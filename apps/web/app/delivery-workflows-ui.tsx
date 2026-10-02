@@ -732,6 +732,25 @@ async function post(action: string, payload: Record<string, unknown>, key?: stri
   }
 }
 
+/**
+ * A run's own answer, taken from ANOTHER screen — the Command Center's Retry.
+ *
+ * Run actions leave the console from this module only (a-runs-buttons-come-from-its-actions
+ * scans for any other sender). The console-a stream's Command Center posted `retry_step` with a
+ * raw fetch on its own say-so; it now passes the answer the run offered (the engine's
+ * stopped_for_operator) and it is sent here, keyed by the press like every other write.
+ */
+export async function sendRunAnswer(projectId: string, actor: string, runId: string,
+                                    answer: RunAction) {
+  return runPress({
+    press: { scope: `run-answer:${runId}`, label: answer.label },
+    fingerprint: JSON.stringify([answer.key, runId, answer.step_id ?? null]),
+  }, (key) => post(answer.key, {
+    project_id: projectId, actor, run_id: runId,
+    ...(answer.step_id ? { step_id: answer.step_id } : {}),
+  }, key));
+}
+
 export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
   const [tab, setTab] = useState<Tab>("running");
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
@@ -1230,13 +1249,32 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           // SAY WHAT IT DID. "Advance now" reported success while advancing nothing — a run
           // waiting on a person cannot be ticked forward — and a button that always says
           // "done" is indistinguishable from a button that does nothing.
+          // NOT THE WORKER'S PUMP. "Advance now" called /run-capabilities, which only the
+          // worker principal may call — on every authenticated install (boss-1) it answered 403
+          // — and ticking the queue is the worker's job, not an operator's. What an operator
+          // means by it is "is anything stuck that could move now?", which is a re-check of each
+          // unfinished run: the console key may do that, and it says what it put back.
           onAdvance={() => void pressOn("Advance", null, async (key) => {
-            const r = await post("advance", { project_id: projectId, actor }, key);
-            const moved = ((r.ok ? (r.data as { performed?: unknown[] })?.performed : []) ?? []);
-            setNotice(!r.ok ? `Advance — ${r.error}`
-              : moved.length ? `Advanced ${moved.length} step${moved.length === 1 ? "" : "s"}.`
-              : "Nothing to advance — every run is finished or waiting on a person.");
-            if (r.ok) await load();
+            const open = runsToRecheckInBulk(runs);
+            let requeued = 0;
+            const failed: string[] = [];
+            for (const run of open) {
+              // One press, one key: the server derives each request's key from the press AND
+              // its body, so every run is re-checked once however often Advance is pressed.
+              const r = await post("recheck", { project_id: projectId, actor, run_id: run.id },
+                                   key);
+              if (!r.ok) failed.push(r.error ?? "refused");
+              else requeued += ((r.data as { requeued?: unknown[] })?.requeued ?? []).length;
+            }
+            const checked = `Checked ${open.length} live run${open.length === 1 ? "" : "s"}. `;
+            setNotice(failed.length ? `${checked}Check again — ${failed[0]}`
+              : !open.length ? "No run is live, so there is nothing to check. To revive a "
+                + "failed run, open it and use Re-check on that run."
+              : requeued ? `${checked}Put ${requeued} step${requeued === 1 ? "" : "s"} `
+                + "back in the queue; they run on the next tick."
+              : checked
+                + "Nothing could move yet — each run is waiting on a person or on work in flight.");
+            await load();
           })}
           onRetryStep={(runId, stepId) =>
             act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
@@ -2528,6 +2566,22 @@ type DeployHost = { id: string; name: string; address?: string; status?: string 
 /** How the runtime words a gate somebody said no to. */
 const DENIED = /^step '(.+)' was rejected$/;
 
+/** The run statuses a bulk "Check every run again" touches: work that is still going. */
+export const LIVE_RUN_STATUSES = ["queued", "validating", "running", "waiting", "paused",
+                                  "blocked"] as const;
+
+/**
+ * The runs "Check every run again" re-checks. ONLY LIVE ONES.
+ *
+ * It used to re-check every run that was not completed, cancelled or compensated, which
+ * included failed and dead-lettered runs from long ago. recheck_run puts a run back to running
+ * when its blocker has cleared, so one click could revive old failed work across the project,
+ * one POST per run. Reviving a failed run is a decision about THAT run; its own Re-check does it.
+ */
+export function runsToRecheckInBulk<T extends { status: string }>(runs: T[]): T[] {
+  return runs.filter((run) => (LIVE_RUN_STATUSES as readonly string[]).includes(run.status));
+}
+
 const BUCKETS = ["needs_you", "running", "blocked", "done"] as const;
 type Bucket = typeof BUCKETS[number];
 const BUCKET_LABEL: Record<Bucket | "all", string> = {
@@ -2584,9 +2638,10 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   if (runs.length === 0) {
     return (
       <div className="dw-empty" data-testid="dw-no-runs">
-        <p>Nothing is running on a delivery workflow yet.</p>
+        <p>Nothing is running yet.</p>
         <p className="detail">
-          Install the catalogue, apply a workflow to a class of work, and start something.
+          Describe what you want built in the box above and press Build, or pick a workflow
+          from the Catalogue tab and start it.
         </p>
       </div>
     );
@@ -2620,8 +2675,9 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
           ))}
         </div>
         <button type="button" className="cap-btn" onClick={onAdvance} disabled={!!busy}
-                data-testid="dw-advance">
-          {busy === "Advance" ? "Advancing…" : "Advance now"}
+                data-testid="dw-advance"
+                title="Re-test what stopped each live run and put back what can now move. A failed run is re-checked from its own page.">
+          {busy === "Advance" ? "Checking…" : "Check every run again"}
         </button>
       </div>
       {shown.length === 0 ? (
@@ -2683,7 +2739,8 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               ) : null}
               {run.waiting_on ? (
                 <span className="dw-waiting" data-testid="dw-waiting">
-                  waiting on {run.waiting_on}
+                  waiting on {/^[a-z0-9_]+$/.test(run.waiting_on)
+                    ? roleLabel(run.waiting_on) : run.waiting_on}
                 </span>
               ) : null}
             </button>
@@ -4482,11 +4539,14 @@ function ChangeRecord({ documentId }: { documentId: string }) {
     if (state.kind !== "shut") return;
     setState({ kind: "loading" });
     try {
-      const r = await fetch(`/api/artifacts/${encodeURIComponent(documentId)}`,
+      // /v1, THROUGH THE CONSOLE'S PROXY. This was /api/artifacts, which no route handler
+      // serves, so every record read "Could not read it — HTTP 404" and every PDF link 404'd.
+      // tests/every-client-fetch-has-a-route enumerates these paths now.
+      const r = await fetch(`/v1/artifacts/${encodeURIComponent(documentId)}`,
                             { cache: "no-store" });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setState({ kind: "failed", why: String(body?.error ?? `HTTP ${r.status}`) });
+        setState({ kind: "failed", why: String(body?.detail ?? body?.error ?? `HTTP ${r.status}`) });
         return;
       }
       const markdown = String(body?.content?.markdown ?? "").trim();
@@ -4518,7 +4578,7 @@ function ChangeRecord({ documentId }: { documentId: string }) {
                 shown in the wrong delivery format — "I dont think anyone will be able to read
                 that". Rendered server-side on demand, so a record written before the PDF
                 existed still downloads. */}
-            <a className="cap-btn" href={`/api/artifacts/${encodeURIComponent(documentId)}/pdf`}
+            <a className="cap-btn" href={`/v1/artifacts/${encodeURIComponent(documentId)}/pdf`}
                data-testid="dw-record-pdf" target="_blank" rel="noreferrer">
               Download as PDF
             </a>
@@ -6345,8 +6405,8 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
                     // because then the step is guaranteed to fail.
                     step.captain && (holdings[step.captain] ?? []).length === 0 ? (
                       <span className="dw-draft-grant" data-testid={`dw-empty-${step.id}`}>
-                        {step.captain} holds no skills, so it cannot do anything. Open it on the
-                        Agents page and give it the skills this work needs.
+                        {roleLabel(step.captain)} holds no skills, so it cannot do anything.
+                        Open it in Agent work and give it the skills this work needs.
                       </span>
                     ) : null
                   ) : (

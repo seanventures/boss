@@ -3,6 +3,7 @@
 import { type CanaryRun } from "../lib/canaries";
 import { runCanariesAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 function tone(s: string): string {
   return s === "pass" ? "#3fb950" : s === "fail" ? "#f85149" : "#8b949e";
@@ -13,7 +14,7 @@ export function CanaryCard({ projectId, run }: { projectId: string; run: CanaryR
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <h3 style={{ margin: 0 }}>Canary suite</h3>
-        <form action={runCanariesAction}>
+        <ActionForm action={runCanariesAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <SubmitButton
             type="submit"
@@ -24,7 +25,7 @@ export function CanaryCard({ projectId, run }: { projectId: string; run: CanaryR
           >
             Run canaries
           </SubmitButton>
-        </form>
+        </ActionForm>
       </div>
       <p className="detail">
         Smokes that prove the non-negotiables — exactly-once effects, no-drop comms, durable

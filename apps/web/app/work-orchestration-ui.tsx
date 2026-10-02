@@ -30,6 +30,7 @@ import {
 } from "./work-orchestration-actions";
 import { ClientRelativeTime } from "./client-relative-time";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 type Props = {
   feed: WorkOrchestrationFeed;
@@ -150,7 +151,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
           </div>
           <details className="wo-editor">
             <summary>Add or rescore work</summary>
-            <form action={upsertRankedWorkAction}>
+            <ActionForm action={upsertRankedWorkAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -174,19 +175,19 @@ export function WorkOrchestration({ feed, actor }: Props) {
               </div>
               <label>Workload class<input name="workload_class" defaultValue="general" /></label>
               <SubmitButton className="button" type="submit">Score and track</SubmitButton>
-            </form>
+            </ActionForm>
           </details>
         </section>
 
         <section className="wo-column wo-capacity" aria-label="Capacity and job queue">
           <div className="wo-column-head">
             <div><Gauge size={17} /><span>Capacity envelope</span></div>
-            <form action={planResourceAllocationsAction}>
+            <ActionForm action={planResourceAllocationsAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <input type="hidden" name="resource_kind" value="job_concurrency" />
               <SubmitButton type="submit">Rebalance</SubmitButton>
-            </form>
+            </ActionForm>
           </div>
           <div className="wo-quota-list">
             {feed.quotas.map((quota) => {
@@ -233,7 +234,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
           </div>
           <details className="wo-editor">
             <summary>Change quota</summary>
-            <form action={upsertResourceQuotaAction}>
+            <ActionForm action={upsertResourceQuotaAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -262,7 +263,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                 <label>Burst<input name="burst_limit" type="number" min={0} defaultValue={0} /></label>
               </div>
               <SubmitButton className="button" type="submit">Save envelope</SubmitButton>
-            </form>
+            </ActionForm>
           </details>
         </section>
 
@@ -286,21 +287,21 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   {provider.binding_count} bound
                 </small>
                 {!provider.is_default ? (
-                  <form action={setDefaultWorkTrackerAction} className="wo-inline-sync">
+                  <ActionForm action={setDefaultWorkTrackerAction} className="wo-inline-sync">
                     <input type="hidden" name="project_id" value={feed.projectId} />
                     <input type="hidden" name="actor" value={actor} />
                     <input type="hidden" name="provider_key" value={provider.provider_key} />
                     <SubmitButton className="button secondary" type="submit">
                       Make default
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
                 ) : null}
               </div>
             ))}
           </div>
           <details className="wo-editor" data-testid="work-tracker-connect">
             <summary>Connect work tracker (Plane default · Jira · Linear · GitHub · Azure DevOps)</summary>
-            <form action={connectWorkTrackerAction}>
+            <ActionForm action={connectWorkTrackerAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <label>
@@ -356,7 +357,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <SubmitButton className="button" type="submit">
                 Connect tracker
               </SubmitButton>
-            </form>
+            </ActionForm>
           </details>
           <div className="wo-binding-list">
             {feed.trackerBindings.slice(0, 8).map((binding) => (
@@ -395,7 +396,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
           </div>
           <details className="wo-editor">
             <summary>Connect bot or status channel</summary>
-            <form action={upsertDeliveryBotAction}>
+            <ActionForm action={upsertDeliveryBotAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -405,8 +406,8 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <label>Bot display name<input name="display_name" defaultValue="BOSS Product Manager" required /></label>
               <label>External identity<input name="external_identity" placeholder="boss-product-manager" /></label>
               <SubmitButton className="button secondary" type="submit">Register bot identity</SubmitButton>
-            </form>
-            <form action={upsertStatusChannelAction}>
+            </ActionForm>
+            <ActionForm action={upsertStatusChannelAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -417,7 +418,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <label>Purpose<input name="purpose" defaultValue="Ticket, PR, and deployment status" required /></label>
               <label>Events<textarea name="event_kinds" rows={2} defaultValue={"ticket.updated\ndeployment.status\npull_request.status"} /></label>
               <SubmitButton className="button secondary" type="submit">Save status channel</SubmitButton>
-            </form>
+            </ActionForm>
           </details>
         </section>
       </div>
@@ -441,7 +442,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
             <div><Robot size={16} /><span>{selected.owner_actor ?? "Unassigned"} · {selected.workload_class}</span></div>
           </div>
           {selectedBinding && selectedBinding.sync_status !== "synced" ? (
-            <form action={syncTrackerBindingAction} className="wo-inline-sync">
+            <ActionForm action={syncTrackerBindingAction} className="wo-inline-sync">
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <input type="hidden" name="work_item_id" value={selected.id} />
@@ -449,7 +450,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <input name="external_key" placeholder="BOSS-270" aria-label="External ticket key" />
               <input name="external_issue_id" placeholder="External issue id (optional)" aria-label="External issue ID" />
               <SubmitButton className="button" type="submit">Confirm ticket link</SubmitButton>
-            </form>
+            </ActionForm>
           ) : null}
         </aside>
       ) : null}

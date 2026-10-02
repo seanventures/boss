@@ -19,24 +19,38 @@ describe("console capabilities help card", () => {
    * The tests moved with it. What they protect is unchanged: the card must tell a newcomer how
    * to start, and it must not promise anything BOSS cannot do.
    */
-  it("tells a first-time operator the three ways in", () => {
+  // REWRITTEN. These asserted the stale copy: an "Ask" button the composer no longer has,
+  // research landing in Discovery and builds in Meetings (both hidden from the rail; Build goes
+  // to Workflow), and "merge state is not tracked" beside a PR approval that merges. What they
+  // protect is unchanged: how to start, where the work appears, and the honest limits.
+  it("tells a first-time operator the ways in, named as the composer names them", () => {
     expect(html).toContain('data-testid="console-capabilities-card"');
-    // Every entry point, named, with where its output lands — a way in that does not say where
-    // the work appears leaves the operator watching the wrong area.
-    expect(html).toMatch(/<b>Ask<\/b>/);
-    expect(html).toMatch(/<b>Research<\/b>/);
     expect(html).toMatch(/<b>Build<\/b>/);
-    expect(html).toMatch(/Discovery/);
-    expect(html).toMatch(/Meetings/);
-    expect(html).toMatch(/Factory/);
+    expect(html).toMatch(/<b>Talk to BOSS<\/b>/);
+    // Where the work appears — areas the rail actually shows.
+    expect(html).toMatch(/<b>Workflow<\/b>/);
+    expect(html).toMatch(/<b>Factory<\/b>/);
+    expect(html).toMatch(/<b>Approvals<\/b>/);
   });
 
-  it("states what is missing instead of implying completeness", () => {
-    expect(html).toMatch(/not here yet/i);
-    // The three real gaps. Each was a live surprise for an operator before it was written down.
+  it("names only areas an operator can find in the rail", () => {
+    for (const offNav of [/Discovery/, /Meetings/, /CI\/CD/, /Budget area/, /Agents page/]) {
+      expect(html).not.toMatch(offNav);
+    }
+  });
+
+  it("states the limits instead of implying completeness", () => {
     expect(html).toMatch(/host and a target/i);      // deploys need infrastructure first
-    expect(html).toMatch(/<b>not tracked<\/b>/);      // merge state is not known
     expect(html).toContain("<b>not guaranteed</b>"); // previews and sandboxes can fail closed
+    // And it does not contradict Approvals, which merges a PR and ships a deploy on approval.
+    expect(html).not.toMatch(/not tracked/);
+    expect(html).not.toMatch(/paused in Community/);
+  });
+
+  it("cites a setup document that exists", () => {
+    const cited = /<code>([^<]+\.md)<\/code>/.exec(html)?.[1];
+    expect(cited).toBeTruthy();
+    expect(() => readFileSync(resolve(__dirname, "../../..", cited!), "utf8")).not.toThrow();
   });
 
   it("does not overclaim", () => {

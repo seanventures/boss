@@ -8,6 +8,7 @@ import {
   reliabilityRemediateAction,
 } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 const SEV_COLOR: Record<string, string> = {
   critical: "#f85149",
@@ -84,24 +85,24 @@ function IncidentRow({ projectId, incident }: { projectId: string; incident: Rel
       </div>
       <Pill text={incident.status} color={STATUS_COLOR[incident.status] ?? "#8b949e"} />
       <div style={{ display: "flex", gap: 6 }}>
-        <form action={reliabilityDiagnoseAction}>
+        <ActionForm action={reliabilityDiagnoseAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="incident_id" value={incident.id} />
           <ActionButton label="Diagnose" />
-        </form>
+        </ActionForm>
         {canRemediate ? (
-          <form action={reliabilityRemediateAction}>
+          <ActionForm action={reliabilityRemediateAction}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="incident_id" value={incident.id} />
             <ActionButton label="Fix PR" />
-          </form>
+          </ActionForm>
         ) : null}
-        <form action={reliabilityFeedbackAction}>
+        <ActionForm action={reliabilityFeedbackAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="incident_id" value={incident.id} />
           <input type="hidden" name="verdict" value="false_alarm" />
           <ActionButton label="False alarm" />
-        </form>
+        </ActionForm>
       </div>
     </div>
   );

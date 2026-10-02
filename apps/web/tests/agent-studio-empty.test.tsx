@@ -120,7 +120,9 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
     expect(markup).toContain("Requested skills");
     expect(markup).toContain("Data boundary");
     expect(markup).not.toContain("as-agent-graph");
-    expect(markup).toContain("Test all 1 agent");
+    // REWRITTEN: the setup check is still offered once agents exist, named for what it checks
+    // ("Test all N agents" read as running them) and no longer the header's primary action.
+    expect(markup).toContain("Check every agent&#x27;s setup");
     expect(markup).not.toContain("Add your first agents");
   });
 

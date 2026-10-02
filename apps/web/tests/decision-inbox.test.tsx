@@ -76,11 +76,115 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
     expect(markup).not.toContain("Already done");
     expect(markup).toContain('data-testid="decision-approve"');
     expect(markup).toContain('data-testid="decision-reject"');
-    expect(markup).toContain('data-testid="decision-escalate"');
     expect(markup).toContain('value="approve"');
     expect(markup).toContain('value="reject"');
-    expect(markup).toContain('value="escalate"');
-    expect(markup).toContain("Escalate to role or approver");
+    // REWRITTEN: this used to assert an "Escalate" button posting action=escalate, which the
+    // server never accepted — every press failed. Handing a decision on is delegation now,
+    // drawn only when the engine offers it (see the contract tests below).
+    expect(markup).not.toContain('value="escalate"');
+  });
+
+  it("draws exactly the actions the engine offers, labelled as it says", () => {
+    const markup = html(
+      <DecisionInbox
+        feed={feed([item({
+          id: "dec_pr", status: "pending", question: "Merge it?", kind: "pull_request",
+          allowedActions: [
+            { action: "approve", label: "Approve and merge", tone: "approve", effect: "e" },
+            { action: "reject", label: "Keep blocked", tone: "reject", effect: "e" },
+            { action: "revise", label: "Request changes", tone: "neutral", effect: "e",
+              needs: "note" },
+            { action: "delegate", label: "Hand to someone else", tone: "neutral", effect: "e",
+              needs: "delegate_to" },
+          ],
+        })])}
+        tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
+      />,
+    );
+    expect(markup).toContain("Approve and merge");
+    expect(markup).toContain("Keep blocked");
+    expect(markup).toContain('data-testid="decision-delegate"');
+    expect(markup).toContain('name="delegate_to"');
+    expect(markup).toContain('value="delegate"');
+    expect(markup).not.toContain('name="escalate_to"');
+  });
+
+  it("a PR parked by the old 'Request changes' is answerable again and listed as needing you", () => {
+    // Nothing read revision_requested on a PR and the status refused approval, so such a PR
+    // could never be merged from BOSS. The engine reopens it and offers the answer again.
+    const markup = html(
+      <DecisionInbox
+        feed={feed([item({
+          id: "dec_stuck", status: "revision_requested", kind: "pull_request",
+          question: "Merge the stuck PR?",
+          allowedActions: [
+            { action: "approve", label: "Approve and merge", tone: "approve", effect: "e" },
+            { action: "reject", label: "Keep blocked", tone: "reject", effect: "e" },
+          ],
+        })])}
+        tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
+      />,
+    );
+    expect(markup).toContain("Merge the stuck PR?");
+    expect(markup).toContain("Approve and merge");
+    expect(markup).toContain('data-testid="decision-approve"');
+  });
+
+  it("a workflow's own decision step says that approving releases the step", () => {
+    const markup = html(
+      <DecisionInbox
+        feed={feed([item({
+          id: "dec_wf", status: "pending", kind: "workflow_gate", question: "Publish?",
+          recommendation: { action: "resume_workflow" },
+          allowedActions: [{ action: "approve", label: "Approve", tone: "approve", effect: "e" }],
+        })])}
+        tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
+      />,
+    );
+    expect(markup).toContain("Approving releases the step");
+    expect(markup).not.toContain("no automated follow-on");
+  });
+
+  it("a budget or capacity refusal is a notice with the fix, and only Dismiss", () => {
+    // boss-1: model_capacity_denied showed Approve/Reject that did nothing and an internal
+    // question string as its title.
+    const markup = html(
+      <DecisionInbox
+        feed={feed([item({
+          id: "dec_cap", status: "pending", kind: "refusal",
+          question: "Model capacity refused typed decision setup:typesafe-key/key-proof-fa84",
+          recommendation: { action: "model_capacity_denied", occurrences: 4 },
+          allowedActions: [{ action: "reject", label: "Dismiss", tone: "neutral", effect: "e" }],
+          guidance: { what_happened: "No connected model had capacity.",
+                      what_to_do: "Add credit in Repo and model, then Retry the step.",
+                      area: "setup", link_label: "Open Repo and model" },
+        })])}
+        tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
+      />,
+    );
+    expect(markup).toContain("No connected model had capacity.");
+    expect(markup).toContain('data-testid="decision-guidance"');
+    expect(markup).toContain("area=setup");
+    expect(markup).toContain(">Dismiss<");
+    expect(markup).not.toContain('data-testid="decision-approve"');
+    expect(markup).toContain('name="reject_label" value="Dismiss"');
+    // Seen-count on the PENDING card, where it matters.
+    expect(markup).toContain('data-testid="decision-occurrences"');
+  });
+
+  it("a gate on a run carries the run id so the result can link straight to it", () => {
+    const markup = html(
+      <DecisionInbox
+        feed={feed([item({
+          id: "dec_gate", status: "pending", kind: "deploy_gate",
+          recommendation: { workflow_run_id: "wfr_9", capability: "deploy" },
+          allowedActions: [{ action: "approve", label: "Ship it", tone: "approve", effect: "e" }],
+        })])}
+        tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
+      />,
+    );
+    expect(markup).toContain('name="workflow_run_id" value="wfr_9"');
+    expect(markup).toContain("Ship it");
   });
 
   it("renders an honest empty pending queue, not a silent history dump", () => {

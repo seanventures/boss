@@ -149,7 +149,10 @@ describe("the panel's plumbing", () => {
 
   it("offers the report as a PDF, built on request", () => {
     expect(UI).toContain("Download as PDF");
-    expect(UI).toContain("/api/artifacts/");
+    // REWRITTEN: /api/artifacts/ was the bug — no handler serves it, so every PDF 404'd. The
+    // API's /v1/artifacts/{id}/pdf, through the console's /v1 proxy, is what works.
+    expect(UI).toContain("`/v1/artifacts/");
+    expect(UI).not.toContain("/api/artifacts/");
     expect(UI).toContain('method: "POST"');
   });
 

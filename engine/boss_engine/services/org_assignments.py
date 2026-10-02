@@ -63,10 +63,32 @@ def set_one(
         raise OrgCycle(f"'{agent_id}' cannot report to itself.")
 
     edges = {k: v["reports_to"] for k, v in get_all(connection, project_id).items()}
+    # A PARENT THAT IS NOT IN THE PLAN IS PUT IN IT, AT THE TOP.
+    #
+    # Team structure's "Reports to" offered roles from the OBSERVED tree when nothing was
+    # planned, and nothing here checked the parent was planned. The child was saved reporting to
+    # a role the chart did not contain, so it rendered at the top level while its "Reports to"
+    # column named a parent — two answers to one question. Placing the parent (top level, where
+    # it would render anyway) makes the plan say what the chart shows.
+    place_parent = bool(parent) and parent not in edges
     edges[agent_id] = parent
+    if place_parent:
+        edges[parent] = None
     if parent and _would_cycle(edges, agent_id, parent):
         raise OrgCycle(
             f"'{agent_id}' already sits above '{parent}', so this would make a loop."
+        )
+    if place_parent:
+        connection.execute(
+            text("INSERT INTO org_assignments "
+                 "  (project_id, agent_id, reports_to, sort, updated_by, updated_at) "
+                 "VALUES (:p, :a, NULL, 0, :by, now()) ON CONFLICT (project_id, agent_id) "
+                 "DO NOTHING"),
+            {"p": project_id, "a": parent, "by": actor},
+        )
+        emit_event(
+            connection, project_id, "org.assignment_set", actor, "role", parent,
+            {"reports_to": None, "why": f"placed at the top so '{agent_id}' can report to it"},
         )
 
     connection.execute(

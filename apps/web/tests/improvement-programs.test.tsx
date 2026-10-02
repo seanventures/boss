@@ -64,7 +64,7 @@ describe("createImprovementProgramAction", () => {
     form.set("benchmark_id", "bugbox");
     form.set("baseline_evaluation_id", "eval_1");
 
-    await expect(createImprovementProgramAction(form)).resolves.toBeUndefined();
+    await expect(createImprovementProgramAction(form)).resolves.toMatchObject({ ok: true });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -89,10 +89,14 @@ describe("createImprovementProgramAction", () => {
     form.set("actor", "ceo");
     form.set("name", "routing-baseline");
     form.set("objective", "Hold routing quality");
+    // REWRITTEN for the ActionResult contract (lib/action-result.ts): a server action now
+    // returns its failure as a sentence instead of throwing one Next would redact.
 
-    await expect(createImprovementProgramAction(form)).rejects.toThrow(
-      "baseline_evaluation_id is required",
-    );
+    await expect(createImprovementProgramAction(form)).resolves.toMatchObject({
+
+      ok: false, error: expect.stringContaining("baseline_evaluation_id is required"),
+
+    });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });

@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { API_KEY, API_URL } from "../lib/client";
 import { apiWrite, pressToken } from "../lib/api-write";
+import type { ActionResult } from "../lib/action-result";
+import { act } from "../lib/server-action";
 
 async function post(path: string, body: Record<string, unknown>): Promise<void> {
   const response = await apiWrite(`${API_URL}${path}`, {
@@ -41,7 +43,7 @@ function lines(formData: FormData, key: string): string[] {
     .filter(Boolean);
 }
 
-export async function upsertRankedWorkAction(formData: FormData): Promise<void> {
+export async function upsertRankedWorkAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const subjectId = text(formData, "subject_id") || await pressToken();
   await post("/v1/work-orchestration/items", {
     project_id: text(formData, "project_id"),
@@ -62,9 +64,9 @@ export async function upsertRankedWorkAction(formData: FormData): Promise<void> 
     confidence: integer(formData, "confidence", 75),
     manual_adjustment: integer(formData, "manual_adjustment", 0),
   });
-}
+}); }
 
-export async function upsertResourceQuotaAction(formData: FormData): Promise<void> {
+export async function upsertResourceQuotaAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await post("/v1/work-orchestration/quotas", {
     project_id: text(formData, "project_id"),
     actor: text(formData, "actor", "ceo"),
@@ -78,17 +80,17 @@ export async function upsertResourceQuotaAction(formData: FormData): Promise<voi
     allocation_weight: Number(text(formData, "allocation_weight", "1")),
     borrow_enabled: formData.get("borrow_enabled") === "true",
   });
-}
+}); }
 
-export async function planResourceAllocationsAction(formData: FormData): Promise<void> {
+export async function planResourceAllocationsAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await post("/v1/work-orchestration/allocations/plan", {
     project_id: text(formData, "project_id"),
     actor: text(formData, "actor", "ceo"),
     resource_kind: text(formData, "resource_kind", "job_concurrency"),
   });
-}
+}); }
 
-export async function syncTrackerBindingAction(formData: FormData): Promise<void> {
+export async function syncTrackerBindingAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await post("/v1/work-orchestration/tracker-bindings", {
     project_id: text(formData, "project_id"),
     actor: text(formData, "actor", "ceo"),
@@ -100,17 +102,17 @@ export async function syncTrackerBindingAction(formData: FormData): Promise<void
     external_url: text(formData, "external_url") || undefined,
     external_state: text(formData, "external_state") || undefined,
   });
-}
+}); }
 
-export async function setDefaultWorkTrackerAction(formData: FormData): Promise<void> {
+export async function setDefaultWorkTrackerAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await post("/v1/work-trackers/set-default", {
     project_id: text(formData, "project_id"),
     actor: text(formData, "actor", "ceo"),
     provider_key: text(formData, "provider_key", "plane"),
   });
-}
+}); }
 
-export async function connectWorkTrackerAction(formData: FormData): Promise<void> {
+export async function connectWorkTrackerAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const providerKey = text(formData, "provider_key", "plane");
   const configuration: Record<string, string> = {};
   // Common fields from the connect form (provider-specific extras ignored if empty)
@@ -145,9 +147,9 @@ export async function connectWorkTrackerAction(formData: FormData): Promise<void
     set_as_default: formData.get("set_as_default") === "true",
     test: formData.get("skip_test") !== "true",
   });
-}
+}); }
 
-export async function upsertDeliveryBotAction(formData: FormData): Promise<void> {
+export async function upsertDeliveryBotAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await post("/v1/work-orchestration/bot-identities", {
     project_id: text(formData, "project_id"),
     actor: text(formData, "actor", "ceo"),
@@ -156,9 +158,9 @@ export async function upsertDeliveryBotAction(formData: FormData): Promise<void>
     display_name: text(formData, "display_name"),
     external_identity: text(formData, "external_identity") || undefined,
   });
-}
+}); }
 
-export async function upsertStatusChannelAction(formData: FormData): Promise<void> {
+export async function upsertStatusChannelAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await post("/v1/work-orchestration/status-channels", {
     project_id: text(formData, "project_id"),
     actor: text(formData, "actor", "ceo"),
@@ -172,4 +174,4 @@ export async function upsertStatusChannelAction(formData: FormData): Promise<voi
     event_kinds: lines(formData, "event_kinds"),
     allowed_data_boundaries: ["public", "internal"],
   });
-}
+}); }

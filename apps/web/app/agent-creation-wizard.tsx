@@ -46,6 +46,9 @@ type WizardProps = {
   roles: RoleFeedItem[];
   skills: SkillFeedItem[];
   onClose: () => void;
+  /** The role a "Definition" link asked for. Following it for a role with no Studio definition
+   *  opened an empty wizard, so the role, name and key had to be typed again. */
+  initialRoleKey?: string;
 };
 
 const STEPS = [
@@ -110,10 +113,16 @@ export function AgentCreationWizard({
   roles,
   skills,
   onClose,
+  initialRoleKey,
 }: WizardProps) {
-  const [draft, setDraft] = useState(() =>
-    createInitialAgentWizardDraft(roles[0]?.roleKey ?? "", actor),
-  );
+  const [draft, setDraft] = useState(() => {
+    const asked = initialRoleKey ? roles.find((r) => r.roleKey === initialRoleKey) : undefined;
+    const base = createInitialAgentWizardDraft(asked?.roleKey ?? roles[0]?.roleKey ?? "", actor);
+    return asked
+      ? { ...base, name: asked.displayName || asked.roleKey,
+          agentKey: asked.roleKey.replace(/_/g, "-") }
+      : base;
+  });
   // The project's registered MCP servers, so the Authority step offers real servers to GRANT
   // instead of a free-text "integrations" box nothing read.
   const [servers, setServers] = useState<GrantableServer[]>([]);

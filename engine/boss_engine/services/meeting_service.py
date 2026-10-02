@@ -739,6 +739,37 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     return run_id
 
 
+#: The blocks request_meeting wraps around a directive so every seat reads them — the SAME
+#: objects as the PANEL_*_MARKER constants above. The console-a and console-b streams each
+#: defined these three strings for one incident ("PRD meeting: --- WHAT THIS PANEL IS FOR ---");
+#: at integration one definition is kept (the MARKER names, which request_meeting and
+#: meeting_subject use) and these names point at it, so directive_subject() and the console's
+#: lib/directive-subject.ts mirror cannot drift from the builder.
+PANEL_PURPOSE_MARK = PANEL_PURPOSE_MARKER
+PANEL_ASK_MARK = PANEL_ASK_MARKER
+PANEL_RESEARCH_MARK = PANEL_RESEARCH_MARKER
+
+
+def directive_subject(directive: str) -> str:
+    """What the operator asked for, without the prompt scaffolding around it.
+
+    The scaffolding is for the panel; it is not a name. A workflow's panel step wrapped the ask
+    in "--- WHAT THIS PANEL IS FOR --- You are the panel inside BOSS's … workflow", and the
+    task was titled from the first 90 characters — so on boss-1 the task read "PRD meeting:
+    --- WHAT THIS PANEL IS FOR --- You are the pane…" and the Command Center, the Factory's
+    panel cards and the Approvals evidence chip all showed that instead of what was asked.
+    """
+    text_in = str(directive or "")
+    if PANEL_ASK_MARK in text_in:
+        text_in = text_in.split(PANEL_ASK_MARK, 1)[1]
+    elif text_in.lstrip().startswith(PANEL_PURPOSE_MARK):
+        # A purpose block with no ask marker after it: nothing but scaffolding to show.
+        text_in = ""
+    if PANEL_RESEARCH_MARK in text_in:
+        text_in = text_in.split(PANEL_RESEARCH_MARK, 1)[0]
+    return " ".join(text_in.split())
+
+
 def convene_prd_meeting_core(
     connection, *, settings: Settings, budget, intake, jobs,
     project_id: str, directive: str, url: str = "",

@@ -30449,6 +30449,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/console/command-center:
+    get:
+      summary: Console Command Center Endpoint
+      description: 'The Command Center: what is running, what needs the operator, how recent runs went.
+
+
+        Read in workflow runs, not tasks — a run started by Build creates no task, so the old
+
+        task-based landing page never showed the thing an operator had just started. See
+
+        boss_engine.services.command_center.'
+      operationId: get_v1_console_command_center_0052b476
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Console Command Center Endpoint V1 Console Command Center Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     A2AAcknowledgeRequest:
@@ -36851,6 +36885,22 @@ components:
         updated_at:
           type: string
           title: Updated At
+        kind:
+          type: string
+          title: Kind
+          default: general
+        allowed_actions:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Allowed Actions
+        guidance:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Guidance
       type: object
       required:
       - id

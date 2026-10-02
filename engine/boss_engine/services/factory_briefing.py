@@ -35,7 +35,7 @@ from typing import Any, Optional
 
 from sqlalchemy import text as sql
 
-from . import task_shepherd
+from . import decision_actions, task_shepherd
 from .naming import identity_key, project_name
 
 _log = logging.getLogger(__name__)
@@ -129,29 +129,39 @@ def _diagnosis(error: Optional[str], *, gates_failed: Optional[list] = None) -> 
 
 def _decisions(connection, project_id: str) -> list[dict[str, Any]]:
     """Approvals with nobody's answer on them. The commonest reason a factory is idle."""
-    rows = connection.execute(
-        # `question`, not `title` — the column this table actually has. Getting it wrong
-        # returned an empty briefing that read as "nothing needs you" while six decisions sat
-        # unanswered, which is why the section errors below are reported rather than swallowed.
-        sql("SELECT id, question, status, risk_tier, deadline_at, default_action, created_at "
-            "FROM decisions WHERE project_id = :p AND status IN ('pending', 'delegated') "
-            "ORDER BY created_at LIMIT :n"),
-        {"p": project_id, "n": PER_KIND}).mappings().all()
+    # WHICH ONES, BY THE APPROVALS INBOX'S RULE (decision_actions.attention). This was its own
+    # `status IN ('pending', 'delegated')`, which left out a pull request stuck in a dead-end
+    # revision_requested and called a pending decision "past its deadline" whenever it merely
+    # HAD one (review round 3). Waiting ones come first; expired hold-default ones follow,
+    # because an expired hold applies nothing and seven of them were once why the factory sat
+    # idle. The column is `question`, not `title`: getting that wrong returned an empty
+    # briefing that read as "nothing needs you" while six decisions sat unanswered, which is
+    # why the section errors are reported rather than swallowed.
+    rows = decision_actions.waiting_on_operator(connection, project_id, include_expired=True)
+    rows.sort(key=lambda r: (decision_actions.attention(r) != "needs_action",
+                             str(r.get("created_at") or "")))
     out = []
-    for row in rows:
-        overdue = bool(row["deadline_at"]) and str(row["default_action"] or "hold") == "hold"
+    for row in rows[:PER_KIND]:
+        described = decision_actions.describe(row)
+        expired = described["attention"] == "expired"
+        offered = described["allowed_actions"]
+        # The first answer the card offers, so a refusal notice is dismissed rather than
+        # "approved" (nothing reads an approval of a notice).
+        first = offered[0] if offered else {"action": "approve", "label": "Approve"}
         out.append({
             "kind": "decision", "id": row["id"], "title": str(row["question"] or "")[:140],
             "since": str(row["created_at"]),
+            "attention": described["attention"],
             # An expired hold applies NOTHING, so the work waits for ever rather than taking a
             # safe default. Saying "overdue" without that is a nag; saying it with that is a
             # reason to act.
-            "note": ("past its deadline — the default is 'hold', which applies nothing, so this "
-                     "waits until somebody answers it" if overdue else
+            "note": ("past its deadline — the default is 'hold', which applies nothing, so "
+                     "this waits until somebody answers it" if expired else
                      "waiting for an answer"),
             "actions": [{"tool": "decide", "args": {"decision_id": row["id"],
-                                                    "action": "approve"},
-                         "label": f"Approve — {str(row['question'] or row['id'])[:60]}"}],
+                                                    "action": first["action"]},
+                         "label": f"{first['label']} — "
+                                  f"{str(row['question'] or row['id'])[:60]}"}],
         })
     return out
 

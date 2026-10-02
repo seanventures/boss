@@ -1,0 +1,557 @@
+"""What a person can do with a decision, decided once, here.
+
+THE SAME FOUR BUTTONS ON EVERY CARD WAS THE BUG.
+
+The Approvals screen gave every pending card Approve, Reject, Escalate and Request changes,
+whatever the card was. On boss-1 the queue held three pending decisions: a PR review, a
+`budget_denied` and a `model_capacity_denied`. For the last two, Approve recorded a decision
+nothing reads ("this type has no automated follow-on") and Reject did the same in red — the
+step they came from had already failed and would not resume either way. The real fix
+(raise the budget, add model credit) was mentioned nowhere. Escalate posted an action the
+server did not accept, so it always failed. And "Request changes" on a workflow gate parked
+the decision in `revision_requested`, which the workflow runner never reads, so the run
+waited for ever.
+
+The engine already decides once which actions a RUN offers; this is the same contract for
+decisions. The console renders `actions` and nothing else, and `DecisionService.transition`
+refuses an action that is not in the list — so a button that cannot work is never drawn, and
+a caller that bypasses the console (MCP, the chat agent, curl) gets the same answer, with
+what to do instead.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Mapping, Optional
+
+# WHAT EVERY DECISION BOSS RAISES IS, DECIDED HERE AND CHECKED AGAINST THE CODE THAT RAISES IT.
+#
+# The first version of this contract recognised three refusal reasons by name and called
+# everything else `general`. Review found that the refusals BOSS actually raises most were
+# not among them: a Factory build that hit a rate limit writes
+# `restore_model_capacity_or_raise_budget` / `model_capacity_exhausted`, the budget governor's
+# tier-2 freeze writes `raise_cap_or_wait_for_headroom` / `budget_tier2_frozen`, and the
+# autoscaler writes `increase_budget_or_defer_work`. All of them fell through to `general`,
+# were ranked first in the Command Center as gates, and offered Approve, "Carries out what
+# this card proposes", on a card nothing acts on. A list of names is only as good as the last
+# person who remembered to extend it, so
+# engine/tests/test_every_decision_boss_raises_has_its_buttons_decided.py walks every place in
+# engine/ and apps/ that creates a decision and fails when the action it writes is not
+# classified below.
+
+#: Refusals: BOSS declined to spend (budget) or could not (model capacity). They are notices,
+#: not questions. The work has already stopped or been deferred, and approving or rejecting
+#: the card changes nothing about it. Keyed by the recommendation action OR the reason code a
+#: producer writes; the value names the guidance family in `_REFUSAL_GUIDANCE`.
+REFUSALS: dict[str, str] = {
+    # typed_decision_spend: the reason doubles as the action.
+    "budget_denied": "budget",
+    "budget_deferred": "budget",
+    "model_capacity_denied": "capacity",
+    # budget.BudgetService: a reservation over the cap.
+    "increase_budget_or_defer": "budget",
+    "increase_allocation_or_defer": "budget",
+    # budget.BudgetService: past freeze_tier2_pct, high-risk work is refused.
+    "raise_cap_or_wait_for_headroom": "tier2_frozen",
+    "budget_tier2_frozen": "tier2_frozen",
+    # governed_code_task_service and deadletters: a build or a job ran out of model capacity
+    # or credit. On a real install this is the refusal BOSS raises most often.
+    "restore_model_capacity_or_raise_budget": "capacity",
+    "model_capacity_exhausted": "capacity",
+    # resource_plane autoscaler: the budget state stopped BOSS adding workers.
+    "increase_budget_or_defer_work": "autoscale",
+    "approve_budget_increase_or_accept_degraded_mode": "autoscale",
+    # jobs: the budget state deferred a job; it is re-queued and runs later by itself.
+    "review_budget_policy": "deferred",
+    "budget_state_deferred_job": "deferred",
+}
+#: Kept under their old names; both now cover every refusal, by action or by reason.
+REFUSAL_REASONS = frozenset(REFUSALS)
+REFUSAL_ACTIONS = REFUSAL_REASONS
+
+#: Approving CARRIES THESE OUT: DecisionService._handle_approved_follow_on acts on each one.
+#: The enforcing test reads that function and fails when this set and it disagree.
+CARRIED_OUT_ON_APPROVAL = frozenset({
+    "execute_agent_tool",
+    "resume_agent_run",
+    "resume_code_task",
+    "review_plan_draft",
+    "github.community.dispatch_plan",
+    "github.community.merge_authorization",
+    "review_pull_request",
+    "review_deployment",
+    "review_infra_provisioning",
+    "self_improvement.begin_canary",
+    "self_improvement.rollout",
+    "role.autonomy_change",
+})
+
+#: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
+#: sends the proposal back with the note. For every other decision `revision_requested` was a
+#: status nothing reads and one that could no longer be approved — a pull request sent back
+#: that way could never be merged from BOSS again. The enforcing test reads that function too.
+REVISE_CONSUMED = frozenset({
+    "self_improvement.begin_canary",
+    "self_improvement.rollout",
+    "role.autonomy_change",
+})
+
+#: A workflow decision step (workflows.py) writes this action and no run id. The runner reads
+#: the decision's status exactly as it reads a capability gate's, so it is a workflow gate;
+#: as `general` it offered "Request changes", which left the run waiting for ever.
+WORKFLOW_GATE_ACTIONS = frozenset({"resume_workflow"})
+
+#: Approving these RECORDS a go-ahead and starts nothing. Some are read later by the work that
+#: asked (an SRE runbook, an assurance reopen, a GitHub effect fenced to an approved decision);
+#: most ask a person to do something first. Either way the Approve button must not claim that
+#: it carries anything out, so it says what it does.
+RECORDED_ON_APPROVAL = frozenset({
+    "approve_changeset",
+    "approve_initiative_budget",
+    "attach_required_evidence",
+    "configure_or_enable_infra_provisioning",
+    "configure_supported_channel",
+    "configure_target_github_and_retry_phase",
+    "coordinate_with_surface_owner",
+    "create_budget_reservation",
+    "fix_phase_spec_and_retry",
+    "github.community.triage_review",
+    "implement_governed_host_deployment",
+    "investigate_regression",
+    "plan_governed_changeset",
+    "provide_github_token",
+    "provide_openai_api_key",
+    "reclassify_or_configure_approved_boundary_adapter",
+    "reopen_and_investigate",
+    "reserve_budget_before_deployment",
+    "reserve_provider_budget",
+    "resolve_assurance_case",
+    "resolve_cluster_validation_blockers",
+    "restore_metric_evaluator",
+    "restore_verifier_preconditions",
+    "review_commitment",
+    "review_cost_anomaly",
+    "review_deployment_health",
+    "review_entitlement_sources",
+    "review_model_spend_and_host_effects_before_retry",
+    "review_model_spend_and_receipts_before_retry",
+    "review_plane_sync_failure",
+    "review_plane_sync_uncertain",
+    "review_provider_spend_kill_switch",
+    "review_rollback_or_retry",
+    "review_stalled_meeting",
+    "set_BOSS_INFRA_REAL_PROVISION_ALLOWED",
+    "typed_decision_lease_expired",
+    "typed_decision_reconciliation",
+    "update_deployment_environment_policy",
+    "upsert_comms_channel_policy",
+    "use_settled_conclusion_or_reopen_with_new_evidence",
+})
+#: Producers that build the action from a provider key (comms: configure_or_enable_slack_…).
+RECORDED_ON_APPROVAL_PREFIXES = ("configure_or_enable_",)
+
+#: Every action BOSS is known to write. The enforcing test fails on a producer outside it.
+KNOWN_ACTIONS = (REFUSAL_REASONS | CARRIED_OUT_ON_APPROVAL | WORKFLOW_GATE_ACTIONS
+                 | RECORDED_ON_APPROVAL)
+
+KINDS = ("refusal", "deploy_gate", "workflow_gate", "pull_request", "general")
+
+_OPEN = frozenset({"pending", "delegated"})
+#: An expired hold-default decision can still be answered: see DecisionService.transition.
+_REOPENABLE = frozenset({"expired"})
+
+
+def _rec(decision: Mapping[str, Any]) -> dict[str, Any]:
+    rec = decision.get("recommendation")
+    return rec if isinstance(rec, dict) else {}
+
+
+def _action_of(decision: Mapping[str, Any]) -> str:
+    return str(_rec(decision).get("action") or "")
+
+
+def _reason(decision: Mapping[str, Any]) -> str:
+    rec = _rec(decision)
+    for key in ("reason_code", "reason"):
+        value = rec.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(decision.get("reason") or "").strip()
+
+
+def _refusal_family(decision: Mapping[str, Any]) -> Optional[str]:
+    """Which refusal this is, by action first and then by ANY reason the producer wrote.
+
+    Every reason field is consulted, not only the first: the governed build path writes the
+    provider's own code (`model_rate_limit`) as `reason_code` and BOSS's (`model_capacity_
+    exhausted`) as `reason`, and reading only the first missed it.
+    """
+    action = _action_of(decision)
+    if action in REFUSALS:
+        return REFUSALS[action]
+    rec = _rec(decision)
+    for value in (rec.get("reason_code"), rec.get("reason"), decision.get("reason")):
+        if isinstance(value, str) and value.strip() in REFUSALS:
+            return REFUSALS[value.strip()]
+    return None
+
+
+def kind_of(decision: Mapping[str, Any]) -> str:
+    """Which of KINDS this decision is. Total: anything unrecognised is `general`."""
+    rec = _rec(decision)
+    action = _action_of(decision)
+    if _refusal_family(decision):
+        return "refusal"
+    if rec.get("workflow_run_id") or action in WORKFLOW_GATE_ACTIONS:
+        if str(rec.get("capability") or "") in {"deploy", "redeploy"}:
+            return "deploy_gate"
+        return "workflow_gate"
+    if action == "review_pull_request":
+        return "pull_request"
+    return "general"
+
+
+def carries_out_on_approval(decision: Mapping[str, Any]) -> bool:
+    """True when approving makes BOSS do something itself, not only record the answer."""
+    return _action_of(decision) in CARRIED_OUT_ON_APPROVAL
+
+
+def consumes_revision(decision: Mapping[str, Any]) -> bool:
+    """True when something reads `revision_requested` for this decision and acts on the note."""
+    return _action_of(decision) in REVISE_CONSUMED
+
+
+def _action(action: str, label: str, tone: str, effect: str,
+            needs: Optional[str] = None) -> dict[str, Any]:
+    return {"action": action, "label": label, "tone": tone, "effect": effect, "needs": needs}
+
+
+def _delegate() -> dict[str, Any]:
+    # "Escalate" in the old inbox, which posted an action the server never accepted. Handing a
+    # decision to somebody else IS delegation, so it is called what it does and posts that.
+    return _action(
+        "delegate", "Hand to someone else", "neutral",
+        "Moves this decision to the person or role you name; it stays open until they answer.",
+        needs="delegate_to",
+    )
+
+
+_RETRY = ("Then retry the work: Retry on the failed step in Workflow, or on the build in "
+          "Factory. Approving this card would not retry anything.")
+
+_REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
+    "capacity": {
+        "what_happened": (
+            "BOSS tried to call a model and it had no capacity or credit left (a rate limit, "
+            "used-up credit, or the model budget spent), so the work that asked stopped "
+            "instead of retrying for ever."),
+        "what_to_do": (
+            "Add credit or raise the limit on the model account, or connect another model, in "
+            "Repo and model. If the budget was the limit, raise it in Govern. " + _RETRY),
+        "area": "setup",
+        "link_label": "Open Repo and model",
+    },
+    "budget": {
+        "what_happened": (
+            "BOSS refused to spend because the work would have gone over the budget, so the "
+            "step that asked failed."),
+        "what_to_do": (
+            "Raise the cap or wait for the budget window to reset in Govern. " + _RETRY),
+        "area": "budget",
+        "link_label": "Open Govern",
+    },
+    "tier2_frozen": {
+        "what_happened": (
+            "Spending has passed the point where the budget policy freezes high-risk (tier 2 "
+            "and above) work, so BOSS refused to start it. Lower-risk work still runs."),
+        "what_to_do": (
+            "Raise the cap or the freeze threshold in Govern, or wait for the budget window "
+            "to reset. " + _RETRY),
+        "area": "budget",
+        "link_label": "Open Govern",
+    },
+    "autoscale": {
+        "what_happened": (
+            "The budget is close to or over its cap, so BOSS did not add workers. Queued work "
+            "still runs on the workers it already has, only more slowly."),
+        "what_to_do": (
+            "Nothing is needed if slower is fine. To let BOSS add workers, raise the cap in "
+            "Govern. Approving this card would not add any."),
+        "area": "budget",
+        "link_label": "Open Govern",
+    },
+    "deferred": {
+        "what_happened": (
+            "The budget state defers this kind of work, so BOSS moved the job to run later. "
+            "It is still queued and runs again by itself."),
+        "what_to_do": (
+            "Nothing is needed if it can wait. To run it sooner, raise the cap in Govern. "
+            "Approving this card would not run it."),
+        "area": "budget",
+        "link_label": "Open Govern",
+    },
+}
+
+
+def guidance(decision: Mapping[str, Any]) -> Optional[dict[str, str]]:
+    """What happened and what to do, for a decision that is a notice rather than a question."""
+    family = _refusal_family(decision)
+    if family is None:
+        return None
+    return dict(_REFUSAL_GUIDANCE[family])
+
+
+def _general_approve(decision: Mapping[str, Any]) -> dict[str, Any]:
+    if carries_out_on_approval(decision):
+        return _action("approve", "Approve", "approve", "Carries out what this card proposes.")
+    # The old text promised to carry the card out for EVERY general decision, and for most of
+    # them nothing does: a "provide_github_token" card approved stayed exactly as it was.
+    return _action(
+        "approve", "Approve", "approve",
+        "Records your approval. BOSS starts nothing from this card by itself; work that needs "
+        "this approval can use it when it runs again.")
+
+
+def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every action a person may take on this decision right now, in display order.
+
+    Empty means there is nothing to press: the decision is closed.
+    """
+    status = str(decision.get("status") or "")
+    if status == "approved":
+        # The approval happened; the only thing left is recording that it was carried out by
+        # hand, which matters for the types BOSS cannot carry out itself.
+        return [_action(
+            "execute", "Mark executed", "approve",
+            "Records what was carried out and where, for the audit trail.", needs="note")]
+    if status not in _OPEN and not reopenable(decision):
+        return []
+    kind = kind_of(decision)
+    if kind == "refusal":
+        return [_action(
+            "reject", "Dismiss", "neutral",
+            "Clears this notice from the queue. It does not retry anything; fix the cause and "
+            "retry the work.")]
+    if kind == "deploy_gate":
+        return [
+            _action("approve", "Ship it", "approve",
+                    "Builds a container from this app and runs it on the bound host."),
+            _action("reject", "Don't ship", "reject",
+                    "Fails the Deploy step. Nothing is sent to any host."),
+            _delegate(),
+        ]
+    if kind == "workflow_gate":
+        # No "Request changes": the workflow runner reads approved, rejected and expired, and
+        # a gate parked in revision_requested left its run waiting for ever.
+        return [
+            _action("approve", "Approve", "approve",
+                    "Releases the step and the workflow continues from it."),
+            _action("reject", "Reject", "reject",
+                    "Fails the step. The run stops there unless you retry it."),
+            _delegate(),
+        ]
+    if kind == "pull_request":
+        # No "Request changes" either. Nothing reads a PR review's revision_requested, and the
+        # status could no longer be approved, so a PR sent back that way could never be merged
+        # from BOSS. Changing the code is a new build, which Factory starts from a note.
+        return [
+            _action("approve", "Approve and merge", "approve",
+                    "Authorizes the merge; BOSS merges once its own checks pass."),
+            _action("reject", "Keep blocked", "reject",
+                    "The pull request stays open and unmerged. To have BOSS change it, open "
+                    "the app in Factory and use Add a feature or Rebuild with a fresh spec, "
+                    "saying what to change."),
+            _delegate(),
+        ]
+    actions = [
+        _general_approve(decision),
+        _action("reject", "Reject", "reject", "Declines it; nothing is carried out."),
+    ]
+    if consumes_revision(decision):
+        actions.append(_action(
+            "revise", "Request changes", "neutral",
+            "Sends the proposal back with your note; nothing is applied until it returns.",
+            needs="note"))
+    actions.append(_delegate())
+    return actions
+
+
+def reopenable(decision: Mapping[str, Any]) -> bool:
+    """A decision in a status that looks closed but can still be answered.
+
+    An expired hold-default decision applied nothing (see DecisionService.transition). A
+    decision parked in `revision_requested` whose type does not read that status is the same
+    dead end: before this contract, "Request changes" was offered on pull requests and every
+    general card, and those decisions sit in that status on real installs with no way to
+    approve them. Answering reopens them.
+    """
+    status = str(decision.get("status") or "")
+    if status in _REOPENABLE:
+        return str(decision.get("default_action") or "hold").lower() == "hold"
+    if status == "revision_requested":
+        return not consumes_revision(decision)
+    return False
+
+
+#: Where a decision belongs in front of the operator. ONE answer, read by every surface that
+#: counts or filters decisions: the Approvals inbox, the Command Center and the v2 queue.
+#:
+#: WHY ONE. Review round 2 found three definitions of "needs the operator". The Command Center
+#: counted pending and delegated; the inbox counted any card the engine offered an answer on,
+#: which swept in every expired hold-default decision (127 of 165 on the live project, some of
+#: them "Approve and merge" on pull requests from weeks ago); the v2 queue counted every
+#: revision_requested, including the ones waiting on the proposer. The landing page and the
+#: inbox disagreed about what was waiting.
+#:
+#:   needs_action  pending or delegated and not past its deadline, or parked in a
+#:                 revision_requested nothing reads (the stuck pull requests): the operator is
+#:                 the only way it moves.
+#:   expired       expired with a hold default, so nothing was applied and it can still be
+#:                 answered. Shown in its own group with its age, never in the default view:
+#:                 most of these are about work that has long moved on.
+#:   resolved      everything else, including a revision_requested that the proposer is
+#:                 working on.
+ATTENTION = ("needs_action", "expired", "resolved")
+
+#: The statuses a needs_action or expired decision can be in. A reader that selects in SQL
+#: selects these and classifies the rows with `attention`; the rule itself is never in SQL.
+ATTENTION_CANDIDATE_STATUSES = ("pending", "delegated", "revision_requested", "expired")
+#: The statuses a needs_action decision can be in (the same, without expired).
+NEEDS_ACTION_CANDIDATE_STATUSES = ("pending", "delegated", "revision_requested")
+
+
+def _deadline_passed(decision: Mapping[str, Any], now: Optional[datetime]) -> bool:
+    deadline = decision.get("deadline_at")
+    if isinstance(deadline, str):
+        try:
+            deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    if not isinstance(deadline, datetime):
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return deadline <= (now or datetime.now(timezone.utc))
+
+
+def attention(decision: Mapping[str, Any], now: Optional[datetime] = None) -> str:
+    """Which of ATTENTION this decision is in, right now.
+
+    A pending decision past its deadline is classified as the expiry would leave it. The inbox
+    runs `expire_overdue` before it reads and the Command Center does not (it is a read), so
+    without this a card overdue by a minute counted as waiting on the landing page and as
+    expired in the inbox.
+    """
+    status = str(decision.get("status") or "")
+    if status in _OPEN and _deadline_passed(decision, now):
+        status = "expired"
+    if status in _OPEN:
+        return "needs_action"
+    if status == "revision_requested":
+        return "resolved" if consumes_revision(decision) else "needs_action"
+    if status in _REOPENABLE and reopenable({**dict(decision), "status": status}):
+        return "expired"
+    return "resolved"
+
+
+def _sort_key(row: Mapping[str, Any]) -> tuple:
+    deadline = row.get("deadline_at")
+    created = row.get("created_at")
+    return (
+        -int(row.get("risk_tier") or 0),
+        deadline is None, str(deadline or ""),
+        str(created or ""),
+    )
+
+
+def waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] = None,
+                        include_expired: bool = False, min_risk_tier: Optional[int] = None,
+                        task_ids: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    """Every decision in the project that `attention` puts in front of the operator.
+
+    THE ONE READER for "how many decisions are waiting on you". Review round 3 found the
+    Approvals nav badge saying 2 while the inbox and the Command Center said 3 over the same
+    rows: GET /v1/status counted `status IN ('pending', 'delegated')` itself and so left out a
+    pull request parked in a dead-end revision_requested. The Workflow screen's Decisions KPI,
+    the dashboard's Awaiting You, the chat's factory briefing, health, ops and Metatron each
+    kept the same list of their own. They all read this now, and
+    engine/tests/test_every_surface_agrees_on_what_needs_the_operator.py fails on any reader
+    in engine/ or apps/ that writes its own list again.
+
+    Candidates are selected in SQL and classified here, never in SQL, so the rule lives in one
+    place. Sorted most urgent first: highest risk, nearest deadline, oldest. `include_expired`
+    adds the expired hold-default decisions that can still be answered.
+    """
+    from sqlalchemy import bindparam, text
+
+    statuses = ATTENTION_CANDIDATE_STATUSES if include_expired else NEEDS_ACTION_CANDIDATE_STATUSES
+    where = ["project_id = :project_id", "status IN :statuses"]
+    params: dict[str, Any] = {"project_id": project_id, "statuses": list(statuses)}
+    binds = [bindparam("statuses", expanding=True)]
+    if min_risk_tier is not None:
+        where.append("risk_tier >= :min_risk_tier")
+        params["min_risk_tier"] = int(min_risk_tier)
+    if task_ids is not None:
+        if not task_ids:
+            return []
+        where.append("task_id IN :task_ids")
+        params["task_ids"] = list(task_ids)
+        binds.append(bindparam("task_ids", expanding=True))
+    statement = text(
+        "SELECT * FROM decisions WHERE " + " AND ".join(where)
+    ).bindparams(*binds)
+    wanted = {"needs_action", "expired"} if include_expired else {"needs_action"}
+    rows = [dict(r) for r in connection.execute(statement, params).mappings().all()]
+    return sorted((r for r in rows if attention(r, now) in wanted), key=_sort_key)
+
+
+def count_waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] = None,
+                              min_risk_tier: Optional[int] = None) -> int:
+    """How many decisions need the operator: the number every badge and KPI shows."""
+    return len(waiting_on_operator(connection, project_id, now=now,
+                                   min_risk_tier=min_risk_tier))
+
+
+def describe(decision: Mapping[str, Any], now: Optional[datetime] = None) -> dict[str, Any]:
+    """The fields every decision card carries: kind, actions, guidance and attention."""
+    return {
+        "kind": kind_of(decision),
+        "allowed_actions": allowed_actions(decision),
+        "guidance": guidance(decision),
+        "attention": attention(decision, now),
+    }
+
+
+class DecisionActionNotAllowed(ValueError):
+    """The action is not one this decision offers. The message says what to do instead."""
+
+
+def require_allowed(decision: Mapping[str, Any], action: str) -> None:
+    """Refuse an action the decision does not offer, saying what would help.
+
+    Only the KIND is enforced here. Whether the status allows it (already approved, expired
+    with a non-hold default) stays with the transition itself, which has always answered that
+    and words it for the case.
+    """
+    kind = kind_of(decision)
+    offered = {a["action"] for a in allowed_actions({**dict(decision), "status": "pending"})}
+    offered.add("execute")
+    if action in offered:
+        return
+    if kind == "refusal":
+        hint = guidance(decision) or {}
+        raise DecisionActionNotAllowed(
+            f"This is a notice, not a question: {hint.get('what_happened', '')} "
+            f"{action.capitalize()} would not change anything. {hint.get('what_to_do', '')} "
+            "Dismiss it once you have."
+        )
+    if action == "revise":
+        raise DecisionActionNotAllowed(
+            "Nothing reads a request for changes on this decision, and it could not be "
+            "approved afterwards. Reject it to decline, or approve it. To change the work "
+            "itself, start that change: for an app, Add a feature or Rebuild with a fresh "
+            "spec in Factory."
+        )
+    raise DecisionActionNotAllowed(
+        f"'{action}' is not available on a {kind.replace('_', ' ')} decision. "
+        f"Choose one of: {', '.join(sorted(offered - {'execute'}))}."
+    )

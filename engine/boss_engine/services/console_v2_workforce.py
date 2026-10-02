@@ -345,7 +345,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         "spend_attributed": False,
         "spend_note": (
             "BOSS does not record which agent an LLM call belongs to, so per-agent cost cannot "
-            "be shown. Project spend is on the Projects screen."
+            "be shown. Each project's spend is on its card in Factory, and the total is in Govern."
         ),
     }
 

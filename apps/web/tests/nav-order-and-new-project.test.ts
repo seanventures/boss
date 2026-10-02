@@ -496,8 +496,11 @@ describe("managing runs, not just watching them", () => {
   it("says what Advance actually did", () => {
     // It reported success while advancing nothing — a run waiting on a person cannot be
     // ticked forward — and a button that always says "done" reads as one that does nothing.
-    expect(DW2).toContain("Nothing to advance — every run is finished or waiting on a person.");
-    expect(DW2).toContain("Advanced ${moved.length} step");
+    // REWRITTEN: the button no longer calls the worker-only pump (403 on authed installs); it
+    // re-checks each unfinished run. The protected behaviour is the same — it says what it did.
+    expect(DW2).toContain(
+      "Nothing could move yet — each run is waiting on a person or on work in flight.");
+    expect(DW2).toContain("Put ${requeued} step");
   });
 
   it("can put a failed step back in the queue", () => {

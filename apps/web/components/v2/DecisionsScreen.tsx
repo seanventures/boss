@@ -316,9 +316,22 @@ function DecisionRow({ d }: { d: V2Decision }) {
               {d.delegated_to ? ` → ${d.delegated_to}` : ""}
             </>
           ) : null}
-          {/* The options, so the row says how it can be answered rather than only that it
-              must be. A question with no visible answers is a dead end. */}
-          {d.options.length > 0 ? (
+          {/* The answers that work, as the Approvals inbox labels them, so the row says how it
+              can be answered rather than only that it must be. The raw options are the
+              fallback for an older API. */}
+          {d.kind === "refusal" ? (
+            <>
+              {"  "}
+              <span className="v2-row-meta-dim">notice</span>{" "}
+              {d.guidance?.what_to_do ?? "BOSS refused to spend; fix the cause, then retry."}
+            </>
+          ) : d.allowed_actions && d.allowed_actions.length > 0 ? (
+            <>
+              {"  "}
+              <span className="v2-row-meta-dim">answers</span>{" "}
+              {d.allowed_actions.map((a) => a.label).join(" · ")}
+            </>
+          ) : d.options.length > 0 ? (
             <>
               {"  "}
               <span className="v2-row-meta-dim">options</span> {d.options.join(" · ")}

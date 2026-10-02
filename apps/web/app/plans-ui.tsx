@@ -3,6 +3,7 @@
 import { type PlanItem } from "../lib/plans";
 import { dispatchPlanAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 export function PlansCard({ projectId, plans }: { projectId: string; plans: PlanItem[] }) {
   return (
@@ -27,7 +28,7 @@ export function PlansCard({ projectId, plans }: { projectId: string; plans: Plan
               {p.status === "dispatched" ? (
                 <span className="detail" style={{ color: "#3fb950" }}>dispatched ✓</span>
               ) : (
-                <form action={dispatchPlanAction}>
+                <ActionForm action={dispatchPlanAction}>
                   <input type="hidden" name="project_id" value={projectId} />
                   <input type="hidden" name="plan_id" value={p.id} />
                   <SubmitButton
@@ -39,7 +40,7 @@ export function PlansCard({ projectId, plans }: { projectId: string; plans: Plan
                   >
                     Dispatch
                   </SubmitButton>
-                </form>
+                </ActionForm>
               )}
             </div>
           ))}

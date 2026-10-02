@@ -3,18 +3,14 @@ import React from "react";
 /**
  * What this console can actually do, for someone seeing it for the first time.
  *
- * This card used to be design-partner SETUP: `make onboard`, `make seed`, Plane API keys,
- * "repo access is granted by a human". Two problems. It was setup instructions on a page you
- * only reach after setup has already succeeded — nobody reading it needs it. And it described a
- * private evaluation checkout, so a reader could not tell which parts apply to the release in
- * front of them.
+ * Keep this honest as the product changes — it went stale once already. It described an "Ask"
+ * button the composer no longer has, sent research to Discovery and builds to Meetings then
+ * Factory (both hidden from the rail; Build goes to Workflow), named a "CI/CD → Hosts" area
+ * that is called Infra, said BOSS-initiated deploys were paused while the Approvals deploy gate
+ * says approving ships it, said merge state was not tracked while a PR approval merges, and
+ * cited docs/operations/DESIGN_PARTNER_ONBOARDING.md, which does not exist.
  *
- * It now answers the question a first-time operator actually has: what can I do here, and what
- * is not here yet. The second half matters more than the first — a feature list that quietly
- * omits its own limits is how "it says it can deploy" becomes an hour of confusion.
- *
- * Keep this honest as the product changes. Setup lives in
- * docs/operations/DESIGN_PARTNER_ONBOARDING.md, where instructions belong.
+ * Every area named below is one the rail shows; tests/onboarding-help-card checks that.
  */
 export function OnboardingHelpCard() {
   return (
@@ -28,33 +24,42 @@ export function OnboardingHelpCard() {
 
       <div className="help-grid">
         <div className="help-col">
-          <h3 className="help-h">Three ways in</h3>
+          <h3 className="help-h">Two ways in</h3>
           <ul className="help-list">
             <li>
-              <b>Ask</b> — a question about your work. BOSS reads live state and answers with
-              real numbers; it can also act on the answer with your approval.
+              <b>Build</b> — describe what you want. BOSS starts a workflow run: a panel writes the
+              spec, an agent builds and tests it and opens a pull request. Watch every step in
+              {" "}<b>Workflow</b>; the finished project is in <b>Factory</b>.
             </li>
             <li>
-              <b>Research</b> — when the idea is not formed yet. Web research produces a cited
-              dossier and candidate outcomes under <b>Discovery</b>.
+              <b>Talk to BOSS</b> — ask about your work. BOSS answers from live state and can act
+              on the answer when you press the button it offers.
+            </li>
+          </ul>
+          <h3 className="help-h">What needs you</h3>
+          <ul className="help-list">
+            <li>
+              <b>Approvals</b> holds what BOSS will not do without you — shipping to a host,
+              merging a pull request. When BOSS refuses to spend (over budget, no model credit)
+              the card says what to fix and where.
             </li>
             <li>
-              <b>Build</b> — a directive. A panel debates it, drafts a PRD, you approve, and the
-              project runs. Watch it in <b>Meetings</b>, then <b>Factory</b>.
+              A step that fails stops its run. The Command Center lists it with the reason and a
+              {" "}<b>Retry</b> once you have fixed the cause.
             </li>
           </ul>
         </div>
 
         <div className="help-col">
-          <h3 className="help-h">What is not here yet</h3>
+          <h3 className="help-h">Before you start, and the limits</h3>
           <ul className="help-list">
             <li>
-              You can record a <b>host and a target</b> under Infra → Hosts. BOSS-initiated
-              SSH planning and deployment are paused in Community.
+              A build needs a connected repository and model — <b>Repo and model</b>.
             </li>
             <li>
-              Merge state is <b>not tracked</b> — the console shows PRs opened, not merged. That
-              needs GitHub.
+              Deploying needs a <b>host and a target</b>: register the host in <b>Infra</b>,
+              then bind the app to it on the run&apos;s Deploy step. Nothing ships until you approve
+              the deploy gate.
             </li>
             <li>
               Previews and sandboxes are <b>not guaranteed</b>. A blocked surface fails closed
@@ -66,7 +71,7 @@ export function OnboardingHelpCard() {
 
       <p className="detail help-foot">
         Anything BOSS starts is inspectable — every run, its cost, and the evidence behind it.
-        Setup and operations live in <code>docs/operations/DESIGN_PARTNER_ONBOARDING.md</code>.
+        Setup is in <code>docs/community/GETTING_STARTED.md</code>.
       </p>
     </article>
   );

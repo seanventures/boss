@@ -2084,6 +2084,10 @@ class SoftwareFactoryService:
             task_id,
             f"Approve code change: {title} (PR #{pr.number})",
             {
+                # FIRST, so nothing it carries can replace the action below. Its keys are the
+                # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
+                # the decision-producer scan refuses a spread placed after "action".
+                **sealed_evidence,
                 "action": "review_pull_request",
                 "summary": (
                     f"BOSS built “{title}” in a sandbox and opened pull request #{pr.number}. "
@@ -2111,7 +2115,6 @@ class SoftwareFactoryService:
                 "quality_gate_id": quality_gate_id,
                 "run_id": run_id,
                 "no_auto_merge": True,
-                **sealed_evidence,
             },
             {},
             "merge_decision_required",

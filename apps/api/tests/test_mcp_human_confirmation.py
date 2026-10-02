@@ -267,12 +267,19 @@ def test_confirmed_mcp_decision_records_human_reviewer_as_actor(
                 risk_tier, default_action, status, approved_by
             ) VALUES (
                 :id, :project_id, 'Review MCP attribution',
-                '{"action":"manual_test"}'::jsonb,
+                CAST(:recommendation AS JSONB),
                 '[{"label":"Review","action":"review"}]'::jsonb,
                 1, 'hold', :status, :approved_by
             )
         """), {"id": decision_id, "project_id": PROJECT,
                "status": initial_status,
+               # REWRITTEN for revise: "Request changes" is offered only where something
+               # reads the note (decision_actions.REVISE_CONSUMED). On a type nothing reads it
+               # for, a pull request sent back that way could never be merged, so the server
+               # now refuses it. An autonomy change does read it; with no change id attached
+               # its follow-on is a no-op, so this stays a test of who the actor is.
+               "recommendation": ('{"action":"role.autonomy_change"}' if action == "revise"
+                                  else '{"action":"manual_test"}'),
                "approved_by": "ceo" if initial_status == "approved" else None})
 
     template = f"/v1/decisions/{{decision_id}}/{action}"

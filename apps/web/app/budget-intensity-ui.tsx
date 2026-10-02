@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { setBudgetIntensityAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 // Mirrors the backend mapping in budget.set_intensity so the preview matches what will apply.
 function envelope(v: number) {
@@ -31,7 +32,7 @@ export function BudgetIntensitySlider({
         One CEO dial (0–100) sets the spend envelope and scaling limits — daily/monthly/burst caps,
         max concurrent jobs and workers, and which model tiers are allowed.
       </p>
-      <form action={setBudgetIntensityAction} style={{ display: "grid", gap: 12, marginTop: 10 }}>
+      <ActionForm action={setBudgetIntensityAction} style={{ display: "grid", gap: 12, marginTop: 10 }}>
         <input type="hidden" name="project_id" value={projectId} />
         <input
           type="range"
@@ -67,7 +68,7 @@ export function BudgetIntensitySlider({
             Current: {current}
           </p>
         )}
-      </form>
+      </ActionForm>
     </article>
   );
 }

@@ -1,5 +1,11 @@
 
 import { consoleAuthConfig } from "../lib/console-session";
+import { cookies, headers } from "next/headers";
+import {
+  areasToRender,
+  isFullDocumentRequest,
+  LOADED_AREAS_COOKIE,
+} from "../lib/area-loading";
 import {
   applyChangeSetAction,
   approveChangeSetAction,
@@ -152,6 +158,8 @@ import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-gov
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { AgentOrb } from "./agent-orb";
 import { buildAgentRoster } from "../lib/roster";
+import { fetchCommandCenter } from "../lib/command-center";
+import { CommandCenter } from "./command-center-ui";
 import { ReliabilityHome } from "./reliability-ui";
 import { AssuranceCenter } from "./assurance-ui";
 import { fetchAssuranceFeed } from "../lib/assurance";
@@ -185,7 +193,7 @@ import { RepoActivityPanel } from "./repo-activity-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
-import { fetchDeliveryMetrics, fetchInFlight } from "../lib/metrics";
+import { fetchDeliveryMetrics } from "../lib/metrics";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
@@ -235,6 +243,7 @@ import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
 import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
 
 import { AskBossHero } from "./ask-boss-hero";
+import { ActionForm } from "./client-forms";
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
@@ -525,8 +534,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // What it costs, stated honestly rather than discovered later: the first load is ~8 MB again
   // and takes several seconds, and every area's feeds are fetched whether or not you open it.
   // That is one slow load per session instead of a slow response to every click.
-  const shows = (_area: string) => true;
-  const needs = (..._areas: string[]) => true;
+  //
+  // AND THEN IT WENT LAZY, WITHOUT GIVING THE CLICK BACK. Both ends of this trade were reported
+  // as unusable, and neither is necessary (see lib/area-loading.ts). A browser load renders the
+  // requested area alone, so the first paint is one area's worth instead of 6-9 seconds. The
+  // first time the operator opens another area, the shell adds it to a session cookie, shows a
+  // real loading state and refreshes; from then on this renders every area the session has
+  // opened, at the same tree positions, so the ones on screen update rather than remount and a
+  // second click on them is the old pure CSS reveal.
+  const [requestHeaders, requestCookies] = await Promise.all([headers(), cookies()]);
+  const loadedAreas = areasToRender({
+    requested: shownArea,
+    cookie: requestCookies.get(LOADED_AREAS_COOKIE)?.value,
+    fullDocument: isFullDocumentRequest((name) => requestHeaders.get(name)),
+  });
+  const shows = (area: string) => loadedAreas.has(area);
+  const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area));
   const requestedDecisionFilter = parseDecisionInboxFilter(
     getParam(resolvedSearchParams?.decision_filter),
   );
@@ -666,7 +689,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fetchReliabilityFeed(activeProjectId),
     fetchAiSreCapabilities(activeProjectId),
     fetchDeliveryMetrics(activeProjectId, 7),
-    fetchInFlight(activeProjectId, 6),
+    // The Command Center's one call, in this wave rather than after it: an await on its
+    // own is a round trip every other feed waits behind.
+    fetchCommandCenter(activeProjectId, needs("overview")),
   ] as const);
 
   const [workforceData, orgChartData] = await Promise.all([workforceP, orgChartP]);
@@ -868,7 +893,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing
   // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
   // calls, so serialising it was pure waste on every single render.
-  const [reliabilityFeed, aiSreFeed, deliveryMetrics, inFlight] = await reliabilityWaveP;
+  const [reliabilityFeed, aiSreFeed, deliveryMetrics, commandCenter] = await reliabilityWaveP;
   const [costInsights, llmSpend] = await Promise.all([
     Promise.resolve(budgetArea.costInsights),
     Promise.resolve(budgetArea.llmSpend),
@@ -966,6 +991,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       // Sign out only means something when the console has a password; without one the button
       // led to a sign-in page that could only say authentication is not configured.
       signOutAvailable={consoleAuthConfig() !== null}
+      loadedAreas={[...loadedAreas]}
     >
       <div className="frame">
         {/* ONE AGENT SURFACE.
@@ -1135,155 +1161,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           ) : null}
 
-          <div className="cc-kpis">
-            <AreaLink className="cc-kpi" area="work" orgId={activeOrgId}>
-              <span className="cc-kpi-l">Outcomes in flight</span>
-              <span className="cc-kpi-n">{status.openTasks}</span>
-            </AreaLink>
-                        {/* Was "Agents active", which counted ROLES owning a task in an active column.
-                Only 23 of 187 tasks carry an owner_role_id, so it showed 0/21 while four runs
-                were executing — arithmetic over a field nothing populates, which reads as
-                broken. This counts the work instead. */}
-            <AreaLink className="cc-kpi" area="code_tasks" orgId={activeOrgId}>
-              <span className="cc-kpi-l">Running now</span>
-              <span className="cc-kpi-n">
-                {deliveryMetrics.runsRunning}
-                {deliveryMetrics.jobsQueued > 0 ? (
-                  <small> · {deliveryMetrics.jobsQueued} queued</small>
-                ) : null}
-              </span>
-            </AreaLink>
-            <AreaLink className="cc-kpi amber" area="decisions" orgId={activeOrgId}>
-              <span className="cc-kpi-l">Awaiting you</span>
-              <span className="cc-kpi-n">{status.pendingDecisions}</span>
-            </AreaLink>
-            {/* Was "Verified today", which counted a 100-row page and so displayed exactly
-                100 whenever there were 100 or more — a page size dressed as a count. This is
-                an aggregate over the window instead. */}
-            <AreaLink className="cc-kpi green" area="code_tasks" orgId={activeOrgId}>
-              <span className="cc-kpi-l">Shipped · 7d</span>
-              <span className="cc-kpi-n">{deliveryMetrics.prsOpened}<small> PRs</small></span>
-            </AreaLink>
-          </div>
-
-          <div className="cc-grid">
-            <article className="cc-coord" aria-label="Live coordination">
-              <div className="cc-panel-head">
-                <strong>Live coordination</strong>
-                <span className="cc-panel-meta">
-                  {ccRoster.filter((agent) => agent.state === "running").length} running
-                </span>
-              </div>
-              <div className="cc-stage">
-                <svg className="cc-stage-lines" viewBox="0 0 520 340" aria-hidden>
-                  <g strokeWidth="1.6" fill="none" strokeDasharray="4 6">
-                    {CC_NODE_SPOTS.slice(0, ccGraphAgents.length).map((spot, index) => (
-                      <line
-                        key={index}
-                        x1="260"
-                        y1="170"
-                        x2={spot.lineX}
-                        y2={spot.lineY}
-                        stroke={index % 2 === 0 ? "#2f6fe0" : "#2ec5c5"}
-                        style={{ animation: `bpFlow ${spot.flowSeconds}s linear infinite` }}
-                      />
-                    ))}
-                    {ccGraphAgents.length >= 2 ? (
-                      <line
-                        x1={CC_NODE_SPOTS[0].lineX}
-                        y1={CC_NODE_SPOTS[0].lineY}
-                        x2={CC_NODE_SPOTS[1].lineX}
-                        y2={CC_NODE_SPOTS[1].lineY}
-                        stroke="#26365c"
-                        style={{ animation: "bpFlow 2s linear infinite" }}
-                      />
-                    ) : null}
-                  </g>
-                </svg>
-                <div className="cc-core">
-                  <div className="cc-core-tile">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/boss-mark.png" alt="" />
-                  </div>
-                  <span className="cc-core-label">BOSS core</span>
-                </div>
-                {ccGraphAgents.map((agent, index) => {
-                  const spot = CC_NODE_SPOTS[index];
-                  return (
-                    <div
-                      className="cc-node"
-                      key={agent.id}
-                      style={{ left: `${spot.left}%`, top: `${spot.top}%` }}
-                    >
-                      <AgentOrb
-                        label={roleInitials(agent.name)}
-                        state={agent.state}
-                        spinSeconds={spot.spinSeconds}
-                        title={`${agent.name} — ${agent.state}`}
-                      />
-                      <span className="cc-node-label">{agent.name}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </article>
-
-            {/* WHAT YOU STARTED, NOT WHAT THE MACHINE LOGGED.
-                This was the raw event stream: worker heartbeats, leased jobs, budget
-                reservations released. All true, none of it something a person acts on, and it
-                pushed the one question an operator actually has off the page — "I pressed
-                Build, what is it doing, and where do I look?" Each row is a thing they
-                started, the stage it is in, and a link to the area that shows that stage. */}
-            <article className="cc-feed" aria-label="In flight">
-              <div className="cc-panel-head">
-                <span className="cc-live-dot" aria-hidden />
-                <strong>In flight</strong>
-                <span className="cc-feed-meta">last 3 days</span>
-              </div>
-              <div className="cc-feed-list">
-                {inFlight.map((item) => (
-                  <AreaLink
-                    className="cc-flight-row"
-                    area={item.area}
-                    orgId={activeOrgId}
-                    key={item.taskId}
-                    title={item.title}
-                  >
-                    <span className={`cc-flight-stage stage-${item.stage}`}>{item.stage}</span>
-                    <span className="cc-flight-main">
-                      <span className="cc-flight-title">{item.title || item.taskId}</span>
-                      <span className="cc-flight-sub">
-                        {item.active ? "running" : item.status}
-                        {item.createdAt ? <> · <time dateTime={item.createdAt}>{formatDateTime(item.createdAt)}</time></> : null}
-                      </span>
-                    </span>
-                    <span className="cc-flight-go" aria-hidden>→</span>
-                  </AreaLink>
-                ))}
-                {inFlight.length === 0 ? (
-                  <p className="empty-state">
-                    Nothing started in the last three days. Describe something in Ask BOSS and
-                    press Build.
-                  </p>
-                ) : null}
-              </div>
-            </article>
-          </div>
-          {/* The flow, as one row, in the order the work happens.
-              These already carried the two ways in — convene a panel, start a code task. What
-              was missing on either side of them is where an idea comes FROM when it is not yet
-              formed (research), and where the result GOES once it exists (apps). An operator
-              landing here could see how to start work and not how to find what it produced,
-              which is most of what "the flow is missing" has meant. */}
-          <div className="ov-actions">
-            <span className="ov-actions-label">Quick actions</span>
-            <AreaLink className="ov-action" area="discovery" orgId={activeOrgId}>View saved research</AreaLink>
-            <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a panel</AreaLink>
-            <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a project</AreaLink>
-            <AreaLink className="ov-action" area="delivery" orgId={activeOrgId}>See your deployed apps</AreaLink>
-            <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
-            <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
-          </div>
+          {/* THE FACTORY AS WORKFLOW RUNS. What needs you, what is running (step, agent,
+              elapsed) and how recent runs ended — every row a link into its run. This replaced
+              task-based KPI tiles, an orb graph over a field nothing populates, quick actions
+              to off-rail areas, a Metatron card whose button did nothing and a "Pending
+              decisions" list that linked nowhere. See command-center-ui.tsx. */}
+          <CommandCenter key={`${activeOrgId}:${activeProjectId}`} projectId={activeProjectId}
+            orgId={activeOrgId} actor={activeActorId} initial={commandCenter} />
         </section>
         ) : null}
 
@@ -1293,75 +1177,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {shows("overview") ? (
-        <section className="stack-grid" data-area="overview">
-          <article className="stack-card">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Metatron</span>
-                <h2>Scoped status query</h2>
-              </div>
-            </div>
-            {/* The composer that stood here asked for a question plus two optional ids and
-                posted to a read-only endpoint. Ask BOSS, at the top of this page, answers the
-                same question from the same live state AND can act on it, so keeping a second
-                weaker entry point only split the operator's attention. The rendering below
-                stays: the captain page still links here with q/task_id/decision_id set. */}
-            <p className="detail">
-              Ask a scoped question from <strong>Ask BOSS</strong> at the top of this page —
-              it reads the same live control-plane state and can act on the answer.
-            </p>
-            {metatron ? (
-              <div className="decision-grid">
-                <div>
-                  <h4>Answer</h4>
-                  <p>{metatron.answer}</p>
-                  <p className="detail">
-                    {metatron.apiReachable
-                      ? `Fresh as of ${formatDateTime(metatron.freshnessAt)}.`
-                      : metatron.blockedReason}
-                  </p>
-                </div>
-                <div>
-                  <h4>Suggested actions</h4>
-                  {metatron.suggestedActions.length > 0 ? (
-                    <ul className="detail">
-                      {metatron.suggestedActions.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="detail">No suggested action.</p>
-                  )}
-                </div>
-                <div>
-                  <h4>References</h4>
-                  {metatron.references.length > 0 ? (
-                    <div className="feed-list">
-                      {metatron.references.map((reference) => (
-                        <div key={`${reference.objectType}:${reference.objectId}`}>
-                          <div>{reference.title}</div>
-                          <p className="detail">
-                            {reference.objectType} / {reference.objectId}
-                            {reference.status ? ` / ${reference.status}` : ""}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="detail">No references returned.</p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="detail">
-                Ask a scoped question to get a freshness-stamped answer from the
-                live control plane.
-              </p>
-            )}
-          </article>
-        </section>
-        ) : null}
         {/* THE DIAGNOSTIC GRID IS GONE, DELIBERATELY.
             Eleven tiles: Project, Database "Connected", Auth Session "Ceo", Budget State,
             Pending Decisions, Active Jobs, Open Tasks, Blocking State "Clear", Artifacts,
@@ -1377,73 +1192,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             above the fold says a number and nothing else — not what failed, not when, not
             whether it matters now. A count with no context is an anxiety generator, not a
             signal; failures belong next to the work they came from, which is Monitoring. */}
-
-        {shows("overview") ? (
-        <section className="bx-overview" data-area="overview" aria-label="Overview summary">
-          <div className="bx-overview-split">
-            <article
-              className="bx-card"
-              style={{ padding: "22px", display: "grid", gap: "14px" }}
-            >
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">Needs attention</span>
-                  <h2 style={{ fontSize: "1.18rem", margin: "4px 0 0" }}>
-                    Pending decisions
-                  </h2>
-                </div>
-                <span
-                  className={`pill${status.pendingDecisions > 0 ? " warn" : ""}`}
-                >
-                  {status.pendingDecisions} open
-                </span>
-              </div>
-              {decisions.items.filter(
-                (decision) =>
-                  decision.status === "pending" ||
-                  decision.status === "delegated",
-              ).length > 0 ? (
-                <div className="bx-attention">
-                  {decisions.items
-                    .filter(
-                      (decision) =>
-                        decision.status === "pending" ||
-                        decision.status === "delegated",
-                    )
-                    .slice(0, 4)
-                    .map((decision) => (
-                      <div className="bx-attention-item" key={decision.id}>
-                        <span className="bx-tier">T{decision.riskTier}</span>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 600 }}>
-                            {decision.question}
-                          </div>
-                          <p
-                            className="detail"
-                            style={{ fontSize: "0.84rem" }}
-                          >
-                            Recommends {formatRecommendation(decision)} /{" "}
-                            {decision.status}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              ) : (
-                <p className="detail">
-                  No decisions are waiting. The queue is clear.
-                </p>
-              )}
-            </article>
-
-            {/* "Recent activity" removed. It was the same event stream taken out of the
-                landing panel earlier — audit.export generated, resource.quota updated,
-                factory flow.ticked, receipt.created. Machine bookkeeping: every line true,
-                none of it something an operator decides anything from. Removing it from one
-                place and leaving it in another was half a decision. */}
-          </div>
-        </section>
-        ) : null}
 
         {shows("org") ? (
         <section className="panel-stack">
@@ -1461,7 +1209,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Add or update org delegate</h3>
-              <form action={upsertOrgMemberAction} className="composer compact">
+              <ActionForm action={upsertOrgMemberAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="org_id" value={activeOrgId} />
                 <input type="hidden" name="actor" value={activeActorId} />
@@ -1517,7 +1265,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <SubmitButton className="button secondary" type="submit">
                   Save org delegate
                 </SubmitButton>
-              </form>
+              </ActionForm>
             </article>
 
             <article className="stack-card">
@@ -1579,7 +1327,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Grant temporary access</h3>
-              <form action={createBreakGlassGrantAction} className="composer compact">
+              <ActionForm action={createBreakGlassGrantAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
@@ -1637,7 +1385,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <SubmitButton className="button secondary" type="submit">
                   Grant break-glass access
                 </SubmitButton>
-              </form>
+              </ActionForm>
             </article>
 
             <article className="stack-card">
@@ -1672,7 +1420,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <p className="detail">{grant.reason}</p>
                       </div>
                       {grant.status === "active" ? (
-                        <form
+                        <ActionForm
                           action={revokeBreakGlassGrantAction}
                           className="composer compact"
                         >
@@ -1695,7 +1443,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <SubmitButton className="button secondary" type="submit">
                             Revoke
                           </SubmitButton>
-                        </form>
+                        </ActionForm>
                       ) : (
                         <code className="mono">{grant.id}</code>
                       )}
@@ -2005,14 +1753,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <article className="stack-card" id="provider-resources">
                   <h3>Resource Explorer</h3>
                   <div className="button-stack">
-                    <form action={syncProviderResourcesAction}>
+                    <ActionForm action={syncProviderResourcesAction}>
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
                       <SubmitButton className="button secondary" type="submit">
                         Sync all providers
                       </SubmitButton>
-                    </form>
-                    <form action={runResourceJanitorAction} className="composer compact">
+                    </ActionForm>
+                    <ActionForm action={runResourceJanitorAction} className="composer compact">
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
                       <label className="field">
@@ -2045,7 +1793,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         ChangeSets. It never deletes production resources or calls
                         providers directly.
                       </p>
-                    </form>
+                    </ActionForm>
                   </div>
                   {providerOps.resources.length === 0 ? (
                     <p className="detail">
@@ -2079,7 +1827,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
                 <article className="stack-card" id="provider-scaling">
                   <h3>Budget-Aware Autoscaler</h3>
-                  <form action={upsertWorkerPoolAction} className="composer compact">
+                  <ActionForm action={upsertWorkerPoolAction} className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <div className="input-grid">
@@ -2189,9 +1937,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Register worker pool
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
 
-                  <form action={runAutoscalerPlanAction} className="composer compact">
+                  <ActionForm action={runAutoscalerPlanAction} className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <label className="field">
@@ -2222,7 +1970,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       scale-up is held as a BudgetReservation-backed ChangeSet for
                       approval.
                     </p>
-                  </form>
+                  </ActionForm>
 
                   {providerOps.workerPools.length === 0 ? (
                     <p className="detail">
@@ -2282,7 +2030,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
                 <article className="stack-card">
                   <h3>ChangeSet Review</h3>
-                  <form action={createChangeSetAction} className="composer compact">
+                  <ActionForm action={createChangeSetAction} className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <label className="field">
@@ -2361,7 +2109,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Create ChangeSet
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
 
                   {providerOps.changeSets.length === 0 ? (
                     <p className="detail">No Resource Plane ChangeSets yet.</p>
@@ -2388,7 +2136,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </div>
                           <div className="button-stack">
                             {changeSet.status === "pending_approval" ? (
-                              <form action={approveChangeSetAction}>
+                              <ActionForm action={approveChangeSetAction}>
                                 <input
                                   type="hidden"
                                   name="changeset_id"
@@ -2407,10 +2155,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 <SubmitButton className="button secondary" type="submit">
                                   Approve
                                 </SubmitButton>
-                              </form>
+                              </ActionForm>
                             ) : null}
                             {changeSet.status === "approved" ? (
-                              <form action={applyChangeSetAction}>
+                              <ActionForm action={applyChangeSetAction}>
                                 <input
                                   type="hidden"
                                   name="changeset_id"
@@ -2429,7 +2177,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 <SubmitButton className="button secondary" type="submit">
                                   Apply
                                 </SubmitButton>
-                              </form>
+                              </ActionForm>
                             ) : (
                               <code className="mono">{changeSet.id}</code>
                             )}
@@ -2442,7 +2190,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
                 <article className="stack-card">
                   <h3>Deployment Registry</h3>
-                  <form
+                  <ActionForm
                     action={upsertDeploymentEnvironmentPolicyAction}
                     className="composer compact"
                   >
@@ -2538,7 +2286,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       until an active environment policy allows the runtime mode
                       and required gates.
                     </p>
-                  </form>
+                  </ActionForm>
 
                   {providerOps.deploymentPolicies.length > 0 ? (
                     <div className="feed-list">
@@ -2579,7 +2327,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </p>
                   )}
 
-                  <form
+                  <ActionForm
                     action={createDeploymentTargetAction}
                     className="composer compact"
                   >
@@ -2668,9 +2416,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Register deployment target
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
 
-                  <form action={createDeploymentRunAction} className="composer compact">
+                  <ActionForm action={createDeploymentRunAction} className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <label className="field">
@@ -2730,7 +2478,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       run only after the ChangeSet is applied, or immediately for
                       local targets with no provider write.
                     </p>
-                  </form>
+                  </ActionForm>
 
                   {providerOps.deploymentTargets.length === 0 ? (
                     <p className="detail">No deployment targets registered yet.</p>
@@ -2781,7 +2529,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             ) : null}
                           </div>
                           <div className="button-stack">
-                            <form action={runDeploymentHealthCheckAction}>
+                            <ActionForm action={runDeploymentHealthCheckAction}>
                               <input
                                 type="hidden"
                                 name="deployment_run_id"
@@ -2800,7 +2548,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <SubmitButton className="button secondary" type="submit">
                                 Run health checks
                               </SubmitButton>
-                            </form>
+                            </ActionForm>
                             <code className="mono">
                               {run.rollbackArtifactId ?? run.releaseArtifactId ?? run.id}
                             </code>
@@ -3125,13 +2873,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   ? `Latest snapshot at ${formatDateTime(status.latestSnapshotAt)}.`
                   : "No persisted health snapshot yet. Refresh one from the console."}
               </p>
-              <form action={refreshHealthSnapshotAction}>
+              <ActionForm action={refreshHealthSnapshotAction}>
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <SubmitButton className="button secondary" type="submit">
                   Refresh snapshot
                 </SubmitButton>
-              </form>
+              </ActionForm>
               <div className="feed-list">
                 {status.topRisks.length === 0 ? (
                   <p className="detail">No current risk summary available.</p>
@@ -3171,14 +2919,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     {opsQueue.readyJobIds.length} / stale leases{" "}
                     {opsQueue.staleLeaseJobIds.length}
                   </p>
-                  <form action={createOpsDigestAction}>
+                  <ActionForm action={createOpsDigestAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <input type="hidden" name="limit" value={25} />
                     <SubmitButton className="button secondary" type="submit">
                       Create ops digest
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
                   <div className="feed-list">
                     {opsQueue.recommendedActions.length === 0 ? (
                       <p className="detail">
@@ -3359,20 +3107,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </span>
                     </div>
                   </div>
-                  <form action={createReplayBundleAction}>
+                  <ActionForm action={createReplayBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <SubmitButton className="button secondary" type="submit">
                       Create replay bundle
                     </SubmitButton>
-                  </form>
-                  <form action={createComplianceEvidenceBundleAction}>
+                  </ActionForm>
+                  <ActionForm action={createComplianceEvidenceBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <SubmitButton className="button secondary" type="submit">
                       Create compliance evidence
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
                 </>
               )}
             </article>
@@ -3500,7 +3248,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <SlackToolsCard projectId={activeProjectId} />
             <article className="stack-card">
               <h3>Draft outbound message</h3>
-              <form action={submitOutboxDraftAction} className="composer compact">
+              <ActionForm action={submitOutboxDraftAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
@@ -3533,7 +3281,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <SubmitButton className="button secondary" type="submit">
                   Create outbox draft
                 </SubmitButton>
-              </form>
+              </ActionForm>
             </article>
 
             <article className="stack-card">
@@ -3581,7 +3329,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   )}
 
-                  <form
+                  <ActionForm
                     action={upsertCommsChannelPolicyAction}
                     className="composer compact"
                   >
@@ -3633,7 +3381,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Save channel policy
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
                 </>
               )}
             </article>
@@ -3666,15 +3414,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           {message.status === "dry_run" ? (
                             <p className="detail">dry-run — no provider send</p>
                           ) : null}
-                          <form action={dryRunOutboxMessageAction}>
+                          <ActionForm action={dryRunOutboxMessageAction}>
                             <input type="hidden" name="message_id" value={message.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
                             <SubmitButton className="button secondary" type="submit">
                               Dry-run deliver
                             </SubmitButton>
-                          </form>
-                          <form action={queueOutboxMessageAction}>
+                          </ActionForm>
+                          <ActionForm action={queueOutboxMessageAction}>
                             <input type="hidden" name="message_id" value={message.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -3694,7 +3442,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <SubmitButton className="button secondary" type="submit">
                               Queue send
                             </SubmitButton>
-                          </form>
+                          </ActionForm>
                         </div>
                       ) : (
                         <code className="mono">{message.id}</code>
@@ -3782,14 +3530,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           />
                         </div>
                       ) : (
-                        <form action={installPackAction}>
+                        <ActionForm action={installPackAction}>
                           <input type="hidden" name="pack_id" value={pack.packId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
                           <SubmitButton className="button secondary" type="submit">
                             Install
                           </SubmitButton>
-                        </form>
+                        </ActionForm>
                       )}
                     </div>
                   ))}
@@ -3971,7 +3719,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   )}
 
-                  <form
+                  <ActionForm
                     action={upsertEnterpriseIdentityProviderAction}
                     className="composer"
                     id="identity-provider-form"
@@ -4037,7 +3785,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Save identity provider
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
                 </>
               )}
             </article>
@@ -4096,7 +3844,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   )}
 
-                  <form
+                  <ActionForm
                     action={upsertEnterpriseIdentityRolloutPolicyAction}
                     className="composer compact"
                   >
@@ -4146,7 +3894,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Save rollout policy
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
                 </>
               )}
             </article>
@@ -4211,7 +3959,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     )}
                   </div>
 
-                  <form action={upsertEnterpriseScimGroupAction} className="composer">
+                  <ActionForm action={upsertEnterpriseScimGroupAction} className="composer">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <label className="field">
@@ -4237,9 +3985,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Upsert SCIM group
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
 
-                  <form action={upsertEnterpriseScimUserAction} className="composer">
+                  <ActionForm action={upsertEnterpriseScimUserAction} className="composer">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <label className="field">
@@ -4278,7 +4026,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <SubmitButton className="button secondary" type="submit">
                       Upsert SCIM user
                     </SubmitButton>
-                  </form>
+                  </ActionForm>
                 </>
               )}
             </article>
@@ -4343,7 +4091,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             ? ` ${formatDateTime(module.installedAt)}`
                             : ""}
                         </span>
-                        <form action={uninstallAgentModuleAction}>
+                        <ActionForm action={uninstallAgentModuleAction}>
                           <input type="hidden" name="module_id" value={module.moduleId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -4355,8 +4103,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <SubmitButton className="button ghost" type="submit">
                             Uninstall
                           </SubmitButton>
-                        </form>
-                        <form action={rollbackAgentModuleAction}>
+                        </ActionForm>
+                        <ActionForm action={rollbackAgentModuleAction}>
                           <input type="hidden" name="module_id" value={module.moduleId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -4368,17 +4116,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <SubmitButton className="button secondary" type="submit">
                             Roll back
                           </SubmitButton>
-                        </form>
+                        </ActionForm>
                       </div>
                     ) : (
-                      <form action={installAgentModuleAction}>
+                      <ActionForm action={installAgentModuleAction}>
                         <input type="hidden" name="module_id" value={module.moduleId} />
                         <input type="hidden" name="project_id" value={activeProjectId} />
                         <input type="hidden" name="actor" value={activeActorId} />
                         <SubmitButton className="button secondary" type="submit">
                           Install module
                         </SubmitButton>
-                      </form>
+                      </ActionForm>
                     )}
                   </div>
                 ))}
@@ -4510,7 +4258,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         {["api_key", "gateway_token"].includes(
                           source.authMethod,
                         ) ? (
-                          <form
+                          <ActionForm
                             action={uploadModelCredentialAction}
                             className="composer compact"
                           >
@@ -4564,11 +4312,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 ? "Rotate credential"
                                 : "Store credential"}
                             </SubmitButton>
-                          </form>
+                          </ActionForm>
                         ) : null}
                         {source.authMethod.includes("oauth") ? (
                           source.connectionStatus === "connected" ? (
-                            <form
+                            <ActionForm
                               action={disconnectEntitlementSourceAction}
                               className="composer compact"
                             >
@@ -4591,10 +4339,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <SubmitButton className="button secondary" type="submit">
                                 Disconnect session
                               </SubmitButton>
-                            </form>
+                            </ActionForm>
                           ) : (
                             <div className="feed-list">
-                              <form
+                              <ActionForm
                                 action={createEntitlementConnectionSessionAction}
                                 className="composer compact"
                               >
@@ -4641,7 +4389,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 <SubmitButton className="button secondary" type="submit">
                                   Start official session
                                 </SubmitButton>
-                              </form>
+                              </ActionForm>
 
                               {sourceConnectionSessions.length === 0 ? (
                                 <p className="detail">
@@ -4672,7 +4420,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                       ) : null}
                                       {session.status ===
                                       "operator_action_required" ? (
-                                        <form
+                                        <ActionForm
                                           action={
                                             completeEntitlementConnectionSessionAction
                                           }
@@ -4722,7 +4470,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                           >
                                             Complete session
                                           </SubmitButton>
-                                        </form>
+                                        </ActionForm>
                                       ) : null}
                                     </div>
                                     <code className="mono">{session.id}</code>
@@ -5255,10 +5003,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
             hand. This groups the runs into apps and puts each one's life on a single row. */}
         {shows("code_tasks") ? (
-        <section className="panel-stack" data-area="code_tasks" aria-label="Projects">
+        <section className="panel-stack" data-area="code_tasks" aria-label="Factory">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Projects</span>
+              {/* The rail calls this Factory in Community (communityNavCopy); the screen said
+                  "Projects", so the operator arrived somewhere with a different name. */}
+              <span className="eyebrow">Factory</span>
               <h2>An agent clones the repo, edits code, runs your tests — then opens a gated PR.</h2>
             </div>
           </div>
@@ -5748,7 +5498,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </p>
                         ) : null}
                         <div className="inline-actions">
-                          <form action={createDeadletterIncidentAction}>
+                          <ActionForm action={createDeadletterIncidentAction}>
                             <input
                               type="hidden"
                               name="deadletter_id"
@@ -5768,10 +5518,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <SubmitButton className="button secondary" type="submit">
                               Incident packet
                             </SubmitButton>
-                          </form>
+                          </ActionForm>
                           {deadletter.sourceKind === "job" &&
                           !deadletter.requeuedJobId ? (
-                            <form action={createDeadletterRemediationAction}>
+                            <ActionForm action={createDeadletterRemediationAction}>
                               <input
                                 type="hidden"
                                 name="deadletter_id"
@@ -5800,9 +5550,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <SubmitButton className="button secondary" type="submit">
                                 Retry
                               </SubmitButton>
-                            </form>
+                            </ActionForm>
                           ) : null}
-                          <form action={createDeadletterRemediationAction}>
+                          <ActionForm action={createDeadletterRemediationAction}>
                             <input
                               type="hidden"
                               name="deadletter_id"
@@ -5831,8 +5581,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <SubmitButton className="button secondary" type="submit">
                               Escalate
                             </SubmitButton>
-                          </form>
-                          <form action={createDeadletterRemediationAction}>
+                          </ActionForm>
+                          <ActionForm action={createDeadletterRemediationAction}>
                             <input
                               type="hidden"
                               name="deadletter_id"
@@ -5861,7 +5611,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <SubmitButton className="button secondary" type="submit">
                               Hold
                             </SubmitButton>
-                          </form>
+                          </ActionForm>
                         </div>
                       </div>
                       <code className="mono">{deadletter.sourceId}</code>

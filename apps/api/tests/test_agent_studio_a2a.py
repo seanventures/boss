@@ -665,21 +665,24 @@ def test_a2a_filters_unmatched_groups_and_deadletters_stale_claims(engine):
 
 
 def test_agent_studio_catalog_api_exposes_seeded_objects(client):
+    """REWRITTEN. This created its proof workflow through the generic /v1/workflows API — a
+    SYSTEM-namespace definition — and asserted the Studio catalog listed it. That was the bug:
+    the catalog listed every system workflow, BOSS's governed coding pipeline included, in a
+    JSON editor with Publish. Studio now lists the customer's own (product) workflows, made
+    through the customer's door."""
     settings = get_settings()
-    definition = client.post(
-        "/v1/workflows",
-        json={
-            "project_id": settings.default_project_id,
-            "workflow_key": "studio_catalog_proof",
-            "name": "Studio catalog proof",
-            "actor": "ceo",
-        },
+    created = client.post(
+        "/v1/delivery-workflows/create",
+        json={"project_id": settings.default_project_id, "name": "Studio catalog proof",
+              "actor": "ceo"},
     )
-    assert definition.status_code == 201, definition.text
-    version = client.post(
-        f"/v1/workflows/{definition.json()['id']}/versions",
+    assert created.status_code == 200, created.text
+    definition_id = created.json()["definition"]["id"]
+    saved = client.post(
+        "/v1/delivery-workflows/save",
         json={
             "project_id": settings.default_project_id,
+            "definition_id": definition_id,
             "actor": "ceo",
             "spec": {
                 "entry_step": "prove",
@@ -687,7 +690,13 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
             },
         },
     )
-    assert version.status_code == 201, version.text
+    assert saved.status_code == 200, saved.text
+    system = client.post(
+        "/v1/workflows",
+        json={"project_id": settings.default_project_id, "workflow_key": "studio_system_proof",
+              "name": "Studio system proof", "actor": "ceo"},
+    )
+    assert system.status_code == 201, system.text
     response = client.get(
         "/v1/agent-studio/catalog",
         params={"project_id": settings.default_project_id},
@@ -696,11 +705,171 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
     payload = response.json()
     assert {item["agent_key"] for item in payload["agents"]} == _shipped_agent_keys()
     assert len(payload["panels"]) == 3
-    assert len(payload["workflows"]) >= 1
     assert all("versions" in workflow for workflow in payload["workflows"])
-    assert payload["workflows"][0]["versions"][0]["id"] == version.json()["id"]
+    keys = {workflow["workflow_key"] for workflow in payload["workflows"]}
+    assert "studio_catalog_proof" in keys
+    # REWRITTEN AGAIN: this asserted a system-namespace definition made through the generic
+    # API stayed out of Studio. That is how the older Studio filed every flow it created, so
+    # those flows vanished from Studio and Workflow alike. A key BOSS does not ship is the
+    # customer's: the generic API now files it under product, so it is listed. BOSS's own
+    # workflows stay out, which is what this test was protecting.
+    assert "studio_system_proof" in keys
+    assert "governed_coding_pipeline" not in keys
+    assert all(workflow.get("namespace") == "product" for workflow in payload["workflows"])
+    proof = next(w for w in payload["workflows"] if w["workflow_key"] == "studio_catalog_proof")
+    assert proof["versions"][0]["id"] == saved.json()["version"]["id"]
     assert "workflow_runs" in payload
     assert "health" in payload["a2a"]
+
+
+def test_a_flow_the_older_studio_made_comes_back_editable_and_boss_own_stay_put(
+        client, engine):
+    """The older Studio created flows through /v1/workflows, under the SYSTEM namespace. When
+    Studio was limited to the product namespace they vanished from Studio and Workflow, and
+    the product save path refused them. Startup moves them back, once, and never touches a
+    workflow BOSS ships.
+
+    REWRITTEN (review round 2): the move ran inside GET /v1/agent-studio/catalog, so a read
+    wrote and the flows came back only after Studio had been opened. The flow is now made the
+    way the older Studio left it (a system definition with the operator's key; the generic API
+    no longer files one there), and the startup step moves it."""
+    from uuid import uuid4
+
+    from apps.api.app.services import workflows as workflow_runtime
+
+    settings = get_settings()
+    project_id = settings.default_project_id
+    root = settings.specpack_root / "workflows"
+    key = f"older_studio_flow_{uuid4().hex[:8]}"
+    with engine.begin() as connection:
+        workflow_runtime.seed_specpack_workflows(connection, project_id=project_id,
+                                                 workflow_root=root, actor="bootstrap")
+        made = workflow_runtime.create_definition(
+            connection, project_id=project_id, workflow_key=key, name="Older Studio flow",
+            description=None, actor="ceo", namespace=workflow_runtime.SYSTEM_NAMESPACE)
+
+    def adopted_events() -> int:
+        with engine.begin() as connection:
+            return connection.execute(text(
+                "SELECT count(*) FROM events WHERE event_type = 'workflow.adopted_into_product' "
+                "AND entity_id = :id"), {"id": made["id"]}).scalar_one()
+
+    # A read writes nothing: the catalog no longer moves it.
+    assert client.get("/v1/agent-studio/catalog",
+                      params={"project_id": project_id}).status_code == 200
+    assert adopted_events() == 0
+
+    with engine.begin() as connection:
+        moved = workflow_runtime.adopt_operator_made_workflows_everywhere(
+            connection, root, actor="boss")
+    assert key in moved.get(project_id, [])
+
+    catalog = client.get("/v1/agent-studio/catalog", params={"project_id": project_id})
+    assert catalog.status_code == 200, catalog.text
+    assert key in {w["workflow_key"] for w in catalog.json()["workflows"]}
+    with engine.begin() as connection:
+        namespaces = dict(connection.execute(text(
+            "SELECT workflow_key, namespace FROM workflow_definitions "
+            "WHERE project_id = :p AND workflow_key IN (:k, 'governed_coding_pipeline')"),
+            {"p": project_id, "k": key}).all())
+    assert namespaces == {key: "product", "governed_coding_pipeline": "system"}
+    assert adopted_events() == 1
+
+    saved = client.post("/v1/delivery-workflows/save", json={
+        "project_id": project_id, "definition_id": made["id"], "actor": "ceo",
+        "spec": {"entry_step": "prove", "steps": [{"id": "prove", "kind": "task"}]}})
+    assert saved.status_code == 200, saved.text
+
+    # Idempotent: the next boot moves nothing and records nothing.
+    with engine.begin() as connection:
+        again = workflow_runtime.adopt_operator_made_workflows_everywhere(
+            connection, root, actor="boss")
+    assert key not in again.get(project_id, [])
+    assert adopted_events() == 1
+
+
+def test_the_generic_api_files_an_operators_workflow_as_the_customers(client, engine):
+    """The class the startup move cleans up is no longer produced: a definition made through
+    POST /v1/workflows with a key BOSS does not ship lands in the product namespace, where
+    Studio and Workflow list it."""
+    from uuid import uuid4
+
+    settings = get_settings()
+    key = f"operator_flow_{uuid4().hex[:8]}"
+    made = client.post("/v1/workflows", json={"project_id": settings.default_project_id,
+                                               "workflow_key": key, "name": "Operator flow",
+                                               "actor": "ceo"})
+    assert made.status_code == 201, made.text
+    with engine.begin() as connection:
+        namespace = connection.execute(text(
+            "SELECT namespace FROM workflow_definitions WHERE id = :id"),
+            {"id": made.json()["id"]}).scalar_one()
+    assert namespace == "product"
+
+
+def test_a_system_workflow_boss_made_itself_survives_the_startup_adoption(client, engine):
+    """Review round 3: namespace_for_new_definition files a worker-made definition under
+    system even when its key is not shipped, and the startup adoption then moved every
+    non-shipped system definition to product on the next boot, handing BOSS's own flow to the
+    customer as an editable Studio flow. The same happened to a workflow an earlier release
+    seeded and a later one dropped from the specpack. BOSS-made definitions now say so (on
+    their creation event, or by the BOSS actor that seeded them before that) and stay put,
+    while an operator-made one still moves."""
+    from uuid import uuid4
+
+    from apps.api.app.services import workflows as workflow_runtime
+
+    settings = get_settings()
+    project_id = settings.default_project_id
+    root = settings.specpack_root / "workflows"
+    tag = uuid4().hex[:8]
+    with engine.begin() as connection:
+        worker_made = workflow_runtime.create_definition(
+            connection, project_id=project_id, workflow_key=f"worker_flow_{tag}",
+            name="Worker flow", description=None, actor="worker",
+            namespace=workflow_runtime.SYSTEM_NAMESPACE, made_by_boss=True)
+        # Seeded by an older release before the marker existed, then dropped from the specpack.
+        dropped = workflow_runtime.create_definition(
+            connection, project_id=project_id, workflow_key=f"dropped_flow_{tag}",
+            name="Dropped flow", description=None, actor="bootstrap",
+            namespace=workflow_runtime.SYSTEM_NAMESPACE)
+        operator_made = workflow_runtime.create_definition(
+            connection, project_id=project_id, workflow_key=f"older_studio_{tag}",
+            name="Older Studio flow", description=None, actor="ceo",
+            namespace=workflow_runtime.SYSTEM_NAMESPACE)
+        moved = workflow_runtime.adopt_operator_made_workflows_everywhere(
+            connection, root, actor="boss")
+        namespaces = dict(connection.execute(text(
+            "SELECT id, namespace FROM workflow_definitions WHERE id IN (:a, :b, :c)"),
+            {"a": worker_made["id"], "b": dropped["id"], "c": operator_made["id"]}).all())
+    assert namespaces == {worker_made["id"]: "system", dropped["id"]: "system",
+                          operator_made["id"]: "product"}
+    assert moved.get(project_id, []).count(f"older_studio_{tag}") == 1
+    assert f"worker_flow_{tag}" not in moved.get(project_id, [])
+
+
+def test_an_operator_cannot_publish_over_a_workflow_boss_ships(client, engine):
+    """Agent Studio's Flows tab offered Publish on governed_coding_pipeline. The generic publish
+    endpoint now refuses BOSS's shipped workflows, saying where to make the change instead."""
+    from apps.api.app.services.workflows import seed_specpack_workflows
+
+    settings = get_settings()
+    with engine.begin() as connection:
+        seeded = seed_specpack_workflows(
+            connection, project_id=settings.default_project_id,
+            workflow_root=settings.specpack_root / "workflows", actor="bootstrap")
+    pipeline = next(item for item in seeded
+                    if item.get("workflow_key") == "governed_coding_pipeline")
+    refused = client.post(
+        f"/v1/workflows/{pipeline['workflow_definition_id']}/versions",
+        json={"project_id": settings.default_project_id, "actor": "ceo",
+              "spec": {"entry_step": "x", "steps": [{"id": "x", "kind": "task"}]}},
+    )
+    assert refused.status_code == 403, refused.text
+    # REWRITTEN: it pointed at "Fork it in Workflow > Catalogue", which does not list BOSS's
+    # own workflows, so the advice could not be followed.
+    assert "not editable from the console" in refused.json()["detail"]
+    assert "Fork it in Workflow > Catalogue" not in refused.json()["detail"]
 
 
 def test_agent_studio_catalog_smoke_checks_every_seeded_agent_without_external_effects(client):

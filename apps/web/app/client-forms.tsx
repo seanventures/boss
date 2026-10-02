@@ -2,8 +2,12 @@
 
 import React, { useEffect, useRef, useState, useTransition, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { useFormStatus } from 'react-dom';
+
+import { describeActionError, isActionResult, type ActionResult } from '../lib/action-result';
 
 import { pasteConnectSuccessCopy } from '../lib/paste-connect';
+import { notifyChanged } from './changed';
 import {
   createKpiAction,
   submitCommandAction,
@@ -88,65 +92,101 @@ export function Toaster(): React.ReactElement | null {
   );
 }
 
-interface ActionFormProps {
-  action: (formData: FormData) => Promise<void>;
-  successMessage: string;
-  className?: string;
+type FormAttributes = Omit<React.FormHTMLAttributes<HTMLFormElement>, "action" | "children">;
+
+interface ActionFormProps extends FormAttributes {
+  /** A server action. Returns an ActionResult (lib/action-result.ts); a legacy void return
+   *  is read as success, and a throw as failure. */
+  action: (formData: FormData) => Promise<ActionResult | void>;
+  /** The toast on success when the action does not say something more specific itself. */
+  successMessage?: string;
+  /** Called with the result, for a form that has more to do than show it (open a run, say). */
+  onResult?: (result: ActionResult) => void;
   children: ReactNode;
   'data-testid'?: string;
 }
 
+/** While the action runs. Read from inside the form, so every form gets it with no wiring. */
+function ActionFormPending(): React.ReactElement | null {
+  const status = useFormStatus();
+  if (!status.pending) return null;
+  return (
+    <p className="loading action-form-pending" role="status" aria-live="polite" aria-atomic="true">
+      Working…
+    </p>
+  );
+}
+
+/**
+ * THE FORM EVERY SERVER ACTION GOES THROUGH.
+ *
+ * A raw `<form action={serverAction}>` had three ways to tell the operator nothing: a thrown
+ * error became Next's redacted "error occurred in the Server Components render" (no error
+ * boundary exists, so the page crashed), a refused request the action never checked looked
+ * exactly like success, and a success changed the page somewhere below the fold with no word
+ * that it had. This renders the action's ActionResult: pending while it runs, then a toast and
+ * an inline line — the sentence from the server on failure, with what to do about it.
+ *
+ * tests/server-actions-return-results.test.ts fails on any `<form action={xAction}>` that does
+ * not come through here.
+ */
 export function ActionForm({
   action,
   successMessage,
-  className,
+  onResult,
   children,
-  'data-testid': testId,
+  ...rest
 }: ActionFormProps): React.ReactElement {
-  const [isPending, startTransition] = useTransition();
-  const [localError, setLocalError] = useState<string | null>(null);
-  const router = useRouter();
+  const [result, setResult] = useState<ActionResult | null>(null);
 
-  const handleAction = (formData: FormData) => {
-    setLocalError(null);
-    startTransition(async () => {
-      try {
-        // Through callAction, so the press reaches the server and the action's API writes are
-        // keyed by it: these forms submit with a plain button, not a SubmitButton.
-        await callAction(action)(formData);
-        // Success: toast + router.refresh() to pick up the revalidatePath done inside the server action.
-        // This makes the updated lists (KPI registry, budget, feeds, events) visible immediately after client submit.
-        showToast('success', successMessage);
-        router.refresh();
-      } catch (err: unknown) {
-        const msg =
-          err instanceof Error
-            ? err.message
-            : 'Action failed (check budget, permissions, or provider state). See decision inbox and event feed.';
-        setLocalError(msg);
-        showToast('error', msg);
-      }
-    });
+  // An async form action: React holds the form's pending state until it settles, which is
+  // what SubmitButton and ActionFormPending read.
+  const handleAction = async (formData: FormData) => {
+    setResult(null);
+    let outcome: ActionResult;
+    try {
+      // Through callAction, so the press reaches the server and the action's API writes are
+      // keyed by it: these forms submit with a plain button, not a SubmitButton.
+      const returned = await callAction(action)(formData);
+      outcome = isActionResult(returned) ? returned : { ok: true };
+    } catch (err: unknown) {
+      outcome = { ok: false, error: describeActionError(err) };
+    }
+    setResult(outcome);
+    onResult?.(outcome);
+    if (outcome.ok) {
+      showToast('success', outcome.message ?? successMessage ?? 'Done.');
+      // The action revalidated on the server, and its reply carries the new page. The signal
+      // tells every panel that polls on its own to reload too (see changed.ts). Not useRouter:
+      // ActionForm renders inside server components that are also rendered outside the app
+      // router (tests, the org gate), where useRouter throws.
+      notifyChanged('action-form');
+    } else {
+      showToast('error', outcome.error ?? 'That did not work, and the server gave no reason.');
+    }
   };
 
   return (
-    <form
-      action={handleAction}
-      className={className}
-      data-testid={testId}
-      aria-busy={isPending}
-    >
+    <form {...rest} action={handleAction}>
       {children}
-      {isPending && (
-        <p className="loading" role="status" aria-live="polite" aria-atomic="true">
-          Processing… (validating budget reservation, policy, and lease)
+      <ActionFormPending />
+      {result && !result.ok ? (
+        <p className="error-banner" role="alert" aria-atomic="true" data-testid="action-form-error">
+          {result.error}
         </p>
-      )}
-      {localError && (
-        <p className="error-banner" role="alert" aria-atomic="true">
-          {localError}
+      ) : null}
+      {result && result.ok && (result.message || result.href) ? (
+        <p className="action-form-done" role="status" aria-live="polite"
+           data-testid="action-form-done">
+          {result.message ?? successMessage}
+          {result.href ? (
+            <>
+              {" "}
+              <a href={result.href}>{result.hrefLabel ?? "Open it"}</a>
+            </>
+          ) : null}
         </p>
-      )}
+      ) : null}
     </form>
   );
 }

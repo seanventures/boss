@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from . import decision_actions
 from .budget import BudgetGovernor
 from .health import HealthSnapshotService
 
@@ -205,31 +206,35 @@ class MetatronService:
     def _answer_decisions(
         self, connection: Connection, project_id: str, limit: int
     ) -> tuple[str, list[dict[str, Any]]]:
-        rows = connection.execute(
+        # WAITING ON YOU is the Approvals inbox's rule (decision_actions.attention). This
+        # answer counted pending and delegated itself, so it told the operator fewer decisions
+        # were waiting than the inbox listed: a pull request stuck in a dead-end
+        # revision_requested was left out (review round 3). Recent answered ones follow as
+        # references, as before.
+        pending = decision_actions.waiting_on_operator(connection, project_id)
+        waiting_ids = {row["id"] for row in pending}
+        recent = connection.execute(
             text(
                 """
                 SELECT id, question, status, default_action, risk_tier, deadline_at, created_at
                 FROM decisions
                 WHERE project_id = :project_id
-                ORDER BY
-                  CASE WHEN status IN ('pending', 'delegated') THEN 0 ELSE 1 END,
-                  risk_tier DESC,
-                  created_at DESC
+                ORDER BY risk_tier DESC, created_at DESC
                 LIMIT :limit
                 """
             ),
             {"project_id": project_id, "limit": limit},
         ).mappings().all()
-        pending = [row for row in rows if row["status"] in {"pending", "delegated"}]
+        rows = (pending + [dict(r) for r in recent if r["id"] not in waiting_ids])[:limit]
         if pending:
             first = pending[0]
             answer = (
-                f"There are {len(pending)} currently pending or delegated decision(s). "
+                f"There are {len(pending)} decision(s) waiting on you. "
                 f"The most urgent is \"{first['question']}\" with status {first['status']} "
                 f"and default action {first['default_action']}."
             )
         else:
-            answer = "There are no currently pending or delegated decisions."
+            answer = "There are no decisions waiting on you."
         references = [
             self._reference(
                 "decision",
@@ -430,19 +435,8 @@ class MetatronService:
     def _pending_decision_refs(
         self, connection: Connection, project_id: str, limit: int
     ) -> list[dict[str, Any]]:
-        rows = connection.execute(
-            text(
-                """
-                SELECT id, question, status, created_at
-                FROM decisions
-                WHERE project_id = :project_id
-                  AND status IN ('pending', 'delegated')
-                ORDER BY risk_tier DESC, created_at DESC
-                LIMIT :limit
-                """
-            ),
-            {"project_id": project_id, "limit": limit},
-        ).mappings().all()
+        # The decisions waiting on the operator, by the Approvals inbox's rule (review round 3).
+        rows = decision_actions.waiting_on_operator(connection, project_id)[:limit]
         return [
             self._reference(
                 "decision",

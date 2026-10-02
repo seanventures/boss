@@ -18,6 +18,7 @@ import {
 } from "./actions";
 import { MeetingConsensusCard } from "./phase3-ui";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 import { callAction } from "../lib/call-action";
 const ROLE_META: Record<string, { initials: string; tone: string }> = {
@@ -120,7 +121,7 @@ function NewMeetingForm({
 }) {
   const [meetingType, setMeetingType] = useState<"prd_panel" | "standup">("prd_panel");
   return (
-    <form action={conveneMeetingAction} className="mr-convene">
+    <ActionForm action={conveneMeetingAction} className="mr-convene">
       <input type="hidden" name="project_id" value={projectId} />
       <label className="mr-field-label" htmlFor="mr-type">Meeting type</label>
       <select
@@ -188,7 +189,7 @@ function NewMeetingForm({
         </span>
       )}
       <ConveneActions meetingType={meetingType} onCancel={onCancel} />
-    </form>
+    </ActionForm>
   );
 }
 
@@ -475,22 +476,22 @@ function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRo
               <span className="mr-role-row-lens">{r.lens}</span>
             </div>
             <div className="mr-role-row-actions">
-              <form action={setMeetingRoleEnabledAction}>
+              <ActionForm action={setMeetingRoleEnabledAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
                 <input type="hidden" name="enabled" value={r.enabled === false ? "true" : "false"} />
                 <SubmitButton type="submit" className="cap-btn">{r.enabled === false ? "Enable" : "Disable"}</SubmitButton>
-              </form>
-              <form action={deleteMeetingRoleAction}>
+              </ActionForm>
+              <ActionForm action={deleteMeetingRoleAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
                 <SubmitButton type="submit" className="cap-btn danger">Remove</SubmitButton>
-              </form>
+              </ActionForm>
             </div>
           </div>
         ))}
       </div>
-      <form action={upsertMeetingRoleAction} className="mr-convene">
+      <ActionForm action={upsertMeetingRoleAction} className="mr-convene">
         <input type="hidden" name="project_id" value={projectId} />
         <div className="mr-convene-row">
           <label>Role title<input name="title" placeholder="e.g. Legal Counsel" required /></label>
@@ -502,7 +503,7 @@ function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRo
         <textarea name="lens" className="mr-lens-input" rows={3} required
           placeholder="e.g. legal and contractual risk — IP, liability, compliance, terms, and what could expose the org legally." />
         <SubmitButton type="submit" className="cap-btn primary">Add role-agent</SubmitButton>
-      </form>
+      </ActionForm>
     </div>
   );
 }
@@ -608,13 +609,13 @@ export function MeetingsHome({
           <p className="detail">
             A live panel calls a model. To prove the phase machine without spend, run a simulated fixture.
           </p>
-          <form action={runSimulatedMeetingAction}>
+          <ActionForm action={runSimulatedMeetingAction}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="directive" value="Community simulated panel fixture" />
             <SubmitButton type="submit" className="cap-btn">
               Run no-spend fixture
             </SubmitButton>
-          </form>
+          </ActionForm>
         </div>
       ) : (
         <div className="mr-home-grid">

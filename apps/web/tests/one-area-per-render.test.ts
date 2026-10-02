@@ -35,7 +35,13 @@ describe("only the requested area is rendered", () => {
     // So `shows` returns true and the sections below all render again. What is still worth
     // protecting is that this stayed ONE seam: the gate every section passes through, so the
     // trade is two lines to flip rather than a rewrite to undo.
-    expect(PAGE).toContain("const shows = (_area: string) => true;");
+    //
+    // AND THEN LAZY, WITHOUT GIVING THE CLICK BACK (lib/area-loading.ts). A browser load renders
+    // the requested area alone; an area opened for the first time joins a session set and is
+    // fetched once, with a loading state; after that a click is the pure reveal again. Still
+    // one seam — the set below is the only thing either gate reads.
+    expect(PAGE).toContain("const shows = (area: string) => loadedAreas.has(area);");
+    expect(PAGE).toContain("const loadedAreas = areasToRender({");
     expect(PAGE).toContain('requestedArea.trim() : "overview"');
   });
 

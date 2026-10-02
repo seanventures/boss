@@ -333,41 +333,38 @@ export async function validateStudioWorkflow(
   });
 }
 
+/**
+ * A NEW WORKFLOW IS THE CUSTOMER'S, AND IT GOES THROUGH THE CUSTOMER'S DOOR.
+ *
+ * Flows created and published through the generic /v1/workflows API, which made a SYSTEM
+ * namespace definition and applied no namespace check on publish — the same door that let the
+ * Flows tab rewrite BOSS's own pipelines. /v1/delivery-workflows/create makes a product
+ * workflow, and /save publishes only to the customer's own, editable ones (require_namespace,
+ * require_editable). The key is derived from the name there, so nobody invents an identifier.
+ */
 export async function createStudioWorkflow(
   projectId: string,
-  workflowKey: string,
   name: string,
   description: string,
   spec: Record<string, unknown>,
   actor: string,
 ): Promise<StudioActionResult> {
-  const definition = await post("/v1/workflows", {
+  const created = await post("/v1/delivery-workflows/create", {
     project_id: projectId,
-    workflow_key: workflowKey,
     name,
     description,
     actor,
   });
-  if (!definition.ok || !definition.item?.id) return definition;
-  const published = await post(
-    `/v1/workflows/${encodeURIComponent(String(definition.item.id))}/versions`,
-    {
-      project_id: projectId,
-      spec,
-      activate: true,
-      actor,
-    },
-  );
+  const definition = (created.item?.definition ?? {}) as Record<string, unknown>;
+  if (!created.ok || typeof definition.id !== "string") return created;
+  const published = await publishStudioWorkflowVersion(projectId, definition.id, spec, actor);
   if (!published.ok) {
     return {
       ...published,
-      message: `Workflow identity was created, but its first version was not published: ${published.message}`,
+      message: `${name} was created, but its first version was not published: ${published.message}`,
     };
   }
-  return {
-    ...published,
-    message: `Created ${name} and published its first immutable version.`,
-  };
+  return { ...published, message: `Created ${name} and published its first version.` };
 }
 
 export async function publishStudioWorkflowVersion(
@@ -376,12 +373,20 @@ export async function publishStudioWorkflowVersion(
   spec: Record<string, unknown>,
   actor: string,
 ): Promise<StudioActionResult> {
-  return post(`/v1/workflows/${encodeURIComponent(definitionId)}/versions`, {
+  const saved = await post("/v1/delivery-workflows/save", {
     project_id: projectId,
+    definition_id: definitionId,
     spec,
-    activate: true,
     actor,
   });
+  if (saved.ok && saved.item?.unchanged) {
+    return { ...saved, message: "Nothing to publish — this is identical to the current version." };
+  }
+  if (saved.ok) {
+    const version = (saved.item?.version ?? {}) as Record<string, unknown>;
+    return { ...saved, message: `Published version ${String(version.version ?? "")}.`.replace(" .", ".") };
+  }
+  return saved;
 }
 
 export async function runStudioWorkflow(

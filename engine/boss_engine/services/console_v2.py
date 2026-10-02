@@ -33,10 +33,12 @@ completed run sat in the same lineage. Everything here groups by lineage for tha
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import text as sql
 
+from . import decision_actions
 
 def _meeting_title(title, directive=None) -> str:
     """meeting_service.meeting_title, imported on first use: that module pulls in the model
@@ -415,9 +417,10 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
     total_projects = len(projects)
     projects = projects[:limit]
 
-    gates = int(connection.execute(
-        sql("SELECT count(*) FROM decisions WHERE project_id = :p AND status = 'pending'"),
-        {"p": project_id}).scalar() or 0)
+    # The decisions waiting on the operator, by the Approvals inbox's rule. `status = 'pending'`
+    # left out delegated decisions and stuck pull requests, so this strip disagreed with the
+    # v2 queue a click away (review round 3).
+    gates = decision_actions.count_waiting_on_operator(connection, project_id)
 
     spend_micros = int(connection.execute(
         sql("SELECT COALESCE(sum(cost_usd_micros), 0) FROM llm_calls "
@@ -944,11 +947,14 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
     }
 
 
-#: Decisions that are still the operator's to make. Anything else has been answered.
-_OPEN_DECISION = ("pending", "delegated", "revision_requested")
+#: Where a decision that is still the operator's to make can be. Which of them really are is
+#: decision_actions.attention, the rule the Approvals inbox and the Command Center use: this
+#: list alone counted a revision_requested the proposer was working on as waiting on you.
+_OPEN_DECISION = decision_actions.NEEDS_ACTION_CANDIDATE_STATUSES
 
 
-def decision_queue(connection, project_id: str, *, limit: int = 60) -> dict[str, Any]:
+def decision_queue(connection, project_id: str, *, limit: int = 60,
+                   now: Optional[datetime] = None) -> dict[str, Any]:
     """Every gate waiting on a human, and what happens if nobody answers.
 
     THE DEADLINE IS THE POINT
@@ -977,14 +983,17 @@ def decision_queue(connection, project_id: str, *, limit: int = 60) -> dict[str,
               deadline_at ASC NULLS LAST,
               risk_tier DESC,
               created_at ASC
-            LIMIT :lim
             """
         ),
-        {"p": project_id, "open": list(_OPEN_DECISION), "lim": int(limit)},
+        # The limit is applied after classifying, so rows that are not the operator's cannot
+        # use up the page.
+        {"p": project_id, "open": list(_OPEN_DECISION)},
     ).mappings().all()]
+    rows = [r for r in rows if decision_actions.attention(r, now) == "needs_action"][:int(limit)]
 
     items = []
     for r in rows:
+        described = decision_actions.describe(r, now)
         default = str(r.get("default_action") or "").strip()
         deadline = r.get("deadline_at")
         options = r.get("options") or []
@@ -1011,6 +1020,11 @@ def decision_queue(connection, project_id: str, *, limit: int = 60) -> dict[str,
                 else "waits for you — nothing happens on its own"
             ),
             "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            # The same contract the Approvals inbox draws from, so a refusal notice reads as a
+            # notice here too and the row names the answers that work, not the raw options.
+            "kind": described["kind"],
+            "allowed_actions": described["allowed_actions"],
+            "guidance": described["guidance"],
         })
 
     expiring = [i for i in items if i["deadline_at"] and i["default_action"]]

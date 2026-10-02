@@ -3,6 +3,11 @@
 import { IDENTITY_PARAMS, searchForNewProject } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
 import { onChanged } from "./changed";
+import {
+  cookieWith,
+  loadedAreasCookie,
+  loadedAreasCookieValue,
+} from "../lib/area-loading";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
@@ -280,6 +285,10 @@ export type ConsoleShellProps = {
   /** True when console sign-in is configured (BOSS_CONSOLE_PASSWORD set); Sign out is shown only
    *  then. Read on the server, where the password lives. */
   signOutAvailable?: boolean;
+  /** The areas the server rendered this time (lib/area-loading.ts). An area not in it is not
+   *  in the DOM yet: opening it shows a loading state and asks the server for it. Absent means
+   *  every area was rendered, which is how this shell behaved before areas went lazy. */
+  loadedAreas?: string[];
   children: ReactNode;
 };
 
@@ -290,6 +299,7 @@ export default function ConsoleShell({
   editionId,
   initialArea,
   signOutAvailable = false,
+  loadedAreas,
   children,
 }: ConsoleShellProps) {
   const resolvedEdition = normalizeEditionId(editionId);
@@ -499,6 +509,42 @@ export default function ConsoleShell({
       setActive(stored as AreaId);
     }
   }, [queryString]);
+
+  // AN AREA OPENED FOR THE FIRST TIME IS FETCHED ONCE, WITH A REAL LOADING STATE.
+  //
+  // The server renders the requested area plus the ones this session has opened
+  // (lib/area-loading.ts). One that is not in the DOM yet is added to the session cookie and
+  // the page refreshes; the areas already on screen keep their tree positions, so they update
+  // rather than remount. Every later click on it is the pure reveal below.
+  const loadedRef = useRef<string[] | undefined>(loadedAreas);
+  loadedRef.current = loadedAreas;
+  const [, startAreaLoad] = useTransition();
+  const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
+  const ensureLoaded = useCallback((id: string) => {
+    const loaded = loadedRef.current;
+    if (!loaded || loaded.includes(id)) return;
+    try {
+      document.cookie = loadedAreasCookie(
+        cookieWith(loadedAreasCookieValue(document.cookie), id));
+    } catch {
+      /* cookies blocked: the requested area still renders, from the URL */
+    }
+    setAreaLoadAsked({ id, at: Date.now() });
+    startAreaLoad(() => { router.refresh(); });
+  }, [router]);
+  const activeLoading = !!loadedAreas && !loadedAreas.includes(active);
+  useEffect(() => {
+    // Opened by a deep link, Back/Forward or anything else that set `active` without going
+    // through go(): the same fetch, once.
+    if (activeLoading && areaLoadAsked?.id !== active) ensureLoaded(active);
+  }, [activeLoading, active, areaLoadAsked, ensureLoaded]);
+  const [loadSlow, setLoadSlow] = useState(false);
+  useEffect(() => {
+    setLoadSlow(false);
+    if (!activeLoading) return;
+    const t = window.setTimeout(() => setLoadSlow(true), 20_000);
+    return () => window.clearTimeout(t);
+  }, [activeLoading, active]);
 
   const go = useCallback((id: AreaId) => {
     // A RAIL CLICK TOUCHES THE SERVER ZERO TIMES.
@@ -1170,6 +1216,22 @@ export default function ConsoleShell({
         <main className="bx-content" data-active={active} aria-label={activeDef.label}
               data-dock={dockedRun ? "open" : undefined}
               style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
+          {activeLoading ? (
+            <div className="area-loading" role="status" aria-live="polite"
+                 data-testid="area-loading">
+              <div className="area-loading-bar" aria-hidden />
+              <span>Loading {activeDef.label}…</span>
+              {loadSlow ? (
+                <span>
+                  This is taking longer than usual — the control plane may be busy.{" "}
+                  <button type="button" className="linkish"
+                          onClick={() => window.location.reload()}>
+                    Reload the page
+                  </button>
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           {children}
         </main>
         {dockedRun ? (

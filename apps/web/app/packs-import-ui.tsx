@@ -26,7 +26,12 @@ export function PackImportForm({
         setError(null);
         startTransition(async () => {
           try {
-            await callAction(importPackAction)(formData);
+            // A result, not a throw: see lib/action-result.ts.
+            const result = await callAction(importPackAction)(formData);
+            if (!result.ok) {
+              setError(result.error ?? "Pack import failed.");
+              return;
+            }
             router.refresh();
           } catch (err) {
             setError(err instanceof Error ? err.message : "Pack import failed.");
@@ -92,7 +97,11 @@ export function PackExportButton({
         startTransition(async () => {
           try {
             const result = await callAction(exportPackAction)(formData);
-            downloadPackYaml(result.packId, result.yaml);
+            if (!result.ok || !result.data) {
+              setError(result.error ?? "Pack export failed.");
+              return;
+            }
+            downloadPackYaml(String(result.data.packId), String(result.data.yaml));
           } catch (err) {
             setError(err instanceof Error ? err.message : "Pack export failed.");
           }

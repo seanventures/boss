@@ -63,8 +63,11 @@ describe("only the requested area is fetched", () => {
     // the DOM again, so every area's feeds must be fetched again or the sections render empty.
     // `needs` remains the single place that decides, so the two gates cannot drift apart: a
     // page that renders an area it did not fetch is worse than either trade.
-    expect(PAGE).toContain("const needs = (..._areas: string[]) => true;");
-    expect(PAGE).toContain("const shows = (_area: string) => true;");
+    // REWRITTEN when areas went lazy (lib/area-loading.ts): both gates read the SAME set — the
+    // requested area plus the ones this session opened — so they still cannot drift apart.
+    expect(PAGE).toContain(
+      "const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area));");
+    expect(PAGE).toContain("const shows = (area: string) => loadedAreas.has(area);");
   });
 
   it("every feed in the platform-ops wave is gated on the area that reads it", () => {

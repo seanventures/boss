@@ -123,7 +123,7 @@ describe("pack import/export actions", async () => {
     fd.set("actor", "ceo");
     fd.set("yaml", yaml);
 
-    await expect(importPackAction(fd)).resolves.toBeUndefined();
+    await expect(importPackAction(fd)).resolves.toMatchObject({ ok: true });
     expect(client.importPack).toHaveBeenCalledWith({
       project_id: "boss-dogfood",
       yaml_content: yaml,
@@ -174,8 +174,14 @@ describe("pack import/export actions", async () => {
     fd.set("project_id", "boss-dogfood");
     fd.set("actor", "ceo");
     fd.set("yaml", "invalid: [ yaml");
+    // REWRITTEN for the ActionResult contract (lib/action-result.ts): a server action now
+    // returns its failure as a sentence instead of throwing one Next would redact.
 
-    await expect(importPackAction(fd)).rejects.toThrow("invalid pack yaml");
+    await expect(importPackAction(fd)).resolves.toMatchObject({
+
+      ok: false, error: expect.stringContaining("invalid pack yaml"),
+
+    });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
@@ -188,10 +194,10 @@ describe("pack import/export actions", async () => {
     fd.set("actor", "ceo");
     fd.set("pack_id", "core_v1");
 
-    await expect(exportPackAction(fd)).resolves.toEqual({
+    await expect(exportPackAction(fd)).resolves.toMatchObject({ ok: true, data: {
       yaml,
       packId: "core_v1",
-    });
+    } });
     expect(client.exportPack).toHaveBeenCalledWith("boss-dogfood", "core_v1");
   });
 });

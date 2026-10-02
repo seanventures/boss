@@ -2671,6 +2671,14 @@ class DecisionCard(BaseModel):
     external_ref: Optional[str] = None
     created_at: str
     updated_at: str
+    # What a person can do with it, decided by the engine (services/decision_actions.py) so the
+    # console draws only buttons that work. Defaults keep older payloads valid.
+    kind: str = "general"
+    allowed_actions: list[dict[str, Any]] = Field(default_factory=list)
+    guidance: Optional[dict[str, Any]] = None
+    # needs_action, expired or resolved (decision_actions.attention). The inbox filters on it
+    # and the Command Center counts with the same rule, so the two never disagree.
+    attention: Optional[str] = None
 
 
 class DecisionInboxResponse(BaseModel):

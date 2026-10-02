@@ -203,8 +203,10 @@ describe("v1 Org Chart", () => {
       out.indexOf("</details>"),
     );
     expect(out).toContain("Add role to team");
-    expect(row).toContain('data-testid="org-work-qa_lead"');
-    expect(row).toContain('data-testid="org-definition-qa_lead"');
+    // REWRITTEN: the bench's buttons have their own testids now; the tree's org-work-<id> was
+    // reused here and in the no-handoffs list, so a test could not tell the three apart.
+    expect(row).toContain('data-testid="org-bench-work-qa_lead"');
+    expect(row).toContain('data-testid="org-bench-definition-qa_lead"');
     expect(row).toContain(">Work<");
     expect(row).toContain(">Definition<");
     expect(row).toContain(">Place<");
@@ -231,8 +233,9 @@ describe("v1 Org Chart", () => {
     expect(slice).toContain("No recent handoffs");
     expect(slice).toContain("openRoleWork(n.id)");
     expect(slice).toContain("openAgentDefinition(n.id)");
-    expect(slice).toContain('data-testid={`org-work-${n.id}`}');
-    expect(slice).toContain('data-testid={`org-definition-${n.id}`}');
+    // REWRITTEN for list-specific testids (see the bench test above).
+    expect(slice).toContain('data-testid={`org-alone-work-${n.id}`}');
+    expect(slice).toContain('data-testid={`org-alone-definition-${n.id}`}');
     expect(slice).toContain(">Work</button>");
     expect(slice).toContain(">Definition</button>");
   });

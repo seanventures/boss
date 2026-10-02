@@ -39,7 +39,7 @@ from boss_engine.mcp.api_surface import (
     needs_operator_confirmation as mcp_needs_operator_confirmation,
     operation_alias as mcp_operation_alias,
 )
-from boss_engine.services import mcp_confirmation
+from boss_engine.services import decision_actions, mcp_confirmation
 
 from .bootstrap import seed
 from .bootstrap_ports import build_ports
@@ -1319,6 +1319,17 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] delivery catalogue: {result['count']} workflows for {project}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a seed
         print(f"[lifespan] delivery catalogue seed skipped: {exc}")
+    # FLOWS THE OLDER STUDIO FILED UNDER THE SYSTEM NAMESPACE come back where the customer's
+    # work lives, once, before anyone reads. This ran inside a GET of the Studio catalog, so a
+    # read wrote and the flows reappeared in Workflow only after someone had opened Studio.
+    try:
+        with begin(engine) as connection:
+            adopted = workflow_runtime.adopt_operator_made_workflows_everywhere(
+                connection, settings.specpack_root / "workflows", actor="boss")
+        if adopted:
+            print(f"[lifespan] operator-made workflows moved to product: {adopted}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a housekeeping move
+        print(f"[lifespan] operator-made workflow adoption skipped: {exc}")
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
@@ -2449,6 +2460,7 @@ def job_summary_from_row(row) -> JobSummary:
 
 
 def decision_card_from_row(row) -> DecisionCard:
+    from boss_engine.services import decision_actions
     from boss_engine.services.core import decision_reason_from_payload
 
     rec = row.get("recommendation") or {}
@@ -2481,6 +2493,7 @@ def decision_card_from_row(row) -> DecisionCard:
         external_ref=row.get("external_ref"),
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
+        **decision_actions.describe(row),
     )
 
 
@@ -9619,7 +9632,7 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         require_project_actor(
             connection, run_row["project_id"], actor, "task_create"
         )
-    from .services.code_task_service import retry_code_task
+    from .services.code_task_service import RetryRefused, retry_code_task
     try:
         rr = p.get("repair_retries")
         # profile/repair_retries were accepted by retry_code_task() and DROPPED here, so a
@@ -9633,6 +9646,9 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
             profile=(p.get("profile") or None),
             repair_retries=(int(rr) if isinstance(rr, int) else None),
         )
+    except RetryRefused as exc:
+        # Not "not found": the run exists and is finished. 409 with what to do instead.
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -11588,15 +11604,11 @@ def status(project_id: str) -> StatusResponse:
         if not row:
             raise HTTPException(status_code=404, detail="Unknown project_id")
 
-        pending_decisions = connection.execute(
-            text(
-                """
-                SELECT COUNT(*) FROM decisions
-                WHERE project_id = :project_id AND status IN ('pending', 'delegated')
-                """
-            ),
-            {"project_id": project_id},
-        ).scalar_one()
+        # The number on the Approvals nav badge and the Workflow screen's Decisions KPI. It
+        # used to be its own `status IN ('pending', 'delegated')`, which left out a pull
+        # request parked in a dead-end revision_requested: the badge said 2 while the inbox
+        # and the Command Center said 3 (review round 3). It is the inbox's rule now.
+        pending_decisions = decision_actions.count_waiting_on_operator(connection, project_id)
         open_tasks = connection.execute(
             text(
                 """
@@ -12222,9 +12234,7 @@ def list_tasks(
                 SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority,
                        t.risk_tier, t.owner_role_id, t.parent_task_id, t.dependency_task_ids,
                        t.due_at, t.data_boundary, t.dedupe_key, t.created_at, t.updated_at,
-                       j.status AS latest_job_status,
-                       EXISTS(SELECT 1 FROM decisions d WHERE d.task_id = t.id
-                              AND d.status IN ('pending', 'delegated')) AS has_open_decision
+                       j.status AS latest_job_status
                 FROM tasks t
                 LEFT JOIN LATERAL (
                     SELECT status FROM jobs WHERE task_id = t.id
@@ -12241,6 +12251,15 @@ def list_tasks(
                 "offset": offset,
             },
         ).mappings().all()
+        # A task is in "review" when a decision on it is waiting on the operator, by the same
+        # rule the Approvals inbox uses. This was its own EXISTS over pending and delegated,
+        # so a task whose pull request sat in a dead-end revision_requested read as done or
+        # in progress while the inbox listed it as waiting (review round 3).
+        waiting = {
+            str(d["task_id"]) for d in decision_actions.waiting_on_operator(
+                connection, project_id, task_ids=[str(r["id"]) for r in rows])
+        }
+        rows = [{**dict(r), "has_open_decision": str(r["id"]) in waiting} for r in rows]
         return TaskListResponse(
             project_id=project_id,
             items=[task_summary_from_row(row) for row in rows],
@@ -13303,6 +13322,23 @@ def create_deployment_endpoint(payload: FirstDeployBody = Body(...)) -> dict:
             detail=result.get("reason") or "Deployment policy blocked this run.",
         )
     return result
+
+
+@app.get("/v1/console/command-center")
+def console_command_center_endpoint(project_id: str) -> dict:
+    """The Command Center: what is running, what needs the operator, how recent runs went.
+
+    Read in workflow runs, not tasks — a run started by Build creates no task, so the old
+    task-based landing page never showed the thing an operator had just started. See
+    boss_engine.services.command_center.
+    """
+    from boss_engine.services import command_center
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        return command_center.build(connection, settings, project_id)
 
 
 @app.get("/v1/console/v2/overview")
@@ -21089,6 +21125,13 @@ def consume_budget(payload: BudgetConsumeRequest) -> BudgetConsumeResponse:
         )
 
 
+def _is_worker_principal() -> bool:
+    """True only for an authenticated request from the configured worker identity."""
+    expected = settings.worker_principal.strip()
+    return bool(current_transport_authenticated.get() and expected
+                and current_api_principal.get() == expected)
+
+
 def require_worker_principal() -> None:
     """Only the configured worker identity may claim or settle leased work."""
     if not current_transport_authenticated.get():
@@ -24315,6 +24358,13 @@ def create_workflow_definition(
                     name=payload.name,
                     description=payload.description,
                     actor=payload.actor,
+                    # The customer's unless it is BOSS's own: see namespace_for_new_definition.
+                    namespace=workflow_runtime.namespace_for_new_definition(
+                        payload.workflow_key, settings.specpack_root / "workflows",
+                        boss_itself=_is_worker_principal()),
+                    # Recorded so the startup adoption leaves a worker-made system flow where
+                    # the worker put it (review round 3).
+                    made_by_boss=_is_worker_principal(),
                 )
             )
         except workflow_runtime.WorkflowError as error:
@@ -24347,6 +24397,17 @@ def publish_workflow_version(
             connection, payload.project_id, payload.actor, "workflow_manage"
         )
         try:
+            # BOSS's own workflows are not an operator's to rewrite; the worker principal (the
+            # only caller that maintains them over HTTP) is exempt.
+            if not _is_worker_principal():
+                definition = connection.execute(
+                    text("SELECT namespace, workflow_key FROM workflow_definitions "
+                         "WHERE id = :id AND project_id = :p"),
+                    {"id": definition_id, "p": payload.project_id},
+                ).mappings().first()
+                if definition:
+                    workflow_runtime.refuse_operator_edit_of_boss_workflow(
+                        dict(definition), settings.specpack_root / "workflows")
             return WorkflowVersionSummary(
                 **workflow_runtime.publish_version(
                     connection,
@@ -24357,6 +24418,8 @@ def publish_workflow_version(
                     activate=payload.activate,
                 )
             )
+        except workflow_runtime.WorkflowNamespaceError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
 
@@ -25394,12 +25457,19 @@ def get_agent_studio_catalog(
             ready, missing = agent_studio._catalog_tables_ready(connection)
             if not ready:
                 raise AgentStudioSchemaMissingError(missing)
+            # Flows the older Studio filed under the system namespace are moved to the product
+            # namespace once, at startup (adopt_operator_made_workflows_everywhere), not here:
+            # a read must not write, and Workflow lists them too without Studio being opened.
             return {
                 "project_id": project_id,
                 "agents": agent_studio.list_agents(connection, project_id),
                 "panels": agent_studio.list_panels(connection, project_id),
+                # THE CUSTOMER'S WORKFLOWS ONLY. This listed all 32 of BOSS's own system
+                # workflows too, in a JSON editor with Publish (see
+                # refuse_operator_edit_of_boss_workflow).
                 "workflows": workflow_runtime.list_definition_details(
-                    connection, project_id, include_retired=False
+                    connection, project_id, include_retired=False,
+                    namespace=workflow_runtime.PRODUCT_NAMESPACE,
                 ),
                 "agent_runs": agent_studio.list_agent_runs(connection, project_id, 50),
                 "panel_runs": agent_studio.list_panel_runs(connection, project_id, 50),

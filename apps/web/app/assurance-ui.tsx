@@ -2,6 +2,7 @@ import type { AssuranceFeed } from "../lib/assurance";
 import React from "react";
 import { seedAssuranceDemoAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 function text(item: Record<string, unknown>, key: string, fallback = "—"): string {
   const value = item[key];
@@ -89,12 +90,12 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
                 Seed a measured contract below to see how a metric and its case fit together;
                 the assurance guide in the documentation explains how to record your own.
               </p>
-              <form action={seedAssuranceDemoAction}>
+              <ActionForm action={seedAssuranceDemoAction}>
                 <input type="hidden" name="project_id" value={feed.projectId} />
                 <SubmitButton type="submit" className="cap-btn">
                   Seed one demo metric + case
                 </SubmitButton>
-              </form>
+              </ActionForm>
               <p className="detail">
                 The demo is labeled <code>seeded: true</code> and is not production health.
               </p>

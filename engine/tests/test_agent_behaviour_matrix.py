@@ -789,19 +789,26 @@ def test_the_landing_panel_shows_started_work_not_the_event_log():
     """"These don't make real sense to me." The panel was the raw event stream — worker
     heartbeats, leased jobs, budget reservations released. All true, none of it actionable, and
     it crowded out the only question an operator has after pressing Build: what is it doing and
-    where do I look? The Enterprise page now renders a live CoordinationPanel; Community
-    still uses the original In flight panel."""
+    where do I look?
+
+    REWRITTEN (console-a stream, ported to the Community tree at integration). This asserted the
+    task-era panels, and on this tree it read apps/web/app/page-community.tsx, a private-repo
+    path the Community export renames to page.tsx — so it failed here for a file name. Both
+    panels read `tasks`, and a run started by Build creates no task, so the work the operator
+    had just started never appeared in either. The answer to the same question is now the
+    Command Center, which reads workflow runs: the step a run is on, the agent on it, and a link
+    into the run."""
     page = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
-    panel = pathlib.Path("apps/web/app/coordination-ui.tsx").read_text(encoding="utf-8")
-    community = pathlib.Path("apps/web/app/page-community.tsx").read_text(encoding="utf-8")
-    assert "<CoordinationPanel" in page
-    assert "reconcileRecentWork(inFlight, tasks.items)" in page
-    assert 'aria-label="Recent work"' in panel
-    assert "snapshot.inFlight.map((item)" in panel
-    assert "item.stage" in panel and "item.status" in panel
-    assert "area=work&task=" in panel, "task rows do not open their trace"
-    assert "<AreaLink" in panel and "area={item.area}" in panel
-    assert 'aria-label="In flight"' in community
+    assert "<CommandCenter" in page
+    assert "<CoordinationPanel" not in page
+    panel = pathlib.Path("apps/web/app/command-center-ui.tsx").read_text(encoding="utf-8")
+    assert 'aria-labelledby="cc2-running-h"' in panel
+    assert "data.running.map((run)" in panel
+    assert "run.step_label" in panel and "agentPhrase(run.agent)" in panel
+    assert "runHref(run.run_id, orgId)" in panel, "running rows do not open their run"
+    from boss_engine.services import command_center
+    import inspect
+    assert "FROM workflow_runs r" in inspect.getsource(command_center.build)
 
 
 def test_in_flight_only_uses_columns_that_exist():
