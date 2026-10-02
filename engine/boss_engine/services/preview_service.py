@@ -335,6 +335,30 @@ def python_source_is_program(source: str) -> bool:
     return False
 
 
+def python_source_has_main_guard(source: str) -> bool:
+    """True when the file has a top-level `if __name__ == "__main__":` block."""
+    import ast
+    try:
+        tree = ast.parse(source or "")
+    except (SyntaxError, ValueError):
+        return bool(re.search(r"""__name__\s*==\s*['"]__main__['"]""", source or ""))
+    return any(isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+               and isinstance(n.test.left, ast.Name) and n.test.left.id == "__name__"
+               for n in tree.body)
+
+
+def python_entry_strength(source: str) -> int:
+    """How surely a program is an app: 0 serves HTTP, 1 has a __main__ block, 2 merely calls.
+
+    python_source_is_program counts ANY top-level call, so a config module app_settings.py that
+    runs load_dotenv() is "a program" — and in changed-list order it beat the server.py the same
+    build wrote. Being a program qualifies a candidate; this ranks the qualified ones.
+    """
+    if python_source_serves(source):
+        return 0
+    return 1 if python_source_has_main_guard(source) else 2
+
+
 def python_source_serves(source: str) -> bool:
     """True when the file constructs or starts an HTTP server/app object anywhere in it."""
     import ast
@@ -783,17 +807,23 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     # now be a program (python_source_is_program). A name-matched program wins first, as
     # before; a program that constructs a server is the app whatever it is called. Package
     # modules are run with -m by command_for_entry, so choosing one here is safe.
-    named, serving = [], []
-    for cand in [c for c in (changed or []) if c.endswith(".py") and not _is_py_test_path(c)]:
+    #
+    # Among the qualified, what the file DOES ranks before what it is called and where it sits
+    # in the changed list: a server beats a __main__ script beats a module that merely makes a
+    # top-level call. Otherwise app_settings.py calling load_dotenv() is "a program" named like
+    # an app, and outranks the server.py written beside it.
+    ranked = []
+    for order, cand in enumerate(
+            [c for c in (changed or []) if c.endswith(".py") and not _is_py_test_path(c)]):
         source = _read_py(workdir, cand)
         if source is None or not python_source_is_program(source):
             continue
-        if cand.rsplit("/", 1)[-1].startswith(_PY_ENTRY_PREFIXES):
-            named.append(cand)
-        elif python_source_serves(source):
-            serving.append(cand)
-    if named or serving:
-        return ("py", (named or serving)[0])
+        named = cand.rsplit("/", 1)[-1].startswith(_PY_ENTRY_PREFIXES)
+        strength = python_entry_strength(source)
+        if named or strength == 0:
+            ranked.append((strength, 0 if named else 1, order, cand))
+    if ranked:
+        return ("py", min(ranked)[3])
     # 2. A static app THIS task built. Ranked ABOVE the repo-wide python fallback: a task that
     #    ships web-nqueens/index.html means that app, not whatever serve.py predates it.
     #
@@ -1404,6 +1434,77 @@ def _proof_tree(workdir: Path, overlay: Optional[dict] = None) -> Path:
     return proof
 
 
+# A Node package that depends on one of these is a server, whatever its start script says.
+_NODE_SERVER_DEPS = frozenset({
+    "express", "fastify", "koa", "@hapi/hapi", "hapi", "restify", "polka", "hono",
+    "@nestjs/core", "next", "nuxt", "@sveltejs/kit", "@remix-run/serve", "http-server",
+    "serve", "connect", "socket.io",
+})
+
+# Suffixes of files that can change what an app DOES when started. A build that touched none of
+# them (docs, tests, fixtures) changed nothing the serve proof could catch.
+_RUNNABLE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".vue",
+                      ".svelte")
+_RUNNABLE_NAMES = frozenset({"package.json", RUN_DECLARATION_FILE, DECLARED_APP_FILE,
+                             "Procfile", "requirements.txt", "pyproject.toml"})
+
+
+def touches_runnable_source(changed: Optional[list[str]]) -> bool:
+    """Did this build change anything that could alter how its app starts or what it serves?
+
+    A web follow-up that edited only a README or only tests in boss-sandbox — a repo holding
+    several apps — has nothing of its own to start, and asking the shared repo which app it is
+    gets an honest "ambiguous". Failing that build for not serving was failing it for the
+    repository's shape, not for its change.
+    """
+    for raw in changed or []:
+        rel = str(raw).strip().lstrip("./")
+        lowered = "/" + rel.lower()
+        name = lowered.rsplit("/", 1)[-1]
+        if (_is_py_test_path(rel) or "/docs/" in lowered or "/__tests__/" in lowered
+                or ".test." in name or ".spec." in name):
+            continue
+        if name in {n.lower() for n in _RUNNABLE_NAMES} or name.endswith(_RUNNABLE_SUFFIXES):
+            return True
+    return False
+
+
+def _entry_evidently_serves(tree: Path, kind: str, value: str, read) -> bool:
+    """For a build NOT known to be a service: is the app its files name actually a server?
+
+    declare_app_entry names the program a build wrote, and a CLI is a program too. A CLI
+    main.py with a __main__ block, or a Node tool whose `start` is `node cli.js`, used to be
+    launched by the serve proof and failed for not answering HTTP, which blocked builds that
+    completed before the proof existed. Only a build that is a service, or whose own entry
+    constructs a server, is held to serving.
+    """
+    if kind == "static":
+        return True
+    if kind == "py":
+        source = (read(value) if read else None) or _read_py(tree, value) or ""
+        return python_source_serves(source)
+    if kind == "node":
+        base = tree if value in (".", "") else tree / value
+        try:
+            payload = json.loads((base / "package.json").read_text()) or {}
+        except (OSError, ValueError):
+            return False
+        deps = {**(payload.get("dependencies") or {}), **(payload.get("devDependencies") or {})}
+        if any(d in _NODE_SERVER_DEPS for d in deps):
+            return True
+        # A hand-rolled server: http.createServer(...) or .listen(...) in its own sources.
+        for path in list(base.glob("*.*js")) + list(base.glob("src/*.*js")) \
+                + list(base.glob("*.ts")) + list(base.glob("src/*.ts")):
+            try:
+                text = path.read_text(errors="ignore")
+            except OSError:
+                continue
+            if "createServer(" in text or re.search(r"\.listen\(", text):
+                return True
+        return False
+    return False
+
+
 def prove_app_serves(workdir: Path, changed: Optional[list[str]], *, read=None,
                      serves_http: bool = False, overlay: Optional[dict] = None,
                      timeout: float = 180.0) -> dict:
@@ -1446,10 +1547,20 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *, read=None,
         else:
             entry = declare_app_entry(changed or [], read)
             parsed = parse_declared_app(entry) if entry else None
+            if parsed and not serves_http and not _entry_evidently_serves(tree, *parsed, read):
+                # A CLI or worker: a program, but not a server. Its tests are its proof.
+                record.update(source="library", app_entry=entry,
+                              verification=_detect_verification(tree))
+                return record
             if parsed:
                 record["app_entry"] = entry
                 command = command_for_entry(tree, *parsed)
                 record["source"] = "derived"
+            elif serves_http and changed is not None and not touches_runnable_source(changed):
+                # Docs/tests only: nothing this build wrote can be started, so nothing to prove.
+                record.update(source="no_runnable_change",
+                              verification=_detect_verification(tree))
+                return record
             elif serves_http:
                 try:
                     command = _detect_command(tree, changed)
@@ -1473,7 +1584,14 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *, read=None,
         proc, port_hint = launch_app(tree, command, log_path)
         try:
             port = _discover_working_port(log_path, port_hint, timeout=timeout, proc=proc)
-            if port is None:
+            exit_code = proc.poll()
+            if port is None and exit_code is not None:
+                # It EXITED; it did not time out. "did not serve HTTP within timeout" for a
+                # process that died at 0.8s sent the reader looking for a slow start.
+                record.update(ok=False, exit_code=exit_code, error=(
+                    f"the app exited (code {exit_code}) before serving HTTP: "
+                    + _why_it_failed(log_path)))
+            elif port is None:
                 record.update(ok=False, error=_serve_failure(log_path, port_hint))
             else:
                 record.update(proven=True, port=port)

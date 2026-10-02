@@ -439,6 +439,61 @@ _ADVISORY_HARD_FLOOR = ("code_written", "app_serves")
 _NEVER_SHIP_PAST = frozenset({"app_serves"})
 
 
+def app_serves_check_skip_reason(fctx: dict) -> Optional[str]:
+    """Why the app_serves gate does not apply to this run, or None when it does.
+
+    A NON-FINAL DECOMPOSITION SLICE is not the app yet. Slice 1 of a decomposed build may be
+    the data model alone; the server is a later slice's job. Held to serving, it failed with
+    "serves HTTP but declares no way to run it", and because a non-final slice never opens a
+    PR the gate went straight to block — the chain stopped at slice 1 unless a convergence
+    round talked the agent into writing a server its slice was not about. The FINAL slice
+    carries the whole lineage and is held to serving in full.
+    """
+    didx, dtot = (fctx or {}).get("decomposition_index"), (fctx or {}).get("decomposition_total")
+    if isinstance(didx, int) and isinstance(dtot, int) and dtot > 1 and didx < dtot:
+        return f"decomposition slice {didx}/{dtot}: the final slice proves the app serves"
+    return None
+
+
+def app_serves_inconclusive_on_runtime(record: dict, command_runtime: str) -> dict:
+    """Mark a failed serve proof as a HARNESS fault when it ran somewhere the tests did not.
+
+    With BOSS_SANDBOX_COMMAND_RUNTIME=docker the suite and its dependency installs run in the
+    command container, while the proof launches on the control-plane host's python3/npm. A
+    Flask build whose Flask exists only in the container would "fail" with ModuleNotFoundError
+    — a fact about where BOSS ran it, not about the code — and the coder would be sent to fix it.
+    """
+    if (str(command_runtime or "").lower() == "docker" and record.get("ok") is False
+            and not record.get("harness")):
+        return {**record, "harness": True,
+                "harness_reason": "the proof ran on the host, the build's tests in the "
+                                  "docker command runtime; its failure is not evidence "
+                                  "about the code"}
+    return record
+
+
+def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict]
+                          ) -> tuple[str, str]:
+    """(code_task_runs.error, partial-PR rescue reason) for a run the quality gate blocked.
+
+    The error used to name the failing gates only — "failing gates: ['app_serves']" — so an
+    operator looking at a blocked build had to dig the app's ImportError out of the evidence
+    and the event log. And the rescue reason always said "never_block is disabled", which was
+    false whenever app_serves forced the block with never_block on. When the app did not start,
+    say so, with what BOSS ran and what the app said.
+    """
+    error = (f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
+             "A human can waive these + open the PR via /override.")
+    reason = "quality gate blocked and never_block is disabled"
+    if "app_serves" in (failing or []):
+        rec = app_serves_record or {}
+        command = rec.get("command") or "(no run command found)"
+        app_error = str(rec.get("error") or "")[:500]
+        error += f" The app did not start: BOSS ran `{command}` — {app_error}"
+        reason = f"the app did not start (`{command}`), so the build is not done"
+    return error, reason
+
+
 def resolve_gate_failure_action(
     *,
     failing: list[str],
@@ -3657,6 +3712,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds", 180)
                               or 180),
             )
+            record = app_serves_inconclusive_on_runtime(
+                record, getattr(settings, "sandbox_command_runtime", "subprocess"))
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.app_serve_checked", "boss",
                            "code_task_run", run_id,
@@ -3665,7 +3722,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return record
 
         app_serves_record: dict = {"skipped": "the tests did not pass, so there is no app to start"}
-        if tests_passed:
+        _serve_skip = app_serves_check_skip_reason(fctx)
+        if _serve_skip:
+            app_serves_record = {"skipped": _serve_skip}
+        elif tests_passed:
             app_serves_record = _check_app_serves(changed_files)
             gates["app_serves"] = bool(app_serves_record.get("ok"))
 
@@ -4006,7 +4066,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
                         gates["nothing_broke"] = tests_passed
-                    if tests_passed:
+                    if tests_passed and "app_serves" in gates:
                         # Green again: re-prove the app against the code as it now stands.
                         app_serves_record = _check_app_serves(
                             {fc.path: fc.content for fc in sandbox.diff()})
@@ -4322,6 +4382,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "failing_gates": failing}
             elif action == "block":
                 _finish_vms(success=False)  # retain the stage VMs for inspection
+                _blocked_error, _blocked_reason = blocked_gate_messages(
+                    qg_id, failing, app_serves_record)
                 # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
                 # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
                 # NOT waive still block, and the PR still carries its own merge-gate Decision.
@@ -4336,10 +4398,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     c.execute(sql(
                         "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
                         "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
-                        {"e": f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
-                              f"A human can waive these + open the PR via /override.",
-                         "fc": json.dumps(ctx), "id": run_id})
-                _rescue_pr("quality gate blocked and never_block is disabled")
+                        {"e": _blocked_error, "fc": json.dumps(ctx), "id": run_id})
+                _rescue_pr(_blocked_reason)
                 return {"status": "blocked", "done": True, "awaiting_gate_override": True,
                         "quality_gate_id": qg_id, "failing_gates": failing}
 
