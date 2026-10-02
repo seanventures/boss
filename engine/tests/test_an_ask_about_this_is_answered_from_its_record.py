@@ -263,10 +263,16 @@ def _router(monkeypatch, answerer, **settings):
     return router, progress
 
 
-def _ask(router, db, *, external_ref=STEP_REF, role="Qa", question=QUESTION):
+def _ask(router, db, *, external_ref=STEP_REF, role="Qa", question=QUESTION,
+         depth="investigate"):
+    # THE INVESTIGATING LOOP. Since boss-1's 347 s "Ask the Qa", a question about a record is
+    # answered first in one tool-less call (subject_answer.py, pinned by
+    # test_an_ask_about_this_answers_first_in_one_call.py) and this loop runs when the operator
+    # presses "Investigate further" / "Do the fix" — depth="investigate". Every guarantee below
+    # is about that loop, and still holds for it.
     return router._answer(db, "boss-dogfood", [{"role": "user", "content": question}],
                           actor="executive_console", external_ref=external_ref, role=role,
-                          thread_id="athr_x")
+                          thread_id="athr_x", depth=depth)
 
 
 ANSWER = ("The preview crashed on start with ImportError: lead_triage_core/approvals.py uses a "

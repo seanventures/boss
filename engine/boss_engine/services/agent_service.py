@@ -545,6 +545,10 @@ class AgentService:
         #: Files the operator attached to THIS message — a screenshot of the error, a log too
         #: long to paste. Each is {name, media_type, kind, data}.
         attachments: Optional[list[dict[str, Any]]] = None,
+        #: "investigate" asks for the full tool loop on a question about a record — the dock's
+        #: "Investigate further" / "Do the fix". Otherwise such a question is answered first in
+        #: one call from the record (subject_answer.py).
+        depth: Optional[str] = None,
     ) -> dict[str, Any]:
         # THE AGENT IS PART OF WHICH CONVERSATION THIS IS. Without it the thread resolved on
         # (project, surface, external_ref) alone, so asking a second agent about the same task
@@ -600,6 +604,7 @@ class AgentService:
             # a chat turn is one HTTP request, and an investigation that now runs six or more
             # lookups would otherwise be two minutes of a pulsing dot.
             thread_id=thread["id"],
+            depth=depth,
         )
         assistant = self.append_message(
             connection,
@@ -668,6 +673,8 @@ class AgentService:
             # The read trail. Collected by the router already and dropped here, which is why
             # the console could never show what an answer was based on.
             "tool_calls": getattr(turn, "tool_calls", []) or [],
+            # What the dock offers under a first answer: "Investigate further", "Do the fix".
+            "next_steps": getattr(turn, "next_steps", []) or [],
             "messages": [*messages, assistant],
         }
 

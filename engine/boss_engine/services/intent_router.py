@@ -88,6 +88,9 @@ class RouterTurn:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     #: Offers the operator can accept with one click. Nothing here has run.
     proposed_actions: list[dict[str, Any]] = field(default_factory=list)
+    #: The turns the dock offers next — "Investigate further", "Do the fix" — under an answer
+    #: given from a record in one call (subject_answer.py). Each is {id, label, depth, message}.
+    next_steps: list[dict[str, Any]] = field(default_factory=list)
 
 
 _TOOL_SCHEMAS = [
@@ -1486,6 +1489,9 @@ class IntentRouter:
         mode: str = "operate",
         #: The conversation this turn belongs to, so progress can be reported while it runs.
         thread_id: Optional[str] = None,
+        #: "investigate" runs the full tool loop on a question about a record; otherwise such a
+        #: question is answered first in one call from the record (subject_answer.py).
+        depth: Optional[str] = None,
     ) -> RouterTurn:
         # BEFORE ANYTHING ELSE IN THE TURN: whichever model this project connected is the one
         # that should answer, and the router is the first place that knows both the project and
@@ -1516,7 +1522,7 @@ class IntentRouter:
                 return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
                                 mode=mode,
                                 thread_id=thread_id,
-                                role=role)
+                                role=role, depth=depth)
             # Any other new instruction REVISES the plan to reflect it (re-propose). This also unjams a
             # thread whose plan was already handled another way — the user just steers with a message.
             row = connection.execute(
@@ -1594,7 +1600,7 @@ class IntentRouter:
             return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
                                 mode=mode,
                                 thread_id=thread_id,
-                                role=role)
+                                role=role, depth=depth)
 
         capability_id = {
             "create_code_task": "code_task",
@@ -1667,6 +1673,58 @@ class IntentRouter:
             )
         return block
 
+    def _first_answer_adapter(self):
+        """The model the first answer asks: the chat agent's own backend, without its loop."""
+        return self._answer_agent()._adapter_obj()
+
+    def _first_answer(self, connection, project_id: str, evidence: Any, question: str, *,
+                      history: list, role: Optional[str],
+                      thread_id: Optional[str]) -> Optional[RouterTurn]:
+        """One call, no tools, inside `chat_subject_answer_seconds` — see subject_answer.py.
+
+        Returns None only when no model budget was granted, so the ordinary path reports that
+        in its own words. Every other outcome is an answer: the model's, or — when its time ran
+        out or it failed — what the record itself says and what was not checked.
+        """
+        from .subject_answer import answer_first, answer_seconds
+
+        reservation = self.budget.reserve(
+            connection, project_id, "model", self.settings.agent_router_budget_usd_micros,
+            "Orchestration first answer from a subject's record.", 10)
+        if reservation.get("status") != "reserved":
+            return None
+        seconds = answer_seconds(self.settings)
+        report = _progress_reporter(project_id, thread_id)
+        if report is not None:
+            report(f"reading the record for {evidence.ref.label} and writing the answer")
+        try:
+            try:
+                adapter = self._first_answer_adapter()
+            except Exception as exc:  # noqa: BLE001 — still answer, from the record
+                from .subject_answer import QuickAnswer, record_only_answer
+
+                why = f"{type(exc).__name__}: {str(exc)[:200]}"
+                quick = QuickAnswer(reply=record_only_answer(evidence, why), seconds=0.0,
+                                    by_model=False, reason=why)
+            else:
+                quick = answer_first(adapter, evidence, question, history=history, role=role,
+                                     seconds=seconds)
+        finally:
+            try:
+                self.budget.release(connection, project_id, reservation["reservation_id"],
+                                    "answer")
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            emit_event(connection, project_id, "agent.first_answer", "orchestrator",
+                       "project", project_id,
+                       {"subject": evidence.ref.external_ref, "seconds": round(quick.seconds, 1),
+                        "by_model": quick.by_model, "reason": quick.reason[:300]})
+        except Exception:  # noqa: BLE001 — telemetry must not cost the answer
+            pass
+        return RouterTurn(reply=_boss_cannot_call_you_back(quick.reply),
+                          next_steps=quick.next_steps())
+
     def _reask(self, *, project_id: str, actor: str, question: str, history: list,
                reply: str, instruction: str, system: str, budget: "TurnBudget",
                on_step, focus: str, allow_writes: bool, max_steps: int):
@@ -1707,7 +1765,8 @@ class IntentRouter:
                 #: "discuss" puts the agent's head in a different place — see
                 #: `_discussion_brief`. Anything else is the operating agent it has always been.
                 mode: str = "operate",
-                thread_id: Optional[str] = None) -> RouterTurn:
+                thread_id: Optional[str] = None,
+                depth: Optional[str] = None) -> RouterTurn:
         """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
         thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
         explicit build intent (handled in route_turn) actuates work."""
@@ -2074,6 +2133,25 @@ class IntentRouter:
         latest_blocks: Optional[list[dict[str, Any]]] = None
         if attached:
             latest, latest_blocks = _with_attachments(latest, attached)
+        # A QUESTION ABOUT A RECORD IS ANSWERED FIRST, IN ONE CALL, FROM THE RECORD.
+        #
+        # boss-1, 2026-10-02: "Ask the Qa" on a Preview step whose record held the whole cause
+        # (Vite: Could not resolve entry module "index.html") took 347 s and answered "Budget
+        # spent; answering from evidence gathered…" — the loop below spent its round-trips, each
+        # a CLI call with ~48 tool schemas and this ~250-line persona, re-finding what the
+        # subject block already said. The owner: "these things should be quick". So the first
+        # answer is one tool-less call inside a hard budget (subject_answer.py), and the loop
+        # runs only when the operator presses "Investigate further" or "Do the fix".
+        if subject_ref is not None and subject_ev is not None:
+            from .subject_answer import wants_first_answer
+
+            if wants_first_answer(_question or latest, subject_ev, depth,
+                                  has_images=bool(latest_blocks)):
+                first = self._first_answer(connection, project_id, subject_ev,
+                                           _question or latest, history=history, role=role,
+                                           thread_id=thread_id)
+                if first is not None:
+                    return first
         reply = ""
         # WHY THE ANSWER IS MISSING, IF IT IS.
         #

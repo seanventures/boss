@@ -321,6 +321,23 @@ class CliChatBrain:
         return (data.get("session_id", self._session_default),
                 (data.get("result") or ""), self._usage(data))
 
+    def create_plain_answer(self, system_prompt: str, prompt: str) -> Tuple[str, dict]:
+        """One completion with no tools at all, for subject_answer's first answer.
+
+        The base form is the text response on the adapter's own terms; the Claude CLI overrides
+        `_invoke_plain` to drop Claude Code's own ~34k-token system prompt as well.
+        """
+        try:
+            data = self._invoke_plain(system_prompt, prompt)
+        except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged
+            self._observe_capacity(ok=False, error=str(exc))
+            raise
+        self._observe_capacity(ok=True, error=None)
+        return (data.get("result") or ""), self._usage(data)
+
+    def _invoke_plain(self, system_prompt: str, prompt: str) -> dict:
+        return self._invoke(f"{system_prompt}\n\n{prompt}")
+
     def _observe_capacity(self, *, ok: bool, error: Optional[str]) -> None:
         """Fold this call's outcome into what BOSS knows about the provider's capacity.
 
@@ -372,7 +389,17 @@ class ClaudeCliAdapter(CliChatBrain):
     # (An empty --allowedTools does NOT disable server tools like WebSearch; --tools "" does.)
     _NO_BUILTIN_TOOLS = ("--tools", "")
 
-    def _invoke(self, prompt: str) -> dict:
+    #: THE FIRST ANSWER'S PER-CALL OVERHEAD, MEASURED (this Mac, Claude Code 2.1.284, a
+    #: one-word reply): Claude Code's own system prompt is ~34,000 input tokens on every `-p`
+    #: call; with `--system-prompt` it is ~450. An answer-from-the-record call has no use for an
+    #: agentic coding persona, and no tools, so it runs on its own short prompt, one turn, and
+    #: with no MCP servers loaded (subject_answer.py).
+    _PLAIN_FLAGS = ("--max-turns", "2", "--strict-mcp-config", "--disable-slash-commands")
+
+    def _invoke_plain(self, system_prompt: str, prompt: str) -> dict:
+        return self._invoke(prompt, system_prompt=system_prompt)
+
+    def _invoke(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
         own_timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
         # NO CALL OUTLIVES ITS TURN (call_deadline.py): the CLI's own 240 s is a ceiling, and
         # inside a chat turn the turn's remaining time is the real one.
@@ -401,11 +428,13 @@ class ClaudeCliAdapter(CliChatBrain):
             # It was latent and count-sensitive: 52 registered tools answered fine and the
             # 53rd tipped it over, so it would have looked like whichever tool was added last
             # broke the console. Leave room to recover from one stray attempt.
-            "--max-turns", "6",
+            *(("--max-turns", "6") if system_prompt is None else self._PLAIN_FLAGS),
             # VARIADIC: `--tools` takes every argument up to the next flag, so it never sits
             # last before a positional prompt — the prompt is passed with -p above.
             *self._NO_BUILTIN_TOOLS,  # pure completion, no tool use
         ]
+        if system_prompt is not None:
+            cmd += ["--system-prompt", system_prompt]
         model = self.model_override or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
@@ -566,6 +595,42 @@ class FallingBackAdapter:
                 f"{primary_error} (and the fallback failed too: {fallback_exc})") from primary_error
         self.last_backend = type(self.fallback).__name__
         return out
+
+    def create_plain_answer(self, system_prompt, prompt):
+        """subject_answer's one call, on the same fallback terms as the chat one. A fallback
+        without the lean path gets an ordinary tool-less chat completion."""
+        primary_error = None
+        try:
+            plain = getattr(self.primary, "create_plain_answer", None)
+            if callable(plain):
+                out = plain(system_prompt, prompt)
+            else:
+                msg, usage = self.primary.create_chat_completion(
+                    [{"role": "system", "content": system_prompt},
+                     {"role": "user", "content": prompt}], tools=None)
+                out = (str(msg.get("content") or ""), usage)
+            self.last_backend = type(self.primary).__name__
+            return out
+        except Exception as exc:  # noqa: BLE001
+            if not self._unavailable(exc):
+                raise
+            primary_error = exc
+            _log.warning("chat brain unavailable (%s); falling back to %s",
+                         exc, type(self.fallback).__name__)
+            if self._on_fallback:
+                try:
+                    self._on_fallback(exc)
+                except Exception:  # noqa: BLE001 — reporting must not break answering
+                    pass
+        try:
+            msg, usage = self.fallback.create_chat_completion(
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user", "content": prompt}], tools=None)
+        except Exception as fallback_exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"{primary_error} (and the fallback failed too: {fallback_exc})") from primary_error
+        self.last_backend = type(self.fallback).__name__
+        return str(msg.get("content") or ""), usage
 
     def create_text_response(self, prompt, system_prompt=None, model=None):
         """The one-shot completion, on the same terms as the chat one.

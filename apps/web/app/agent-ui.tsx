@@ -174,6 +174,23 @@ export function stripAppFacts(content: string): string {
 /** One tool BOSS called while answering. The evidence behind the paragraph. */
 type ToolCall = { tool?: string; args?: Record<string, unknown>; ok?: boolean };
 
+/**
+ * A TURN THE DOCK OFFERS NEXT, under an answer BOSS gave from a record in one call.
+ *
+ * boss-1, 2026-10-02: "Ask the Qa" on a failed Preview step ran the whole investigating loop for
+ * 347 s before answering what the step's own record said. The first answer now comes in one
+ * call, and digging deeper is the operator's choice: "Investigate further" or "Do the fix" send
+ * `message` with `depth`, which is what runs the full tool loop. See subject_answer.py.
+ */
+export type NextStep = { id: string; label: string; depth?: string; message: string };
+
+export function nextStepsOf(data: Record<string, unknown> | null | undefined): NextStep[] {
+  const raw = data?.next_steps;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((s): s is NextStep =>
+    !!s && typeof (s as NextStep).label === "string" && typeof (s as NextStep).message === "string");
+}
+
 type ProposedAction = {
   id: string;
   tool: string;
@@ -311,6 +328,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [pendingPlan, setPendingPlan] = useState<Record<string, unknown> | null>(null);
   /** Actions BOSS is OFFERING. Nothing here has run; a click is what executes it. */
   const [proposed, setProposed] = useState<ProposedAction[]>([]);
+  /** "Investigate further" / "Do the fix" under the last answer — see NextStep. */
+  const [nextSteps, setNextSteps] = useState<NextStep[]>([]);
   const [trail, setTrail] = useState<ToolCall[]>([]);
   const [ranAction, setRanAction] = useState<string | null>(null);
   /**
@@ -539,7 +558,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
    */
   const openSession = useCallback((threadId: string | null) => {
     setSel(GENERAL);
-    setMessages([]); setContext(null); setPendingPlan(null); setProposed([]);
+    setMessages([]); setContext(null); setPendingPlan(null); setProposed([]); setNextSteps([]);
     setThreadId(threadId);
     if (!threadId) { setLoadingThread(false); return; }   // New chat: nothing to fetch
     setLoadingThread(true);
@@ -558,7 +577,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     // conversation stayed on screen while a different thread loaded — and it stays clickable,
     // so "delete all containers on hetzner-ci-01" could be pressed from a chat about
     // something else entirely.
-    setSel(id); setMessages([]); setContext(null); setPendingPlan(null); setProposed([]);
+    setSel(id); setMessages([]); setContext(null); setPendingPlan(null); setProposed([]); setNextSteps([]);
     setLoadingThread(true);
     const th = threadFor(id, list);
     setThreadId(th?.thread_id ?? null);
@@ -675,6 +694,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const runTurn = useCallback((fd: FormData) => {
     fd.set("project_id", projectId); fd.set("actor", actor);
+    // The offers belong to the answer they came from; a new turn retires them.
+    setNextSteps([]);
     // Every turn, not just the first: the operator asked a named member of the workforce, and
     // the second question is still addressed to them.
     if (roleName) fd.set("role", roleName);
@@ -842,6 +863,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // them here does not make anything safer, it makes the action unreachable and the
         // agent look like it is lying.
         setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
+        // THE ANSWER FIRST, THE DIGGING ON REQUEST — see NextStep.
+        setNextSteps(nextStepsOf(d));
         // WHAT THE ANSWER IS BASED ON. See ReadTrail: a confident paragraph with nothing
         // behind it is exactly what makes an operator distrust the whole thing.
         setTrail(Array.isArray(d.tool_calls) ? (d.tool_calls as ToolCall[]) : []);
@@ -852,6 +875,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       }
     });
   }, [projectId, actor, threadId, sel, roleRef, roleName, refreshThreads]);
+
+  /** Take one of the offered next steps: its message, sent at its depth, as the operator's. */
+  const takeNextStep = useCallback((step: NextStep) => {
+    if (busy) return;
+    setMessages((m) => [...m, { role: "user", content: step.message }]);
+    const fd = new FormData();
+    fd.set("message", step.message);
+    if (step.depth) fd.set("depth", step.depth);
+    runTurn(fd);
+  }, [busy, runTurn]);
 
   const send = useCallback(() => {
     const msg = input.trim();
@@ -936,7 +969,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       if (!r.ok) return;
       // Local state last, and only on success: clearing the panel before the server agreed
       // would show an empty conversation that comes back on the next load.
-      setMessages([]); setProposed([]); setTrail([]); setPendingPlan(null);
+      setMessages([]); setProposed([]); setNextSteps([]); setTrail([]); setPendingPlan(null);
       setThreadId(null);
       refreshThreads();
     } catch {
@@ -1347,6 +1380,26 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               is what executes it, verbatim, with no model in between. Cheapest first, because
               "this link is wrong" does not say whether you want it cleared or the app redeployed —
               and one of those costs minutes and money. */}
+          {/* THE ANSWER CAME FIRST; GOING DEEPER IS A CHOICE. Under an answer BOSS gave from
+              the record in one call (boss-1: 347 s became one call), the full investigation and
+              the fix are one press away — and never start on their own. */}
+          {nextSteps.length > 0 && !busy ? (
+            <div className="agent-next-steps" data-testid="agent-next-steps">
+              {nextSteps.map((step) => (
+                <button
+                  type="button"
+                  className="button agent-next-step"
+                  key={step.id || step.label}
+                  data-testid={`agent-next-${step.id || step.label}`}
+                  title={step.message}
+                  onClick={() => takeNextStep(step)}
+                >
+                  {step.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
           {proposed.length > 0 ? (
             <div className="agent-proposals" data-testid="agent-proposals">
               <p className="detail agent-proposals-head">

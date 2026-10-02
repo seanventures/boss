@@ -11716,6 +11716,7 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
                 external_ref=payload.external_ref,
                 role=payload.role,
                 mode=payload.mode,
+                depth=payload.depth,
                 attachments=[
                     {"name": a.name, "media_type": a.media_type, "kind": a.kind,
                      "data": a.data}

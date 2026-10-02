@@ -6527,6 +6527,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .agent-proposal { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .agent-proposal-why { min-width: 0; overflow-wrap: anywhere; }
 
+/* "Investigate further" / "Do the fix" under an answer given from the record in one call.
+   Controls, not suggestions: going deeper is the operator's choice, so it has to look pressable. */
+.agent-next-steps { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 8px; min-width: 0; }
+.agent-next-step { white-space: nowrap; }
+
 /* These read as pale suggestions rather than controls, so operators did not press them. An
    offer the operator does not recognise as pressable is the same as no offer at all — the
    whole point of propose-only is that the click is the authorisation. */
