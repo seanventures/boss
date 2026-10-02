@@ -22,7 +22,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc2 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc4 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -139,7 +139,7 @@ This is the same command as [Install](#install): it installs the newest release 
 The same install without the website. The download and the Git checkout use the same commit, the installer verifies it, and a failed download stops before anything runs:
 
 ```bash
-BOSS_RELEASE_COMMIT=a2a2dea7f4936c7dba83ffdca84934eefa4efc3c bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+BOSS_RELEASE_COMMIT=964bd7e8406c758d75e2dbd82e0bcf12e1f7d16a bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
 ```
 
 > [!WARNING]
@@ -152,9 +152,9 @@ The installer uses `~/boss` unless you pass `--dir`. Add installer flags after t
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc2 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc4 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc2
+./install.sh --dir "$PWD" --ref v1.0-rc4
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:

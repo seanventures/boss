@@ -44,10 +44,10 @@ To verify a result, read the returned task and its event history. Other operatio
 
 ## Coverage
 
-| Surface | Coverage of all 982 mounted Community HTTP operations |
+| Surface | Coverage of all 983 mounted Community HTTP operations |
 |---|---|
-| Terminal ([capability matrix](TERMINAL_CAPABILITY_MATRIX.md)) | Maps all 982; 969 `/v1/` operator operations are addressable by `/op`. |
-| MCP ([operation matrix](mcp-api-capability-matrix.json)) | Accounts for all 982: 851 are eligible for API policy checks, 64 sensitive actions require separate human approval of an exact request, none remain held for route-specific safety gaps, and 67 protocol or internal routes are excluded. |
+| Terminal ([capability matrix](TERMINAL_CAPABILITY_MATRIX.md)) | Maps all 983; 970 `/v1/` operator operations are addressable by `/op`. |
+| MCP ([operation matrix](mcp-api-capability-matrix.json)) | Accounts for all 983: 851 are eligible for API policy checks, 64 sensitive actions require separate human approval of an exact request, none remain held for route-specific safety gaps, and 68 protocol or internal routes are excluded. |
 
 !!! note "Mapped is not the same as authorized"
     The API and terminal can submit operator requests, but existing server checks can still deny or hold an action. A mapped operation does not imply that an edition enables the feature or that a particular credential is authorized.

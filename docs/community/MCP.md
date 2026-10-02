@@ -120,7 +120,7 @@ The engine registry has 106 tools: 61 read and 45 write. Examples:
 
 | Tool or area | Community behavior |
 |---|---|
-| `create_discovery` | Stays in the registry for compatibility, but Community refuses new Discovery research until its model calls use durable job leases, budget reservations, and reconciled receipts. The API's Discovery start and deepen routes return 503 for authorized callers while this release gate is open. |
+| `create_discovery` | Queues a governed `discovery.run` job: a worker leases it, and each research stage is budget-reserved, leased on the Claude Code subscription, and receipted. Without a usable Claude Code subscription the job's first stage is refused and the discovery fails with that reason; nothing is spent. |
 | Source tools and pull request reads | Accept a run ID from the session project or an active repository binding in that project. |
 | `read_logs` | Returns only project-tagged captured logs. |
 | Arbitrary URL probes | Unavailable until destinations can be verified against a project network policy. |
@@ -189,7 +189,7 @@ How the bridge constrains each call:
 
 ## Operation coverage
 
-The operation inventory is generated from each edition's mounted `app.openapi()` and keyed by **method plus path**, because FastAPI's automatic operation IDs are duplicated on a few multi-method routes. Run `python scripts/audit_mcp_api_parity.py --check` to verify [`mcp-api-capability-matrix.json`](mcp-api-capability-matrix.json). At this revision it accounts for all **983 Community** and **1,034 Enterprise** operations:
+The operation inventory is generated from each edition's mounted `app.openapi()` and keyed by **method plus path**, because FastAPI's automatic operation IDs are duplicated on a few multi-method routes. Run `python scripts/audit_mcp_api_parity.py --check` to verify [`mcp-api-capability-matrix.json`](mcp-api-capability-matrix.json). At this revision it accounts for all **983 Community** and **1,035 Enterprise** operations:
 
 | Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
 |---|---:|---:|---:|---:|

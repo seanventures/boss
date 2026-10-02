@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: BOSS Control Plane
-  version: 1.0.0-rc.2
+  version: 1.0.0-rc.4
   description: BOSS Community self-hosted HTTP API. Generated from the routes mounted with BOSS_EDITION=community.
     API-key transport can be enabled by the self-hosted operator.
 paths:
@@ -30483,6 +30483,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/discoveries/{run_id}/execute:
+    post:
+      summary: Execute Discovery Endpoint
+      description: 'The worker hands a leased `discovery.run` job here: the research agent (the Claude
+        CLI)
+
+        lives in this container. Each stage spends under the job''s lease, with its own
+
+        reservation and receipt; stages already paid for replay. Fenced by the lease token.'
+      operationId: post_v1_discoveries_run_id_execute_6ac80599
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiscoveryExecuteBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     A2AAcknowledgeRequest:
@@ -38807,6 +38842,30 @@ components:
       required:
       - ui_bearing
       title: DesignPromptResponse
+    DiscoveryExecuteBody:
+      properties:
+        job_id:
+          type: string
+          minLength: 1
+          title: Job Id
+        worker_id:
+          type: string
+          minLength: 1
+          title: Worker Id
+        lease_token:
+          type: string
+          minLength: 1
+          title: Lease Token
+      type: object
+      required:
+      - job_id
+      - worker_id
+      - lease_token
+      title: DiscoveryExecuteBody
+      description: 'The worker''s lease of a discovery.run job. All three are required: every research
+        stage
+
+        spends only under this lease, so a call without one must not reach the pipeline.'
     DiscoveryPromoteBody:
       properties:
         outcome_index:
@@ -61154,6 +61213,10 @@ components:
           minimum: 5.0
           title: Lease Ttl Seconds
           default: 60
+        handing_back:
+          type: boolean
+          title: Handing Back
+          default: false
       type: object
       required:
       - worker_id

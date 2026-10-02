@@ -1128,7 +1128,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("overview") ? (
         <section data-area="overview" aria-label="Ask BOSS">
           <AskBossHero projectId={activeProjectId} actor={activeActorId}
-            orgId={activeOrgId} />
+            orgId={activeOrgId} deploymentAvailable={false} />
         </section>
         ) : null}
 
