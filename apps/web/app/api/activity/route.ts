@@ -30,6 +30,9 @@ const FORWARD = [
   // separated from the run it happened during.
   "level", "source", "run_id", "agent", "service",
   "since", "until", "sort", "order", "limit", "offset",
+  // "Load older": the last row of the previous page. Without it forwarded, the button would
+  // reload the newest page forever.
+  "cursor", "workflow_run_id",
 ] as const;
 
 export async function GET(req: Request) {

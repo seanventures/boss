@@ -60,6 +60,8 @@ export type ActivityLogQuery = {
   order?: string;
   limit?: number;
   offset?: number;
+  /** `next_cursor` from the previous page: the rows strictly older than it. */
+  cursor?: string;
 };
 
 export type ActivityLogItem = {
@@ -98,7 +100,38 @@ export type ActivityLog = {
   total?: number;
   limit?: number;
   offset?: number;
+  /** Present when there is an older page; pass it back as `cursor` to load it. */
+  nextCursor?: string;
 };
+
+/** How many rows the LOG holds per level and per stream (GET /v1/activity/facets) — counted
+ *  against the log, not the page. */
+export type ActivityFacets = {
+  levels: Record<string, number>;
+  sources: Record<string, number>;
+  levelsExact: boolean;
+  note?: string;
+};
+
+export function mapActivityFacets(payload: unknown): ActivityFacets | null {
+  if (!isPlainObject(payload)) return null;
+  const counts = (value: unknown): Record<string, number> => {
+    const out: Record<string, number> = {};
+    if (isPlainObject(value)) {
+      for (const [key, n] of Object.entries(value)) {
+        const parsed = asFiniteNumber(n);
+        if (parsed !== undefined) out[key] = parsed;
+      }
+    }
+    return out;
+  };
+  return {
+    levels: counts(payload.levels),
+    sources: counts(payload.sources),
+    levelsExact: payload.levels_exact !== false,
+    note: typeof payload.note === "string" ? payload.note : undefined,
+  };
+}
 
 const STATUS_SET = new Set<string>(ACTIVITY_LOG_STATUSES);
 const SORT_SET = new Set<string>(ACTIVITY_LOG_SORTS);
@@ -148,6 +181,7 @@ export function activityLogSearchParams(
   if (typeof query.offset === "number" && Number.isFinite(query.offset)) {
     params.set("offset", String(Math.max(0, Math.trunc(query.offset))));
   }
+  setIfPresent(params, "cursor", query.cursor);
   return params;
 }
 
@@ -170,6 +204,8 @@ export function mapActivityLog(
     total: asFiniteNumber(payload.total),
     limit: asFiniteNumber(payload.limit),
     offset: asFiniteNumber(payload.offset),
+    nextCursor:
+      typeof payload.next_cursor === "string" && payload.next_cursor ? payload.next_cursor : undefined,
   };
 }
 

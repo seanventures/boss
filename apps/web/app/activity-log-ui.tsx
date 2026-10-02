@@ -3,7 +3,8 @@
 import React, { useEffect, useMemo, useState, useTransition } from "react";
 
 import { formatDateTime } from "../lib/datetime";
-import { fetchActivityLog } from "../lib/activity-log-client";
+import { fetchActivityFacets, fetchActivityLog } from "../lib/activity-log-client";
+import type { ActivityFacets } from "../lib/activity-log";
 
 /**
  * Local types matching GET /v1/activity.
@@ -102,6 +103,7 @@ type ActivityLogFeed = {
   total?: number;
   limit?: number;
   offset?: number;
+  nextCursor?: string;
 };
 
 const EMPTY_FEED: ActivityLogFeed = {
@@ -266,6 +268,10 @@ export function ActivityLog({
   const [order, setOrder] = useState<SortOrder>("desc");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // THE LOG'S COUNTS, not the page's. null until they arrive, or when they could not be read.
+  const [facets, setFacets] = useState<ActivityFacets | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState("");
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -290,6 +296,67 @@ export function ActivityLog({
     ? undefined
     : ALL_SOURCES.filter((value) => enabledSources.has(value)).join(",");
 
+  const listQuery = useMemo(() => ({
+    q: debouncedSearch || undefined,
+    kind: kind || undefined,
+    status: status || undefined,
+    actor: actorFilter || undefined,
+    level: level || undefined,
+    source: sourceParam,
+    agent: agentFilter || undefined,
+    service: serviceFilter || undefined,
+    run_id: scopedRun || undefined,
+    workflow_run_id: scopedWorkflowRun || undefined,
+    sort: serverSort,
+    order: serverOrder,
+    // A transcript is dense. Fifty rows is barely a minute of a build.
+    limit: 200,
+  }), [debouncedSearch, kind, status, actorFilter, level, sourceParam, agentFilter,
+       serviceFilter, scopedRun, scopedWorkflowRun, serverSort, serverOrder]);
+
+  // THE CHIP COUNTS, FROM THE LOG. Fetched on their own so the first page never waits for the
+  // classification they need; scoped like the list, but not by level or stream, because a chip
+  // says how many rows switching it on would show.
+  useEffect(() => {
+    let alive = true;
+    setFacets(null);
+    void fetchActivityFacets(projectId, {
+      run_id: scopedRun || undefined,
+      workflow_run_id: scopedWorkflowRun || undefined,
+      agent: agentFilter || undefined,
+      service: serviceFilter || undefined,
+    }).then((result) => {
+      if (alive) setFacets(result);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [projectId, scopedRun, scopedWorkflowRun, agentFilter, serviceFilter]);
+
+  /** "Load older": the next page behind the last row shown, with the same filters. */
+  const loadOlder = async () => {
+    if (!feed.nextCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    setOlderError("");
+    const older = await fetchActivityLog(projectId, { ...listQuery, cursor: feed.nextCursor });
+    setLoadingOlder(false);
+    if (!older.apiReachable) {
+      setOlderError(
+        `Could not load older rows (${older.blockedReason ?? "the API did not answer"}). ` +
+        "The rows above are unchanged; press Load older again to retry.",
+      );
+      return;
+    }
+    setFeed((current) => {
+      const seen = new Set(current.items.map((item) => item.id));
+      return {
+        ...current,
+        items: [...current.items, ...older.items.filter((item) => !seen.has(item.id))],
+        nextCursor: older.nextCursor,
+      };
+    });
+  };
+
   useEffect(() => {
     let alive = true;
     // NOTHING TICKED IS NOT "EVERYTHING". An empty `source` means every stream to the API, so
@@ -304,32 +371,16 @@ export function ActivityLog({
       // A ROUTE HANDLER, NOT A SERVER ACTION. This call took 25.3 seconds on the live
       // console -- about 14s of query and the rest a full re-render of the route, which is
       // what a Server Action ships alongside its return value. See lib/activity-log-client.ts.
-      const result = await fetchActivityLog(projectId, {
-        q: debouncedSearch || undefined,
-        kind: kind || undefined,
-        status: status || undefined,
-        actor: actorFilter || undefined,
-        level: level || undefined,
-        source: sourceParam,
-        agent: agentFilter || undefined,
-        service: serviceFilter || undefined,
-        run_id: scopedRun || undefined,
-        workflow_run_id: scopedWorkflowRun || undefined,
-        sort: serverSort,
-        order: serverOrder,
-        // A transcript is dense. Fifty rows is barely a minute of a build.
-        limit: 200,
-      });
+      const result = await fetchActivityLog(projectId, listQuery);
       if (!alive) return;
       setFeed(result);
+      setOlderError("");
       setLoading(false);
     });
     return () => {
       alive = false;
     };
-  }, [projectId, debouncedSearch, kind, status, actorFilter, level, agentFilter,
-      serviceFilter, scopedRun, scopedWorkflowRun, serverSort, serverOrder,
-      sourceParam, noSourcesOn]);
+  }, [projectId, listQuery, noSourcesOn]);
 
   const items = useMemo(() => {
     const rows = feed.items ?? [];
@@ -341,26 +392,24 @@ export function ActivityLog({
     return sortItems(shown, sort, order);
   }, [feed.items, sort, order, hideVerbose, level]);
 
-  /** How many rows sit at each level on this page. A level chip with no count is a guess about
-   *  whether clicking it is worth doing. */
-  const levelCounts = useMemo(() => {
-    const counts: Record<string, number> = { error: 0, warn: 0, info: 0, verbose: 0 };
-    for (const item of feed.items ?? []) {
-      counts[item.level] = (counts[item.level] ?? 0) + 1;
-    }
-    return counts;
-  }, [feed.items]);
-
-  /** How many rows on this page came from each stream. A toggle with a count says whether
-   *  unticking it will actually change anything — and, when a stream reads 0 across a long
-   *  window, that BOSS is not writing it rather than that the filter is wrong. */
-  const sourceCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const item of feed.items ?? []) {
-      counts[item.source] = (counts[item.source] ?? 0) + 1;
-    }
-    return counts;
-  }, [feed.items]);
+  /** How many rows the LOG holds at each level and in each stream — server-side counts.
+   *
+   *  These were counted over the 200 rows on the page and read as totals: on boss-1 the chips
+   *  said ERROR 0 and Deadletters 0 while Operations reported 14 dead-letters. A chip is read
+   *  as a fact about the log, so it comes from the log (GET /v1/activity/facets). Until the
+   *  counts arrive, or when they cannot be read, a chip shows "…" or "?" — never a zero that
+   *  was not counted. */
+  const chipCount = (counts: Record<string, number> | undefined, key: string): string => {
+    if (facets === null) return "…";
+    const n = counts?.[key];
+    if (typeof n !== "number") return "?";
+    return `${n}${counts === facets.levels && !facets.levelsExact ? "+" : ""}`;
+  };
+  /** Verbose rows hidden on THIS page — a fact about the page, and labelled as one. */
+  const pageVerbose = useMemo(
+    () => (feed.items ?? []).filter((item) => item.level === "verbose").length,
+    [feed.items],
+  );
 
   const agentOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -525,7 +574,7 @@ export function ActivityLog({
             data-testid={`activity-level-${value}`}
           >
             {value.toUpperCase()}
-            <span className="alog-level-n">{levelCounts[value] ?? 0}</span>
+            <span className="alog-level-n">{chipCount(facets?.levels, value)}</span>
           </button>
         ))}
         {/* Says plainly that rows are being hidden. A viewer that quietly drops most of what it
@@ -540,8 +589,8 @@ export function ActivityLog({
             />
             <span>
               Hide verbose
-              {hideVerbose && levelCounts.verbose
-                ? ` (${levelCounts.verbose} hidden)`
+              {hideVerbose && pageVerbose
+                ? ` (${pageVerbose} hidden on this page)`
                 : ""}
             </span>
           </label>
@@ -590,7 +639,7 @@ export function ActivityLog({
               data-testid={`activity-source-${choice.value}`}
             >
               {choice.label}
-              <span className="alog-source-n">{sourceCounts[choice.value] ?? 0}</span>
+              <span className="alog-source-n">{chipCount(facets?.sources, choice.value)}</span>
             </button>
           );
         })}
@@ -875,6 +924,18 @@ export function ActivityLog({
             {typeof feed.total === "number" ? ` of ${feed.total}` : ""}
             {pending ? " · refreshing…" : ""}
           </p>
+          {facets?.note ? <p className="detail" data-testid="activity-facets-note">{facets.note}</p> : null}
+          {/* THE ROWS PAST THE FIRST PAGE. There was no way to them: the log fetched the newest
+              200 and anything older was unreachable without guessing a filter. */}
+          {feed.nextCursor ? (
+            <button type="button" className="cap-btn" onClick={() => void loadOlder()}
+                    disabled={loadingOlder} data-testid="activity-load-older">
+              {loadingOlder ? "Loading older rows…" : "Load older"}
+            </button>
+          ) : items.length > 0 && !pending ? (
+            <p className="detail" data-testid="activity-end-of-log">That is the oldest row for these filters.</p>
+          ) : null}
+          {olderError ? <p className="error-banner" role="alert">{olderError}</p> : null}
         </div>
       ) : null}
 

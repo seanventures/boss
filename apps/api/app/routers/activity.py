@@ -134,6 +134,10 @@ def list_activity(
     order: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    cursor: Optional[str] = Query(
+        default=None,
+        description="next_cursor from the previous page: the rows strictly older than it.",
+    ),
 ) -> dict[str, Any]:
     """Searchable, sortable ops timeline. Honest empty; never fake items."""
     project_id = _resolve_project_id(project_id)
@@ -179,12 +183,49 @@ def list_activity(
                 order=order_key,
                 limit=limit,
                 offset=offset,
+                cursor=_clean(cursor),
             )
         except HTTPException:
             raise
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return _envelope(payload, project_id=project_id, limit=limit, offset=offset)
+
+
+@router.get("/v1/activity/facets")
+def activity_facets(
+    project_id: Optional[str] = Query(default=None),
+    since: Optional[str] = Query(default=None),
+    until: Optional[str] = Query(default=None),
+    run_id: Optional[str] = Query(default=None),
+    workflow_run_id: Optional[str] = Query(default=None),
+    agent: Optional[str] = Query(default=None),
+    service: Optional[str] = Query(default=None),
+) -> dict[str, Any]:
+    """How many rows the log holds per level and per stream, counted against the log.
+
+    The console's chips used to count the 200 rows on screen and read as totals (boss-1:
+    ERROR 0 and Deadletters 0 beside 14 dead-letters in Operations).
+    """
+    project_id = _resolve_project_id(project_id)
+    with begin(get_engine()) as connection:
+        log_service = _service()
+        facets = getattr(log_service, "facets", None)
+        if not callable(facets):
+            raise HTTPException(status_code=503, detail=f"{UNAVAILABLE} Missing facets.")
+        try:
+            return facets(
+                connection,
+                project_id,
+                since=_clean(since),
+                until=_clean(until),
+                run_id=_clean(run_id),
+                workflow_run_id=_clean(workflow_run_id),
+                agent=_clean(agent),
+                service=_clean(service),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 __all__ = ["router"]
