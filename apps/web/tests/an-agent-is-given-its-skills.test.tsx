@@ -37,7 +37,7 @@ const render = (node: React.ReactElement) => renderToStaticMarkup(node);
 describe("what an agent can do is on the agent", () => {
   it("lists the skills it actually holds, with what holding them costs", () => {
     const html = render(
-      <AgentSkills projectId="p" roleKey="video_editor" onChanged={() => {}}
+      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}}
                    spec={{}}
                    panel={panel([skill("video.apply_plan"),
                                  skill("publish_youtube", { risk_tier: 3 })], [])} />);
@@ -52,7 +52,7 @@ describe("what an agent can do is on the agent", () => {
     // The state every installed example was in. "No skills" is not a cosmetic gap: every step
     // naming this agent is refused at the gate.
     const html = render(
-      <AgentSkills projectId="p" roleKey="video_editor" onChanged={() => {}}
+      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}}
                    spec={{ allowed_skills: ["video.cut", "video.reframe"] }}
                    panel={panel([], [skill("video.cut")])} />);
     expect(html).toContain("holds no skills");
@@ -63,19 +63,19 @@ describe("what an agent can do is on the agent", () => {
 
   it("a grant left behind by a deleted skill is shown as broken, not hidden", () => {
     const html = render(
-      <AgentSkills projectId="p" roleKey="video_editor" onChanged={() => {}} spec={{}}
+      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}} spec={{}}
                    panel={panel([skill("gone", { missing: true })], [])} />);
     expect(html).toContain("this grant does");
   });
 
   it("offers a skill to give, and says so when there is nothing left to give", () => {
     const withMore = render(
-      <AgentSkills projectId="p" roleKey="video_editor" onChanged={() => {}} spec={{}}
+      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}} spec={{}}
                    panel={panel([], [skill("video.cut")])} />);
     expect(withMore).toContain("Give this agent a skill");
 
     const exhausted = render(
-      <AgentSkills projectId="p" roleKey="video_editor" onChanged={() => {}} spec={{}}
+      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}} spec={{}}
                    panel={panel([skill("video.cut")], [])} />);
     expect(exhausted).toContain("already holds every skill");
     expect(exhausted).not.toContain("Give this agent a skill");
@@ -84,7 +84,7 @@ describe("what an agent can do is on the agent", () => {
   it("a skill the spec forbids is not offered, and the reason is stated", () => {
     // Offering a forbidden skill and refusing it later is a control that lies about itself.
     const html = render(
-      <AgentSkills projectId="p" roleKey="video_editor" onChanged={() => {}}
+      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}}
                    spec={{ forbidden_skills: ["deploy_production"] }}
                    panel={panel([], [skill("deploy_production"), skill("video.cut")])} />);
     expect(html).toContain("Its spec forbids deploy_production");
@@ -100,7 +100,7 @@ describe("a step names an agent, and the builder checks it may run it", () => {
 
   it("says nothing when the agent holds the skill — beyond confirming it", () => {
     const html = render(
-      <CaptainCanRunIt projectId="p" step={step} mine={mine} onGranted={() => {}}
+      <CaptainCanRunIt projectId="p" actor="ceo" step={step} mine={mine} onGranted={() => {}}
                        holdings={{ media_publisher: ["publish_youtube"] }} />);
     expect(html).toContain("media_publisher holds publish_youtube");
     expect(html).not.toContain("does not hold");
@@ -110,7 +110,7 @@ describe("a step names an agent, and the builder checks it may run it", () => {
     // Without this, the failure surfaces AFTER the run has waited on a human approval — the
     // worst possible moment to learn the agent was never permitted to publish.
     const html = render(
-      <CaptainCanRunIt projectId="p" step={step} mine={mine} onGranted={() => {}}
+      <CaptainCanRunIt projectId="p" actor="ceo" step={step} mine={mine} onGranted={() => {}}
                        holdings={{ media_publisher: ["video.cut"] }} />);
     expect(html).toContain("does not hold publish_youtube");
     expect(html).toContain("will be refused when it runs");
@@ -121,10 +121,10 @@ describe("a step names an agent, and the builder checks it may run it", () => {
     // An MCP tool's authority comes from the connection, not from a grant on the agent, so
     // there is nothing here to check and nothing to say.
     expect(render(
-      <CaptainCanRunIt projectId="p" step={{ id: "s", kind: "capability" } as never}
+      <CaptainCanRunIt projectId="p" actor="ceo" step={{ id: "s", kind: "capability" } as never}
                        mine={mine} holdings={{}} onGranted={() => {}} />)).toBe("");
     expect(render(
-      <CaptainCanRunIt projectId="p" step={step} mine={{ skill_id: null } as never}
+      <CaptainCanRunIt projectId="p" actor="ceo" step={step} mine={{ skill_id: null } as never}
                        holdings={{}} onGranted={() => {}} />)).toBe("");
   });
 });

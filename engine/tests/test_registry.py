@@ -169,6 +169,9 @@ _EXPECTED_TOOLS: set[str] = {
     # Authoring the unit of doing, so an operator can get a skill by describing one in the
     # conversation rather than filling in a form about behaviour kinds and digest pinning.
     "draft_skill",
+    # Giving an agent a skill or an MCP server by asking — the act the Agents page exists for.
+    "assign_skill_to_agent",
+    "assign_mcp_to_agent",
     "list_capabilities",
     "list_skills",
     "start_workflow",
@@ -192,11 +195,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 107, (
+    assert len(reg.names()) == 109, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 61
-    assert len(write) == 46
+    assert len(write) == 48
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -363,7 +366,7 @@ def test_every_write_declares_what_pressing_it_costs():
     """
     from boss_engine.tools.registry import Reversibility  # noqa: F401 — documents the values
 
-    allowed = {"safe", "costs_money", "destroys_work", "irreversible"}
+    allowed = {"safe", "costs_money", "destroys_work", "irreversible", "grants_authority"}
     reg = build_default_registry()
     undeclared = []
     for spec in reg.specs(kind="write"):
@@ -411,6 +414,11 @@ _SAFE_WRITES = [
     # workflow places that step.
     "draft_skill",
     "draft_workflow",
+    # A SKILL GRANT IS A ROW. Giving an agent a skill adds one; taking it back (the same tool,
+    # remove=true) deletes it and records the removal. Nothing starts or spends, and the skill's
+    # own risk tier still decides when a use of it waits for a person. (assign_mcp_to_agent was
+    # listed here too; it hands over a server's credentials, so it is `grants_authority` now.)
+    "assign_skill_to_agent",
     # Read-only by default and one at a time per project. The FIXING variant is not a separate
     # tool but a separate permission: it returns requires_confirmation, so only an operator's
     # click gets a writable shell on a host.
@@ -447,6 +455,8 @@ def test_the_tools_that_are_never_pressed_by_the_model():
     reg = build_default_registry()
     never = sorted(s.name for s in reg.specs(kind="write") if not s.self_executable)
     assert never == [
+        # hands an agent an MCP server — its credentials and every action it exposes
+        "assign_mcp_to_agent",
         "cancel_code_task",   # throws away a build in flight
         "cancel_job",         # the one that caused this
         "decide",             # approves a gate; an agent that approves its own gates is ungated

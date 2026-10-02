@@ -3145,7 +3145,8 @@ class RegisterRoleRequest(BaseModel):
     project_id: str
     role_key: str
     display_name: Optional[str] = None
-    autonomy_level: int = 0
+    #: Left out on an update, the current level is kept (a new role starts at 0).
+    autonomy_level: Optional[int] = None
     #: role_key of the manager, or None for a root. NOT validated against existing roles: the
     #: org is discovered from observed handoffs, so a manager is often registered after the
     #: role reporting to them.

@@ -18,10 +18,11 @@ import {
   X,
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import type { RoleFeedItem } from "../lib/roles";
 import type { SkillFeedItem } from "../lib/skills";
 import {
+  adoptCreatedAgent,
   applyAgentWizardPattern,
   buildAgentWizardSubmission,
   createInitialAgentWizardDraft,
@@ -35,10 +36,13 @@ import {
   NEW_ROLE,
 } from "../lib/agent-wizard";
 import { createStudioAgent, type StudioActionResult } from "./agent-studio-actions";
+import { loadGrantable, type GrantableServer } from "../lib/agents";
 
 import { callAction } from "../lib/call-action";
 type WizardProps = {
   projectId: string;
+  /** The signed-in actor. Every write this wizard makes is made as them. */
+  actor: string;
   roles: RoleFeedItem[];
   skills: SkillFeedItem[];
   onClose: () => void;
@@ -102,19 +106,34 @@ function agentInitials(name: string): string {
 
 export function AgentCreationWizard({
   projectId,
+  actor,
   roles,
   skills,
   onClose,
 }: WizardProps) {
   const [draft, setDraft] = useState(() =>
-    createInitialAgentWizardDraft(roles[0]?.roleKey ?? ""),
+    createInitialAgentWizardDraft(roles[0]?.roleKey ?? "", actor),
   );
+  // The project's registered MCP servers, so the Authority step offers real servers to GRANT
+  // instead of a free-text "integrations" box nothing read.
+  const [servers, setServers] = useState<GrantableServer[]>([]);
+  const [serversFailed, setServersFailed] = useState("");
+  useEffect(() => {
+    let alive = true;
+    void loadGrantable(projectId).then((r) => {
+      if (!alive) return;
+      if (r.ok) setServers(r.data.mcp_servers); else setServersFailed(r.error);
+    });
+    return () => { alive = false; };
+  }, [projectId]);
   const [step, setStep] = useState(0);
   const [furthestStep, setFurthestStep] = useState(0);
   const [agentKeyEdited, setAgentKeyEdited] = useState(false);
   const [issues, setIssues] = useState<AgentWizardIssue[]>([]);
   const [result, setResult] = useState<StudioActionResult>();
   const [completed, setCompleted] = useState<StudioActionResult>();
+  /** An agent this wizard made whose profile then failed — offered in the role list below. */
+  const [madeAgent, setMadeAgent] = useState<{ roleKey: string; name: string } | null>(null);
   const [pending, startTransition] = useTransition();
 
   const role = roles.find((item) => item.roleKey === draft.roleKey);
@@ -187,11 +206,18 @@ export function AgentCreationWizard({
     setResult(undefined);
     startTransition(async () => {
       const next = await callAction(createStudioAgent)(
-        buildAgentWizardSubmission(projectId, draft),
+        buildAgentWizardSubmission(projectId, draft, actor),
         publish,
       );
       setResult(next);
       if (next.ok) setCompleted(next);
+      const made = next.item?.agent_created;
+      if (!next.ok && typeof made === "string" && made) {
+        // The agent exists now; only its profile failed. Point the wizard at it so the next
+        // press retries the profile rather than 409-ing on the agent it just made.
+        setMadeAgent({ roleKey: made, name: String(next.item?.agent_name ?? made) });
+        setDraft((current) => adoptCreatedAgent(current, made));
+      }
     });
   };
 
@@ -358,6 +384,11 @@ export function AgentCreationWizard({
                             somebody else's role — and the Agents page, which lists `roles`,
                             would never show it. */}
                         <option value={NEW_ROLE}>+ A new role for this agent</option>
+                        {madeAgent && !roles.some((item) => item.roleKey === madeAgent.roleKey) ? (
+                          <option value={madeAgent.roleKey}>
+                            {madeAgent.name} · just made by this wizard
+                          </option>
+                        ) : null}
                         {roles.map((item) => (
                           <option key={item.id} value={item.roleKey}>
                             {item.displayName} · L{item.autonomyLevel}
@@ -378,7 +409,7 @@ export function AgentCreationWizard({
                       <input
                         value={draft.owner}
                         onChange={(event) => update("owner", event.target.value)}
-                        placeholder="vp_agents"
+                        placeholder={actor}
                       />
                     </Field>
                   </div>
@@ -401,13 +432,18 @@ export function AgentCreationWizard({
                       <Cpu />
                       <span><b>Deterministic brief</b><small>Side-effect-free, reproducible runtime</small></span>
                     </button>
+                    {/* NOT OFFERED AS IF IT WORKED. Every Studio run of a live_model version is
+                        blocked in this release, so choosing it produced an agent whose every
+                        run failed. Workflow steps given to the agent run on the project's
+                        chat model regardless. */}
                     <button
                       type="button"
                       className={draft.executionMode === "live_model" ? "active" : ""}
-                      onClick={() => update("executionMode", "live_model")}
+                      disabled
+                      title="Not available in this release"
                     >
                       <Sparkle />
-                      <span><b>Live model</b><small>Provider and budget reservation required at run time</small></span>
+                      <span><b>Live model</b><small>Not available in this release — workflow steps given to this agent already run on the project&apos;s chat model</small></span>
                     </button>
                   </div>
                   {draft.executionMode === "live_model" && (
@@ -489,7 +525,7 @@ export function AgentCreationWizard({
                   <StepHeading
                     index="03"
                     title="Draw the authority envelope."
-                    description="Rules constrain behavior. Skills and integrations request capability; RoleSpec and policy decide what becomes effective."
+                    description="Rules constrain behavior. The skills and MCP servers ticked here are GIVEN to the agent when it is created — what it holds is what it can use."
                   />
                   <Field
                     label="Deterministic rules · one per line"
@@ -507,7 +543,7 @@ export function AgentCreationWizard({
                       <b>Installed skills</b>
                       <span>{draft.requestedSkills.length} requested</span>
                     </div>
-                    <small>Publish validates each request against the selected RoleSpec.</small>
+                    <small>Ticked skills are granted to the agent; publish then checks the profile against what it holds.</small>
                   </div>
                   <div className="aw-skill-list">
                     {skills.map((skill) => {
@@ -539,18 +575,63 @@ export function AgentCreationWizard({
                       <p className="aw-empty-line">No installed skills are available to request.</p>
                     )}
                   </div>
-                  <Field label="Integration references · no secrets">
-                    <input
-                      value={draft.requestedIntegrationsText}
-                      onChange={(event) =>
-                        update("requestedIntegrationsText", event.target.value)
-                      }
-                      placeholder="github, plane, slack"
-                    />
-                    <small className="aw-field-note">
-                      Reference configured integration IDs only. Credentials remain in the provider vault.
-                    </small>
-                  </Field>
+                  <div className="aw-capability-head">
+                    <div>
+                      <b>MCP servers</b>
+                      <span>{draft.mcpServers.length} given</span>
+                    </div>
+                    <small>Leave tools empty to give every tool the server offers.</small>
+                  </div>
+                  <div className="aw-skill-list aq-list" data-testid="aw-mcp-list">
+                    {servers.map((server) => {
+                      const chosen = draft.mcpServers.find((m) => m.serverId === server.mcp_server_id);
+                      return (
+                        <label key={server.mcp_server_id} className={chosen ? "selected" : ""}>
+                          <input
+                            type="checkbox"
+                            checked={!!chosen}
+                            data-testid={`aw-mcp-${server.mcp_server_id}`}
+                            onChange={() =>
+                              update(
+                                "mcpServers",
+                                chosen
+                                  ? draft.mcpServers.filter((m) => m.serverId !== server.mcp_server_id)
+                                  : [...draft.mcpServers,
+                                     { serverId: server.mcp_server_id, name: server.server, tools: "" }],
+                              )
+                            }
+                          />
+                          <div>
+                            <b>{server.server}</b>
+                            <small>{server.description || server.url}{server.enabled ? "" : " · disabled in this project"}</small>
+                            {chosen ? (
+                              <input
+                                className="aq-tools"
+                                placeholder="Only these tools (comma-separated) — empty for all"
+                                value={chosen.tools}
+                                onClick={(event) => event.preventDefault()}
+                                onChange={(event) =>
+                                  update(
+                                    "mcpServers",
+                                    draft.mcpServers.map((m) =>
+                                      m.serverId === server.mcp_server_id
+                                        ? { ...m, tools: event.target.value } : m),
+                                  )
+                                }
+                              />
+                            ) : null}
+                          </div>
+                        </label>
+                      );
+                    })}
+                    {!servers.length && (
+                      <p className="aw-empty-line">
+                        {serversFailed
+                          ? `Could not read this project's MCP servers — ${serversFailed}.`
+                          : "No MCP servers are registered. Register one on the Skills and MCP page to give an agent its tools."}
+                      </p>
+                    )}
+                  </div>
                 </>
               )}
 
@@ -687,7 +768,7 @@ export function AgentCreationWizard({
                     <ReviewLine label="Identity" value={`${draft.name || "Unnamed"} · agent/${slugifyAgentKey(draft.agentKey) || "missing"}`} />
                     <ReviewLine label="Authority" value={`${role?.displayName ?? "No role"} · ${draft.dataBoundary}`} />
                     <ReviewLine label="Runtime" value={`${displayKey(draft.executionMode)} · ${displayKey(draft.selectionMode)}`} />
-                    <ReviewLine label="Capabilities" value={`${draft.requestedSkills.length} skills · ${parseWizardList(draft.requestedIntegrationsText).length} integrations`} />
+                    <ReviewLine label="Capabilities" value={`${draft.requestedSkills.length} skills · ${draft.mcpServers.length} MCP servers`} />
                     <ReviewLine label="A2A" value={`${publishTopics.length} publish · ${subscribeTopics.length} subscribe`} />
                     <ReviewLine label="Output" value={`${draft.artifactType || "missing"} · ${outputSections.length} sections`} />
                   </div>
@@ -742,8 +823,8 @@ export function AgentCreationWizard({
               <BlueprintNode
                 icon={<Wrench />}
                 label="Capability"
-                value={`${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"} requested`}
-                meta={`${parseWizardList(draft.requestedIntegrationsText).length} integrations`}
+                value={`${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"} given`}
+                meta={`${draft.mcpServers.length} MCP servers`}
               />
               <span className="aw-chain-line" />
               <BlueprintNode

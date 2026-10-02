@@ -27,10 +27,11 @@ WHAT BOUNDS IT — AND THIS IS THE PART THAT MAKES IT SHIPPABLE
 A loop that can call anything is not an agent, it is a shell. The bounds here are the ones BOSS
 already enforces, connected rather than invented:
 
-* THE TOOLS ARE EXACTLY `role_skills`. Not the role spec's `allowed_skills`, which is prose
-  saying what an agent MAY be given — the grant. An agent cannot reach a skill nobody gave it,
-  and `SkillRuntimeService.invoke` re-checks that at every call, so a prompt injection that
-  invents a tool name gets nothing.
+* THE TOOLS ARE EXACTLY WHAT THE AGENT HOLDS: `role_skills`, plus the tools of the MCP servers
+  in `role_mcp_servers` (narrowed to the granted tool names when the grant lists any). Not the
+  role spec's `allowed_skills`, which is prose saying what an agent MAY be given — the grant. An
+  agent cannot reach a skill or a server nobody gave it, and `SkillRuntimeService.invoke`
+  re-checks skills at every call, so a prompt injection that invents a tool name gets nothing.
 * NO NATIVE TOOLS. No shell, no database, no repository. A video editor has no business
   reading the control plane's Postgres, and the ordinary agent loop hands out all three.
 * THE RISK FLOOR STILL HOLDS. A tier-3 skill suspends the run for a human decision through
@@ -187,6 +188,14 @@ def candidates(connection: Connection, settings: Settings,
                  "ORDER BY role_key, skill_id"),
             {"p": project_id}).mappings().all():
         holdings.setdefault(str(row["role_key"]), []).append(str(row["skill_id"]))
+    # AN AGENT HOLDING ONLY MCP SERVERS IS STILL SOMEBODY. An agent given the Mattermost server
+    # and nothing else can post; leaving it out of the pool would make an MCP grant decorative.
+    for row in connection.execute(
+            text("SELECT g.role_key, s.name FROM role_mcp_servers g JOIN mcp_servers s "
+                 "ON s.id = g.mcp_server_id WHERE g.project_id = :p AND s.enabled "
+                 "ORDER BY g.role_key, s.name"),
+            {"p": project_id}).mappings().all():
+        holdings.setdefault(str(row["role_key"]), []).append(f"mcp:{row['name']}")
 
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -248,6 +257,14 @@ def choose_agent(
         "what is asked. Answer with JSON and nothing else:\n"
         '  {"role_key": "...", "why": "one sentence"}'
     )
+    # WHY THE MODEL WAS NOT USED, said truthfully when it was not.
+    #
+    # This called `adapter.complete(...)`, a method no chat adapter has. The AttributeError was
+    # swallowed below, so the model was never once consulted, every pick was the word-overlap
+    # fallback, and the run card told the operator "no model was available" on installs whose
+    # model was working fine. The one-shot completion every adapter does implement is
+    # `create_text_response(prompt, system_prompt=...) -> (ref, text, usage)`.
+    model_failure = ""
     try:
         from .claude_cli_adapter import make_agent_chat_adapter
         from .setup_service import chat_engine_for
@@ -257,29 +274,31 @@ def choose_agent(
         if engine:
             resolved = settings.model_copy(update={"chat_llm_engine": engine})
         adapter = make_agent_chat_adapter(resolved)
-        reply = adapter.complete(
-            system="You route work to the agent that can do it. You output JSON only.",
-            messages=[{"role": "user", "content": prompt}],
+        _ref, text_out, _usage = adapter.create_text_response(
+            prompt,
+            system_prompt="You route work to the agent that can do it. You output JSON only.",
         )
-        text_out = reply if isinstance(reply, str) else str(
-            (reply or {}).get("content") or (reply or {}).get("text") or "")
-        picked = json.loads(_only_json(text_out))
+        picked = json.loads(_only_json(str(text_out or "")))
         role = str(picked.get("role_key") or "").strip().lower()
         if role in {c["role_key"] for c in pool}:
             return {"role_key": role,
                     "why": str(picked.get("why") or "").strip() or "chosen for this instruction",
                     "how": "model"}
-    except Exception:  # noqa: BLE001 — a routing failure must not fail the step outright
-        pass
+        model_failure = f"the model named {role or 'nobody'!r}, which is not in the pool"
+    except Exception as error:  # noqa: BLE001 — a routing failure must not fail the step outright
+        model_failure = f"the model could not be asked ({type(error).__name__}: {str(error)[:160]})"
 
     # THE DETERMINISTIC FALLBACK. Overlap between the words in the instruction and the words in
-    # the skill ids each agent holds. Crude, and it beats refusing to run.
+    # the skill ids each agent holds. Crude, and it beats refusing to run. A tie goes to the
+    # agent holding MORE (it can do more of whatever the words missed), then to the key, so the
+    # same pool always gives the same answer.
     words = {w for w in _words(instructions) if len(w) > 3}
     best = max(pool, key=lambda c: (
-        len(words & {w for skill in c["holds"] for w in _words(skill)}), -len(c["holds"])))
+        len(words & {w for skill in c["holds"] for w in _words(skill)}), len(c["holds"]),
+        [-ord(ch) for ch in c["role_key"]]))
     return {"role_key": best["role_key"],
-            "why": "its skills share the most words with the instruction — no model was "
-                   "available to judge properly",
+            "why": "its skills share the most words with the instruction — "
+                   f"{model_failure or 'no model judged it'}",
             "how": "word_overlap"}
 
 
@@ -335,11 +354,14 @@ def run(
     role = chosen["role_key"]
 
     skills = held_skills(connection, settings, project_id, role)
-    if not skills:
+    from .agents import held_mcp_servers
+
+    servers = held_mcp_servers(connection, project_id, role)
+    if not skills and not servers:
         raise AgentStepError(
-            f"{role} holds no skills, so it cannot do anything. Open the agent and give it the "
-            "skills this work needs — a step naming an agent that holds nothing is refused here "
-            "rather than at the first tool call.")
+            f"{role} holds no skills and no MCP servers, so it cannot do anything. Open the "
+            "agent and give it what this work needs — a step naming an agent that holds nothing "
+            "is refused here rather than at the first tool call.")
 
     # WHAT THE NEXT STEP NEEDS FROM THIS ONE.
     #
@@ -400,6 +422,8 @@ def run(
             "agent_step": {
                 "role_key": role,
                 "skill_ids": [str(s["id"]) for s in skills],
+                # Pinned like the skills: a server revoked mid-run stops being offered on resume.
+                "mcp_server_ids": [str(s["id"]) for s in servers],
                 "actor": actor,
             },
         },
@@ -435,6 +459,7 @@ def run(
         "chosen_because": chosen["why"],
         "chosen_how": chosen["how"],
         "skills_offered": [str(s["id"]) for s in skills],
+        "mcp_servers_offered": [str(s["name"]) for s in servers],
         "skills_used": produced.pop("_used", []) if "_used" in produced else _used_skills(
             connection, str(result.get("run_id") or "")),
         "status": result.get("status"),

@@ -62,7 +62,14 @@ export async function POST(req: Request) {
   const remove = action === "delete";
   const key = String(body.skill_key ?? "").trim();
   const projectId = String(body.project_id ?? "").trim();
-  const actor = String(body.actor ?? "executive_console");
+  // WHO PRESSED IT, never a stand-in. A missing actor became 'executive_console', so a grant
+  // from a screen that forgot to pass one was recorded as the console's, not the person's.
+  const actor = String(body.actor ?? "").trim();
+  if (!actor) {
+    return NextResponse.json(
+      { error: "actor is required — the screen must send the signed-in member making this change" },
+      { status: 400 });
+  }
   if (remove && (!key || !projectId)) {
     return NextResponse.json({ error: "skill_key and project_id are required" }, { status: 400 });
   }

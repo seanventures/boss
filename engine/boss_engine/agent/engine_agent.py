@@ -248,6 +248,7 @@ def _step_label(name: str, args: dict) -> str:
 _WHY_NOT_SELF_EXECUTED = {
     "destroys_work": "throws away work in flight, or removes a control — the operator decides",
     "irreversible": "cannot be undone once done — the operator decides",
+    "grants_authority": "gives an agent reach on somebody's account — the operator decides",
 }
 
 

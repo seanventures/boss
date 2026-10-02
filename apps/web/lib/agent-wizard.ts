@@ -19,7 +19,9 @@ export type AgentWizardDraft = {
   operatorPrompt: string;
   rulesText: string;
   requestedSkills: string[];
-  requestedIntegrationsText: string;
+  /** MCP servers this agent is GIVEN (role_mcp_servers), with an optional comma-separated tool
+   *  allowlist each. It was a free-text "integrations" field nothing ever read or enforced. */
+  mcpServers: Array<{ serverId: string; name: string; tools: string }>;
   dataBoundary: "public" | "internal" | "confidential" | "restricted";
   maxSteps: number;
   maxCalls: number;
@@ -37,15 +39,22 @@ export type AgentWizardIssue = {
 };
 
 export type AgentWizardSubmission = {
+  /** Who is making this agent: the signed-in actor, never a literal. Every write carries it. */
+  actor: string;
   definition: Record<string, unknown>;
   version: Record<string, unknown>;
-  /** A ROLE TO REGISTER FIRST, when the operator is creating one rather than picking one.
+  /** THE AGENT ITSELF, written before its Studio profile (the one agent model: a role, what it
+   *  holds, and optionally a profile).
    *
-   *  The wizard wrote `agent_definitions`/`agent_versions` and referenced an existing
-   *  `roles.role_key`, so an agent created here never appeared on the Agents page — that roster
-   *  lists `roles`. Four disconnected agent models, and the create button was wired to the one
-   *  the operator never sees. Registering the role first converges them. */
-  role?: Record<string, unknown>;
+   *  `create` makes a new agent through POST /v1/agents with its skills and MCP servers GRANTED
+   *  in the same transaction — the wizard used to register a bare role and write the chosen
+   *  skills into two lists the runtime never reads, so the agent it made held nothing. `grant`
+   *  gives an existing agent whatever the profile uses that it does not already hold. */
+  agent: {
+    roleKey: string;
+    create?: Record<string, unknown>;
+    grant?: Record<string, unknown>;
+  };
 };
 
 /** The sentinel for "I am making a new role", not picking one that exists. */
@@ -138,13 +147,15 @@ export function slugifyAgentKey(value: string): string {
 
 export function createInitialAgentWizardDraft(
   roleKey = "",
+  owner = "",
 ): AgentWizardDraft {
   return {
     pattern: "blank",
     name: "",
     agentKey: "",
     description: "",
-    owner: "vp_agents",
+    // The definition's owner starts as whoever is making it (it was the literal 'vp_agents').
+    owner,
     roleKey,
     newRoleName: "",
     executionMode: "deterministic_brief",
@@ -157,7 +168,7 @@ export function createInitialAgentWizardDraft(
     operatorPrompt: "",
     rulesText: "",
     requestedSkills: [],
-    requestedIntegrationsText: "",
+    mcpServers: [],
     dataBoundary: "internal",
     maxSteps: 8,
     maxCalls: 8,
@@ -175,7 +186,10 @@ export function applyAgentWizardPattern(
   pattern: AgentWizardPattern,
 ): AgentWizardDraft {
   if (pattern === "blank") {
-    return { ...createInitialAgentWizardDraft(draft.roleKey), name: draft.name, agentKey: draft.agentKey };
+    return {
+      ...createInitialAgentWizardDraft(draft.roleKey, draft.owner),
+      name: draft.name, agentKey: draft.agentKey,
+    };
   }
   return {
     ...draft,
@@ -206,6 +220,17 @@ export function validateAgentWizardDraft(
   }
   if (!draft.artifactType.trim()) {
     issues.push({ field: "artifactType", message: "Output artifact type is required." });
+  }
+  if (draft.executionMode === "live_model") {
+    // SAID BEFORE PUBLISH, NOT AFTER. Every Studio run of a live_model version is blocked in
+    // this release (agent_studio.start_agent_run: live_model_runtime_not_enabled), so offering
+    // it produced an agent whose every run failed. A workflow step runs the agent on the
+    // project's chat model whatever this says; that is where live work happens.
+    issues.push({
+      field: "runtime",
+      message: "Live-model Studio runs are not available in this release — choose Deterministic "
+        + "brief. Workflow steps given to this agent still run on the project's chat model.",
+    });
   }
   if (
     draft.executionMode === "live_model" &&
@@ -240,9 +265,23 @@ export function validateAgentWizardDraft(
   return issues;
 }
 
+/**
+ * The wizard already made this agent; its Studio profile is what failed.
+ *
+ * POST /v1/agents refuses an existing key (it must: creating is never editing), and the wizard
+ * kept "+ A new role" selected, so pressing Create again after a profile failure — an agent_key
+ * already taken, say — answered 409 "already exists" for the agent this same wizard had just
+ * made, and the role list did not offer it to switch to. The retry now targets the made agent,
+ * so it gives it anything new and goes on to the profile.
+ */
+export function adoptCreatedAgent(draft: AgentWizardDraft, roleKey: string): AgentWizardDraft {
+  return { ...draft, roleKey, newRoleName: "" };
+}
+
 export function buildAgentWizardSubmission(
   projectId: string,
   draft: AgentWizardDraft,
+  actor: string,
 ): AgentWizardSubmission {
   const preferredCapabilities = parseWizardList(draft.preferredCapabilitiesText);
   const modelPolicy: Record<string, unknown> = {
@@ -254,39 +293,62 @@ export function buildAgentWizardSubmission(
     modelPolicy.pinned_model = draft.pinnedModel.trim();
   }
 
-  // A NEW ROLE, REGISTERED ALONGSIDE. Without this the wizard writes agent_definitions and
-  // points at a role that already exists, so "create an agent" could never produce one the
-  // Agents page lists — that roster reads `roles`.
   const makingRole = draft.roleKey === NEW_ROLE;
   const newRoleKey = slugifyAgentKey(draft.newRoleName || draft.name).replace(/-/g, "_");
+  const roleKey = makingRole ? newRoleKey : draft.roleKey;
+  const skills = [...draft.requestedSkills].sort();
+  const mcpServers = draft.mcpServers.map((m) => ({
+    server_id: m.serverId,
+    tools: parseWizardList(m.tools),
+  }));
+
+  // THE GRANT IS THE PERMISSION. A new agent is created holding exactly what was ticked; an
+  // existing one is given anything ticked that it does not hold. Either way the Studio
+  // profile's `requested_skills` below is what the agent now HOLDS, so publish validation
+  // (which accepts held skills) and the runtime (which reads only the grant) agree.
+  const agent: AgentWizardSubmission["agent"] = makingRole
+    ? {
+      roleKey,
+      create: {
+        project_id: projectId,
+        actor,
+        role_key: newRoleKey,
+        name: (draft.newRoleName || draft.name).trim(),
+        purpose: draft.description.trim(),
+        skills,
+        mcp_servers: mcpServers,
+        // THE RULES ARE THE AGENT'S BOUNDARIES. The old role registration wrote them to
+        // spec.boundaries.must_not; the first cut of POST /v1/agents dropped them, so an agent
+        // made with "never bypass policy" as a rule had no must_not at all.
+        boundaries: { must: [], must_not: parseWizardLines(draft.rulesText) },
+      },
+    }
+    : {
+      roleKey,
+      ...(skills.length || mcpServers.length ? {
+        grant: {
+          project_id: projectId,
+          actor,
+          grant_skills: skills,
+          grant_mcp_servers: mcpServers,
+        },
+      } : {}),
+    };
 
   return {
-    ...(makingRole && newRoleKey ? {
-      role: {
-        project_id: projectId,
-        role_key: newRoleKey,
-        display_name: (draft.newRoleName || draft.name).trim(),
-        // Starts at zero: an agent created by hand has done nothing yet, and an autonomy level
-        // it did not earn is the one number on this page nobody should be able to award itself.
-        autonomy_level: 0,
-        spec: {
-          mission: draft.description.trim(),
-          permissions: { allowed_skills: draft.requestedSkills },
-          boundaries: { must_not: parseWizardList(draft.rulesText) },
-        },
-      },
-    } : {}),
+    actor,
+    agent,
     definition: {
       project_id: projectId,
       agent_key: slugifyAgentKey(draft.agentKey),
       name: draft.name.trim(),
       description: draft.description.trim(),
-      owner: draft.owner.trim() || "vp_agents",
-      actor: "vp_agents",
+      owner: draft.owner.trim() || actor,
+      actor,
     },
     version: {
       project_id: projectId,
-      role_key: makingRole ? newRoleKey : draft.roleKey,
+      role_key: roleKey,
       model_policy: modelPolicy,
       prompts: {
         system: draft.systemPrompt.trim(),
@@ -295,8 +357,9 @@ export function buildAgentWizardSubmission(
         operator: draft.operatorPrompt.trim(),
       },
       rules: parseWizardLines(draft.rulesText),
-      requested_skills: [...draft.requestedSkills].sort(),
-      requested_integrations: parseWizardList(draft.requestedIntegrationsText),
+      requested_skills: skills,
+      // The servers' names, for the profile's record. What the agent may USE is the grant.
+      requested_integrations: draft.mcpServers.map((m) => m.name),
       scopes: {
         project: "current",
         data_boundary: draft.dataBoundary,
@@ -319,7 +382,7 @@ export function buildAgentWizardSubmission(
         source: "agent_studio_wizard",
         pattern: draft.pattern,
       },
-      actor: "vp_agents",
+      actor,
     },
   };
 }

@@ -22,7 +22,7 @@ MCP surface. A second execution path for the same actions would be a second plac
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 #: Risk at or above this is ALWAYS a human decision, whatever a workflow says.
 #: See `approval_mode_for` — governance that configuration can switch off is not governance.
@@ -538,26 +538,45 @@ REGISTERED_ROLES = frozenset({
 HUMAN_ROLES = frozenset({"human"})
 
 
-def validate_captain(step: Mapping[str, Any]) -> list[str]:
-    """Whether a step's named captain is somebody this workforce has."""
+def validate_captain(step: Mapping[str, Any],
+                     roster: Optional[Iterable[str]] = None) -> list[str]:
+    """Whether a step's named captain is somebody this workforce has.
+
+    `roster` is everything the PROJECT's steps may name (workflows.project_roster: its agents
+    plus the bundled roles it has not deleted). REGISTERED_ROLES alone is the bundled
+    workforce, so an agent an operator made with POST /v1/agents — whose quick-create screen
+    says it can be put on a step — was refused here as "not a role this workforce has". Every
+    caller with the project in hand passes its roster (workflows.project_roster); one without a
+    project (the catalogue, which only names bundled roles) still gets the fixed list.
+    """
     named = str(step.get("captain") or "").strip().lower()
     if not named:
         return []
-    if named in REGISTERED_ROLES:
+    # THE ROSTER IS THE WHOLE ANSWER WHEN THERE IS ONE. It already holds the bundled roles the
+    # project has not deleted (workflows.project_roster); unioning REGISTERED_ROLES back in here
+    # let a step name a bundled agent the operator had deleted (review of milestone/agents,
+    # round 2), and the refusal that says what to do never fired.
+    known = (REGISTERED_ROLES if roster is None
+             else {str(r).strip().lower() for r in roster} | HUMAN_ROLES)
+    if named in known:
         return []
+    others = sorted(known - HUMAN_ROLES)
     return [
         f"step '{step.get('id', '?')}' names captain '{named}', which is not a role this "
-        f"workforce has. One of: {', '.join(sorted(REGISTERED_ROLES)[:6])}, ..."
+        f"workforce has. Pick an agent this project has (for example "
+        f"{', '.join(others[:6])}), create it on the Agents page first, or leave the captain "
+        "empty for BOSS to pick."
     ]
 
 
-def validate_step(step: Mapping[str, Any]) -> list[str]:
+def validate_step(step: Mapping[str, Any],
+                  roster: Optional[Iterable[str]] = None) -> list[str]:
     """Everything wrong with one capability step, as sentences an operator can act on.
 
     Returns a list rather than raising on the first problem: a builder showing one error at a
     time makes a customer fix a workflow five times to publish it once.
     """
-    problems: list[str] = validate_captain(step)
+    problems: list[str] = validate_captain(step, roster)
     binding = step.get("binding") or {}
     key = str(binding.get("capability") or "").strip()
     step_id = step.get("id", "?")
