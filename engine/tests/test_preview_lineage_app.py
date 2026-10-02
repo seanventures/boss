@@ -199,7 +199,10 @@ def _python_app_beside_an_old_web_app(tmp_path):
     stale = tmp_path / "web"          # a previous task's app, with its own entry
     stale.mkdir()
     (stale / "index.html").write_text("<html></html>")
-    (tmp_path / "serve_scorecard.py").write_text("# the app this run built\n")
+    # A real server script, main block and all. A comment-only file is not a program, and the
+    # resolver no longer mistakes a name for one (see test_a_build_proves_its_app_runs.py).
+    (tmp_path / "serve_scorecard.py").write_text(
+        "# the app this run built\nif __name__ == '__main__':\n    serve()\n")
     return tmp_path
 
 
@@ -220,6 +223,7 @@ def test_ambiguity_is_refused_rather_than_guessed_at_the_root(tmp_path):
     """_detect_command swallowed AmbiguousAppError and guessed the root — the very directory
     resolution had just declined to choose. The refusal names the apps and what to do."""
     root = _python_app_beside_an_old_web_app(tmp_path)
-    (root / "serve_monitor.py").write_text("# another run's app\n")
+    (root / "serve_monitor.py").write_text(
+        "# another run's app\nif __name__ == '__main__':\n    serve()\n")
     with pytest.raises(ps.AmbiguousAppError):
         ps._detect_command(root, [])          # no lineage signal: cannot tell which app
