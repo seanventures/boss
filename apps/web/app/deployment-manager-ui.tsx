@@ -21,6 +21,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { openDockAbout } from "../lib/dock-subject";
+
 
 type Host = {
   id: string;
@@ -81,21 +83,16 @@ export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
   // a side dock for exactly this, driven by `?agent=`; `?ask=` prefills the composer, the same
   // handoff the Agents page uses. Two params, no new chat surface.
   const ask = useCallback((question: string) => {
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.set("agent", "general");
-      url.searchParams.set("dock_ask", question);
-      // ADDRESS IT, DO NOT INHERIT IT.
-      //
-      // `dock_role` is a URL parameter, so it SURVIVES until something overwrites it. This
-      // panel set the question and not the role, so pressing "Open the Deployment Manager"
-      // opened whichever role the operator had last addressed — reported as a Deployment
-      // Manager card that opened the Security Reviewer chat, ready to answer about hosts and
-      // rollbacks as the wrong agent. Every door into the dock must name its own role.
-      url.searchParams.set("dock_role", "Deployment Manager");
-      window.history.replaceState(null, "", url.toString());
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    } catch { /* non-browser */ }
+    // ADDRESS IT, DO NOT INHERIT IT.
+    //
+    // `dock_role` is a URL parameter, so it SURVIVES until something overwrites it. This
+    // panel set the question and not the role, so pressing "Open the Deployment Manager"
+    // opened whichever role the operator had last addressed — reported as a Deployment
+    // Manager card that opened the Security Reviewer chat, ready to answer about hosts and
+    // rollbacks as the wrong agent. Every door into the dock names its own role.
+    //
+    // No subject: these starters are about the fleet as a whole, not one record.
+    openDockAbout({ subject: null, question, role: "Deployment Manager" });
   }, []);
 
   const verified = hosts.filter((h) => h.status === "verified");

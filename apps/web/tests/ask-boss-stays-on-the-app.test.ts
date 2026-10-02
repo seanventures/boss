@@ -24,27 +24,28 @@ const ASK = SRC.slice(SRC.indexOf("const askBossAbout"),
                       SRC.indexOf("const livePreviewFor"));
 
 describe("opening the dock", () => {
-  it("names the run the conversation is about", () => {
-    expect(ASK).toContain('url.searchParams.set("agent", m.id)');
+  it("names the run the conversation is about, as a typed subject", () => {
+    expect(ASK).toContain('subject: { kind: "code_task", id: m.id }');
   });
 
   it("also puts the page on that app, so a stale ?run= cannot hijack it", () => {
-    expect(ASK).toContain('url.searchParams.set("run", m.id)');
+    expect(ASK).toContain("also: { run: m.id }");
   });
 
-  it("sets both before pushing, so one push describes one state", () => {
+  it("sets both in ONE push, so one push describes one state", () => {
     // Two pushes, or a push with only half the state, leaves a window where the URL says the
-    // dock is about one app and the page is on another — which is the bug.
-    const agentAt = ASK.indexOf('searchParams.set("agent"');
-    const runAt = ASK.indexOf('searchParams.set("run"');
-    const pushAt = ASK.indexOf("history.pushState");
-    expect(agentAt).toBeLessThan(pushAt);
-    expect(runAt).toBeLessThan(pushAt);
-    expect(ASK.split("history.pushState").length - 1).toBe(1);
+    // dock is about one app and the page is on another — which is the bug. The helper writes
+    // every param, `also` included, before its single history call.
+    expect(ASK).toContain('history: "push"');
+    expect(ASK.split("openDockAbout(").length - 1).toBe(1);
+    const HELPER = codeOnly("lib/dock-subject.ts");
+    const open = HELPER.slice(HELPER.indexOf("export function openDockAbout"));
+    expect(open.indexOf("dockParams(o)")).toBeLessThan(open.indexOf("history.pushState"));
+    expect(open.split("history.pushState").length - 1).toBe(1);
   });
 
   it("still fires the synthetic popstate the shell listens for", () => {
-    expect(ASK).toContain('new PopStateEvent("popstate")');
+    expect(codeOnly("lib/dock-subject.ts")).toContain('new PopStateEvent("popstate")');
   });
 });
 

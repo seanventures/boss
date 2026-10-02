@@ -35,8 +35,14 @@ describe("the progress line has something to poll from the first second", () => 
     expect(UI).toContain('fd.set("thread_id", live)');
   });
 
-  it("it only does this when there is no thread yet", () => {
-    expect(UI).toContain("if (!live) {");
+  it("it does this when there is no thread yet — or when the turn has a scope", () => {
+    // boss-1 (2026-10-02): a thread id held from an earlier conversation, or one created by
+    // project and actor alone, was not the thread a scoped, role-addressed turn landed in, so
+    // the dock polled an empty thread for 276 seconds. With a scope, ensure again with the
+    // turn's own (scope, role) key.
+    expect(UI).toContain("if (!live || scopeRef) {");
+    expect(UI).toContain("external_ref: scopeRef || undefined,");
+    expect(UI).toContain("role: roleName || undefined");
   });
 
   it("failing to get an id never costs the operator their message", () => {

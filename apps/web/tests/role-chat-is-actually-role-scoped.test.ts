@@ -60,7 +60,8 @@ describe("a role's conversation survives closing the panel", () => {
     // Without a scope key a role chat falls into the general bucket with a null thread id, so
     // every open starts a stranger who cannot refer to what it just told you.
     expect(UI).toContain("const roleRef = roleName ? `role:${roleName}` : \"\"");
-    expect(UI).toContain('else if (roleRef) fd.set("external_ref", roleRef)');
+    expect(UI).toContain("const scopeRef = sel !== GENERAL ? sel : roleRef;");
+    expect(UI).toContain('if (scopeRef) fd.set("external_ref", scopeRef);');
   });
 
   it("the history is loaded when the panel opens, not after the first message", () => {

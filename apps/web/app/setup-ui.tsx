@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { RoleTable } from "./settings-knobs-ui";
 import { HelpTip } from "./help-tip";
 import { apiWrite } from "../lib/api-write";
+import { openDockAbout } from "../lib/dock-subject";
 
 type Step = { id: string; title: string; done: boolean; detail: string;
               from_environment?: boolean; repository?: string | null };
@@ -294,23 +295,20 @@ function Configured({ env }: { env?: { github?: EnvCheck; model?: EnvCheck } }) 
  * second chat surface with its own habits.
  */
 function askInDock(question: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", "general");
-    url.searchParams.set("dock_ask", question);
+  openDockAbout({
+    subject: null,
+    question,
     // ADDRESS IT, DO NOT INHERIT IT: dock_role survives in the URL until something clears it,
     // so a door that sets only the question opens whichever role was last addressed.
-    url.searchParams.delete("dock_role");
+    role: null,
     // AND START A NEW CONVERSATION. Clearing the role is not enough — the dock reopens the
     // last thread, which carries the role it was had with. A setup question opened under a
     // week-old Deployment Manager conversation, banner and all: "Continuing with the
     // Deployment Manager". A question about connecting a repository has nothing to do with
     // releases and rollbacks, and answering it with that history in context is worse than
     // answering it cold.
-    url.searchParams.set("dock_fresh", "1");
-    window.history.replaceState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+    fresh: true,
+  });
 }
 
 function AskBoss({ about, problem }: { about: string; problem?: string | null }) {

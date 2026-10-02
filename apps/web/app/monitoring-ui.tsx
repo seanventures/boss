@@ -26,6 +26,7 @@ import {
 import {
   isObservabilityUnconfigured, MonitoringPanel, type Observability,
 } from "./delivery-manage";
+import { openDockAbout, type DockSubject } from "../lib/dock-subject";
 
 
 /**
@@ -40,55 +41,56 @@ import {
  * is actually down beats "ask about an app", and it means the first question already carries
  * the facts BOSS would otherwise spend three tool calls rediscovering.
  */
-function askInDock(question: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", "general");
-    url.searchParams.set("dock_ask", question);
-    // ADDRESS IT, DO NOT INHERIT IT. `dock_role` is a URL parameter and SURVIVES until
-    // something overwrites it, so a door that sets only the question opens whichever role was
-    // last addressed. This one asks BOSS in general (`agent=general`), so it clears the role
-    // rather than leaving the previous agent's name on the banner above an unrelated answer.
-    url.searchParams.delete("dock_role");
-    window.history.replaceState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+function askInDock(question: string, subject: DockSubject | null = null): void {
+  // BOSS in general answers here; the role is cleared, never inherited.
+  openDockAbout({ subject, question, role: null });
 }
+
+/** One starter: the operator's question, and the target it is about when there is one. */
+export type MonitoringAsk = { question: string; subject: DockSubject | null };
 
 /** What is worth asking about, given what this screen is currently showing. */
 export function monitoringStarters(health?: Health | null): string[] {
+  return monitoringAsks(health).map((a) => a.question);
+}
+
+/** The starters with their subjects. A single sick target is asked about AS that target — its
+ *  error, address and history travel as the record, not as a sentence (see lib/dock-subject.ts
+ *  for boss-1, where the sentence version was answered about something else). */
+export function monitoringAsks(health?: Health | null): MonitoringAsk[] {
   const targets = health?.targets ?? [];
   const sick = targets.filter((t) => t.status === "down" || t.status === "degraded");
   const unknown = targets.filter((t) => t.status === "unknown" || t.status === "not_deployed");
-  const out: string[] = [];
+  const out: MonitoringAsk[] = [];
+  const ask = (question: string, subject: DockSubject | null = null) =>
+    out.push({ question, subject });
 
   if (sick.length === 1) {
     const t = sick[0];
-    out.push(
-      `${t.app_name} (${t.environment}) is ${t.status}${t.url ? ` at ${t.url}` : ""}` +
-      `${t.last_error ? ` — last error: ${t.last_error}` : ""}. Why, and what is the fix?`);
+    ask(`Why is ${t.app_name} (${t.environment}) ${t.status}, and what is the fix?`,
+        t.target_id ? { kind: "deployment", id: t.target_id } : null);
   } else if (sick.length > 1) {
-    out.push(`${sick.map((t) => t.app_name).join(", ")} are not healthy. ` +
-             "Check each one against the host and tell me what is actually wrong.");
+    ask(`${sick.map((t) => t.app_name).join(", ")} are not healthy. ` +
+        "What is actually wrong with each?");
   } else if (targets.length) {
-    out.push("Everything here reads healthy. Check the probes are really running and that " +
-             "each app answers on the port its target claims — not just that the row is green.");
+    ask("Everything here reads healthy. Check the probes are really running and that " +
+        "each app answers on the port its target claims — not just that the row is green.");
   }
 
   if (unknown.length) {
-    out.push(`${unknown.map((t) => t.app_name).join(", ")} ` +
-             `${unknown.length === 1 ? "has" : "have"} no health signal. ` +
-             "Is that because nothing is deployed, or because nothing is probing it?");
+    ask(`${unknown.map((t) => t.app_name).join(", ")} ` +
+        `${unknown.length === 1 ? "has" : "have"} no health signal. ` +
+        "Is that because nothing is deployed, or because nothing is probing it?");
   }
 
   // The reason an operator comes to this screen with an idea rather than an incident.
-  out.push("I want to change what we monitor. What is being checked for each app today, " +
-           "what would you add, and what can you set up yourself?");
+  ask("I want to change what we monitor. What is being checked for each app today, " +
+      "what would you add, and what can you set up yourself?");
   return out;
 }
 
 function AskBossAboutMonitoring({ health }: { health?: Health | null }) {
-  const starters = monitoringStarters(health);
+  const starters = monitoringAsks(health);
   return (
     <section className="ct-block" data-testid="monitoring-ask">
       <div className="ct-block-title">Ask BOSS about this</div>
@@ -101,8 +103,9 @@ function AskBossAboutMonitoring({ health }: { health?: Health | null }) {
         reconfigured until you click.
       </p>
       <div className="dm-starters">
-        {starters.map((q) => (
-          <button type="button" className="cap-btn" key={q} onClick={() => askInDock(q)}
+        {starters.map(({ question: q, subject }) => (
+          <button type="button" className="cap-btn" key={q}
+                  onClick={() => askInDock(q, subject)}
                   data-testid="monitoring-starter">
             {q.length > 96 ? `${q.slice(0, 96)}…` : q}
           </button>

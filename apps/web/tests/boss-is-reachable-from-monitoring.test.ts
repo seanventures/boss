@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { monitoringStarters } from "../app/monitoring-ui";
+import { monitoringAsks, monitoringStarters } from "../app/monitoring-ui";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -27,14 +27,17 @@ const health = (targets: unknown[]) => ({
 }) as never;
 
 describe("the questions it offers", () => {
-  it("names the app that is actually broken, with its error", () => {
-    const [first] = monitoringStarters(health([
-      target(), target({ app_name: "Lead-Triage Inbox", status: "down",
+  it("names the app that is actually broken, and asks ABOUT its target", () => {
+    // The error and the address used to be pasted into the question. They travel as the
+    // target itself now — the server resolves it into its whole record (boss-1: a pasted
+    // paraphrase was answered about something else).
+    const [first] = monitoringAsks(health([
+      target(), target({ target_id: "deptgt_9", app_name: "Lead-Triage Inbox", status: "down",
                          url: "http://192.0.2.202:3014", last_error: "connection refused" }),
     ]));
-    expect(first).toContain("Lead-Triage Inbox");
-    expect(first).toContain("connection refused");
-    expect(first).toContain("http://192.0.2.202:3014");
+    expect(first.question).toContain("Lead-Triage Inbox");
+    expect(first.question).toContain("down");
+    expect(first.subject).toEqual({ kind: "deployment", id: "deptgt_9" });
   });
 
   it("lists them when several are unwell", () => {
@@ -73,8 +76,7 @@ describe("how it opens", () => {
   const UI = codeOnly("app/monitoring-ui.tsx");
 
   it("through the console's own dock, not a fourth chat surface", () => {
-    expect(UI).toContain('url.searchParams.set("agent", "general");');
-    expect(UI).toContain('url.searchParams.set("dock_ask", question);');
+    expect(UI).toContain("openDockAbout({ subject, question, role: null });");
   });
 
   it("it is present whether or not anything is set up", () => {

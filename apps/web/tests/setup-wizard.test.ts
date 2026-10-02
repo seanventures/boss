@@ -382,19 +382,22 @@ describe("and an agent is one click away, carrying the error", () => {
   });
 
   it("it opens the console's own dock rather than a second chat surface", () => {
-    expect(UI).toContain('url.searchParams.set("agent", "general")');
-    expect(UI).toContain('url.searchParams.set("dock_ask", question)');
+    // Through the one door helper (lib/dock-subject.ts): no record behind a setup question,
+    // so no subject — `agent=general`.
+    expect(UI).toContain("openDockAbout({");
+    expect(UI).toContain("subject: null,");
+    expect(UI).toContain("question,");
   });
 
   it("and clears the role, so it cannot inherit whoever was addressed last", () => {
-    expect(UI).toContain('url.searchParams.delete("dock_role")');
+    expect(UI).toContain("role: null,");
   });
 
   it("and starts a NEW conversation rather than reopening the last one", () => {
     // Measured: a question about connecting a repository opened under a week-old Deployment
     // Manager thread, banner and all — "Continuing with the Deployment Manager". Clearing the
     // role is not enough, because the resumed thread carries the role it was had with.
-    expect(UI).toContain('url.searchParams.set("dock_fresh", "1")');
+    expect(UI).toContain("fresh: true,");
   });
 
   it("the question carries what failed, because that is the whole value of asking", () => {

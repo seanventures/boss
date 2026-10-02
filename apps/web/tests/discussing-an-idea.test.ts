@@ -34,8 +34,8 @@ describe("the idea surface exists and is reachable", () => {
   });
 
   it("and it opens a conversation rather than answering once", () => {
-    expect(HERO).toContain('url.searchParams.set("dock_mode", "discuss")');
-    expect(HERO).toContain('url.searchParams.set("dock_ask", seed)');
+    expect(HERO).toContain('mode: "discuss"');
+    expect(HERO).toContain("question: seed");
   });
 
   it("there is ONE entry, not one per kind of question", () => {
@@ -71,13 +71,13 @@ describe("a discussion is a new conversation with nobody in particular", () => {
   });
 
   it("a stale role in the URL cannot leak into it either", () => {
-    expect(HERO).toContain('url.searchParams.delete("dock_role")');
+    expect(HERO).toContain("role: null, mode: \"discuss\"");
   });
 
   it("it starts a NEW thread rather than resuming the last one", () => {
     // The heading was the visible half; the real damage is that a resumed thread's history
     // goes into the model's context, so an idea gets answered next to probe latencies.
-    expect(HERO).toContain('url.searchParams.set("dock_fresh", "1")');
+    expect(HERO).toContain("fresh: true");
     expect(SHELL).toContain("setDockFresh((n) => n + 1)");
     expect(SHELL).toContain("${dockFresh}");
   });

@@ -17,6 +17,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { MemoryHome } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
+import { openDockAbout } from "../lib/dock-subject";
 
 type Skill = {
   skill_key: string; label: string; summary: string; behaviour_kind: string;
@@ -622,21 +623,16 @@ export function SkillsHome(
  *  says what it can do here. Same door the Workflow page uses to design a workflow — a skill is
  *  the unit a custom workflow step runs, so it is the same conversation one level down. */
 function askBossAboutSkills(projectId: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", "general");
-    url.searchParams.set("dock_role", "Program Manager");
-    url.searchParams.set(
-      "dock_ask",
+  openDockAbout({
+    subject: null,
+    role: "Program Manager",
+    question:
       "I want to create a skill for this project. A skill is the reusable unit of doing that a"
       + " workflow step runs — trimming a video, posting to a channel, calling one tool on an"
       + " MCP server. Ask me what you need to know, then draft it and I will create it."
       + ` Start by telling me which skills ${projectId} already has, so I do not ask for one`
       + " that exists.",
-    );
-    window.history.replaceState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+  });
 }
 
 /** WHERE A SKILL CAN GO, ON THE ROW THAT OWNS IT.
@@ -743,16 +739,12 @@ function roleLabel(roleKey: string): string {
  *  workflow agent's job, so this hands the skill to it by name rather than inventing a second
  *  half-built step editor here. */
 function askBossToPlaceSkill(skillId: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", "general");
-    url.searchParams.set("dock_role", "Program Manager");
-    url.searchParams.set(
-      "dock_ask",
+  openDockAbout({
+    subject: null,
+    role: "Program Manager",
+    question:
       `I want to use the skill \`${skillId}\` as a step in a workflow. Define the custom step`
       + " that runs it, then show me which workflows could place it and where.",
-    );
-    window.history.pushState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+    history: "push",
+  });
 }

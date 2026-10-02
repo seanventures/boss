@@ -46,8 +46,8 @@ describe("skills are authored by conversation", () => {
   it("the door is addressed to the role whose remit this is", () => {
     const fn = SKILLS.slice(SKILLS.indexOf("function askBossAboutSkills"));
     const body = fn.slice(0, fn.indexOf("\n}"));
-    expect(body).toContain('"dock_role", "Program Manager"');
-    expect(body).toContain("dock_ask");
+    expect(body).toContain('role: "Program Manager"');
+    expect(body).toContain("question:");
     // The opener must tell BOSS to look first, or it will offer a skill that already exists.
     expect(body).toContain("already has");
   });

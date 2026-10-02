@@ -21,36 +21,50 @@ import { describe, expect, it } from "vitest";
  */
 const APP = join(process.cwd(), "app");
 
-function sourcesSettingDockAsk(): Array<[string, string]> {
-  return readdirSync(APP)
-    .filter((f) => f.endsWith(".tsx") || f.endsWith(".ts"))
-    .map((f) => [f, readFileSync(join(APP, f), "utf8")] as [string, string])
-    .filter(([, src]) => src.includes('searchParams.set("dock_ask"'));
+/** Every opening of the dock goes through `openDockAbout` (lib/dock-subject.ts) — see
+ *  every-ask-door-attaches-a-subject.test.ts — so the per-door decision is the `role:` it
+ *  passes. The helper's type makes `role` required (`string | null`); this pins that no door
+ *  works around it. */
+function doorCalls(): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (const f of readdirSync(APP).filter((x) => x.endsWith(".tsx") || x.endsWith(".ts"))) {
+    const src = readFileSync(join(APP, f), "utf8");
+    let at = src.indexOf("openDockAbout({");
+    while (at >= 0) {
+      const end = src.indexOf("});", at);
+      out.push([f, src.slice(at, end)]);
+      at = src.indexOf("openDockAbout({", end);
+    }
+  }
+  return out;
 }
 
 describe("every door into the dock names its own role", () => {
   it("finds the doors at all", () => {
     // If this drops to zero the rest of the suite passes vacuously.
-    expect(sourcesSettingDockAsk().length).toBeGreaterThanOrEqual(5);
+    expect(doorCalls().length).toBeGreaterThanOrEqual(8);
   });
 
-  it("decides dock_role wherever it sets dock_ask", () => {
-    const offenders: string[] = [];
-    for (const [file, src] of sourcesSettingDockAsk()) {
-      const asks = (src.match(/searchParams\.set\("dock_ask"/g) ?? []).length;
-      const decides = (src.match(/searchParams\.(set|delete)\("dock_role"/g) ?? []).length;
-      if (decides < asks) offenders.push(`${file} (${asks} ask, ${decides} role)`);
-    }
+  it("decides the role wherever it opens the dock", () => {
+    const offenders = doorCalls()
+      .filter(([, call]) => !/\brole\b/.test(call))
+      .map(([file]) => file);
     expect(
       offenders,
       "these open the dock without saying who answers, so it inherits the last agent addressed",
     ).toEqual([]);
   });
 
+  it("the helper sets or clears dock_role on every opening — silence is inheritance", () => {
+    const HELPER = readFileSync(join(process.cwd(), "lib", "dock-subject.ts"), "utf8");
+    expect(HELPER).toContain("dock_role: o.role,");
+    expect(HELPER).toContain("if (value === null) url.searchParams.delete(key);");
+  });
+
   it("the Deployment Manager addresses the Deployment Manager", () => {
     // The instance that was reported. Named explicitly so the fix cannot be quietly undone
     // by a refactor that still satisfies the counting rule above.
     const src = readFileSync(join(APP, "deployment-manager-ui.tsx"), "utf8");
-    expect(src).toContain('url.searchParams.set("dock_role", "Deployment Manager");');
+    expect(src).toContain('role: "Deployment Manager"');
   });
 });

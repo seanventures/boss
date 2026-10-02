@@ -18,6 +18,8 @@ from .capability_manifest import CapabilityManifest
 from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
+from .turn_budget import TurnBudget
+from .turn_subject import parse_subject, resolve_subject, stays_on_subject, subject_context
 from .discovery_service import start_discovery
 from .intake import CommandIntakeService
 from .jobs import JobLeaseService
@@ -722,6 +724,26 @@ def without_what_was_already_said(reply: str, history: list) -> str:
     # Say that something was removed rather than leaving a reply that reads as oddly terse.
     return out + (f"\n\n(BOSS left out {dropped} point{'s' if dropped > 1 else ''} already "
                   "covered above rather than repeating them.)")
+
+
+def continuation_messages(*, question: str, history: list, reply: str,
+                          instruction: str) -> tuple[str, list]:
+    """(message, history) for a re-ask, with the operator's literal question in both.
+
+    The question goes into the history as the user turn the reply answered — so the transcript
+    the model reads is the real one — and is quoted again under the instruction, because an
+    instruction that says "answer the original question" must be able to point at it.
+    """
+    question = str(question or "").strip()
+    turns = [m for m in (history or []) if isinstance(m, dict)]
+    if question:
+        turns = turns + [{"role": "user", "content": question}]
+    turns = turns + [{"role": "assistant", "content": reply}]
+    message = str(instruction or "").strip()
+    if question:
+        message += ("\n\nTHE OPERATOR'S QUESTION — your answer must still answer it:\n\""
+                    + question + "\"")
+    return message, turns
 
 
 def is_operational_question(message: str) -> bool:
@@ -1606,38 +1628,69 @@ class IntentRouter:
         except ValueError as error:
             return RouterTurn(reply=f"I couldn’t start that work: {error}")
 
-    def _scope_note(self, connection, project_id: str, external_ref: Optional[str]) -> str:
-        """One paragraph naming the app under discussion, or nothing.
+    def _scope_note(self, connection, project_id: str, external_ref: Optional[str],
+                    question: str = "", evidence: Any = None) -> str:
+        """The SUBJECT block for a turn about one thing — or nothing.
 
         Nothing is the right answer for a general thread: inventing a subject makes every
         unrelated question about the last app that happened to be open.
+
+        THIS USED TO KNOW ONE KIND OF THING. It queried code_task_runs and told the model
+        "THIS CONVERSATION IS ABOUT ONE APP … Call read_spec with this run id FIRST" — so when
+        the operator asked about a failed Preview STEP (boss-1, 2026-10-02) the turn was framed
+        as a question about a completed build's PRD, and ended up answering about deployments.
+        It now resolves whatever the thread is about — a workflow step, a preview, a build, a
+        discovery, a deployment, a decision — into that thing's own record, and puts the
+        operator's literal question and an answer-this contract above it. See turn_subject.py.
         """
         if not external_ref:
             return ""
-        try:
-            row = connection.execute(
-                text("SELECT id, title, status, pull_request_url, task_id "
-                     "FROM code_task_runs WHERE (id = :r OR task_id = :r) AND project_id = :p "
-                     "ORDER BY created_at DESC LIMIT 1"),
-                {"r": external_ref, "p": project_id},
-            ).mappings().first()
-        except Exception:
+        ref = parse_subject(external_ref)
+        if ref is None:
             return ""
-        if row is None:
-            return ""
-        pr = row["pull_request_url"] or "none opened"
-        return (
-            "THIS CONVERSATION IS ABOUT ONE APP.\n"
-            f"App: {row['title']}\nRun id: {row['id']}\nStatus: {row['status']}\nPR: {pr}\n"
-            "Questions like \"what should we build next\", \"what did we miss\", \"which "
-            "criteria are untested\" or \"read the PRD\" refer to THIS app unless they name "
-            "another one. Call read_spec with this run id FIRST — it returns the PRD, the "
-            "acceptance criteria, what was implemented and what the reviewer said, in one "
-            "call. Do not answer scope questions about this app without reading it, and do "
-            "not report a PRD or diff as unavailable until read_spec has said so.\n"
-            "This run is a STARTING POINT, not a restriction. The app has other runs, and if "
-            "the operator points you at a different one (\"use the latest working one\"), do "
-            "that — their correction outranks this block."
+        if evidence is None:
+            evidence = resolve_subject(connection, project_id, ref)
+        block = subject_context(evidence, question)
+        if ref.kind == "code_task":
+            # The rule this note always carried for builds survives the move: naming a run
+            # must not stop BOSS looking at the app's other runs when the operator says to.
+            block += (
+                "\nQuestions like \"what should we build next\" or \"which criteria are "
+                "untested\" refer to THIS app unless they name another one.\n"
+                "This run is a STARTING POINT, not a restriction. The app has other runs, and if "
+                "the operator points you at a different one (\"use the latest working one\"), do "
+                "that — their correction outranks this block."
+            )
+        return block
+
+    def _reask(self, *, project_id: str, actor: str, question: str, history: list,
+               reply: str, instruction: str, system: str, budget: "TurnBudget",
+               on_step, focus: str, allow_writes: bool, max_steps: int):
+        """EVERY re-ask in a turn is made here, and carries the operator's question.
+
+        In boss-1 both re-asks sent a corrective instruction ("answer the operator's original
+        question again, better") with a history that did not contain the original question —
+        `history` is everything BEFORE the latest message — so on a new thread the model saw
+        its own reply, a list of faults, and nothing else. Its answer then replaced the first
+        one. Three hand-built call sites had three ways to get this wrong; one builder has
+        none, and `test_an_ask_about_this_is_answered_from_its_record` checks every agent call
+        the router makes for the literal question.
+
+        Returns None without calling anything when the turn's budget is spent: a re-ask is a
+        second chance, not a licence to overrun.
+        """
+        if budget is not None and budget.spent():
+            _log.info("re-ask skipped: the turn's budget is spent (%s)", budget.describe())
+            return None
+        message, full_history = continuation_messages(
+            question=question, history=history, reply=reply, instruction=instruction)
+        return self._answer_agent().chat(
+            project_id=project_id, actor=actor, message=message, history=full_history,
+            system=system, allow_writes=allow_writes,
+            max_steps=budget.steps_for(max_steps) if budget is not None else max_steps,
+            # A re-ask the operator cannot see is how the incident's first four tool calls
+            # left no progress rows at all.
+            on_step=on_step, budget=budget, focus=focus,
         )
 
     def _answer(self, connection, project_id: str, messages: list,
@@ -1973,9 +2026,20 @@ class IntentRouter:
         # (b) still did not help, because the facts were a summary and the model wanted the
         # PRD. Scope belongs here, where it is invisible and durable, and the model can go and
         # READ the spec itself.
-        scope = self._scope_note(connection, project_id, external_ref)
+        #
+        # AND FIRST, NOT LAST. The subject's record and the operator's literal question open the
+        # prompt, above ~250 lines of persona written around deploy incidents. In boss-1 the
+        # question was a Preview step's ImportError and the persona's examples were redeploys;
+        # the model answered the examples.
+        _question = next(
+            (str(m.get("content") or "") for m in reversed(messages or [])
+             if isinstance(m, dict) and m.get("role") == "user"), "")
+        subject_ref = parse_subject(external_ref)
+        subject_ev = resolve_subject(connection, project_id, subject_ref) if subject_ref else None
+        scope = self._scope_note(connection, project_id, external_ref, _question,
+                                 evidence=subject_ev)
         if scope:
-            system = system + "\n\n" + scope
+            system = scope + "\n\n" + system
         # last 12 user/assistant turns as history; newest user message drives the turn
         convo = [
             {"role": m["role"], "content": m["content"]}
@@ -2027,6 +2091,17 @@ class IntentRouter:
                     # could repeat a write that had already succeeded.
                     _looking_only = asked_only_to_look(latest)
                     _report = _progress_reporter(project_id, thread_id)
+                    # ONE BUDGET FOR THE WHOLE TURN — see turn_budget.py. Every pass below
+                    # draws from it, so a first pass, a grounding re-ask and a continuation can
+                    # no longer add up to 32 model calls and 276 seconds.
+                    _budget = TurnBudget(
+                        seconds=float(getattr(self.settings, "chat_turn_seconds", 120) or 120),
+                        model_calls=int(getattr(self.settings, "chat_turn_model_calls", 16)
+                                        or 16))
+                    _focus = subject_ref.label if subject_ref else ""
+                    #: The subject's record was in front of the model. An answer drawn from it is
+                    #: grounded — the gates below that count lookups must not punish it.
+                    _subject_grounded = bool(subject_ev is not None and subject_ev.found)
                     # An investigation posts its findings back into THIS conversation, so the
                     # thread has to travel with the call. The model has no way to know it.
                     self._answer_agent().ambient = {"_thread_id": thread_id}
@@ -2069,7 +2144,9 @@ class IntentRouter:
                         # button — so the operator gets the diagnosis and the fix, one click
                         # away, instead of a fait accompli.
                         allow_writes=not _looking_only, on_step=_report,
-                        max_steps=int(getattr(self.settings, "chat_max_steps", 14) or 14),
+                        max_steps=_budget.steps_for(
+                            int(getattr(self.settings, "chat_max_steps", 14) or 14)),
+                        budget=_budget, focus=_focus,
                     )
                     reply = str(turn.reply or "").strip()
                     # WHAT IT DID, NOT JUST WHAT IT SAID.
@@ -2176,13 +2253,20 @@ class IntentRouter:
                         str(c.get("tool") or "") not in _ROLE_READS and c.get("ok", True)
                         for c in tool_calls
                     )
+                    # ...AND UNLESS THE SUBJECT'S OWN RECORD WAS THE GROUND. In boss-1 the first
+                    # pass answered from the Preview step's error, which the question carried —
+                    # zero tools, because none were needed — and this block re-asked it with no
+                    # question in context, producing read_spec/list_source/read_pull_request on
+                    # the build and an answer about something else.
                     if role and reply and not read_before and not grounded_otherwise and not any(
                         c.get("tool") == "recall_role_experience" for c in tool_calls
-                    ):
+                    ) and not _subject_grounded:
                         try:
-                            reread = self._answer_agent().chat(
-                                project_id=project_id, actor=actor,
-                                message=(
+                            reread = self._reask(
+                                project_id=project_id, actor=actor, question=_question or latest,
+                                history=history, reply=reply, system=system, budget=_budget,
+                                on_step=_report, focus=_focus or f"{role}'s record",
+                                instruction=(
                                     f"You answered as {role} without calling "
                                     "recall_role_experience and without reading anything else, "
                                     "so any specific claim you made about this project came "
@@ -2198,8 +2282,7 @@ class IntentRouter:
                                     "mention the empty record only if the operator asked what "
                                     "you have argued before."
                                 ),
-                                history=[{"role": "assistant", "content": reply}],
-                                system=system, allow_writes=False, max_steps=4,
+                                allow_writes=False, max_steps=4,
                             )
                         except Exception as exc:  # noqa: BLE001 — the first answer still stands
                             # Visible, not silent: this block referenced a `self.agent`
@@ -2218,7 +2301,8 @@ class IntentRouter:
                                                             .get("error") or "")})
                         grounded = getattr(reread, "reply", "")
                         if grounded and any(c.get("tool") == "recall_role_experience"
-                                            for c in tool_calls):
+                                            for c in tool_calls) and (
+                                subject_ev is None or stays_on_subject(str(grounded), subject_ev)):
                             reply = str(grounded).strip()
                         else:
                             # Could not ground it. Say which kind of answer this is rather
@@ -2240,7 +2324,10 @@ class IntentRouter:
                     # back ("could not determine", "would you like me to investigate further").
                     # It is told exactly which fault it committed and what to do about it,
                     # because "try harder" is not an instruction a model can act on.
-                    _thin = under_investigated(tool_calls, latest)
+                    # NOT ON AN ANSWER FROM THE SUBJECT'S RECORD. The lookup floor exists for
+                    # answers built from too little looking; one built from the record the
+                    # operator pointed at has looked at the thing itself.
+                    _thin = under_investigated(tool_calls, latest) and not _subject_grounded
                     _handed_back = hands_the_problem_back(reply, proposed)
                     # A PRESCRIPTION IS NOT A FIX, AND A REPEAT IS NOT AN ANSWER.
                     #
@@ -2295,7 +2382,14 @@ class IntentRouter:
                             # points away from anything else.
                             _chain = ("diagnose_run on the run in question if you have not, then "
                                       "read_logs, then the code")
-                            if _DEPLOY_SUBJECT.search(latest):
+                            # THE CHAIN COMES FROM WHAT THE TURN IS ABOUT, NOT FROM ITS WORDS.
+                            # In boss-1 the console's own boilerplate ("check the app's code and
+                            # the host") matched this regex's bare `host`, and the model was
+                            # ordered down the deployment chain about a Preview step. With a
+                            # subject, its record names the tools that settle what is open.
+                            if subject_ev is not None and subject_ev.open_points:
+                                _chain = ", then ".join(t for _, t in subject_ev.open_points)
+                            elif _DEPLOY_SUBJECT.search(latest):
                                 _chain = ("describe_deployment_target and list_deployments for "
                                           "THIS app, then preflight_deployment_target, then "
                                           "find_free_port or inspect_host on the machine. A "
@@ -2358,16 +2452,17 @@ class IntentRouter:
                                 "DID, or a propose_action button — never with a plan, and never "
                                 "with a yes/no question.")
                         try:
-                            better = self._answer_agent().chat(
-                                project_id=project_id, actor="orchestrator",
-                                message="\n\n".join(gaps) + (
+                            better = self._reask(
+                                project_id=project_id, actor="orchestrator", question=_question or latest,
+                                history=history, reply=reply, system=system, budget=_budget,
+                                on_step=_report,
+                                focus=_focus or "the gaps in the first answer",
+                                instruction="\n\n".join(gaps) + (
                                     "\n\nAnswer the operator's original question again, better. "
                                     "Do not restate what you already said — replace it."),
-                                history=history + [{"role": "assistant", "content": reply}],
-                                system=system,
                                 # Same permission the first pass had. A continuation must not be
                                 # a way to acquire writes the turn was not entitled to.
-                                allow_writes=not _looking_only, on_step=_report,
+                                allow_writes=not _looking_only,
                                 max_steps=int(getattr(
                                     self.settings, "chat_continuation_steps", 10) or 10),
                             )
@@ -2391,6 +2486,15 @@ class IntentRouter:
                                     "why": str(result.get("why") or ""),
                                 })
                         improved = str(getattr(better, "reply", "") or "").strip()
+                        # A RE-ASK MAY REFINE AN ANSWER, NOT SWAP ITS SUBJECT. In boss-1 this
+                        # line replaced an answer about the Preview step with "Lead Triage Inbox
+                        # has never been deployed". An off-subject replacement is refused and the
+                        # first answer stands.
+                        if improved and subject_ev is not None and not stays_on_subject(
+                                improved, subject_ev):
+                            _log.warning("continuation answered about something other than %s; "
+                                         "keeping the first answer", subject_ev.ref.label)
+                            improved = ""
                         if improved:
                             reply = improved
 
@@ -2418,17 +2522,18 @@ class IntentRouter:
                     if (reply and not actions and not _looking_only
                             and _ACTION_CLAIM.search(reply)):
                         try:
-                            again = self._answer_agent().chat(
-                                project_id=project_id, actor=actor,
-                                message=(
+                            again = self._reask(
+                                project_id=project_id, actor=actor, question=_question or latest,
+                                history=history, reply=reply, system=system, budget=_budget,
+                                on_step=_report, focus=_focus or "the change you described",
+                                instruction=(
                                     "You just told the operator you had made a change, and no "
                                     "tool ran — the trace shows reads only. They have already "
                                     "approved it. Call the tool that performs it NOW, with "
                                     "concrete arguments. If you cannot, name the tool you "
                                     "lack; do not describe the change again."
                                 ),
-                                history=[{"role": "assistant", "content": reply}],
-                                system=system, allow_writes=True, max_steps=4,
+                                allow_writes=True, max_steps=4,
                             )
                         except Exception as exc:  # noqa: BLE001 — the first answer still stands
                             # Same dead `self.agent` reference as the grounding re-ask

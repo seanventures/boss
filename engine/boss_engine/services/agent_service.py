@@ -74,8 +74,15 @@ class AgentService:
             # all. Separation is about whose history is READ, and starting a fresh thread for
             # the new agent achieves it completely — refusing achieves it by making the
             # feature unusable.
+            # ...AND TO THE THING IT IS ABOUT. A held thread id is reused only when it is the
+            # conversation this turn is scoped to. In boss-1 the dock held a role thread while
+            # the turn was about a Preview step; answering in the held thread would have read
+            # `role:Qa` as the subject and dropped the step entirely. A different scope falls
+            # through to that scope's own thread — the same rule as a different role.
+            same_scope = not external_ref or (row["external_ref"] or "") == external_ref
             if (row["agent_role"] or "") == agent_role:
-                return dict(row)
+                if same_scope:
+                    return dict(row)
 
         if external_ref:
             row = connection.execute(

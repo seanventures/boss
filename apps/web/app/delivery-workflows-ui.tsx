@@ -13,6 +13,7 @@ import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
+import { openDockAbout, type DockSubject } from "../lib/dock-subject";
 import { inputsWithTheDirective, missingRequired, suppliedInputs, workflowInputFields }
   from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
@@ -1394,7 +1395,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             </p>
             <button type="button" className="cap-btn primary" data-testid="dw-workflow-agent"
                     onClick={() => askBossAbout(
-                      "general",
+                      null,
                       "I want to work on this project's workflows. You can draft a new one from"
                       + " a described sequence of steps, change an existing one, define a custom"
                       + " step backed by a skill, or retire one. Start by telling me which"
@@ -2870,6 +2871,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           onSetTarget={(targetId) => onSetTarget(targetId)}
           onPrepareTarget={onPrepareTarget}
           buildRunId={buildRunId}
+          workflowRunId={run.id}
           onRunPreview={onRunPreview}
           onBound={onBound}
           projectId={projectId}
@@ -3251,19 +3253,38 @@ function roleLabel(roleKey: string): string {
   return roleKey.replace(/_/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
 }
 
-function askBossAbout(runRef: string, question: string, captain?: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", runRef || "general");
-    url.searchParams.set("dock_ask", question);
-    // ADDRESSED, NOT BROADCAST. `dock_role` is the parameter the dock already reads to answer
-    // as a named member of the workforce, reading that role's own record rather than replying
-    // as BOSS-in-general with a name in the banner.
-    if (captain) url.searchParams.set("dock_role", roleLabel(captain));
-    else url.searchParams.delete("dock_role");
-    window.history.replaceState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+/** Open the dock about `subject`, addressed to the step's captain.
+ *
+ *  ADDRESSED, NOT BROADCAST: the captain answers from that role's own record rather than as
+ *  BOSS-in-general with a name in the banner. And ABOUT THE THING, NOT A PARAPHRASE OF IT — see
+ *  lib/dock-subject.ts for boss-1, where a paraphrase of a Preview step was answered as a
+ *  question about deployments. */
+function askBossAbout(subject: DockSubject | null, question: string, captain?: string): void {
+  openDockAbout({ subject, question, role: captain ? roleLabel(captain) : null });
+}
+
+/** What the operator is asking about a step, in their words — and nothing else.
+ *
+ *  This used to be "On the Preview step (status failed), BOSS says: \"<error cut at 400
+ *  characters>\". Why is it in this state, and what is the fix? Check the app's code and the
+ *  host before answering." The error now travels whole, as the step's own record, resolved by
+ *  the server from the subject; and "check the host" was an instruction to go exploring that
+ *  sent boss-1's turn to the deployment tools. */
+export function stepQuestion(step: Pick<RunStep, "step_id" | "status">, label?: string): string {
+  const name = label || step.step_id;
+  switch (step.status) {
+    case "failed":
+    case "deadlettered":
+      return `Why did the ${name} step fail, and what is the fix?`;
+    case "waiting":
+    case "blocked":
+      return `What is the ${name} step waiting on, and what do I need to do?`;
+    case "running":
+    case "leased":
+      return `Is the ${name} step making progress, or is it stuck?`;
+    default:
+      return `Why is the ${name} step ${step.status}?`;
+  }
 }
 
 /** ANSWER THE GATE WHERE THE DECISION CAN BE READ.
@@ -3574,8 +3595,10 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
                      actions,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
-                     previewStarting, busy }: {
+                     workflowRunId, previewStarting, busy }: {
   projectId: string;
+  /** The workflow run this step belongs to — what "Ask about this step" is about. */
+  workflowRunId?: string;
   /** This step's Try again / Skip, from the run's server-decided `actions`. */
   actions: { retry?: RunAction; skip?: RunAction };
   /** Where this step sits in the run, so the card can carry the rail's number. */
@@ -3609,8 +3632,6 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const learnedDeploy = flaggedDeploy || targets.length > 0;
   const [helpOpen, setHelpOpen] = useState(false);
   const showHelp = helpOpen || !learnedDeploy;
-  // The sentence this step is actually showing the operator — its failure, or the note the
-  // capability recorded. It is what makes the opening question specific instead of "help".
   // THE ADDRESS OF THE THING THAT WAS JUST SHIPPED.
   //
   // Only on a deploy that SUCCEEDED, and only from the target this run is actually bound to —
@@ -3700,9 +3721,6 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
     if (!domain) return "";
     return /^https?:\/\//.test(domain) ? domain : `http://${domain}`;
   })();
-  const askNote = String(
-    step.error || (step.output || {}).note || (step.output || {}).error || "",
-  ).slice(0, 400);
   const blocker = step.blocker ?? null;
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
   // the runtime recorded — merged here so the link builder sees one object.
@@ -4070,12 +4088,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                     + " with this step's state already filled in"
                   : "Opens the side dock with this step's state and message already filled in"}
                 onClick={() => askBossAbout(
-                  buildRunId || "",
-                  `On the ${capability?.label ?? step.step_id} step`
-                  + ` (status ${step.status})`
-                  + (askNote ? `, BOSS says: "${askNote}"` : "")
-                  + ". Why is it in this state, and what is the fix? Check the app's code and"
-                  + " the host before answering.",
+                  workflowRunId
+                    ? { kind: "workflow_step", id: workflowRunId, step: step.step_id }
+                    : buildRunId ? { kind: "code_task", id: buildRunId } : null,
+                  stepQuestion(step, capability?.label),
                   stepCaptain(step, capability))}>
           {stepCaptain(step, capability)
             ? `Ask the ${roleLabel(stepCaptain(step, capability))}`

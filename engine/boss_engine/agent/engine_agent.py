@@ -204,7 +204,8 @@ def _step_label(name: str, args: dict) -> str:
     a spinner with extra words.
     """
     subject = ""
-    for key in ("run_id", "job_id", "target_id", "host", "service", "repo", "role", "sql"):
+    for key in ("preview_id", "run_id", "job_id", "target_id", "app_name", "host", "service",
+                "path", "query", "repo", "role", "sql"):
         value = str(args.get(key) or "").strip()
         if value:
             subject = value[:40]
@@ -222,6 +223,23 @@ def _step_label(name: str, args: dict) -> str:
         "inspect_host": "inspecting the host",
         "recall_role_experience": "recalling what this role has argued here",
         "describe_role": "reading the role's remit",
+        # The ones an "ask about this step" turn reaches for. "chaining tools" was all the dock
+        # could say while these ran.
+        "read_preview_log": "reading the preview's start-up log",
+        "get_task_preview": "reading the build's previews and why they failed",
+        "list_previews": "listing the previews",
+        "describe_workflow_run": "reading the workflow run and its steps",
+        "read_spec": "reading the build's PRD and acceptance criteria",
+        "read_pull_request": "reading the pull request",
+        "list_source": "listing the app's files",
+        "describe_deployment_target": "reading the deployment target",
+        "list_deployments": "listing the deployments",
+        "preflight_deployment_target": "checking the target can be deployed to",
+        "list_deployment_hosts": "listing the deployment hosts",
+        "http_probe": "checking whether it answers",
+        "list_decisions": "reading the open decisions",
+        "list_discovery": "reading the discovery dossier",
+        "propose_action": "preparing a button for the fix",
     }.get(name, name.replace("_", " "))
     return f"{friendly} — {subject}" if subject else friendly
 
@@ -275,6 +293,12 @@ class EngineAgent:
         #: so without this the operator watches a dot for as long as the investigation takes —
         #: and the reliability work deliberately makes investigations longer.
         on_step: Optional[Callable[[str], None]] = None,
+        #: The TURN's budget, shared by every pass in it (see services/turn_budget.py). When it
+        #: is spent the next round-trip is the answer step, whatever `max_steps` says.
+        budget: Any = None,
+        #: What this pass is about, in the operator's words — "workflow step wfr_…/preview".
+        #: Used in the progress line so the dock says what is being looked at, not a phase.
+        focus: str = "",
     ) -> AgentTurn:
         """Run one agent turn. Returns the reply plus the tool trace and any
         write actions that were held for confirmation. `system` overrides the
@@ -321,15 +345,21 @@ class EngineAgent:
 
         for i in range(max_steps):
             steps = i + 1
-            last = i >= answer_step
+            # THE TURN'S BUDGET OUTRANKS THIS PASS'S STEP LIMIT. In the incident each pass was
+            # within its own limit and the turn ran 276 seconds; the turn is what the operator
+            # waits on, so the turn is what is counted.
+            out_of_turn = budget is not None and budget.must_answer_now()
+            last = i >= answer_step or out_of_turn
             if last:
                 messages.append({
                     "role": "user",
                     "content": (
-                        "You are out of tool budget for this turn. Do not apologise and do not "
+                        ("This turn's budget is spent (" + budget.describe() + "). "
+                         if out_of_turn else "You are out of tool budget for this turn. ")
+                        + "Do not apologise and do not "
                         "ask to continue. Answer from what you have already established:\n"
-                        "1. What you FOUND, with concrete evidence (ids, counts, timings).\n"
-                        "2. What you could NOT determine, and the one check that would settle it.\n"
+                        "1. The answer to the operator's question, with concrete evidence.\n"
+                        "2. What you could NOT check, in one sentence each, and why.\n"
                         "3. The single next action you would take.\n"
                         "Partial findings are useful; a report of running out of steps is not."
                     ),
@@ -346,12 +376,19 @@ class EngineAgent:
             # The phase IS the information: deciding what to look at, then weighing what came
             # back. Emitted before the round-trip rather than after, because a line that
             # appears once the work is done is not progress.
+            # NAME THE THING, NOT THE PHASE. "Weighing what came back" for four minutes said
+            # nothing the elapsed counter did not; "reading the record for workflow step
+            # wfr_…/preview" says what is being looked at.
             if on_step is not None:
                 try:
                     on_step(
-                        "reading your question and deciding what to look at" if i == 0
-                        else "writing the answer" if last
-                        else "weighing what came back, and what to check next"
+                        "writing the answer" + (" — the turn's time is up" if out_of_turn else "")
+                        if last
+                        else (f"reading {focus} and deciding what is still open" if focus
+                              else "reading your question and deciding what to look at")
+                        if i == 0
+                        else (f"weighing what came back about {focus}" if focus
+                              else "weighing what came back, and what to check next")
                     )
                 except Exception:  # noqa: BLE001 — never fail a turn to report progress
                     pass
@@ -365,6 +402,8 @@ class EngineAgent:
             # twice. The model call is the thing that 529'd; that is what gets another try.
             from .transient import _with_transient_retry
 
+            if budget is not None:
+                budget.spend_call()
             msg, _usage = _with_transient_retry(
                 lambda: self._adapter_obj().create_chat_completion(
                     messages, tools=(None if last else schemas)

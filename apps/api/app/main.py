@@ -12006,6 +12006,10 @@ def ensure_agent_thread_endpoint(payload: open_bodies.AgentThreadEnsureBody, req
             surface=str(payload.get("surface") or "chat"),
             external_ref=(str(payload.get("external_ref")) or None
                           if payload.get("external_ref") else None),
+            # THE SAME KEY THE TURN WILL RESOLVE. Without the role this created an unscoped
+            # thread, the turn (role=Qa) fell through to another one, and in boss-1 the dock
+            # polled the empty thread for 276 seconds while the progress went elsewhere.
+            agent_role=str(payload.get("role") or ""),
         )
     return {"thread_id": thread["id"]}
 

@@ -24,8 +24,7 @@ describe("every step has somebody who answers for it", () => {
   it("the ask is addressed, not broadcast", () => {
     // `dock_role` is the parameter the dock already reads to answer as a named member of the
     // workforce, reading that role's own record.
-    expect(UI).toContain('if (captain) url.searchParams.set("dock_role", roleLabel(captain));');
-    expect(UI).toContain('else url.searchParams.delete("dock_role");');
+    expect(UI).toContain("role: captain ? roleLabel(captain) : null");
   });
 
   it("the button says who it reaches", () => {
