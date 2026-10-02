@@ -1238,6 +1238,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "knowledge instead, not here: these are the values that "
                                    "differ every run.",
                 },
+                "start_anyway": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Readiness keys (from a refusal's `missing`) the operator "
+                                   "explicitly said to start without, e.g. "
+                                   "['deployment_target']. Never fill this in on your own.",
+                },
                 "project_id": {"type": "string"},
             },
             ["directive", "workflow_key"],
@@ -1301,6 +1307,28 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     return {"ok": False, "error": f"no research run {adopted!r} in this project"}
                 except _run_actions.RunActionRefused as error:
                     return {"ok": False, "error": error.reason}
+            # THE SAME PREFLIGHT AS THE CONSOLE'S START. An agent asked to "run the newsletter"
+            # on an install with no mail server started it, paid for the research, and failed
+            # at the send after a person approved it. It now gets the list of what is missing
+            # and the fix, to tell the operator — and starts anyway only for the keys the
+            # operator said to start without.
+            from ..services import workflow_readiness as _ready
+
+            accepted = args.get("start_anyway")
+            try:
+                readiness = _ready.refuse_unless_ready(
+                    c, getattr(ctx, "settings", None), pid, version_id=str(version_id),
+                    input_data=run_input,
+                    start_anyway=[str(k) for k in accepted] if isinstance(accepted, list) else [])
+            except _ready.WorkflowNotReadyError as error:
+                return {"ok": False, "error": str(error),
+                        "missing": [{"key": m["key"], "what": m["label"], "detail": m["detail"],
+                                     "fix": m["fix"],
+                                     "needed_by": [n["label"] for n in m["needed_by"]]}
+                                    for m in error.readiness.get("missing") or []],
+                        "next": "Tell the operator what is missing and how to fix it. Start "
+                                "again with start_anyway=[keys] only if they say to start "
+                                "without them."}
             try:
                 run = wf.start_run(
                     c, project_id=pid, actor=actor,
@@ -1311,10 +1339,13 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 )
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
+            _ready.record_started_anyway(c, pid, actor, run.get("id") or "", readiness)
         return {"status": "running", "run_id": run.get("id"), "workflow_key": key,
                 "project_id": pid, "title": title,
                 **({"built_on_research": adopted} if adopted else {}),
-                **({"ignored_input": ignored} if ignored else {})}
+                **({"ignored_input": ignored} if ignored else {}),
+                **({"started_without": readiness.get("started_anyway")}
+                   if readiness.get("started_anyway") else {})}
 
     @reg.tool(
         "request_meeting",

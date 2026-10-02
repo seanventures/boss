@@ -114,6 +114,16 @@ def _build_inputs(after_meeting: bool = False) -> dict[str, Any]:
     return inputs
 
 
+def _notify_inputs() -> dict[str, Any]:
+    """What a notify step reads: the run's name, and WHO TO TELL.
+
+    `channel` comes from the run's `notify_channel` input — an email address or a Mattermost
+    channel the operator types when starting. It was never bound, so every notify step in the
+    catalogue had nowhere to post and recorded a green no-op (boss-1 map, 2026-10-02).
+    """
+    return {"message": _in("title"), "channel": _in("notify_channel")}
+
+
 def _chain(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Wire a straight sequence. Every catalogue workflow is a sequence with gates in it, and
     hand-writing `next` twelve times is twelve chances to mis-wire one."""
@@ -158,7 +168,7 @@ CATALOGUE: list[dict[str, Any]] = [
             # one-line directive as though none of it had happened.
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
-            _step("spec_review", "spec_review", approver_role="product_owner"),
+            _step("spec_review", "spec_review", approver_role="pm"),
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             # READINESS BEFORE PRODUCTION, NOT AFTER IT.
@@ -199,7 +209,7 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("deploy", "deploy", {"run_id": _from("plrr", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
-            _step("notify", "notify", {"message": _in("title")}),
+            _step("notify", "notify", _notify_inputs()),
         ]),
     },
     {
@@ -231,18 +241,22 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
-            _step("notify", "notify", {"message": _in("title")}),
+            _step("notify", "notify", _notify_inputs()),
         ]),
     },
     {
         "key": "major_feature",
         "name": "Major Feature",
-        "description": "A feature large enough to deserve a spec of its own and a person "
-                       "signing off on it before anyone builds anything.",
+        # NO LONGER PROMISES A SIGN-OFF BEFORE THE BUILD. This said "a person signing off on it
+        # before anyone builds anything"; the step that stood for that is the PRD approval,
+        # which is automatic by default (BOSS_MEETING_PRD_AUTO_APPROVE). The sign-offs a person
+        # really gives here are on the preview and on the release, so that is what it says.
+        "description": "A feature large enough to deserve research and a spec of its own. A "
+                       "person signs off how it looks and works, and again before it ships.",
         "objective": (
-            "Specify a feature large enough to deserve its own spec, then build it and have a "
-            "person sign off the way it looks and works. The PRD is reviewed by a human before "
-            "any code and must be arguable on its merits, not just implementable."
+            "Specify a feature large enough to deserve its own spec, then build it. The PRD is "
+            "the build brief and must be arguable on its merits, not just implementable. Once "
+            "it is built, a person signs off the way it looks and works."
         ),
         "work_class": "feature.major",
         "steps": _chain([
@@ -252,10 +266,10 @@ CATALOGUE: list[dict[str, Any]] = [
             # one-line directive as though none of it had happened.
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
-            _step("spec_review", "spec_review", approver_role="product_owner"),
+            _step("spec_review", "spec_review", approver_role="pm"),
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
-            _step("ux_review", "ux_review", approver_role="design_lead"),
+            _step("ux_review", "ux_review", approver_role="design_critic"),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
             # Last, before the deploy gate — deliberately after readiness and its preview, so
@@ -278,10 +292,13 @@ CATALOGUE: list[dict[str, Any]] = [
         "name": "Fast Fix / Hotfix",
         "description": "Something is broken now. No research, no panel — build, prove it, "
                        "have someone say yes, ship.",
+        # NO PANEL HERE, SO THE OBJECTIVE NO LONGER TALKS TO ONE. It said "this panel is the
+        # retrospective" in a workflow with no meeting step; the objective is shown to the
+        # operator and handed to the steps, so it has to describe the steps that exist.
         "objective": (
-            "Something is broken in production now. The build has already run; this panel is the "
-            "retrospective — what happened, why, and what stops it recurring. Do not re-specify "
-            "the fix."
+            "Something is broken in production now. Fix exactly that: the smallest change that "
+            "makes the failure stop, with a test that would have caught it. Do not redesign "
+            "the surrounding code; a person approves the release."
         ),
         "work_class": "bugfix",
         "steps": _chain([
@@ -300,7 +317,7 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
-            _step("notify", "notify", {"message": _in("title")}),
+            _step("notify", "notify", _notify_inputs()),
         ]),
     },
     {
@@ -316,8 +333,13 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive"), "deep": True}),
-            _step("meeting", "meeting", {"directive": _in("directive")}),
-            _step("spec_review", "spec_review", approver_role="product_owner"),
+            # THE PANEL ARGUES FROM THE RESEARCH HERE TOO. This meeting read the directive and
+            # nothing else — the wiring bug already fixed in Standard Product Delivery — so the
+            # one workflow whose whole output is a researched recommendation paid for deep
+            # research and then debated without it.
+            _step("meeting", "meeting", {"directive": _in("directive"),
+                                         "research": _from("research", "dossier")}),
+            _step("spec_review", "spec_review", approver_role="pm"),
             _step("document", "document", {"title": _in("title")}),
         ]),
     },
@@ -333,7 +355,7 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "project.new",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
-            _step("spec_review", "spec_review", approver_role="tech_lead"),
+            _step("spec_review", "spec_review", approver_role="cto"),
             _step("build", "build", _build_inputs(after_meeting=True)),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
@@ -360,15 +382,16 @@ CATALOGUE: list[dict[str, Any]] = [
                        "the preview and signs off before it ships.",
         "objective": (
             "The point of this work is how it looks and feels. A person will use the preview and "
-            "sign it off, so the PRD must state the interaction, the states (empty, loading, "
-            "error) and what 'good' means concretely enough for a reviewer to judge against."
+            "sign it off. The PRD must therefore state the interaction, the states (empty, "
+            "loading, error) and what 'good' means concretely enough for a reviewer to judge "
+            "against."
         ),
         "work_class": "feature.major",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
-            _step("ux_review", "ux_review", approver_role="design_lead"),
+            _step("ux_review", "ux_review", approver_role="design_critic"),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
             # Last, before the deploy gate — deliberately after readiness and its preview, so
@@ -390,17 +413,22 @@ CATALOGUE: list[dict[str, Any]] = [
         "key": "security_hardening",
         "name": "Security Hardening",
         "description": "Threat-led work with a security sign-off that cannot be automated away.",
+        # THERE IS NO PANEL, AND THE RESEARCH NOW REACHES THE BUILD. The objective said "the
+        # panel argues the threat model" in a workflow with no meeting step, and the research it
+        # paid for was handed to nothing: the build read only the directive. The threat research
+        # is the build's brief now, which is the only reason to research first.
         "objective": (
             "Threat-led work ending in a security sign-off that cannot be automated away. The "
-            "panel argues the threat model: what an attacker would try, what is exposed, and what "
-            "evidence the reviewer will need."
+            "research names what an attacker would try and what is exposed; the build closes "
+            "those, and the reviewer gets the evidence for each."
         ),
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
-            _step("build", "build", _build_inputs()),
+            _step("build", "build", {**_build_inputs(),
+                                     "spec_markdown": _from("research", "dossier")}),
             _step("review", "review", {"seats": ["security"]}),
-            _step("security_review", "security_review", approver_role="security_lead"),
+            _step("security_review", "security_review", approver_role="security_reviewer"),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
             # Last, before the deploy gate — deliberately after readiness and its preview, so
@@ -421,17 +449,20 @@ CATALOGUE: list[dict[str, Any]] = [
     {
         "key": "data_migration",
         "name": "Data / Migration Change",
-        "description": "Changes to data are the ones you cannot take back. Reviewed by someone "
-                       "who owns the data, with the rollback proven before it ships.",
+        # THE PERSON IS AT THE RELEASE, AND THE TEXT SAYS SO. "A person reviews it before
+        # anything runs" pointed at the PRD approval, which is automatic by default. The human
+        # decision in this workflow is the deploy gate — the moment the migration would run.
+        "description": "Changes to data are the ones you cannot take back. The rollback is "
+                       "specified up front, and a person approves before the migration runs.",
         "objective": (
             "Change data, which is the change you cannot take back. The PRD must state the "
             "rollback, how the migration is verified, and what happens to in-flight work — a "
-            "person reviews it before anything runs."
+            "person approves the release before the migration runs."
         ),
         "work_class": "any",
         "steps": _chain([
             _step("meeting", "meeting", {"directive": _in("directive")}),
-            _step("spec_review", "spec_review", approver_role="data_owner"),
+            _step("spec_review", "spec_review", approver_role="cto"),
             _step("build", "build", _build_inputs(after_meeting=True)),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
@@ -446,7 +477,7 @@ CATALOGUE: list[dict[str, Any]] = [
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  approver_role="data_owner"),
+                  approver_role="cto"),
             _step("monitor", "monitor"),
             _step("document", "document", {"title": _in("title")}),
         ]),
@@ -469,9 +500,9 @@ CATALOGUE: list[dict[str, Any]] = [
             # one-line directive as though none of it had happened.
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
-            _step("spec_review", "spec_review", approver_role="product_owner"),
+            _step("spec_review", "spec_review", approver_role="pm"),
             _step("build", "build", _build_inputs(after_meeting=True)),
-            _step("security_review", "security_review", approver_role="security_lead"),
+            _step("security_review", "security_review", approver_role="security_reviewer"),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
@@ -509,7 +540,7 @@ CATALOGUE: list[dict[str, Any]] = [
             # one-line directive as though none of it had happened.
             _step("meeting", "meeting", {"directive": _in("directive"),
                                          "research": _from("research", "dossier")}),
-            _step("spec_review", "spec_review", approver_role="tech_lead"),
+            _step("spec_review", "spec_review", approver_role="cto"),
             _step("build", "build", _build_inputs(after_meeting=True)),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
@@ -541,7 +572,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "any",
         "steps": [
             _step("meeting", "meeting", {"directive": _in("directive")}, nxt=["announce"]),
-            _step("announce", "notify", {"message": _in("title")}, nxt=["grace"]),
+            # THE ANNOUNCEMENT IS THE POINT, SO ITS CHANNEL IS REQUIRED. As a no-op `notify` it
+            # told nobody and the run then waited seven days for objections nobody could raise.
+            # `notify_channel` is a required input of this workflow (see its `inputs`), so a run
+            # cannot start without somewhere to announce, and the preflight checks it can send.
+            _step("announce", "notify", _notify_inputs(), nxt=["grace"]),
             # The one control step in the catalogue: a real grace period, not a promise of one.
             {"id": "grace", "kind": "timer", "wait_seconds": 604800, "binding": {},
              "next": ["build"]},
@@ -572,19 +607,228 @@ CATALOGUE: list[dict[str, Any]] = [
 ]
 
 
+# ── What Start asks for ────────────────────────────────────────────────────────────────────────
+#
+# WHY EVERY TEMPLATE DECLARES ITS INPUTS NOW. No catalogue entry had an input_schema, so the
+# console had nothing to draw and "Start" fell back to `sample: true`: the run was on a random
+# demo idea rather than the operator's work, and spent research, a panel, a build and a pull
+# request in THEIR repository on it. For the six `any`-class templates the sample was a new
+# product brief ("Build a meeting cost meter") handed to a data migration or a deprecation
+# (boss-1 map, 2026-10-02). Start now opens a form for the operator's own brief, and a sample
+# is an explicit "try an example" that fits the template.
+
+#: The fields a catalogue step reads from the run, described once. `directive` is worded per
+#: template in BRIEFS, because "what should it do" and "what is broken" are different questions.
+_FIELD_TEXT: dict[str, dict[str, Any]] = {
+    "title": {"type": "string", "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app "
+                             "it builds and the written record.",
+              "examples": ["Shift swap board"]},
+    "repository": {"type": "string", "title": "Repository (optional)",
+                   "description": "owner/name of the GitHub repository to build in. Leave blank "
+                                  "for this project's primary repository."},
+    "acceptance_criteria": {"type": "array", "items": {"type": "string"},
+                            "title": "How you will know it works (optional)",
+                            "description": "Each line becomes a check the build is held to. "
+                                           "Leave blank and the panel proposes them."},
+    "reference_links": {"type": "array", "items": {"type": "string", "format": "uri"},
+                        "title": "Links to read first (optional)",
+                        "description": "Docs, designs or tickets the builder should read."},
+    "notify_channel": {"type": "string", "title": "Who to tell",
+                       "description": "Where the outcome is posted: email:someone@example.com or "
+                                      "mattermost:<channel id>. Leave blank and the notify step "
+                                      "is skipped and says so.",
+                       "examples": ["email:team@example.com"]},
+}
+
+#: Per template: how its brief is asked for, an example that fits its purpose (the form's
+#: placeholder and the explicit "try an example"), and any input required beyond what its steps
+#: demand. Every CATALOGUE key must be here — `test_every_template_asks_for_its_own_brief`.
+BRIEFS: dict[str, dict[str, Any]] = {
+    "standard_product_delivery": {
+        "directive": ("What should it do?",
+                      "Who it is for and what a person can do with it, in two or three "
+                      "sentences. The panel argues from this text and its PRD is the build "
+                      "brief, so a thin brief produces a thin product."),
+        "example": {"title": "Shift swap board",
+                    "directive": "A shift-swap board where staff offer a shift they cannot "
+                                 "work, colleagues claim it, and the manager approves the "
+                                 "swap. Used on a phone, mid-shift."},
+    },
+    "minor_feature": {
+        "directive": ("What should change, and in which app?",
+                      "One small addition to an app that already exists. Name the app and the "
+                      "change; this path has no research and no spec review."),
+        "example": {"title": "Export swaps as CSV",
+                    "directive": "In the existing Shift swap board: add a 'Download CSV' button "
+                                 "to the approvals page that exports this month's approved "
+                                 "swaps."},
+    },
+    "major_feature": {
+        "directive": ("What is the feature?",
+                      "The feature, who needs it and why. It is researched and specified "
+                      "before it is built, and a person signs off the preview and the "
+                      "release."),
+        "example": {"title": "Recurring shift swaps",
+                    "directive": "Let staff offer a recurring shift (every Tuesday for six "
+                                 "weeks) in one action, with the manager approving the series "
+                                 "or individual dates."},
+    },
+    "fast_fix": {
+        "directive": ("What is broken?",
+                      "What fails, where, and how to see it fail. The build makes the smallest "
+                      "change that stops it, with a test that would have caught it."),
+        "example": {"title": "Approvals page 500",
+                    "directive": "In the Shift swap board, the approvals page returns HTTP 500 "
+                                 "when a swap has no claimant. It should list the swap as "
+                                 "unclaimed instead."},
+    },
+    "research_led_discovery": {
+        "directive": ("What do you want to find out?",
+                      "The question, and the decision it feeds. This ends in a written "
+                      "recommendation, not in code."),
+        "example": {"title": "Is a shift-swap app worth building?",
+                    "directive": "Do hourly-staff teams of 20-200 people already have a good way "
+                                 "to swap shifts, and would a manager pay for one that "
+                                 "enforces approval rules?"},
+    },
+    "backend_service_setup": {
+        "directive": ("What service should exist?",
+                      "What it serves, the data it owns and who calls it. The PRD names the "
+                      "endpoints and how it is watched."),
+        "example": {"title": "Rota API",
+                    "directive": "A small HTTP service that stores weekly rotas and answers "
+                                 "'who is on shift at time T' for other apps, with a health "
+                                 "check and request metrics."},
+    },
+    "ux_certification": {
+        "directive": ("What is the experience?",
+                      "The interaction, its states (empty, loading, error) and what 'good' "
+                      "means, concretely enough for a reviewer to judge the preview against."),
+        "example": {"title": "One-tap shift claim",
+                    "directive": "Make claiming an offered shift one tap on a phone, with a "
+                                 "clear confirmation and an undo for ten seconds."},
+    },
+    "security_hardening": {
+        "directive": ("What needs hardening?",
+                      "The system and the threat you are worried about. Research names what an "
+                      "attacker would try; the build closes it and a person signs off the "
+                      "security posture."),
+        "example": {"title": "Harden swap approvals",
+                    "directive": "Make sure only a shift's own manager can approve its swap: "
+                                 "check for IDOR on the approve endpoint and for CSRF on the "
+                                 "approvals form."},
+    },
+    "data_migration": {
+        "directive": ("What data changes?",
+                      "The change, the rollback, and what happens to work in flight. A person "
+                      "approves before the migration runs."),
+        "example": {"title": "Split shift times by timezone",
+                    "directive": "Store shift start and end as UTC plus the site's timezone "
+                                 "instead of local time, migrating existing rows, with a "
+                                 "rollback that restores the old columns."},
+    },
+    "compliance_release": {
+        "directive": ("What is being released, under which controls?",
+                      "The change and the controls it must satisfy. Each control's evidence is "
+                      "produced and a person signs off security and the release."),
+        "example": {"title": "Audit log for approvals",
+                    "directive": "Record every swap approval and rejection in an append-only "
+                                 "audit log with who, when and why, retained for a year."},
+    },
+    "third_party_integration": {
+        "directive": ("Which system are you bringing in, and for what?",
+                      "The other system, what you need from it, and what should happen when "
+                      "it is down. Research reads their API first."),
+        "example": {"title": "Slack swap alerts",
+                    "directive": "Post a message to the team's Slack channel when a shift is "
+                                 "offered, and update it when the swap is claimed or approved."},
+    },
+    "deprecation_sunset": {
+        "directive": ("What is being taken away?",
+                      "What goes, what replaces it, and who must be told. The announcement is "
+                      "sent first and the removal waits a week."),
+        "example": {"title": "Retire the legacy swap form",
+                    "directive": "Remove the old paper-style swap request form now that the "
+                                 "board replaces it; redirect its URL to the board."},
+        # THE ANNOUNCEMENT IS THE POINT. A sunset nobody was told about is the outcome this
+        # workflow exists to prevent, so it cannot start without somewhere to announce.
+        "required": ("notify_channel",),
+    },
+}
+
+
+def _fields_read(steps: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
+    """Every run input the steps read, in first-read order, and the ones a step REQUIRES."""
+    from .workflow_capabilities import CAPABILITIES
+
+    order: list[str] = []
+    required: set[str] = set()
+    for step in steps:
+        binding = step.get("binding") or {}
+        capability = CAPABILITIES.get(str(binding.get("capability") or ""))
+        for name, value in (binding.get("inputs") or {}).items():
+            if isinstance(value, dict) and "from_input" in value:
+                field = str(value["from_input"])
+                if field not in order:
+                    order.append(field)
+                if capability and name in capability.required_inputs:
+                    required.add(field)
+    return order, required
+
+
+def input_schema_for(entry: dict[str, Any]) -> dict[str, Any]:
+    """The JSON Schema Start draws its form from: every field a step reads, required where a
+    step cannot run without it, worded for this template."""
+    brief = BRIEFS[entry["key"]]
+    order, required = _fields_read(entry["steps"])
+    required |= set(brief.get("required") or ())
+    title, help_text = brief["directive"]
+    properties: dict[str, Any] = {}
+    for field in order:
+        if field == "directive":
+            properties[field] = {"type": "string", "format": "textarea", "title": title,
+                                 "description": help_text,
+                                 "examples": [brief["example"]["directive"]]}
+        else:
+            text_for = dict(_FIELD_TEXT[field])
+            if field in required and text_for["title"].endswith(" (optional)"):
+                text_for["title"] = text_for["title"][: -len(" (optional)")]
+            properties[field] = text_for
+    return {"type": "object",
+            "required": [f for f in order if f in required],
+            "properties": properties}
+
+
+def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
+    """The spec a catalogue entry publishes — one construction for seeding and for the summary,
+    so what a card describes is what a project runs."""
+    # THE OBJECTIVE TRAVELS WITH THE SPEC, so a step can read what the workflow it is
+    # part of is FOR. Without it every panel in all twelve workflows convened the
+    # same generic PRD meeting: Research-Led Discovery, whose own description says it
+    # "ends in a decision and a document, not in code", asked for an implementation
+    # plan exactly like Standard Product Delivery did.
+    return {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
+            "objective": entry.get("objective") or "",
+            "workflow_name": entry["name"],
+            "input_schema": input_schema_for(entry)}
+
+
+def example_for(workflow_key: str) -> Optional[dict[str, Any]]:
+    """The template's own example brief, for an explicit "try an example"."""
+    brief = BRIEFS.get(str(workflow_key or ""))
+    return dict(brief["example"]) if brief else None
+
+
 def catalogue_summary() -> list[dict[str, Any]]:
     """What a customer sees when choosing. Includes what the workflow will need from their
     project, so "you have not connected a repository" is said at the point of choosing."""
+    from .workflow_capabilities import CAPABILITIES, stops_for_a_person
+    from .workflow_readiness import need_for, needs_of
+
     out = []
     for entry in CATALOGUE:
-        # THE OBJECTIVE TRAVELS WITH THE SPEC, so a step can read what the workflow it is
-        # part of is FOR. Without it every panel in all twelve workflows convened the
-        # same generic PRD meeting: Research-Led Discovery, whose own description says it
-        # "ends in a decision and a document, not in code", asked for an implementation
-        # plan exactly like Standard Product Delivery did.
-        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
-                "objective": entry.get("objective") or "",
-                "workflow_name": entry["name"]}
+        spec = entry_spec(entry)
         # VALIDATE FIRST, then read the gates off the result.
         #
         # Effective approval is computed during validation — a deploy step written without an
@@ -596,10 +840,21 @@ def catalogue_summary() -> list[dict[str, Any]]:
             {"entry_step": spec["entry_step"],
              "steps": [dict(step) for step in entry["steps"]]}
         )
-        gates = [
-            s["id"] for s in effective["steps"]
+        manual = [
+            s for s in effective["steps"]
             if (s.get("approval") or {}).get("mode") == "manual"
         ]
+        # A GATE IS WHERE A PERSON IS ASKED. The PRD approval is manual by the risk floor and
+        # answered by the panel's own decision — automatically by default — so it is listed
+        # apart rather than as "you approve: spec_review".
+        def _capability(step: dict[str, Any]) -> str:
+            return str((step.get("binding") or {}).get("capability") or "")
+
+        gates = [s["id"] for s in manual
+                 if _capability(s) not in CAPABILITIES
+                 or stops_for_a_person(_capability(s), (s.get("approval") or {}).get("mode"))]
+        automatic = [s["id"] for s in manual if s["id"] not in gates]
+        needs = needs_of(spec)
         out.append({
             "key": entry["key"],
             "name": entry["name"],
@@ -612,8 +867,20 @@ def catalogue_summary() -> list[dict[str, Any]]:
                 for s in entry["steps"]
             ],
             "gates": gates,
+            "automatic_approvals": automatic,
             "requires_project": sorted(project_requirements(spec)),
+            # EVERYTHING it needs from a project, including a model and the agents its gates
+            # name — the same keys the start preflight checks, with their labels.
+            "needs": [{"key": key, "label": need_for(key).label} for key in needs],
             "estimated_minutes": estimate_minutes(spec),
+            # WHAT IT SPENDS, not only how long it takes: PLRR is a second build pass.
+            "cost_notes": [
+                {"step": s["id"], "note": CAPABILITIES[_capability(s)].cost_note}
+                for s in entry["steps"]
+                if _capability(s) in CAPABILITIES and CAPABILITIES[_capability(s)].cost_note
+            ],
+            "input_schema": spec["input_schema"],
+            "example": example_for(entry["key"]),
         })
     return out
 
@@ -650,14 +917,7 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
             )
             definition_id = definition["id"]
 
-        # THE OBJECTIVE TRAVELS WITH THE SPEC, so a step can read what the workflow it is
-        # part of is FOR. Without it every panel in all twelve workflows convened the
-        # same generic PRD meeting: Research-Led Discovery, whose own description says it
-        # "ends in a decision and a document, not in code", asked for an implementation
-        # plan exactly like Standard Product Delivery did.
-        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
-                "objective": entry.get("objective") or "",
-                "workflow_name": entry["name"]}
+        spec = entry_spec(entry)
         try:
             version = workflows.publish_version(
                 connection, project_id=project_id, definition_id=definition_id,

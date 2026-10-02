@@ -486,6 +486,15 @@ def run_due(
             if not active:
                 raise ScheduleError(
                     f"'{row['workflow_key']}' has no published version to run.")
+            # CHECKED AT EVERY FIRING, NOT ONCE. A schedule runs unattended, so a newsletter on
+            # an install with no mail server would research every Monday and fail at the send
+            # every Monday. The refusal is the schedule's `last_error` — what is missing and the
+            # fix — and counts toward pausing it, like any other failure to start.
+            from .workflow_readiness import refuse_unless_ready
+
+            refuse_unless_ready(
+                connection, None, project_id, version_id=str(active),
+                input_data=dict(row["input"] if isinstance(row["input"], dict) else {}))
             run = start_run(
                 connection,
                 project_id=project_id,

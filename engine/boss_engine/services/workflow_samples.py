@@ -204,7 +204,8 @@ def catalogue_work_class(workflow_key: str) -> str:
 
 
 def sample_for(connection: Connection, project_id: str, work_class: str,
-               *, seed: Optional[int] = None) -> Optional[dict[str, Any]]:
+               *, seed: Optional[int] = None,
+               workflow_key: str = "") -> Optional[dict[str, Any]]:
     """A runnable input for this work class, or None when the project cannot supply one.
 
     None is a real answer and the caller must respect it: a minor-feature demonstration needs
@@ -213,6 +214,17 @@ def sample_for(connection: Connection, project_id: str, work_class: str,
     """
     rng = random.Random(seed)
     cls = (work_class or "").strip().lower()
+
+    # A TEMPLATE FOR "ANY" WORK GETS ITS OWN EXAMPLE. Six catalogue templates are class `any`,
+    # which fell through to a NEW PRODUCT brief — "Build a meeting cost meter" handed to Data
+    # Migration or Deprecation / Sunset (boss-1 map, 2026-10-02). Each template now carries an
+    # example that fits what it is for, and that is the one an explicit "try an example" runs.
+    if cls == "any" and workflow_key:
+        from .workflow_catalogue import example_for
+
+        example = example_for(workflow_key)
+        if example:
+            return example
 
     if cls.startswith("project") or cls in ("", "product.new"):
         return _unused_product(connection, project_id, rng)
