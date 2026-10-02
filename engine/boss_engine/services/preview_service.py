@@ -1429,6 +1429,18 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
     return None
 
 
+# Names the coding agent's allow-list passes ON PURPOSE because the AGENT needs them to buy
+# model turns — and that an app it wrote has no business holding (see app_environment).
+_MODEL_CREDENTIAL_PREFIXES = ("ANTHROPIC_", "CLAUDE_", "OPENAI_")
+
+
+def _is_model_or_credential(name: str) -> bool:
+    from .agent_env import SECRET_SHAPED
+
+    upper = name.upper()
+    return upper.startswith(_MODEL_CREDENTIAL_PREFIXES) or any(m in upper for m in SECRET_SHAPED)
+
+
 def app_environment(workdir: Path, port: int) -> dict[str, str]:
     """The environment an app BOSS starts (preview or serve proof) runs with.
 
@@ -1437,6 +1449,15 @@ def app_environment(workdir: Path, port: int) -> dict[str, str]:
     ran a build's app — code an agent wrote minutes earlier — on the worker with the worker's
     whole environment (second review of f16b5d4), the same exposure that let an agent's test
     suite clear a production database on 2026-09-02 (see agent_env).
+
+    AND THEN LESS THAN THE AGENT. agent_environment is the CODING AGENT's allow-list, and it
+    lets ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_BASE_URL through on purpose:
+    the agent cannot work without its model credential. b63717c handed that list to the app as
+    is, so every serve proof and every host preview started agent-written code holding the
+    install's model credential — an app that logs its environment, or a dependency that ships
+    it somewhere, spends the operator's model account (third review of b63717c). The app never
+    needs it, so every ANTHROPIC_*/CLAUDE_*/OPENAI_* name and every credential-shaped name an
+    operator let through BOSS_AGENT_ENV_ALLOW for the agent is removed here.
 
     PORT and HOST are set AFTER the filter: they are values BOSS chose for this launch, not
     anything inherited, and agent_environment's allow-list (built for the coding agent) does
@@ -1450,6 +1471,7 @@ def app_environment(workdir: Path, port: int) -> dict[str, str]:
         "PYTHONUNBUFFERED": "1", "npm_config_cache": str(workdir / ".npm-cache"),
         "npm_config_fund": "false", "npm_config_audit": "false",
         "npm_config_update_notifier": "false"})
+    env = {k: v for k, v in env.items() if not _is_model_or_credential(k)}
     env.update({"PORT": str(port), "HOST": "0.0.0.0", "HOME": str(workdir)})
     return env
 
@@ -1502,35 +1524,22 @@ def _proof_tree(workdir: Path) -> Path:
     """A disposable copy of the build's tree to start the app in.
 
     In place would be wrong: the sandbox's diff is `git add -A`, so whatever the running app
-    writes — a SQLite file, an npm cache, a log — would ride into the pull request. node_modules
-    is linked rather than copied (it is large and the verify step already installed it). There
-    is no micro-VM overlay: a micro-VM build is not proved on the host at all (see
+    writes — a SQLite file, an npm cache, a log — would ride into the pull request. There is no
+    micro-VM overlay: a micro-VM build is not proved on the host at all (see
     governed_code_task_service.app_serves_check_skip_reason).
+
+    COPIED, NODE_MODULES INCLUDED. b63717c linked each node_modules into the build workdir to
+    save the copy, so a declared `npm install && node server.js` — or any app that writes a cache
+    under node_modules — wrote THROUGH the link into the build's own tree, and the proof changed
+    the workdir it exists to leave alone (third review of b63717c). Nothing the proof's command
+    may write is shared with the build: the whole tree is copied, links inside it kept as links
+    (npm's .bin entries and workspace links are relative, so they resolve inside the copy).
     """
     proof = Path(tempfile.mkdtemp(prefix="boss-serve-proof-"))
     shutil.copytree(workdir, proof, dirs_exist_ok=True, symlinks=True,
-                    ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__",
-                                                  ".npm-cache"))
-    # os.walk with pruning, not rglob: rglob would descend every installed package.
-    for dirpath, dirnames, _files in os.walk(workdir):
-        if "node_modules" in dirnames:
-            source = Path(dirpath) / "node_modules"
-            target = proof / source.relative_to(workdir)
-            if target.parent.is_dir() and not target.exists():
-                try:
-                    target.symlink_to(source, target_is_directory=True)
-                except OSError:
-                    pass
-        dirnames[:] = [d for d in dirnames if d not in ("node_modules", ".git")]
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", ".npm-cache"))
     return proof
 
-
-# A Node package that depends on one of these is a server, whatever its start script says.
-_NODE_SERVER_DEPS = frozenset({
-    "express", "fastify", "koa", "@hapi/hapi", "hapi", "restify", "polka", "hono",
-    "@nestjs/core", "next", "nuxt", "@sveltejs/kit", "@remix-run/serve", "http-server",
-    "serve", "connect", "socket.io",
-})
 
 # Suffixes of files that can change what an app DOES when started. A build that touched none of
 # them (docs, tests, fixtures) changed nothing the serve proof could catch.
@@ -1560,46 +1569,9 @@ def touches_runnable_source(changed: Optional[list[str]]) -> bool:
     return False
 
 
-def _entry_evidently_serves(tree: Path, kind: str, value: str) -> bool:
-    """Is the app a lineage's files name actually a server? Evidence, read from the tree.
-
-    declare_app_entry names the program a build wrote, and a CLI is a program too. A CLI
-    main.py with a __main__ block, or a Node tool whose `start` is `node cli.js`, used to be
-    launched by the serve proof and failed for not answering HTTP, which blocked builds that
-    completed before the proof existed. Only a lineage that declared a run command, or whose
-    own entry starts a server when run, is held to serving.
-    """
-    if kind == "static":
-        return True
-    if kind == "py":
-        return python_source_serves(_read_py(tree, value) or "")
-    if kind == "node":
-        base = tree if value in (".", "") else tree / value
-        try:
-            payload = json.loads((base / "package.json").read_text()) or {}
-        except (OSError, ValueError):
-            return False
-        deps = {**(payload.get("dependencies") or {}), **(payload.get("devDependencies") or {})}
-        if any(d in _NODE_SERVER_DEPS for d in deps):
-            return True
-        # A hand-rolled server: http.createServer(...) or .listen(...) in its own sources.
-        for path in list(base.glob("*.*js")) + list(base.glob("src/*.*js")) \
-                + list(base.glob("*.ts")) + list(base.glob("src/*.ts")):
-            try:
-                text = path.read_text(errors="ignore")
-            except OSError:
-                continue
-            if "createServer(" in text or re.search(r"\.listen\(", text):
-                return True
-        return False
-    return False
-
-
 def _entry_is_the_lineages(entry: tuple[str, str], files: list[str]) -> bool:
-    """Did this lineage write the app `entry` names? Only then is its shape evidence about IT.
-
-    The resolver falls back to repo conventions — a root serve.py some other app left behind —
-    and a server that is not this lineage's says nothing about whether this build is a service.
+    """Did this lineage write the app `entry` names? A boss.preview.app naming an app the
+    lineage never wrote (a root file merged in from elsewhere) is another app's (how_app_runs).
     """
     kind, value = entry
     value = value.strip().strip("/")
@@ -1613,18 +1585,6 @@ def _entry_is_the_lineages(entry: tuple[str, str], files: list[str]) -> bool:
 def _repo_rel(path) -> str:
     rel = str(path).strip()
     return rel[2:] if rel.startswith("./") else rel
-
-
-# A usage line is how argparse, click and most CLIs answer being run without the arguments they
-# require. Matched at a line start so a server that logs the word "usage" mid-line is not one.
-_USAGE_LINE = re.compile(r"(?im)^\s*usage:")
-
-
-def _printed_usage(log_path: str) -> bool:
-    try:
-        return bool(_USAGE_LINE.search(Path(log_path).read_text(errors="ignore")[:20000]))
-    except OSError:
-        return False
 
 
 # How each source of a run command is named to a person reading a failure.
@@ -1676,16 +1636,26 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
     declaration and proved a different command than the preview runs (second review of
     f16b5d4).
 
-    WHO IS HELD TO SERVING is decided by evidence, never by a flag: the lineage declared a run
-    command, or the app it wrote starts a server when run, or `known_service` (the run builds a
-    named full-stack app scaffold). `web_app_build` is set on every build-on-existing/extend —
-    CLIs and libraries included — so it is not evidence. A build that is not a service is left
-    to its tests (the preview's "verified by tests" path). A build whose diff changes nothing
-    that can alter how an app starts (docs, tests) has nothing to prove.
+    WHO IS HELD TO SERVING is decided by DECLARATION, never by reading code: the lineage (or
+    this run) wrote a run command — boss.preview.command, or boss.preview.command in a
+    package.json — or `known_service` (the run builds a named full-stack app, official_app_id).
+    Every other build — CLI, library, worker, an app that declared nothing — is left to its
+    tests, and the record says "not a declared service".
 
-    A non-declared command that exits printing a usage line is a CLI that wants arguments, not
-    a service that failed: it is recorded and passes. A DECLARED command is held to serving
-    whatever it prints — the build said it serves.
+    WHY NOT INFER IT. Three reviews running, the gate guessed "is this a service" from the
+    source, and each guess blocked a build that should have completed (the gate is never
+    shipped past): cf8c2d4 launched a CLI main.py; f16b5d4 a CLI whose server sat behind a
+    subcommand; b63717c (python_source_serves "reachability") still a CLI whose main() picks
+    `serve` with an if/elif or a --serve flag — run bare it does its CLI thing and exits, and
+    was failed for not answering HTTP. Every smarter heuristic has a next shape. The implement
+    prompt REQUIRES a service to declare its run command (RUN_DECLARATION_INSTRUCTION), so the
+    build itself says what it is, and the static reading survives only as the preview's guess at
+    what to launch for an undeclared repo — it never blocks a build. `web_app_build` is not
+    evidence either: it is set on every build-on-existing/extend, CLIs and libraries included.
+    A build whose diff changes nothing that can alter how an app starts (docs, tests) has
+    nothing to prove.
+
+    A DECLARED command is held to serving whatever it prints — the build said it serves.
 
     Started with launch_app and waited on with _discover_working_port — the preview's own
     primitives. Never raises. If the CHECK itself cannot run (the tree cannot be copied, the
@@ -1710,34 +1680,32 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
             (tree / DECLARED_APP_FILE).write_text(pending + "\n", encoding="utf-8")
 
         def _not_a_service(why: str) -> dict:
-            record.update(source="library", not_a_service=why,
+            record.update(source="not_declared", not_a_service=f"not a declared service: {why}",
                           verification=_detect_verification(tree))
             return record
+
+        # DECLARED OR NAMED, NOTHING ELSE (see WHO IS HELD above). Asked before how_app_runs so
+        # an undeclared build is never launched — and never failed for what the repository
+        # holds — on the strength of a guess. how_app_runs asks find_run_declaration the same
+        # question with the same files first, so a declaration here is the command run below.
+        if not known_service and find_run_declaration(tree, files or None) is None:
+            return _not_a_service(
+                "the build wrote no boss.preview.command, so its tests are its proof")
 
         try:
             plan = how_app_runs(tree, files or None)
         except AmbiguousAppError as exc:
-            if not known_service:
-                return _not_a_service(f"no app of this lineage could be told apart: {exc}")
             record.update(ok=False, source="ambiguous", error=(
                 f"this build serves HTTP but did not declare how to run it, and the "
                 f"repository is ambiguous: {exc} Write boss.preview.command."))
             return record
         if plan is None or not plan.command:
-            if not known_service:
-                return _not_a_service("no runnable app found")
             record.update(ok=False, error=(
                 "this build serves HTTP but declares no way to run it and none could be "
                 "found. Write boss.preview.command with the command that starts it."))
             return record
         if plan.entry:
             record["app_entry"] = f"{plan.entry[0]}:{plan.entry[1]}"
-        is_service = (plan.source == "declared" or known_service
-                      or (plan.entry is not None and _entry_is_the_lineages(plan.entry, files)
-                          and _entry_evidently_serves(tree, *plan.entry)))
-        if not is_service:
-            return _not_a_service(
-                f"{record['app_entry'] or 'the app'} does not start a server when run")
 
         record["source"] = plan.source
         record["command"] = plan.shell()
@@ -1748,14 +1716,6 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
             exit_code = proc.poll()
             if port is not None:
                 record.update(proven=True, port=port)
-            elif exit_code is not None and plan.source != "declared" and not known_service \
-                    and _printed_usage(log_path):
-                # A CLI whose server sits behind a subcommand: run bare, it printed its usage
-                # and exited. Not a service that failed — nothing claimed it serves.
-                record.update(source="library", proven=False, exit_code=exit_code,
-                              not_a_service=("exited printing a usage line: a command-line "
-                                             "tool that needs arguments, not a service"),
-                              verification=_detect_verification(tree))
             elif exit_code is not None:
                 # It EXITED; it did not time out. "did not serve HTTP within timeout" for a
                 # process that died at 0.8s sent the reader looking for a slow start.

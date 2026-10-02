@@ -19,9 +19,11 @@ remains for undeclared repos judges a Python file by what it does, not what it i
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import shlex
+import textwrap
 
 import pytest
 
@@ -145,9 +147,10 @@ def test_the_container_preview_runs_a_package_module_the_same_way(tmp_path):
 
 
 def test_the_resolved_command_actually_serves(tmp_path):
-    """Resolution being right is worthless if the command it builds cannot start the app."""
+    """Resolution being right is worthless if the command it builds cannot start the app.
+    (A named full-stack app: only a declared or named app is started by the proof.)"""
     root = _lead_triage(tmp_path)
-    record = ps.prove_app_serves(root, BUILT, timeout=20)
+    record = ps.prove_app_serves(root, BUILT, known_service=True, timeout=20)
     assert record["ok"] and record["proven"], record
     assert record["command"] == "python3 -m lead_triage_core.server"
 
@@ -326,7 +329,7 @@ def test_a_library_that_serves_nothing_is_left_to_its_tests(tmp_path):
     record = ps.prove_app_serves(root, ["scoring/rank.py", "tests/test_rank.py"],
                                  timeout=5)
     assert record["ok"] is True and record["proven"] is False
-    assert record["source"] == "library"
+    assert record["source"] == "not_declared"
 
 
 # --------------------------------------------------------------------------------------- #
@@ -342,7 +345,7 @@ def test_a_cli_main_with_a_main_block_is_left_to_its_tests(tmp_path):
     root = _write(tmp_path, files)
     record = ps.prove_app_serves(root, list(files), timeout=5)
     assert record["ok"] is True and record["proven"] is False, record
-    assert record["source"] == "library"
+    assert record["source"] == "not_declared"
     assert record["command"] is None
 
 
@@ -351,7 +354,7 @@ def test_a_node_cli_with_a_start_script_is_left_to_its_tests(tmp_path):
              "cli.js": "console.log(process.argv.slice(2).join(' '))\n"}
     root = _write(tmp_path, files)
     record = ps.prove_app_serves(root, list(files), timeout=5)
-    assert record["ok"] is True and record["source"] == "library", record
+    assert record["ok"] is True and record["source"] == "not_declared", record
 
 
 def test_a_long_running_worker_that_is_not_a_service_is_not_required_to_serve(tmp_path):
@@ -359,14 +362,21 @@ def test_a_long_running_worker_that_is_not_a_service_is_not_required_to_serve(tm
                                "    while True:\n        time.sleep(1)\n"}
     root = _write(tmp_path, files)
     record = ps.prove_app_serves(root, list(files), timeout=5)
-    assert record["ok"] is True and record["source"] == "library", record
+    assert record["ok"] is True and record["source"] == "not_declared", record
 
 
-def test_a_build_not_flagged_as_a_service_that_writes_a_server_is_still_proven(tmp_path):
-    """The relaxation is for things that are not servers; a server the build wrote still runs."""
+def test_an_undeclared_server_is_left_to_its_tests_unless_it_is_a_named_app(tmp_path):
+    """Third review of b63717c: the gate no longer reads code to decide "is this a service".
+    A server the build wrote but never declared is left to its tests (the implement prompt
+    requires a declaration; the preview still guesses for it); a named full-stack app is
+    still started."""
     root = _lead_triage(tmp_path)
     record = ps.prove_app_serves(root, BUILT, timeout=20)
-    assert record["ok"] and record["proven"] and record["source"] == "derived", record
+    assert record["ok"] and not record["proven"] and record["source"] == "not_declared", record
+    assert record["command"] is None
+    assert record["not_a_service"].startswith("not a declared service")
+    named = ps.prove_app_serves(root, BUILT, known_service=True, timeout=20)
+    assert named["ok"] and named["proven"] and named["source"] == "derived", named
 
 
 def test_a_docs_only_follow_up_in_a_multi_app_repo_is_not_failed_for_the_repos_shape(tmp_path):
@@ -556,7 +566,7 @@ def test_a_cli_follow_up_flagged_as_a_web_build_is_not_held_to_serving(tmp_path)
     record = ps.prove_app_serves(root, list(files), lineage=["main.py", "tests/test_main.py"],
                                  known_service=gov.serve_proof_known_service({}, extend_fctx),
                                  timeout=5)
-    assert record["ok"] is True and record["source"] == "library", record
+    assert record["ok"] is True and record["source"] == "not_declared", record
 
 
 def test_a_library_follow_up_flagged_as_a_web_build_is_not_held_to_serving(tmp_path):
@@ -568,7 +578,7 @@ def test_a_library_follow_up_flagged_as_a_web_build_is_not_held_to_serving(tmp_p
     record = ps.prove_app_serves(root, ["scoring/rank.py"], lineage=list(files),
                                  known_service=gov.serve_proof_known_service({}, extend_fctx),
                                  timeout=5)
-    assert record["ok"] is True and record["source"] == "library", record
+    assert record["ok"] is True and record["source"] == "not_declared", record
     body = inspect.getsource(gov.run_governed_code_task)
     assert "known_service=serve_proof_known_service(spec, fctx)" in body
 
@@ -584,18 +594,18 @@ def test_a_cli_whose_server_hides_behind_a_dispatched_subcommand_is_not_a_servic
     files = {"main.py": CLI_DISPATCHED}
     root = _write(tmp_path, files)
     record = ps.prove_app_serves(root, list(files), timeout=10)
-    assert record["ok"] is True and record["source"] == "library", record
+    assert record["ok"] is True and record["source"] == "not_declared", record
 
 
-def test_a_cli_that_exits_with_its_usage_line_is_not_a_failed_service(tmp_path):
-    """When the server IS reachable by name (behind an `if args.cmd == ...`), the static rule
-    cannot tell; the run can. A non-declared command that exits printing `usage:` is a CLI."""
+def test_a_cli_with_a_reachable_serve_branch_is_never_launched(tmp_path):
+    """The static rule cannot tell this CLI from a server (python_source_serves says it
+    serves); the gate no longer asks it. Undeclared, it is not started at all."""
     assert ps.python_source_serves(CLI_BRANCHED)
     files = {"main.py": CLI_BRANCHED}
     root = _write(tmp_path, files)
     record = ps.prove_app_serves(root, list(files), timeout=10)
-    assert record["ok"] is True and record["source"] == "library", record
-    assert record["exit_code"] == 2
+    assert record["ok"] is True and record["source"] == "not_declared", record
+    assert record["command"] is None and "exit_code" not in record
 
 
 def test_a_declared_command_that_prints_usage_is_still_a_failure(tmp_path):
@@ -725,3 +735,130 @@ def test_the_container_preview_runs_the_builds_declared_command(tmp_path):
     ps._generate_dockerfile(root, DECLARED_LINEAGE)
     assert 'CMD ["sh", "-lc", "python3 -m lead_triage_core.server"]' in (
         root / "Dockerfile").read_text()
+
+
+# --------------------------------------------------------------------------------------- #
+# Third review of b63717c. Each test below fails on b63717c.
+# --------------------------------------------------------------------------------------- #
+
+# A CLI whose main() picks `serve` by hand, if/elif on argv: run bare it lists and exits 0.
+CLI_IF_ELIF = '''\
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def serve():
+    ThreadingHTTPServer(("0.0.0.0", 8000), BaseHTTPRequestHandler).serve_forever()
+
+
+def export():
+    print("exported 3 leads")
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "list"
+    if cmd == "serve":
+        serve()
+    elif cmd == "export":
+        export()
+    else:
+        print("3 leads")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+# The same CLI with an optional --serve flag: run bare it prints and exits 0, no usage line.
+CLI_SERVE_FLAG = '''\
+import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def serve(port):
+    ThreadingHTTPServer(("0.0.0.0", port), BaseHTTPRequestHandler).serve_forever()
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="leads")
+    parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+    if args.serve:
+        serve(args.port)
+    else:
+        print("3 leads")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+@pytest.mark.parametrize("source", [CLI_IF_ELIF, CLI_SERVE_FLAG], ids=["if-elif", "serve-flag"])
+def test_a_cli_with_a_serve_subcommand_or_flag_is_not_blocked_as_a_service(tmp_path, source):
+    """BLOCKER, third review of b63717c. python_source_serves followed main() to serve() by
+    name, so a CLI whose main() dispatches `serve` with if/elif or a --serve flag counted as a
+    service: run bare it printed "3 leads", exited 0, and was failed for not answering HTTP —
+    a gate nothing ships past. The gate now holds only a DECLARED build to serving."""
+    files = {"leads.py": source, "tests/test_leads.py": "import unittest\n"}
+    root = _write(tmp_path, files)
+    record = ps.prove_app_serves(root, list(files), lineage=list(files), timeout=10)
+    assert record["ok"] is True, record
+    assert record["source"] == "not_declared" and record["command"] is None, record
+    assert record["not_a_service"].startswith("not a declared service")
+    # The decision reads no code: the static "evidently serves" inference is gone from it.
+    code = ast.parse(textwrap.dedent(inspect.getsource(ps.prove_app_serves))).body[0]
+    code.body = code.body[1:]  # the docstring tells the history; the code must not read source
+    body = ast.unparse(code)
+    assert "python_source_serves" not in body and "evidently_serves" not in body
+    assert not hasattr(ps, "_entry_evidently_serves")
+
+
+def test_the_started_app_holds_no_model_credential(tmp_path, monkeypatch):
+    """MINOR, third review of b63717c. app_environment passed agent_environment through as is,
+    and that allow-list carries the CODING AGENT's model credential on purpose — so every serve
+    proof and every host preview started agent-written code holding ANTHROPIC_API_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_BASE_URL."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.internal")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    # An operator let more through for the agent; the app gets none of it.
+    monkeypatch.setenv("BOSS_AGENT_ENV_ALLOW", "STRIPE_API_KEY,SLACK_BOT_TOKEN,LOG_LEVEL")
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_live")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb")
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    env = ps.app_environment(tmp_path, 4321)
+    for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                 "OPENAI_API_KEY", "STRIPE_API_KEY", "SLACK_BOT_TOKEN"):
+        assert name not in env, name
+    assert env["PORT"] == "4321" and env["HOST"] == "0.0.0.0" and env["HOME"] == str(tmp_path)
+    assert "PATH" in env and env["LOG_LEVEL"] == "debug"
+    # And through the launcher every preview and proof uses: the app sees none of them.
+    root = _lead_triage(tmp_path / "app", **{"boss.preview.command": (
+        'test -z "$ANTHROPIC_API_KEY" && test -z "$CLAUDE_CODE_OAUTH_TOKEN" && '
+        'test -z "$ANTHROPIC_BASE_URL" && test -n "$PORT" && '
+        'python3 -m lead_triage_core.server\n')})
+    record = ps.prove_app_serves(root, BUILT + ["boss.preview.command"], timeout=20)
+    assert record["ok"] and record["proven"], record
+
+
+def test_the_proof_cannot_modify_the_build_workdir_through_node_modules(tmp_path):
+    """MINOR, third review of b63717c. _proof_tree symlinked each node_modules into the real
+    build workdir, so a declared `npm install && …` — or any app writing under node_modules —
+    wrote through the link into the tree the sandbox diffs and ships."""
+    root = _lead_triage(tmp_path, **{
+        "node_modules/left-pad/index.js": "module.exports = 1\n",
+        "web/node_modules/dep/index.js": "module.exports = 2\n",
+        "boss.preview.command": (
+            "echo tampered > node_modules/left-pad/index.js && "
+            "echo new > node_modules/added.js && rm -rf web/node_modules/dep && "
+            "python3 -m lead_triage_core.server\n")})
+    before = {p.relative_to(root).as_posix(): p.read_bytes()
+              for p in root.rglob("*") if p.is_file()}
+    record = ps.prove_app_serves(root, BUILT + ["boss.preview.command"], timeout=20)
+    assert record["ok"] and record["proven"], record
+    after = {p.relative_to(root).as_posix(): p.read_bytes()
+             for p in root.rglob("*") if p.is_file()}
+    assert after == before

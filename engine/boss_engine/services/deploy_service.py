@@ -604,11 +604,18 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
                        timeout=900, check=True)
         if not (work / "dist").is_dir():
             raise RuntimeError("build script ran but did not produce ./dist")
+        # NO `start`, NO SERVER — WHATEVER IS DECLARED. A built frontend is static under nginx,
+        # as it was in 00907e9. b63717c let a root boss.preview.command turn this into a node
+        # deploy, so a Vite SPA whose build declared `npx vite preview --port $PORT` (how its
+        # PREVIEW runs) shipped as a node container running a dev-preview server instead of
+        # dist/ under nginx (third review of b63717c). The declaration says how to run the app
+        # for a preview and the serve proof; WHAT KIND OF DEPLOY it is stays the repository's
+        # own answer. Only a SERVER deploy takes the declared command, in place of `npm start`.
+        if not has_start:
+            return (work, "static", "", sha)
         root_declared = _declared_run(work, changed)
         if root_declared is not None and (root_declared.declared_in or ".") != ".":
             root_declared = None
-        if not has_start and root_declared is None:
-            return (work, "static", "", sha)
         # Built, and it has a server to run. Ship the whole app directory — its package.json is
         # the run contract — laid out under the same `dist` name every mode uses, so staging,
         # rollback and cleanup stay one implementation.
@@ -633,7 +640,7 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     # package" the preview had been fixed for, the health gate saw nothing and the deploy rolled
     # back (second review of f16b5d4). One function, so a command proven at build time is the
     # command deployed.
-    from .preview_service import AmbiguousAppError, how_app_runs
+    from .preview_service import AmbiguousAppError, how_app_runs, resolve_app_entry
 
     static_dir = None
     try:
@@ -671,19 +678,34 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
             f"cannot tell which app to deploy from {where} — candidates: {exc}. "
             "Have the task build a single app, or set boss.preview.command.") from exc
 
-    if plan is not None and plan.source == "declared":
-        rel = plan.declared_in or "."
+    # THE MODE IS THE REPOSITORY'S ANSWER; THE DECLARATION IS ONLY A RUN COMMAND. b63717c
+    # returned a server deploy for any declared plan before asking what the app is, so a static
+    # site whose build declared `python3 -m http.server $PORT` (how to PREVIEW it) deployed as a
+    # python container instead of under nginx (third review of b63717c). What kind of app this
+    # is comes from the entry (boss.preview.app, else the resolver) exactly as before 00907e9;
+    # a declared command is used only when that answer is a server (py, node).
+    declared = plan if plan is not None and plan.source == "declared" else None
+    if plan is not None and plan.entry:
+        kind, value = plan.entry
+    else:
+        try:
+            kind, value = resolve_app_entry(work, changed)
+        except AmbiguousAppError:
+            # Only a declared plan gets here (how_app_runs raised for an undeclared one above):
+            # the repository cannot say, and the declaration names the app's directory.
+            kind, value = ("", "")
+    if declared is not None and not kind:
+        # A declared app the resolver cannot classify (a FastAPI app/main.py run by uvicorn is
+        # no "program") is a server — the build said how it serves — never a file tree.
+        rel = declared.declared_in or "."
         app_root = work if rel == "." else work / rel
         if (app_root / "package.json").is_file():
-            # A Node app with a declared command: shipped like any node app, run as declared.
-            return _node_payload(work, app_root, sha, plan.declared_command or "")
+            return _node_payload(work, app_root, sha, declared.declared_command or "")
         payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
         shutil.copytree(work, payload / "dist",
                         ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__"))
         shutil.rmtree(work, ignore_errors=True)
-        return (payload, "py", plan.shell(), sha)
-
-    kind, value = plan.entry if plan is not None and plan.entry else ("", "")
+        return (payload, "py", declared.shell(), sha)
     if kind == "py":
         # A server, not a file tree. The stock app serves its own UI *and* its /api/* routes
         # from one process, so shipping only web-stock/ to nginx would render a UI in which
@@ -701,10 +723,17 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
         # commit-ref fix removed, reintroduced by copying the payload out of the clone.
         # The command how_app_runs built for it: `python3 -m pkg.server` from above its package
         # for a package module, `python3 serve.py` for a script — never `python {file}`.
-        return (payload, "py", plan.shell(), sha)
+        command = plan.shell() if plan is not None and plan.command else \
+            f"python3 {shlex.quote(value)}"
+        return (payload, "py", command, sha)
 
     if kind == "node":
-        return _node_payload(work, work if value in (".", "") else work / value, sha, "")
+        node_rel = value.strip("/") if value not in ("", ".") else "."
+        # The declared command runs from the directory that declared it; it replaces
+        # `npm start` only when that directory is the node app being shipped.
+        command = (declared.declared_command or "") if declared is not None \
+            and (declared.declared_in or ".").strip("/") == node_rel else ""
+        return _node_payload(work, work if node_rel == "." else work / node_rel, sha, command)
     if kind == "static":
         static_dir = work / value
     elif (work / "dist").is_dir():
