@@ -19,6 +19,12 @@ _TRANSIENT_MARKERS = (
 
 
 def _looks_transient(error: BaseException) -> bool:
+    from ..services.call_deadline import TurnDeadlineExceeded
+
+    # THE TURN'S CLOCK IS NOT A HICCUP. Retrying a call the turn's deadline cut off spent the
+    # same wait again, three times (call_deadline.py).
+    if isinstance(error, TurnDeadlineExceeded):
+        return False
     text = f"{type(error).__name__}: {error}".lower()
     return any(marker in text for marker in _TRANSIENT_MARKERS)
 
@@ -41,6 +47,12 @@ def _with_transient_retry(call, attempts: int = 3, backoff: float = 2.0):
         except BaseException as exc:  # noqa: BLE001 — re-raised below unless transient
             last = exc
             if attempt == attempts - 1 or not _looks_transient(exc):
+                raise
+            # A retry that cannot finish inside the turn is not worth starting.
+            from ..services.call_deadline import MIN_CALL_SECONDS, remaining
+
+            left = remaining()
+            if left is not None and left < backoff * (attempt + 1) + MIN_CALL_SECONDS:
                 raise
             _log.warning(
                 "answer attempt %d/%d hit a transient provider error (%s) — retrying in %.0fs",

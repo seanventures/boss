@@ -138,6 +138,15 @@ def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict
                 delay = max(delay, float(retry_after.get("retry-after")))
             except (TypeError, ValueError):
                 pass
+            # A WAIT THE TURN CANNOT AFFORD IS NOT A RETRY (call_deadline.py): inside a chat
+            # turn, sleeping past its deadline only to be refused is the slowest failure there is.
+            from .call_deadline import MIN_CALL_SECONDS, TurnDeadlineExceeded, remaining
+
+            left = remaining()
+            if left is not None and left < min(delay, 45.0) + MIN_CALL_SECONDS:
+                raise TurnDeadlineExceeded(
+                    f"the provider asked BOSS to wait {min(delay, 45.0):.0f}s and this turn "
+                    f"has {max(0, int(left))}s left") from exc
             time.sleep(min(delay, 45.0))
 
 # USD per 1,000,000 tokens: (input, output). Turns real token usage into a
@@ -427,7 +436,16 @@ class OpenAIAdapter:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
         stats: dict = {}
-        response = _with_retry(lambda: client.chat.completions.create(**kwargs), stats=stats)
+        # NO CALL OUTLIVES ITS TURN (call_deadline.py). Asked per attempt, so a retry after a
+        # slow first try gets only what is left, and none at all once the turn is out of time.
+        from .call_deadline import bounded_timeout, remaining
+
+        def _create():
+            if remaining() is None:
+                return client.chat.completions.create(**kwargs)
+            return client.chat.completions.create(**kwargs, timeout=bounded_timeout(600))
+
+        response = _with_retry(_create, stats=stats)
         msg = response.choices[0].message
         tool_calls = None
         if getattr(msg, "tool_calls", None):

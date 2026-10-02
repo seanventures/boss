@@ -22,7 +22,7 @@ from .turn_budget import TurnBudget
 from .turn_subject import (
     cites_the_record, id_exists, parse_subject, resolve_subject, stays_on_subject,
     strays_from_subject,
-    subject_context,
+    subject_context, subject_named_in,
 )
 from .discovery_service import start_discovery
 from .intake import CommandIntakeService
@@ -2040,7 +2040,17 @@ class IntentRouter:
              if isinstance(m, dict) and m.get("role") == "user"), "")
         subject_ref = parse_subject(external_ref)
         subject_ev = resolve_subject(connection, project_id, subject_ref) if subject_ref else None
-        scope = self._scope_note(connection, project_id, external_ref, _question,
+        _scope_ref = external_ref
+        if subject_ref is None:
+            # AN ID IN THE QUESTION IS A DOOR TOO (turn_subject.subject_named_in): its record
+            # goes into the FIRST call, so "why did crun_… fail?" is answered in one round-trip
+            # instead of three. Only when the id is really a record here — an unknown id stays
+            # an ordinary question rather than becoming "no record of …".
+            _named = subject_named_in(_question)
+            _named_ev = resolve_subject(connection, project_id, _named) if _named else None
+            if _named_ev is not None and _named_ev.found:
+                subject_ref, subject_ev, _scope_ref = _named, _named_ev, _named.external_ref
+        scope = self._scope_note(connection, project_id, _scope_ref, _question,
                                  evidence=subject_ev)
         if scope:
             system = scope + "\n\n" + system
@@ -2085,6 +2095,7 @@ class IntentRouter:
                 self.settings.agent_router_budget_usd_micros,
                 "Orchestration conversational answer.", 10)
             if reservation.get("status") == "reserved":
+                _deadline_token = None
                 try:
                     # Tool-grounded answer: the read-only agent may call engine read
                     # tools to fetch real data, then reply. Falls back to a plain
@@ -2102,6 +2113,12 @@ class IntentRouter:
                         seconds=float(getattr(self.settings, "chat_turn_seconds", 180) or 180),
                         model_calls=int(getattr(self.settings, "chat_turn_model_calls", 16)
                                         or 16))
+                    # THE WHOLE TURN ENDS IN TIME, every model call in it included — the
+                    # re-asks and anything else this method asks a model (call_deadline.py).
+                    # EngineAgent narrows it further per call; nothing may widen it.
+                    from . import call_deadline as _call_deadline
+
+                    _deadline_token = _call_deadline.enter(_budget.deadline(answering=True))
                     _focus = subject_ref.label if subject_ref else ""
                     # An investigation posts its findings back into THIS conversation, so the
                     # thread has to travel with the call. The model has no way to know it.
@@ -2576,6 +2593,8 @@ class IntentRouter:
                     if not reply:
                         failure = "the model returned an empty answer"
                 finally:
+                    if _deadline_token is not None:
+                        _call_deadline.leave(_deadline_token)
                     try:
                         self.budget.release(connection, project_id, reservation["reservation_id"], "answer")
                     except Exception:  # noqa: BLE001
