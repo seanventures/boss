@@ -1151,8 +1151,9 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         inside execute_job and cannot be asked to do anything.
         """
         try:
+            # handing_back: the reclaim must not cost the job an attempt (jobs.heartbeat).
             hb_client.heartbeat(settings.worker_id, job.id, job.lease_token,
-                                SHUTDOWN_LEASE_TTL_SECONDS)
+                                SHUTDOWN_LEASE_TTL_SECONDS, handing_back=True)
             LOGGER.warning(
                 "job_handed_back_for_shutdown worker_id=%s job_id=%s kind=%s — worker is "
                 "stopping (deploy or restart); lease shortened to %ss so this job is "
