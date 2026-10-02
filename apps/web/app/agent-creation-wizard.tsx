@@ -36,6 +36,7 @@ import {
 } from "../lib/agent-wizard";
 import { createStudioAgent, type StudioActionResult } from "./agent-studio-actions";
 
+import { callAction } from "../lib/call-action";
 type WizardProps = {
   projectId: string;
   roles: RoleFeedItem[];
@@ -185,7 +186,7 @@ export function AgentCreationWizard({
     }
     setResult(undefined);
     startTransition(async () => {
-      const next = await createStudioAgent(
+      const next = await callAction(createStudioAgent)(
         buildAgentWizardSubmission(projectId, draft),
         publish,
       );

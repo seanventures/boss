@@ -33,6 +33,7 @@ import { askBossAction, runAgentActionAction } from "./actions";
 import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
 
+import { callAction } from "../lib/call-action";
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
 // moved to Opus — 192s for 27 lookups, measured — and 120 handed control back in the middle of
@@ -1162,7 +1163,7 @@ export function AskBossHero({
       // as cancelled, because it may still land server-side.
       const stalled = Symbol("stalled");
       const r = await Promise.race([
-        askBossAction(null, fd),
+        callAction(askBossAction)(null, fd),
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), STALL_SECONDS * 1000)),
       ]);
@@ -1252,7 +1253,7 @@ export function AskBossHero({
   const accept = useCallback((a: ProposedAction) => {
     setRanAction(a.id);
     startTransition(async () => {
-      const r = await runAgentActionAction(projectId, actor, a.tool, a.args, threadId ?? undefined);
+      const r = await callAction(runAgentActionAction)(projectId, actor, a.tool, a.args, threadId ?? undefined);
       const data = r.data as Record<string, unknown> | undefined;
       const ok = r.ok && data?.ok !== false;
       // The Factory card, the Workflows screen and the monitoring panel render the rows this

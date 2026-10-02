@@ -31,6 +31,7 @@ import {
 } from "./agent-process-actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 const DEFAULT_PROCESS_KEY = "prd_to_accepted_work";
 
 function labelize(value: string): string {
@@ -58,8 +59,8 @@ export function AgentProcesses({
 
   const reload = () =>
     Promise.all([
-      loadAgentProcessTemplatesAction(projectId),
-      loadAgentProcessRunsAction(projectId),
+      callAction(loadAgentProcessTemplatesAction)(projectId),
+      callAction(loadAgentProcessRunsAction)(projectId),
     ]).then(([templateResult, runResult]) => {
       const nextErrors: string[] = [];
       if (templateResult.ok && templateResult.data) {
@@ -79,8 +80,8 @@ export function AgentProcesses({
     let alive = true;
     setLoading(true);
     Promise.all([
-      loadAgentProcessTemplatesAction(projectId),
-      loadAgentProcessRunsAction(projectId),
+      callAction(loadAgentProcessTemplatesAction)(projectId),
+      callAction(loadAgentProcessRunsAction)(projectId),
     ]).then(([templateResult, runResult]) => {
       if (!alive) return;
       const nextErrors: string[] = [];
@@ -129,7 +130,7 @@ export function AgentProcesses({
     setDetailLoading(true);
     setError(null);
     startTransition(async () => {
-      const result = await loadAgentProcessRunAction(projectId, runId);
+      const result = await callAction(loadAgentProcessRunAction)(projectId, runId);
       if (result.ok && result.data) {
         setSteps(mapProcessSteps(result.data));
         setDetailLoading(false);
@@ -194,7 +195,7 @@ export function AgentProcesses({
           setError(null);
           startTransition(async () => {
             if (intent === "compile") {
-              const result = await compileAgentProcessAction(formData);
+              const result = await callAction(compileAgentProcessAction)(formData);
               if (!result.ok || !result.data) {
                 setError(result.error ?? "Compile failed.");
                 return;
@@ -215,7 +216,7 @@ export function AgentProcesses({
             }
             let specJson = String(formData.get("spec") ?? "").trim();
             if (!specJson) {
-              const compiled = await compileAgentProcessAction(formData);
+              const compiled = await callAction(compileAgentProcessAction)(formData);
               if (!compiled.ok || !compiled.data) {
                 setError(compiled.error ?? "Compile failed.");
                 return;
@@ -243,7 +244,7 @@ export function AgentProcesses({
             );
             saveData.set("description", String(formData.get("description") ?? "").trim());
             saveData.set("spec", specJson);
-            const saved = await saveAgentProcessTemplateAction(saveData);
+            const saved = await callAction(saveAgentProcessTemplateAction)(saveData);
             if (!saved.ok) {
               setError(saved.error ?? "Save failed.");
               return;
@@ -347,7 +348,7 @@ export function AgentProcesses({
             saveData.set("name", name);
             saveData.set("description", String(formData.get("description") ?? "").trim());
             saveData.set("spec", JSON.stringify(spec));
-            const saved = await saveAgentProcessTemplateAction(saveData);
+            const saved = await callAction(saveAgentProcessTemplateAction)(saveData);
             if (!saved.ok) {
               setError(saved.error ?? "Save failed.");
               return;
@@ -522,7 +523,7 @@ export function AgentProcesses({
         action={(formData) => {
           setError(null);
           startTransition(async () => {
-            const result = await startAgentProcessAction(formData);
+            const result = await callAction(startAgentProcessAction)(formData);
             if (result.ok && result.data) {
               setSelectedRunId(typeof result.data.id === "string" ? result.data.id : null);
               setSteps(mapProcessSteps(result.data));

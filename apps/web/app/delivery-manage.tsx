@@ -31,6 +31,7 @@ import {
   ChangeSetNextStep, plannedDeploymentFrom, type PlannedDeployment,
 } from "./deploy-ui";
 
+import { callAction } from "../lib/call-action";
 type Secret = {
   secret_ref_id: string; name: string; backend: string; secret_kind: string;
   status: string; fingerprint: string | null; last4: string | null;
@@ -201,7 +202,7 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
     if (gaps.length) { setMsg(`fill in: ${gaps.join(", ")}`); return; }
     setMsg(null); setPublicKey(null);
     void perform("Uploading", async () => {
-    const out: any = await putSecretAction({ name, value, secret_kind: kind, backend });
+    const out: any = await callAction(putSecretAction)({ name, value, secret_kind: kind, backend });
     // The value is cleared immediately: it has been written through, and keeping it in a form
     // field is keeping a secret in the browser for no reason.
     setValue("");
@@ -213,7 +214,7 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
     if (gaps.length) { setMsg(`fill in: ${gaps.join(", ")}`); return; }
     setMsg(null); setPublicKey(null);
     void perform("Generating", async () => {
-      const out: any = await generateKeypairAction({ name, backend });
+      const out: any = await callAction(generateKeypairAction)({ name, backend });
       if (out?.error) { setMsg(`failed: ${out.error}`); return; }
       setPublicKey(out.public_key);
       setMsg(`generated ${out.fingerprint} — install the PUBLIC key below on the host`);
@@ -297,7 +298,7 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
               <td>
                 <button style={btn} disabled={pending}
                         onClick={() => void perform("Verifying", async () => {
-                          const out: any = await verifySecretAction(s.secret_ref_id);
+                          const out: any = await callAction(verifySecretAction)(s.secret_ref_id);
                           setMsg(out?.resolvable
                             ? `${s.name}: resolves ✓${out.fingerprint_unchanged === false ? " (FINGERPRINT CHANGED)" : ""}`
                             : `${s.name}: ${out?.error || "cannot resolve"}`);
@@ -421,7 +422,7 @@ export function MonitoringPanel({ initial, hostTargetId, compact = false }: {
                   }
                   setMsg(null);
                   void perform("Deploying stack", async () => {
-                  const out: any = await deployObservabilityAction(hostTargetId!);
+                  const out: any = await callAction(deployObservabilityAction)(hostTargetId!);
                   setMsg(out?.error
                     ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 200)}`
                     : `stack deployed — ${out.apps?.length ?? 0} app(s) on ${out.grafana_url}`);
@@ -502,7 +503,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const [appsAmbiguous, setAppsAmbiguous] = useState(false);
   useEffect(() => {
     let live = true;
-    getDeliveryDefaultsAction().then((d) => {
+    callAction(getDeliveryDefaultsAction)().then((d) => {
       if (!live || !d || d.error) return;
       setDefaults(d);
       // Set the VALUE, not a placeholder. Showing the default repo as placeholder text made an
@@ -512,7 +513,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     });
     // BOSS already knows every repo it has worked in — asking an operator to type one from
     // memory is both unnecessary and a chance to typo a name that fails later at clone time.
-    listReposAction().then((d) => { if (live && d?.repos) setRepos(d.repos); });
+    callAction(listReposAction)().then((d) => { if (live && d?.repos) setRepos(d.repos); });
     return () => { live = false; };
   }, []);
   const [targetId, setTargetId] = useState<string | null>(null);
@@ -553,7 +554,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
       return;
     }
     say("registering target…");
-    const out = await createTargetAction({
+    const out = await callAction(createTargetAction)({
       app_name: form.app_name, repo: form.repo, environment: form.environment,
       target_kind: form.target_kind, target_ref: targetRef,
       domains: domain ? [domain] : [],
@@ -566,7 +567,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     setTargetId(out.id);
     say(`target ${out.id} created`);
     if (form.secret_ref_id) {
-      const bound = await bindSecretAction(out.id, "ssh_key", form.secret_ref_id);
+      const bound = await callAction(bindSecretAction)(out.id, "ssh_key", form.secret_ref_id);
       say(bound?.error ? `binding failed: ${bound.error}` : "credential bound");
     }
     setStep(2);
@@ -654,7 +655,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
                         if (apps.length || !form.repo) return;
                         const [o, n] = form.repo.includes("/")
                           ? form.repo.split("/") : [defaults.owner || "", form.repo];
-                        listRepoAppsAction(o, n).then((d) => {
+                        callAction(listRepoAppsAction)(o, n).then((d) => {
                           if (d?.apps) { setApps(d.apps); setAppsAmbiguous(!!d.ambiguous); }
                         });
                       }}
@@ -802,9 +803,9 @@ export function TargetControls({ target, shipped, onChanged, communityEdition = 
     let owner = target.repo.includes("/") ? target.repo.split("/")[0] : (target.repo_owner || "");
     const name = target.repo.includes("/")
       ? target.repo.split("/").slice(1).join("/") : target.repo;
-    if (!owner) owner = (await getDeliveryDefaultsAction())?.owner || "";
+    if (!owner) owner = (await callAction(getDeliveryDefaultsAction)())?.owner || "";
     if (!owner) return;
-    const d = await listRefsAction(owner, name);
+    const d = await callAction(listRefsAction)(owner, name);
     if (d?.branches) setRefs(d.branches);
     if (!ref && d?.default_branch) setRef(d.default_branch);
   };
@@ -826,7 +827,7 @@ export function TargetControls({ target, shipped, onChanged, communityEdition = 
 
   const toggle = (patch: { auto_deploy?: boolean; paused?: boolean }) =>
     void perform("Saving", async () => {
-      const out: any = await setAutoDeployAction(target.id, patch);
+      const out: any = await callAction(setAutoDeployAction)(target.id, patch);
       if (out?.error) { setMsg(out.error); return; }
       setState({ auto: !!out.auto_deploy, paused: !!out.paused });
       setMsg(null);
@@ -866,7 +867,7 @@ export function TargetControls({ target, shipped, onChanged, communityEdition = 
               busy={busy === "Planning"}
               onClick={() => { setMsg(null); setPlan(null);
                 void perform("Planning", async () => {
-                  const out: any = await deployTargetAction(target.id, ref);
+                  const out: any = await callAction(deployTargetAction)(target.id, ref);
                   if (out?.error) {
                     setMsg(String(out.error));
                     return;
@@ -1004,7 +1005,7 @@ export function FleetPanel({ projectId, targets = [] }: {
   const [hostWriteBlocker, setHostWriteBlocker] = React.useState<string | null>(null);
 
   const reload = React.useCallback(async () => {
-    const r = await listDeploymentHostsAction(projectId);
+    const r = await callAction(listDeploymentHostsAction)(projectId);
     if (r.ok) {
       setHosts((((r.data as any)?.hosts ?? []) as FleetHost[]));
       setBlocker(((r.data as any)?.preconditions?.blocker ?? null) as Blocker | null);
@@ -1092,7 +1093,7 @@ export function FleetPanel({ projectId, targets = [] }: {
                     <ActionButton busy={busy} label="Generate a key for me" busyLabel="Generating…"
                       title="BOSS mints a keypair; you push the public half with one command"
                       onClick={() => run(
-                        () => generateHostKeyAction(null, formOf({ host_id: h.id, backend: keyBackend })),
+                        () => callAction(generateHostKeyAction)(null, formOf({ host_id: h.id, backend: keyBackend })),
                         (d) => setMinted((p) => ({ ...p, [h.id]: d })))} />
                     <label className="detail" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                       store in
@@ -1113,7 +1114,7 @@ export function FleetPanel({ projectId, targets = [] }: {
                         e.preventDefault();
                         const fd = new FormData(e.currentTarget as HTMLFormElement);
                         fd.set("host_id", h.id); fd.set("backend", keyBackend);
-                        void run(() => adoptHostKeyAction(null, fd), () => setAdoptFor(null));
+                        void run(() => callAction(adoptHostKeyAction)(null, fd), () => setAdoptFor(null));
                       }}>
                       <span className="detail">
                         Paste the PRIVATE key that already works on {h.address}. It goes straight
@@ -1173,7 +1174,7 @@ export function FleetPanel({ projectId, targets = [] }: {
                         setCopied(h.id); window.setTimeout(() => setCopied(null), 2000);
                       }} />
                     <ActionButton busy={busy} label="I've run it — verify" busyLabel="Connecting…"
-                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
                   </div>
                   {/* The trap this wizard exists to close. */}
                   <p className="detail" style={{ margin: "6px 0 0" }}>
@@ -1192,12 +1193,12 @@ export function FleetPanel({ projectId, targets = [] }: {
                   </p>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
-                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
                     {hostWritesAllowed ? (
                       <ActionButton busy={busy} label="Let BOSS install its own key"
                         busyLabel="Installing…"
                         title="Replaces the borrowed credential with one BOSS owns and can rotate"
-                        onClick={() => run(() => installHostKeyAction(
+                        onClick={() => run(() => callAction(installHostKeyAction)(
                           null, formOf({ host_id: h.id, backend: keyBackend })))} />
                     ) : null}
                   </div>
@@ -1214,10 +1215,10 @@ export function FleetPanel({ projectId, targets = [] }: {
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {hostWritesAllowed ? (
                       <ActionButton busy={busy} label="Install docker" busyLabel="Provisioning…"
-                        onClick={() => run(() => provisionHostAction(null, formOf({ host_id: h.id })))} />
+                        onClick={() => run(() => callAction(provisionHostAction)(null, formOf({ host_id: h.id })))} />
                     ) : null}
                     <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
-                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
                   </div>
                 </div>
               ) : null}
@@ -1255,7 +1256,7 @@ export function FleetPanel({ projectId, targets = [] }: {
 
                   <div>
                     <ActionButton busy={busy} label="Re-verify" busyLabel="Connecting…"
-                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                      onClick={() => run(() => callAction(verifyDeploymentHostAction)(null, formOf({ host_id: h.id })))} />
                   </div>
                 </div>
               ) : null}
@@ -1271,7 +1272,7 @@ export function FleetPanel({ projectId, targets = [] }: {
                     for (const k of ["revoke_key", "remove_docker", "purge", "force"]) {
                       fd.set(k, fd.get(k) === "on" ? "true" : "false");
                     }
-                    void run(() => retireHostAction(null, fd));
+                    void run(() => callAction(retireHostAction)(null, fd));
                   }}>
                   <span className="detail">
                     Removes only the keys BOSS put on {h.address} (a backup is left beside the
@@ -1335,7 +1336,7 @@ export function FleetPanel({ projectId, targets = [] }: {
             e.preventDefault();
             const fd = new FormData(e.currentTarget as HTMLFormElement);
             fd.set("project_id", projectId);
-            void run(() => registerDeploymentHostAction(null, fd), () => setOpenReg(false));
+            void run(() => callAction(registerDeploymentHostAction)(null, fd), () => setOpenReg(false));
           }}>
           <Field label="Name" name="name" placeholder="hetzner-ci-01" required />
           <Field label="Address" name="address" placeholder="192.0.2.202" required />

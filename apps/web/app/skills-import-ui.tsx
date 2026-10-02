@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { exportSkillAction, importSkillAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 export function SkillImportForm({
   projectId,
   actor,
@@ -25,7 +26,7 @@ export function SkillImportForm({
         setError(null);
         startTransition(async () => {
           try {
-            await importSkillAction(formData);
+            await callAction(importSkillAction)(formData);
             router.refresh();
           } catch (err) {
             setError(err instanceof Error ? err.message : "Skill import failed.");
@@ -91,7 +92,7 @@ export function SkillExportButton({
         setError(null);
         startTransition(async () => {
           try {
-            const result = await exportSkillAction(formData);
+            const result = await callAction(exportSkillAction)(formData);
             downloadSkillYaml(result.skillId, result.yaml);
           } catch (err) {
             setError(err instanceof Error ? err.message : "Skill export failed.");

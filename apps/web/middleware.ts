@@ -10,7 +10,8 @@ import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
  * Lift a server action's press into a request header.
  *
  * A browser cannot add headers to a server action's POST, but SubmitButton puts the press's key
- * in the form (`__boss_intent`). The action's API calls happen on the server, where only request
+ * in the form (`__boss_intent`), and lib/call-action.ts sends it as the first argument of
+ * app/press-relay.ts when code invokes an action. The action's API calls happen on the server, where only request
  * headers are reachable, so the key is moved here — the one place every action passes — and
  * lib/api-write.ts derives each call's Idempotency-Key from it. Next tees the body for
  * middleware, so reading a clone leaves the action's own copy intact. Large bodies (uploads) are

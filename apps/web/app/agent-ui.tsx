@@ -13,6 +13,7 @@ import {
 import { LedgerStrip } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
 
+import { callAction } from "../lib/call-action";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
@@ -760,7 +761,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // "Working…" bubble kept spinning for another 15 seconds underneath it. Nothing on the
         // page depends on a question having been asked; the thread list is refreshed
         // explicitly below.
-          askBossAction(null, fd),
+          callAction(askBossAction)(null, fd),
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
         ]);
@@ -931,7 +932,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const acceptAction = useCallback((action: ProposedAction) => {
     startTransition(async () => {
-      const r = await runAgentActionAction(
+      const r = await callAction(runAgentActionAction)(
         projectId, actor, action.tool, action.args, threadId ?? undefined,
         action.id, action.label);
       const payload = (r.data ?? {}) as Record<string, unknown>;

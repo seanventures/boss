@@ -14,6 +14,7 @@ import {
 } from "./actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 function usd(micros: number): string {
   return `$${(micros / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
@@ -70,7 +71,7 @@ export function FinopsCard({
   reconciliations: CommitmentReconciliation[];
   summary?: FinopsSummary | null;
 }) {
-  const [initState, initAction, initPending] = useActionState(requestInitiativeBudgetAction, null);
+  const [initState, initAction, initPending] = useActionState(callAction(requestInitiativeBudgetAction), null);
   const honesty = describeFinopsSpendHonesty(summary);
   const maxProviderSpend = Math.max(
     1,

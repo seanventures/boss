@@ -16,6 +16,7 @@ import {
   resolveDecisionAction,
 } from './actions';
 
+import { callAction } from "../lib/call-action";
 export type ToastType = 'success' | 'error';
 
 interface Toast {
@@ -110,7 +111,9 @@ export function ActionForm({
     setLocalError(null);
     startTransition(async () => {
       try {
-        await action(formData);
+        // Through callAction, so the press reaches the server and the action's API writes are
+        // keyed by it: these forms submit with a plain button, not a SubmitButton.
+        await callAction(action)(formData);
         // Success: toast + router.refresh() to pick up the revalidatePath done inside the server action.
         // This makes the updated lists (KPI registry, budget, feeds, events) visible immediately after client submit.
         showToast('success', successMessage);
@@ -220,7 +223,7 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
     setLocalError(null);
     startTransition(async () => {
       try {
-        const result = await easyConnectProviderAction(formData);
+        const result = await callAction(easyConnectProviderAction)(formData);
         formRef.current?.reset();
         setSecretRefId(result.secret_ref_id);
         showToast("success", pasteConnectSuccessCopy(result.secret_ref_id));

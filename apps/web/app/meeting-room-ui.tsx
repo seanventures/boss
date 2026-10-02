@@ -18,6 +18,7 @@ import {
 import { MeetingConsensusCard } from "./phase3-ui";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 const ROLE_META: Record<string, { initials: string; tone: string }> = {
   "Product Manager": { initials: "PM", tone: "accent" },
   "Engineer / Architect": { initials: "EN", tone: "blue" },
@@ -248,7 +249,7 @@ function MeetingEvidence({
   } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    loadMeetingEvidenceAction(meetingId, projectId).then((result) => {
+    callAction(loadMeetingEvidenceAction)(meetingId, projectId).then((result) => {
       if (!cancelled && result.ok) {
         setEvidence(result);
       }

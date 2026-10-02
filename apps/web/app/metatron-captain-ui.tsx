@@ -24,6 +24,7 @@ import {
 } from "./metatron-captain-actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 export function MetatronCaptain({
   projectId,
   actor,
@@ -41,11 +42,11 @@ export function MetatronCaptain({
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    loadMetatronCaptainSessionAction(projectId, actor).then(async (result) => {
+    callAction(loadMetatronCaptainSessionAction)(projectId, actor).then(async (result) => {
       if (!alive) return;
       if (result.ok && result.data) {
         const next = mapMetatronCaptainSession(result.data);
-        const theater = await loadMetatronTheaterAction(projectId, actor);
+        const theater = await callAction(loadMetatronTheaterAction)(projectId, actor);
         if (!alive) return;
         setState({
           ...next,
@@ -88,7 +89,7 @@ export function MetatronCaptain({
       onSend={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await sendMetatronCaptainMessageAction(formData);
+          const result = await callAction(sendMetatronCaptainMessageAction)(formData);
           if (result.ok && result.data) {
             setState(mapMetatronCaptainSession(result.data));
             return;
@@ -102,9 +103,9 @@ export function MetatronCaptain({
       onAddGoal={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await createMetatronCaptainGoalAction(formData);
+          const result = await callAction(createMetatronCaptainGoalAction)(formData);
           if (result.ok) {
-            const session = await loadMetatronCaptainSessionAction(
+            const session = await callAction(loadMetatronCaptainSessionAction)(
               projectId,
               actor,
             );
@@ -124,7 +125,7 @@ export function MetatronCaptain({
       onWatch={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await refreshMetatronCaptainWatchAction(formData);
+          const result = await callAction(refreshMetatronCaptainWatchAction)(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,
@@ -139,7 +140,7 @@ export function MetatronCaptain({
       onDrive={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await proposeMetatronCaptainDriveAction(formData);
+          const result = await callAction(proposeMetatronCaptainDriveAction)(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,
@@ -157,7 +158,7 @@ export function MetatronCaptain({
       onTheater={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await runMetatronTheaterAction(formData);
+          const result = await callAction(runMetatronTheaterAction)(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,
@@ -181,7 +182,7 @@ export function MetatronCaptain({
       onOverwatch={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await runMetatronCaptainOverwatchAction(formData);
+          const result = await callAction(runMetatronCaptainOverwatchAction)(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,

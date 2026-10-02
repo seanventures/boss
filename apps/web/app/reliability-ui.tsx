@@ -7,6 +7,7 @@ import {
   reliabilityFeedbackAction,
   reliabilityRemediateAction,
 } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 const SEV_COLOR: Record<string, string> = {
   critical: "#f85149",
@@ -37,9 +38,11 @@ function Pill({ text, color }: { text: string; color: string }) {
   );
 }
 
+/** A SubmitButton, so each press carries its own key to the server action (lib/api-write.ts):
+ *  a double-pressed "Fix PR" opens one pull request, not two. */
 function ActionButton({ label }: { label: string }) {
   return (
-    <button
+    <SubmitButton
       type="submit"
       style={{
         background: "transparent", color: "var(--ink-soft)", border: "1px solid var(--line)",
@@ -47,7 +50,7 @@ function ActionButton({ label }: { label: string }) {
       }}
     >
       {label}
-    </button>
+    </SubmitButton>
   );
 }
 

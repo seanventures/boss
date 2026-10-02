@@ -8,6 +8,7 @@ import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome, ModelAttention }
 import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 const PHASE_LABEL: Record<string, string> = {
   queued: "Queued",
   signal_sweep: "Signal sweep (web)",
@@ -30,7 +31,7 @@ function statusTone(s: string): string {
 }
 
 function PromoteOutcome({ runId, idx, orgId, promotedTaskId }: { runId: string; idx: number; orgId?: string; promotedTaskId?: string }) {
-  const [state, action, pending] = useActionState(promoteOutcomeAction, null);
+  const [state, action, pending] = useActionState(callAction(promoteOutcomeAction), null);
   const taskId = promotedTaskId ?? state?.taskId;
   if (taskId) {
     const href = `/?org=${orgId ?? "org_boss"}&area=meetings&task=${taskId}`;
@@ -47,7 +48,7 @@ function PromoteOutcome({ runId, idx, orgId, promotedTaskId }: { runId: string; 
 }
 
 function DeepenButton({ runId }: { runId: string }) {
-  const [state, action, pending] = useActionState(deepenDiscoveryAction, null);
+  const [state, action, pending] = useActionState(callAction(deepenDiscoveryAction), null);
   if (state?.runId) return <span className="detail" style={{ color: "#3fb950" }}>⏬ Deeper pass started ({state.runId.slice(0, 9)}…) — see the list</span>;
   return (
     <form action={action} style={{ display: "inline-flex" }}>
@@ -111,7 +112,7 @@ function StartDiscovery({ projectId, researchAvailable }: {
   projectId: string;
   researchAvailable: boolean;
 }) {
-  const [state, action, pending] = useActionState(startDiscoveryAction, null);
+  const [state, action, pending] = useActionState(callAction(startDiscoveryAction), null);
   if (!researchAvailable) {
     return (
       <section className="panel" style={{ padding: 16 }} data-testid="discovery-research-paused">

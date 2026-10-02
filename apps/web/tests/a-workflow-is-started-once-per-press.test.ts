@@ -6,11 +6,13 @@
  * the first. The console now refuses a second action while one is in flight, and a replacement
  * carries `replace:<run id>` — the server returns the run that key already started.
  *
- * REWRITTEN to the platform rule. The first fix was a ref private to this panel; the next button
- * would have needed its own. The in-flight refusal now comes from lib/api-write.ts, which every
- * console write goes through (tests/every-write-goes-through-api-write.test.ts), and whose
- * behaviour is pinned in tests/a-press-is-sent-once.test.ts. What is checked here is only that
- * this panel uses it, synchronously, before any await.
+ * REWRITTEN to the platform rule, twice. The first fix was a ref private to this panel; the
+ * second (45e7693) put every write of the panel in one scope — the automatic recheck included,
+ * which then refused every recheck but the first and silently dropped a Retry pressed meanwhile.
+ * Now every PRESS on the panel goes through `pressOn`, which holds the press scope in
+ * lib/api-write's one registry before any await and is the only thing that sets `busy`; the
+ * background recheck takes no scope at all. The behaviour is proven by mounting the panel in
+ * tests/a-background-write-never-takes-a-press.test.tsx; what is pinned here is the wiring.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,15 +21,22 @@ import { describe, expect, it } from "vitest";
 const UI = readFileSync(join(__dirname, "..", "app", "delivery-workflows-ui.tsx"), "utf8");
 
 describe("a workflow is started once per press", () => {
-  it("refuses a second action while one is in flight, checked before any await", () => {
-    const act = UI.slice(UI.indexOf("const act = useCallback("));
-    const firstAwait = act.indexOf("await ");
-    const guard = act.indexOf("if (writeInFlight(RUN_ACTIONS)) return");
-    expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(firstAwait);
-    // ...and every run action is in that one scope, so the guard covers them all.
-    expect(UI).toMatch(/apiWrite\("\/api\/delivery-workflows", \{[\s\S]*?\}, \{ action: RUN_ACTIONS \}\)/);
+  it("every press on the panel holds the press scope, and only presses set busy", () => {
+    const panel = UI.slice(UI.indexOf("export function DeliveryWorkflows("),
+                           UI.indexOf("\nexport function", UI.indexOf("export function DeliveryWorkflows(") + 1));
+    const pressOn = panel.slice(panel.indexOf("const pressOn = useCallback("),
+                                panel.indexOf("const act = useCallback("));
+    expect(pressOn).toMatch(/runPress<T>\(\{ press: \{ scope: PANEL_PRESSES, label \}/);
+    // `busy` is set in exactly one place: inside the press.
+    expect(panel.match(/setBusy\((?!null)/g)?.length).toBe(1);
+    expect(pressOn).toContain("setBusy(label)");
+    expect(panel).toMatch(/const act = useCallback\([\s\S]*?pressOn\(label, \[action, payload\]/);
     expect(UI).not.toContain("inFlight.current");
+    expect(UI).not.toContain("writeInFlight");
+  });
+
+  it("the automatic recheck is not a press: it goes out without a press scope or key", () => {
+    expect(UI).toMatch(/post\("recheck", \{ project_id: projectId, actor, run_id: r\.id \}\)\)/);
   });
 
   it("names the run being replaced, so a second press returns the same replacement", () => {

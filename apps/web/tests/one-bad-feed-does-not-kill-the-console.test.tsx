@@ -44,7 +44,7 @@ describe("the shepherd panel", () => {
   it("uses the same reader for the refresh as for the first paint", () => {
     // The old `d as Overview` cast in load() was the other half of the bug: a refresh could
     // admit a shape the first render had rejected.
-    expect(SHEPHERD).toContain("readOverview(await getShepherdOverviewAction())");
+    expect(SHEPHERD).toContain("readOverview(await callAction(getShepherdOverviewAction)())");
     expect(SHEPHERD).not.toContain("setData(d as Overview)");
   });
 

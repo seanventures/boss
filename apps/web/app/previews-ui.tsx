@@ -20,6 +20,7 @@ import {
 import { approvePreviewAction, createPreviewFixtureAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
 
 function resolveHref(href: string): string {
@@ -49,7 +50,7 @@ export function ApprovePreview(
   { preview, compact = false }: { preview: PreviewRec; compact?: boolean },
 ) {
   const [gate, setGate] = React.useState<any>(null);
-  const [state, action] = useActionState(approvePreviewAction, null);
+  const [state, action] = useActionState(callAction(approvePreviewAction), null);
 
   // A BATCHED ROUTE HANDLER, NOT A PER-ROW SERVER ACTION.
   //
@@ -291,7 +292,7 @@ export function PreviewsPanel({
   actor: string;
   runTitles?: Record<string, string>;
 }) {
-  const [state, action] = useActionState(createPreviewFixtureAction, null);
+  const [state, action] = useActionState(callAction(createPreviewFixtureAction), null);
   return (
     <PreviewsHonesty
       runTitles={runTitles}

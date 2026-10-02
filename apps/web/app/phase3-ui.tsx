@@ -14,6 +14,7 @@ import {
 } from "./actions";
 import { SubmitButton } from "./submit-button";
 
+import { callAction } from "../lib/call-action";
 function tone(s: string): string {
   const x = (s || "").toLowerCase();
   if (["actioned", "acknowledged", "approved", "pass", "on_track"].includes(x)) return "#3fb950";
@@ -77,8 +78,8 @@ export function InboxAckCard({ items }: { items: AckState[] }) {
 
 // --- Slack shaping: persona render + digest batching ---
 export function SlackToolsCard({ projectId }: { projectId: string }) {
-  const [renderState, renderAction, renderPending] = useActionState(slackRenderAction, null);
-  const [digestState, digestAction, digestPending] = useActionState(slackDigestAction, null);
+  const [renderState, renderAction, renderPending] = useActionState(callAction(slackRenderAction), null);
+  const [digestState, digestAction, digestPending] = useActionState(callAction(slackDigestAction), null);
   return (
     <article className="stack-card">
       <h3 style={{ margin: 0 }}>Slack — persona render & digest</h3>
@@ -129,8 +130,8 @@ export function MeetingConsensusCard({
   meetingId?: string;
   meetings?: Array<{ id: string; title: string }>;
 }) {
-  const [tallyState, tallyAction, tallyPending] = useActionState(tallyVotesAction, null);
-  const [sweepState, sweepAction, sweepPending] = useActionState(sweepStalledMeetingsAction, null);
+  const [tallyState, tallyAction, tallyPending] = useActionState(callAction(tallyVotesAction), null);
+  const [sweepState, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction), null);
   const bound = Boolean(meetingId);
   return (
     <article className="stack-card" data-testid="meeting-consensus-card">
@@ -191,8 +192,8 @@ export function MeetingConsensusCard({
 
 // --- Software-factory scale-up: WIP + confidence merge gate + chunk planner ---
 export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
-  const [mergeState, mergeAction, mergePending] = useActionState(mergeCheckAction, null);
-  const [chunkState, chunkAction, chunkPending] = useActionState(chunkPlanAction, null);
+  const [mergeState, mergeAction, mergePending] = useActionState(callAction(mergeCheckAction), null);
+  const [chunkState, chunkAction, chunkPending] = useActionState(callAction(chunkPlanAction), null);
   const planeLabel =
     wip?.githubPlane === "mission_control_binding"
       ? `GitHub: Mission Control binding${wip.githubFullName ? ` (${wip.githubFullName})` : ""}`

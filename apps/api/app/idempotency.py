@@ -31,6 +31,7 @@ A key that is claimed but never finishes (the API process died mid-request) is t
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -101,6 +102,31 @@ def is_streaming(content_type: str) -> bool:
     return any(lowered.startswith(kind) for kind in _STREAMING_CONTENT_TYPES)
 
 
+# Headers a replay must NOT repeat. Length and type are re-derived from the stored body; a
+# cookie is a credential issued to the first response's moment, never something to hand out
+# again from storage; and hop-by-hop headers describe one connection, not the answer.
+_NOT_REPLAYED_HEADERS = frozenset({
+    "content-length", "content-type", "set-cookie", "connection", "keep-alive",
+    "transfer-encoding", "date", "server", REPLAYED_HEADER.lower(),
+})
+
+
+def replayable_headers(raw_headers) -> list[list[str]]:
+    """The route's own headers, as a replay must repeat them.
+
+    Review of 45e7693: a replay sent only the body and its content type, so a second press of a
+    download came back without its Content-Disposition — a nameless blob instead of the file the
+    first press saved. Found by test_a_replayed_write_looks_like_the_first.py.
+    """
+    kept = []
+    for name, value in raw_headers:
+        name_s = name.decode("latin-1") if isinstance(name, bytes) else str(name)
+        value_s = value.decode("latin-1") if isinstance(value, bytes) else str(value)
+        if name_s.lower() not in _NOT_REPLAYED_HEADERS:
+            kept.append([name_s, value_s])
+    return kept
+
+
 def remembers(status_code: int) -> bool:
     """Whether an outcome belongs to the key, or the key should be free to try again."""
     if 200 <= status_code < 300:
@@ -116,6 +142,7 @@ class Claim:
     status_code: int = 0
     body: bytes = b""
     content_type: Optional[str] = None
+    headers: tuple[tuple[str, str], ...] = ()
 
 
 def claim(connection, *, principal: str, key: str, method: str, path: str,
@@ -156,7 +183,8 @@ def claim(connection, *, principal: str, key: str, method: str, path: str,
             """))
             return Claim("run")
         row = connection.execute(text("""
-            SELECT request_hash, state, status_code, response_body, content_type
+            SELECT request_hash, state, status_code, response_body, content_type,
+                   response_headers
             FROM api_idempotency_keys
             WHERE principal = :principal AND idempotency_key = :key
         """), {"principal": principal, "key": key}).mappings().first()
@@ -166,20 +194,25 @@ def claim(connection, *, principal: str, key: str, method: str, path: str,
             return Claim("mismatch")
         if row["state"] != "completed":
             return Claim("in_progress")
+        stored = row["response_headers"] or []
+        if isinstance(stored, str):
+            stored = json.loads(stored)
         return Claim("replay", status_code=int(row["status_code"]),
-                     body=bytes(row["response_body"] or b""), content_type=row["content_type"])
+                     body=bytes(row["response_body"] or b""), content_type=row["content_type"],
+                     headers=tuple((str(n), str(v)) for n, v in stored))
     return Claim("in_progress")
 
 
 def complete(connection, *, principal: str, key: str, status_code: int, body: bytes,
-             content_type: Optional[str]) -> None:
+             content_type: Optional[str], headers: Optional[list[list[str]]] = None) -> None:
     connection.execute(text("""
         UPDATE api_idempotency_keys
         SET state = 'completed', status_code = :status, response_body = :body,
-            content_type = :content_type, completed_at = now()
+            content_type = :content_type, response_headers = CAST(:headers AS JSONB),
+            completed_at = now()
         WHERE principal = :principal AND idempotency_key = :key
     """), {"principal": principal, "key": key, "status": status_code, "body": body,
-           "content_type": content_type})
+           "content_type": content_type, "headers": json.dumps(headers or [])})
 
 
 def release(connection, *, principal: str, key: str) -> None:

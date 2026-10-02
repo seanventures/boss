@@ -25,7 +25,7 @@ describe("the progress line has something to poll from the first second", () => 
     // Ordered: the ensure call must come before the request that does the work.
     const ensure = UI.indexOf('"/api/agent-thread"');
     expect(ensure).toBeGreaterThan(-1);
-    expect(ensure).toBeLessThan(UI.indexOf("askBossAction(null, fd)"));
+    expect(ensure).toBeLessThan(UI.indexOf("callAction(askBossAction)(null, fd)"));
     expect(turn.length).toBeGreaterThan(0);
   });
 
