@@ -228,16 +228,25 @@ def test_plrr_says_it_is_a_second_build():
 
 #: Doors that start a run without the preflight, and why that is right. Anything else that
 #: calls `start_run` must call `refuse_unless_ready` (or the API's `_delivery_readiness_or_409`).
+#: `start_project_run` is no longer here: it was exempt ("the build is already running"), yet the
+#: run it starts is the whole catalogue pipeline, deploy included, so the MCP/chat path got no
+#: warning while the console refused (review of the readiness change). It cannot refuse, so it
+#: checks and NOTES (`note_unready_start`), which counts as asking.
 EXEMPT = {
-    ("engine/boss_engine/services/workflows.py", "start_project_run"):
-        "the run governs a build that is already running — the work exists before the "
-        "workflow does, so there is nothing left to refuse",
     ("engine/boss_engine/services/workflows.py", "_process_control_step"):
         "a subworkflow's child run; the parent's preflight included it "
         "(workflow_readiness.requirements recurses into subworkflow steps)",
 }
 _MODULE_ALIASES = {"wf", "workflows", "workflow_runtime"}
-_CHECKS = ("refuse_unless_ready(", "_delivery_readiness_or_409(")
+_CHECKS = ("refuse_unless_ready(", "_delivery_readiness_or_409(", "note_unready_start(")
+#: A door that can start a run WITHOUT something must put that on the run's record.
+_RECORDS = ("record_started_anyway(", "note_unready_start(")
+#: Doors with nobody at the keyboard. A refusal there must be said where people look — the
+#: event door used to refuse and only log.
+_UNATTENDED = {
+    ("engine/boss_engine/services/workflow_schedules.py", "run_due"),
+    ("engine/boss_engine/services/event_dispatch.py", "dispatch_event"),
+}
 
 
 def _start_run_callers() -> list[tuple[str, str, str]]:
@@ -291,3 +300,25 @@ def test_every_door_that_starts_a_run_checks_readiness_first():
         "EXEMPT with the reason it cannot apply.")
     stale = [door for door in EXEMPT if door not in names]
     assert not stale, f"exempt doors that no longer exist: {stale}"
+    # A start that went ahead without something says so on the run, at every door.
+    unrecorded = [
+        f"{rel}:{name}" for rel, name, body in callers
+        if (rel, name) not in EXEMPT and not any(r in body for r in _RECORDS)
+    ]
+    assert not unrecorded, (
+        f"these doors can start a run without something and do not record it: {unrecorded}. "
+        "Call workflow_readiness.record_started_anyway with the preflight's result.")
+
+
+def test_every_unattended_door_says_why_it_did_not_start():
+    """Schedules and event subscriptions: a refusal is a `workflow.start_refused` event naming
+    the door, and the operator's accepted exceptions are honoured."""
+    sources = {(rel, name): body for rel, name, body in _start_run_callers()}
+    for door in _UNATTENDED:
+        assert door in sources, f"{door} no longer starts runs; update _UNATTENDED"
+        body = sources[door]
+        assert "record_refused(" in body or "_refused(" in body, door
+        assert "start_anyway=" in body, f"{door} cannot honour an accepted exception"
+    # The schedule helper is the one that records.
+    schedules = (REPO / "engine/boss_engine/services/workflow_schedules.py").read_text()
+    assert "record_refused(" in schedules

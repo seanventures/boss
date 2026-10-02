@@ -187,16 +187,40 @@ def dispatch_event(
                            "workflow_key": subscription["sink_ref"]},
                 )
                 continue
+            from .workflow_readiness import (
+                WorkflowNotReadyError, record_refused, record_started_anyway,
+                refuse_unless_ready,
+            )
+
             try:
                 # THE SAME PREFLIGHT EVERY START DOOR MAKES. An event that starts a workflow
-                # this project cannot finish is refused here, logged with what is missing,
-                # rather than started and failed at its last step.
-                from .workflow_readiness import refuse_unless_ready
-
-                refuse_unless_ready(
-                    connection, None, project_id, version_id=str(active),
-                    input_data={"event_type": event_type, "entity_type": entity_type,
-                                "entity_id": entity_id, **(data or {})})
+                # this project cannot finish is refused here rather than started and failed
+                # at its last step — unless the operator accepted starting without it when
+                # they set the subscription up (`config.start_anyway`).
+                accepted = config.get("start_anyway")
+                try:
+                    readiness = refuse_unless_ready(
+                        connection, None, project_id, version_id=str(active),
+                        input_data={"event_type": event_type, "entity_type": entity_type,
+                                    "entity_id": entity_id, **(data or {})},
+                        start_anyway=[str(k) for k in accepted]
+                        if isinstance(accepted, list) else [])
+                except WorkflowNotReadyError as refused:
+                    # SAID WHERE PEOPLE LOOK, not only in a log. This door used to refuse and
+                    # log, so a subscription that started runs yesterday silently stopped
+                    # starting anything (review of the readiness change).
+                    unaccepted = {**refused.readiness, "missing": [
+                        m for m in refused.readiness["missing"]
+                        if m["key"] not in refused.readiness.get("started_anyway", [])]}
+                    record = record_refused(
+                        connection, project_id, str(config.get("actor") or "event-dispatcher"),
+                        door="subscription", door_id=subscription["id"],
+                        door_name=f"The subscription to {subscription['event_type']}",
+                        workflow_key=subscription["sink_ref"], readiness=unaccepted)
+                    enqueued.append({"kind": "workflow", "refused": True,
+                                     "workflow_key": subscription["sink_ref"],
+                                     "missing": [m["key"] for m in record["missing"]]})
+                    continue
                 run = start_run(
                     connection,
                     project_id=project_id,
@@ -206,6 +230,11 @@ def dispatch_event(
                     dedupe_key=f"event:{dedupe_hash}",
                     workflow_version_id=str(active),
                 )
+                if not run.get("duplicate"):
+                    record_started_anyway(
+                        connection, project_id,
+                        str(config.get("actor") or "event-dispatcher"),
+                        str(run.get("id") or ""), readiness)
                 enqueued.append({"kind": "workflow", "run_id": run.get("id"),
                                  "workflow_key": subscription["sink_ref"]})
             except Exception:  # noqa: BLE001 — one sink must not take the others down

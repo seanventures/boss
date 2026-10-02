@@ -134,7 +134,11 @@ describe("re-running does not duplicate a live workflow", () => {
     // Offered on a live run by the engine's rule (workflow_run_actions.py), rendered here.
     expect(SOURCE).toContain("stop_and_rerun: onStopAndRerun");
     expect(SOURCE).toContain('testId: "dw-stop-and-rerun"');
-    expect(SOURCE).toContain("if (!stopped?.ok) return;");
+    // REWRITTEN (review of the readiness change): this pinned the browser's stop-then-start.
+    // When the start was refused after the stop had landed, the operator had no run at all.
+    // The press is one start naming the run it replaces; the server checks, stops and starts
+    // in one transaction, so it still never leaves two runs — and never leaves none.
+    expect(SOURCE).toContain("replaces_run: run.id");
   });
 
   it("and stopping is available on its own", () => {

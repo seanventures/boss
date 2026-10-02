@@ -10386,3 +10386,14 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .dw-ready-later { display: block; font-style: italic; }
 .dw-ready-anyway { display: flex; gap: 6px; align-items: center; cursor: pointer; }
 .dw-card-auto, .dw-card-cost { margin: 0; font-size: 0.68rem; }
+/* The same checklist where a start was refused outside the form: Build, Re-run, Fix, Run. */
+.dw-refusal { margin: 8px 0; }
+.dw-refusal-foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* Outgoing email: in Repo and model, and inline beside an email item on a checklist. */
+.email-setup-grid {
+  display: grid; gap: 8px; margin: 8px 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.email-setup-grid label { display: grid; gap: 3px; font-size: 0.72rem; }
+.email-setup-grid input { min-width: 0; }
+.email-setup.compact { margin-top: 6px; }

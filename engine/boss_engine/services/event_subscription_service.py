@@ -104,7 +104,7 @@ def validate_event_type(value: str) -> str:
 def validate_sink_kind(value: str) -> str:
     sink_kind = value.strip().lower()
     if sink_kind not in SINK_KINDS:
-        raise ValueError("sink_kind must be one of: job, webhook_out.")
+        raise ValueError("sink_kind must be one of: job, webhook_out, workflow.")
     return sink_kind
 
 
@@ -131,6 +131,44 @@ def _row(row) -> dict[str, Any]:
         if hasattr(row["updated_at"], "isoformat")
         else row["updated_at"],
     }
+
+
+def _with_readiness(connection: Connection, subscription: dict[str, Any]) -> dict[str, Any]:
+    """A subscription that starts a workflow comes back with what that workflow needs here.
+
+    Saved, not refused: setting up "start meeting-to-tickets when a meeting ends" before the
+    tracker is connected is a reasonable order, and the example setup scripts do it. But the
+    event door refuses a start the project cannot finish, and nobody is at the keyboard when
+    the event arrives — so whoever saves it is shown, now, what will be refused, and can put
+    the keys they accept in `config.start_anyway` (review of the readiness change).
+    """
+    if subscription.get("sink_kind") != "workflow":
+        return subscription
+    from .workflow_readiness import readiness_of_version
+
+    try:
+        with connection.begin_nested():
+            version_id = connection.execute(
+                text("SELECT active_version_id FROM workflow_definitions "
+                     "WHERE project_id = :p AND workflow_key = :k"),
+                {"p": subscription["project_id"], "k": subscription["sink_ref"]},
+            ).scalar()
+    except Exception:  # noqa: BLE001 — an install without workflows has nothing to check
+        version_id = None
+    if not version_id:
+        return {**subscription, "readiness": {
+            "ready": False, "checked": [], "missing": [], "applies": False,
+            "summary": f"there is no published workflow '{subscription['sink_ref']}' here, "
+                       "so this subscription will start nothing until there is"}}
+    readiness = readiness_of_version(connection, None, subscription["project_id"],
+                                     version_id=str(version_id))
+    accepted = (subscription.get("config") or {}).get("start_anyway")
+    accepted = [str(k) for k in accepted] if isinstance(accepted, list) else []
+    readiness["started_anyway"] = [m["key"] for m in readiness.get("missing") or []
+                                   if m["key"] in accepted]
+    readiness["will_refuse"] = [m["key"] for m in readiness.get("missing") or []
+                                if m["key"] not in accepted]
+    return {**subscription, "readiness": readiness}
 
 
 def _invalidate(project_id: str) -> None:
@@ -226,7 +264,7 @@ def create_event_subscription(
             "enabled": bool(enabled),
         },
     )
-    return _row(row)
+    return _with_readiness(connection, _row(row))
 
 
 def update_event_subscription(
@@ -309,7 +347,7 @@ def update_event_subscription(
         subscription_id,
         {"changed_fields": changed_fields},
     )
-    return _row(row)
+    return _with_readiness(connection, _row(row))
 
 
 def delete_event_subscription(
@@ -388,7 +426,7 @@ def ensure_event_subscription(
         },
     ).mappings().one()
     _invalidate(project_id)
-    return _row(row)
+    return _with_readiness(connection, _row(row))
 
 
 def seed_default_event_subscriptions(

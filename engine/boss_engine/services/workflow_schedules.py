@@ -222,6 +222,55 @@ def next_occurrence(
     return candidate.astimezone(timezone.utc)
 
 
+# ── Readiness ──────────────────────────────────────────────────────────────────
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return []
+    return list(value) if isinstance(value, list) else []
+
+
+def _start_anyway(value: Any) -> list[str]:
+    """The readiness keys a schedule may start without. Only a list of keys is a choice."""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list) or not all(isinstance(k, str) for k in value):
+        raise ScheduleError("start_anyway must be a list of readiness keys, such as "
+                            "['deployment_target'].")
+    return sorted({k.strip() for k in value if k.strip()})
+
+
+def _readiness(connection: Connection, project_id: str, workflow_key: str,
+               input_data: dict[str, Any], start_anyway: list[str]) -> dict[str, Any]:
+    """What this schedule's workflow needs from the project, asked when the schedule is saved.
+
+    ANSWERED, NOT ENFORCED, AT SAVE. A schedule is not a start: saving one for a newsletter
+    before the mail server is set up is a reasonable order to do things in, and the example
+    setup scripts do exactly that. What the operator must not find out on Monday is that it
+    will be refused — so the checklist comes back with the saved schedule, with what they
+    accepted marked, and the console draws it. The firing enforces (`run_due`).
+    """
+    from .workflow_readiness import readiness_of_version
+
+    version_id = connection.execute(
+        text("SELECT active_version_id FROM workflow_definitions "
+             "WHERE project_id = :p AND workflow_key = :k"),
+        {"p": project_id, "k": workflow_key},
+    ).scalar()
+    if not version_id:
+        return {"ready": True, "checked": [], "missing": [], "applies": False}
+    readiness = readiness_of_version(connection, None, project_id, version_id=str(version_id),
+                                     input_data=input_data)
+    readiness["started_anyway"] = [m["key"] for m in readiness.get("missing") or []
+                                   if m["key"] in start_anyway]
+    readiness["will_refuse"] = [m["key"] for m in readiness.get("missing") or []
+                                if m["key"] not in start_anyway]
+    return readiness
+
+
 # ── Storage ────────────────────────────────────────────────────────────────────
 
 def _row(row: Any) -> dict[str, Any]:
@@ -242,6 +291,10 @@ def _row(row: Any) -> dict[str, Any]:
         "last_run_at": row["last_run_at"].isoformat() if row["last_run_at"] else None,
         "last_run_id": row["last_run_id"],
         "last_error": row["last_error"],
+        # What was missing when it last refused, each with its fix — the console draws these
+        # rather than asking the operator to read a sentence.
+        "last_missing": _json_list(row.get("last_missing")),
+        "start_anyway": [str(k) for k in _json_list(row.get("start_anyway"))],
         "consecutive_failures": int(row["consecutive_failures"] or 0),
         # Rendered here rather than in the console, so the API, the CLI and the UI cannot
         # describe the same schedule three different ways.
@@ -264,8 +317,13 @@ def create(
     tz_name: str = "UTC",
     input_data: Optional[dict[str, Any]] = None,
     enabled: bool = True,
+    start_anyway: Optional[list[str]] = None,
 ) -> dict[str, Any]:
-    """Schedule a workflow. The first occurrence is computed now, not at the first tick."""
+    """Schedule a workflow. The first occurrence is computed now, not at the first tick.
+
+    The result carries `readiness`: what the workflow needs from this project, and which of
+    the missing things this schedule was told it may start without."""
+    accepted = _start_anyway(start_anyway)
     name = str(name or "").strip()
     if not name:
         raise ScheduleError("a schedule needs a name.")
@@ -290,23 +348,27 @@ def create(
             """
             INSERT INTO workflow_schedules (
                 id, project_id, workflow_key, name, cadence, minute, hour, weekday,
-                timezone, input, actor, enabled, next_run_at
+                timezone, input, actor, enabled, next_run_at, start_anyway
             ) VALUES (
                 :id, :p, :k, :name, :cadence, :minute, :hour, :weekday,
-                :tz, CAST(:input AS JSONB), :actor, :enabled, :due
+                :tz, CAST(:input AS JSONB), :actor, :enabled, :due,
+                CAST(:anyway AS JSONB)
             ) RETURNING *
             """
         ),
         {"id": make_id("wsc"), "p": project_id, "k": workflow_key, "name": name,
          "cadence": cadence, "minute": minute, "hour": hour, "weekday": weekday,
          "tz": tz_name, "input": json.dumps(input_data or {}), "actor": actor,
-         "enabled": bool(enabled), "due": due},
+         "enabled": bool(enabled), "due": due, "anyway": json.dumps(accepted)},
     ).mappings().one()
     emit_event(connection, project_id, "workflow.schedule_created", actor,
                "workflow_schedule", row["id"],
                {"workflow_key": workflow_key, "describes": describe(
-                   cadence, minute, hour, weekday, tz_name)})
-    return _row(row)
+                   cadence, minute, hour, weekday, tz_name),
+                **({"start_anyway": accepted} if accepted else {})})
+    return {**_row(row),
+            "readiness": _readiness(connection, project_id, workflow_key, input_data or {},
+                                    accepted)}
 
 
 def replace_inputs(
@@ -317,8 +379,13 @@ def replace_inputs(
     actor: str,
     input_data: Optional[dict[str, Any]],
     tz_name: Optional[str] = None,
+    start_anyway: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Replace the values a schedule will run with. Timing stays unless the zone changes.
+
+    `start_anyway` replaces the stored choice when given; omitted, the stored one stays (so
+    an edit of a recipient does not silently withdraw an acceptance). The result carries the
+    readiness for the new values, as `create` does.
 
     The whole input object is replaced, not merged, so a cleared optional field stays cleared.
     Required fields are checked against the version that is published now: the next run uses
@@ -346,16 +413,19 @@ def replace_inputs(
             due = next_occurrence(
                 cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
                 weekday=row["weekday"], tz_name=zone)
+    accepted = (_start_anyway(start_anyway) if start_anyway is not None
+                else [str(k) for k in _json_list(row.get("start_anyway"))])
     updated = connection.execute(
         text(
             """
             UPDATE workflow_schedules
-            SET input=CAST(:input AS JSONB), timezone=:tz, next_run_at=:due, updated_at=now()
+            SET input=CAST(:input AS JSONB), timezone=:tz, next_run_at=:due,
+                start_anyway=CAST(:anyway AS JSONB), updated_at=now()
             WHERE id=:i AND project_id=:p
             RETURNING *
             """
         ),
-        {"input": json.dumps(data), "tz": zone, "due": due,
+        {"input": json.dumps(data), "tz": zone, "due": due, "anyway": json.dumps(accepted),
          "i": schedule_id, "p": project_id},
     ).mappings().one()
     emit_event(
@@ -363,8 +433,10 @@ def replace_inputs(
         "workflow_schedule", schedule_id,
         {"workflow_key": row["workflow_key"],
          "input_keys": sorted(str(key) for key in data),
-         "timezone": zone})
-    return _row(updated)
+         "timezone": zone, "start_anyway": accepted})
+    return {**_row(updated),
+            "readiness": _readiness(connection, project_id, row["workflow_key"], data,
+                                    accepted)}
 
 
 def list_schedules(connection: Connection, project_id: str) -> list[dict[str, Any]]:
@@ -397,7 +469,7 @@ def set_enabled(
             """
             UPDATE workflow_schedules
             SET enabled=:e, next_run_at=:due, consecutive_failures=0, last_error=NULL,
-                updated_at=now()
+                last_missing=NULL, updated_at=now()
             WHERE id=:i AND project_id=:p RETURNING *
             """
         ),
@@ -421,6 +493,42 @@ def delete(connection: Connection, project_id: str, schedule_id: str, actor: str
 
 
 # ── Firing ─────────────────────────────────────────────────────────────────────
+
+def _refused(connection: Connection, project_id: str, row: Any, following: datetime,
+             readiness: dict[str, Any]) -> None:
+    """A firing refused because the project lacks something: say so, keep what, move on.
+
+    NOT A FAILURE TOWARD THE FUSE. The fuse exists because a schedule that fails forever
+    spends money forever; a refusal spends nothing — nothing ran. Counting it disabled a
+    deploy-ending schedule after five quiet weeks on a project with no host (review of the
+    readiness change), so the day the host was added the schedule was off and nobody knew
+    why. It stays on, refuses visibly each time, and runs the first time it can.
+
+    Kept as STRUCTURE, not a truncated sentence: `last_missing` is each item with its fix,
+    `last_error` one short line, and a `workflow.start_refused` event names the schedule.
+    """
+    from .workflow_readiness import record_refused
+
+    unaccepted = {**readiness, "missing": [
+        m for m in readiness.get("missing") or []
+        if m["key"] not in (readiness.get("started_anyway") or [])]}
+    record = record_refused(
+        connection, project_id, row["actor"], door="schedule", door_id=row["id"],
+        door_name=f"The schedule '{row['name']}'", workflow_key=row["workflow_key"],
+        readiness=unaccepted)
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_schedules
+            SET next_run_at=:due, last_error=:err, last_missing=CAST(:missing AS JSONB),
+                updated_at=now()
+            WHERE id=:i
+            """
+        ),
+        {"due": following, "err": record["message"], "missing": json.dumps(record["missing"]),
+         "i": row["id"]},
+    )
+
 
 def run_due(
     connection: Connection,
@@ -488,13 +596,24 @@ def run_due(
                     f"'{row['workflow_key']}' has no published version to run.")
             # CHECKED AT EVERY FIRING, NOT ONCE. A schedule runs unattended, so a newsletter on
             # an install with no mail server would research every Monday and fail at the send
-            # every Monday. The refusal is the schedule's `last_error` — what is missing and the
-            # fix — and counts toward pausing it, like any other failure to start.
-            from .workflow_readiness import refuse_unless_ready
+            # every Monday. What the operator accepted when saving the schedule
+            # (`start_anyway`) is honoured; anything else missing refuses — see the handler
+            # below for what a refusal records.
+            from .workflow_readiness import WorkflowNotReadyError, refuse_unless_ready
 
-            refuse_unless_ready(
-                connection, None, project_id, version_id=str(active),
-                input_data=dict(row["input"] if isinstance(row["input"], dict) else {}))
+            try:
+                readiness = refuse_unless_ready(
+                    connection, None, project_id, version_id=str(active),
+                    input_data=dict(row["input"] if isinstance(row["input"], dict) else {}),
+                    start_anyway=[str(k) for k in _json_list(row.get("start_anyway"))])
+            except WorkflowNotReadyError as refused:
+                _refused(connection, project_id, row, following, refused.readiness)
+                started.append({"schedule_id": row["id"], "name": row["name"],
+                                "error": "not ready", "disabled": False,
+                                "missing": [m["key"] for m in refused.readiness["missing"]
+                                            if m["key"] not in refused.readiness.get(
+                                                "started_anyway", [])]})
+                continue
             run = start_run(
                 connection,
                 project_id=project_id,
@@ -505,12 +624,18 @@ def run_due(
                 dedupe_key=f"schedule:{row['id']}:{fired_at.isoformat()}",
                 workflow_version_id=str(active),
             )
+            if not run.get("duplicate"):
+                from .workflow_readiness import record_started_anyway
+
+                record_started_anyway(connection, project_id, row["actor"],
+                                      str(run.get("id") or ""), readiness)
             connection.execute(
                 text(
                     """
                     UPDATE workflow_schedules
                     SET next_run_at=:due, last_run_at=:fired, last_run_id=:run,
-                        last_error=NULL, consecutive_failures=0, updated_at=now()
+                        last_error=NULL, last_missing=NULL, consecutive_failures=0,
+                        updated_at=now()
                     WHERE id=:i
                     """
                 ),

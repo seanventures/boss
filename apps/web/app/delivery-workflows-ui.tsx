@@ -17,8 +17,9 @@ import { openDockAbout, type DockSubject } from "../lib/dock-subject";
 import { inputsWithTheDirective, missingRequired, suppliedInputs, workflowInputFields }
   from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
-import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness,
-         type Readiness } from "./workflow-readiness-ui";
+import { ReadinessPanel, StartRefusal, WIZARD_COLLECTS, asReadiness, unaccepted,
+         useWorkflowReadiness, type PendingRefusal, type Readiness } from "./workflow-readiness-ui";
+import { AreaLink } from "./area-link";
 import { RunReportPanel } from "./run-report-ui";
 import { HelpTip } from "./help-tip";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
@@ -153,6 +154,10 @@ type Schedule = {
   weekday?: number | null;
   timezone?: string;
   input?: Record<string, unknown>;
+  /** What was missing the last time a firing was refused, each with its fix. */
+  last_missing?: { key: string; label: string; fix?: string; area?: string | null }[];
+  /** Readiness keys this schedule may start without (the unattended Start anyway). */
+  start_anyway?: string[];
 };
 
 type ScheduleDraft = {
@@ -161,6 +166,8 @@ type ScheduleDraft = {
   scheduleId: string | null;
   timezone: string;
   values: Record<string, string>;
+  /** Missing things the operator accepted this schedule may start without. */
+  startAnyway: string[];
 };
 
 function browserTimeZone(): string {
@@ -846,6 +853,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // wait is plainly too long), and the poll below refreshes so it appears without another click.
   const [previewStarting, setPreviewStarting] = useState<{ runId: string; at: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** A start this panel made that was refused for what the project lacks. */
+  const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
   // ONCE, on the first load that has runs. `useRef` rather than a dependency on `openRun`,
   // because the list re-polls every few seconds: re-deciding each time would reopen a run the
@@ -1067,14 +1076,30 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // payload, the payload is the press's fingerprint, and so a double click did not join the
   // first click: it was refused and toasted "the previous Re-run is still in progress", against
   // the rule that a double click sends once and says nothing (review of 6ca9119).
+  // The refusal's retry is this same press again; a ref, so the callback need not name itself.
+  const actRef = useRef<((label: string, action: string, payload: Record<string, unknown>,
+                          dedupeFromPress?: string) => Promise<unknown>) | null>(null);
   const act = useCallback((label: string, action: string, payload: Record<string, unknown>,
                            dedupeFromPress?: string) =>
     pressOn(label, [action, payload], async (key) => {
       setNotice(null);
+      setRefusal(null);
       const result = await post(action, {
         project_id: projectId, actor, ...payload,
         ...(dedupeFromPress ? { dedupe_key: `${dedupeFromPress}:${key}` } : {}),
       }, key);
+      // A START REFUSED FOR WHAT THE PROJECT LACKS gets the checklist and "<label> anyway",
+      // whichever button started it — Re-run, Stop and run again, Build on this research.
+      // They showed a sentence and no way past (review of the readiness change). The retry is
+      // the same press with exactly the keys the operator ticked.
+      const readiness = !result.ok ? asReadiness(result.readiness) : null;
+      if (readiness) {
+        setRefusal({ label, message: result.error ?? "", readiness,
+                     retry: (keys) => actRef.current?.(label, action,
+                                                       { ...payload, start_anyway: keys },
+                                                       dedupeFromPress) });
+        return result;
+      }
       // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
       // always requires a person" is the whole value of the validation.
       setNotice(result.ok ? `${label} — done.` : `${label} — ${result.error}`);
@@ -1087,6 +1112,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       if (result.ok) await load();
       return result;
     }), [pressOn, projectId, actor, load]);
+  actRef.current = act;
 
   // OPEN THE ONE THAT WANTS YOU. A page whose every run is collapsed makes an operator click
   // to find out whether anything needs them, which is the question the page exists to answer.
@@ -1135,6 +1161,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         </p>
       ) : notice ? (
         <p className="dw-notice" data-testid="dw-notice">{notice}</p>
+      ) : null}
+      {refusal ? (
+        <StartRefusal refusal={refusal} projectId={projectId} busy={!!busy}
+                      onDismiss={() => setRefusal(null)} />
       ) : null}
 
       {tab === "running" ? (
@@ -1244,6 +1274,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           }}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
+            // THE CHOICE MADE FOR THIS RUN CARRIES OVER. A run started without a deployment
+            // host was refused on its re-run; the server now repeats what was accepted for
+            // `rerun_of`, and anything newly missing draws the checklist.
+            rerun_of: run.id,
             // One fresh run per press; a retried or doubled request returns the same run.
           }, `again:${run.id}`)}
           // STOP, THEN START — in that order and as ONE press.
@@ -1254,15 +1288,17 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           // screen's own advice was "cancel this run first", for a control it did not offer.
           // Now it offers it, and this does both — the stop has to land before the start, or
           // the new run joins the old one instead of replacing it.
+          //
+          // ONE REQUEST, CHECKED BEFORE ANYTHING IS STOPPED. This was a stop and then a start
+          // from the browser; once Start could refuse a project that lacks something, the stop
+          // succeeded, the start was refused, and the operator was left with no run at all
+          // (review of the readiness change). `replaces_run` makes the server check, then stop,
+          // then start, in one transaction — a refusal leaves the original running and draws
+          // the checklist here, and the original run's accepted gaps carry over.
           onStopAndRerun={async (run) => {
-            const stopped = await act("Stop", "stop", {
-              run_id: run.id, reason: "replaced by a fresh run from the console",
-            });
-            // ONLY START IF THE STOP LANDED. Starting after a failed cancel is the exact
-            // outcome this button exists to prevent: two live runs on one project.
-            if (!stopped?.ok) return;
-            await act("Re-run", "start", {
+            await act("Stop and run again", "start", {
               workflow_key: run.workflow_key, input: inputForRerun(run.input),
+              replaces_run: run.id,
               // A RUN IS REPLACED ONCE. However often this is pressed for run X, the server
               // returns the same replacement — the second press no longer starts a second one.
               dedupe_key: `replace:${run.id}`,
@@ -1286,6 +1322,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         />
       ) : tab === "yours" ? (
         <YoursView
+          projectId={projectId}
           installed={installed} schedules={schedules} busy={busy}
           onStart={(key) => {
             // A WORKFLOW IS NEVER STARTED BLIND.
@@ -1312,6 +1349,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               scheduleId: existing?.id ?? null,
               timezone: existing?.timezone || browserTimeZone(),
               values: scheduleFormValues(existing?.input),
+              startAnyway: existing?.start_anyway ?? [],
             });
           }}
           onCancelSchedule={() => setScheduleDraft(null)}
@@ -1336,6 +1374,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                 minute: existing?.minute ?? 0,
                 timezone: draft.timezone.trim(),
                 input: suppliedInputs(fields, draft.values),
+                // THE UNATTENDED START ANYWAY. A schedule has nobody to press it on Monday, so
+                // what the operator accepted on the checklist above is stored with it.
+                start_anyway: draft.startAnyway,
                 ...(draft.scheduleId ? { schedule_id: draft.scheduleId } : {}),
               });
             if (result.ok) setScheduleDraft(null);
@@ -2394,7 +2435,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
         </div>
       ) : null}
 
-      <ReadinessPanel readiness={readiness} accepted={startAnyway}
+      <ReadinessPanel readiness={readiness} accepted={startAnyway} projectId={projectId}
                       onAccept={setStartAnyway} />
 
       {blocked ? <p className="dw-new-error" data-testid="dw-wiz-blocked">{blocked}</p> : null}
@@ -4652,9 +4693,10 @@ function ownWorkflows(installed: Installed[]): Installed[] {
  *
  *  Same cards, their own tab, plus the one thing a workflow of your own needs that a catalogue
  *  entry does not — a way to say when it should run without anybody asking. */
-function YoursView({ installed, schedules, busy, onStart, onEditMine, scheduleDraft,
+function YoursView({ projectId, installed, schedules, busy, onStart, onEditMine, scheduleDraft,
                      onOpenSchedule, onCancelSchedule, onChangeSchedule, onSubmitSchedule,
                      onToggleSchedule, onDeleteSchedule }: {
+  projectId: string;
   installed: Installed[];
   schedules: Schedule[];
   busy: string | null;
@@ -4669,6 +4711,12 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, scheduleDr
   onDeleteSchedule: (id: string) => void;
 }) {
   const ours = useMemo(() => ownWorkflows(installed), [installed]);
+  // WHAT ITS FIRING WILL REFUSE, ASKED WHILE SAVING. A schedule runs with nobody at the
+  // keyboard; a deploy-ending one on a project with no host refused every firing and was
+  // switched off after five, and nobody had been told at save time (review of the readiness
+  // change). The checklist is drawn here, and what is ticked is stored with the schedule.
+  const draftReadiness = useWorkflowReadiness(projectId, scheduleDraft?.workflowKey ?? "",
+                                              scheduleDraft?.values ?? {});
   const byWorkflow = useMemo(() => {
     const map = new Map<string, Schedule[]>();
     for (const s of schedules) {
@@ -4734,6 +4782,16 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, scheduleDr
               )}
             </div>
           ))}
+          <ReadinessPanel readiness={draftReadiness} accepted={scheduleDraft.startAnyway}
+                          projectId={projectId}
+                          onAccept={(keys) => onChangeSchedule({ ...scheduleDraft,
+                                                                 startAnyway: keys })} />
+          {unaccepted(draftReadiness, scheduleDraft.startAnyway).length ? (
+            <p className="detail" data-testid="dw-sched-draft-will-refuse">
+              Saved as it is, each run will be refused — nothing is spent, and the schedule
+              shows why — until these are added or you tick Start anyway.
+            </p>
+          ) : null}
           <div className="dw-card-actions">
             <button type="submit" className="cap-btn primary"
                     disabled={!!busy || !scheduleDraft.timezone.trim() || draftMissing.length > 0}
@@ -4810,8 +4868,28 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, scheduleDr
                           // rather than a cosmetic difference. There is a guard for this.
                           ? (s.next_run_at ? `next ${formatDateTime(s.next_run_at)}` : "")
                           : "paused"}
-                        {s.last_error ? ` · last run failed: ${s.last_error}` : ""}
+                        {s.last_missing?.length ? ""
+                          : s.last_error ? ` · last run failed: ${s.last_error}` : ""}
                       </span>
+                      {/* NOT STARTED, AND WHY — each missing item with its fix, kept by the
+                          schedule as structure. It was the readiness paragraph cut at 500
+                          characters, which could lose the sentence saying what to do. */}
+                      {s.last_missing?.length ? (
+                        <span className="detail dw-sched-refused"
+                              data-testid={`dw-sched-refused-${s.id}`}>
+                          Last time it was due it did not start — missing:{" "}
+                          {s.last_missing.map((m, i) => (
+                            <span key={m.key}>
+                              {i ? "; " : ""}<b>{m.label}</b>
+                              {m.fix ? (
+                                <> — {m.area ? <AreaLink area={m.area}>{m.fix}</AreaLink>
+                                              : m.fix}</>
+                              ) : null}
+                            </span>
+                          ))}
+                          . Or edit it and tick Start anyway.
+                        </span>
+                      ) : null}
                       <span className="dw-sched-actions">
                         <button type="button" className="linklike" disabled={!!busy}
                                 data-testid={`dw-sched-toggle-${s.id}`}

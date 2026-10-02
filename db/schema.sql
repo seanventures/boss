@@ -3844,6 +3844,13 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, name)
 );
+-- What the operator accepted this schedule may start without ("I will add the deployment host
+-- before the release"), and what was missing the last time it was refused. A schedule has
+-- nobody at the keyboard to press Start anyway, so the choice is stored with it; a refusal is
+-- kept as the missing items and their fixes, not as a sentence cut at 500 characters.
+ALTER TABLE workflow_schedules
+  ADD COLUMN IF NOT EXISTS start_anyway JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS last_missing JSONB;
 -- The only query the tick makes, on every tick.
 CREATE INDEX IF NOT EXISTS idx_workflow_schedules_due
   ON workflow_schedules(next_run_at) WHERE enabled;

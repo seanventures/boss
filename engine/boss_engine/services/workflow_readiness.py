@@ -68,11 +68,14 @@ NEEDS: dict[str, Need] = {
         "deployment_target", "Somewhere to deploy: a verified deployment host",
         "Add and verify a host in Infra → Where apps install. The release step then puts the "
         "app on it; until there is one, the deploy step cannot run.", "delivery"),
+    # The fix names a console form, not an API call. The review of the first version found the
+    # only instruction was "POST /v1/email/config", which a person without a terminal cannot
+    # follow, and there was no SMTP screen. The form lives in Repo and model and is drawn
+    # inline on the start checklist beside this item.
     "email": Need(
         "email", "Outgoing email (SMTP)",
-        "Configure SMTP for this project: POST /v1/email/config with host, port and "
-        "from_address (and a password), or set BOSS_EMAIL_SMTP_HOST and "
-        "BOSS_EMAIL_FROM_ADDRESS on the API and worker.", None),
+        "Enter your mail server in Repo and model → Outgoing email — its host, port, the "
+        "address mail comes from, and its password.", "setup"),
     "mattermost": Need(
         "mattermost", "A Mattermost bot BOSS can post as",
         "Set BOSS_MATTERMOST_BASE_URL and BOSS_MATTERMOST_BOT_TOKEN, and "
@@ -294,8 +297,14 @@ def requirements(
             needed.add("model")
             if not str(step.get("captain") or binding.get("agent") or "").strip():
                 needed.add("agent_pool")
-        for named in (str(step.get("captain") or binding.get("agent") or "").strip(),
-                      str((step.get("approval") or {}).get("approver_role") or "").strip()):
+        # AN APPROVER IS NEEDED ONLY WHERE SOMEONE APPROVES. The PRD approval (`spec_review`)
+        # is answered by the panel's own decision — the owner keeps it automatic — yet its
+        # `approver_role: pm` made every delivery template refuse to start on a project with
+        # no 'pm', for a step no person or agent ever acts on (review of the readiness change).
+        approver = str((step.get("approval") or {}).get("approver_role") or "").strip()
+        if key in caps.CAPABILITY_KEYS and caps.get(key).answered_by != "person":
+            approver = ""
+        for named in (str(step.get("captain") or binding.get("agent") or "").strip(), approver):
             if named and named not in caps.HUMAN_ROLES:
                 needed.add(f"role:{named}")
         if step.get("kind") == "subworkflow" and connection is not None and _depth < 3:
@@ -551,6 +560,14 @@ def refuse_unless_ready(
     return readiness
 
 
+def _missing_record(readiness: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The missing items as they are kept on a record: enough to say what and how to fix it
+    without re-running the check, never the whole checklist."""
+    return [{"key": m["key"], "label": m["label"], "first_step": m.get("first_step"),
+             "fix": m.get("fix"), "area": m.get("area")}
+            for m in readiness.get("missing") or []]
+
+
 def record_started_anyway(connection: Connection, project_id: str, actor: str, run_id: str,
                           readiness: Mapping[str, Any]) -> None:
     """A run started with something missing says so on its own record, so whoever looks at it
@@ -560,13 +577,107 @@ def record_started_anyway(connection: Connection, project_id: str, actor: str, r
     from .core import emit_event
 
     emit_event(connection, project_id, "workflow.started_unready", actor, "workflow_run",
-               run_id, {"missing": [{"key": m["key"], "label": m["label"],
-                                     "first_step": m["first_step"]}
-                                    for m in readiness.get("missing") or []]})
+               run_id, {"missing": _missing_record(readiness),
+                        "started_anyway": list(readiness.get("started_anyway") or []),
+                        "chosen_by": "operator"})
+
+
+def accepted_by_run(connection: Connection, project_id: str, run_id: str) -> list[str]:
+    """The keys an earlier run was started without, so running it AGAIN repeats that choice.
+
+    Re-run and Stop-and-run-again used to post a plain start: a run the operator had started
+    anyway (no deployment host yet) was refused on its re-run, and Stop-and-run-again stopped
+    the original first, leaving them with no run at all (review of the readiness change). The
+    choice made for that run carries to its re-run; anything newly missing still refuses.
+    Only the operator's own choice carries — a run that was merely NOTED as unready (an
+    approved build, see `note_unready_start`) accepted nothing.
+    """
+    if not run_id:
+        return []
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(
+                text("SELECT data FROM events WHERE project_id = :p AND entity_id = :r "
+                     "AND event_type = 'workflow.started_unready'"),
+                {"p": project_id, "r": run_id},
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 — no record means no earlier choice to repeat
+        return []
+    keys: set[str] = set()
+    for data in rows:
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                continue
+        if not isinstance(data, Mapping) or data.get("chosen_by", "operator") != "operator":
+            continue
+        keys.update(str(m.get("key")) for m in data.get("missing") or []
+                    if isinstance(m, Mapping) and m.get("key"))
+    return sorted(keys)
+
+
+def refusal_record(readiness: Mapping[str, Any], *, door: str, door_name: str,
+                   workflow_key: str) -> dict[str, Any]:
+    """What an unattended door keeps when it was refused: the missing items with their fixes,
+    and one short sentence. Short on purpose — a schedule's `last_error` used to be the whole
+    summary cut at 500 characters, which could cut off the very sentence saying what to do."""
+    missing = _missing_record(readiness)
+    labels = "; ".join(m["label"] for m in missing) or "something it needs"
+    one = len(missing) == 1
+    message = (f"Not started — this project is missing {labels}. Fix "
+               f"{'it' if one else 'them'} (each item says how), or accept starting without "
+               f"{'it' if one else 'them'} on the {door}.")
+    return {"door": door, "door_name": door_name, "workflow_key": workflow_key,
+            "missing": missing, "message": message}
+
+
+def record_refused(connection: Connection, project_id: str, actor: str, *, door: str,
+                   door_id: str, door_name: str, workflow_key: str,
+                   readiness: Mapping[str, Any]) -> dict[str, Any]:
+    """An UNATTENDED start that was refused says so where people look.
+
+    A schedule or an event subscription has nobody at the keyboard to read a 409. The event
+    door used to refuse and only log, so a subscription that had started runs the day before
+    silently stopped starting anything (review of the readiness change). This is the visible
+    half: a `workflow.start_refused` event naming the door, what is missing and the fix for
+    each. Returns the record, for the door to keep beside itself.
+    """
+    from .core import emit_event
+
+    record = {**refusal_record(readiness, door=door, door_name=door_name,
+                               workflow_key=workflow_key), "door_id": door_id}
+    emit_event(connection, project_id, "workflow.start_refused", actor, door, door_id, record)
+    return record
+
+
+def note_unready_start(connection: Connection, settings: Any, project_id: str, actor: str,
+                       run_id: str, *, version_id: str,
+                       input_data: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """For a door that must not refuse: check anyway, and put what is missing on the run.
+
+    `start_project_run` starts the outer workflow for a build that an approval has ALREADY
+    started — refusing it would leave a running code task with no run to watch. It was exempt
+    from the preflight outright, so the request_meeting → PRD → build path got no warning at
+    all while the console path refused, and its deploy still failed at the end on a project
+    with no host (review of the readiness change). Now the run carries the same list from its
+    first second, marked as nobody's choice.
+    """
+    readiness = readiness_of_version(connection, settings, project_id, version_id=version_id,
+                                     input_data=input_data)
+    if readiness.get("missing") and run_id:
+        from .core import emit_event
+
+        emit_event(connection, project_id, "workflow.started_unready", actor, "workflow_run",
+                   run_id, {"missing": _missing_record(readiness), "started_anyway": [],
+                            "chosen_by": "nobody",
+                            "why": "started by an approved build, which cannot be refused"})
+    return readiness
 
 
 __all__ = [
-    "NEEDS", "Need", "WorkflowNotReadyError", "check", "need_for", "needs_of", "preflight",
-    "readiness_of_version", "record_started_anyway", "refuse_unless_ready", "requirements",
+    "NEEDS", "Need", "WorkflowNotReadyError", "accepted_by_run", "check", "need_for",
+    "needs_of", "note_unready_start", "preflight", "readiness_of_version", "record_refused",
+    "record_started_anyway", "refusal_record", "refuse_unless_ready", "requirements",
     "skill_needs", "summary_sentence",
 ]
