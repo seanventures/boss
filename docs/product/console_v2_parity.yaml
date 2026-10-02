@@ -1,0 +1,189 @@
+# Where every v1 console area lives in the v2 console.
+#
+# v1 has ~38 areas; v2 has nine screens. A fold that size is indistinguishable from a deletion
+# unless each area's destination is written down. engine/tests/test_console_v2_parity.py and
+# apps/web/tests/console-v2-surface.test.ts keep this file true to both consoles.
+#
+#   to:    the v2 screen id (components/v2/Shell.tsx V2_NAV) the area folds into, or null when
+#          v2 does not carry it (then `what` says why). Every v1 area stays reachable in v1 —
+#          the toggle in both headers switches consoles, and nothing here is removed from v1.
+#   what:  what of the area v2 shows.
+#   risk:  what an operator would lose if v2 were the only console.
+#
+# v2_nav records the screens themselves: the v1 area each one links back to (V2_NAV.v1Area)
+# and, where the v2 label is not the v1 label, why. The console walk on boss-1 (2026-10-02)
+# found v2 linking "Workflows" to v1 Infra and "Infra & Models" to v1 Observability, and naming
+# the same screens differently ("Workforce" vs "Agent work"); the labels now match v1 unless a
+# reason is given here.
+
+v2_nav:
+  missions: {v1Area: code_tasks}
+  hive: {v1Area: agent, label_differs_because: "Hive is the v2 picture of every agent at once; v1's BOSS Agent is one conversation."}
+  factory: {v1Area: workforce}
+  org: {v1Area: org_chart}
+  panels: {v1Area: decisions}
+  boss: {v1Area: delivery_workflows}
+  timeline: {v1Area: activity, label_differs_because: "v2 shows receipts — the recorded effects — not the whole activity log."}
+  infra: {v1Area: delivery, label_differs_because: "v2 puts model spend beside hosts and targets; v1 keeps models in Repo and model."}
+  settings: {v1Area: setup, label_differs_because: "v2 Settings gathers roles, repositories and what this deployment does not have; v1 splits them across Repo and model, Identity and Access."}
+
+overview:
+  to: missions
+  what: The project strip and what needs you, as the Projects landing.
+  risk: The Command Center's what-changed and top-risk summaries are v1-only.
+code_tasks:
+  to: missions
+  what: Every project with its stage, progress, PR and preview.
+  risk: Retry, steer and the per-run log viewer stay in v1 — v2 links each project back to its v1 card for those controls.
+delivery_workflows:
+  to: boss
+  what: The workflow catalogue and each workflow's stages.
+  risk: Building or editing a workflow, schedules and the run timeline are v1-only; v2 is read-only here.
+workforce:
+  to: factory
+  what: What each agent role has done.
+  risk: Staffing and per-role chat are v1-only.
+org_chart:
+  to: org
+  what: Planned roles and observed handoffs.
+  risk: Editing the team structure is v1-only.
+agent:
+  to: hive
+  what: Every agent, at once.
+  risk: The BOSS Agent conversation and its briefing are v1-only.
+decisions:
+  to: panels
+  what: Approvals waiting on a person.
+  risk: Approval rules and delegated decisions are edited in v1.
+activity:
+  to: timeline
+  what: Receipts — the effects BOSS recorded.
+  risk: The full activity log (levels, streams, Load older) is v1-only.
+delivery:
+  to: infra
+  what: Hosts, deployment targets and the latest deploy per target.
+  risk: Registering a host, deploying, rollback and the pipeline generators are v1-only; v2 shows where things run but cannot change it.
+monitoring:
+  to: infra
+  what: Deploy health per target.
+  risk: Grafana links, the monitoring stack deploy and the observability suite's gap list are v1-only.
+observability-suite:
+  to: infra
+  what: Folded into Infra & Models as health.
+  risk: The recommended stack and source health-checks are v1-only.
+discovery:
+  to: missions
+  what: A project's research dossier, reached from the project.
+  risk: Starting research outside a workflow, and the dossier reader, are v1-only — a project that skipped research shows nothing here.
+meetings:
+  to: panels
+  what: Panel outcomes that need approval.
+  risk: The meeting room — rounds, debate, synthesis, the drafted PRD and the consensus record — is v1-only; v2 shows only the decision a meeting produced.
+setup:
+  to: settings
+  what: The repositories code tasks have targeted.
+  risk: Connecting a repository, choosing a model and every governing knob are v1-only.
+skills:
+  to: settings
+  what: Not shown yet; Settings lists what is configured at the company level.
+  risk: Authoring skills, assigning them to agents, MCP servers, channels and memory are v1-only.
+budget:
+  to: infra
+  what: Model spend this month, by model.
+  risk: Caps, budget intensity, token policies and FinOps are v1-only.
+enterprise:
+  to: settings
+  what: What console sign-in uses today, said the same way as v1 Identity.
+  risk: Recording identity providers and SCIM members is v1-only.
+infra:
+  to: infra
+  what: Provider connections and MCP servers, listed.
+  risk: Provider configuration, worker scaling and resource ledgers are v1-only.
+capabilities:
+  to: settings
+  what: Not shown yet.
+  risk: Registering, enabling and auditing MCP servers and tools is v1-only.
+work:
+  to: factory
+  what: Recent work by role.
+  risk: The task board, live jobs and receipts list are v1-only.
+reports:
+  to: timeline
+  what: Receipts.
+  risk: Evidence, official reports and QA scorecards are v1-only.
+portfolio:
+  to: missions
+  what: Projects in priority order.
+  risk: Ranked priorities, quotas, leases and release planning are v1-only.
+processes:
+  to: factory
+  what: Role handoffs show as work by role.
+  risk: The PRD-to-accept process view is v1-only.
+shepherd:
+  to: missions
+  what: A stuck project's state.
+  risk: The shepherd's reasoning about stuck work is v1-only.
+reliability:
+  to: infra
+  what: Health.
+  risk: On-call, incidents and the knowledge graph are v1-only.
+ai-sre:
+  to: null
+  what: The AI SRE capability ledger is a coverage document about BOSS itself, not company state; it stays in v1.
+  risk: None for operating a company; it is read when evaluating BOSS.
+knowledge-graph:
+  to: null
+  what: The infrastructure knowledge graph is a v1 reliability tool with no v2 screen yet.
+  risk: Graph exploration is v1-only.
+pipeline:
+  to: settings
+  what: Not shown yet.
+  risk: Coding pipeline profiles, tiers and run costs are v1-only.
+comms:
+  to: null
+  what: The outbox discipline screen governs external sends and has no v2 counterpart yet.
+  risk: Approving or holding an outbound message is v1-only.
+github:
+  to: settings
+  what: Repositories targeted by code tasks.
+  risk: Branch truth, sync, conflict resolution and merges are v1-only.
+ops:
+  to: null
+  what: Operations (health, audit, replay, self-improvement) is platform maintenance, not company state.
+  risk: Dead-letter replay and audit export are v1-only.
+assurance:
+  to: null
+  what: Ground truth, proof gates and security scanning have no v2 screen yet.
+  risk: Recording assurance metrics and cases is v1-only.
+org:
+  to: settings
+  what: Agent roles.
+  risk: Actors, permissions, packs and modules are v1-only.
+studio:
+  to: factory
+  what: Agents appear by the work they did.
+  risk: Creating, testing and publishing an agent is v1-only.
+sandboxes:
+  to: null
+  what: The execution plane inspector is an operator tool with no v2 screen.
+  risk: Inspecting a sandbox and its console is v1-only.
+dashboard:
+  to: missions
+  what: The cross-phase snapshot reads as the Projects strip.
+  risk: Budget, queue and proof tiles together are v1-only.
+foundations:
+  to: null
+  what: The design-system reference is for people building the console, not for operating BOSS.
+  risk: None for an operator.
+components:
+  to: null
+  what: The component library is for people building the console, not for operating BOSS.
+  risk: None for an operator.
+
+cross_cutting:
+  - id: ask-boss
+    what: The Ask BOSS dock opens from any v1 area; v2 has its own agent chat on Hive.
+  - id: console-toggle
+    what: The v1/v2 toggle sits in both headers, so neither console is a dead end.
+  - id: org-scope
+    what: Both consoles carry ?org=, so switching consoles keeps the organization.

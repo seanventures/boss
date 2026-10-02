@@ -255,7 +255,7 @@ const AREAS: AreaDef[] = [
     // second in the sidebar, under Command Center, ahead of everything an operator actually
     // does — and called "SSO", which names one protocol rather than the thing it configures.
     label: "Identity",
-    sub: "Who can sign in — OIDC, SAML, SCIM · IdP packs · Community / Cloud / Enterprise",
+    sub: "Identity providers and member sync — console sign-in is the installer password",
     group: "Settings",
     icon: ICONS.enterprise,
   },

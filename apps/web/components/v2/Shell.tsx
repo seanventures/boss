@@ -26,16 +26,23 @@ import type { CompanyOverview } from "../../lib/v2/overview";
  * v1 area that has it today. That is the difference between a placeholder and a dead end: the
  * feature stays reachable while it is being moved.
  */
+/**
+ * Labels match v1's for the same screen, and each entry links to the v1 area that IS that
+ * screen. The console walk on boss-1 (2026-10-02) found "Workflows" linking to v1 Infra,
+ * "Infra & Models" to v1 Observability, "Workforce" to the Task Board and "Org Chart" to Access
+ * and packs, with the same screens named differently in each console. Where a v2 label still
+ * differs, docs/product/console_v2_parity.yaml says why (tests/console-v2-surface.test.ts).
+ */
 export const V2_NAV = [
   { id: "missions", label: "Projects", href: "/v2", built: true, v1Area: "code_tasks" },
   { id: "hive", label: "Hive", href: "/v2/hive", built: true, v1Area: "agent" },
-  { id: "factory", label: "Workforce", href: "/v2/factory", built: true, v1Area: "work" },
-  { id: "org", label: "Org Chart", href: "/v2/org", built: true, v1Area: "org" },
-  { id: "panels", label: "Decisions", href: "/v2/panels", built: true, v1Area: "decisions" },
-  { id: "boss", label: "Workflows", href: "/v2/boss", built: true, v1Area: "delivery" },
+  { id: "factory", label: "Agent work", href: "/v2/factory", built: true, v1Area: "workforce" },
+  { id: "org", label: "Team structure", href: "/v2/org", built: true, v1Area: "org_chart" },
+  { id: "panels", label: "Approvals", href: "/v2/panels", built: true, v1Area: "decisions" },
+  { id: "boss", label: "Workflow", href: "/v2/boss", built: true, v1Area: "delivery_workflows" },
   { id: "timeline", label: "Receipts", href: "/v2/timeline", built: true, v1Area: "activity" },
-  { id: "infra", label: "Infra & Models", href: "/v2/infra", built: true, v1Area: "monitoring" },
-  { id: "settings", label: "Settings", href: "/v2/settings", built: true, v1Area: "capabilities" },
+  { id: "infra", label: "Infra & Models", href: "/v2/infra", built: true, v1Area: "delivery" },
+  { id: "settings", label: "Settings", href: "/v2/settings", built: true, v1Area: "setup" },
 ] as const;
 
 export type V2NavId = (typeof V2_NAV)[number]["id"];
