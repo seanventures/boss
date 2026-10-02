@@ -6242,7 +6242,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             # Resolve the task's own PR, so "why did crun_x fail to preview" is one call.
             with ctx.begin() as c:
                 row = c.execute(
-                    _text("SELECT pull_request_url, pull_request_number, repo, owner "
+                    # repo and owner live in the spec JSON, not as columns: selecting them bare
+                    # raised UndefinedColumn 'repo' on every crun_ id (boss-1, 2026-10-02).
+                    _text("SELECT pull_request_url, pull_request_number, "
+                          "spec->>'repo' AS repo, spec->>'owner' AS owner "
                           "FROM code_task_runs WHERE id = :r AND project_id = :p"),
                     {"r": raw, "p": pid}).mappings().first()
             if not row:
