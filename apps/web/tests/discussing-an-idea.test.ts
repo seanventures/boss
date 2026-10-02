@@ -79,7 +79,8 @@ describe("a discussion is a new conversation with nobody in particular", () => {
     // goes into the model's context, so an idea gets answered next to probe latencies.
     expect(HERO).toContain("fresh: true");
     expect(SHELL).toContain("setDockFresh((n) => n + 1)");
-    expect(SHELL).toContain("${dockFresh}");
+    // The bump is part of the chat's mount key (see dockChatKey), so a fresh press remounts.
+    expect(SHELL).toContain("fresh: dockFresh })");
   });
 
   it("and the fresh flag is consumed once, not left in the URL", () => {

@@ -23,7 +23,7 @@ from typing import Callable
 @dataclass
 class TurnBudget:
     #: Wall-clock seconds the turn may spend before it must answer.
-    seconds: float = 120.0
+    seconds: float = 180.0
     #: Model round-trips across the whole turn.
     model_calls: int = 16
     clock: Callable[[], float] = time.monotonic

@@ -19,7 +19,10 @@ from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
 from .turn_budget import TurnBudget
-from .turn_subject import parse_subject, resolve_subject, stays_on_subject, subject_context
+from .turn_subject import (
+    cites_the_record, parse_subject, resolve_subject, stays_on_subject, strays_from_subject,
+    subject_context,
+)
 from .discovery_service import start_discovery
 from .intake import CommandIntakeService
 from .jobs import JobLeaseService
@@ -2095,13 +2098,10 @@ class IntentRouter:
                     # draws from it, so a first pass, a grounding re-ask and a continuation can
                     # no longer add up to 32 model calls and 276 seconds.
                     _budget = TurnBudget(
-                        seconds=float(getattr(self.settings, "chat_turn_seconds", 120) or 120),
+                        seconds=float(getattr(self.settings, "chat_turn_seconds", 180) or 180),
                         model_calls=int(getattr(self.settings, "chat_turn_model_calls", 16)
                                         or 16))
                     _focus = subject_ref.label if subject_ref else ""
-                    #: The subject's record was in front of the model. An answer drawn from it is
-                    #: grounded — the gates below that count lookups must not punish it.
-                    _subject_grounded = bool(subject_ev is not None and subject_ev.found)
                     # An investigation posts its findings back into THIS conversation, so the
                     # thread has to travel with the call. The model has no way to know it.
                     self._answer_agent().ambient = {"_thread_id": thread_id}
@@ -2149,6 +2149,14 @@ class IntentRouter:
                         budget=_budget, focus=_focus,
                     )
                     reply = str(turn.reply or "").strip()
+                    # AN ANSWER DRAWN FROM THE SUBJECT'S RECORDED FAILURE IS GROUNDED — the
+                    # gates below that count lookups must not punish it (boss-1's first pass
+                    # needed no tools: the ImportError was in hand). But only an answer that
+                    # USED the failure: "the record was found" switched the lookup floor and the
+                    # role re-ask off for every build thread and every briefing door, including
+                    # the ones whose record holds no answer at all (a build with no error, a
+                    # deployment whose outage is in its health samples, "still working?").
+                    _subject_grounded = cites_the_record(reply, subject_ev)
                     # WHAT IT DID, NOT JUST WHAT IT SAID.
                     #
                     # `turn.trace` was discarded, so when BOSS redeployed an app the console
@@ -2302,7 +2310,8 @@ class IntentRouter:
                         grounded = getattr(reread, "reply", "")
                         if grounded and any(c.get("tool") == "recall_role_experience"
                                             for c in tool_calls) and (
-                                subject_ev is None or stays_on_subject(str(grounded), subject_ev)):
+                                subject_ev is None or stays_on_subject(
+                                    str(grounded), subject_ev, _question or latest)):
                             reply = str(grounded).strip()
                         else:
                             # Could not ground it. Say which kind of answer this is rather
@@ -2327,7 +2336,8 @@ class IntentRouter:
                     # NOT ON AN ANSWER FROM THE SUBJECT'S RECORD. The lookup floor exists for
                     # answers built from too little looking; one built from the record the
                     # operator pointed at has looked at the thing itself.
-                    _thin = under_investigated(tool_calls, latest) and not _subject_grounded
+                    _thin = (under_investigated(tool_calls, latest)
+                             and not cites_the_record(reply, subject_ev))
                     _handed_back = hands_the_problem_back(reply, proposed)
                     # A PRESCRIPTION IS NOT A FIX, AND A REPEAT IS NOT AN ANSWER.
                     #
@@ -2489,11 +2499,14 @@ class IntentRouter:
                         # A RE-ASK MAY REFINE AN ANSWER, NOT SWAP ITS SUBJECT. In boss-1 this
                         # line replaced an answer about the Preview step with "Lead Triage Inbox
                         # has never been deployed". An off-subject replacement is refused and the
-                        # first answer stands.
-                        if improved and subject_ev is not None and not stays_on_subject(
-                                improved, subject_ev):
-                            _log.warning("continuation answered about something other than %s; "
-                                         "keeping the first answer", subject_ev.ref.label)
+                        # first answer stands. A NEGATIVE test — see strays_from_subject: an
+                        # on-topic continuation that never quotes the run id (every good answer
+                        # on a build thread) must still replace a hand-back.
+                        _stray = (strays_from_subject(improved, subject_ev, _question or latest)
+                                  if improved and subject_ev is not None else "")
+                        if _stray:
+                            _log.warning("continuation refused, keeping the first answer: %s",
+                                         _stray)
                             improved = ""
                         if improved:
                             reply = improved

@@ -24,17 +24,48 @@ const APP = join(process.cwd(), "app");
 /** Every opening of the dock goes through `openDockAbout` (lib/dock-subject.ts) — see
  *  every-ask-door-attaches-a-subject.test.ts — so the per-door decision is the `role:` it
  *  passes. The helper's type makes `role` required (`string | null`); this pins that no door
- *  works around it. */
+ *  works around it.
+ *
+ *  THE CALL IS FOUND BY BALANCING ITS PARENTHESES, not by searching for a closing token. The
+ *  first version took the end as the next `});` — and boss-agent-home's door closes with
+ *  `})}>`, so the search returned -1, the next search restarted from 0, and the loop never
+ *  ended: the worker died out of memory and this rule silently stopped being checked. A scan
+ *  that cannot find the end stops, and the door it could not read is reported as an offender
+ *  rather than skipped. */
+export function doorCallsIn(src: string): string[] {
+  const out: string[] = [];
+  const OPEN = "openDockAbout(";
+  let at = src.indexOf(OPEN);
+  while (at >= 0) {
+    let depth = 0;
+    let end = -1;
+    let quote: string | null = null;
+    for (let i = at + OPEN.length - 1; i < src.length; i++) {
+      const ch = src[i];
+      if (quote) {
+        if (ch === "\\") i++;
+        else if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+      else if (ch === "(") depth++;
+      else if (ch === ")" && --depth === 0) { end = i + 1; break; }
+    }
+    // Unbalanced: report the rest of the file as the call (it will fail the role rule only if
+    // it truly lacks one) and STOP — never restart the search behind where it began.
+    out.push(src.slice(at, end < 0 ? src.length : end));
+    if (end < 0) break;
+    at = src.indexOf(OPEN, end);
+  }
+  return out;
+}
+
 function doorCalls(): Array<[string, string]> {
   const out: Array<[string, string]> = [];
   for (const f of readdirSync(APP).filter((x) => x.endsWith(".tsx") || x.endsWith(".ts"))) {
     const src = readFileSync(join(APP, f), "utf8");
-    let at = src.indexOf("openDockAbout({");
-    while (at >= 0) {
-      const end = src.indexOf("});", at);
-      out.push([f, src.slice(at, end)]);
-      at = src.indexOf("openDockAbout({", end);
-    }
+    // Calls only — not the import line.
+    for (const call of doorCallsIn(src)) if (call.startsWith("openDockAbout({")) out.push([f, call]);
   }
   return out;
 }
@@ -43,6 +74,16 @@ describe("every door into the dock names its own role", () => {
   it("finds the doors at all", () => {
     // If this drops to zero the rest of the suite passes vacuously.
     expect(doorCalls().length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("reads a door that closes with })}> — the one that hung the scan", () => {
+    const files = doorCalls().map(([f]) => f);
+    expect(files).toContain("boss-agent-home.tsx");
+    const [call] = doorCallsIn(
+      'x <b onClick={() => openDockAbout({ subject: s, question: "why (it) failed?", role: null })}>');
+    expect(call.endsWith('role: null })')).toBe(true);
+    // Unbalanced source ends the scan instead of looping.
+    expect(doorCallsIn("openDockAbout({ role: null").length).toBe(1);
   });
 
   it("decides the role wherever it opens the dock", () => {

@@ -342,6 +342,14 @@ class EngineAgent:
         # to do but answer from what it gathered. Running out of budget now costs completeness,
         # not the whole reply.
         answer_step = max(1, max_steps - 1)
+        #: THE BUTTON SURVIVES THE CLOCK. When the TURN's budget (not this pass's step limit)
+        #: forces the answer, the model may still attach the fix it found as a button — one
+        #: propose_action round, then the answer. A read → read → propose chain that crossed the
+        #: budget used to end as prose describing a fix with nothing to press, and the
+        #: action-claim re-ask that would have caught it does not start on a spent budget.
+        #: propose_action changes nothing, so this cannot buy a write the turn was not given.
+        offer_schemas = [sc for sc in schemas if sc["function"]["name"] == "propose_action"]
+        offer_spent = False
 
         for i in range(max_steps):
             steps = i + 1
@@ -350,6 +358,9 @@ class EngineAgent:
             # waits on, so the turn is what is counted.
             out_of_turn = budget is not None and budget.must_answer_now()
             last = i >= answer_step or out_of_turn
+            # Only when another step remains to write the answer in.
+            closing_offer = bool(last and out_of_turn and offer_schemas and not offer_spent
+                                 and i < max_steps - 1)
             if last:
                 messages.append({
                     "role": "user",
@@ -362,6 +373,9 @@ class EngineAgent:
                         "2. What you could NOT check, in one sentence each, and why.\n"
                         "3. The single next action you would take.\n"
                         "Partial findings are useful; a report of running out of steps is not."
+                        + ("\nIf you have found a fix and have not yet offered it, you may call "
+                           "propose_action ONCE now to attach it as a button; then answer."
+                           if closing_offer else "")
                     ),
                 })
             # THE SILENCE BEFORE THE FIRST TOOL WAS THE WHOLE PROBLEM.
@@ -406,11 +420,17 @@ class EngineAgent:
                 budget.spend_call()
             msg, _usage = _with_transient_retry(
                 lambda: self._adapter_obj().create_chat_completion(
-                    messages, tools=(None if last else schemas)
+                    messages, tools=(offer_schemas if closing_offer
+                                     else None if last else schemas)
                 )
             )
             messages.append(msg["raw"])
-            tool_calls = None if last else msg.get("tool_calls")
+            if closing_offer:
+                offer_spent = True
+                tool_calls = [tc for tc in (msg.get("tool_calls") or [])
+                              if tc.get("name") == "propose_action"] or None
+            else:
+                tool_calls = None if last else msg.get("tool_calls")
             if not tool_calls:
                 final_text = msg.get("content") or ""
                 if final_text.strip():
@@ -428,7 +448,7 @@ class EngineAgent:
                 # giving up. `continue` rather than `break`, so the reserved final step still
                 # gets its chance.
                 empty_completions += 1
-                if empty_completions <= 2 and not last:
+                if empty_completions <= 2 and (not last or closing_offer):
                     messages.append({
                         "role": "user",
                         "content": (

@@ -98,3 +98,31 @@ export function openDockAbout(o: DockOpening): void {
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
 }
+
+/** What the dock is showing, as read back from the URL by the console shell. */
+export type DockState = {
+  /** `?agent=` — the subject's ref, or "general". */
+  agent: string | null;
+  ask: string;
+  role: string;
+  discussing: boolean;
+  fresh: number;
+};
+
+/**
+ * THE IDENTITY OF ONE DOCK CONVERSATION — the React key the shell mounts AgentChat under.
+ *
+ * Review of 20b0abf: the key was `ask|role|discussing|fresh`, without the subject. AgentChat
+ * holds the subject it was mounted with (`useState(initialTaskId)`) and its role path never
+ * re-reads it. Once questions became the operator's own words they stopped being unique —
+ * "Why did the Preview step fail, and what is the fix?" is the same for every run — so asking
+ * the Qa about run B's Preview step with the dock still open on run A's kept the same key, did
+ * not remount, and sent the turn with run A's step as its `external_ref`.
+ *
+ * Every field that decides what the turn is about or who answers it is in the key, so a
+ * different subject is a different conversation by construction, not by the question text
+ * happening to differ.
+ */
+export function dockChatKey(d: DockState): string {
+  return JSON.stringify([d.agent ?? "", d.role, d.discussing, d.fresh, d.ask]);
+}
