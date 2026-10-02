@@ -22737,7 +22737,8 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         # And not a bundled one the operator deleted: project_roster leaves those out, so the
         # builder never offers a captain publish would then refuse. Before a project is chosen
         # only a person can be named.
-        "roles": sorted(roster) if roster else [step_agents.HUMAN],
+        "roles": ([r for r in sorted(roster) if r != step_agents.HUMAN] + [step_agents.HUMAN]
+                  if roster else [step_agents.HUMAN]),
         "agents": [{"role_key": a["role_key"], "name": a["name"], "holds": a["holds"],
                     "mcp": a.get("mcp") or []}
                    for a in agents],
@@ -24248,6 +24249,17 @@ def _delivery_readiness_or_409(
             version_id = resolution["selected"]["workflow_version_id"]
     if not version_id:
         return {"ready": True, "checked": [], "missing": []}
+    # CAN THIS VERSION START AT ALL, before what the project lacks. A version retired because an
+    # agent it named was deleted (the agents stream) was answered with the templates stream's
+    # checklist ("connect a model…") — advice that could never make it start. The start's own
+    # gate (workflows._version_row) is asked first, so the refusal names the real reason and
+    # what to do: start the current version.
+    try:
+        workflow_runtime._version_row(connection, project_id, str(version_id))
+    except workflow_runtime.WorkflowNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except workflow_runtime.WorkflowConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     accepted = start_anyway if isinstance(start_anyway, list) else []
     try:
         return workflow_readiness.refuse_unless_ready(
