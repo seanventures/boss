@@ -615,7 +615,7 @@ echo "STORE:$STORE"
 case "$STORE" in *secret_store_fallback_not_accepted*) exit 0 ;; esac
 CONNECT=$(curl -sS -X POST "$B/v1/setup/coding-agents/connect" \
   -H "x-boss-api-key: $K" -H 'Content-Type: application/json' \
-  -d "{\"project_id\":\"$PROJ\",\"actor\":\"ceo\",\"provider\":\"$PROV\",\"prove\":false}" || true)
+  -d "{\"project_id\":\"$PROJ\",\"actor\":\"ceo\",\"provider\":\"$PROV\",\"prove\":true}" || true)
 echo "CONNECT:$CONNECT"
 EOS
   encoded=$(printf '%s' "$remote_script" | base64 | tr -d '\n')
@@ -639,20 +639,26 @@ sys.exit(0 if data.get("ok") is True else 1)' 2>/dev/null; then
     warn "BOSS did not store the subscription credential; inspect API logs"
     return 1
   fi
-  # Community cannot run the live proof safely yet. The first governed job
-  # must establish whether the recorded subscription can actually work.
+  # PROVED, NOT ASSUMED: BOSS answers one trivial, reserved and receipted turn on the
+  # subscription before it calls it connected, and explains why when it cannot.
   if printf '%s' "$out" | sed -n 's/^CONNECT://p' | python3 -c 'import json,sys
 try:
     data=json.load(sys.stdin)
 except (ValueError, TypeError):
     sys.exit(1)
+proof=data.get("proof") if isinstance(data.get("proof"), dict) else {}
 sys.exit(0 if data.get("ok") is True and data.get("connected") is True
          and data.get("entitlement_recorded") is True
-         and isinstance(data.get("proof"), dict)
-         and data["proof"].get("skipped") is True else 1)' 2>/dev/null; then
-    ok "subscription recorded; live model turn remains unverified"
+         and proof.get("ok") is True and not proof.get("skipped") else 1)' 2>/dev/null; then
+    ok "subscription connected — it answered a test turn"
   else
-    warn "the subscription was not fully recorded; inspect BOSS setup status and API logs"
+    # BOSS's own explanation (it never contains the credential): what was wrong, what to do.
+    reason="$(printf '%s' "$out" | sed -n 's/^CONNECT://p' | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("detail") or "")
+except (ValueError, TypeError):
+    print("")' 2>/dev/null)"
+    warn "${reason:-the subscription was not connected; inspect BOSS setup status and API logs}"
     return 1
   fi
 }

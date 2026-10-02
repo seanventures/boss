@@ -126,29 +126,36 @@ def claude_credential() -> str:
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
-    # Community cannot run an unmetered CLI proof turn from setup. The credential is
-    # restored and the CLI login is checked by BOSS, but the first governed job must
-    # establish whether this subscription can actually answer.
+    # PROVED, NOT ASSUMED. BOSS runs one trivial turn on the subscription — reserved and
+    # receipted like any model call — before it calls it connected. Recording it unproved let a
+    # wrong Claude credential look connected until a workflow failed on it with a 401.
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/v1/setup/coding-agents/connect", method="POST",
         data=json.dumps({"project_id": "boss-dogfood", "actor": "ceo",
-                         "provider": provider, "prove": False}).encode(),
+                         "provider": provider, "prove": True}).encode(),
         headers={"x-boss-api-key": api_key, "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             result = json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
-        # Do not echo a response body: a provider error could contain private data.
-        raise RuntimeError(f"BOSS connection refused {provider}: HTTP {exc.code}") from None
+        # BOSS's own 422 explanation says what to do and never contains the credential. Any
+        # other body is not echoed: a provider error could contain private data.
+        detail = ""
+        if exc.code == 422:
+            try:
+                detail = str(json.loads(exc.read().decode() or "{}").get("detail") or "")
+            except (ValueError, OSError):
+                detail = ""
+        raise RuntimeError(f"BOSS did not connect {provider}: {detail or f'HTTP {exc.code}'}") from None
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"BOSS connection check could not finish for {provider}") from exc
     if not result.get("connected") or not result.get("entitlement_recorded"):
         raise RuntimeError(f"BOSS did not record the {provider} connection")
     proof = result.get("proof")
-    if not isinstance(proof, dict) or proof.get("skipped") is not True:
-        raise RuntimeError(f"BOSS returned an unexpected {provider} proof state")
-    print(f"  {provider}: connection recorded; model use remains unverified")
+    if not isinstance(proof, dict) or proof.get("ok") is not True or proof.get("skipped"):
+        raise RuntimeError(f"BOSS did not prove the {provider} connection with a live turn")
+    print(f"  {provider}: connected — it answered a test turn")
 
 
 def claude_local_session_ready(api_url: str, api_key: str) -> None:
