@@ -10367,3 +10367,22 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border); color: var(--ink);
   user-select: all; -webkit-user-select: all;
 }
+
+/* WHAT A WORKFLOW NEEDS BEFORE IT CAN RUN HERE (workflow-readiness-ui.tsx).
+   Shown in the start form before anything is spent: a template that needs a deployment host
+   or a mail server used to start anyway and fail at its last step. Amber, not red — nothing has
+   failed; something has to be added first. */
+.dw-ready {
+  margin: 8px 0; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--amber, #F5B544);
+  background: var(--amber-soft, rgba(245, 181, 68, 0.13));
+  font-size: 0.74rem; line-height: 1.45;
+}
+.dw-ready h4 { margin: 0 0 6px; font-size: 0.8rem; }
+.dw-ready-ok { border-color: var(--border); background: transparent; color: var(--muted); }
+.dw-ready-list { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 6px; }
+.dw-ready-list li[data-accepted] { opacity: 0.7; }
+.dw-ready-fix { display: block; }
+.dw-ready-later { display: block; font-style: italic; }
+.dw-ready-anyway { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.dw-card-auto, .dw-card-cost { margin: 0; font-size: 0.68rem; }

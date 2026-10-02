@@ -17,6 +17,8 @@ import { openDockAbout, type DockSubject } from "../lib/dock-subject";
 import { inputsWithTheDirective, missingRequired, suppliedInputs, workflowInputFields }
   from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
+import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness,
+         type Readiness } from "./workflow-readiness-ui";
 import { RunReportPanel } from "./run-report-ui";
 import { HelpTip } from "./help-tip";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
@@ -97,8 +99,17 @@ type CatalogueEntry = {
   step_count: number;
   steps: { id: string; capability: string }[];
   gates: string[];
+  /** Approvals answered without a person — the PRD approval, by the panel's own decision. */
+  automatic_approvals?: string[];
   requires_project: string[];
+  /** Everything it needs from a project, in the start preflight's words. */
+  needs?: { key: string; label: string }[];
+  /** What it spends beyond its minutes — PLRR is a second build pass. */
+  cost_notes?: { step: string; note: string }[];
   estimated_minutes: number;
+  input_schema?: unknown;
+  /** The template's own example brief, for "Try an example". */
+  example?: { title?: string; directive?: string } | null;
 };
 
 type Installed = {
@@ -118,8 +129,8 @@ type Installed = {
             /** WHO RUNS IT. Empty means different things by kind — see the card. */
             captain?: string; agent_work?: boolean }[];
   active_version?: number | null;
-  /** What starting it will ask for. Absent on a workflow that declares nothing, which is
-   *  every catalogue workflow today. */
+  /** What starting it will ask for. Every catalogue template declares one; absent only on a
+   *  workflow somebody made without inputs. */
   input_schema?: unknown;
 };
 
@@ -528,6 +539,8 @@ type PlanStep = {
   approval_note: string;
   risk_tier: number | null;
   typical_minutes: number | null;
+  /** What it spends beyond its minutes — PLRR is a second build pass. */
+  cost_note?: string | null;
   inputs: { name: string; source: string; ready: boolean }[];
   produces: string[];
 };
@@ -691,7 +704,10 @@ async function post(action: string, payload: Record<string, unknown>, key?: stri
       body: JSON.stringify({ action, ...payload }),
     }, { key });
     const body = await r.json();
-    return r.ok ? { ok: true as const, data: body } : { ok: false as const, error: body?.error };
+    // A start refused for what the project lacks carries the checklist, so the form can draw it.
+    return r.ok ? { ok: true as const, data: body }
+      : { ok: false as const, error: body?.error,
+          readiness: (body?.readiness ?? undefined) as Readiness | undefined };
   } catch (e) {
     return { ok: false as const, error: String((e as Error)?.message ?? e) };
   }
@@ -843,6 +859,19 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   /** The workflow "Start one" chose, so the composer opens on it rather than on a blank path
    *  question the operator has already answered by pressing a button on that workflow's card. */
   const [startWith, setStartWith] = useState<string | undefined>(undefined);
+  /** "Try an example" — the template's own example brief, filled in for the operator to read. */
+  const [startExample, setStartExample] =
+    useState<{ title?: string; directive?: string } | null>(null);
+  /** EVERY START OPENS THE FORM. Catalogue and Yours both sent `sample: true`, so the run was
+   *  on a random demo idea rather than the operator's work — research, a panel, a build and a
+   *  pull request in THEIR repository, on "Build a meeting cost meter" (boss-1 map,
+   *  2026-10-02). Now Start opens the composer on that workflow, with its readiness. */
+  const openComposerOn = (key: string, example?: { title?: string; directive?: string } | null) => {
+    setStartWith(key);
+    setStartExample(example ?? null);
+    setComposerOpen(true);
+    setTab("running");
+  };
   // Lifted out of the builder so forking can land the operator on the thing they just made.
   const [builderTarget, setBuilderTarget] = useState<string>("");
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -1114,18 +1143,21 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             {runs.length ? (
               <button type="button" className="linklike dw-composer-hide"
                       data-testid="dw-composer-hide"
-                      onClick={() => { setComposerOpen(false); setStartWith(undefined); }}>Hide</button>
+                      onClick={() => {
+                        setComposerOpen(false); setStartWith(undefined); setStartExample(null);
+                      }}>Hide</button>
             ) : null}
             <NewProjectComposer
               projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
-              startWith={startWith}
+              startWith={startWith} example={startExample}
               // KEYED ON THE CHOICE, so pressing "Start one" on a different workflow rebuilds
               // the composer rather than leaving it on the first one's inputs.
-              key={startWith ?? "blank"}
+              key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}`}
               onStarted={(runId) => {
                 if (runId) setOpenRun(runId);
                 setComposerOpen(false);
                 setStartWith(undefined);
+                setStartExample(null);
                 setNotice(runId ? `Started ${runId}.` : "Started.");
                 void load();
               }}
@@ -1255,28 +1287,16 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       ) : tab === "yours" ? (
         <YoursView
           installed={installed} schedules={schedules} busy={busy}
-          onStart={(key, workClass) => {
-            // A WORKFLOW THAT DECLARES INPUTS CANNOT BE STARTED BLIND.
+          onStart={(key) => {
+            // A WORKFLOW IS NEVER STARTED BLIND.
             //
             // `sample: true` is "surprise me": the API picks a sample directive for the
-            // workflow's WORK CLASS, which exists for the catalogue's software-building paths.
-            // On a workflow that asks for a video link and editing instructions it is refused
-            // outright (409, no sample for this class) or — worse — injects a software brief
-            // and the run dies on its first step with no video_url, having told the operator
-            // nothing about why. Either way the operator never got to say what they wanted.
-            //
-            // So: if the workflow declared what it needs, open the form on the step that
-            // collects it, with this workflow already chosen. Only a workflow that declares
-            // nothing still starts on a sample, which is what that button was built for.
-            const chosen = installed.find((w) => w.workflow_key === key);
-            if (workflowInputFields(chosen?.input_schema).length) {
-              setStartWith(key);
-              setComposerOpen(true);
-              setTab("running");
-              return;
-            }
-            void act(`Start ${key}`, "start", { workflow_key: key, work_class: workClass,
-                                                sample: true });
+            // workflow's WORK CLASS. On a workflow that asks for a video link it was refused
+            // or injected a software brief; on a catalogue one it spent a build on a demo idea
+            // in the operator's repository. Either way the operator never got to say what they
+            // wanted. Start opens the form on this workflow, with what it needs and whether
+            // this project has it; a sample is the catalogue card's explicit "Try an example".
+            openComposerOn(key);
           }}
           onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
           scheduleDraft={scheduleDraft}
@@ -1352,15 +1372,15 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onInstall={() => act("Install the catalogue", "install", {})}
           onApply={(key, workClass) =>
             act(`Apply ${key}`, "apply", { workflow_key: key, work_class: workClass })}
-          onStart={(key, workClass) =>
-            // NOT A PLACEHOLDER. This sent {"directive": "Describe the work here"}, so the
-            // panel debated that phrase, the spec review approved it and the builder tried to
-            // build it — every step ran and none did anything. The API picks a real piece of
-            // work for this workflow's CLASS, and refuses with a reason when the project
-            // cannot supply one, which is a better demonstration than a run that does nothing.
-            act(`Start ${key}`, "start", {
-              workflow_key: key, work_class: workClass, sample: true,
-            })}
+          onStart={(key) =>
+            // THE OPERATOR'S OWN BRIEF. This sent `sample: true`, so the run was a demo idea
+            // the API picked — for six templates a new-product brief that did not fit them —
+            // and it spent a build in the operator's repository (boss-1 map, 2026-10-02).
+            openComposerOn(key)}
+          onTryExample={(key) =>
+            // AN EXAMPLE THAT FITS THE TEMPLATE, SHOWN BEFORE IT RUNS. Filled into the form to
+            // read and change; nothing starts until Start is pressed there.
+            openComposerOn(key, catalogue.find((c) => c.key === key)?.example ?? null)}
           onFork={async (key) => {
             const entry = catalogue.find((c) => c.key === key);
             // A UNIQUE KEY PER FORK.
@@ -1744,7 +1764,16 @@ export function blockingReason(
  * Four steps, each of which can be skipped by pressing on: nothing here is required except the
  * description, because a wizard that demands ten answers is a wizard people route around.
  */
-function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted, startWith }: {
+/** The inputs the composer draws for a workflow: what it declared, less what the wizard's own
+ *  steps already collect for a catalogue template (the brief, its name, the repository...). A
+ *  workflow somebody made keeps every field it declared — its `title` may mean a YouTube title,
+ *  not the run's name. */
+export function composerFields(schema: unknown, isCatalogue: boolean) {
+  return workflowInputFields(schema).filter((f) => !(isCatalogue && WIZARD_COLLECTS.has(f.name)));
+}
+
+function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted, startWith,
+                             example }: {
   projectId: string; actor: string;
   workflows: Installed[];
   catalogue: CatalogueEntry[];
@@ -1752,10 +1781,28 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
   /** A workflow the operator asked to start, chosen already. Opens on the step that collects
    *  what that workflow declared it needs, because they have already made the path decision. */
   startWith?: string;
+  /** "Try an example": the template's own example brief, filled in for the operator to read
+   *  and change — never started unseen. */
+  example?: { title?: string; directive?: string } | null;
 }) {
-  const [step, setStep] = useState(startWith ? 1 : 0);
+  // A CATALOGUE TEMPLATE OPENS ON ITS BRIEF. Its directive is collected on the first step, and
+  // opening on the path step (right for a workflow whose inputs are all its own) put the one
+  // required answer behind a Back button.
+  const [step, setStep] = useState(() => {
+    if (!startWith) return 0;
+    const isCatalogue = catalogue.some((c) => c.key === startWith);
+    const schema = workflows.find((w) => w.workflow_key === startWith)?.input_schema;
+    return isCatalogue || !composerFields(schema, isCatalogue).length ? 0 : 1;
+  });
   const [draft, setDraft] = useState<NewProjectDraft>(
-    startWith ? { ...EMPTY_DRAFT, workflowKey: startWith } : EMPTY_DRAFT);
+    startWith ? { ...EMPTY_DRAFT, workflowKey: startWith,
+                  title: example?.title ?? "", directive: example?.directive ?? "" }
+              : EMPTY_DRAFT);
+  /** The missing needs the operator chose to start without — sent as `start_anyway`. */
+  const [startAnyway, setStartAnyway] = useState<string[]>([]);
+  /** The checklist from a refused start, when the path was "this project's usual path" and
+   *  could not be asked about beforehand. */
+  const [refusal, setRefusal] = useState<Readiness | null>(null);
   // WHO WILL BE ON IT. Read from the API rather than guessed here: start_run seeds from
   // STAGE_ROLES plus the chosen workflow's approver roles, and a second copy of that rule in
   // the console would drift from the one that actually runs.
@@ -1821,24 +1868,44 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
   // hardcoded: a custom workflow declares its own, and the form has to draw whatever that is.
   const selectedWorkflowSchema = workflows.find(
     (w) => w.workflow_key === draft.workflowKey)?.input_schema;
-  const declaredInputs = workflowInputFields(selectedWorkflowSchema);
+  const selectedIsCatalogue = !!describe(draft.workflowKey);
+  const declaredInputs = composerFields(selectedWorkflowSchema, selectedIsCatalogue);
 
   // WHAT WILL ACTUALLY BE SENT, worked out once and used for the guard, the review and the
   // start — three places that disagreed. The operator's directive stands in for a single blank
   // prose input rather than being asked for twice; see `inputsWithTheDirective`.
-  const inputsToSend = inputsWithTheDirective(declaredInputs, draft.inputs, draft.directive);
+  const inputsToSend = selectedIsCatalogue
+    ? suppliedInputs(declaredInputs, draft.inputs)
+    : inputsWithTheDirective(declaredInputs, draft.inputs, draft.directive);
   const stillBlank = missingRequired(declaredInputs, inputsToSend);
+
+  // CAN IT RUN HERE. Asked as soon as the path is known, so what is missing is on screen
+  // before Start rather than in a run that fails at its last step.
+  const asked = useWorkflowReadiness(projectId, draft.workflowKey, inputsToSend);
+  const readiness = asked ?? refusal;
+  const notReady = unaccepted(readiness, startAnyway);
 
   // `??` WAS WRONG HERE AND IT COST A RUN. `blockingReason` returns "" for "nothing is
   // blocking", and "" is neither null nor undefined, so the right-hand side never ran and this
   // whole check was dead code: a required input left blank sailed past the form and was refused
   // by the runtime instead, as `WorkflowValidationError: this workflow needs 1 input(s) it was
   // not given: instructions` under a button that had looked perfectly ready to press.
-  const blocked = blockingReason(step, draft, declaredInputs.length > 0)
+  // A catalogue template's brief IS its declared directive, collected on step 0 — so the
+  // twenty-character rule applies to it like any software brief.
+  // WHAT STOPS MOVING ON is only this step's own question. A required field drawn on a later
+  // step (Deprecation / Sunset's "Who to tell") must not disable Next on the step before it —
+  // that is a form you cannot get to the end of. It still blocks Start, below.
+  const stepBlocked = blockingReason(step, draft,
+                                     declaredInputs.length > 0 && !selectedIsCatalogue);
+  const blocked = stepBlocked
     // A required input still blank blocks the start, and says which one — the run would be
     // refused by the runtime anyway, and being told at the form is the difference between a
     // correction and a failed run.
-    || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "");
+    || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "")
+    // So does something the project lacks, unless the operator chose to start without it.
+    || (notReady.length
+        ? `Not ready here yet: ${notReady.map((m) => m.label).join("; ")} — see below.`
+        : "");
 
   const start = async () => {
     // WHAT THIS RUN IS CALLED, when the operator wrote no brief.
@@ -1879,8 +1946,14 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
           // sent: an empty string would read further down as a deliberate choice of empty.
           ...inputsToSend,
         },
+        ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
       });
-      if (!r.ok) { setError(r.error ?? "Could not start it."); return; }
+      if (!r.ok) {
+        setError(r.error ?? "Could not start it.");
+        // Refused for what the project lacks: draw the list where the operator is looking.
+        if ("readiness" in r && r.readiness) setRefusal(r.readiness);
+        return;
+      }
       const run = (r.data as { run?: { id?: string }; id?: string } | undefined);
       // WHO IS ON IT, recorded as a CHOICE — but only when it differs from what start_run
       // already seeded. Writing an identical list back as `operator` would claim a decision
@@ -1920,8 +1993,11 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
     <section className="dw-new dw-wizard" data-testid="dw-new-project">
       <div className="dw-new-head">
         <h3>New project</h3>
+        {/* "you approve" was the PRD approval, which is automatic by default — the step now
+            says so, and so does this. The person's decision is the release. */}
         <p className="detail">
-          A panel specs it, you approve, then it builds, previews, and asks before it deploys.
+          A panel specs it, the spec is approved automatically, then it builds, previews, and
+          asks you before it deploys.
         </p>
       </div>
 
@@ -2056,7 +2132,8 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
               Rendered FROM the chosen workflow's declaration, not hardcoded: a custom workflow
               that fetches a video, trims a clip and publishes to a channel declares those, and
               until now was startable only by a caller that already knew the field names.
-              Nothing renders for a workflow that declares none, which is every catalogue one. */}
+              Nothing renders for a workflow that declares none; for a catalogue template only
+              what the wizard's own steps do not already ask (who to tell) is drawn here. */}
           {declaredInputs.length ? (
             <div className="dw-wiz-inputs" data-testid="dw-workflow-inputs">
               <span className="dw-field-label">What this path needs <HelpTip
@@ -2317,6 +2394,9 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
         </div>
       ) : null}
 
+      <ReadinessPanel readiness={readiness} accepted={startAnyway}
+                      onAccept={setStartAnyway} />
+
       {blocked ? <p className="dw-new-error" data-testid="dw-wiz-blocked">{blocked}</p> : null}
 
       <div className="dw-wiz-foot">
@@ -2336,7 +2416,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
               {busy ? "Starting…" : "Start with defaults"}
             </button>
             <button type="button" className="cap-btn primary" data-testid="dw-wiz-next"
-                    disabled={!!blocked}
+                    disabled={!!stepBlocked}
                     onClick={() => setStep((n) => n + 1)}>Next</button>
           </>
         ) : (
@@ -4504,8 +4584,15 @@ function WorkflowPlanPanel({ plan, onCustomize }: {
 
             {/* WHY it stops, not just that it does. "Forced" is the difference between a
                 setting the operator can change and one the risk floor decided for them. */}
-            {step.approval === "manual" ? (
+            {/* "automatic" is the PRD approval: the note says who answers it instead, and how
+                to make it a person's. */}
+            {step.approval === "manual" || step.approval === "automatic" ? (
               <p className="detail dw-plan-note">{step.approval_note}</p>
+            ) : null}
+            {step.cost_note ? (
+              <p className="detail dw-plan-note" data-testid={`dw-plan-cost-${step.id}`}>
+                {step.cost_note}
+              </p>
             ) : null}
 
             {step.inputs.length ? (
@@ -4774,14 +4861,16 @@ function YoursView({ installed, schedules, busy, onStart, onEditMine, scheduleDr
 }
 
 function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork,
-                        onEditMine }: {
+                        onEditMine, onTryExample }: {
   catalogue: CatalogueEntry[];
   installed: Installed[];
   busy: string | null;
   onInstall: () => void;
   onApply: (key: string, workClass: string) => void;
-  /** The work class travels with the key: the sample must fit the lane it runs in. */
+  /** Opens the start form on this template, for the operator's own brief. */
   onStart: (key: string, workClass: string) => void;
+  /** Opens the same form filled with the template's own example, to read before starting. */
+  onTryExample?: (key: string) => void;
   onFork: (key: string) => void;
   /** Open one of the operator's own workflows in the builder, by definition id — the same
    *  handle the builder's "Editing" picker uses, so the card and the dropdown agree. */
@@ -4856,14 +4945,31 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
               </div>
             </dl>
 
-            {entry.requires_project.length > 0 ? (
-              <p className="dw-needs">
+            {/* WHAT IT NEEDS, IN THE PREFLIGHT'S WORDS — including a model and the agents its
+                gates name, which "repository · deployment target" left out. */}
+            {(entry.needs?.length ?? entry.requires_project.length) > 0 ? (
+              <p className="dw-needs" data-testid={`dw-needs-${entry.key}`}>
                 <span className="dw-needs-label">Needs</span>
-                {entry.requires_project.map((need) => (
-                  <span key={need} className="dw-need">{need.replace(/_/g, " ")}</span>
-                ))}
+                {(entry.needs ?? entry.requires_project.map((k) => ({ key: k, label: k })))
+                  .map((need) => (
+                    <span key={need.key} className="dw-need">
+                      {need.label.replace(/_/g, " ")}
+                    </span>
+                  ))}
               </p>
             ) : <p className="dw-needs dw-needs-none">Nothing to set up first</p>}
+            {entry.automatic_approvals?.length ? (
+              <p className="detail dw-card-auto" data-testid={`dw-auto-${entry.key}`}>
+                The PRD is approved automatically; you approve{" "}
+                {entry.gates.length ? entry.gates.join(", ") : "nothing else"}.
+              </p>
+            ) : null}
+            {entry.cost_notes?.map((c) => (
+              <p key={c.step} className="detail dw-card-cost"
+                 data-testid={`dw-cost-${entry.key}-${c.step}`}>
+                <strong>{c.step}</strong>: {c.note}
+              </p>
+            ))}
 
             <div className="dw-card-actions">
               {have.has(entry.key) ? (
@@ -4876,7 +4982,13 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
                     Apply to {entry.work_class}
                   </button>
                   <button type="button" className="cap-btn" disabled={!!busy}
+                          data-testid={`dw-start-${entry.key}`}
                           onClick={() => onStart(entry.key, entry.work_class)}>Start one</button>
+                  {entry.example && onTryExample ? (
+                    <button type="button" className="linklike" disabled={!!busy}
+                            data-testid={`dw-example-${entry.key}`}
+                            onClick={() => onTryExample(entry.key)}>Try an example</button>
+                  ) : null}
                   {/* Fork, never edit: the standard stays pristine so "reset" means something. */}
                   <button type="button" className="cap-btn" disabled={!!busy}
                           onClick={() => onFork(entry.key)}

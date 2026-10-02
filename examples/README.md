@@ -104,6 +104,14 @@ one needs a work tracker, three need email — so you end up with every example 
 a list of what was skipped and why. Re-running is safe: examples that are already installed are
 reused, not duplicated.
 
+**Each example says what will not work yet.** After it installs, every script asks BOSS whether
+the workflow can run on this project and prints anything missing — a mail server, a connected
+tracker, a Google account — with the step that needs it and how to fix it. `setup_all.py`
+collects those at the end. Start in the console shows the same list, and refuses to start until
+each item is fixed or you choose to start anyway. The video example also adds the two agents it
+names (`video_editor`, `media_publisher`, from the media pack) when your project does not have
+them.
+
 To schedule the newsletter while installing, provide its run inputs up front:
 
 ```bash
@@ -133,10 +141,11 @@ Paste a link, describe the edit in plain English, and get an edited video that w
 approval before it reaches your channel.
 
 - **Steps:** **an agent fetches and edits** → publish (stops for you)
-- **Skills the editing agent holds:** `media.fetch_link`, `media.fetch_image`, `video.trim`,
-  `video.cut`, `video.reframe`, `video.caption`, `video.overlay_image`, `video.watermark`,
-  `video.bookend`
-- **Needs:** a connected model, and a Google account for the first and last step
+- **Skills the editing agent holds:** `media.fetch_link`, `media.fetch_image`,
+  `media.read_document`, `video.trim`, `video.cut`, `video.reframe`, `video.caption`,
+  `video.overlay_image`, `video.watermark`, `video.bookend`
+- **Needs:** a connected model, a Google account for the first and last step, and the
+  `video_editor` and `media_publisher` agents (setup adds them from the media pack)
 
 **What it demonstrates:** a step that binds no skill at all. The editing step carries your
 sentence, and the agent composes its own skills to satisfy it. "Trim it" and "trim it, make it
