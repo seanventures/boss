@@ -390,29 +390,31 @@ def _names_in_step(step: dict[str, Any]) -> dict[str, str]:
 
 
 def steps_naming(connection: Connection, project_id: str, role_key: str) -> list[dict[str, Any]]:
-    """Every workflow step that names this agent, in the version a run would start from.
+    """Every workflow step that names this agent, in any version a run can still start from.
 
-    The LATEST published version of each workflow that is not retired, plus the version of any
-    run still in flight — a run already under way will reach its steps whatever the newest
-    version says.
+    Read from workflows.versions_a_run_can_reach — every published version of a workflow that
+    is not retired, labelled with how a run reaches it — plus the version of any run still in
+    flight, which will reach its steps whatever the workflow says now.
+
+    Round 1 of the milestone/agents review read only each workflow's NEWEST version, so an
+    agent named only in the version that actually runs (an older one made active again, or the
+    active one under a newer unactivated publish) was deleted with 200 and the workflow broken
+    for good. Each entry says which version names it (`because`: the VERSION_REACH label, or
+    'live run') and whether retiring that version would free the agent (`retirable`).
     """
+    from . import workflows
+
     role = str(role_key or "").strip().lower()
-    rows = connection.execute(
-        text(
-            """
-            SELECT DISTINCT ON (d.id) d.workflow_key, d.name, v.version, v.spec, 'latest' AS why
-              FROM workflow_versions v JOIN workflow_definitions d
-                ON d.id = v.workflow_definition_id
-             WHERE v.project_id = :p AND v.status = 'published' AND d.status <> 'retired'
-             ORDER BY d.id, v.version DESC
-            """
-        ),
-        {"p": project_id},
-    ).mappings().all()
+    reachable = [
+        {"workflow_key": v["workflow_key"], "name": v["name"], "version": v["version"],
+         "version_id": v["version_id"], "spec": v["spec"], "why": v["reach"]}
+        for v in workflows.versions_a_run_can_reach(connection, project_id)
+    ]
     live = connection.execute(
         text(
             """
-            SELECT DISTINCT d.workflow_key, d.name, v.version, v.spec, 'live run' AS why
+            SELECT DISTINCT d.workflow_key, d.name, v.version, v.id AS version_id, v.spec,
+                   'live run' AS why
               FROM workflow_runs r
               JOIN workflow_versions v ON v.id = r.workflow_version_id
               JOIN workflow_definitions d ON d.id = v.workflow_definition_id
@@ -424,8 +426,8 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
         {"p": project_id},
     ).mappings().all()
     out: list[dict[str, Any]] = []
-    seen: set[tuple[str, int, str]] = set()
-    for row in list(rows) + list(live):
+    seen: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for row in [dict(r) for r in live] + reachable:
         spec = row["spec"] if isinstance(row["spec"], dict) else {}
         for step in spec.get("steps") or []:
             if not isinstance(step, dict):
@@ -435,15 +437,31 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
                 continue
             key = (str(row["workflow_key"]), int(row["version"]), str(step.get("id")))
             if key in seen:
+                # A version with a run in flight is never retirable, however else it is reached.
                 continue
-            seen.add(key)
-            out.append({
+            entry = {
                 "workflow_key": row["workflow_key"], "workflow": row["name"],
-                "version": int(row["version"]), "step_id": str(step.get("id") or ""),
+                "version": int(row["version"]), "version_id": str(row["version_id"]),
+                "step_id": str(step.get("id") or ""),
                 "step": str(step.get("label") or step.get("name") or step.get("id") or ""),
                 "how": how, "because": row["why"],
-            })
+                "retirable": row["why"] in workflows.RETIRABLE_REACH,
+            }
+            seen[key] = entry
+            out.append(entry)
     return out
+
+
+def _where(named: dict[str, Any]) -> str:
+    """Which version names it, said the way an operator thinks of it."""
+    because = named["because"]
+    if because == "live run":
+        return "a run in flight"
+    if because == "active":
+        return f"v{named['version']}, the version it runs"
+    if because == "older":
+        return f"v{named['version']}, an older version still startable by id"
+    return f"v{named['version']}, {because}"
 
 
 def studio_profiles(connection: Connection, project_id: str, role_key: str) -> list[dict]:
@@ -707,27 +725,41 @@ def update_agent(
 
 
 def delete_agent(connection: Connection, project_id: str, role_key: str, *,
-                 actor: str) -> dict[str, Any]:
+                 actor: str, retire_older_versions: bool = False) -> dict[str, Any]:
     """Take an agent off the roster, or say exactly why it cannot be.
 
     REFUSED WHILE A WORKFLOW STEP NAMES IT. Deleting the agent underneath a step turns a working
     workflow into one that fails at that step, minutes into a run, with "not a role this
     workforce has". The refusal names every step so the operator can move them first.
+
+    `retire_older_versions` is the one way past a step in an OLDER version — published, still
+    startable by id, but neither active, mapped, a subworkflow child nor running. Without it an
+    agent once named in v1 of a workflow now at v5 could never be deleted. Those versions are
+    retired (kept, no longer startable) in the same transaction as the delete, and only those.
     """
     key = str(role_key or "").strip().lower()
     role = _require_role(connection, project_id, key)
 
     named = steps_naming(connection, project_id, key)
-    if named:
+    blocking = [n for n in named if not (retire_older_versions and n["retirable"])]
+    if blocking:
         shown = "; ".join(
-            f"workflow '{n['workflow']}' step '{n['step']}' ({'a run in flight' if n['because'] == 'live run' else 'v' + str(n['version'])}, {n['how']})"
-            for n in named[:6])
-        more = f" and {len(named) - 6} more" if len(named) > 6 else ""
+            f"workflow '{n['workflow']}' step '{n['step']}' ({_where(n)}, {n['how']})"
+            for n in blocking[:6])
+        more = f" and {len(blocking) - 6} more" if len(blocking) > 6 else ""
+        if all(n["retirable"] for n in blocking):
+            todo = ("Only older versions name it, and nothing starts them by default — delete "
+                    "again choosing to retire those versions (their history is kept), or "
+                    "delete the workflow.")
+        else:
+            todo = ("Give those steps to another agent (or leave them for BOSS to pick) and "
+                    "save the workflow" + (", let the run in flight finish"
+                                           if any(n["because"] == "live run" for n in blocking)
+                                           else "") + ", then delete again.")
         raise AgentError(
-            f"{role['display_name']} cannot be deleted: {len(named)} workflow step"
-            f"{'s name' if len(named) != 1 else ' names'} it — {shown}{more}. Give those steps "
-            "to another agent (or leave them for BOSS to pick) and save the workflow, then "
-            "delete again.", status=409)
+            f"{role['display_name']} cannot be deleted: {len(blocking)} workflow step"
+            f"{'s name' if len(blocking) != 1 else ' names'} it — {shown}{more}. {todo}",
+            status=409)
 
     history = connection.execute(
         text("SELECT (SELECT count(*) FROM role_reviews WHERE role_id = :id) "
@@ -740,6 +772,12 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
             f"{'s' if history != 1 else ''} on record, and that history is audit evidence BOSS "
             "keeps. Take its skills and MCP servers away instead — an agent holding nothing is "
             "never picked for a step and is refused if one names it.", status=409)
+
+    from . import workflows
+
+    retired = workflows.retire_versions(
+        connection, project_id, {n["version_id"] for n in named if n["retirable"]},
+        actor=actor, reason=f"named agent '{key}', which was deleted") if named else []
 
     connection.execute(text("UPDATE kpis SET owner_role_id = NULL WHERE owner_role_id = :id"),
                        {"id": role["id"]})
@@ -780,8 +818,9 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
     emit_event(connection, project_id, "agent.deleted", actor, "role", key,
                {"skills": list(skills), "mcp_servers": list(mcp),
                 "studio_profiles_retired": [p["agent_key"] for p in profiles],
-                "reports_moved_up": list(moved)})
+                "reports_moved_up": list(moved), "workflow_versions_retired": retired})
     return {"role_key": key, "deleted": True, "skills_released": sorted(skills),
+            "workflow_versions_retired": retired,
             "mcp_servers_released": sorted(mcp),
             "studio_profiles_retired": [p["agent_key"] for p in profiles],
             "reports_moved_to": role["reports_to"], "reports_moved": sorted(moved)}

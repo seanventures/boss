@@ -22537,7 +22537,9 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         "blocks": blocks(),
         # THE PROJECT'S AGENTS, not only the bundled ones: an agent made on the Agents page has
         # to be offered as a captain, or the builder cannot put it on the step it was made for.
-        "roles": sorted(REGISTERED_ROLES | roster),
+        # And not a bundled one the operator deleted: project_roster leaves those out, so the
+        # builder never offers a captain publish would then refuse.
+        "roles": sorted(roster or REGISTERED_ROLES),
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
             "A capability at or above the risk floor always requires a person, whatever a "

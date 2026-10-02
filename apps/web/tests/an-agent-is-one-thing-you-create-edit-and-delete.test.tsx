@@ -129,6 +129,33 @@ describe("an agent can be deleted, or you are told why not", () => {
     expect(html).toMatch(/data-testid="agent-delete-open"[^>]*disabled|disabled[^>]*data-testid="agent-delete-open"/);
   });
 
+  it("says which version names it, so the version that runs is never a bare number", () => {
+    // Review of milestone/agents, round 2: the guard read only the newest version, so the
+    // version that actually ran could lose its agent. The page now names the version's role.
+    const html = render(<AgentDelete projectId="p" actor="ceo" onDeleted={() => {}}
+      detail={detail({ named_on_steps: [{
+        workflow_key: "ship", workflow: "Ship it", version: 1, step_id: "audit",
+        step: "Audit the release", how: "runs it", because: "active", retirable: false }] })} />);
+    expect(html).toContain("v1, the version it runs");
+    expect(html).toMatch(/data-testid="agent-delete-open"[^>]*disabled|disabled[^>]*data-testid="agent-delete-open"/);
+  });
+
+  it("an older version alone does not block: the page says it is retired with the agent", () => {
+    // Every startable version is guarded; without this way through, an agent once named in v1
+    // of a workflow now at v5 could never be deleted.
+    const html = render(<AgentDelete projectId="p" actor="ceo" onDeleted={() => {}}
+      detail={detail({ named_on_steps: [{
+        workflow_key: "ship", workflow: "Ship it", version: 1, step_id: "audit",
+        step: "Audit the release", how: "runs it", because: "older", retirable: true }] })} />);
+    expect(html).not.toContain("agent-delete-blocked");
+    expect(html).toContain('data-testid="agent-delete-retires"');
+    expect(html).toContain("Ship it v1");
+    expect(html).not.toMatch(/data-testid="agent-delete-open"[^>]*disabled|disabled[^>]*data-testid="agent-delete-open"/);
+    // And the delete it sends asks for exactly that.
+    expect(codeOnly("app/agent-detail-ui.tsx")).toContain("retireOlderVersions: older.length > 0");
+    expect(codeOnly("lib/agents.ts")).toContain("retire_older_versions=true");
+  });
+
   it("otherwise says what deleting does before it is confirmed", () => {
     const html = render(<AgentDelete projectId="p" actor="ceo" onDeleted={() => {}}
       detail={detail({ studio_profiles: [{ id: "a", agent_key: "k", name: "K", status: "active" }] })} />);

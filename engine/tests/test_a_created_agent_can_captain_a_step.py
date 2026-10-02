@@ -84,3 +84,46 @@ def test_every_call_with_a_project_passes_the_project_roster():
         "step naming an agent the operator created is refused there. Pass "
         "workflows.project_roster(connection, project_id), or list the call in "
         "WITHOUT_A_PROJECT with the reason.")
+
+
+def test_with_a_roster_a_bundled_role_missing_from_it_is_refused():
+    """Review of milestone/agents, round 2: validate_captain unioned REGISTERED_ROLES back into
+    the roster, so a bundled agent the operator had DELETED still passed at publish and only
+    failed at start or minutes into a run. With a roster, the roster is the whole answer (plus
+    the human approver); project_roster is what keeps undeleted bundled roles in it."""
+    [problem] = validate_captain({"id": "s", "captain": "qa"}, roster={"release_auditor"})
+    assert "not a role this workforce has" in problem and "Agents page" in problem
+    assert validate_captain({"id": "s", "captain": "human"}, roster={"release_auditor"}) == []
+    assert validate_captain({"id": "s", "captain": "qa"}) == [], "no project: the bundled list"
+
+
+class _Rows:
+    """A connection answering the roster's two reads: the roles rows, then the tombstones."""
+
+    def __init__(self, roles, deleted):
+        self._answers = [roles, deleted]
+
+    def execute(self, *_a, **_k):
+        return self
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return list(self._answers.pop(0))
+
+
+def test_the_project_roster_leaves_out_exactly_the_bundled_agents_an_operator_deleted(
+        monkeypatch):
+    from boss_engine.services import seed_exclusions
+    from boss_engine.services.workflow_capabilities import REGISTERED_ROLES
+
+    monkeypatch.setattr(seed_exclusions, "_table_ready", lambda _c: True)
+    roster = workflows.project_roster(_Rows(["release_auditor", "cto"], ["qa"]), "p")
+    assert "release_auditor" in roster, "an agent the operator made"
+    assert "qa" not in roster, "a bundled agent the operator deleted"
+    # Bundled roles merely not installed stay valid, as before: several captains run through
+    # the agent process template with no pack installing them.
+    assert (REGISTERED_ROLES - {"qa"}) <= roster
+    # Re-made by hand after a delete, the roles row wins over the old tombstone.
+    assert "qa" in workflows.project_roster(_Rows(["qa"], ["qa"]), "p")

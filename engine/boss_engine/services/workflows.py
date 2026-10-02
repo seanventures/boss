@@ -247,18 +247,31 @@ def missing_required_inputs(spec: dict[str, Any], input_data: dict[str, Any]) ->
 
 
 def project_roster(connection: Connection, project_id: str) -> frozenset[str]:
-    """Every agent this project has — what a step may name as its captain.
+    """Every agent a step in this project may name — what validate_captain accepts.
 
     The bundled REGISTERED_ROLES alone refused every agent an operator created, so the
     quick-create promise "it can be put on a workflow step as soon as it exists" was false.
     tests/test_a_created_agent_can_captain_a_step.py checks every validate_workflow_spec call
     that has a connection passes this.
+
+    THE PROJECT'S AGENTS, PLUS THE BUNDLED ROLES IT HAS NOT DELETED. Unioning every bundled role
+    in (review of milestone/agents, round 2) let a workflow name 'qa' after the operator had
+    deleted qa: publish accepted it, and the absence only surfaced at start or minutes into a
+    run. A deleted bundled agent is tombstoned (seed_exclusions 'role'), so it is left out here
+    and publish refuses it with the sentence that says what to do. Bundled roles a project has
+    simply not installed stay in, as before — several captains run through the agent process
+    template without a pack installing them (test_every_step_has_a_captain.KNOWN_UNROOTED).
     """
-    return frozenset(
-        str(key) for key in connection.execute(
+    from . import seed_exclusions
+    from .workflow_capabilities import HUMAN_ROLES, REGISTERED_ROLES
+
+    roles = {
+        str(key).strip().lower() for key in connection.execute(
             text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id},
         ).scalars().all()
-    )
+    }
+    deleted = seed_exclusions.excluded(connection, project_id, "role") - roles
+    return frozenset(roles | (REGISTERED_ROLES - deleted) | HUMAN_ROLES)
 
 
 def validate_workflow_spec(spec: dict[str, Any],
@@ -999,6 +1012,16 @@ def publish_version(
         #
         # Publishing the same content twice must not create two versions, so the match is
         # ACTIVATED rather than copied: the history stays honest and the intent is carried out.
+        # A RETIRED MATCH IS PUBLISHED AGAIN. Versions are retired when an agent they named is
+        # deleted (retire_versions). Re-saving that content passed the roster check just above,
+        # so what it names exists again — making it active while it stayed retired would leave
+        # the workflow pointing at a version `_version_row` refuses.
+        if existing["status"] == "retired":
+            connection.execute(
+                text("UPDATE workflow_versions SET status = 'published' WHERE id = :id"),
+                {"id": existing["id"]})
+            result["status"] = "published"
+            result["republished"] = True
         if str(definition.get("active_version_id") or "") != str(existing["id"]):
             connection.execute(
                 text(
@@ -1300,9 +1323,128 @@ def _version_row(connection: Connection, project_id: str, version_id: str) -> An
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Workflow version not found.")
-    if row["status"] != "published" or row["definition_status"] != "active":
+    if row["status"] == "retired" and row["definition_status"] == "active":
+        raise WorkflowConflictError(
+            f"v{row['version']} of '{row['workflow_name']}' was retired (an agent it named was "
+            "deleted), so it cannot start. Start the workflow's current version instead.")
+    if (row["status"] not in STARTABLE_VERSION_STATUSES
+            or row["definition_status"] not in STARTABLE_DEFINITION_STATUSES):
         raise WorkflowConflictError("Workflow version is not active and published.")
     return row
+
+
+#: WHAT `_version_row` LETS A RUN START FROM — the one gate every run passes (start_run is the
+#: only writer of workflow_runs, and it always calls `_version_row`). Named so the delete guard
+#: below reads the same rule rather than a copy of it.
+STARTABLE_VERSION_STATUSES = ("published",)
+STARTABLE_DEFINITION_STATUSES = ("active",)
+#: A 'draft' definition is not startable YET, but publishing any version to it makes it active
+#: and every published version it already has startable by id, with no further check.
+GUARDED_DEFINITION_STATUSES = STARTABLE_DEFINITION_STATUSES + ("draft",)
+
+#: How a run reaches a version, as `versions_a_run_can_reach` labels it. Only `older` may be
+#: retired to free what it names: nothing points at it, so retiring it breaks no default start,
+#: mapping or parent workflow. Every other reach is something that WILL start that version.
+VERSION_REACH = {
+    "active": "the version the workflow starts by default",
+    "not yet active": "published without being made active, ready to be switched on",
+    "mapped": "a workflow mapping sends work to it",
+    "subworkflow": "another workflow's step starts it as a subworkflow",
+    "older": "an older published version — still startable by its id, though nothing points at it",
+}
+RETIRABLE_REACH = frozenset({"older"})
+
+
+def versions_a_run_can_reach(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Every workflow version a run in this project can still start from, with how.
+
+    THE INCIDENT (review of milestone/agents, round 2). The agent-delete guard read only each
+    workflow's NEWEST version. publish_version makes an older one active again when its content
+    is re-saved (the restore-after-a-bad-save flow), and can publish without activating, and
+    start_run accepts any published version by id. So an agent named only in the active v1,
+    with a v2 that did not name it, was deleted with 200 and tombstoned; the next run of v1 was
+    refused with "not a role this workforce has", for good.
+
+    So this reads the same statuses `_version_row` accepts (plus drafts, which one publish makes
+    startable), not a selection of them, and labels each version with the strongest reason a
+    run would reach it (VERSION_REACH). A new way to choose a version cannot slip past it: any
+    version it could choose is one of these rows already.
+    """
+    rows = connection.execute(
+        text(
+            """
+            SELECT d.id AS definition_id, d.workflow_key, d.name, d.active_version_id,
+                   v.id AS version_id, v.version, v.spec,
+                   (SELECT a.version FROM workflow_versions a
+                     WHERE a.id = d.active_version_id) AS active_version
+              FROM workflow_versions v JOIN workflow_definitions d
+                ON d.id = v.workflow_definition_id
+             WHERE v.project_id = :p
+               AND v.status = ANY(:version_statuses)
+               AND d.status = ANY(:definition_statuses)
+             ORDER BY d.workflow_key, v.version DESC
+            """
+        ),
+        {"p": project_id, "version_statuses": list(STARTABLE_VERSION_STATUSES),
+         "definition_statuses": list(GUARDED_DEFINITION_STATUSES)},
+    ).mappings().all()
+    mapped = {str(v) for v in connection.execute(
+        text("SELECT workflow_version_id FROM workflow_mappings "
+             "WHERE project_id = :p AND enabled"),
+        {"p": project_id},
+    ).scalars().all()}
+    specs = {str(row["version_id"]): (row["spec"] if isinstance(row["spec"], dict)
+                                      else _json(row["spec"], {})) or {}
+             for row in rows}
+    children: set[str] = set()
+    for spec in specs.values():
+        for step in spec.get("steps") or []:
+            if isinstance(step, dict) and step.get("kind") == "subworkflow":
+                child = (step.get("binding") or {}).get("workflow_version_id")
+                if child:
+                    children.add(str(child))
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        vid = str(row["version_id"])
+        active = row["active_version"]
+        if vid == str(row["active_version_id"] or ""):
+            reach = "active"
+        elif vid in mapped:
+            reach = "mapped"
+        elif vid in children:
+            reach = "subworkflow"
+        elif active is None or int(row["version"]) > int(active):
+            reach = "not yet active"
+        else:
+            reach = "older"
+        out.append({"definition_id": row["definition_id"], "workflow_key": row["workflow_key"],
+                    "name": row["name"], "version_id": vid, "version": int(row["version"]),
+                    "spec": specs[vid], "reach": reach})
+    return out
+
+
+def retire_versions(connection: Connection, project_id: str, version_ids: Iterable[str], *,
+                    actor: str, reason: str) -> list[str]:
+    """Retire older published versions so no run can start from them; returns those retired.
+
+    Only versions `versions_a_run_can_reach` labels `older` — never the active one, a mapped
+    one or a subworkflow child, which are what work actually starts from. History is kept: the
+    row stays, with its runs; only `_version_row` stops accepting it. Re-saving the same content
+    later publishes it again (publish_version), after the spec is re-checked.
+    """
+    wanted = {str(v) for v in version_ids}
+    retirable = [v for v in versions_a_run_can_reach(connection, project_id)
+                 if v["version_id"] in wanted and v["reach"] in RETIRABLE_REACH]
+    for version in retirable:
+        connection.execute(
+            text("UPDATE workflow_versions SET status = 'retired' "
+                 "WHERE id = :id AND project_id = :p AND status = 'published'"),
+            {"id": version["version_id"], "p": project_id})
+        emit_event(connection, project_id, "workflow.version_retired", actor,
+                   "workflow_version", version["version_id"],
+                   {"definition_id": version["definition_id"],
+                    "version": version["version"], "reason": reason})
+    return [v["version_id"] for v in retirable]
 
 
 def _table_exists(connection: Connection, table_name: str) -> bool:
