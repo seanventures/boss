@@ -23942,7 +23942,8 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             wanted = work_class or (
                 catalogue_work_class(workflow_key) if workflow_key else ""
             )
-            chosen = sample_for(connection, project_id, str(wanted or ""))
+            chosen = sample_for(connection, project_id, str(wanted or ""),
+                                workflow_key=workflow_key)
         if not chosen:
             # REFUSING IS THE CORRECT ANSWER when the project cannot supply an example. The
             # alternative is a run against an app that does not exist.
@@ -23964,6 +23965,10 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
                 raise HTTPException(
                     status_code=404, detail=f"no delivery workflow '{workflow_key}'"
                 )
+        # CAN IT RUN HERE — asked before anything is spent. See workflow_readiness.
+        readiness = _delivery_readiness_or_409(
+            connection, project_id, version_id=version_id, work_class=work_class,
+            run_input=run_input, start_anyway=payload.get("start_anyway"))
         try:
             run = workflow_runtime.start_run(
                 connection, project_id=project_id, actor=actor, input_data=run_input,
@@ -23990,10 +23995,74 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except workflow_runtime.WorkflowBindingBlockedError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        from boss_engine.services.workflow_readiness import record_started_anyway
+
+        if not run.get("duplicate"):
+            record_started_anyway(connection, project_id, actor, run.get("id") or "", readiness)
         # Named in the response rather than dropped in silence: a caller that asked for
         # adoption and did not get it should be able to see that, not wonder why its run
         # behaved differently from the one it copied.
-        return {"run": run, **({"ignored_input": dropped} if dropped else {})}
+        return {"run": run, **({"ignored_input": dropped} if dropped else {}),
+                **({"readiness": readiness} if readiness.get("missing") else {})}
+
+
+def _delivery_readiness_or_409(
+    connection, project_id: str, *, version_id: Optional[str], work_class: str,
+    run_input: dict, start_anyway: Any,
+) -> dict:
+    """The start preflight for the delivery doors: refuse with WHAT IS MISSING and the fix.
+
+    409 with a structured detail — `message` is the sentence, `readiness` the checklist the
+    console draws — because "cannot run here yet" is a state of the project, not a bad request.
+    A work_class start resolves its mapping first so the same check applies to it.
+    """
+    from boss_engine.services import workflow_readiness
+
+    if not version_id and work_class:
+        try:
+            resolution = workflow_runtime.resolve_mapping(
+                connection, project_id=project_id, selector_kind="work_class",
+                selector_value=work_class)
+        except workflow_runtime.WorkflowError:
+            resolution = {}
+        if resolution.get("status") == "selected":
+            version_id = resolution["selected"]["workflow_version_id"]
+    if not version_id:
+        return {"ready": True, "checked": [], "missing": []}
+    accepted = start_anyway if isinstance(start_anyway, list) else []
+    try:
+        return workflow_readiness.refuse_unless_ready(
+            connection, settings, project_id, version_id=str(version_id),
+            input_data=run_input, start_anyway=[str(k) for k in accepted])
+    except workflow_readiness.WorkflowNotReadyError as error:
+        raise HTTPException(status_code=409, detail={
+            "message": str(error), "readiness": error.readiness}) from error
+
+
+@app.get("/v1/delivery-workflows/{workflow_key}/readiness")
+def get_delivery_workflow_readiness(workflow_key: str, project_id: str,
+                                    input: Optional[str] = None) -> dict:
+    """What this workflow needs from this project, each item checked, with the fix.
+
+    The same answer Start gives when it refuses, asked before pressing it — the start form and
+    the example setup scripts draw it. `input` is the run input as JSON, for needs that depend
+    on it (a notify channel the operator typed).
+    """
+    from boss_engine.services import workflow_readiness
+
+    try:
+        supplied = json.loads(input) if input else {}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="input must be a JSON object") from error
+    with begin(engine) as connection:
+        running = workflow_runtime.running_version(connection, project_id, workflow_key)
+        if not running or not running.get("version_id"):
+            raise HTTPException(status_code=404,
+                                detail=f"no delivery workflow '{workflow_key}'")
+        result = workflow_readiness.readiness_of_version(
+            connection, settings, project_id, version_id=str(running["version_id"]),
+            input_data=supplied if isinstance(supplied, dict) else {})
+        return {"workflow_key": workflow_key, "project_id": project_id, **result}
 
 
 @app.get("/v1/delivery-workflows")
@@ -24192,6 +24261,15 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
         require_project_actor(
             connection, payload.project_id, payload.actor, "workflow_execute"
         )
+        # THE SAME PREFLIGHT AS THE DELIVERY DOOR. This low-level door starts product workflows
+        # too, and one unchecked door is how a template that cannot run here gets started
+        # anyway. System workflows are not checked (refuse_unless_ready says why).
+        if not payload.parent_run_id:
+            _delivery_readiness_or_409(
+                connection, payload.project_id, version_id=payload.workflow_version_id,
+                work_class=(payload.selector_value
+                            if payload.selector_kind == "work_class" else ""),
+                run_input=dict(payload.input or {}), start_anyway=None)
         try:
             return WorkflowRunSummary(
                 **workflow_runtime.start_run(
