@@ -21082,6 +21082,7 @@ def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse
                 payload.job_id,
                 payload.lease_token,
                 payload.lease_ttl_seconds,
+                handing_back=payload.handing_back,
             )
         except LeaseNotFoundError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error

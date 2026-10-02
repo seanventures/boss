@@ -887,12 +887,25 @@ class JobLeaseService:
         job_id: str,
         lease_token: str,
         lease_ttl_seconds: int,
+        handing_back: bool = False,
     ) -> dict[str, Any]:
         current_time = now_utc()
         lease_expires_at = current_time + timedelta(seconds=lease_ttl_seconds)
         row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token)
         if row["lease_expires_at"] <= current_time:
             raise LeaseNotFoundError("Lease has expired.")
+        if handing_back:
+            # A DEPLOY IS NOT THE JOB'S FAILURE. The stopping worker shortens its lease so the job
+            # is reclaimed in seconds, and reclaiming it adds an attempt — so two deploys during
+            # one long build used two of its three attempts, and a third would have deadlettered
+            # work that never failed (boss-1, 2026-10-02). Give the attempt back now; the
+            # reclaim's increment then leaves the count where the work actually is.
+            connection.execute(
+                text("UPDATE jobs SET attempt = GREATEST(attempt - 1, 0) WHERE id = :job_id"),
+                {"job_id": job_id},
+            )
+            emit_event(connection, row["project_id"], "job.handed_back", worker_id, "job",
+                       job_id, {"reason": "worker stopping", "attempt_not_counted": True})
 
         next_status = "running" if row["status"] == "leased" else row["status"]
         connection.execute(
