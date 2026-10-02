@@ -5874,6 +5874,9 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
         require_project_actor(
             connection, payload.project_id, payload.actor, "workflow_execute"
         )
+        from .services.meeting_service import meeting_subject
+        # The meeting's name is its subject, not the directive verbatim (see meeting_subject).
+        meeting_title = meeting_subject(payload.directive)
         # Attach to an existing task if one was supplied, else create one.
         if payload.task_id:
             exists = connection.execute(
@@ -5887,7 +5890,7 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             task = intake.create_task(
                 connection,
                 project_id=payload.project_id,
-                title=f"PRD meeting: {payload.directive[:90]}",
+                title=f"PRD meeting: {meeting_title}",
                 description=payload.directive,
                 # Same directive in the same project is the same meeting. A double-submit or a
                 # retried request must not convene a second panel and spend twice.
@@ -5914,6 +5917,7 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             directive=payload.directive, url=payload.url,
             constraints=payload.constraints, role_keys=payload.roles,
             finalize_ctx={"reservation_id": reservation_id},
+            title=meeting_title,
         )
         job = jobs.create_job(
             connection, project_id=payload.project_id, task_id=task_id,
@@ -6015,7 +6019,10 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
     def _iso(v):
         return v.isoformat() if hasattr(v, "isoformat") else v
 
-    from .services.meeting_service import resolve_roles, load_role_map, FACILITATOR_TITLE
+    from .services.meeting_service import (
+        resolve_roles, load_role_map, FACILITATOR_TITLE, meeting_subject, display_title,
+        prd_state_of,
+    )
 
     def _pr_for_task(connection, tid):
         if not tid:
@@ -6046,7 +6053,8 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
         covered_tasks: set = set()
         # 1) Durable meeting_runs — live phase/status + per-round state.
         runs = connection.execute(
-            text("""SELECT id, task_id, status, phase, directive, url, role_keys, state, usage, created_at, updated_at
+            text("""SELECT id, task_id, status, phase, directive, url, role_keys, state, usage, created_at, updated_at,
+                           title, decision_id
                     FROM meeting_runs WHERE project_id = :p ORDER BY updated_at DESC LIMIT :limit"""),
             {"p": project_id, "limit": max(1, min(limit, 100))},
         ).mappings().all()
@@ -6070,9 +6078,13 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
             items.append({
                 "id": r["id"], "task_id": r["task_id"], "task_title": t_title, "task_status": t_status,
                 "role_keys": [p["key"] for p in personas],
-                "title": f"PRD meeting: {r['directive']}",
+                # THE SUBJECT, NOT THE PROMPT: workflow framing made every card on boss-1 read
+                # "PRD meeting:" followed by the workflow framing.
+                "title": f"PRD meeting: {r['title'] or meeting_subject(r['directive'])}",
                 "purpose": "Cross-functional PRD review and drafting",
                 "status": r["status"], "phase": r["phase"],
+                **prd_state_of(connection, run_status=r["status"], decision_id=r["decision_id"],
+                               task_id=r["task_id"], pull_request_url=pr_url),
                 "participants": [p["title"] for p in personas] + [FACILITATOR_TITLE],
                 "created_at": _iso(r["created_at"]), "completed_at": _iso(r["updated_at"]) if r["status"] == "completed" else None,
                 "directive": r["directive"], "url": r["url"],
@@ -6149,9 +6161,11 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
                     "task_title": task_title,
                     "task_status": task_status,
                     "role_keys": content.get("role_keys") or [],
-                    "title": m["title"],
+                    "title": display_title(m["title"]),
                     "purpose": m["purpose"],
                     "status": m["status"],
+                    **prd_state_of(connection, run_status=m["status"], decision_id=None,
+                                   task_id=task_id, pull_request_url=pr_url),
                     "phase": "done",
                     "participants": m["participants"] or [],
                     "created_at": _iso(m["created_at"]),
