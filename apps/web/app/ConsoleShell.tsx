@@ -64,44 +64,9 @@ import {
 } from "../lib/edition";
 import { EditionChip } from "./edition-ui";
 import { areaVisibilityCss } from "../lib/area-visibility";
+import type { AreaId } from "../lib/area-ids";
 
-type AreaId =
-  | "workforce"
-  | "org_chart"
-  | "agent"
-  | "dashboard"
-  | "overview"
-  | "decisions"
-  | "work"
-  | "activity"
-  | "delivery_workflows"
-  | "portfolio"
-  | "discovery"
-  | "meetings"
-  | "processes"
-  | "code_tasks"
-  | "shepherd"
-  | "delivery"
-  | "monitoring"
-  | "reliability"
-  | "ai-sre"
-  | "reports"
-  | "budget"
-  | "pipeline"
-  | "comms"
-  | "github"
-  | "infra"
-  | "capabilities"
-  | "studio"
-  | "sandboxes"
-  | "foundations"
-  | "components"
-  | "ops"
-  | "assurance"
-  | "org"
-  | "skills"
-  | "setup"
-  | "enterprise";
+export type { AreaId };
 
 type AreaDef = {
   id: AreaId;

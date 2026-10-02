@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 
+import type { AreaId } from "../lib/area-ids";
+
 // A link that switches console areas CLIENT-SIDE (instant — all area sections
 // are already in the DOM, shown/hidden by CSS) instead of doing a Next
 // navigation that re-runs the whole server page (~15 API calls). It keeps a real
@@ -15,7 +17,9 @@ export function AreaLink({
   children,
   title,
 }: {
-  area: string;
+  // AreaId, not string: a dead target is a compile error (see lib/area-ids.ts for the two that
+  // did nothing when clicked); tests/every-area-link-goes-somewhere.test.ts pins the hrefs.
+  area: AreaId;
   orgId?: string;
   className?: string;
   children: ReactNode;

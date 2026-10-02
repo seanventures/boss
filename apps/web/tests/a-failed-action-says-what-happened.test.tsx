@@ -29,7 +29,14 @@ describe("the console has an error boundary at both levels", () => {
       <ConsoleError error={Object.assign(new Error("An error occurred in the Server Components render. The specific message is omitted in production builds"), { digest: "123abc" })}
                     reset={() => {}} />,
     );
-    expect(html).toContain("That action did not go through");
+    // REWRITTEN (review of milestone/console-b, 2026-10-02): this asserted the heading "That
+    // action did not go through", which the boundary also showed for render and fetch failures
+    // where no action was taken. It now says what it knows, and never the unbacked promise that
+    // nothing was sent twice.
+    expect(html).toContain("This page hit an error");
+    expect(html).toContain("it may or may not have reached BOSS");
+    expect(html).not.toContain("did not go through");
+    expect(html).not.toContain("sent twice");
     expect(html).toContain("123abc");
     expect(html).toContain("Try again");
     expect(html).toContain("Back to Command Center");
