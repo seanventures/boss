@@ -12,7 +12,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import yaml
 from sqlalchemy import bindparam, text
@@ -246,7 +246,25 @@ def missing_required_inputs(spec: dict[str, Any], input_data: dict[str, Any]) ->
     )
 
 
-def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
+def project_roster(connection: Connection, project_id: str) -> frozenset[str]:
+    """Every agent this project has — what a step may name as its captain.
+
+    The bundled REGISTERED_ROLES alone refused every agent an operator created, so the
+    quick-create promise "it can be put on a workflow step as soon as it exists" was false.
+    tests/test_a_created_agent_can_captain_a_step.py checks every validate_workflow_spec call
+    that has a connection passes this.
+    """
+    return frozenset(
+        str(key) for key in connection.execute(
+            text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id},
+        ).scalars().all()
+    )
+
+
+def validate_workflow_spec(spec: dict[str, Any],
+                           roster: Optional[Iterable[str]] = None) -> dict[str, Any]:
+    """Normalise and check a spec. `roster` is the project's agents (project_roster); without
+    it a captain must be a bundled role, which is right only where there is no project."""
     if not isinstance(spec, dict):
         raise WorkflowValidationError("workflow spec must be an object.")
     raw_steps = spec.get("steps")
@@ -302,7 +320,7 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
             # WHETHER THE NAMED AGENT EXISTS is checked here; whether it HOLDS anything is
             # checked in `_validate_bindings`, which has the project in hand. Both fail closed,
             # because a step given to an agent that can do nothing is a run that wastes a gate.
-            captain_problems = validate_captain(step)
+            captain_problems = validate_captain(step, roster)
             if captain_problems:
                 raise WorkflowValidationError(" ".join(captain_problems))
             approval = dict(step.get("approval") or {})
@@ -340,7 +358,7 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
             # had their captain checked — so a typo in a role on a customer's step published
             # cleanly and was denied at run time, twenty minutes into a workflow, as
             # "caller 'vidoe_editor' not in allowed_callers".
-            captain_problems = validate_captain(step)
+            captain_problems = validate_captain(step, roster)
             if captain_problems:
                 raise WorkflowValidationError(" ".join(captain_problems))
             approval = dict(step.get("approval") or {})
@@ -355,7 +373,7 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
         elif kind == "capability":
             # Every problem at once. A builder that surfaces one error at a time makes a
             # customer fix a workflow five times to publish it once.
-            problems = capability_problems(step)
+            problems = capability_problems(step, roster)
             if problems:
                 raise WorkflowValidationError(" ".join(problems))
             # Store the EFFECTIVE approval mode, not the requested one: a plan that reads
@@ -943,7 +961,7 @@ def publish_version(
     ).mappings().first()
     if not definition:
         raise WorkflowNotFoundError("Workflow definition not found.")
-    normalized = validate_workflow_spec(spec)
+    normalized = validate_workflow_spec(spec, project_roster(connection, project_id))
     _hold_new_typed_decision_work(normalized)
 
     # Custom steps are checked HERE as well as at start_run, and only these. Their risk tier
@@ -1484,7 +1502,8 @@ def start_run(
         mapping_id = resolution["selected"]["id"]
         workflow_version_id = resolution["selected"]["workflow_version_id"]
     version = _version_row(connection, project_id, str(workflow_version_id))
-    spec = validate_workflow_spec(_json(version["spec"], {}))
+    spec = validate_workflow_spec(_json(version["spec"], {}),
+                                  project_roster(connection, project_id))
     _hold_new_typed_decision_work(spec)
     version_namespace = connection.execute(
         text(
@@ -1668,7 +1687,7 @@ def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
     row = connection.execute(
         text(
             """
-            SELECT v.spec FROM workflow_runs r
+            SELECT v.spec, r.project_id FROM workflow_runs r
             JOIN workflow_versions v ON v.id=r.workflow_version_id
             WHERE r.id=:run_id
             """
@@ -1677,7 +1696,10 @@ def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Workflow run not found.")
-    return validate_workflow_spec(_json(row["spec"], {}))
+    # Re-read on every step of a run, so a run whose step names an operator-made agent must not
+    # be refused half-way through by a check that only knows the bundled roles.
+    return validate_workflow_spec(_json(row["spec"], {}),
+                                  project_roster(connection, str(row["project_id"])))
 
 
 def _what_there_is_to_review(connection: Connection, run_id: str) -> dict[str, Any]:
@@ -4464,7 +4486,8 @@ def migrate_run(
     if target["workflow_definition_id"] != run["workflow_definition_id"]:
         raise WorkflowValidationError("Target version belongs to another workflow definition.")
     old_spec = _run_spec(connection, run_id)
-    new_spec = validate_workflow_spec(_json(target["spec"], {}))
+    new_spec = validate_workflow_spec(_json(target["spec"], {}),
+                                      project_roster(connection, project_id))
     old_steps = _step_map(old_spec)
     new_steps = _step_map(new_spec)
     rows = connection.execute(

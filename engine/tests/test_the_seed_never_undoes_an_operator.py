@@ -163,6 +163,56 @@ def test_every_operator_removal_is_remembered():
     assert '"role_spec"' in inspect.getsource(agents.update_agent)
 
 
+#: Every function that writes a role's SPEC or NAME (an INSERT INTO roles, or an UPDATE roles
+#: that sets spec or display_name), and whose decision it carries out.
+SPEC_WRITERS = {
+    "services/specpack.py::register_role": "operator",
+    "services/specpack.py::_upsert_role_spec": "seed",
+    "services/agents.py::create_agent": "operator",
+    "services/agents.py::update_agent": "operator",
+}
+
+
+def test_every_write_of_a_role_spec_is_remembered_or_asks():
+    """An edit the seed does not know about is an edit the seed reverts.
+
+    THE INCIDENT (review of milestone/agents, round 1). The WRITERS list above enumerated
+    INSERTs only, so it never saw `UPDATE roles SET spec = …`. POST /v1/roles could rewrite a
+    bundled role's spec and record nothing, and the next seed put the pack's YAML back. Creating
+    an agent under a deleted bundled key lifted the delete but recorded no edit, so the seed
+    overwrote the operator's new agent with the pack's mission and grants.
+
+    Every spec writer is found here by its SQL and must be either an operator path that records
+    a `role_spec` exclusion, or a seed path that asks seed_exclusions before it writes.
+    """
+    writes = re.compile(
+        r"INSERT\s+INTO\s+roles\b|UPDATE\s+roles\s+SET\b(?:(?!\bWHERE\b)[\s\S])*?"
+        r"\b(?:spec|display_name)\s*=", re.I)
+    found: dict[str, str] = {}
+    for path in _python_files():
+        source = path.read_text(encoding="utf-8")
+        if not writes.search(source):
+            continue
+        tree = ast.parse(source)
+        for fn in _functions(tree):
+            body = ast.get_source_segment(source, fn) or ""
+            for nested in [n for n in _functions(fn) if n is not fn]:
+                body = body.replace(ast.get_source_segment(source, nested) or "", "")
+            if writes.search(body):
+                found[f"{_short(path)}::{fn.name}"] = body
+    assert set(found) == set(SPEC_WRITERS), (
+        f"new spec writers: {sorted(set(found) - set(SPEC_WRITERS))}; gone: "
+        f"{sorted(set(SPEC_WRITERS) - set(found))}. Decide whether each is an operator's "
+        "decision (record a role_spec exclusion) or a seed (ask seed_exclusions).")
+    for name, kind in SPEC_WRITERS.items():
+        if kind == "operator":
+            assert '"role_spec"' in found[name], (
+                f"{name} writes a role's spec for an operator and records no role_spec "
+                "exclusion, so the next seed reverts it")
+        else:
+            assert "seed_exclusions" in found[name], f"{name} seeds without asking"
+
+
 def test_the_kinds_are_the_ones_the_schema_allows():
     schema = (ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
     block = schema[schema.index("CREATE TABLE IF NOT EXISTS seed_exclusions"):]

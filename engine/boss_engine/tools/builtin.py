@@ -6733,6 +6733,8 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # direction to go and press a button. Same kind of act as the three above — it changes what
     # an agent CAN do, starts nothing and spends nothing — and taking it back is the same tool.
     "assign_skill_to_agent",
+    # Reachable from chat, but OFFERED: it is declared `grants_authority` (a server's
+    # credentials go with it), so the model proposes the grant and an operator's click runs it.
     "assign_mcp_to_agent",
     # STARTING WORK MEANS STARTING A WORKFLOW.
     #

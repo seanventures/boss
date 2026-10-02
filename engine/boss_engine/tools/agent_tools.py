@@ -71,7 +71,12 @@ def register_agent_tools(reg: ToolRegistry) -> None:
             "project_id": {"type": "string"},
         }, ["agent", "server"]),
         kind="write",
-        reversibility="safe",
+        # OFFERED, NOT PRESSED. An MCP server carries its credentials and every action it
+        # exposes, so granting one hands an agent reach on somebody's account. Shipped as `safe`
+        # at first, which let the chat model give any agent any registered server on its own;
+        # now the model proposes it and an operator's click runs it. Taking a server back goes
+        # through the same button, which costs one click and keeps the tool one tool.
+        reversibility="grants_authority",
     )
     def assign_mcp_to_agent(ctx, *, project_id, actor, args) -> dict[str, Any]:
         agents = services_module("agents")

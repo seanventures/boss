@@ -41,6 +41,13 @@ def test_the_anonymous_runner_still_works_exactly_as_before():
     assert steps.RUNNER_CALLER == "workflow_runner"
 
 
+def validate_captain_with_roster_refuses_a_typo() -> bool:
+    from boss_engine.services.workflow_capabilities import validate_captain
+
+    return bool(validate_captain({"id": "publish", "captain": "vidoe_editor"},
+                                 roster={"video_editor", "release_auditor"}))
+
+
 def test_a_misspelt_agent_is_caught_when_the_workflow_is_published():
     """Only the built-in capabilities had their captain checked.
 
@@ -48,7 +55,11 @@ def test_a_misspelt_agent_is_caught_when_the_workflow_is_published():
     minutes into a workflow — as "caller 'vidoe_editor' not in allowed_callers".
     """
     source = inspect.getsource(workflows)
-    assert "captain_problems = validate_captain(step)" in source
+    # The call now passes the project's roster, so an agent the operator created is accepted
+    # and a typo still is not (tests/test_a_created_agent_can_captain_a_step.py). Updated from
+    # the one-argument form in review round 1 of milestone/agents; the check itself is unchanged.
+    assert "captain_problems = validate_captain(step, roster)" in source
+    assert validate_captain_with_roster_refuses_a_typo()
 
     from boss_engine.services.workflow_capabilities import validate_captain
 

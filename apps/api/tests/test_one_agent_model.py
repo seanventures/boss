@@ -190,11 +190,12 @@ def test_re_registering_a_role_keeps_its_autonomy_and_manager(client, engine):
 # --------------------------------------------------------------------------- #
 # Delete
 # --------------------------------------------------------------------------- #
-def _workflow_naming(engine, role_key: str) -> str:
-    """A published workflow whose step names `role_key` as its captain."""
+def _workflow_naming(engine, role_key: str, step: dict | None = None) -> str:
+    """A published workflow whose step names `role_key` (as its captain unless `step` says)."""
     definition, version = _key("wfd"), _key("wfv")
+    step = step or {"captain": role_key, "binding": {"agent_work": True}}
     spec = {"steps": [{"id": "audit", "label": "Audit the release", "kind": "capability",
-                       "captain": role_key, "binding": {"agent_work": True}}]}
+                       **step}]}
     with engine.begin() as c:
         c.execute(text("INSERT INTO workflow_definitions (id, project_id, workflow_key, name, "
                        "created_by) VALUES (:id, :p, :k, 'Ship it', 'test')"),
@@ -231,6 +232,27 @@ def test_delete_is_refused_while_a_workflow_step_names_the_agent(client, engine)
                          {"p": PROJECT, "k": key}).scalar() == 0
         assert c.execute(text("SELECT count(*) FROM role_skills WHERE project_id=:p "
                               "AND role_key=:k"), {"p": PROJECT, "k": key}).scalar() == 0
+
+
+@pytest.mark.parametrize("how, step", [
+    ("approves it", lambda key: {"binding": {"capability": "approve"},
+                                 "approval": {"mode": "manual", "approver_role": key}}),
+    ("runs it", lambda key: {"binding": {"capability": "deploy", "role_key": key}}),
+])
+def test_a_gate_approver_or_a_binding_role_also_blocks_the_delete(client, engine, how, step):
+    """Review of milestone/agents, round 1: the guard read only captain and binding.agent(s), so
+    an agent named as a gate's approver (approval.approver_role) or a binding's role_key was
+    deleted with 200 and tombstoned — the gate broken for good, and no seed to bring it back."""
+    key = _key()
+    assert _create(client, role_key=key).status_code == 201
+    _workflow_naming(engine, key, step(key))
+
+    r = client.delete(f"/v1/agents/{key}", params={"project_id": PROJECT, "actor": "ceo"})
+    assert r.status_code == 409, r.text
+    assert how in r.json()["detail"] and "Audit the release" in r.json()["detail"]
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM roles WHERE project_id=:p AND role_key=:k"),
+                         {"p": PROJECT, "k": key}).scalar() == 1
 
 
 def test_deleting_moves_its_reports_up_and_retires_its_studio_profiles(client, engine):
@@ -475,11 +497,116 @@ def test_the_chat_gives_an_agent_a_skill_and_an_mcp_server(client, engine):
     given = registry.invoke("assign_skill_to_agent", ctx, project_id=PROJECT, actor="ceo",
                             args={"agent": key, "skill": skill})
     assert given.get("assigned") is True, given
+    # AN MCP GRANT IS OFFERED, NOT PRESSED: it hands the agent a server's credentials. The
+    # model's own call comes back as a proposal and changes nothing; the operator's click runs it.
+    args = {"agent": key, "server": server["name"], "tools": ["post"]}
+    offered = registry.invoke("assign_mcp_to_agent", ctx, project_id=PROJECT, actor="ceo",
+                              args=args)
+    assert offered.get("requires_confirmation") is True, offered
+    assert _holds(client, key) == ({skill}, set()), "a proposal must not grant anything"
     mcp = registry.invoke("assign_mcp_to_agent", ctx, project_id=PROJECT, actor="ceo",
-                          args={"agent": key, "server": server["name"], "tools": ["post"]})
+                          args=offered["proposed_args"], operator_confirmed=True)
     assert mcp.get("assigned") is True, mcp
     assert _holds(client, key) == ({skill}, {server["id"]})
 
     wrong = registry.invoke("assign_skill_to_agent", ctx, project_id=PROJECT, actor="ceo",
                             args={"agent": "nobody_here", "skill": skill})
     assert "Available:" in str(wrong), "a wrong agent must be answered with the ones that exist"
+
+
+# --------------------------------------------------------------------------- #
+# Review of milestone/agents, round 1
+# --------------------------------------------------------------------------- #
+def test_an_agent_made_here_can_captain_a_step_the_moment_it_exists(client):
+    """Quick create promised the new agent could be put on a step; validate_captain knew only
+    the bundled roles, so publishing a workflow that named it was refused."""
+    key = _key()
+    assert _create(client, role_key=key, skills=_builtin_skills(client, 1)).status_code == 201
+    offered = client.get("/v1/delivery-workflows/capabilities",
+                         params={"project_id": PROJECT}).json()["roles"]
+    assert key in offered, "the builder must offer the new agent as a captain"
+
+    definition = client.post("/v1/workflows", json={
+        "project_id": PROJECT, "workflow_key": _key("wf"), "name": "Audit", "actor": "ceo"})
+    assert definition.status_code == 201, definition.text
+    version = client.post(f"/v1/workflows/{definition.json()['id']}/versions", json={
+        "project_id": PROJECT, "actor": "ceo",
+        "spec": {"entry_step": "audit", "steps": [{
+            "id": "audit", "kind": "capability", "captain": key,
+            "binding": {"agent_work": True, "inputs": {"instructions": "check the release"}}}]}})
+    assert version.status_code == 201, version.text
+
+    typo = client.post(f"/v1/workflows/{definition.json()['id']}/versions", json={
+        "project_id": PROJECT, "actor": "ceo",
+        "spec": {"entry_step": "audit", "steps": [{
+            "id": "audit", "kind": "capability", "captain": key + "_typo",
+            "binding": {"agent_work": True, "inputs": {"instructions": "check"}}}]}})
+    assert typo.status_code in (400, 409, 422), typo.text
+    assert "Agents page" in typo.text, "a refused captain must say what to do"
+
+
+def test_a_name_with_no_english_letters_still_makes_an_agent(client):
+    """'காணொளி தொகுப்பாளர்' slugged to '' and was refused as "'' cannot be an agent key"."""
+    r = client.post("/v1/agents", json={"project_id": PROJECT, "actor": "ceo",
+                                        "name": "காணொளி தொகுப்பாளர்"})
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "காணொளி தொகுப்பாளர்"
+    assert r.json()["role_key"].startswith("agent_")
+    bad = client.post("/v1/agents", json={"project_id": PROJECT, "actor": "ceo",
+                                          "name": "X", "role_key": "9x"})
+    assert bad.status_code == 422
+    assert "leave the key empty" in bad.json()["detail"]
+
+
+def test_an_edit_through_post_roles_and_a_remade_bundled_agent_survive_a_reseed(client, engine):
+    """POST /v1/roles recorded no edit, so the seed put the pack's YAML back; and an agent made
+    by hand under a deleted bundled key was overwritten with the pack's spec."""
+    _reseed(engine)
+    r = client.post("/v1/roles", json={
+        "project_id": PROJECT, "role_key": "security_reviewer",
+        "spec": {"mission": "Edited through POST /v1/roles", "display_name": "Sec"}})
+    assert r.status_code == 201, r.text
+
+    victim = "ux_engineer"
+    deleted = client.delete(f"/v1/agents/{victim}", params={"project_id": PROJECT,
+                                                             "actor": "ceo"})
+    if deleted.status_code == 409:
+        pytest.skip(f"{victim} is named or has history here: {deleted.json()['detail']}")
+    remade = _create(client, role_key=victim, name="UX by hand", purpose="Mine now")
+    assert remade.status_code == 201, remade.text
+
+    _reseed(engine)
+    with engine.connect() as c:
+        missions = dict(c.execute(text(
+            "SELECT role_key, spec->>'mission' FROM roles WHERE project_id=:p "
+            "AND role_key IN ('security_reviewer', :v)"), {"p": PROJECT, "v": victim}).all())
+    assert missions == {"security_reviewer": "Edited through POST /v1/roles",
+                        victim: "Mine now"}
+
+
+def test_a_non_human_caller_is_held_on_every_agent_write(client, engine, monkeypatch):
+    """POST /v1/roles was held for a person's confirmation; POST /v1/agents, PATCH
+    /v1/agents/{key} and POST /v1/role-mcp-servers were not, so an MCP client could strip an
+    agent's must_not boundaries with nobody confirming."""
+    suffix = uuid4().hex[:10]
+    bot_key, bot = f"bot-{suffix}", f"bot_member_{suffix}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", bot_key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{bot_key}:{bot}")
+    with engine.begin() as c:
+        api_main.members.upsert_member(
+            c, project_id=PROJECT, member_id=bot, display_name="A bot", member_type="agent",
+            role_keys=[], permissions=["role_review", "workflow_manage"], actor="ceo")
+    headers = {"Authorization": f"Bearer {bot_key}"}
+    server = _mcp_server(engine)
+    calls = [
+        ("POST", "/v1/agents", {"project_id": PROJECT, "name": "Sneaky"}),
+        ("PATCH", "/v1/agents/qa", {"project_id": PROJECT,
+                                    "boundaries": {"must": [], "must_not": []}}),
+        ("POST", "/v1/role-mcp-servers", {"project_id": PROJECT, "role_key": "qa",
+                                          "mcp_server_id": server["id"]}),
+    ]
+    for method, path, body in calls:
+        r = client.request(method, path, json=body, headers=headers)
+        assert r.status_code == 409, f"{method} {path}: {r.status_code} {r.text}"
+        assert r.json()["detail"] == "mcp_confirmation_required", (method, path)

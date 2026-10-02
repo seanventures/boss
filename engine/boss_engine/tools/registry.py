@@ -35,12 +35,20 @@ ToolKind = Literal["read", "write"]
 #:   costs_money   — spends real budget per call. Reversible in state, not in spend.
 #:   destroys_work — throws away work in flight, or removes a control somebody put there.
 #:   irreversible  — cannot be undone by any means BOSS has.
+#:   grants_authority — hands an agent reach it did not have, on somebody's account: an MCP
+#:                   server carries that server's credentials and every action it exposes.
+#:                   The grant can be taken back; what the agent did with it in between cannot.
+#:                   Added when assign_mcp_to_agent shipped as `safe`, so the chat model could
+#:                   give any agent any registered server on its own.
 #:
-#: `destroys_work` and `irreversible` are never executed by the model. They are offered.
-Reversibility = Literal["safe", "costs_money", "destroys_work", "irreversible"]
+#: `destroys_work`, `irreversible` and `grants_authority` are never executed by the model. They
+#: are offered.
+Reversibility = Literal["safe", "costs_money", "destroys_work", "irreversible",
+                        "grants_authority"]
 
-#: The two the model may never press itself, whatever it was asked.
-NEVER_SELF_EXECUTE: frozenset[str] = frozenset({"destroys_work", "irreversible"})
+#: The ones the model may never press itself, whatever it was asked.
+NEVER_SELF_EXECUTE: frozenset[str] = frozenset({"destroys_work", "irreversible",
+                                                "grants_authority"})
 
 # handler(ctx, *, project_id, actor, args) -> dict
 ToolHandler = Callable[..., dict]
@@ -235,8 +243,11 @@ class ToolRegistry:
                 # shown, so the arguments come back untouched for the proposal to carry.
                 "proposed_args": safe_args,
                 "message": (
-                    f"'{name}' is declared '{spec.reversibility}' — it throws away work or "
-                    "cannot be undone — so it runs only when an operator clicks it."
+                    f"'{name}' is declared '{spec.reversibility}' — "
+                    + ("it gives an agent reach on somebody's account"
+                       if spec.reversibility == "grants_authority"
+                       else "it throws away work or cannot be undone")
+                    + " — so it runs only when an operator clicks it."
                 ),
             }
         try:

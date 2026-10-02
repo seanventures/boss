@@ -13881,6 +13881,7 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
                 display_name=body.display_name, autonomy_level=body.autonomy_level,
                 reports_to=body.reports_to, spec=body.spec,
                 reports_to_given="reports_to" in body.model_fields_set,
+                actor=actor,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -22519,10 +22520,14 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
     # should not have to know which of their steps BOSS wrote. Optional, because the palette is
     # also browsed before a project is chosen.
     custom: list[dict] = []
+    roster: frozenset[str] = frozenset()
     if project_id and database_is_reachable(engine):
+        from boss_engine.services.workflows import project_roster
+
         with begin(engine) as connection:
             custom = [s for s in custom_steps.list_steps(connection, project_id)
                       if s["enabled"]]
+            roster = project_roster(connection, project_id)
 
     return {
         "capabilities": palette(),
@@ -22530,7 +22535,9 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         # Control blocks the runtime has always supported and the builder never offered, so a
         # customer could only ever author a straight line.
         "blocks": blocks(),
-        "roles": sorted(REGISTERED_ROLES),
+        # THE PROJECT'S AGENTS, not only the bundled ones: an agent made on the Agents page has
+        # to be offered as a captain, or the builder cannot put it on the step it was made for.
+        "roles": sorted(REGISTERED_ROLES | roster),
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
             "A capability at or above the risk floor always requires a person, whatever a "
@@ -25193,7 +25200,9 @@ def validate_agent_studio_workflow(
             connection, payload.project_id, payload.actor, "workflow_manage"
         )
         try:
-            normalized = workflow_runtime.validate_workflow_spec(payload.spec)
+            normalized = workflow_runtime.validate_workflow_spec(
+                payload.spec,
+                workflow_runtime.project_roster(connection, payload.project_id))
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
         steps = normalized["steps"]

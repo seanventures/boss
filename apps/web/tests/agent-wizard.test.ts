@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adoptCreatedAgent,
   applyAgentWizardPattern,
   buildAgentWizardSubmission,
   createInitialAgentWizardDraft,
@@ -138,9 +139,44 @@ describe("Agent Studio creation wizard", () => {
         purpose: "Checks every release against the change log.",
         skills: ["model.generate_text"],
         mcp_servers: [{ server_id: "mcp_9", tools: [] }],
+        // Added in review round 1: the wizard's rules are the agent's must_not boundaries.
+        boundaries: { must: [], must_not: [] },
       },
     });
     expect(payload.version.role_key).toBe("release_auditor");
+  });
+
+  it("the wizard's rules become the new agent's must_not boundaries", () => {
+    // The old role registration wrote the rules to spec.boundaries.must_not; the first cut of
+    // POST /v1/agents dropped them, so "never bypass policy" bound nothing.
+    const draft = {
+      ...createInitialAgentWizardDraft(NEW_ROLE, "ceo"),
+      name: "Release Auditor", agentKey: "release_auditor",
+      rulesText: "Never bypass policy.\nNever merge your own change.",
+    };
+    const create = buildAgentWizardSubmission("p", draft, "ceo").agent.create;
+    expect(create?.boundaries).toEqual({
+      must: [], must_not: ["Never bypass policy.", "Never merge your own change."],
+    });
+  });
+
+  it("a retry after the profile failed targets the agent it already made", () => {
+    // POST /v1/agents refuses an existing key, and "+ A new role" stayed selected, so pressing
+    // Create again after a profile failure 409'd on the agent this same wizard had just made.
+    const draft = {
+      ...createInitialAgentWizardDraft(NEW_ROLE, "ceo"),
+      name: "Release Auditor", agentKey: "taken_key", newRoleName: "Release Auditor",
+      requestedSkills: ["model.generate_text"],
+    };
+    const retry = buildAgentWizardSubmission("p", adoptCreatedAgent(draft, "release_auditor"), "ceo");
+    expect(retry.agent.create).toBeUndefined();
+    expect(retry.agent.roleKey).toBe("release_auditor");
+    expect(retry.agent.grant?.grant_skills).toEqual(["model.generate_text"]);
+    expect(retry.version.role_key).toBe("release_auditor");
+    const actions = readFileSync(resolve(__dirname, "../app/agent-studio-actions.ts"), "utf8");
+    expect(actions).toContain("agent_created: submission.agent.roleKey");
+    const wizard = readFileSync(resolve(__dirname, "../app/agent-creation-wizard.tsx"), "utf8");
+    expect(wizard).toContain("adoptCreatedAgent(current, made)");
   });
 
   it("live-model Studio runs are refused before publish, with what to do instead", () => {

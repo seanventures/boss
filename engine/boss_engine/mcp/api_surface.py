@@ -81,12 +81,31 @@ _EXCLUDED_FRAGMENTS = (
     ("/compensations/claim", "workflow_worker_protocol"),
 )
 _WORKER_TAILS = frozenset({"heartbeat", "complete", "fail", "settle", "release"})
+#: WHO AN AGENT IS AND WHAT IT MAY REACH. Every route that writes an agent's identity, mission or
+#: boundaries (the `roles` row) or hands it an MCP server is held for a person's confirmation
+#: when a non-human calls it, exactly as POST /v1/roles always was.
+#:
+#: The agent resource (routers/agents.py) arrived as new paths, and nothing classified them: an
+#: external MCP client could PATCH /v1/agents/{role_key} and strip a bundled agent's must_not
+#: boundaries, or grant an agent an MCP server carrying someone's credentials, with no person
+#: confirming — while the older POST /v1/roles for the same change needed one. Each is
+#: confirmation-eligible, so a reviewed call still goes through.
+#: engine/tests/test_every_roster_write_is_held_like_post_roles.py finds every API route whose
+#: handler calls a roster writer and fails until it is listed here.
+ROSTER_AUTHORITY_WRITES = frozenset({
+    ("POST", "/v1/roles"),
+    ("POST", "/v1/agents"),
+    ("PATCH", "/v1/agents/{role_key}"),
+    ("DELETE", "/v1/agents/{role_key}"),
+    ("POST", "/v1/role-mcp-servers"),
+    ("DELETE", "/v1/role-mcp-servers"),
+})
 _OPERATOR_ONLY_EXACT = frozenset({
-    "/v1/orgs", "/v1/members", "/v1/roles", "/v1/break-glass/grants",
+    "/v1/orgs", "/v1/members", "/v1/break-glass/grants",
     "/v1/budget/allocations", "/v1/budget/set_intensity",
     "/v1/console/v2/autonomy", "/v1/console/v2/autonomy/apply",
     "/v1/enterprise/identity-providers",
-})
+} | {path for _, path in ROSTER_AUTHORITY_WRITES})
 _GOVERNED_EFFECT_ALLOWLIST = frozenset({
     ("POST", "/v1/changesets/{changeset_id}/apply"),
     ("POST", "/v1/delivery-workflows/apply"),
@@ -184,7 +203,7 @@ _CONFIRMABLE_EXACT = frozenset({
     ("POST", "/v1/roles"),
     ("DELETE", "/v1/sandboxes/{sandbox_id}"),
     ("POST", "/v1/worker-autoscaling/apply"),
-})
+} | ROSTER_AUTHORITY_WRITES)
 _HUMAN_ATTRIBUTED_CONFIRMATIONS = {
     # These handlers persist the actor of a human decision. The API may use the
     # separate reviewer as that actor only after consuming an exact confirmation.

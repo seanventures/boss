@@ -22,6 +22,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import type { RoleFeedItem } from "../lib/roles";
 import type { SkillFeedItem } from "../lib/skills";
 import {
+  adoptCreatedAgent,
   applyAgentWizardPattern,
   buildAgentWizardSubmission,
   createInitialAgentWizardDraft,
@@ -131,6 +132,8 @@ export function AgentCreationWizard({
   const [issues, setIssues] = useState<AgentWizardIssue[]>([]);
   const [result, setResult] = useState<StudioActionResult>();
   const [completed, setCompleted] = useState<StudioActionResult>();
+  /** An agent this wizard made whose profile then failed — offered in the role list below. */
+  const [madeAgent, setMadeAgent] = useState<{ roleKey: string; name: string } | null>(null);
   const [pending, startTransition] = useTransition();
 
   const role = roles.find((item) => item.roleKey === draft.roleKey);
@@ -208,6 +211,13 @@ export function AgentCreationWizard({
       );
       setResult(next);
       if (next.ok) setCompleted(next);
+      const made = next.item?.agent_created;
+      if (!next.ok && typeof made === "string" && made) {
+        // The agent exists now; only its profile failed. Point the wizard at it so the next
+        // press retries the profile rather than 409-ing on the agent it just made.
+        setMadeAgent({ roleKey: made, name: String(next.item?.agent_name ?? made) });
+        setDraft((current) => adoptCreatedAgent(current, made));
+      }
     });
   };
 
@@ -374,6 +384,11 @@ export function AgentCreationWizard({
                             somebody else's role — and the Agents page, which lists `roles`,
                             would never show it. */}
                         <option value={NEW_ROLE}>+ A new role for this agent</option>
+                        {madeAgent && !roles.some((item) => item.roleKey === madeAgent.roleKey) ? (
+                          <option value={madeAgent.roleKey}>
+                            {madeAgent.name} · just made by this wizard
+                          </option>
+                        ) : null}
                         {roles.map((item) => (
                           <option key={item.id} value={item.roleKey}>
                             {item.displayName} · L{item.autonomyLevel}
