@@ -638,12 +638,24 @@ def test_a_required_input_from_a_skipped_step_stops_that_step_with_the_reason(
         runner.tick(c, Ctx(eng), project_id=project)
         workflows.skip_failed_step(c, project_id=project, run_id=run["id"],
                                    step_id="research", actor="ceo", reason="out of budget")
-        _tick_through_retries(eng, c, project, run["id"])
+        # ONE tick, not "tick through every retry". The review of c8de36b found this test passed
+        # on 534a1b9 too, because ticking through all the retries reaches the same end state
+        # whether the skip is settled or retried. A skip is a recorded fact; the step fails
+        # ONCE (SettledCapabilityError) and says why, with no retry scheduled.
+        runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
+        attempt = c.execute(text("SELECT attempt FROM workflow_step_runs "
+                                 "WHERE workflow_run_id=:r AND step_id='meeting'"),
+                            {"r": run["id"]}).scalar()
+        retries = c.execute(text("SELECT count(*) FROM events WHERE entity_id=:r "
+                                 "AND event_type='workflow.step_retry_scheduled'"),
+                            {"r": run["id"]}).scalar()
         c.execute(text("DELETE FROM discovery_runs WHERE id=:i"), {"i": did})
 
     assert not meeting.calls
-    assert steps["meeting"]["status"] in {"failed", "deadlettered"}
+    assert steps["meeting"]["status"] == "deadlettered", steps["meeting"]
+    assert attempt == 1
+    assert retries == 0, "a settled skip was retried"
     error = steps["meeting"]["last_error"] or ""
     assert "'research' was skipped" in error and "out of budget" in error, error
 

@@ -74,6 +74,21 @@ FINISHED_RUN_STATES = frozenset({"completed", "failed", "deadlettered", "cancell
 #: somebody stopped it (Stop promises "it cannot be resumed"), it completed, or it was undone.
 CLOSED_RUN_STATES = frozenset({"cancelled", "completed", "compensated"})
 
+#: A run STOPPED AT A FAILED STEP, waiting for the operator — NOT finished.
+#:
+#: THE CONTRADICTION THIS ENDS (review of 534a1b9/c8de36b, 2026-10-02). Once a failed step began
+#: stopping its run, `failed` meant "stopped and waiting for you" on the run card and under
+#: "Needs you" — but Stop and Remove still read it as "over": Stop was not offered and
+#: `cancel_run` returned early, so a parallel branch still working under a stopped run could not
+#: be stopped (the 2026-09-02 shape: a cancel that does not stop the work), Remove deleted the
+#: run's records while that branch went on, and the only way to abandon the run was to delete it.
+#: One definition now: a stopped run is still the operator's to decide about. Stop applies (it
+#: cancels the live steps and the work they started), Remove waits until nothing in it is live.
+STOPPED_RUN_STATES = frozenset({"failed", "deadlettered"})
+
+#: Step states that mean work is still in flight (or queued to be) — `workflows.ACTIVE_STEP_STATES`.
+LIVE_STEP_STATES = frozenset({"ready", "leased", "running", "waiting"})
+
 #: A run undoing what it did. Neither stoppable (`cancel_run` would race the compensation) nor
 #: removable (`delete_run` refuses it) until that finishes — the one TEMPORARY state, and so the
 #: one where an action is shown disabled rather than left out.
@@ -106,6 +121,25 @@ STEP_ACTION_KEYS = ("retry_step", "skip_step")
 
 #: A verdict's three states. Only the first two reach the console; all three reach `require`.
 ENABLED, DISABLED, ABSENT = "enabled", "disabled", "absent"
+
+
+def standing(status: Any) -> str:
+    """Where a run stands, in the one vocabulary the console files runs by: `active`, `stopped`
+    (at a failed step, waiting for the operator), `closed` (over: nothing in it runs again) or
+    `compensating` (undoing itself).
+
+    Sent with every run so the console holds no private list of run states. It used to: its
+    `LIVE` list left out `paused` and `compensating`, so a paused run — which the server offers
+    Stop on — was filed under "Done", and its closed list was a hand copy of CLOSED_RUN_STATES
+    that nothing held equal to this one."""
+    value = str(status or "")
+    if value in STOPPED_RUN_STATES:
+        return "stopped"
+    if value in CLOSED_RUN_STATES:
+        return "closed"
+    if value == COMPENSATING:
+        return "compensating"
+    return "active"
 
 
 class RunActionRefused(WorkflowConflictError):
@@ -313,6 +347,7 @@ def _verdicts(
     active = status in ACTIVE_RUN_STATES
     finished = status in FINISHED_RUN_STATES
     closed = status in CLOSED_RUN_STATES
+    stopped = status in STOPPED_RUN_STATES
     compensating = status == COMPENSATING
     undoing = "it is undoing what it did — wait for that to finish"
     current = latest_attempts(steps)
@@ -335,7 +370,11 @@ def _verdicts(
     else:
         out.append(_verdict("recheck", recheck, ENABLED))
 
-    if active:
+    # A STOPPED run is stoppable too: it is waiting for the operator, not over, and "I am not
+    # going to retry or skip this — abandon it" is one of the answers. `cancel_run` then cancels
+    # whatever is still live under it (a parallel branch still working) and the work that
+    # branch started.
+    if active or stopped:
         out.append(_verdict("stop", "Stop this run", ENABLED))
         out.append(_verdict("stop_and_rerun", "Stop and run again", ENABLED))
     elif compensating:
@@ -347,9 +386,28 @@ def _verdicts(
         out.append(_verdict("stop_and_rerun", "Stop and run again", ABSENT,
                             f"{why} — run it again instead"))
 
-    if finished:
+    live = [str(step.get("step_id") or "") for step in current
+            if step.get("status") in LIVE_STEP_STATES]
+    if closed:
         out.append(_verdict("rerun", "Run this workflow again", ENABLED))
         out.append(_verdict("remove", "Remove this run", ENABLED))
+    elif stopped:
+        # Not "Run this workflow again" beside a run still waiting for you: that left two runs
+        # for one directive, the stopped one under "Needs you" for ever. Stop and run again
+        # replaces it — exactly as on a run that is still going.
+        out.append(_verdict("rerun", "Run this workflow again", ABSENT,
+                            "it is stopped at a failed step and still waiting for you — Stop "
+                            "and run again replaces it rather than starting a second workflow "
+                            "beside it"))
+        if live:
+            # Deleting the records while a branch is still working is the failure `cancel_run`
+            # exists to prevent, one table further down. Temporary — so shown, and disabled.
+            out.append(_verdict(
+                "remove", "Remove this run", DISABLED,
+                f"'{live[0]}' is still working under this run. Stop the run first — that stops "
+                "the work — and then it can be removed."))
+        else:
+            out.append(_verdict("remove", "Remove this run", ENABLED))
     else:
         out.append(_verdict("rerun", "Run this workflow again", ABSENT,
                             "it is still going — Stop and run again replaces it rather than "
@@ -430,6 +488,45 @@ def run_actions(
     return [_public(v) for v in _verdicts(run, steps, discoveries) if v["state"] != ABSENT]
 
 
+#: Step states a run stops at — `workflows.STOPPED_STEP_STATES`; a test holds the two equal.
+STOPPED_STEP_STATES = frozenset({"failed", "deadlettered"})
+
+
+def stopped_for_operator(
+    run: dict[str, Any], steps: list[dict[str, Any]],
+    discoveries: Optional[dict[str, dict[str, Any]]] = None,
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """The steps this run is stopped at FOR ITS OPERATOR, each with the answers it offers.
+
+    THE ONE RULE for "a step failed and somebody has to decide". The console's run card and
+    "Needs you" bucket, and the Command Center's "Stopped — a step failed" list, all mean this.
+    The briefing had its own query — every failed step in the project, whatever its run — so it
+    listed failed steps of COMPLETED and CANCELLED runs (every legacy `failed_continued` row the
+    schema rewrite turned into `failed`) and offered only "Re-check", which those runs refuse
+    (review of c8de36b). Here a step counts when it is the latest attempt, failed or
+    dead-lettered, not a refused approval (that is a person's no, already answered), not a
+    branch an `any` join went on without, and the run offers an answer on it right now.
+    """
+    status = str(run.get("status") or "")
+    if status in CLOSED_RUN_STATES or status == COMPENSATING:
+        return []
+    verdicts = _verdicts(run, steps, discoveries)
+    out: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for step in latest_attempts(steps):
+        if step.get("status") not in STOPPED_STEP_STATES:
+            continue
+        if _output(step).get("tolerated_by_join"):
+            continue
+        if is_gate(_step_kind(step), step_capability(step)):
+            continue
+        step_id = str(step.get("step_id") or "")
+        answers = [_public(v) for v in verdicts
+                   if v.get("step_id") == step_id and v["state"] == ENABLED]
+        if answers:
+            out.append((step, answers))
+    return out
+
+
 def decide(
     run: dict[str, Any], steps: list[dict[str, Any]],
     discoveries: Optional[dict[str, dict[str, Any]]], key: str, step_id: Optional[str] = None,
@@ -441,6 +538,58 @@ def decide(
         if verdict["key"] == key and verdict.get("step_id") == step_id:
             return verdict
     return _verdict(key, key, ABSENT, f"no step '{step_id}' on this run", step_id=step_id)
+
+
+def research_to_adopt(
+    connection: Connection, project_id: str, *, from_run: Any = None, from_discovery: Any = None,
+) -> str:
+    """The dossier a new run may build on, from a source the caller NAMED — checked here.
+
+    ONE RULE FOR EVERY DOOR. The HTTP start endpoint resolved `from_run` through the
+    "Build on this research" action and `from_discovery` through a status check of its own; the
+    agent's `start_workflow` had a third copy. The two `from_discovery` copies accepted a
+    COMPLETED dossier with no findings, which the run rule refuses ("the research completed with
+    no findings"), and a request naming BOTH sources skipped the `from_run` rule entirely and
+    copied a live run's input (review of 0fd6c45). Every start now asks this.
+
+    Raises `WorkflowValidationError` for both sources at once, `WorkflowNotFoundError` for a
+    source not in this project, and `RunActionRefused` (a 409) with the sentence the console
+    would show when there is nothing finished to build on.
+    """
+    from .workflows import WorkflowValidationError
+
+    run_id = str(from_run or "").strip()
+    discovery_id = str(from_discovery or "").strip()
+    if run_id and discovery_id:
+        raise WorkflowValidationError(
+            "name one source of research to build on — from_run or from_discovery, not both. "
+            "A run carries the research it produced; a dossier is that research directly.")
+    if run_id:
+        try:
+            offered = require(connection, project_id, run_id, "build_on_research")
+        except RunActionRefused as error:
+            raise RunActionRefused(
+                "build_on_research",
+                f"{run_id} has no completed research to carry forward: {error.reason}",
+            ) from error
+        return str(offered["discovery_id"])
+    if not discovery_id:
+        raise WorkflowValidationError("name the research to build on")
+    facts = load_discoveries(connection, project_id, [discovery_id]).get(discovery_id)
+    if not facts:
+        raise WorkflowNotFoundError("research run not found")
+    status = str(facts.get("status") or "")
+    if status != "completed":
+        raise RunActionRefused(
+            "build_on_research",
+            f"that research is {status}, not completed — there is nothing finished to build on "
+            "yet")
+    if not facts.get("has_findings"):
+        raise RunActionRefused(
+            "build_on_research",
+            "that research completed with no findings, so there is nothing to build on — run "
+            "the research again, or start without it")
+    return discovery_id
 
 
 # ── Reading a run's state, once, for the list and for the gate ─────────────────────────────
@@ -504,8 +653,8 @@ def load_runs(
     if not runs:
         return {}
     rows = connection.execute(
-        text("SELECT workflow_run_id, step_id, step_kind, status, output, binding_snapshot, "
-             "iteration, created_at, completed_at FROM workflow_step_runs "
+        text("SELECT id, workflow_run_id, step_id, step_kind, status, output, binding_snapshot, "
+             "iteration, created_at, completed_at, updated_at, last_error FROM workflow_step_runs "
              "WHERE workflow_run_id = ANY(:ids) ORDER BY created_at, iteration"),
         {"ids": [r["id"] for r in runs]},
     ).mappings().all()
@@ -515,6 +664,7 @@ def load_runs(
         template = templates.get(row["workflow_run_id"], {}).get(str(row["step_id"])) or {}
         binding = template.get("binding") if isinstance(template.get("binding"), dict) else {}
         by_run[row["workflow_run_id"]].append({
+            "id": row.get("id"),
             "step_id": row["step_id"],
             "kind": template.get("kind") or row["step_kind"],
             "capability": str(binding.get("capability") or ""),
@@ -524,6 +674,8 @@ def load_runs(
             "iteration": int(row["iteration"] or 0),
             "created_at": _iso(row["created_at"]),
             "completed_at": _iso(row["completed_at"]),
+            "updated_at": _iso(row.get("updated_at")),
+            "last_error": row.get("last_error"),
         })
     return {
         r["id"]: ({"id": r["id"], "status": r["status"], "input": _json(r["input"], {}) or {}},
@@ -557,6 +709,14 @@ def require(
     for a run that is not in this project, and `RunActionRefused` (a 409) with the action's own
     reason otherwise.
     """
+    # THE CHECK HOLDS THE RUN. Try again read the run unlocked and then set it running, so a
+    # Stop committing in between was undone — a cancelled run revived (review of 0fd6c45).
+    # Taking the row lock here serializes EVERY gated operation against Stop, whichever caller
+    # forgot to lock first; for one that already holds it, this is a no-op.
+    connection.execute(
+        text("SELECT id FROM workflow_runs WHERE id = :id AND project_id = :p FOR UPDATE"),
+        {"id": run_id, "p": project_id},
+    )
     loaded = load_runs(connection, project_id, [run_id]).get(run_id)
     if loaded is None:
         raise WorkflowNotFoundError("Workflow run not found.")
@@ -572,6 +732,8 @@ def require(
 
 __all__ = [
     "ACTIVE_RUN_STATES", "CLOSED_RUN_STATES", "FINISHED_RUN_STATES", "RUN_ACTION_KEYS",
+    "STOPPED_RUN_STATES", "LIVE_STEP_STATES", "STOPPED_STEP_STATES", "standing",
+    "stopped_for_operator", "research_to_adopt",
     "STEP_ACTION_KEYS", "BUILD_WORKFLOW_KEY", "RunActionRefused", "actions_for", "decide",
     "is_gate", "latest_attempts", "load_discoveries", "load_runs", "require",
     "research_discovery_ids", "research_to_build_on", "run_actions", "step_capability",

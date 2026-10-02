@@ -229,7 +229,20 @@ type Run = {
    *  Sent by the server: this file's own list of "terminal" states left out `compensated` and
    *  named `deadlettered` beside the real ones, a private copy that had already drifted. */
   finished?: boolean;
+  /** Where the run stands, decided by the SERVER (`workflow_run_actions.standing`): `active`,
+   *  `stopped` (at a failed step, waiting for the operator), `closed` or `compensating`. This
+   *  file kept three lists of its own — LIVE, a closed list and ACTIVE_RUN_STATES — none held
+   *  to the engine's; LIVE left out `paused` and `compensating`, so a paused run the server
+   *  offers Stop on was filed under "Done" (review of 0fd6c45). */
+  standing?: RunStanding;
 };
+
+export type RunStanding = "active" | "stopped" | "closed" | "compensating";
+
+/** Is anything about this run still moving — work in flight, or an undo in progress? */
+export function runIsLive(run: { standing?: RunStanding }): boolean {
+  return run.standing === "active" || run.standing === "compensating";
+}
 
 /** One thing the operator may do to a run, as the engine decided it
  *  (boss_engine/services/workflow_run_actions.py).
@@ -299,7 +312,6 @@ function runSubject(run: Run): string | null {
   return appIdentity(run.input as AppRun).name || raw;
 }
 
-const LIVE = ["running", "waiting", "queued", "validating", "leased"];
 
 /** What a step observed from the build, rather than started itself: the review seats and the
  *  quality gates the governed pipeline actually recorded. Without this, `review` and `test` were
@@ -334,7 +346,24 @@ function observedGates(step: RunStep, runAppName = ""): string | null {
  *  operator retries or skips it (the run's `actions`). Runs recorded before that change still carry
  *  `failed_continued` outputs, and they must keep reading as failed rather than as green. */
 function failedButContinued(step: RunStep): boolean {
-  return (step.output as { status?: string } | undefined)?.status === "failed_continued";
+  // KEYED ON WHAT THE ROW WAS RECORDED AS. The schema rewrite (db/schema.sql) turned every
+  // legacy row into status `failed` with output.status `failed` and `recorded_as:
+  // failed_continued`, so a check on output.status alone could no longer match anything and
+  // "failed — went on" had become dead code (review of c8de36b).
+  const out = (step.output ?? {}) as { status?: string; recorded_as?: string };
+  return out.recorded_as === "failed_continued" || out.status === "failed_continued";
+}
+
+/** A step that succeeded by DOING NOTHING: a bare notify, video_edit or social_publish, which
+ *  no tool performs, records an honest `status: recorded` no-op.
+ *
+ *  NOT A ✓. "Publish to a channel" showed a green tick when nothing was published, while the
+ *  engine's own test said it "must not read as work done" — the test checked the engine and
+ *  not what the operator sees (review of c8de36b). Its own state, saying what to do: bind a
+ *  skill or a custom step that does the work. */
+export function didNothing(step: RunStep): boolean {
+  return step.status === "succeeded"
+    && (step.output as { status?: string } | undefined)?.status === "recorded";
 }
 
 /** A step the runtime completed by recording that its phase never happened. */
@@ -363,28 +392,39 @@ export const STOPPED_STEP_STATUSES: readonly string[] = ["failed", "deadlettered
 export function stoppedForYou(step: RunStep): boolean {
   if (!STOPPED_STEP_STATUSES.includes(step.status)) return false;
   if (step.kind === "decision") return false;
+  // A fan-out branch an `any` join went on without: a visible partial failure, not a stop.
+  if ((step.output as { tolerated_by_join?: unknown } | undefined)?.tolerated_by_join) return false;
   return !step.decision_id;
 }
 
 /** The first step this run stopped at for the operator, or null. */
-export function stoppedStep(run: { status: string; steps?: RunStep[] | null }): RunStep | null {
+export function stoppedStep(run: { status: string; standing?: RunStanding;
+                                   steps?: RunStep[] | null }): RunStep | null {
   // A run somebody stopped, or one that finished, is history — nothing there waits on anybody.
-  if (["cancelled", "completed", "compensated"].includes(run.status)) return null;
+  // The SERVER says which runs are closed; this used to be a hand copy of the engine's list.
+  if (run.standing === "closed") return null;
   return (run.steps ?? []).find(stoppedForYou) ?? null;
 }
 
 /** Does this run need a person right now — an open approval, or a step it stopped at? The ONE
  *  rule the bucket, the page's opening run and the run card all read, so they cannot disagree. */
-export function runNeedsYou(run: { status: string; steps?: RunStep[] | null }): boolean {
+export function runNeedsYou(run: { status: string; standing?: RunStanding;
+                                   steps?: RunStep[] | null }): boolean {
   return (run.steps ?? []).some(needsYou) || stoppedStep(run) !== null;
 }
 
 /** Which heading a run is listed under. Exported so the rule is tested, not only rendered. */
-export function bucketOf(run: { status: string; steps?: RunStep[] | null }):
+export function bucketOf(run: { status: string; standing?: RunStanding;
+                                steps?: RunStep[] | null }):
     "needs_you" | "running" | "blocked" | "done" {
   if (runNeedsYou(run)) return "needs_you";
-  if (["failed", "deadlettered", "blocked", "cancelled"].includes(run.status)) return "blocked";
-  return LIVE.includes(run.status) ? "running" : "done";
+  // "Stopped" holds runs that stopped without finishing: stopped at a step, held up
+  // (`blocked`), or stopped by somebody (`cancelled`). Everything else that is still moving —
+  // paused and compensating included — is "Running".
+  if (run.standing === "stopped" || run.status === "blocked" || run.status === "cancelled") {
+    return "blocked";
+  }
+  return runIsLive(run) ? "running" : "done";
 }
 
 /** Who skipped a step and why, when an OPERATOR skipped it — "" for a branch never taken.
@@ -421,7 +461,7 @@ export function startedLabel(iso: string): string {
 }
 
 function byLiveness(a: Run, b: Run): number {
-  const live = (r: Run) => (LIVE.includes(r.status) ? 0 : 1);
+  const live = (r: Run) => (runIsLive(r) ? 0 : 1);
   if (live(a) !== live(b)) return live(a) - live(b);
   return (b.created_at ?? b.updated_at ?? "").localeCompare(a.created_at ?? a.updated_at ?? "");
 }
@@ -904,7 +944,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   //
   // Fast while something is in flight, slower when idle — idle still means "watch for work
   // appearing", not "stop looking".
-  const anyLive = runs.some((r) => LIVE.includes(r.status));
+  const anyLive = runs.some(runIsLive);
   useEffect(() => {
     const t = window.setInterval(() => { void load(); }, anyLive ? 8000 : 15000);
     return () => window.clearInterval(t);
@@ -2578,8 +2618,8 @@ function hasFindings(step: RunStep): boolean {
   return Array.isArray(f) && f.length > 0;
 }
 
-function phaseOf(step: RunStep):
-    "done" | "now" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" {
+export function phaseOf(step: RunStep):
+    "done" | "now" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" | "nothing" {
   // FAILED, AND THE WORK WENT ON. Research that died is not "not run" — that hides something
   // worth fixing — and it is not a stopped run either, because the project carried on without
   // it. Its own state, so neither reading is offered.
@@ -2588,10 +2628,15 @@ function phaseOf(step: RunStep):
   if (step.status === "failed" || step.status === "deadlettered" || step.status === "cancelled") {
     return "failed";
   }
+  if (didNothing(step)) return "nothing";
   if (step.status === "succeeded") return hasFindings(step) ? "findings" : "done";
   if (["running", "leased", "ready", "waiting", "queued"].includes(step.status)) return "now";
   return "ahead";
 }
+
+/** What a step that did nothing says, wherever it is shown. */
+export const DID_NOTHING =
+  "nothing was done — no skill or custom step does this work; bind one to this step";
 
 /** The run the page should open on.
  *
@@ -2608,7 +2653,7 @@ export function runToOpen(runs: Run[]): string | null {
   // An open approval OR a step the run stopped at — the same rule the "Needs you" bucket reads.
   const needsMe = runs.find(runNeedsYou);
   if (needsMe) return needsMe.id;
-  const live = runs.find((r) => ACTIVE_RUN_STATES.has(r.status));
+  const live = runs.find(runIsLive);
   return (live ?? runs[0]).id;
 }
 
@@ -2809,7 +2854,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                   animated while it is flowing, dim before. Drawn for every step including the
                   first, whose predecessor is the Agents node. */}
               <i className="dw-link" aria-hidden
-                 data-flow={["done", "skipped", "findings", "failed_on"].includes(previous ?? "")
+                 data-flow={["done", "skipped", "findings", "nothing", "failed_on"].includes(previous ?? "")
                    ? (phase === "now" ? "moving" : "past") : "future"} />
               <button type="button" className="dw-node-btn"
                       aria-current={phase === "now" ? "step" : undefined}
@@ -2824,6 +2869,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                     : phase === "failed_on" ? "✕"
                     : phase === "findings" ? "▲"
                     : phase === "skipped" ? "–"
+                    : phase === "nothing" ? "○"
                     : hasStepIcon(step.capability ?? undefined)
                       ? <StepIcon capability={step.capability ?? undefined} />
                       : phase === "done" ? "✓" : index + 1}
@@ -2832,6 +2878,11 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                 <span className="dw-node-meta">
                   {needsYou(step) ? (
                     <em className="dw-node-you" data-testid="dw-node-you">needs you</em>
+                  ) : phase === "nothing" ? (
+                    <span className="dw-node-skipped" data-testid="dw-node-did-nothing"
+                          title={DID_NOTHING}>
+                      nothing done
+                    </span>
                   ) : phase === "skipped" ? (
                     // "not run" READS AS A FAULT, and the reason was recorded all along.
                     //
@@ -2903,7 +2954,9 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           appears as soon as one step has finished and keeps filling in, which is also what
           makes it useful DURING a long build rather than only after it. */}
       {run.steps.some((s) => s.status === "succeeded" || s.status === "skipped") ? (
-        <RunReportPanel runId={run.id} projectId={projectId} />
+        <RunReportPanel runId={run.id} projectId={projectId}
+                        researchAction={(run.actions ?? []).find(
+                          (a) => a.key === "build_on_research")} />
       ) : null}
 
       {/* WORKFLOW MANAGEMENT — exactly the actions the server sent for this run, in its order.
@@ -3157,9 +3210,6 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
  *  step_id is what the runtime actually carries; the capability prop resolved from the
  *  catalogue is the fallback for a workflow whose author renamed the step.
  */
-//: A run that has not finished. Re-running one of these produces a duplicate workflow rather
-//: than a retry, which is exactly what an operator hit: two runs for one project, both live.
-const ACTIVE_RUN_STATES = new Set(["running", "waiting", "ready", "leased", "queued", "paused"]);
 
 /** PLAN A DEPLOYMENT, FROM THE STEP WHOSE JOB IS SHIPPING.
  *
@@ -3788,13 +3838,18 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         {gateWaiting ? null : (
           <span className="dw-badge"
                 data-tone={phase === "skipped" ? "muted"
+                  : phase === "nothing" ? "wait"
                   : phase === "failed_on" ? "bad" : tone(step.status)}
                 data-testid={phase === "failed_on" ? "dw-step-failed-on"
+                  : phase === "nothing" ? "dw-step-did-nothing"
                   : phase === "skipped" ? "dw-step-na" : undefined}>
             {phase === "failed_on" ? "failed — went on"
+              : phase === "nothing" ? DID_NOTHING
               // Same wording as the chain node, for the same reason: this step chose to stand
-              // aside and said why. The sentence renders directly below as the note.
-              : phase === "skipped" ? "skipped" : step.status}
+              // aside and said why. The sentence renders directly below as the note. An
+              // operator's skip says who skipped it, as the rail does — "skipped" alone read
+              // the same as a branch the run never took.
+              : phase === "skipped" ? (skippedBy(step) || "skipped") : step.status}
           </span>
         )}
         {/* THE NUMBER, TYING THE CARD TO THE RAIL ABOVE IT. Taken from the reference design:

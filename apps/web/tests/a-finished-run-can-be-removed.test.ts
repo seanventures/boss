@@ -27,13 +27,21 @@ describe("removing a run", () => {
     // Decided by the engine beside "Run this workflow again", on a FINISHED run only — the
     // states `delete_run` accepts. A test there holds FINISHED_RUN_STATES equal to them.
     // REWRITTEN to the verdict form; delete_run now refuses through the same verdict.
-    const finished = ENGINE.indexOf("    if finished:\n");
-    const rerun = ENGINE.indexOf('_verdict("rerun"', finished);
-    const remove = ENGINE.indexOf('_verdict("remove", "Remove this run", ENABLED)', finished);
-    expect(finished).toBeGreaterThan(-1);
-    expect(rerun).toBeGreaterThan(finished);
+    // REWRITTEN AGAIN (review of c8de36b): a run STOPPED at a failed step is the operator's,
+    // not over — Remove is offered on it only once nothing under it is live (it used to delete
+    // the records while a parallel branch went on). So Remove is enabled outright on a CLOSED
+    // run, and on a stopped one only when no step is live; engine/tests/
+    // test_a_stopped_run_is_the_operators.py enforces the behaviour.
+    const closed = ENGINE.indexOf("    if closed:\n", ENGINE.indexOf("    live = ["));
+    const rerun = ENGINE.indexOf('_verdict("rerun"', closed);
+    const remove = ENGINE.indexOf('_verdict("remove", "Remove this run", ENABLED)', closed);
+    expect(closed).toBeGreaterThan(-1);
+    expect(rerun).toBeGreaterThan(closed);
     expect(remove).toBeGreaterThan(rerun);
-    expect(remove - finished).toBeLessThan(200);
+    expect(remove - closed).toBeLessThan(200);
+    const stopped = ENGINE.indexOf("    elif stopped:\n", remove);
+    expect(stopped).toBeGreaterThan(remove);
+    expect(ENGINE.slice(stopped, stopped + 1400)).toContain('"remove", "Remove this run", DISABLED');
   });
 
   it("asks first, because it cannot be undone", () => {

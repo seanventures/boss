@@ -1418,6 +1418,10 @@ def _validate_bindings(
             _version_row(connection, project_id, child_id)
 
 
+#: Run inputs that claim work already happened. Only the server sets them — see `start_run`.
+ADOPT_PREFIX = "adopt_"
+
+
 def start_run(
     connection: Connection,
     *,
@@ -1430,8 +1434,28 @@ def start_run(
     selector_value: Optional[str] = None,
     policy_snapshot: Optional[dict[str, Any]] = None,
     parent_run_id: Optional[str] = None,
+    adopted: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    """Start a run.
+
+    ADOPTION IS DECIDED BY THE SERVER, HERE, FOR EVERY ENTRY POINT. An `adopt_*` input tells the
+    runtime "this work already happened — watch it rather than do it". The HTTP start endpoint
+    stripped caller-supplied ones on purpose, but the agent's `start_workflow` copied its
+    `inputs` straight through, so a model could assert research had been done and the run would
+    build on it — the boss-1 incident (a run built on research that failed) through the agent's
+    door, past both the "Build on this research" rule and the adopt-key rule (review of
+    0fd6c45). So every `adopt_*` key in `input_data` is dropped here, whoever sent it; the only
+    way to set one is `adopted`, which callers fill from a source they have CHECKED
+    (`workflow_run_actions.research_to_adopt`, or `start_project_run`, true by construction).
+    """
     dedupe_key = _clean_text(dedupe_key, "dedupe_key")
+    input_data = {k: v for k, v in (input_data or {}).items()
+                  if not str(k).startswith(ADOPT_PREFIX)}
+    for key, value in (adopted or {}).items():
+        if not str(key).startswith(ADOPT_PREFIX):
+            raise WorkflowValidationError(f"{key!r} is not an adoption key")
+        if value not in (None, ""):
+            input_data[str(key)] = value
     existing = connection.execute(
         text(
             "SELECT id FROM workflow_runs WHERE project_id=:project_id AND dedupe_key=:dedupe_key"
@@ -1548,7 +1572,8 @@ def start_run(
             status="pending",
         )
     connection.execute(
-        text("UPDATE workflow_runs SET status='running', updated_at=now() WHERE id=:id"),
+        text("UPDATE workflow_runs SET status='running', updated_at=now() "
+             "WHERE id=:id AND status='validating'"),
         {"id": run_id},
     )
     # WHO IS ON THIS, seeded before the first step can be refused for not knowing.
@@ -1841,9 +1866,10 @@ def get_run(connection: Connection, project_id: str, run_id: str) -> dict[str, A
     )
     # WHAT AN OPERATOR MAY DO TO IT — the same decision every operation on it enforces. See
     # workflow_run_actions.
-    from .workflow_run_actions import actions_for
+    from .workflow_run_actions import actions_for, standing
 
     result["actions"] = actions_for(connection, project_id, [run_id]).get(run_id, [])
+    result["standing"] = standing(result.get("status"))
     return result
 
 
@@ -1887,11 +1913,12 @@ def list_runs(
     # THE AGENT'S LIST CARRIES THE SAME ACTIONS AS THE CONSOLE'S. Without them the agent and the
     # MCP list surface could not see what a run offers, and would learn it only by trying —
     # batched, so a page of runs costs three queries, not three per run.
-    from .workflow_run_actions import actions_for
+    from .workflow_run_actions import actions_for, standing
 
     offered = actions_for(connection, project_id, [item["id"] for item in items])
     for item in items:
         item["actions"] = offered.get(item["id"], [])
+        item["standing"] = standing(item.get("status"))
     return items
 
 
@@ -2182,6 +2209,11 @@ def _maybe_activate(
     )
     if ready:
         _activate_step(connection, run_id, step_id, iteration)
+        if policy == "any":
+            # Branches that failed before this released are now gone on without — say so on
+            # each, so none of them stops the run later (see `_an_any_join_may_go_on_without`).
+            _stamp_tolerated(connection, run_id, step_id, iteration,
+                             [str(w) for w in template["wait_for"]])
 
 
 def _drain_control_steps(connection: Connection, run_id: str) -> None:
@@ -2316,7 +2348,8 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             },
         )
         connection.execute(
-            text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+            text("UPDATE workflow_runs SET status='waiting', updated_at=now() "
+                 "WHERE id=:id AND status IN ('running','waiting')"),
             {"id": run["id"]},
         )
         _emit_step_event(
@@ -2376,7 +2409,8 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             {"id": row["id"], "decision_id": decision_id},
         )
         connection.execute(
-            text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+            text("UPDATE workflow_runs SET status='waiting', updated_at=now() "
+                 "WHERE id=:id AND status IN ('running','waiting')"),
             {"id": run["id"]},
         )
         _emit_step_event(
@@ -2410,7 +2444,8 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             {"id": row["id"], "child_id": child["id"]},
         )
         connection.execute(
-            text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+            text("UPDATE workflow_runs SET status='waiting', updated_at=now() "
+                 "WHERE id=:id AND status IN ('running','waiting')"),
             {"id": run["id"]},
         )
         return
@@ -2575,13 +2610,97 @@ def _step_label(template: dict[str, Any], step_id: str) -> str:
     return step_id
 
 
+#: Output key stamped on a failed branch that a `success_policy: any` join went on without.
+TOLERATED_BY_JOIN = "tolerated_by_join"
+
+
+def _any_joins_after(steps: dict[str, dict[str, Any]], step_id: str) -> list[str]:
+    """The joins this step feeds, when EVERY next step is a join that releases on any branch.
+
+    Only then can the run go on without it: a failed step that also feeds anything else is a
+    hole in the run, whatever a join somewhere thinks."""
+    targets = [str(t) for t in (steps.get(step_id) or {}).get("next", []) or []]
+    joins = [t for t in targets
+             if (steps.get(t) or {}).get("kind") == "join"
+             and (steps.get(t) or {}).get("success_policy", "all") == "any"]
+    return joins if targets and len(joins) == len(targets) else []
+
+
+def _stamp_tolerated(connection: Connection, run_id: str, join_id: str, iteration: int,
+                     wait_for: list[str]) -> None:
+    """Record, on each failed branch of a released `any` join, that the run went on without it.
+
+    THE PARTIAL FAILURE STAYS VISIBLE. The step keeps its failed status and its error — the
+    bundled fan-out template promises to "make partial failures visible" — and gains the name
+    of the join that released without it, which is what exempts it from stopping the run."""
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET output = COALESCE(output, '{}'::jsonb)
+                         || jsonb_build_object(CAST(:key AS TEXT), CAST(:join_id AS TEXT)),
+                updated_at = now()
+            WHERE workflow_run_id=:run_id AND iteration=:iteration
+              AND step_id IN :step_ids AND status IN ('failed', 'deadlettered')
+              AND output->>CAST(:key AS TEXT) IS NULL
+            """
+        ).bindparams(bindparam("step_ids", expanding=True)),
+        {"run_id": run_id, "iteration": iteration, "step_ids": tuple(wait_for),
+         "key": TOLERATED_BY_JOIN, "join_id": join_id},
+    )
+
+
+def _an_any_join_may_go_on_without(connection: Connection, run_id: str, row: Any) -> bool:
+    """Can a `success_policy: any` join still release without this failed step?
+
+    THE FAN-OUT TEMPLATE COULD NOT TOLERATE ONE FAILED SCOPE. `agent_group_fan_out_join` joins
+    three scope workers on `any` and says it "makes partial failures visible" — but once a
+    failed step stopped its run, one failed worker stopped the whole run and `_maybe_finish_run`
+    refused to complete past it (review of c8de36b). So a branch whose every next step is an
+    `any` join does not stop the run while that join has released, or another of its branches
+    has succeeded or is still working. If every branch fails, the last failure stops the run as
+    any failure would.
+    """
+    steps = _step_map(_run_spec(connection, run_id))
+    joins = _any_joins_after(steps, str(row["step_id"]))
+    if not joins:
+        return False
+    iteration = int(row["iteration"])
+    for join_id in joins:
+        released = connection.execute(
+            text("SELECT 1 FROM workflow_step_runs WHERE workflow_run_id=:r AND step_id=:s "
+                 "AND iteration=:i AND status <> 'pending'"),
+            {"r": run_id, "s": join_id, "i": iteration},
+        ).first()
+        wait_for = [str(w) for w in steps[join_id].get("wait_for", [])]
+        if released:
+            _stamp_tolerated(connection, run_id, join_id, iteration, wait_for)
+            continue
+        others = connection.execute(
+            text("SELECT step_id, status, output FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND iteration=:i AND step_id IN :ids")
+            .bindparams(bindparam("ids", expanding=True)),
+            {"r": run_id, "i": iteration,
+             "ids": tuple(w for w in wait_for if w != str(row["step_id"])) or ("",)},
+        ).mappings().all()
+        # `pending` counts as "may yet": a branch further up its chain can still reach the
+        # join. If it never does, `_maybe_finish_run` finds this step unexcused when nothing is
+        # left running, and stops the run at it then.
+        if not any(o["status"] in ACTIVE_STEP_STATES or o["status"] == "pending"
+                   or _settled_for_downstream(o) for o in others):
+            return False
+    return True
+
+
 def _first_stopped_step(connection: Connection, run_id: str) -> Any:
-    """The earliest step of this run that failed and has not been retried or skipped."""
+    """The earliest step of this run that failed and has not been retried or skipped — and that
+    no `any` join has gone on without (`TOLERATED_BY_JOIN`)."""
     return connection.execute(
         text(
             """
             SELECT * FROM workflow_step_runs
             WHERE workflow_run_id=:run_id AND status IN :states
+              AND output->>'tolerated_by_join' IS NULL
             ORDER BY created_at, iteration, step_id LIMIT 1
             """
         ).bindparams(bindparam("states", expanding=True)),
@@ -2672,6 +2791,11 @@ def _follow_edges_left_behind(connection: Connection, run_id: str) -> None:
                 _maybe_activate(connection, run_id, str(target), int(row["iteration"]))
 
 
+#: The run states `_set_moving_again` may set running: a run that is moving, or one stopped (or
+#: blocked) waiting for somebody. Never a closed run, a paused one, or one compensating.
+MOVABLE_RUN_STATES = frozenset({"running", "waiting", "failed", "deadlettered", "blocked"})
+
+
 def _set_moving_again(
     connection: Connection, run_id: str, *, released: Optional[tuple[str, int]] = None,
 ) -> str:
@@ -2692,16 +2816,33 @@ def _set_moving_again(
     would be, through `_after_success`, so a skipped loop body returns to its loop controller
     rather than leaving the controller waiting for ever.
 
+    THE ONLY DOOR OUT OF A STOP. Every path that sets a stopped run moving comes through here —
+    the operator's Try again and Skip, and the runner reopening or re-pointing a step onto a
+    retried build (`reopen_failed_step`, `repoint_waiting_step`). Those two used to write
+    `status='waiting'` themselves and leave `blocked_reason` behind, so a run revived by a
+    retried build kept "Stopped at Build: … Try it again, or skip it and carry on." on its card
+    while it waited on the new build, and still after it COMPLETED — a red instruction with no
+    buttons under a finished run (review of c8de36b). Here the sentence is cleared with the
+    status, in one statement, and a test enumerates every other writer of a run's status.
+
+    Never revives a run that is over: a cancelled, completed or compensated run — or one busy
+    compensating — is left exactly as it is. The UPDATE carries that guard itself, so a Stop
+    that commits between an operator's check and this write still wins.
+
     Returns the run's status afterwards.
     """
     run = _run_row(connection, run_id)
     if run["status"] == "paused":
         _refresh_frontier(connection, run_id)
         return "paused"
+    if run["status"] not in MOVABLE_RUN_STATES:
+        _refresh_frontier(connection, run_id)
+        return str(run["status"])
     connection.execute(
         text("UPDATE workflow_runs SET status='running', blocked_reason=NULL, error=NULL, "
-             "updated_at=now() WHERE id=:id"),
-        {"id": run_id},
+             "updated_at=now() WHERE id=:id AND status IN :movable")
+        .bindparams(bindparam("movable", expanding=True)),
+        {"id": run_id, "movable": tuple(sorted(MOVABLE_RUN_STATES))},
     )
     _follow_edges_left_behind(connection, run_id)
     if released is not None:
@@ -2909,7 +3050,8 @@ def claim_step(
         {"id": row["id"], "worker_id": worker_id, "expires_at": expires_at},
     ).mappings().one()
     connection.execute(
-        text("UPDATE workflow_runs SET status='running', updated_at=now() WHERE id=:id"),
+        text("UPDATE workflow_runs SET status='running', updated_at=now() "
+             "WHERE id=:id AND status IN ('running','waiting')"),
         {"id": run_id},
     )
     _emit_step_event(
@@ -3058,7 +3200,11 @@ def force_fail_waiting_step(
         "workflow.step_failed", row, {"error": error[:500], "awaited": True},
     )
     # Stopped here, with the sentence the run card shows — see `_stop_run_at`.
-    _stop_run_at(connection, row["workflow_run_id"], row)
+    if not _an_any_join_may_go_on_without(connection, row["workflow_run_id"], row):
+        _stop_run_at(connection, row["workflow_run_id"], row)
+    else:
+        # Gone on without: the run may now have nothing left to do but finish.
+        _maybe_finish_run(connection, row["workflow_run_id"])
     return _serialize_step(row)
 
 
@@ -3072,6 +3218,20 @@ OPERATOR_RECOVERABLE_STEP_STATES = ("failed", "deadlettered", "cancelled")
 SKIPPABLE_STEP_STATES = ("failed", "deadlettered")
 
 
+def skipped_by_operator(row: Any) -> bool:
+    """Was this step skipped BY AN OPERATOR — "Skip and proceed" — rather than by the run itself
+    (a branch never taken: `condition_not_selected`, `path_not_reached`)?
+
+    THE ONE PREDICATE. The runner's input resolution and the join release both ask it; the
+    runner used to treat every skipped row as an operator's skip, so a step reading from a
+    branch the run never took was failed with "step x was skipped… Retry x" — and x had never
+    failed, so Retry was refused (review of c8de36b)."""
+    if row["status"] != "skipped":
+        return False
+    output = _json(row["output"], {})
+    return bool(isinstance(output, dict) and output.get("skipped_by_operator"))
+
+
 def _settled_for_downstream(row: Any) -> bool:
     """May the steps after this one run?
 
@@ -3079,12 +3239,7 @@ def _settled_for_downstream(row: Any) -> bool:
     skipped because its branch was never taken (`path_not_reached`) is not a decision anybody
     made about this step, so it does not release a join.
     """
-    if row["status"] == "succeeded":
-        return True
-    if row["status"] != "skipped":
-        return False
-    output = _json(row["output"], {})
-    return bool(isinstance(output, dict) and output.get("skipped_by_operator"))
+    return row["status"] == "succeeded" or skipped_by_operator(row)
 
 
 def _latest_step_row(
@@ -3121,6 +3276,13 @@ def retry_failed_step(
     Everything the run already produced is kept; only this step runs again. The run comes back
     to `running` too, or a re-queued step would sit ready under a dead run.
     """
+    # THE RUN FIRST, LOCKED — as Skip, Stop and Remove take it. This read the run unlocked, so a
+    # Stop committing between the check below and the write in `_set_moving_again` was undone:
+    # a cancelled run set running again, the incident this rule exists to end. Run before step,
+    # the order every other operation locks in, so Try again and Skip cannot deadlock.
+    run = _run_row(connection, run_id, lock=True)
+    if run is None or run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
     row = _latest_step_row(connection, project_id, run_id, step_id)
     if not row:
         raise WorkflowNotFoundError(f"no step '{step_id}' on run {run_id}")
@@ -3296,14 +3458,11 @@ def repoint_waiting_step(
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Waiting workflow step not found.")
-    # The RUN goes back to waiting too. A previous attempt may have marked it failed before the
-    # retry existed, and leaving it failed above a step that is actively waiting is the same
-    # contradiction in the other direction.
-    connection.execute(
-        text("UPDATE workflow_runs SET status='waiting', error=NULL, updated_at=now() "
-             "WHERE id=:id"),
-        {"id": row["workflow_run_id"]},
-    )
+    # The RUN moves again too. A previous attempt may have marked it failed before the retry
+    # existed, and leaving it failed above a step that is actively waiting is the same
+    # contradiction in the other direction. Through the one door out of a stop, so the "Stopped
+    # at …" sentence goes with the status and a paused or closed run is left as it is.
+    _set_moving_again(connection, row["workflow_run_id"])
     return _serialize_step(row)
 
 
@@ -3348,12 +3507,10 @@ def reopen_failed_step(
     if not row:
         raise WorkflowNotFoundError("Failed workflow step not found.")
     # The run was marked failed when the step was. It is waiting again now, and leaving it
-    # failed above an actively-waiting step is the same contradiction the other way round.
-    connection.execute(
-        text("UPDATE workflow_runs SET status='waiting', error=NULL, updated_at=now() "
-             "WHERE id=:id"),
-        {"id": row["workflow_run_id"]},
-    )
+    # failed above an actively-waiting step is the same contradiction the other way round —
+    # as is leaving its "Stopped at …" sentence on the card. `_set_moving_again` clears both,
+    # and stops the run again at any OTHER failed step nobody has decided about.
+    _set_moving_again(connection, row["workflow_run_id"])
     return _serialize_step(row)
 
 
@@ -3402,8 +3559,13 @@ def park_step_awaiting(
         ),
         {"id": step_run_id, "output": json.dumps(output)},
     ).mappings().first()
+    # ONLY A MOVING RUN GOES TO `waiting`. This was unconditional, so a branch that parked after
+    # its run had been stopped at a failed sibling — or cancelled while the branch was still
+    # leased — turned the run back to `waiting` under the operator: a stopped run that no longer
+    # said so, or a cancelled one quietly revived.
     connection.execute(
-        text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+        text("UPDATE workflow_runs SET status='waiting', updated_at=now() "
+             "WHERE id=:id AND status IN ('running','waiting')"),
         {"id": row["workflow_run_id"]},
     )
     return _serialize_step(updated)
@@ -3597,8 +3759,13 @@ def fail_step(
                 ),
             },
         )
-        # The run stops at this step, in the one shape every stop takes — see `_stop_run_at`.
-        _stop_run_at(connection, row["workflow_run_id"], updated)
+        # The run stops at this step, in the one shape every stop takes — see `_stop_run_at` —
+        # unless an `any` join can still go on without it (a fan-out's partial failure).
+        if not _an_any_join_may_go_on_without(connection, row["workflow_run_id"], updated):
+            _stop_run_at(connection, row["workflow_run_id"], updated)
+        else:
+            # Gone on without: the run may now have nothing left to do but finish.
+            _maybe_finish_run(connection, row["workflow_run_id"])
     _refresh_frontier(connection, row["workflow_run_id"])
     return _serialize_step(updated)
 
@@ -3614,7 +3781,9 @@ def pause_run(
     if run["status"] != "paused":
         connection.execute(
             text(
-                "UPDATE workflow_runs SET status='paused', paused_at=now(), updated_at=now() WHERE id=:id"
+                "UPDATE workflow_runs SET status='paused', paused_at=now(), updated_at=now() "
+                "WHERE id=:id AND status NOT IN ('completed','failed','deadlettered','cancelled',"
+                "'compensated')"
             ),
             {"id": run_id},
         )
@@ -3642,7 +3811,7 @@ def resume_run(
         text(
             """
             UPDATE workflow_runs SET status='running', paused_at=NULL, updated_at=now()
-            WHERE id=:id
+            WHERE id=:id AND status='paused'
             """
         ),
         {"id": run_id},
@@ -3716,8 +3885,12 @@ def delete_run(connection: Connection, project_id: str, run_id: str, actor: str)
     # Cancelled parents are safe: cancel marks their waiting steps cancelled, which is
     # terminal, so they no longer match. A step that already succeeded has the output copied
     # onto itself and does not match either.
+    # A parent STOPPED at a failed step is not over: once the operator retries or skips, its
+    # waiting subworkflow step resumes from this child. Only a CLOSED parent no longer needs it.
+    from .workflow_run_actions import CLOSED_RUN_STATES
+
     terminal_steps = ", ".join(f":done_{i}" for i in range(len(TERMINAL_STEP_STATES)))
-    terminal_runs = ", ".join(f":closed_{i}" for i in range(len(TERMINAL_RUN_STATES)))
+    terminal_runs = ", ".join(f":closed_{i}" for i in range(len(CLOSED_RUN_STATES)))
     waiter = connection.execute(
         text(
             f"""
@@ -3734,7 +3907,7 @@ def delete_run(connection: Connection, project_id: str, run_id: str, actor: str)
         {
             "run_id": run_id,
             **{f"done_{i}": status for i, status in enumerate(sorted(TERMINAL_STEP_STATES))},
-            **{f"closed_{i}": status for i, status in enumerate(sorted(TERMINAL_RUN_STATES))},
+            **{f"closed_{i}": status for i, status in enumerate(sorted(CLOSED_RUN_STATES))},
         },
     ).mappings().first()
     if waiter:
@@ -3770,14 +3943,20 @@ def cancel_run(
     run = _run_row(connection, run_id, lock=True)
     if run["project_id"] != project_id:
         raise WorkflowNotFoundError("Workflow run not found.")
-    if run["status"] in TERMINAL_RUN_STATES:
+    from .workflow_run_actions import CLOSED_RUN_STATES, require
+
+    if run["status"] in CLOSED_RUN_STATES:
         # Pressed twice, or a run that finished while the press was in flight: it is already
-        # stopped, which is what was asked for. Reported, not refused — like a second Skip.
+        # over, which is what was asked for. Reported, not refused — like a second Skip.
+        #
+        # CLOSED, NOT "TERMINAL". This returned early for `failed` and `deadlettered` too — a
+        # run STOPPED at a failed step, which is waiting for the operator, not over. With a
+        # parallel branch still leased under it, Stop did nothing and the branch kept working:
+        # the 2026-09-02 shape (a cancel that did not stop the work), found by the review of
+        # c8de36b. A stopped run is cancelled like any other: its live steps and their work.
         return get_run(connection, project_id, run_id)
     # The run's "stop" action decides the rest: a run busy compensating is refused (stopping it
     # would race the undo), in the words the console shows on its disabled Stop.
-    from .workflow_run_actions import require
-
     require(connection, project_id, run_id, "stop")
 
     # STOP THE WORK, NOT JUST THE BOOKKEEPING.
@@ -3797,8 +3976,14 @@ def cancel_run(
     connection.execute(
         text(
             """
-            UPDATE workflow_step_runs SET status='cancelled', completed_at=clock_timestamp(), updated_at=now()
-            WHERE workflow_run_id=:run_id AND status IN ('pending','ready','waiting')
+            UPDATE workflow_step_runs SET status='cancelled', completed_at=clock_timestamp(),
+                lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL, updated_at=now()
+            -- LEASED AND RUNNING TOO. A step a worker holds right now was left `leased` under
+            -- a cancelled run; when its tool returned, the worker parked it against the build
+            -- it had just started — work set going after Stop. Cancelled here, the worker's
+            -- complete/park is refused (it no longer holds a lease) and rolls its step back.
+            WHERE workflow_run_id=:run_id
+              AND status IN ('pending','ready','waiting','leased','running')
             """
         ),
         {"run_id": run_id},
@@ -3806,7 +3991,7 @@ def cancel_run(
     connection.execute(
         text(
             """
-            UPDATE workflow_runs SET status='cancelled', error=:reason,
+            UPDATE workflow_runs SET status='cancelled', error=:reason, blocked_reason=NULL,
                 current_frontier='[]'::jsonb, completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id
             """
@@ -4031,7 +4216,7 @@ def begin_compensation(
         text(
             """
             UPDATE workflow_runs SET status='compensating', error=:reason,
-                updated_at=now() WHERE id=:id
+                blocked_reason=NULL, updated_at=now() WHERE id=:id
             """
         ),
         {"id": run_id, "reason": reason},
@@ -4149,7 +4334,7 @@ def complete_compensation(
             text(
                 """
                 UPDATE workflow_runs SET status='compensated', completed_at=clock_timestamp(),
-                    updated_at=now() WHERE id=:id
+                    blocked_reason=NULL, updated_at=now() WHERE id=:id
                 """
             ),
             {"id": run["id"]},
@@ -4803,13 +4988,14 @@ def start_project_run(
         resolved = workflow_for_code_task(connection, project_id=project_id, task_id=None)
     if not resolved or not resolved.get("version_id"):
         return None
+    extra = {k: v for k, v in (extra_input or {}).items() if v not in (None, "", [], {})}
     run_input = {
         "title": title,
         # `directive` is what the catalogue's first steps read: research seeds from it and the
         # panel debates it. It is the instructions, not the title — a title is a label, and a
         # panel handed a label has nothing to discuss.
         "directive": directive,
-        **{k: v for k, v in (extra_input or {}).items() if v not in (None, "", [], {})},
+        **{k: v for k, v in extra.items() if not k.startswith(ADOPT_PREFIX)},
     }
     return start_run(
         connection,
@@ -4817,6 +5003,9 @@ def start_project_run(
         actor=actor,
         workflow_version_id=str(resolved["version_id"]),
         input_data=run_input,
+        # The one place adoption is true by construction: the code task that creates this run
+        # IS the build, and its origin names the panel and research it came from.
+        adopted={k: v for k, v in extra.items() if k.startswith(ADOPT_PREFIX)},
         # One outer run per project. Starting the same project twice — a double-click, a retry
         # of the request — must not produce two nine-step pipelines racing each other over one
         # repository.

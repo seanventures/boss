@@ -8118,6 +8118,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-node[data-phase="findings"] .dw-node-btn { border-color: var(--warn, #d29922); }
 .dw-detail[data-phase="findings"] { border-color: var(--warn, #d29922); }
 .dw-node[data-phase="skipped"] .dw-node-btn { border-style: dashed; opacity: .62; }
+/* A step that succeeded by doing nothing (a bare notify / video_edit / social_publish): not a
+   green tick — a dashed amber outline that reads "nothing happened here". */
+.dw-node[data-phase="nothing"] .dw-node-btn { border-style: dashed; border-color: var(--warn, #d29922); }
+.dw-node[data-phase="nothing"] .dw-dot { color: var(--warn, #d29922); }
+.dw-detail[data-phase="nothing"] { border-color: var(--warn, #d29922); }
 .dw-node[data-phase="ahead"] .dw-node-btn { opacity: .55; }
 .dw-node[data-phase="now"] .dw-dot { background: var(--live, #58a6ff); color: #04121f; }
 .dw-node[data-phase="now"] .dw-node-btn {

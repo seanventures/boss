@@ -119,9 +119,15 @@ def _publish(c, project_id, key, steps, entry):
 
 
 def _start(c, project_id, version_id, input_data=None):
+    # Adoption reaches a run only through `start_run(adopted=…)` — a caller's `adopt_*` input is
+    # dropped (review of 0fd6c45). These tests stand in for the server's own construction path
+    # (`start_project_run`), so the adopt keys they name go where that path puts them.
+    data = dict(input_data or {})
+    adopted = {k: data.pop(k) for k in list(data) if k.startswith("adopt_")}
     return workflows.start_run(
-        c, project_id=project_id, actor="test", input_data=input_data or {},
+        c, project_id=project_id, actor="test", input_data=data,
         dedupe_key=f"dk_{uuid.uuid4().hex[:10]}", workflow_version_id=version_id,
+        adopted=adopted,
     )
 
 

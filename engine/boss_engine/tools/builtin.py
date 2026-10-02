@@ -1283,30 +1283,38 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             supplied = args.get("inputs")
             run_input = dict(supplied) if isinstance(supplied, dict) else {}
             run_input.update({"directive": directive, "title": title})
+            # A MODEL DOES NOT GET TO SAY THE WORK ALREADY HAPPENED. `adopt_*` keys in `inputs`
+            # were copied straight into the run, so an agent could make a run build on research
+            # that failed — the boss-1 incident through the agent's door (review of 0fd6c45).
+            # `start_run` now drops them for every caller; they are named here so the reply
+            # says what was ignored rather than dropping it in silence.
+            ignored = sorted(k for k in run_input if str(k).startswith(wf.ADOPT_PREFIX))
+            adoption: dict = {}
             if adopted:
-                found = c.execute(
-                    _text("SELECT project_id, status FROM discovery_runs WHERE id = :d"),
-                    {"d": adopted},
-                ).mappings().first()
-                if not found or found["project_id"] != pid:
+                # The same research rule the console's start uses: a COMPLETED dossier WITH
+                # findings, in this project. A completed-but-empty one was accepted here.
+                from ..services import workflow_run_actions as _run_actions
+                try:
+                    adoption = {"adopt_discovery_run_id": _run_actions.research_to_adopt(
+                        c, pid, from_discovery=adopted)}
+                except wf.WorkflowNotFoundError:
                     return {"ok": False, "error": f"no research run {adopted!r} in this project"}
-                if str(found["status"] or "") != "completed":
-                    return {"ok": False,
-                            "error": f"that research is {found['status']}, not completed — "
-                                     "there is nothing finished to build on yet"}
-                run_input["adopt_discovery_run_id"] = adopted
+                except _run_actions.RunActionRefused as error:
+                    return {"ok": False, "error": error.reason}
             try:
                 run = wf.start_run(
                     c, project_id=pid, actor=actor,
                     input_data=run_input,
                     dedupe_key=f"agent:{key}:{uuid4().hex[:12]}",
                     workflow_version_id=version_id,
+                    adopted=adoption,
                 )
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
         return {"status": "running", "run_id": run.get("id"), "workflow_key": key,
                 "project_id": pid, "title": title,
-                **({"built_on_research": adopted} if adopted else {})}
+                **({"built_on_research": adopted} if adopted else {}),
+                **({"ignored_input": ignored} if ignored else {})}
 
     @reg.tool(
         "request_meeting",

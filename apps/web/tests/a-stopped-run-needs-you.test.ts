@@ -7,6 +7,7 @@ import {
   stoppedStep, type RunAction, type RunStep,
 } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
+import { standingOf } from "./_helpers/run-standing";
 
 /**
  * A run that has stopped at a failed step is waiting for the operator — and the console did
@@ -29,8 +30,11 @@ function step(status: string, over: Partial<RunStep> = {}): RunStep {
            output: {}, decision_id: null, ...over } as unknown as RunStep;
 }
 
+// REWRITTEN (2026-10-02): a run carries `standing` from the server, which is what the console
+// now files it by; the fixture takes it from the engine's own sets rather than a list here.
 function run(status: string, steps: RunStep[], id = "wfr_stopped"): Run {
-  return { id, status, steps, workflow_key: "k", workflow_name: "W", input: {},
+  return { id, status, standing: standingOf(status), steps, workflow_key: "k",
+           workflow_name: "W", input: {},
            created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-02T00:00:00Z" } as never;
 }
 
