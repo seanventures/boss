@@ -22884,15 +22884,12 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             except Exception:  # noqa: BLE001 — a re-check must never fail the page
                 _blockers[(_s["workflow_run_id"], _s["step_id"])] = None
 
-        # THE DOSSIERS "Build on this research" depends on, read while the connection is open,
-        # in one query for the whole page. See workflow_run_actions.
+        # WHICH BUTTONS EACH RUN HAS, read while the connection is open, batched for the page —
+        # through the SAME reader and the same decision every operation on a run enforces
+        # (workflow_run_actions.require), so a button cannot be shown that its endpoint refuses.
         from boss_engine.services import workflow_run_actions as _run_actions
 
-        _discoveries = _run_actions.load_discoveries(
-            connection, project_id,
-            {i for r in runs for i in _run_actions.research_discovery_ids(
-                [dict(s) for s in steps if s["workflow_run_id"] == r["id"]], r["input"])},
-        )
+        _actions = _run_actions.actions_for(connection, project_id, ids)
 
     # THE ORDER THE STEPS RUN IN, NOT THE ORDER THEY WERE INSERTED.
     #
@@ -23106,9 +23103,11 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             # WHICH BUTTONS THIS RUN HAS — the console renders this list and decides nothing
             # itself. A cancelled run whose research failed offered "Build on this research"
             # because the console kept its own copy of the rule; see workflow_run_actions.
-            "actions": _run_actions.run_actions(
-                {"status": run["status"], "input": run["input"] or {}}, run_steps,
-                _discoveries),
+            "actions": _actions.get(run["id"], []),
+            # Whether the run is over — the engine's set, so the console's "as run" / read-only
+            # assignment does not keep its own list of terminal states (it had one, and it left
+            # out `compensated`).
+            "finished": run["status"] in _run_actions.FINISHED_RUN_STATES,
         })
     return {"project_id": project_id, "runs": out}
 
@@ -23493,8 +23492,13 @@ def recheck_delivery_run(run_id: str, payload: WorkflowRecheckBody) -> dict:
     with begin(engine) as connection:
         actor = _delivery_workflow_actor(payload)
         require_project_actor(connection, project_id, actor, "workflow_execute")
-        return recheck_run(connection, project_id=project_id, run_id=run_id,
-                           requeue=bool(payload.get("requeue", True)), actor=actor)
+        try:
+            return recheck_run(connection, project_id=project_id, run_id=run_id,
+                               requeue=bool(payload.get("requeue", True)), actor=actor)
+        except workflow_runtime.WorkflowError as error:
+            # A run whose "recheck" action is not offered — stopped, finished, undoing itself —
+            # is refused in the same words the console shows, not turned into a 500.
+            raise_workflow_error(error)
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/deploy-target")
@@ -23791,35 +23795,33 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
                 if not owner or owner["project_id"] != project_id:
                     raise HTTPException(status_code=404, detail="source run not found")
                 if not source_discovery:
-                    # THE SAME RULE AS THE BUTTON. This used to be its own query — "any step
+                    # THE BUTTON'S OWN RULE, ENFORCED. This used to be its own query — "any step
                     # succeeded with `output ? 'discovery_id'`" — and the console had a third
                     # copy. A research step from before the runner stopped forgiving failures is
                     # `succeeded` with output `failed_continued` and a dead discovery's id, so
-                    # both copies said "researched" about research that had failed. One function
-                    # now answers for the button and for this, by what the step produced and
-                    # whether the dossier it names actually finished with findings.
+                    # both copies said "researched" about research that had failed. Then it read
+                    # the shared research rule but not the run's state, and so built on a run
+                    # that was still going, which the button never offers. `require` is the
+                    # whole "Build on this research" decision: a finished run, research that
+                    # succeeded, a dossier that completed with findings — refused otherwise, in
+                    # the words the console would have shown.
                     from boss_engine.services import workflow_run_actions as _run_actions
 
-                    source_steps = [dict(row) for row in connection.execute(
-                        text("SELECT step_id, step_kind AS kind, status, output, "
-                             "binding_snapshot, completed_at FROM workflow_step_runs "
-                             "WHERE workflow_run_id = :r"),
-                        {"r": source_run},
-                    ).mappings().all()]
-                    facts = _run_actions.load_discoveries(
-                        connection, project_id,
-                        _run_actions.research_discovery_ids(source_steps, owner["input"]))
-                    found, why_not, _applies = _run_actions.research_to_build_on(
-                        source_steps, owner["input"], facts)
-                    if not found:
+                    try:
+                        offered = _run_actions.require(
+                            connection, project_id, source_run, "build_on_research")
+                    except workflow_runtime.WorkflowNotFoundError as error:
+                        raise HTTPException(status_code=404,
+                                            detail="source run not found") from error
+                    except _run_actions.RunActionRefused as error:
                         # NAMING WHAT IS MISSING. "Carry it forward" on a run that never
                         # researched anything would silently start an ordinary run, and the
                         # operator would pay for research a second time believing they had not.
                         raise HTTPException(
                             status_code=409,
                             detail=f"{source_run} has no completed research to carry forward: "
-                                   f"{why_not}")
-                    source_discovery = found
+                                   f"{error.reason}") from error
+                    source_discovery = str(offered["discovery_id"])
                 if not run_input.get("directive"):
                     run_input = {**(owner["input"] or {}), **run_input}
                     run_input = {k: v for k, v in run_input.items()

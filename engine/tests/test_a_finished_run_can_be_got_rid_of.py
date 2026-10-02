@@ -19,16 +19,33 @@ from boss_engine.services import workflows
 
 
 class TestItWillNotDeleteWorkThatIsStillGoing:
-    def test_a_running_run_is_refused(self):
+    """REWRITTEN to the one-decision rule (2026-10-01). These read `delete_run`'s source for its
+    own status check. That check was a second copy of the console's "Remove this run" rule, and
+    the two had disagreed (Remove was offered on a `blocked` run this refused). Both now read the
+    run's "remove" action, so the behaviour is asserted on that decision and on `delete_run`
+    asking for it."""
+
+    @staticmethod
+    def _remove(status):
+        from boss_engine.services import workflow_run_actions
+
+        return workflow_run_actions.decide({"status": status, "input": {}}, [], {}, "remove")
+
+    @pytest.mark.parametrize("status", ["running", "waiting", "queued", "paused", "blocked"])
+    def test_a_running_run_is_refused(self, status):
+        verdict = self._remove(status)
+        assert verdict["state"] == "absent"
+        assert "Cancel it first" in verdict["reason"], "a refusal has to say what to do instead"
+
+    def test_delete_run_asks_that_decision_before_it_touches_anything(self):
         source = inspect.getsource(workflows.delete_run)
-        assert "TERMINAL_RUN_STATES" in source
-        assert "Cancel it first" in source, "a refusal has to say what to do instead"
+        assert 'require(connection, project_id, run_id, "remove")' in source
+        assert source.index('"remove")') < source.index("SET {column} = NULL")
 
     def test_cancelled_counts_as_finished(self):
         """Cancel stops the work; a cancelled run is then safe to remove, and is the ordinary
         route for getting rid of one that was still going."""
-        source = inspect.getsource(workflows.delete_run)
-        assert '"cancelled"' in source
+        assert self._remove("cancelled")["state"] == "enabled"
 
     def test_deadlettered_is_already_terminal_which_is_why_cancel_did_nothing(self):
         assert "deadlettered" in workflows.TERMINAL_RUN_STATES
@@ -90,6 +107,19 @@ class TestItWillNotStrandAParentThatIsStillWaiting:
     The console lists the child as its own run, and the button this feature added is exactly
     how an operator clears the "error" row while the parent still says "waiting".
     """
+
+    @pytest.fixture(autouse=True)
+    def _remove_is_offered(self, monkeypatch):
+        """These fake connections answer only the waiter query. Whether the run's "remove"
+        action is offered is decided — and tested — in workflow_run_actions; here it is, so
+        what is under test is the waiter guard that runs after it."""
+        from boss_engine.services import workflow_run_actions
+
+        asked = []
+        monkeypatch.setattr(workflow_run_actions, "require",
+                            lambda connection, project_id, run_id, key, **kw:
+                            asked.append(key) or {"key": key, "enabled": True})
+        return asked
 
     def _connection(self, waiter):
         class _Rows:

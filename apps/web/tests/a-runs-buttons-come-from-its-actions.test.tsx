@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
-  FailedStepActions, RUN_ACTION_KEYS, RunActionsBar, STEP_ACTION_KEYS, stepActions,
+  FailedStepActions, RUN_ACTION_KEYS, RunActionsBar, RunsView, STEP_ACTION_KEYS, stepActions,
   type RunAction, type RunStep,
 } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
@@ -23,6 +23,14 @@ import { codeOnly } from "./_helpers/source";
  * The engine now sends `actions` with every run (workflow_run_actions.py) and this file renders
  * it. These tests hold the console to that: no status checks where buttons are chosen, every
  * engine key has its words here, and a rendered run shows exactly what it was sent.
+ *
+ * THE FIRST VERSION OF THIS FILE COULD NOT SEE THE INCIDENT COME BACK. It looked inside the three
+ * functions that render actions and nowhere else; a reviewer put
+ * `{run.status === "cancelled" && ... ? <button onClick={onBuildOnThis}>Build on this research →</button> : null}`
+ * into StepPath — exactly where the original button lived — and every test stayed green. So the
+ * checks below ENUMERATE: every reference anywhere in the file to a handler that performs a run
+ * action must sit in one of the places that renders the server's list, and the whole run view is
+ * rendered with an empty list to prove nothing appears that the server did not send.
  */
 (globalThis as Record<string, unknown>).React = React;
 
@@ -42,6 +50,70 @@ function pythonTuple(name: string): string[] {
   expect(match, `${name} not found in workflow_run_actions.py`).toBeTruthy();
   return [...match![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
 }
+
+/** Every prop that performs a run action when called. */
+const RUN_ACTION_HANDLERS = [
+  "onStop", "onStopAndRerun", "onRerun", "onDelete", "onBuildOnThis", "onRecheck",
+  "onRetryStep", "onSkipStep", "onRetry", "onSkip",
+];
+/** The components that only hand those props on (or, FailedStepActions, render the list). */
+const PASS_THROUGH = ["RunsView", "StepPath", "StepDetail", "FailedStepActions"];
+
+function lineOf(index: number): number {
+  return UI.slice(0, index).split("\n").length;
+}
+
+/** The index of the bracket closing the one at `open`. */
+function closing(open: number): number {
+  const pair: Record<string, string> = { "{": "}", "(": ")" };
+  const [o, c] = [UI[open], pair[UI[open]]];
+  let depth = 0;
+  for (let i = open; i < UI.length; i++) {
+    if (UI[i] === o) depth++;
+    else if (UI[i] === c && --depth === 0) return i;
+  }
+  throw new Error(`unbalanced ${o} at line ${lineOf(open)}`);
+}
+
+/** [start, end) of every handler-named attribute on every <Tag …> element. */
+function attributeSpans(tag: string, names: string[] = RUN_ACTION_HANDLERS): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const el of UI.matchAll(new RegExp(`<${tag}\\b`, "g"))) {
+    let depth = 0;
+    for (let i = el.index! + tag.length + 1; i < UI.length; i++) {
+      const ch = UI[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      else if (ch === ">" && depth === 0) break;
+      if (depth === 0) {
+        const attr = UI.slice(i).match(/^\s([A-Za-z]+)=\{/);
+        if (attr && names.includes(attr[1])) {
+          const open = i + attr[0].length - 1;
+          spans.push([i, closing(open) + 1]);
+        }
+      }
+    }
+  }
+  return spans;
+}
+
+/** Where a run-action handler may be referenced. See the test that reads it. */
+const ALLOWED: Array<[number, number]> = (() => {
+  const spans: Array<[number, number]> = [];
+  for (const fn of PASS_THROUGH) {
+    const at = UI.indexOf(`function ${fn}(`);
+    expect(at, `${fn} is missing`).toBeGreaterThan(-1);
+    const sigEnd = closing(at + `function ${fn}`.length);
+    spans.push([at, sigEnd + 1]);
+    if (fn === "FailedStepActions") spans.push([sigEnd, closing(UI.indexOf("{", sigEnd)) + 1]);
+    spans.push(...attributeSpans(fn));
+  }
+  for (const bar of UI.matchAll(/<RunActionsBar\b[^>]*?handlers=\{/g)) {
+    const open = bar.index! + bar[0].length - 1;
+    spans.push([open, closing(open) + 1]);
+  }
+  return spans;
+})();
 
 const noop = () => {};
 const handlers = {
@@ -88,7 +160,44 @@ describe("which buttons a run has is the server's decision", () => {
     }
     const path = body("function StepPath(");
     expect(path).toContain("<RunActionsBar run={run}");
-    expect(path).not.toMatch(/ACTIVE_RUN_STATES\.has\(run\.status\)/);
+  });
+
+  it("every handler that performs a run action is reached only through the server's list", () => {
+    // EVERY reference to every one of these, anywhere in the file, must be inside one of:
+    //   - a component's own signature (declaring the prop),
+    //   - a handler-named attribute on a component that only passes it down,
+    //   - the `handlers={{…}}` map handed to <RunActionsBar> (which renders the run's list),
+    //   - the body of FailedStepActions (which renders the step's list).
+    // A <button> wired to one anywhere else — the incident's shape — is a reference outside
+    // all of them, and fails here naming its line.
+    const stray: string[] = [];
+    for (const name of RUN_ACTION_HANDLERS) {
+      for (const m of UI.matchAll(new RegExp(`\\b${name}\\b`, "g"))) {
+        if (!ALLOWED.some(([a, b]) => m.index! >= a && m.index! < b)) {
+          stray.push(`${name} at line ${lineOf(m.index!)}: ${UI.slice(m.index! - 60, m.index! + 40)
+            .replace(/\s+/g, " ")}`);
+        }
+      }
+    }
+    expect(stray, "a run action reached without the server's list").toEqual([]);
+  });
+
+  it("every request that performs a run action is made in the one handler set", () => {
+    // The other way round: the requests themselves (retry, skip, re-check, stop, build on a
+    // run) are issued only from the handler attributes on <RunsView>, which reach the screen
+    // only through RunActionsBar and FailedStepActions. A second place issuing one is a second
+    // place deciding when it may be issued.
+    const handlerSet = attributeSpans("RunsView");
+    expect(handlerSet.length).toBeGreaterThan(0);
+    const requests = [
+      ...UI.matchAll(/\bact\("[^"]*",\s*"(retry_step|skip_step|recheck|stop)"/g),
+      ...UI.matchAll(/\bfrom_run:/g),
+    ];
+    expect(requests.length).toBeGreaterThanOrEqual(6);
+    for (const m of requests) {
+      expect(handlerSet.some(([a, b]) => m.index! >= a && m.index! < b),
+             `${m[0]} at line ${lineOf(m.index!)} is outside the run-action handlers`).toBe(true);
+    }
   });
 
   it("the console's old private rules are gone", () => {
@@ -153,9 +262,9 @@ describe("a run renders exactly the actions it was sent", () => {
                    capability: "research" } as unknown as RunStep;
     const sent = run([
       { key: "retry_step", label: "Try Research again", enabled: false, step_id: "research",
-        reason: "this run was stopped, and a stopped run is not resumed" },
+        reason: "it is undoing what it did — wait for that to finish" },
       { key: "skip_step", label: "Skip and proceed", enabled: false, step_id: "research",
-        reason: "this run was stopped, and a stopped run is not resumed" },
+        reason: "it is undoing what it did — wait for that to finish" },
       ok("retry_step", "Try Panel again", "panel"),
     ]);
     const html = renderToStaticMarkup(
@@ -164,7 +273,7 @@ describe("a run renders exactly the actions it was sent", () => {
     expect(html).toContain("Try Research again");
     expect(html).not.toContain("Try Panel again");
     expect(html).toMatch(/data-testid="dw-step-retry"/);
-    expect(html).toMatch(/disabled=""[^>]*title="this run was stopped/);
+    expect(html).toMatch(/disabled=""[^>]*title="it is undoing what it did/);
     // Nothing sent for a step, nothing rendered — whatever its status says.
     expect(renderToStaticMarkup(
       <FailedStepActions step={step} actions={stepActions(sent, "deploy")} busy={null}
@@ -180,5 +289,64 @@ describe("a run renders exactly the actions it was sent", () => {
                                               "approve")} />);
     expect(html).toContain("Try Spec review again");
     expect(html).not.toContain("Skip and proceed");
+  });
+});
+
+
+describe("the whole run view shows nothing the server did not send", () => {
+  /** THE INCIDENT'S RUN, as the API lists it: cancelled, research SUCCEEDED with a dossier,
+   *  the panel failed. Every hand-written rule the console ever had would have offered
+   *  something here — Build on this research, Try again, Skip, Re-check. */
+  function incident(actions: RunAction[], status = "cancelled") {
+    const s = (step_id: string, st: string, capability: string, output = {}) => ({
+      step_id, kind: "capability", status: st, capability, output, evidence: [], error: st ===
+        "failed" ? "the panel never convened" : null, approval: {}, due_at: null,
+      timeout_applied: null, attempt: 1, started_at: null, completed_at: null, decision_id: null,
+    }) as unknown as RunStep;
+    return {
+      ...run(actions), status, finished: status !== "running",
+      steps: [s("research", "succeeded", "research", { discovery_id: "drun_1" }),
+              s("panel", "failed", "meeting")],
+      step_count: 2, steps_done: 1, input: { title: "Lead triage" },
+    };
+  }
+
+  function view(r: ReturnType<typeof incident>, opened = true) {
+    return renderToStaticMarkup(
+      <RunsView runs={[r] as never} openRun={opened ? r.id : null} setOpenRun={noop}
+                onAdvance={noop} busy={null} capabilities={[]} onRetryStep={noop}
+                onSkipStep={noop} onRerun={noop} onStop={noop} onDelete={noop}
+                onStopAndRerun={noop} onBuildOnThis={noop} onRecheck={noop} onSetTarget={noop}
+                onPrepareTarget={noop} onRunPreview={noop} onBound={noop} projectId="p"
+                actor="ceo" roles={[]} targets={[]} hosts={[]} />);
+  }
+
+  const ACTION_TEST_IDS = ["dw-recheck", "dw-stop", "dw-stop-and-rerun", "dw-rerun",
+                           "dw-delete-run", "dw-build-on-this"];
+
+  for (const status of ["cancelled", "failed", "running"]) {
+    it(`a ${status} run sent no actions renders no workflow-management button, no Try again, no Skip`, () => {
+      for (const opened of [true, false]) {
+        const html = view(incident([], status), opened);
+        for (const id of ACTION_TEST_IDS) expect(html).not.toContain(`data-testid="${id}"`);
+        expect(html).not.toMatch(/data-testid="dw-[a-z-]*-(retry|skip)"/);
+        expect(html).not.toContain("Build on this research");
+        expect(html).not.toContain("dw-run-actions");
+      }
+    });
+  }
+
+  it("and the same run renders exactly what it IS sent — the check above is not vacuous", () => {
+    const html = view(incident([
+      ok("rerun", "Run this workflow again"), ok("remove", "Remove this run"),
+      ok("build_on_research", "Build on this research →"),
+      ok("retry_step", "Try Panel again", "panel"), ok("skip_step", "Skip and proceed", "panel"),
+    ], "failed"));
+    for (const id of ["dw-rerun", "dw-delete-run", "dw-build-on-this"]) {
+      expect(html).toContain(`data-testid="${id}"`);
+    }
+    expect(html).not.toContain('data-testid="dw-stop"');
+    expect(html).toContain('data-testid="dw-run-stopped-retry"');
+    expect(html).toContain('data-testid="dw-run-stopped-skip"');
   });
 });

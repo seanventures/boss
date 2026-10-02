@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  STOPPED_STEP_STATUSES, bucketOf, runNeedsYou, runToOpen, skippedBy, stoppedStep,
-  type RunStep,
+  STOPPED_STEP_STATUSES, bucketOf, runNeedsYou, runToOpen, skippedBy, stoppedAnswers,
+  stoppedStep, type RunAction, type RunStep,
 } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
 
@@ -78,11 +78,29 @@ describe("a run stopped at a failed step needs you", () => {
     expect(at).toBeGreaterThan(-1);
     const card = UI.slice(at, at + 1200);
     expect(card).toContain("run.blocked_reason");
-    expect(card).toContain("Try it again, or skip it and carry on.");
+    // REWRITTEN: the sentence named both answers as a literal, whatever the server offered —
+    // "skip it" on an approval, where there is no Skip. It now names exactly the answers the
+    // run's actions carry for that step (see the test below).
+    expect(card).toContain("stoppedAnswers(stepActions(run, stopped.step_id))");
     expect(card).toContain("<FailedStepActions key={stopped.step_id} step={stopped}");
     expect(card).toContain('idPrefix="dw-run-stopped"');
     expect(card).toContain("onSkipStep(run.id, stopped.step_id, reason)");
     expect(card).toContain("onRetryStep(run.id, stopped.step_id)");
+  });
+});
+
+describe("the stopped card names only the answers the server offers", () => {
+  const on = (key: RunAction["key"]): RunAction =>
+    ({ key, label: key, enabled: true, reason: null, step_id: "research" });
+  it("both, one, or none — never an answer that is not there", () => {
+    expect(stoppedAnswers({ retry: on("retry_step"), skip: on("skip_step") }))
+      .toBe(" Try it again, or skip it and carry on.");
+    expect(stoppedAnswers({ retry: on("retry_step") })).toBe(" Try it again.");
+    expect(stoppedAnswers({ skip: on("skip_step") })).toBe(" Skip it and carry on.");
+    expect(stoppedAnswers({})).toBe("");
+    // Offered but not right now (a run undoing itself) is not an answer to tell anyone to take.
+    expect(stoppedAnswers({ retry: { ...on("retry_step"), enabled: false, reason: "undoing" } }))
+      .toBe("");
   });
 });
 

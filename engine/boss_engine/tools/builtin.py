@@ -4609,11 +4609,17 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         reversibility="safe",
     )
     def recheck_workflow_run(ctx, *, project_id, actor, args):
+        from ..services import workflows as _workflows
         from ..services.workflow_recheck import recheck_run
 
         with ctx.begin() as c:
-            return recheck_run(c, project_id=project_id, run_id=str(args["run_id"]),
-                               requeue=bool(args.get("requeue", True)), actor=actor)
+            try:
+                return recheck_run(c, project_id=project_id, run_id=str(args["run_id"]),
+                                   requeue=bool(args.get("requeue", True)), actor=actor)
+            except _workflows.WorkflowError as error:
+                # The run's "recheck" action refused it (a stopped or finished run is not put
+                # back in the queue) — the same sentence the console shows, as an answer.
+                return {"ok": False, "error": str(error)}
 
     @reg.tool(
         "get_investigation",

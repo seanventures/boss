@@ -61,10 +61,13 @@ def test_the_api_resolves_a_named_source_rather_than_trusting_a_claim(field):
     # Ownership and completeness are checked before the adopt key is set.
     assert 'detail="research run not found"' in source
     # Found by what it produced, not by a step name a customer may have changed — and by the
-    # SAME function that decides whether the console offers "Build on this research", so the
-    # button and the request it sends cannot disagree (a cancelled run whose research failed
-    # once offered the button anyway). Its own private query is gone.
-    assert "_run_actions.research_to_build_on(" in source
+    # SAME decision that offers "Build on this research" in the console, so the button and the
+    # request it sends cannot disagree (a cancelled run whose research failed once offered the
+    # button anyway; then the request accepted a run still going, which the button never
+    # offered). REWRITTEN from `research_to_build_on(` to the whole action: `require` checks
+    # the run's state as well as its research. Its own private query is gone.
+    assert "_run_actions.require(" in source
+    assert 'source_run, "build_on_research")' in source
     assert "AND output ? 'discovery_id'" not in source
     assert "not completed — " in source
     # And the blanket strip of caller-supplied adoption is still there.

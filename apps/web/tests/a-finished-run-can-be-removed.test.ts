@@ -20,15 +20,16 @@ const ENGINE = readFileSync(
 describe("removing a run", () => {
   it("is offered on a run that is over", () => {
     expect(UI).toContain('testId: "dw-delete-run"');
-    expect(ENGINE).toContain('_action("remove", "Remove this run")');
+    expect(ENGINE).toContain('_verdict("remove", "Remove this run", ENABLED)');
   });
 
   it("is NOT offered while the run is still going", () => {
     // Decided by the engine beside "Run this workflow again", on a FINISHED run only — the
     // states `delete_run` accepts. A test there holds FINISHED_RUN_STATES equal to them.
+    // REWRITTEN to the verdict form; delete_run now refuses through the same verdict.
     const finished = ENGINE.indexOf("    if finished:\n");
-    const rerun = ENGINE.indexOf('_action("rerun"', finished);
-    const remove = ENGINE.indexOf('_action("remove", "Remove this run")', finished);
+    const rerun = ENGINE.indexOf('_verdict("rerun"', finished);
+    const remove = ENGINE.indexOf('_verdict("remove", "Remove this run", ENABLED)', finished);
     expect(finished).toBeGreaterThan(-1);
     expect(rerun).toBeGreaterThan(finished);
     expect(remove).toBeGreaterThan(rerun);

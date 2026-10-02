@@ -223,6 +223,10 @@ type Run = {
   /** What the operator may do to this run, decided by the SERVER from its real state — see
    *  `RunAction`. Absent only from an API older than the field, which then offers nothing. */
   actions?: RunAction[];
+  /** The run is over (the engine's FINISHED_RUN_STATES), so what it was assigned is history.
+   *  Sent by the server: this file's own list of "terminal" states left out `compensated` and
+   *  named `deadlettered` beside the real ones, a private copy that had already drifted. */
+  finished?: boolean;
 };
 
 /** One thing the operator may do to a run, as the engine decided it
@@ -265,6 +269,18 @@ export function stepActions(run: Pick<Run, "actions">, stepId: string):
     retry: mine.find((a) => a.key === "retry_step"),
     skip: mine.find((a) => a.key === "skip_step"),
   };
+}
+
+/** The sentence's second half on a stopped run's card: the answers the server OFFERS for the
+ *  step, and only those. It said "Try it again, or skip it and carry on." whatever the run
+ *  offered — Skip included on an approval, where the server sends none. */
+export function stoppedAnswers(actions: { retry?: RunAction; skip?: RunAction }): string {
+  const retry = actions.retry?.enabled;
+  const skip = actions.skip?.enabled;
+  if (retry && skip) return " Try it again, or skip it and carry on.";
+  if (retry) return " Try it again.";
+  if (skip) return " Skip it and carry on.";
+  return "";
 }
 
 /** The project this run is delivering. Five runs of "Standard Product Delivery" are five
@@ -2319,7 +2335,7 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
   done: "Done",
 };
 
-function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
+export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                    onRetryStep, onSkipStep, onRerun, onStop, onDelete, onStopAndRerun,
                    onBuildOnThis, onRecheck,
                    onSetTarget, onPrepareTarget,
@@ -2482,8 +2498,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                 <p>
                   {run.blocked_reason
                     || `Stopped at ${stoppedCapability?.label ?? stopped.step_id}: `
-                       + `${stopped.error || run.error || "its work failed"}. `
-                       + "Try it again, or skip it and carry on."}
+                       + `${stopped.error || run.error || "its work failed"}.`
+                       + stoppedAnswers(stepActions(run, stopped.step_id))}
                 </p>
                 <FailedStepActions key={stopped.step_id} step={stopped}
                                    capability={stoppedCapability} busy={busy}
@@ -2678,7 +2694,9 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   // A FINISHED RUN'S ASSIGNMENT IS HISTORY. Offering "+ Assign" on a completed workflow invites
   // a change that cannot affect anything — the work is done and the gates it would have
   // governed are already answered. Shown, not editable.
-  const terminal = ["completed", "cancelled", "failed", "deadlettered"].includes(run.status);
+  // The SERVER's fact (`finished`), not a list kept here — the list this replaced had already
+  // left out `compensated`.
+  const terminal = run.finished === true;
   // Open on the step that wants attention, then the one in flight, then the first. Landing on
   // "research succeeded" when a gate three steps along is waiting for you is the wrong answer
   // to "what is happening".

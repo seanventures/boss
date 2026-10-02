@@ -23,9 +23,9 @@ const ENGINE = readFileSync("../../engine/boss_engine/services/workflow_run_acti
 describe("stopping a run", () => {
   it("is a button on a live run", () => {
     expect(UI).toContain('testId: "dw-stop"');
-    expect(ENGINE).toContain('_action("stop", "Stop this run")');
+    // REWRITTEN to the verdict form; cancel_run now refuses through the same verdict.
     // Live means every status the engine's cancel_run will stop — `blocked` included.
-    expect(ENGINE).toMatch(/if active:\n\s+actions\.append\(_action\("stop"/);
+    expect(ENGINE).toMatch(/if active:\n\s+out\.append\(_verdict\("stop", "Stop this run", ENABLED\)/);
   });
 
   it("reaches the cancel endpoint, addressed to the run", () => {
@@ -50,7 +50,7 @@ describe("stopping a run", () => {
 describe("stop and run again", () => {
   it("is one press", () => {
     expect(UI).toContain('testId: "dw-stop-and-rerun"');
-    expect(ENGINE).toContain('_action("stop_and_rerun", "Stop and run again")');
+    expect(ENGINE).toContain('_verdict("stop_and_rerun", "Stop and run again", ENABLED)');
   });
 
   it("stops BEFORE it starts", () => {

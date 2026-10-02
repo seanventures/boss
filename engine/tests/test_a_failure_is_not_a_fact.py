@@ -129,9 +129,17 @@ class TestPuttingItBack:
     def retried(self, monkeypatch):
         from boss_engine.services import workflows
 
+        from boss_engine.services import workflow_run_actions
+
         calls = []
         monkeypatch.setattr(workflows, "retry_failed_step",
                             lambda connection, **kw: calls.append(kw) or {"status": "ready"})
+        # The fake connection answers only the step query. Whether the run's "recheck" action
+        # is offered is decided and tested in workflow_run_actions; see the tests below for
+        # the refusal itself.
+        monkeypatch.setattr(workflow_run_actions, "require",
+                            lambda connection, project_id, run_id, key, **kw:
+                            {"key": key, "enabled": True})
         return calls
 
     def test_a_cleared_step_is_put_back_through_the_one_retry(self, retried):
@@ -177,6 +185,41 @@ class TestPuttingItBack:
     def test_an_unknown_run_is_an_error_not_a_silent_success(self):
         out = recheck_run(_Rows(), project_id="p", run_id="wfr_missing")
         assert out["ok"] is False
+
+    def test_a_stopped_run_is_not_put_back_by_a_re_check(self, monkeypatch):
+        """A re-check revived steps of a run somebody had STOPPED: the console stopped offering
+        Re-check there, but the endpoint and the agent's tool still re-queued. The run's
+        "recheck" action is asked before the first step goes back, and its refusal stands."""
+        from boss_engine.services import workflow_run_actions, workflows
+
+        asked, retried = [], []
+        monkeypatch.setattr(workflows, "retry_failed_step",
+                            lambda connection, **kw: retried.append(kw))
+
+        def refuse(connection, project_id, run_id, key, **kw):
+            asked.append(key)
+            raise workflow_run_actions.RunActionRefused(key, "this run is cancelled")
+
+        monkeypatch.setattr(workflow_run_actions, "require", refuse)
+        rows = _Rows(
+            targets=[{"id": "deptgt_1", "app_name": "Lead-Triage Inbox",
+                      "environment": "staging", "domains": []}],
+            steps=[DEPLOY_REFUSED])
+        with pytest.raises(workflows.WorkflowConflictError, match="cancelled"):
+            recheck_run(rows, project_id="p", run_id="wfr_1")
+        assert asked == ["recheck"] and retried == []
+
+    def test_but_answering_whether_it_is_still_true_is_never_refused(self, monkeypatch):
+        """`requeue=False` changes nothing, so it asks nobody's permission."""
+        from boss_engine.services import workflow_run_actions
+
+        monkeypatch.setattr(workflow_run_actions, "require",
+                            lambda *a, **k: pytest.fail("a report-only re-check was gated"))
+        rows = _Rows(
+            targets=[{"id": "deptgt_1", "app_name": "Lead-Triage Inbox",
+                      "environment": "staging", "domains": []}],
+            steps=[DEPLOY_REFUSED])
+        assert recheck_run(rows, project_id="p", run_id="wfr_1", requeue=False)["ok"] is True
 
 
 class TestItIsReachableFromEverywhereItIsNeeded:

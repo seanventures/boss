@@ -3458,6 +3458,11 @@ class WorkflowRunSummary(BaseModel):
     workflow_name: str
     version: int
     duplicate: Optional[bool] = None
+    #: What an operator may do to this run, decided from its state by
+    #: services/workflow_run_actions — the same list the console renders and the same decision
+    #: every operation on the run enforces. On the summary, not only the detail, so the agent's
+    #: and the MCP list surface see what a run offers without fetching each one.
+    actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkflowRunDetail(WorkflowRunSummary):
@@ -3465,9 +3470,6 @@ class WorkflowRunDetail(WorkflowRunSummary):
     migrations: list[dict[str, Any]] = Field(default_factory=list)
     compensations: list[dict[str, Any]] = Field(default_factory=list)
     timeline: list[dict[str, Any]] = Field(default_factory=list)
-    #: What an operator may do to this run, decided from its state by
-    #: services/workflow_run_actions.run_actions — the same list the console renders.
-    actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkflowRunListResponse(BaseModel):

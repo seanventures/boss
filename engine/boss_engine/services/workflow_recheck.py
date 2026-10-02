@@ -157,6 +157,7 @@ def recheck_run(connection, *, project_id: str, run_id: str,
         return {"ok": False, "error": f"no steps found for {run_id} in this project"}
 
     checked, requeued = [], []
+    allowed = False
     for row in steps:
         status = blocker_status(connection, project_id, dict(row))
         if not status:
@@ -165,6 +166,16 @@ def recheck_run(connection, *, project_id: str, run_id: str,
         checked.append(entry)
         if not (status.get("cleared") and requeue):
             continue
+        # THE RUN'S "recheck" ACTION DECIDES, before anything is put back. A re-check revived
+        # steps of a run somebody had STOPPED — the console no longer offered Re-check there,
+        # but this, the endpoint and the agent's tool all still did it. Asked at the first step
+        # that would be re-queued, not before: a re-check that only reports changes nothing, and
+        # answering "is it still true?" is never refused.
+        if not allowed:
+            from .workflow_run_actions import require
+
+            require(connection, project_id, run_id, "recheck")
+            allowed = True
         # THE ONE RETRY, NOT A COPY OF IT. This carried its own re-queue UPDATE and its own
         # "revive the run" UPDATE, and recorded no `workflow.step_retried` event — so a step put
         # back by a re-check left no trace in the run's history, and the run was revived to
