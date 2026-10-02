@@ -1477,6 +1477,99 @@ def _execute_step(
     )
 
 
+def _notification_text(context: dict[str, Any], message: Any) -> tuple[str, str]:
+    """The subject and body of a notify step: what the run is, and what it produced.
+
+    The step was given the run's title and nothing else, which is a name and not news. What a
+    reader wants is where the thing is — the deployed URL, the pull request, the preview — and
+    those are already in the run, so the body is assembled from them.
+    """
+    title = str(message or (context.get("input") or {}).get("title") or "").strip()
+    workflow = str(context.get("workflow_name") or "Workflow").strip()
+    subject = f"{workflow}: {title}"[:180] if title else workflow
+    lines = [subject, ""]
+    for label, field in (("Live at", "deployed_url"), ("Preview", "preview_url"),
+                         ("Pull request", "pull_request_url"), ("Record", "document_id")):
+        value = _from_any_step(context, field)
+        if value:
+            lines.append(f"{label}: {value}")
+    lines.append(f"Run: {context.get('run_id')}")
+    return subject, "\n".join(lines)
+
+
+def _notify(
+    connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+    context: dict[str, Any], inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Send the notification, skip it visibly, or fail saying why — never a green no-op.
+
+    Three catalogue templates ended in a notify that recorded `status: recorded` and went green
+    having told nobody, and Deprecation / Sunset's announcement — the point of that workflow —
+    went nowhere before a seven-day wait (boss-1 map, 2026-10-02).
+
+    ONE SEND PER STEP. A retried step that already reached its channel must not send again, so a
+    successful send is recorded as an event keyed on run, step and channel, and found first.
+    """
+    channel = str(inputs.get("channel") or "").strip()
+    if not channel:
+        return {"capability": "notify", "status": "not_applicable", "posted": False,
+                "note": ("Nobody was told: this run was given no channel. Start the next one "
+                         "with 'Who to tell' set to email:someone@example.com or "
+                         "mattermost:<channel id>.")}
+    run_id = str(context.get("run_id") or "")
+    step_id = str(step.get("id") or "")
+    earlier = connection.execute(
+        text("SELECT data FROM events WHERE project_id = :p AND event_type = 'workflow.notified' "
+             "AND entity_id = :r AND data->>'step_id' = :s AND data->>'channel' = :c "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "r": run_id, "s": step_id, "c": channel},
+    ).mappings().first()
+    if earlier:
+        data = earlier["data"] if isinstance(earlier["data"], dict) else {}
+        return {"capability": "notify", "status": "succeeded", "posted": True,
+                "channel": channel, "receipt": data.get("receipt"), "already_sent": True}
+
+    subject, body = _notification_text(context, inputs.get("message"))
+    subject = str(inputs.get("subject") or subject)
+    from ..config import get_settings
+    from .github_adapter import IntegrationConfigurationError
+
+    settings = getattr(ctx, "settings", None) or get_settings()
+    kind = channel.split(":", 1)[0].lower()
+    try:
+        if kind == "email":
+            from .email_adapter import EmailAdapter
+            from .email_config import settings_for
+
+            receipt = EmailAdapter(settings_for(connection, settings, project_id)).send_message(
+                channel, subject, body)
+        elif kind == "mattermost":
+            from .mattermost_adapter import MattermostAdapter
+
+            receipt = MattermostAdapter(settings).post_message(channel, subject, body)
+        else:
+            return {"capability": "notify", "status": "failed", "posted": False,
+                    "channel": channel,
+                    "error": (f"'{channel}' is not a channel BOSS can post to. Use "
+                              "email:someone@example.com or mattermost:<channel id>, then "
+                              "retry this step — or skip it.")}
+    except IntegrationConfigurationError as error:
+        need = "email" if kind == "email" else "mattermost"
+        from .workflow_readiness import need_for
+
+        return {"capability": "notify", "status": "failed", "posted": False, "channel": channel,
+                "error": f"Could not tell {channel}: {error} {need_for(need).fix} Then retry "
+                         "this step, or skip it."}
+    except Exception as error:  # noqa: BLE001 — a refused send is the step's result, not a crash
+        return {"capability": "notify", "status": "failed", "posted": False, "channel": channel,
+                "error": f"Could not tell {channel}: {type(error).__name__}: "
+                         f"{str(error)[:300]}. Retry this step once it is reachable, or skip it."}
+    emit_event(connection, project_id, "workflow.notified", "workflow", "workflow_run", run_id,
+               {"step_id": step_id, "channel": channel, "receipt": receipt, "subject": subject})
+    return {"capability": "notify", "status": "succeeded", "posted": True, "channel": channel,
+            "receipt": receipt, "subject": subject}
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -1519,6 +1612,8 @@ def _perform_capability(
             return _settle_started_work(capability, key, started)
         if key == "document":
             return _write_the_record(connection, project_id, context, inputs)
+        if key == "notify":
+            return _notify(connection, ctx, project_id, step, context, inputs)
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
         # run has already recorded and leaves a document behind.
         if key == "report":

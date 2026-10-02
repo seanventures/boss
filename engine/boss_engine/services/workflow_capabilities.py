@@ -78,6 +78,18 @@ class Capability:
     #: One captain may hold several steps; that is normal and says something true about the
     #: shape of the workforce. What is not acceptable is a step with no owner.
     captain: str = ""
+    #: True when the step's work is done by a model, so a project with no model connected
+    #: cannot run it. Read by `workflow_readiness` before a run starts.
+    needs_model: bool = False
+    #: WHO ANSWERS THE GATE. "person" for a real sign-off; "panel" for `spec_review`, which
+    #: adopts the panel's own PRD decision — approved automatically by default
+    #: (BOSS_MEETING_PRD_AUTO_APPROVE). Counting it as a person's approval made nine templates
+    #: promise a human sign-off that, on boss-1, was granted by `auto_approval` twenty seconds
+    #: after the panel ended (wfr_9c78…).
+    answered_by: str = "person"
+    #: What this step costs beyond its minutes, when that is the thing worth knowing before
+    #: starting — PLRR is a second build pass, and nothing on the plan said so.
+    cost_note: str = ""
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -102,6 +114,7 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("discovery_id", "dossier"),
             typical_minutes=15,
             is_async=True,
+            needs_model=True,
         ),
         _cap(
             key="meeting",
@@ -119,19 +132,29 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("meeting_run_id", "prd_markdown", "task_id"),
             typical_minutes=20,
             is_async=True,
+            needs_model=True,
         ),
         _cap(
             key="spec_review",
             # is this specified well enough to build
             captain="chief_architect",
-            label="Approve the spec",
-            summary="A person reads the PRD and decides whether it gets built.",
+            # NAMED FOR WHAT HAPPENS. This was "Approve the spec — a person reads the PRD and
+            # decides whether it gets built". It adopts the panel's own PRD decision, and that
+            # decision is approved automatically unless BOSS_MEETING_PRD_AUTO_APPROVE is turned
+            # off: on boss-1 the step recorded `approved_by: auto_approval` twenty seconds after
+            # the panel (wfr_9c78…). The owner kept it automatic, so the label stops promising
+            # a sign-off nobody gives.
+            label="PRD approval (automatic)",
+            summary="The panel's PRD is approved before anything is built — automatically by "
+                    "default. Turn BOSS_MEETING_PRD_AUTO_APPROVE off to have a person sign it "
+                    "on the Approvals page instead.",
             tool=None,
             risk_tier=2,
             required_inputs=(),
             optional_inputs=("approver_role",),
             produces=("decision_id",),
             is_gate=True,
+            answered_by="panel",
         ),
         _cap(
             key="build",
@@ -153,6 +176,9 @@ CAPABILITIES: dict[str, Capability] = {
             skills=("github.create_pr_real", "software_factory.sandbox_validation"),
             typical_minutes=45,
             is_async=True,
+            needs_model=True,
+            cost_note="A full build: implement, review, test and open a pull request — "
+                      "usually the largest model spend in the workflow.",
         ),
         _cap(
             key="review",
@@ -253,8 +279,16 @@ CAPABILITIES: dict[str, Capability] = {
             required_inputs=("run_id",),
             optional_inputs=("directive",),
             produces=("findings", "gaps_closed", "code_task_run_id"),
-            typical_minutes=12,
+            # A SECOND BUILD PASS, AND THE PLAN NOW SAYS SO. PLRR extends the build into a new
+            # code task on the same branch to close the operability gaps it finds, so it costs
+            # about what a build costs — and the plan said "12 minutes" and nothing about money.
+            # An operator choosing Standard Product Delivery was never told it builds twice.
+            typical_minutes=30,
             is_async=True,
+            needs_model=True,
+            cost_note="A second build pass on the same branch: it checks the app against the "
+                      "operability the spec promised and writes what is missing. Expect "
+                      "build-level model spend and time.",
         ),
         _cap(
             key="deploy",
@@ -350,13 +384,19 @@ CAPABILITIES: dict[str, Capability] = {
             # who needs telling, and what they are told
             captain="program_manager",
             label="Notify",
-            summary="Post the outcome where the team will see it.",
+            # A REAL CHANNEL, OR A VISIBLE SKIP. This had no tool, returned `recorded` and went
+            # green: Standard Product Delivery, Minor Feature and Fast Fix ended by telling
+            # nobody, and Deprecation / Sunset "announced" a removal to nobody and then waited
+            # seven days. The runner now sends it (`_notify`) and says when it could not.
+            summary="Tell people the outcome: an email address (email:someone@example.com) or "
+                    "a Mattermost channel (mattermost:<id>). With no channel the step is "
+                    "skipped and says so; a channel that cannot be reached fails the step.",
             tool=None,
             risk_tier=1,
             required_inputs=("message",),
-            optional_inputs=("channel",),
-            produces=("posted",),
-            skills=("mattermost.post_real",),
+            optional_inputs=("channel", "subject"),
+            produces=("posted", "channel", "receipt"),
+            skills=("mattermost.post_real", "email.send_real"),
             typical_minutes=1,
         ),
         _cap(
@@ -477,9 +517,44 @@ def palette() -> list[dict[str, Any]]:
             "captain": c.captain,
             # What the builder must show as fixed rather than as a choice.
             "approval_forced_manual": c.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR,
+            # Whether the run actually waits for a PERSON here — false for the PRD approval,
+            # which the panel's decision answers (automatically by default).
+            "stops_for_a_person": stops_for_a_person(c.key),
+            "answered_by": c.answered_by,
+            "needs_model": c.needs_model,
+            "cost_note": c.cost_note,
         }
         for c in CAPABILITIES.values()
     ]
+
+
+def stops_for_a_person(capability_key: str, requested: Optional[str] = None) -> bool:
+    """Whether a run waits for a PERSON at this step — the question an operator plans around.
+
+    Not the same as "approval is manual". `spec_review` is manual by the risk floor and is
+    answered by the panel's own PRD decision, approved automatically by default, so counting it
+    told the catalogue card and the plan "you approve: spec_review" for a step nobody is asked
+    about. One function, so the card, the plan and the start preflight agree.
+    """
+    capability = get(capability_key)
+    if capability.answered_by != "person":
+        return False
+    return approval_mode_for(capability_key, requested) == "manual"
+
+
+#: Where a notify step may post. The prefix is the channel kind, and each kind is a need the
+#: start preflight checks (an SMTP server, a Mattermost bot).
+NOTIFY_CHANNEL_KINDS = {"email": "email", "mattermost": "mattermost"}
+
+
+def notify_channel_need(channel: str) -> str:
+    """The readiness need a notify channel implies: `email`, `mattermost`, or `channel:<value>`
+    for something that is not a channel at all — reported, never guessed at."""
+    value = str(channel or "").strip()
+    kind = value.split(":", 1)[0].lower()
+    if ":" in value and kind in NOTIFY_CHANNEL_KINDS:
+        return NOTIFY_CHANNEL_KINDS[kind]
+    return f"channel:{value}"
 
 
 def approval_mode_for(capability_key: str, requested: Optional[str]) -> str:

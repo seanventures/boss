@@ -188,6 +188,15 @@ def dispatch_event(
                 )
                 continue
             try:
+                # THE SAME PREFLIGHT EVERY START DOOR MAKES. An event that starts a workflow
+                # this project cannot finish is refused here, logged with what is missing,
+                # rather than started and failed at its last step.
+                from .workflow_readiness import refuse_unless_ready
+
+                refuse_unless_ready(
+                    connection, None, project_id, version_id=str(active),
+                    input_data={"event_type": event_type, "entity_type": entity_type,
+                                "entity_id": entity_id, **(data or {})})
                 run = start_run(
                     connection,
                     project_id=project_id,
