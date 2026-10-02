@@ -91,9 +91,9 @@ describe("you can say something to an agent", () => {
     // It navigated to the Agents AREA, so asking one question cost the operator whatever they
     // were looking at. The dock exists for exactly this and can carry an identity as easily
     // as a run id.
-    expect(WF).toContain('url.searchParams.set("agent", "general")');
-    expect(WF).toContain('url.searchParams.set("dock_role", agentName)');
-    expect(WF).toContain('new PopStateEvent("popstate")');
+    // Through the one door helper, which edits the current URL and fires the popstate the
+    // shell listens for (lib/dock-subject.ts).
+    expect(WF).toContain("openDockAbout({ subject: null, role: agentName");
   });
 
   it("addresses the question to that agent, not to BOSS in general", () => {

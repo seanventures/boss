@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { itemHeadline, itemQuestion } from "../app/boss-agent-home";
+import { itemHeadline, itemQuestion, itemSubject } from "../app/boss-agent-home";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -45,30 +45,37 @@ describe("every row names something real", () => {
   });
 });
 
-describe("and the question it asks already carries the facts", () => {
-  it("a stopped step brings its app, its step and its error", () => {
+describe("and the question it asks is about the row's own record", () => {
+  // boss-1 (2026-10-02): the row's facts used to be pasted into the question, with "Check the
+  // app's code and the host before answering" on the end — the sentence that sent a Preview
+  // step's turn to the deployment tools for 276 seconds. The row now hands over WHAT it is
+  // (a typed subject the server resolves into its whole record) and a question in the
+  // operator's own words.
+  it("a stopped step is asked about as that step of that run", () => {
+    expect(itemSubject(step as never)).toEqual(
+      { kind: "workflow_step", id: "wfr_1", step: "deploy" });
     const q = itemQuestion(step as never);
     expect(q).toContain("Lead-Triage Inbox");
-    expect(q).toContain("'deploy' step is deadlettered");
-    expect(q).toContain("no active staging target");
-    // The instruction that made the other screens' answers good.
-    expect(q).toContain("Check the app's code and the host before answering");
+    expect(q).toContain("'deploy' step");
+    expect(q).not.toContain("Check the app's code and the host");
   });
 
-  it("an app that is down brings its address", () => {
-    expect(itemQuestion(down as never)).toContain("192.0.2.202:3013");
-    expect(itemQuestion(down as never)).toContain("connection refused");
+  it("an app that is down is asked about as its deployment target", () => {
+    expect(itemSubject(down as never)).toEqual({ kind: "deployment", id: "deptgt_1" });
+    expect(itemQuestion(down as never)).toContain("Change Calendar (staging)");
   });
 
   it("a quiet build asks whether it is working — and forbids cancelling it", () => {
     // The incident this whole effort started from: asked why a build was slow, BOSS cancelled
     // it. Twenty-seven minutes of work, and nobody had asked for that.
+    expect(itemSubject(quiet as never)).toEqual({ kind: "code_task", id: "crun_1" });
     const q = itemQuestion(quiet as never);
     expect(q).toContain("working or stuck");
     expect(q).toContain("do not cancel anything");
   });
 
   it("a decision asks what it is gating rather than just naming it", () => {
+    expect(itemSubject(decision as never)).toEqual({ kind: "decision", id: "dec_1" });
     expect(itemQuestion(decision as never)).toContain("What is it gating");
   });
 });

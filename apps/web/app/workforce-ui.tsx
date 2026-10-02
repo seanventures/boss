@@ -8,6 +8,7 @@ import { AgentCreationWizard } from "./agent-creation-wizard";
 import { AgentDetail } from "./agent-detail-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
+import { openDockAbout } from "../lib/dock-subject";
 
 /**
  * Workforce and Org Chart, in v1's own styling.
@@ -64,14 +65,8 @@ function openArea(area: "org_chart" | "studio"): void {
  *  makes the reply come from that role's lens and its own past arguments.
  */
 function askAgent(agentName: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", "general");   // the dock's "not about one run" sentinel
-    url.searchParams.set("dock_role", agentName);
-    url.searchParams.set("dock_ask", `@${agentName}: `);
-    window.history.replaceState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+  // `dock_role` is what makes the reply come from that role's lens and its own past arguments.
+  openDockAbout({ subject: null, role: agentName, question: `@${agentName}: ` });
 }
 
 /** Open one agent. Addressable, because a view nobody can link to is one nobody can send. */

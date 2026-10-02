@@ -49,7 +49,12 @@ class TestTheGuardStillFires:
         # A source grep proves the line is present, never that it runs. It is pinned to the
         # real collaborator now, and test_the_grounding_reask_actually_runs.py checks the
         # wiring (agent exists, actor is threaded, failures are logged) rather than the text.
-        assert "self._answer_agent().chat(" in body
+        # boss-1 (2026-10-02): the re-asks were three hand-built calls, none carrying the
+        # operator's question. Every re-ask now goes through `_reask`, which calls the real
+        # collaborator and always carries it.
+        assert "self._reask(" in body
+        assert "self._answer_agent().chat(" in inspect.getsource(
+            intent_router.IntentRouter._reask)
 
     def test_and_is_labelled_if_it_still_will_not_read(self):
         assert "was NOT checked against" in _guard_source()

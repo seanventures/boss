@@ -140,6 +140,12 @@ class Settings(BaseSettings):
     #: The bounded continuation after a faulted answer. Smaller on purpose — it is a second
     #: chance, not a second investigation.
     chat_continuation_steps: int = Field(default=10, alias="BOSS_CHAT_CONTINUATION_STEPS")
+    #: THE TURN'S budget, across the first pass and every re-ask (services/turn_budget.py).
+    #: Each pass had a step limit and the turn had none: boss-1's "Ask the Qa" chained three
+    #: passes for 276 seconds. When either runs out the agent answers with what it has and
+    #: says what it could not check.
+    chat_turn_seconds: int = Field(default=120, alias="BOSS_CHAT_TURN_SECONDS")
+    chat_turn_model_calls: int = Field(default=16, alias="BOSS_CHAT_TURN_MODEL_CALLS")
     #: The investigation runner — a real Claude Code session with a shell, the repo, the
     #: database and the fleet. Its own model, because this is the deep-thinking seat and the
     #: chat seat is optimised for latency.

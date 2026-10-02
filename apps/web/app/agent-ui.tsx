@@ -694,8 +694,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     // _one_conversation_brief — so the console no longer decides on the operator's behalf
     // which of two heads answers.
     if (threadId) fd.set("thread_id", threadId);
-    if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
-    else if (roleRef) fd.set("external_ref", roleRef);  // ...or to this role's own thread
+    // WHAT THE TURN IS ABOUT. `sel` is a build id or, from an "Ask about this" door, a typed
+    // subject reference (`workflow_step:wfr_…:preview` — see lib/dock-subject.ts) that the
+    // server resolves into that thing's own record.
+    const scopeRef = sel !== GENERAL ? sel : roleRef;
+    if (scopeRef) fd.set("external_ref", scopeRef);
     startTransition(async () => {
       // A THREAD ID BEFORE THE TURN, OR THE PROGRESS LINE IS DEAD FOR THE WHOLE TURN.
       //
@@ -709,13 +712,21 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // Reported as "it displays same message for more than 3 mins — how can user wait and
       // see same message". One cheap call fixes it: the thread exists before we send, so the
       // poll has something to ask about from the first second.
+      //
+      // AND IT HAS TO BE THE THREAD THE TURN WILL LAND IN. In boss-1 this asked for a thread by
+      // project and actor alone; the turn — scoped to a step and addressed to Qa — resolved to a
+      // different one, so every poll for 276 seconds read an empty thread. The ensure call now
+      // carries the same (scope, role) key the turn does, and runs whenever the turn has a
+      // scope, because a thread id held from an earlier conversation may belong to another.
       let live = threadId;
-      if (!live) {
+      if (!live || scopeRef) {
         try {
           const r = await apiWrite("/api/agent-thread", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ project_id: projectId, actor }),
+            body: JSON.stringify({ project_id: projectId, actor,
+                                   external_ref: scopeRef || undefined,
+                                   role: roleName || undefined }),
           });
           const body = (await r.json()) as { thread_id?: string };
           if (r.ok && typeof body?.thread_id === "string") {
@@ -1232,7 +1243,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                     : probe
                       ? "Debugging — reading the code, the database and the host. This takes a few minutes."
                       : elapsed >= AGENT_NORMAL_SECONDS
-                        ? "Still working — this turn is running long. It has not been dropped; BOSS is chaining tools."
+                        ? "Still working — this turn is running long. It has not been dropped; the next step it reports will appear here."
                         : "Working — reading the system and choosing tools."}
                 </span>
                 <span className="agent-working-elapsed" data-testid="agent-elapsed">

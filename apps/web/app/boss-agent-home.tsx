@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AgentChat } from "./agent-ui";
+import { openDockAbout, type DockSubject } from "../lib/dock-subject";
 import { onChanged } from "./changed";
 
 type Action = { tool: string; args: Record<string, unknown>; label: string };
@@ -70,41 +71,43 @@ export function itemHeadline(item: Item): string {
   }
 }
 
-/** The question this row would ask, with its facts already in it. */
-export function itemQuestion(item: Item): string {
+/** WHAT THIS ROW IS ABOUT — the record the dock's answer is drawn from.
+ *
+ *  The row's facts used to be folded into the question as prose, error cut to 300 characters,
+ *  with "Check the app's code and the host before answering" on the end. That is the sentence
+ *  which, on a Preview step in boss-1, sent the turn to the deployment tools for 276 seconds.
+ *  The subject travels instead; the server resolves it into the whole record. */
+export function itemSubject(item: Item): DockSubject | null {
   switch (item.kind) {
     case "decision":
-      return `Decision ${item.id} — "${item.title}" — is unanswered. What is it gating, what ` +
-             "happens if I approve it, and is there any reason not to?";
+      return { kind: "decision", id: item.id };
     case "workflow_step":
-      return `${item.app}: the '${item.step}' step is ${item.status} — ${item.error ?? ""}. ` +
-             "Why is it in this state, and what is the fix? Check the app's code and the host " +
-             "before answering.";
+      return item.run_id ? { kind: "workflow_step", id: item.run_id, step: item.step } : null;
     case "unhealthy_app":
-      return `${item.app} (${item.environment}) is deployed at ${item.at} and not answering` +
-             `${item.error ? ` — ${item.error}` : ""}. What is actually wrong?`;
+      return { kind: "deployment", id: item.id };
     case "quiet_build":
-      return `${item.app} has been quiet for ${item.quiet_minutes} minutes in ` +
-             `${item.phase ?? "its current phase"}. Read its activity and tell me whether it is ` +
-             "working or stuck — do not cancel anything.";
+      return { kind: "code_task", id: item.id };
     default:
-      return `Tell me about ${item.id}.`;
+      return null;
   }
 }
 
-function openDock(question: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", "general");
-    url.searchParams.set("dock_ask", question);
-    // ADDRESS IT, DO NOT INHERIT IT. `dock_role` is a URL parameter and SURVIVES until
-    // something overwrites it, so a door that sets only the question opens whichever role was
-    // last addressed. This one asks BOSS in general (`agent=general`), so it clears the role
-    // rather than leaving the previous agent's name on the banner above an unrelated answer.
-    url.searchParams.delete("dock_role");
-    window.history.replaceState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+/** The question this row would ask, in the operator's words. Its facts are the subject's. */
+export function itemQuestion(item: Item): string {
+  switch (item.kind) {
+    case "decision":
+      return `Decision "${item.title ?? item.id}" is unanswered. What is it gating, what ` +
+             "happens if I approve it, and is there any reason not to?";
+    case "workflow_step":
+      return `Why did the '${item.step}' step ${item.status === "deadlettered"
+        ? "stop" : "fail"} for ${item.app ?? "this app"}, and what is the fix?`;
+    case "unhealthy_app":
+      return `Why is ${item.app} (${item.environment}) not answering, and what is the fix?`;
+    case "quiet_build":
+      return `Is ${item.app} still working or stuck? Tell me which — do not cancel anything.`;
+    default:
+      return `Tell me about ${item.id}.`;
+  }
 }
 
 export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
@@ -213,7 +216,11 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
                   ) : null}
                   <div className="dm-starters">
                     <button type="button" className="cap-btn" data-testid="agent-item-ask"
-                            onClick={() => openDock(itemQuestion(item))}>
+                            onClick={() => openDockAbout({
+                              subject: itemSubject(item), question: itemQuestion(item),
+                              // BOSS in general answers the briefing; the role is cleared, not
+                              // inherited from whoever was addressed last.
+                              role: null })}>
                       Ask BOSS about this
                     </button>
                   </div>

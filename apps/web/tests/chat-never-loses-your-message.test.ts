@@ -94,7 +94,9 @@ describe("the composer", () => {
 
   it("still hands the agent the run id, so scope is not lost with the block", () => {
     // Deleting the context block only works because something else carries the subject.
-    expect(src).toContain('fd.set("external_ref", sel)');
+    // The selected run — or a typed subject from an "Ask about this" door — is the scope.
+    expect(src).toContain("const scopeRef = sel !== GENERAL ? sel : roleRef;");
+    expect(src).toContain('if (scopeRef) fd.set("external_ref", scopeRef);');
   });
 });
 

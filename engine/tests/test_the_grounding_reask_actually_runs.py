@@ -41,12 +41,14 @@ def test_the_reask_targets_an_agent_that_exists() -> None:
     assert "self.agent.chat(" not in source, (
         "IntentRouter has no `agent` attribute — this raises AttributeError on every turn"
     )
-    # Two call sites predate this fix and already used the lazy agent — that is what
-    # made the two broken ones identifiable as a slip rather than a different design.
-    assert source.count("self._answer_agent().chat(") >= 4, (
-        "both the grounding re-ask and the action-claim reconcile must use the lazy "
-        "answer agent, alongside the call sites that already did"
+    # boss-1 (2026-10-02): the re-asks were separate hand-built calls and none carried the
+    # operator's question. There are now exactly two calls into the agent — the first pass and
+    # `_reask` — and every re-ask (grounding, continuation, action-claim) goes through the
+    # second. A third direct call is a re-ask built some other way.
+    assert source.count("self._answer_agent().chat(") == 2, (
+        "every re-ask must go through IntentRouter._reask"
     )
+    assert source.count("self._reask(") >= 3
 
 
 def test_the_router_really_has_no_agent_attribute() -> None:

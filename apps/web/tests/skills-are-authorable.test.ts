@@ -167,7 +167,7 @@ describe("a skill can be given to an agent", () => {
     // conversation, and there is already an agent whose remit it is.
     expect(UI).toContain("function askBossToPlaceSkill");
     const fn = UI.slice(UI.indexOf("function askBossToPlaceSkill"));
-    expect(fn.slice(0, fn.indexOf("\n}"))).toContain('"dock_role", "Program Manager"');
+    expect(fn.slice(0, fn.indexOf("\n}"))).toContain('role: "Program Manager"');
   });
 
   it("assignment is its own action on the route, gated like authoring", () => {

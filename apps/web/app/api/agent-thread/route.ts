@@ -38,9 +38,12 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  let body: { project_id?: string; actor?: string };
+  // THE SAME KEY THE TURN WILL USE — scope and role, not just project and actor. In boss-1 this
+  // created an unscoped thread, the turn (about a Preview step, as Qa) resolved to another, and
+  // the dock polled the empty one for the whole turn: "Still working … chaining tools".
+  let body: { project_id?: string; actor?: string; external_ref?: string; role?: string };
   try {
-    body = (await req.json()) as { project_id?: string; actor?: string };
+    body = (await req.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
@@ -53,7 +56,11 @@ export async function POST(req: Request) {
     const r = await apiWrite(`${API_URL}/v1/agent/threads/ensure`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ project_id, actor }),
+      body: JSON.stringify({
+        project_id, actor,
+        external_ref: (body?.external_ref ?? "").trim() || undefined,
+        role: (body?.role ?? "").trim() || undefined,
+      }),
       cache: "no-store",
     });
     if (!r.ok) {

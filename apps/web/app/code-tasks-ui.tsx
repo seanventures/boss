@@ -65,6 +65,7 @@ import {
 
 import { SubmitButton } from "./submit-button";
 import { apiWrite } from "../lib/api-write";
+import { openDockAbout } from "../lib/dock-subject";
 
 function RetryControls(
   { runId, failingGates = [], compact = false }:
@@ -2856,8 +2857,6 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
       window.sessionStorage.setItem(
         `boss.agent.suggests.${m.id}`, JSON.stringify(suggestionsFor(m, lineage)));
     } catch { /* private mode: the dock still works, with generic prompts */ }
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", m.id);
     // AND SAY WHICH APP THE PAGE IS ON, or a stale `?run=` will hijack it.
     //
     // The dock is opened by pushing a param and firing a SYNTHETIC popstate so the shell
@@ -2870,11 +2869,18 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
     // Reported exactly that way: open "[latency-probe] add a formatBytes helper" (PR #125),
     // press Ask BOSS, and the page becomes "Database Schema Drift Detector" (PRs #114/#129).
     //
-    // Writing the run we are asking ABOUT makes the URL describe one coherent state instead of
-    // two contradictory ones, so the broadcast can only re-assert what is already true.
-    url.searchParams.set("run", m.id);
-    window.history.pushState({}, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    // Writing the run we are asking ABOUT (`also: {run}`) in the same push makes the URL
+    // describe one coherent state instead of two contradictory ones, so the broadcast can only
+    // re-assert what is already true.
+    openDockAbout({
+      subject: { kind: "code_task", id: m.id },
+      // An empty composer: the suggestions above are the starters, and the operator picks.
+      question: "",
+      // BOSS in general, not whichever role was addressed last.
+      role: null,
+      history: "push",
+      also: { run: m.id },
+    });
   }, [suggestionsFor]);
 
   // The gateway URL for a run's live preview, or null. Built from the preview ID, never from

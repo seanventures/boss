@@ -156,12 +156,14 @@ describe("the agent is reachable from the step", () => {
 
   it("opens the console's existing dock rather than a second chat surface", () => {
     expect(SOURCE).toContain("askBossAbout");
-    expect(SOURCE).toContain('url.searchParams.set("agent"');
-    expect(SOURCE).toContain('url.searchParams.set("dock_ask"');
+    expect(SOURCE).toContain("openDockAbout({ subject, question");
   });
 
-  it("opens with this step's own words, not an empty box", () => {
-    expect(SOURCE).toContain("const askNote");
+  it("opens ABOUT this step, with the operator's question prefilled — not an empty box", () => {
+    // boss-1: the step's words used to be pasted into the question, cut at 400 characters.
+    // The step itself travels now, and the server reads its whole record.
+    expect(SOURCE).toContain('{ kind: "workflow_step", id: workflowRunId, step: step.step_id }');
+    expect(SOURCE).toContain("stepQuestion(step, capability?.label)");
     expect(SOURCE).toContain('data-testid="dw-ask-boss"');
   });
 });
