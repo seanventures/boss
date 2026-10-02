@@ -274,10 +274,29 @@ def holds_mcp_tool(connection: Connection, project_id: str, role_key: str, serve
     return not allowed or tool in allowed
 
 
-#: Who may run an MCP-calling skill WITHOUT holding its server: the workflow itself, for a step
-#: that names nobody and whose own policy lets the workflow call it (step_agents' documented
-#: exceptions, `ran_as.how` "workflow_runner" / "legacy_workflow_runner"). Nothing else.
-SERVERLESS_MCP_CALLERS = frozenset({"workflow_runner"})
+#: The ONLY roads on which an MCP tool runs without its caller holding the server, by name, and
+#: the one caller each applies to. A road names itself on the invocation
+#: (`SkillExecutorContext.mcp_reach`); the runtime gate and the executor backstop both ask
+#: `serverless_mcp_allowed`, so a caller's name alone never opens it.
+#:
+#: legacy_workflow_runner  a custom step in a version published before step agents had to hold
+#:                          what they run (step_agents' documented exception). Review of
+#:                          milestone/integration: `workflow_runner` used to be on this list
+#:                          outright, so ANY custom MCP-tool step nobody held ran as the workflow
+#:                          in current versions too — chat could author one, publish it and a
+#:                          schedule run it, with no person ever granting the server.
+#: agent_loop_offer         the agent loop calling a tool it OFFERED: a bounded run is offered
+#:                          only the servers its agent holds (agent_loop._granted_mcp_servers),
+#:                          an unbounded one is the operator's own run over reviewed servers.
+SERVERLESS_MCP_GRANTS: dict[str, str] = {
+    "legacy_workflow_runner": "workflow_runner",
+    "agent_loop_offer": "agent_loop",
+}
+
+
+def serverless_mcp_allowed(caller: Optional[str], reach: Optional[str]) -> bool:
+    """May this invocation reach an MCP server its caller does not hold? Only on a named road."""
+    return bool(reach) and SERVERLESS_MCP_GRANTS.get(str(reach)) == str(caller or "")
 
 
 def mcp_grant_gap(connection: Connection, project_id: str, role_key: str, *,
@@ -303,6 +322,14 @@ def mcp_grant_gap(connection: Connection, project_id: str, role_key: str, *,
     gap = {"skill": skill_key, "role_key": role, "mcp_server_id": server_id,
            "server": str(server["name"]), "tool": tool}
     who = role or "this caller"
+    if held is None and role == "workflow_runner":
+        # A STEP NOBODY HOLDS: say what to do about the step, not about an agent called
+        # "workflow_runner", which the operator cannot open.
+        return {**gap, "message": (
+            f"this step runs as the workflow, and the workflow holds no MCP server: {skill_key} "
+            f"calls '{tool}' on '{server['name']}'. Give the server to an agent on the Agents "
+            "page (Give this agent an MCP server) and put that agent on the step, or leave the "
+            "step's agent empty so BOSS picks the one that holds it.")}
     if held is None:
         return {**gap, "message": (
             f"{who} may not run {skill_key}: it calls the MCP server '{server['name']}', and "

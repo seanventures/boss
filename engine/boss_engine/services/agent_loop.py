@@ -243,9 +243,16 @@ def _invoke_mcp_skill(
     caller: str = "agent_loop",
     approved_by: Optional[str] = None,
     approval_about: Optional[dict[str, Any]] = None,
+    mcp_reach: Optional[str] = None,
 ) -> dict[str, Any]:
     tool_name = str(tool.get("name") or "tool")
     skill_spec = _mcp_skill_spec(server, tool)
+    if mcp_reach is None and caller == "agent_loop":
+        # THE AGENT LOOP CALLS ONLY WHAT IT OFFERED: a bounded run is offered the servers its
+        # agent holds (_granted_mcp_servers), an unbounded run is the operator's own. Every other
+        # caller — a custom step's agent, the workflow — must hold the server, which the runtime
+        # gate checks (agents.SERVERLESS_MCP_GRANTS).
+        mcp_reach = "agent_loop_offer"
     context = SkillExecutorContext(
         settings=settings,
         connection=connection,
@@ -253,6 +260,7 @@ def _invoke_mcp_skill(
         actor=actor,
         approved_by=approved_by,
         approval_about=approval_about,
+        mcp_reach=mcp_reach,
     )
 
     def execute(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -1547,6 +1555,7 @@ def _invoke_agent_skill(
     skill_spec: Optional[dict[str, Any]] = None,
     approved_by: Optional[str] = None,
     approval_about: Optional[dict[str, Any]] = None,
+    mcp_reach: Optional[str] = None,
 ) -> dict[str, Any]:
     return SkillRuntimeService(settings).invoke(
         connection,
@@ -1562,6 +1571,7 @@ def _invoke_agent_skill(
             actor=actor,
             approved_by=approved_by,
             approval_about=approval_about,
+            mcp_reach=mcp_reach,
         ),
         skill_spec=skill_spec,
         actor=actor,

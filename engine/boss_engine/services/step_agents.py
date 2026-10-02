@@ -34,20 +34,27 @@ TWO DELIBERATE EXCEPTIONS, both recorded with their reason rather than hidden
 * A BUILT-IN capability that names nobody runs as whoever started the run. Its tool is one of
   BOSS's own and needs no grant, and all twelve catalogue workflows name nobody — moving them
   to a model-picked agent would change who acts on every Build. `ran_as.how == "run_actor"`.
-* A custom step bound to an MCP TOOL that nobody holds runs as the workflow. The synthesised
-  MCP spec lists `workflow_runner` among its own callers, so this widens nothing.
-  `ran_as.how == "workflow_runner"`.
-
 * A custom step in a version published BEFORE these rules (no `step_agent_rules` stamp), that
-  names nobody and binds a skill no agent may run, runs as the workflow exactly as it did when
-  it was published: the builder's default for such a step was "no agent — runs as the
-  workflow", and refusing it now would kill runs, and starts, that worked yesterday.
-  `ran_as.how == "legacy_workflow_runner"`, and `why` says which agent to give the skill to.
+  names nobody and binds a skill or an MCP tool no agent may run, runs as the workflow exactly
+  as it did when it was published: the builder's default for such a step was "no agent — runs
+  as the workflow", and refusing it now would kill runs, and starts, that worked yesterday.
+  `ran_as.how == "legacy_workflow_runner"`, and `why` says which agent to give it to.
   Re-publishing the workflow moves it to the rules above, where the operator can still act.
 
 Every answer is returned as a `ran_as` record — agent, how, why, who else was considered — and
 the runner writes it onto the step's output, so the run view can say "Ran as video_editor — the
 only agent holding video.trim" instead of leaving the operator to guess.
+
+AN MCP SERVER'S REACH IS GRANTED TO AN AGENT, NEVER TO A STEP (independent review of
+milestone/integration, blocker). A custom step bound to an MCP tool that nobody held used to run
+as `workflow_runner`, in current versions too, because the tool's synthesised spec names the
+workflow among its callers. The chat model can author such a step on its own (draft_custom_step
+and draft_workflow are `safe`), publish it as a workflow's active version, and a schedule then
+runs it unattended — a reviewed server's tool, with its credentials, run with nobody ever
+granting that server to anyone. So the one grant rule (`agents.mcp_grant_gap`) applies to these
+steps too: the step runs as an agent that holds the server, a step naming nobody is refused at
+publish when no agent does, and only a version published under the old rules keeps running as
+the workflow (`legacy_workflow_runner`). The same goes for a skill that calls an MCP server.
 """
 from __future__ import annotations
 
@@ -265,22 +272,25 @@ def who_may_run(
 
     Returns (pool, basis, fallback):
       basis     "holds" | "listed" | "anyone" | ""   — why the pool is what it is
-      fallback  WORKFLOW_RUNNER when the binding's OWN policy names the workflow as a caller,
-                so an empty pool is still runnable without widening anything; "" otherwise.
+      fallback  WORKFLOW_RUNNER when the binding's OWN policy names the workflow as a caller
+                and it reaches no MCP server, so an empty pool is still runnable without
+                widening anything; "" otherwise — always "" for an MCP tool or a skill that
+                calls one, because the workflow holds no server.
 
     The order matches `skill_runtime`'s permission gate exactly: a `role_skills` grant, or the
     skill naming the caller in allowed_callers. Picking an agent the gate would then deny is
     the failure this is here to prevent.
     """
     if definition.get("binding_kind") == "mcp_tool":
-        # HOLDING THE SERVER (role_mcp_servers) is how an agent holds an MCP tool — the agents
-        # stream's grant, the one ownership model. The synthesised skill id in role_skills is
-        # still read, for grants made that way before the server grant existed.
-        server_id = str(definition.get("mcp_server_id") or "")
-        held_as = mcp_skill_id(server_id, str(definition.get("mcp_tool_name") or ""))
+        # HOLDING THE SERVER, FOR THIS TOOL (role_mcp_servers through agents.holds_mcp_tool) is
+        # the one way an agent holds an MCP tool — the same rule the runtime gate applies. There
+        # is NO workflow fallback: the step used to run as `workflow_runner` whenever nobody
+        # held the server, which let a step chat authored by itself reach a server nobody was
+        # given (see the module docstring). Only a version published under the old rules still
+        # runs that way, and `resolve` decides that from the step, not from here.
         holders = [a for a in agents
-                   if server_id in (a.get("mcp_ids") or []) or held_as in _granted(a)]
-        return holders, ("holds" if holders else ""), WORKFLOW_RUNNER
+                   if _holds_mcp_tool(connection, project_id, a["role_key"], definition)]
+        return holders, ("holds" if holders else ""), ""
     skill_id = str(definition.get("skill_id") or "")
     holders = [a for a in agents if skill_id in _granted(a)]
     if holders:
@@ -293,11 +303,123 @@ def who_may_run(
             return holders, "holds", ""
         return [], "", ""
     callers = _allowed_callers(connection, project_id, skill_id)
-    fallback = WORKFLOW_RUNNER if WORKFLOW_RUNNER in callers else ""
+    # A SKILL THAT CALLS AN MCP SERVER never runs as the workflow, whatever its callers say: the
+    # workflow holds no server (the one grant rule), and the runtime gate would deny it.
+    reaches = _skill_server(connection, project_id, skill_id)
+    fallback = WORKFLOW_RUNNER if WORKFLOW_RUNNER in callers and not reaches else ""
     if "*" in callers:
-        return list(agents), "anyone", fallback
-    listed = [a for a in agents if a["role_key"] in callers]
-    return listed, ("listed" if listed else ""), fallback
+        pool = list(agents)
+        basis = "anyone"
+    else:
+        pool = [a for a in agents if a["role_key"] in callers]
+        basis = "listed"
+    if reaches:
+        pool = [a for a in pool
+                if not _lacks_server(connection, project_id, a["role_key"], skill_id)]
+    return pool, (basis if pool else ""), fallback
+
+
+def _holds_mcp_tool(connection: Connection, project_id: str, role_key: str,
+                    definition: dict[str, Any]) -> bool:
+    from .agents import holds_mcp_tool
+
+    try:
+        return holds_mcp_tool(connection, project_id, role_key,
+                              str(definition.get("mcp_server_id") or ""),
+                              str(definition.get("mcp_tool_name") or ""))
+    except Exception:  # noqa: BLE001 — a missing table is "holds nothing", not a crash
+        return False
+
+
+def _skill_server(connection: Connection, project_id: str, skill_id: str) -> str:
+    """The MCP server a skill calls, or "" — read from the catalogue the runtime gate reads."""
+    from .skill_catalogue import entry
+
+    try:
+        item = entry(connection, project_id, skill_id)
+    except Exception:  # noqa: BLE001 — cannot read the catalogue: treat as no server
+        return ""
+    policy = ((item or {}).get("spec") or {}).get("policy") or {}
+    return str(policy.get("mcp_server_id") or "")
+
+
+def _server_name(connection: Connection, project_id: str, server_id: str) -> str:
+    row = connection.execute(
+        text("SELECT name FROM mcp_servers WHERE project_id = :p AND id = :s"),
+        {"p": project_id, "s": server_id},
+    ).first()
+    return str(row[0]) if row else server_id
+
+
+def custom_step_runs(definition: dict[str, Any], connection: Optional[Connection] = None,
+                     project_id: str = "") -> str:
+    """What a custom step runs, in the words a refusal uses."""
+    if definition.get("binding_kind") == "mcp_tool":
+        server = str(definition.get("mcp_server_id") or "")
+        if connection is not None:
+            server = _server_name(connection, project_id, server)
+        return f"'{definition.get('mcp_tool_name')}' on MCP server '{server}'"
+    return str(definition.get("skill_id") or "")
+
+
+def nobody_may_run_problem(connection: Connection, project_id: str,
+                           definition: dict[str, Any]) -> str:
+    """Why no agent may run a custom step that names nobody. Publish, start and run say this."""
+    label = definition.get("label")
+    if definition.get("binding_kind") == "mcp_tool":
+        server = _server_name(connection, project_id, str(definition.get("mcp_server_id") or ""))
+        return (f"'{label}' calls '{definition.get('mcp_tool_name')}' on MCP server '{server}', "
+                f"and no agent holds MCP server '{server}', so nobody can do this step. Give "
+                "it to an agent on the Agents page (Give this agent an MCP server), or name an "
+                "agent that holds it on the step.")
+    skill_id = str(definition.get("skill_id") or "")
+    # A HOLDER WITHOUT THE SERVER is a different repair from "nobody holds it", so it is named:
+    # the agent and the server it still needs.
+    for agent in project_agents(connection, project_id):
+        if skill_id in _granted(agent):
+            short = _lacks_server(connection, project_id, agent["role_key"], skill_id)
+            if short:
+                return f"nobody can do '{label}': {short}"
+    return (f"'{label}' runs {skill_id}, and no agent on this project may run it, so nobody can "
+            f"do this step. Give {skill_id} to an agent on the Agents page, or name an agent "
+            "that holds it on the step.")
+
+
+def named_agent_problem(connection: Connection, project_id: str, definition: dict[str, Any],
+                        named: str, agents: list[dict[str, Any]]) -> Optional[str]:
+    """Why the agent a custom step NAMES may not run what the step binds, or None.
+
+    Review of milestone/integration: a named agent was never checked against the binding, so a
+    step naming an agent without the server (or the skill) published cleanly and failed at run
+    time with the raw gate string "caller 'x' not in allowed_callers [...]". This asks what
+    the runtime gate asks — `who_may_run`, the same pool the auto-pick uses — and says it in
+    the gate's own words (agents.mcp_grant_gap), which name the Agents page.
+    """
+    label = definition.get("label")
+    if not any(a["role_key"] == named for a in agents):
+        return (f"names agent '{named}', which this project does not have, so nothing on it "
+                f"holds what '{label}' runs. Its agents are: {_listed(agents)}. Pick one of "
+                f"them, or create '{named}' on the Agents page and give it what the step runs.")
+    pool, _, _ = who_may_run(connection, project_id, definition, agents)
+    if any(a["role_key"] == named for a in pool):
+        return None
+    if definition.get("binding_kind") == "mcp_tool":
+        from .agents import mcp_grant_gap
+
+        tool = str(definition.get("mcp_tool_name") or "")
+        server_id = str(definition.get("mcp_server_id") or "")
+        gap = mcp_grant_gap(connection, project_id, named, server_id=server_id, tool=tool,
+                            skill_key=mcp_skill_id(server_id, tool))
+        if gap:
+            return gap["message"]
+        return None  # the server is gone: `defined_step_problems` says that in its own words
+    skill_id = str(definition.get("skill_id") or "")
+    short = _lacks_server(connection, project_id, named, skill_id)
+    if short:
+        return short
+    return (f"{named} may not run {skill_id}: it does not hold it and the skill does not list "
+            f"it as a caller. Give {skill_id} to {named} on the Agents page, or name an agent "
+            "that holds it.")
 
 
 def _lacks_server(connection: Connection, project_id: str, role_key: str,
@@ -476,19 +598,25 @@ def assignment_problems(connection: Connection, project_id: str,
                 else:
                     problems.append(f"step '{step_id}': {_no_pool_problem(skills, agents)}")
             continue
-        if binding.get("custom_step") and not named:
+        if binding.get("custom_step") and named != HUMAN:
             from . import workflow_custom_steps as custom_steps
 
             definition = custom_steps.get(connection, project_id, str(binding["custom_step"]))
             if definition is None:
                 continue  # `defined_step_problems` names a missing step better than this can
+            if named:
+                # THE NAMED AGENT IS CHECKED AGAINST WHAT THE STEP RUNS, as the runtime gate
+                # will check it — so a step that publishes is a step that runs.
+                problem = named_agent_problem(connection, project_id, definition, named, agents)
+                if problem:
+                    problems.append(f"step '{step_id}' {problem}"
+                                    if problem.startswith("names ")
+                                    else f"step '{step_id}': {problem}")
+                continue
             pool, _, fallback = who_may_run(connection, project_id, definition, agents)
             if not pool and not fallback:
-                skill_id = definition.get("skill_id")
-                problems.append(
-                    f"step '{step_id}' ('{definition['label']}') runs {skill_id}, and no agent on "
-                    f"this project may run it, so nobody can do this step. Give {skill_id} to an "
-                    "agent on the Agents page, or name an agent that holds it on the step.")
+                problems.append(f"step '{step_id}': "
+                                f"{nobody_may_run_problem(connection, project_id, definition)}")
     return problems
 
 
@@ -557,8 +685,7 @@ def resolve(
                 f"this project has no custom step called '{binding['custom_step']}'.")
         agents = project_agents(connection, project_id)
         pool, basis, fallback = who_may_run(connection, project_id, definition, agents)
-        runs = (definition.get("skill_id") if definition.get("binding_kind") == "skill"
-                else f"{definition.get('mcp_tool_name')} (MCP)")
+        runs = custom_step_runs(definition, connection, project_id)
         brief = " ".join(str(x) for x in (definition.get("label"), definition.get("summary"),
                                           runs) if x)
         if pool:
@@ -576,26 +703,16 @@ def resolve(
                 "the workflow. Give it to an agent on the Agents page to have that agent run it.")
         if ran_under_old_rules(step):
             # PUBLISHED UNDER THE OLD RULES, where "no agent — runs as the workflow" was the
-            # builder's default for this step. It keeps running that way (see the module
-            # docstring); the reason tells the operator how to move it to an agent.
+            # builder's default for this step, and an MCP tool nobody held always ran that way.
+            # It keeps running that way (see the module docstring); the reason tells the
+            # operator how to move it to an agent.
             return _record(
                 WORKFLOW_RUNNER, "legacy_workflow_runner",
                 f"no agent holds {runs}. This workflow was published before a step needed an "
-                f"agent holding its skill, so it ran as the workflow, as it always has. Give "
+                f"agent holding what it runs, so it ran as the workflow, as it always has. Give "
                 f"{runs} to an agent on the Agents page and publish the workflow again to have "
                 "that agent run it — a new version is refused until one holds it.")
-        # A HOLDER WITHOUT THE SERVER is a different repair from "nobody holds it", so it is
-        # named: the agent and the server it still needs.
-        short = next((why for why in (
-            _lacks_server(connection, project_id, a["role_key"], str(definition.get("skill_id")))
-            for a in agents if str(definition.get("skill_id") or "") in _granted(a)) if why),
-            None)
-        if short:
-            raise StepAgentError(f"nobody can do '{definition['label']}': {short}")
-        raise StepAgentError(
-            f"no agent on this project may run {runs}, so nobody can do "
-            f"'{definition['label']}'. Give {runs} to an agent on the Agents page, or name an "
-            "agent that holds it on the step.")
+        raise StepAgentError(nobody_may_run_problem(connection, project_id, definition))
 
     # A built-in capability, a typed decision or a gate: BOSS's own machinery, no grant needed.
     return _record(

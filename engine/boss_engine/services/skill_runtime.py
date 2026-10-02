@@ -126,6 +126,17 @@ class SkillRuntimeService:
                     str(policy.get("mcp_tool") or ""))
         if not self._caller_allowed(caller, allowed_callers) and not granted_by_assignment:
             reason = f"caller '{caller}' not in allowed_callers {allowed_callers}"
+            server_id = str((skill.get("policy") or {}).get("mcp_server_id") or "")
+            if server_id:
+                # AN MCP SPEC IS HELD THROUGH ITS SERVER, so say so — the raw gate string named
+                # a list the operator cannot edit and nothing to do (review of integration).
+                from .agents import mcp_grant_gap
+
+                gap = mcp_grant_gap(connection, project_id, caller, server_id=server_id,
+                                    tool=str((skill.get("policy") or {}).get("mcp_tool") or ""),
+                                    skill_key=skill_id)
+                if gap is not None:
+                    reason = gap["message"]
             record_policy_eval(
                 connection, project_id, "skill.invoke", "deny",
                 action=skill_id, reason=reason, detail={"caller": caller, "mode": mode})
@@ -141,9 +152,16 @@ class SkillRuntimeService:
         # an `mcp_tool` skill was a way round the server grant. The caller must hold the server
         # the skill calls (agents.mcp_reach_gap, the one rule); only the workflow itself, on its
         # documented step exceptions, runs one without.
+        #
+        # WHATEVER THE KIND OF SPEC. Review of milestone/integration: this asked only
+        # `behaviour_kind == "mcp_tool"` (an authored skill), so the spec BOSS synthesises for a
+        # direct MCP tool — which lists `workflow_runner` among its callers — passed untouched,
+        # and a custom MCP-tool step nobody held ran as the workflow. Any spec that names a
+        # server is gated here; the only way past without holding it is a named road
+        # (agents.SERVERLESS_MCP_GRANTS) the calling code states on the context.
         reaches = skill.get("policy") or {}
-        if (reaches.get("behaviour_kind") == "mcp_tool" and reaches.get("mcp_server_id")
-                and caller not in _serverless_mcp_callers()):
+        reach = executor_context.mcp_reach if executor_context is not None else None
+        if reaches.get("mcp_server_id") and not _serverless_mcp_allowed(caller, reach):
             from .agents import mcp_grant_gap
 
             gap = mcp_grant_gap(connection, project_id, caller,
@@ -478,7 +496,7 @@ class SkillRuntimeService:
         }
 
 
-def _serverless_mcp_callers() -> frozenset[str]:
-    from .agents import SERVERLESS_MCP_CALLERS
+def _serverless_mcp_allowed(caller: str, reach: Optional[str]) -> bool:
+    from .agents import serverless_mcp_allowed
 
-    return SERVERLESS_MCP_CALLERS
+    return serverless_mcp_allowed(caller, reach)

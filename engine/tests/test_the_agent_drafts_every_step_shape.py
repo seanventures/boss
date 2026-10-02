@@ -127,7 +127,8 @@ def project(eng):
     yield pid
     with eng.begin() as c:
         for table in ("workflow_custom_steps", "workflow_mappings", "workflow_versions",
-                      "workflow_definitions", "mcp_servers", "events", "role_skills", "roles"):
+                      "workflow_definitions", "role_mcp_servers", "mcp_servers", "events",
+                      "role_skills", "roles"):
             with c.begin_nested():
                 c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
@@ -160,11 +161,19 @@ def _agent(c, project_id, role_key, *skills):
 
 
 def test_an_mcp_tool_step_is_drafted_as_a_custom_step_and_published(eng, project):
+    """REWRITTEN (independent review of milestone/integration, blocker): this published an MCP
+    step no agent held, which then ran as the workflow with the server's credentials — the hole
+    that review closed. An agent now holds the server, which is what makes the step runnable;
+    the refusal without one is in test_an_mcp_step_runs_only_as_an_agent_holding_its_server."""
     with eng.begin() as c:
         c.execute(text("INSERT INTO mcp_servers (id, project_id, name, url, risk_tier, enabled, "
                        "provenance, tool_risk_overrides) VALUES ('mcp_w1', :p, 'wiki', "
                        "'http://127.0.0.1:1/', 0, true, '{\"trusted\": true}', '{}')"),
                   {"p": project})
+        _agent(c, project, "librarian")
+        c.execute(text("INSERT INTO role_mcp_servers (id, project_id, role_key, mcp_server_id) "
+                       "VALUES (:i, :p, 'librarian', 'mcp_w1')"),
+                  {"i": f"rms_{uuid.uuid4().hex[:8]}", "p": project})
     result = _draft(eng, project, workflow_key="wiki_lookup", name="Wiki lookup",
                     steps=[{"id": "look", "mcp_tool": {"server": "wiki", "tool": "search"}}])
     assert result.get("status") == "published", result

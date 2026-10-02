@@ -137,6 +137,21 @@ def _skill_on(c, project, server_id: str) -> None:
     agents.grant_mcp(c, project, actor="op", role_key="pm", mcp_server_id=server_id)
 
 
+def _pm_holds(c, project, server_id: str) -> None:
+    """The agent `pm` holds the server itself, so a custom MCP-tool step has someone to run as.
+
+    CHANGED (independent review of milestone/integration, blocker): a custom MCP-tool step that
+    no agent held ran as the workflow, and the tests below leaned on that. It is refused now
+    (test_an_mcp_step_runs_only_as_an_agent_holding_its_server.py); the subject here is still
+    the review rule, which must hold for an agent that holds the server just the same."""
+    from boss_engine.services import agents
+
+    if c.execute(text("SELECT 1 FROM roles WHERE project_id=:p AND role_key='pm'"),
+                 {"p": project}).first() is None:
+        agents.create_agent(c, project, actor="op", name="PM", role_key="pm")
+    agents.grant_mcp(c, project, actor="op", role_key="pm", mcp_server_id=server_id)
+
+
 class _Model:
     """Calls the one offered tool whose name contains `want`, then says it is done."""
 
@@ -555,6 +570,7 @@ def test_an_unreviewed_refusal_is_recorded_as_one_attempt(eng, project, mcp_call
     release. The refusal is not retryable."""
     with eng.begin() as c:
         sid = _unreviewed_server(c, project)
+        _pm_holds(c, project, sid)
         custom_steps.create(c, project_id=project, label="tool_step", actor="op",
                             step_key="tool_step", binding_kind="mcp_tool",
                             mcp_server_id=sid, mcp_tool_name=TOOL)
@@ -591,6 +607,7 @@ def test_a_legacy_timeout_approval_never_releases_an_unreviewed_step(eng, projec
     monkeypatch.setattr(runner, "_tool_registry", lambda: _NoTools())
     with eng.begin() as c:
         sid = _unreviewed_server(c, project)
+        _pm_holds(c, project, sid)
         mcp_registry.update_mcp_server(c, project, sid, actor="op", trusted=True)
         custom_steps.create(c, project_id=project, label="File it", actor="op",
                             step_key="file_it", binding_kind="mcp_tool",
