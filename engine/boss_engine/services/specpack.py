@@ -703,6 +703,7 @@ class SpecPackService:
         display_name: Optional[str] = None, autonomy_level: Optional[int] = None,
         reports_to: Optional[str] = None, spec: Optional[dict] = None,
         reports_to_given: bool = True,
+        actor: str = "operator",
     ) -> dict[str, Any]:
         """Put a role on the books, or update the one already there.
 
@@ -723,6 +724,8 @@ class SpecPackService:
         unconditionally, so re-registering a role to fix its display name demoted it to
         autonomy 0 and detached it from the org chart.
         """
+        from . import seed_exclusions
+
         key = (role_key or "").strip()
         if not key:
             raise ValueError("role_key is required")
@@ -770,6 +773,16 @@ class SpecPackService:
                  "autonomy": int(autonomy_level or 0), "reports_to": reports_to,
                  "spec": json.dumps(spec or {})},
             )
+            # Registering a key by hand is a new decision, over any earlier delete.
+            seed_exclusions.lift(connection, project_id, "role", key)
+        # A SPEC OR NAME AN OPERATOR WROTE STAYS WRITTEN. This path recorded nothing, so editing
+        # a bundled role through POST /v1/roles lasted until the next seed, which found the spec
+        # differed from the pack's YAML and put the YAML back. An autonomy- or manager-only
+        # update writes no spec and so records nothing; neither does registering a bare key
+        # (empty spec), which should still be filled from its pack if it has one.
+        if spec or (existing and display_name is not None):
+            seed_exclusions.exclude(connection, project_id, "role_spec", key, actor=actor,
+                                    reason="written through POST /v1/roles")
         return self.get_role_for_project(connection, project_id, key)
 
     def list_roles_for_project(

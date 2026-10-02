@@ -265,6 +265,19 @@ export function validateAgentWizardDraft(
   return issues;
 }
 
+/**
+ * The wizard already made this agent; its Studio profile is what failed.
+ *
+ * POST /v1/agents refuses an existing key (it must: creating is never editing), and the wizard
+ * kept "+ A new role" selected, so pressing Create again after a profile failure — an agent_key
+ * already taken, say — answered 409 "already exists" for the agent this same wizard had just
+ * made, and the role list did not offer it to switch to. The retry now targets the made agent,
+ * so it gives it anything new and goes on to the profile.
+ */
+export function adoptCreatedAgent(draft: AgentWizardDraft, roleKey: string): AgentWizardDraft {
+  return { ...draft, roleKey, newRoleName: "" };
+}
+
 export function buildAgentWizardSubmission(
   projectId: string,
   draft: AgentWizardDraft,
@@ -304,6 +317,10 @@ export function buildAgentWizardSubmission(
         purpose: draft.description.trim(),
         skills,
         mcp_servers: mcpServers,
+        // THE RULES ARE THE AGENT'S BOUNDARIES. The old role registration wrote them to
+        // spec.boundaries.must_not; the first cut of POST /v1/agents dropped them, so an agent
+        // made with "never bypass policy" as a rule had no must_not at all.
+        boundaries: { must: [], must_not: parseWizardLines(draft.rulesText) },
       },
     }
     : {

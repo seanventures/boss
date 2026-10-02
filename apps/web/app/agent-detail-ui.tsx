@@ -30,7 +30,8 @@ import { createPortal } from "react-dom";
 
 import { formatDate } from "../lib/datetime";
 import {
-  deleteAgent, grantMcp, grantSkill, parseToolList, revokeMcp, revokeSkill, updateAgent,
+  deleteAgent, grantMcp, grantSkill, loadGrantable, parseToolList, revokeMcp, revokeSkill,
+  updateAgent, type AgentSummary,
 } from "../lib/agents";
 
 type App = {
@@ -621,6 +622,22 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState("");
   const [saved, setSaved] = useState("");
+  // WHO IT CAN REPORT TO, as a list to pick from. This was a free-text box expecting an agent
+  // key, while quick create offered a picker — so the same field took a key on one screen and
+  // a name on the other, and a typo was only caught by the API's refusal.
+  const [agents, setAgents] = useState<AgentSummary[] | null>(null);
+  const [agentsFailed, setAgentsFailed] = useState("");
+  useEffect(() => {
+    if (!open || agents) return;
+    let alive = true;
+    void loadGrantable(projectId).then((r) => {
+      if (!alive) return;
+      if (r.ok) setAgents(r.data.agents); else setAgentsFailed(r.error);
+    });
+    return () => { alive = false; };
+  }, [open, agents, projectId]);
+  const managers = (agents ?? []).filter((a) => a.role_key !== detail.role_key);
+  const current = reportsTo.trim();
 
   const lines = (v: string) => v.split("\n").map((x) => x.trim()).filter(Boolean);
   const save = async () => {
@@ -671,9 +688,22 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
             <textarea rows={3} value={mustNot} data-testid="agent-edit-must-not"
                       onChange={(e) => setMustNot(e.target.value)} />
           </label>
-          <label>Reports to (an agent key — empty for nobody)
-            <input value={reportsTo} data-testid="agent-edit-reports-to"
-                   onChange={(e) => setReportsTo(e.target.value)} />
+          <label>Reports to
+            <select value={current} data-testid="agent-edit-reports-to"
+                    onChange={(e) => setReportsTo(e.target.value)}>
+              <option value="">Nobody — a root of the team</option>
+              {/* The current manager stays selectable while the list loads, or if it failed. */}
+              {current && !managers.some((a) => a.role_key === current) ? (
+                <option value={current}>{current}</option>
+              ) : null}
+              {managers.map((a) => (
+                <option key={a.role_key} value={a.role_key}>{a.name} ({a.role_key})</option>
+              ))}
+            </select>
+            {agentsFailed ? (
+              <small className="ad-bad">Could not list this project's agents — {agentsFailed}.
+                The current manager is kept unless you choose Nobody.</small>
+            ) : null}
           </label>
           {failed ? <p className="ad-bad" data-testid="agent-edit-failed">{failed}</p> : null}
           <div className="ad-edit-actions">

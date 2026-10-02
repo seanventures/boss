@@ -42,6 +42,20 @@ describe("creating an agent is one screen that grants what it holds", () => {
     expect(html).not.toContain("System prompt");
   });
 
+  it("a name with no English letters gets a key field instead of an empty-key refusal", async () => {
+    // Review round 1: 'காணொளி தொகுப்பாளர்' slugged to '', quick create had no key field, and
+    // the API refused with "'' cannot be an agent key". Now the key field appears exactly when
+    // the name makes no key, and left empty the server makes one.
+    const { isAgentKey } = await import("../lib/agents");
+    expect(isAgentKey("")).toBe(false);
+    expect(isAgentKey("x")).toBe(false);
+    expect(isAgentKey("video_editor")).toBe(true);
+    const source = codeOnly("app/agent-quick-create.tsx");
+    expect(source).toContain("const nameMakesNoKey = !!name.trim() && !isAgentKey(derived);");
+    expect(source).toContain('data-testid="aq-key"');
+    expect(source).toMatch(/nameMakesNoKey && key \? \{\s*roleKey: key\s*\}/);
+  });
+
   it("writes through the agent resource as the actor it was handed", () => {
     const source = codeOnly("app/agent-quick-create.tsx");
     expect(source).toContain("createAgent(projectId, actor,");
@@ -85,6 +99,14 @@ describe("an agent can be edited", () => {
   it("offers name, mission, boundaries and manager", () => {
     const html = render(<AgentEdit projectId="p" actor="ceo" detail={detail()} onChanged={() => {}} />);
     expect(html).toContain("change name, mission, boundaries or manager");
+  });
+
+  it("picks its manager from the project's agents, as quick create does", () => {
+    // Review round 1: Agent detail's "Reports to" was free text expecting an agent key while
+    // quick create offered a picker, so a typo was caught only by the API's refusal.
+    const source = codeOnly("app/agent-detail-ui.tsx");
+    expect(source).toMatch(/<select value=\{current\} data-testid="agent-edit-reports-to"/);
+    expect(source).toContain("loadGrantable(projectId)");
   });
 
   it("and sends only what changed", () => {

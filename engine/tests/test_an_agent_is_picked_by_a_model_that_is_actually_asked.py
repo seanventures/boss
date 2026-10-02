@@ -134,5 +134,11 @@ def test_the_chat_can_give_an_agent_a_skill_or_an_mcp_server():
     reg = build_default_registry()
     for name in ("assign_skill_to_agent", "assign_mcp_to_agent"):
         spec = reg.get(name)
-        assert spec.kind == "write" and spec.reversibility == "safe"
+        assert spec.kind == "write"
         assert "remove" in spec.parameters["properties"]
+    # REWRITTEN: this asserted both were `safe`. A skill grant is; an MCP grant hands an agent a
+    # server's credentials and every action it exposes, so the chat OFFERS it and a person's
+    # click runs it (review of milestone/agents, round 1).
+    assert reg.get("assign_skill_to_agent").self_executable
+    assert reg.get("assign_mcp_to_agent").reversibility == "grants_authority"
+    assert not reg.get("assign_mcp_to_agent").self_executable

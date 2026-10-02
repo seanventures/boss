@@ -141,6 +141,11 @@ export function revokeMcp(projectId: string, actor: string, roleKey: string, ser
     "DELETE", null, { scope: `agent-${roleKey}-mcp`, label: "Remove MCP server" });
 }
 
+/** The server's rule for a key (agents._KEY): lower_snake_case, a letter first, 2-64 long. */
+export function isAgentKey(value: string): boolean {
+  return /^[a-z][a-z0-9_]{1,63}$/.test(value);
+}
+
 /** "post, read_channel" → ["post", "read_channel"]. Empty means every tool the server has. */
 export function parseToolList(value: string): string[] {
   return Array.from(new Set(value.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean)));

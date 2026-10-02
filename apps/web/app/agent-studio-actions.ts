@@ -167,8 +167,16 @@ export async function createStudioAgent(
   if (!definition.ok || typeof definition.item?.id !== "string") {
     return {
       ...definition,
+      // THE WIZARD ADOPTS IT (lib/agent-wizard adoptCreatedAgent), so pressing Create again
+      // retries the profile against this agent instead of 409-ing on "already exists".
+      ...(submission.agent.create ? {
+        item: {
+          agent_created: submission.agent.roleKey,
+          agent_name: String(submission.agent.create.name ?? submission.agent.roleKey),
+        },
+      } : {}),
       message: submission.agent.create
-        ? `The agent ${submission.agent.roleKey} was created and holds its skills, but its Studio profile was not: ${definition.message}`
+        ? `The agent ${submission.agent.roleKey} was created and holds its skills, but its Studio profile was not: ${definition.message}. Fix that and press Create again — the agent is kept and will not be made twice.`
         : definition.message,
     };
   }

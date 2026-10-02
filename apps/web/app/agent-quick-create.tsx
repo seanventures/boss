@@ -14,7 +14,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import {
-  createAgent, loadGrantable, parseToolList,
+  createAgent, isAgentKey, loadGrantable, parseToolList,
   type Grantable, type McpGrant,
 } from "../lib/agents";
 
@@ -63,7 +63,14 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, onOpenS
   // sentence; saying it here first means the operator is not surprised by that refusal.
   // Same rule as agents.key_from_name on the server, so the key shown is the key made.
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  const key = (slug && !/^[a-z]/.test(slug) ? `agent_${slug}` : slug).slice(0, 64);
+  const derived = (slug && !/^[a-z]/.test(slug) ? `agent_${slug}` : slug).slice(0, 64);
+  // A NAME WITH NO ENGLISH LETTERS (a Tamil name, or one letter) makes no usable key, and this
+  // form had no key field, so the API's refusal named an empty key the operator never typed.
+  // Now the key field appears exactly then; left empty, the server makes one (agent_…).
+  const nameMakesNoKey = !!name.trim() && !isAgentKey(derived);
+  const [ownKey, setOwnKey] = useState("");
+  const key = nameMakesNoKey ? ownKey.trim().toLowerCase() : derived;
+  const keyInvalid = nameMakesNoKey && !!key && !isAgentKey(key);
   const taken = !!key && (grantable?.agents ?? []).some((a) => a.role_key === key);
 
   const submit = async () => {
@@ -72,12 +79,17 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, onOpenS
       setFailed(`An agent "${key}" already exists. Open it from the roster to change it, or pick another name.`);
       return;
     }
+    if (keyInvalid) {
+      setFailed(`"${key}" cannot be a key: use English letters, digits and underscores, starting with a letter — or leave the key empty and BOSS will make one.`);
+      return;
+    }
     setBusy(true);
     setFailed("");
     const mcpServers: McpGrant[] = Object.entries(servers)
       .map(([server_id, tools]) => ({ server_id, tools: parseToolList(tools) }));
     const r = await createAgent(projectId, actor, {
       name: name.trim(), purpose: purpose.trim(), skills, mcpServers, reportsTo: reportsTo || null,
+      ...(nameMakesNoKey && key ? { roleKey: key } : {}),
     });
     setBusy(false);
     if (!r.ok) { setFailed(r.error); return; }
@@ -104,13 +116,26 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, onOpenS
             <span>Name</span>
             <input value={name} autoFocus data-testid="aq-name" placeholder="Release Auditor"
                    onChange={(e) => setName(e.target.value)} />
-            {key ? (
+            {key && !nameMakesNoKey ? (
               <small className={taken ? "aq-bad" : "aw-field-note"}>
                 {taken ? <>An agent <code>{key}</code> already exists — choose another name.</>
                   : <>Its key will be <code>{key}</code>.</>}
               </small>
             ) : null}
           </label>
+          {nameMakesNoKey ? (
+            <label className="aw-field">
+              <span>Key</span>
+              <input value={ownKey} data-testid="aq-key" placeholder="video_editor"
+                     onChange={(e) => setOwnKey(e.target.value)} />
+              <small className={keyInvalid || taken ? "aq-bad" : "aw-field-note"}>
+                {taken ? <>An agent <code>{key}</code> already exists — choose another key.</>
+                  : keyInvalid ? <>Use English letters, digits and underscores, starting with a letter.</>
+                    : <>This name has no English letters to make a key from. Set one, or leave
+                      it empty and BOSS will make one. The name stays exactly as you wrote it.</>}
+              </small>
+            </label>
+          ) : null}
           <label className="aw-field">
             <span>Purpose</span>
             <textarea rows={3} value={purpose} data-testid="aq-purpose"
@@ -216,7 +241,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, onOpenS
           <div>
             <button className="as-button secondary" onClick={onClose} disabled={busy}>Cancel</button>
             <button className="as-button primary" onClick={() => void submit()}
-                    disabled={busy || !name.trim() || taken} data-testid="aq-create">
+                    disabled={busy || !name.trim() || taken || keyInvalid} data-testid="aq-create">
               {busy ? "Creating…" : "Create agent"}
             </button>
           </div>

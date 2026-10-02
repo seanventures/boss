@@ -347,20 +347,45 @@ def _held_skill_ids(connection: Connection, project_id: str, role_key: str) -> s
 # --------------------------------------------------------------------------- #
 # Where an agent is named
 # --------------------------------------------------------------------------- #
+#: EVERY FIELD OF A WORKFLOW STEP THAT NAMES AN AGENT, and what naming it there means.
+#:
+#: This is the one place that knows. The delete guard first read only `captain`, `binding.agent`
+#: and `binding.agents`, so an agent named as a gate's approver (`approval.approver_role` — the
+#: catalogue gates name release_manager, product_owner, design_lead and tech_lead there) or as a
+#: binding's `role_key` (which start_run refuses when the role is missing) was deleted with
+#: 200, tombstoned so no seed would bring it back, and the gate stayed broken for good.
+#: tests/test_every_step_field_naming_an_agent_guards_its_delete.py scans the engine for every
+#: step field read as a role key and fails until each is listed here or exempted with a reason.
+#:
+#: (path into the step, how the step uses the agent, whether the field holds a list of keys)
+STEP_AGENT_FIELDS: tuple[tuple[tuple[str, ...], str, bool], ...] = (
+    (("captain",), "runs it", False),
+    (("binding", "agent"), "runs it", False),
+    (("binding", "role_key"), "runs it", False),
+    (("binding", "agents"), "is on its shortlist", True),
+    (("approval", "approver_role"), "approves it", False),
+)
+
+
+def _field(step: dict[str, Any], path: tuple[str, ...]) -> Any:
+    value: Any = step
+    for part in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
 def _names_in_step(step: dict[str, Any]) -> dict[str, str]:
-    """{role_key: how} for every agent one workflow step names."""
+    """{role_key: how} for every agent one workflow step names, read from STEP_AGENT_FIELDS."""
     found: dict[str, str] = {}
-    binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
-    captain = str(step.get("captain") or "").strip().lower()
-    if captain:
-        found[captain] = "runs it"
-    agent = str(binding.get("agent") or "").strip().lower()
-    if agent:
-        found.setdefault(agent, "runs it")
-    for listed in binding.get("agents") or []:
-        key = str(listed or "").strip().lower()
-        if key:
-            found.setdefault(key, "is on its shortlist")
+    for path, how, many in STEP_AGENT_FIELDS:
+        value = _field(step, path)
+        listed = (value if isinstance(value, list) else []) if many else [value]
+        for item in listed:
+            key = str(item or "").strip().lower()
+            if key:
+                found.setdefault(key, how)
     return found
 
 
@@ -514,11 +539,19 @@ def create_agent(
     display = str(name or "").strip()
     if not display:
         raise AgentError("an agent needs a name.")
-    key = str(role_key or "").strip().lower() or key_from_name(display)
+    given = str(role_key or "").strip().lower()
+    key = given or key_from_name(display)
+    if not given and not _KEY.match(key):
+        # A NAME WITH NO ENGLISH LETTERS STILL MAKES AN AGENT. 'காணொளி தொகுப்பாளர்' slugged to ''
+        # and quick create, which has no key field unless asked, answered "'' cannot be an agent
+        # key" — a refusal naming nothing the operator typed. The name stays exactly as written;
+        # only the key, which nobody chose, is made up.
+        key = f"agent_{make_id('k').split('_')[-1][:8].lower()}"
     if not _KEY.match(key):
         raise AgentError(
-            f"{key!r} cannot be an agent key: lower_snake_case, starting with a letter, 2-64 "
-            "characters.")
+            f"{key!r} cannot be an agent key. Use English letters, digits and underscores, "
+            "starting with a letter, 2-64 characters (for example release_auditor) — or leave "
+            "the key empty and BOSS will make one.")
     if _role(connection, project_id, key) is not None:
         raise AgentError(
             f"an agent {key!r} already exists on this project. Open it to change it, or give "
@@ -546,8 +579,13 @@ def create_agent(
         {"id": make_id("role"), "p": project_id, "k": key, "name": display,
          "reports_to": parent, "spec": json.dumps(spec)},
     )
-    # A KEY AN OPERATOR DELETED AND IS NOW MAKING AGAIN. The new decision wins.
+    # A KEY AN OPERATOR DELETED AND IS NOW MAKING AGAIN. The new decision wins — including over
+    # the pack: deleting the bundled qa and making a qa by hand used to lift only 'role', so the
+    # next seed found a bundled key whose spec differed from the YAML and rewrote it with the
+    # pack's mission and grants. The spec written here is the operator's, so the seed leaves it.
     seed_exclusions.lift(connection, project_id, "role", key)
+    seed_exclusions.exclude(connection, project_id, "role_spec", key, actor=actor,
+                            reason="created in the console")
     _grant_skills(connection, project_id, key, skill_ids, actor)
     for server in servers:
         grant_mcp(connection, project_id, actor=actor, role_key=key,
