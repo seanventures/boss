@@ -25,7 +25,9 @@ class _Ctx:
 
 
 class _Engine:
-    pass
+    def begin(self):
+        from contextlib import nullcontext
+        return nullcontext(_Conn())
 
 
 class _Conn:
