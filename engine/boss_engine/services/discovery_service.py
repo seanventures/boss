@@ -436,6 +436,12 @@ def _attention(r, state: dict) -> Optional[dict]:
     job_text = (job_error.get("message") if isinstance(job_error, dict) else job_error) or ""
     if status == "completed":
         return None
+    if status == "cancelled":
+        # The task shepherd closes a run that no job can advance, keeping its last error: the
+        # reason it stopped is that error, not the cancellation.
+        said = explain(error, source_id=RESEARCH_SOURCE_ID)
+        return {**said, "state": "stopped",
+                "headline": "Stopped — nothing could advance it. " + said["headline"]}
     if status == "failed":
         if state.get("failed_by_job"):
             # The job, not the research, stopped it: explain the job's own error.
