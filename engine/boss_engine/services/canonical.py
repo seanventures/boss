@@ -350,7 +350,13 @@ class CanonicalObjectService:
             ),
             {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
-        return [self._serialize_temporal(row) for row in rows]
+        from .meeting_service import meeting_title
+
+        # The listed title is the display title (framing stripped); see meeting_title.
+        return [
+            {**self._serialize_temporal(row), "title": meeting_title(row["title"], row["purpose"])}
+            for row in rows
+        ]
 
     def create_meeting(
         self,

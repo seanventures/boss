@@ -37,6 +37,15 @@ from typing import Any, Optional
 
 from sqlalchemy import text as sql
 
+
+def _meeting_title(title, directive=None) -> str:
+    """meeting_service.meeting_title, imported on first use: that module pulls in the model
+    adapters, and this one is read on every console page."""
+    from .meeting_service import meeting_title
+
+    return meeting_title(title, directive)
+
+
 # Stage vocabulary, in order. Progress is derived from position, so the order is meaningful.
 STAGES = ("DISCOVERY", "BUILD", "REVIEW", "SHIPPED")
 STAGE_PCT = {"DISCOVERY": 22, "BUILD": 64, "REVIEW": 41, "SHIPPED": 100}
@@ -1396,7 +1405,11 @@ def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str,
         blocked = row.get("blocked_state") or None
         sessions.append({
             "id": row["id"],
-            "title": _clean_title(str(row.get("title") or "")) or str(row.get("title") or ""),
+            # The panel framing comes off first (meeting_title): _clean_title alone is the
+            # product-name cleaner and left the framing as the name of older framed rows. Then
+            # the product-name decorations ("— Re-build PRD"), as on every other v2 card.
+            "title": (lambda t: _clean_title(t) or t)(
+                _meeting_title(row.get("title"), row.get("purpose"))),
             "purpose": str(row.get("purpose") or "")[:300],
             "status": status,
             "deliberating": status in ("scheduled", "running", "in_progress"),
