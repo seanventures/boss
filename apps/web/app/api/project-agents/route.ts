@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { writeAwareFetch } from "../../../lib/api-write";
 import { API_URL, authHeaders } from "../../../lib/client";
 
 /**
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
 
 async function relay(url: string, init: RequestInit) {
   try {
-    const r = await fetch(url, { ...init, cache: "no-store" });
+    const r = await writeAwareFetch(url, { ...init, cache: "no-store" });
     const raw = await r.text();
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }

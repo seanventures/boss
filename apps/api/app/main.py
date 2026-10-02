@@ -643,6 +643,7 @@ from .schemas import (
     LlmCallSummaryGroup,
     LlmCallSummaryResponse,
 )
+from . import idempotency
 from . import request_bodies as open_bodies
 from .request_bodies import (
     AutoDeployBody,
@@ -1612,6 +1613,89 @@ def _authenticated_principal_is_human(connection, principal: str) -> bool:
         WHERE member_id = :principal AND status = 'active'
     """), {"principal": principal}).scalars().all()
     return bool(kinds) and all(kind == "human" for kind in kinds)
+
+
+def _idempotency_claim(**kwargs) -> idempotency.Claim:
+    with begin(engine) as connection:
+        return idempotency.claim(connection, **kwargs)
+
+
+def _idempotency_complete(**kwargs) -> None:
+    with begin(engine) as connection:
+        idempotency.complete(connection, **kwargs)
+
+
+def _idempotency_release(**kwargs) -> None:
+    with begin(engine) as connection:
+        idempotency.release(connection, **kwargs)
+
+
+# DEFINED BEFORE THE AUTH MIDDLEWARE ON PURPOSE. Starlette wraps each later `@app.middleware`
+# around the earlier ones, so this runs INSIDE `require_transport_auth_for_v1`: it sees the
+# principal that middleware authenticated, and a request refused for auth or held for MCP
+# confirmation never claims a key. See apps/api/app/idempotency.py for the rules and incidents.
+@app.middleware("http")
+async def one_effect_per_idempotency_key(request: Request, call_next):
+    raw_key = request.headers.get(idempotency.HEADER)
+    if raw_key is None:
+        return await call_next(request)  # no header: exactly the behaviour before this existed
+    route_path = _route_relative_path(request)
+    if idempotency.exclusion_reason(request.method, route_path):
+        return await call_next(request)
+    key = raw_key.strip()
+    if not idempotency.valid_key(key):
+        return JSONResponse(status_code=400, content={
+            "detail": "invalid_idempotency_key: 1-255 visible ASCII characters, no spaces"})
+    # With API auth off every caller is the same principal; keys are random per intent, so
+    # sharing one namespace there costs nothing.
+    principal = current_api_principal.get() or "anonymous"
+    # Read once here; Starlette replays the cached body to the handler.
+    body = await request.body()
+    fingerprint = idempotency.request_fingerprint(
+        request.method, route_path, request.url.query, body)
+    owner = {"principal": principal, "key": key}
+    claim = await run_in_threadpool(
+        _idempotency_claim, method=request.method, path=route_path,
+        fingerprint=fingerprint, **owner)
+    if claim.outcome == "replay":
+        return Response(content=claim.body, status_code=claim.status_code,
+                        media_type=claim.content_type,
+                        headers={idempotency.REPLAYED_HEADER: "true"})
+    if claim.outcome == "in_progress":
+        return JSONResponse(status_code=409, content={
+            "detail": "idempotency_key_in_progress: the first request with this key is still "
+                      "running; it was not started again"})
+    if claim.outcome == "mismatch":
+        return JSONResponse(status_code=422, content={
+            "detail": "idempotency_key_reused: this key already names a different request"})
+    try:
+        response = await call_next(request)
+    except BaseException:
+        # A handler that raised has decided nothing; the same press must be able to try again.
+        await run_in_threadpool(_idempotency_release, **owner)
+        raise
+    content_type = response.headers.get("content-type", "")
+    if (not idempotency.remembers(response.status_code)
+            or idempotency.is_streaming(content_type)):
+        await run_in_threadpool(_idempotency_release, **owner)
+        return response
+    chunks: list[bytes] = []
+    try:
+        async for chunk in response.body_iterator:
+            chunks.append(chunk if isinstance(chunk, bytes) else chunk.encode())
+    except BaseException:
+        await run_in_threadpool(_idempotency_release, **owner)
+        raise
+    payload = b"".join(chunks)
+    if len(payload) > idempotency.MAX_STORED_BODY_BYTES:
+        await run_in_threadpool(_idempotency_release, **owner)
+    else:
+        await run_in_threadpool(
+            _idempotency_complete, status_code=response.status_code, body=payload,
+            content_type=content_type or None, **owner)
+    replayable = Response(content=payload, status_code=response.status_code)
+    replayable.raw_headers = list(response.raw_headers)
+    return replayable
 
 
 @app.middleware("http")

@@ -27,6 +27,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { AgentChip } from "./agent-chip";
 import { notifyChanged, onChanged } from "./changed";
+import { apiWrite } from "../lib/api-write";
 
 type Assigned = { role_key: string; source: string; assigned_by?: string | null };
 
@@ -82,7 +83,7 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
     setBusy(label);
     setFailed("");
     try {
-      const r = await fetch("/api/project-agents", {
+      const r = await apiWrite("/api/project-agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: projectId, app: appName, actor, ...body }),

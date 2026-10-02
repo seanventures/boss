@@ -64,6 +64,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { SubmitButton } from "./submit-button";
+import { apiWrite } from "../lib/api-write";
 
 function RetryControls(
   { runId, failingGates = [], compact = false }:
@@ -1202,7 +1203,7 @@ function SetupDeployment({ run, projectId, actor, onDone }: {
  */
 async function appDeployOp(body: Record<string, unknown>): Promise<{ ok: boolean; data?: any; error?: string }> {
   try {
-    const r = await fetch("/api/app-deploy", {
+    const r = await apiWrite("/api/app-deploy", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1220,7 +1221,7 @@ async function appDeployOp(body: Record<string, unknown>): Promise<{ ok: boolean
 
 async function retireTarget(targetId: string, actor: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `/api/deployment-targets?target_id=${encodeURIComponent(targetId)}`
         + `&actor=${encodeURIComponent(actor)}`,
       { method: "DELETE", cache: "no-store" },

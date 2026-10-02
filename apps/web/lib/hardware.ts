@@ -3,6 +3,7 @@ import type {
   HardwarePlace,
   HardwarePlacesResponse,
 } from "@boss/api-client";
+import { apiWrite } from "./api-write";
 
 /** Copy for the installer machine. It is a place even when nothing else is registered. */
 export const DEFAULT_PLACE_TITLE = "This computer";
@@ -134,7 +135,7 @@ export async function registerLocalPlace(body: {
   arch: string;
   os: string;
 }): Promise<HardwarePlace> {
-  const res = await fetch("/api/hardware/places/local", {
+  const res = await apiWrite("/api/hardware/places/local", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -147,7 +148,7 @@ export async function enrollHardwareAgent(body: {
   actor: string;
   name: string;
 }): Promise<HardwareAgentEnrollResponse> {
-  const res = await fetch("/api/hardware/places/agents", {
+  const res = await apiWrite("/api/hardware/places/agents", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -162,7 +163,7 @@ export async function registerHardwareProvider(body: {
   provider: string;
   secret_ref: string;
 }): Promise<HardwarePlace> {
-  const res = await fetch("/api/hardware/places/providers", {
+  const res = await apiWrite("/api/hardware/places/providers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

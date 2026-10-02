@@ -13,6 +13,7 @@ import {
   outcomeMessage,
   type Binding,
 } from "../../lib/v2/deploy-controls";
+import { apiWrite } from "../../lib/api-write";
 
 /**
  * Set target, unbind, deploy, retry — the four controls the parity map flags as highest risk.
@@ -97,7 +98,7 @@ export function DeployControls({
     setNote(null);
     setPlan(null);
     try {
-      const res = await fetch("/api/app-deploy", {
+      const res = await apiWrite("/api/app-deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
@@ -131,7 +132,7 @@ export function DeployControls({
     setNote(null);
     setPlan(null);
     try {
-      const res = await fetch(
+      const res = await apiWrite(
         `/api/deployment-targets?target_id=${encodeURIComponent(targetId)}` +
           `&actor=${encodeURIComponent(actor)}`,
         { method: "DELETE" },

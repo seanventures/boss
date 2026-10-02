@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { HelpTip } from "./help-tip";
+import { apiWrite } from "../lib/api-write";
 
 /**
  * The knobs, and what each is worth RIGHT NOW.
@@ -59,7 +60,7 @@ export function SettingsKnobs(
     setBusy(key);
     setNote(null);
     try {
-      const r = await fetch(`/api/settings`, {
+      const r = await apiWrite(`/api/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, project_id: projectId, actor,
@@ -311,7 +312,7 @@ export function RoleTable({ projectId, actor }: { projectId: string; actor: stri
   const save = async (key: string, value: string) => {
     setBusy(key); setNote(null);
     try {
-      const r = await fetch(`/api/settings`, {
+      const r = await apiWrite(`/api/settings`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, project_id: projectId, actor,
                                value: value === "" ? null : value }),

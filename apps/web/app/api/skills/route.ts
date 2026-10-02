@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * The skills area's reads and writes.
@@ -84,7 +85,7 @@ export async function POST(req: Request) {
       + `&skill_id=${encodeURIComponent(skillId)}`
       + `&actor=${encodeURIComponent(actor)}`;
     try {
-      const r = await fetch(
+      const r = await apiWrite(
         `${API_URL}/v1/role-skills${action === "unassign" ? q : ""}`,
         {
           method: action === "assign" ? "POST" : "DELETE",
@@ -112,7 +113,7 @@ export async function POST(req: Request) {
       + `&actor=${encodeURIComponent(actor)}`
     : "/v1/skill-definitions";
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: remove ? "DELETE" : "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       ...(remove ? {} : { body: JSON.stringify(body) }),

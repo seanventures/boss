@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { API_KEY, API_URL } from "../lib/client";
+import { apiWrite } from "../lib/api-write";
 
 async function post(path: string, body: Record<string, unknown>): Promise<void> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await apiWrite(`${API_URL}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

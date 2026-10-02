@@ -7,6 +7,7 @@ import type { SkillFeedItem } from "../lib/skills";
 import { AgentCreationWizard } from "./agent-creation-wizard";
 import { AgentDetail } from "./agent-detail-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
+import { apiWrite } from "../lib/api-write";
 
 /**
  * Workforce and Org Chart, in v1's own styling.
@@ -373,7 +374,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
   const installTemplate = useCallback(async (templateId: string) => {
     setInstalling(templateId); setTemplateError(null);
     try {
-      const response = await fetch(
+      const response = await apiWrite(
         `/v1/agent-studio/templates/${encodeURIComponent(templateId)}/install`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ project_id: projectId, actor }),
@@ -404,7 +405,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
   const place = useCallback(async (agentId: string, reportsTo: string | null) => {
     setBusy(true); setNote(null); setInstalledTemplate(null);
     try {
-      const r = await fetch(`/api/org`, {
+      const r = await apiWrite(`/api/org`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent_id: agentId, project_id: projectId, actor,
@@ -424,7 +425,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
       const url = `/api/org?project_id=${encodeURIComponent(projectId)}`
         + `&agent_id=${encodeURIComponent(agentId)}`
         + `&actor=${encodeURIComponent(actor)}`;
-      const r = await fetch(url, { method: "DELETE" });
+      const r = await apiWrite(url, { method: "DELETE" });
       if (!r.ok) setNote("Could not reset it.");
       else await reload();
     } finally { setBusy(false); }

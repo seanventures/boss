@@ -1,4 +1,5 @@
 import { API_URL, PROJECT_ID, resolveProjectId, authHeaders } from "./client";
+import { apiWrite } from "./api-write";
 
 /** Token efficiency client — scorecard, policies, consumption, recommendations. */
 
@@ -306,7 +307,7 @@ export async function fetchTokenRecommendations(
   // Not rendered this request. Same shape the unreachable path returns, no round trip.
   if (!active) return unfetchedTokenRecommendations(resolved, profileName);
   try {
-    const r = await fetch(`${API_URL}/v1/token-efficiency/recommendations`, {
+    const r = await apiWrite(`${API_URL}/v1/token-efficiency/recommendations`, {
       method: "POST",
       cache: "no-store",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
@@ -367,7 +368,7 @@ export async function estimatePromptTokens(
   maxContextTokens?: number,
 ): Promise<TokenEstimate> {
   try {
-    const r = await fetch(`${API_URL}/v1/token-efficiency/estimate`, {
+    const r = await apiWrite(`${API_URL}/v1/token-efficiency/estimate`, {
       method: "POST",
       cache: "no-store",
       headers: { ...authHeaders(), "Content-Type": "application/json" },

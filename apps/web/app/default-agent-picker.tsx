@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { AgentChip } from "./agent-chip";
 import { notifyChanged } from "./changed";
+import { apiWrite } from "../lib/api-write";
 
 const PROJECT_DEFAULT = "*";
 
@@ -55,7 +56,7 @@ export function DefaultAgentPicker({ projectId, actor }: {
   const act = useCallback(async (body: Record<string, unknown>) => {
     setBusy(true);
     try {
-      const r = await fetch("/api/project-agents", {
+      const r = await apiWrite("/api/project-agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: projectId, app: PROJECT_DEFAULT, actor, ...body }),

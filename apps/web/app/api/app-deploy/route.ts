@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * The app card's deployment actions, off the Server-Action path.
@@ -79,7 +80,7 @@ export async function POST(req: Request) {
   }
   const { path, body: payload } = build(body);
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(payload),

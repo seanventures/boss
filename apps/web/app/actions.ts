@@ -7,12 +7,13 @@ import { orgFromReferer, workflowHref } from "./actions-href";
 import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
+import { apiWrite } from "../lib/api-write";
 
 export async function setPipelineDefaultAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return;
-  await fetch(`${API_URL}/v1/pipeline-profiles/default`, {
+  await apiWrite(`${API_URL}/v1/pipeline-profiles/default`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, name, actor: getActor(formData) }),
@@ -22,7 +23,7 @@ export async function setPipelineDefaultAction(formData: FormData): Promise<void
 
 export async function runCanariesAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
-  await fetch(`${API_URL}/v1/canaries/run`, {
+  await apiWrite(`${API_URL}/v1/canaries/run`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
@@ -32,7 +33,7 @@ export async function runCanariesAction(formData: FormData): Promise<void> {
 
 export async function scanAnomaliesAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
-  await fetch(`${API_URL}/v1/anomalies/scan`, {
+  await apiWrite(`${API_URL}/v1/anomalies/scan`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, auto_lite: true }),
@@ -43,7 +44,7 @@ export async function scanAnomaliesAction(formData: FormData): Promise<void> {
 // ---- Phase 2: self-improvement runtime, evals, autonomy, router, skills ----
 
 async function postJson(path: string, body: Record<string, unknown>): Promise<void> {
-  await fetch(`${API_URL}${path}`, {
+  await apiWrite(`${API_URL}${path}`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
@@ -90,7 +91,7 @@ export type ActionResult = { ok: boolean; data?: Record<string, unknown>; error?
 
 async function postJsonReturn(path: string, body: Record<string, unknown>): Promise<ActionResult> {
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
@@ -439,7 +440,7 @@ export async function dispatchPlanAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const planId = String(formData.get("plan_id") ?? "").trim();
   if (!planId) return;
-  await fetch(`${API_URL}/v1/plans/${encodeURIComponent(planId)}/dispatch`, {
+  await apiWrite(`${API_URL}/v1/plans/${encodeURIComponent(planId)}/dispatch`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
@@ -450,7 +451,7 @@ export async function dispatchPlanAction(formData: FormData): Promise<void> {
 export async function setBudgetIntensityAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const intensity = Number(formData.get("intensity") ?? 50);
-  await fetch(`${API_URL}/v1/budget/set_intensity`, {
+  await apiWrite(`${API_URL}/v1/budget/set_intensity`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
@@ -472,7 +473,7 @@ export async function createPipelineProfileAction(formData: FormData): Promise<v
     model.review_code = "strong";
     model.security_check = "strong";
   }
-  await fetch(`${API_URL}/v1/pipeline-profiles`, {
+  await apiWrite(`${API_URL}/v1/pipeline-profiles`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -717,7 +718,7 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
   const m = text.match(/\b(?:operational\s+)?intensity\b[^0-9]*(\d{1,3})/i);
   if (m) {
     const intensity = Math.max(0, Math.min(100, Number(m[1])));
-    await fetch(`${API_URL}/v1/budget/set_intensity`, {
+    await apiWrite(`${API_URL}/v1/budget/set_intensity`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
@@ -1805,7 +1806,7 @@ export async function easyConnectProviderAction(
   if (baseUrl) {
     body.base_url = baseUrl;
   }
-  const response = await fetch(`${API_URL}/v1/providers/easy-connect`, {
+  const response = await apiWrite(`${API_URL}/v1/providers/easy-connect`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
@@ -2257,7 +2258,7 @@ export async function createImprovementProgramAction(
     throw new Error("baseline_evaluation_id is required");
   }
 
-  const response = await fetch(`${API_URL}/v1/improvement-programs`, {
+  const response = await apiWrite(`${API_URL}/v1/improvement-programs`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -2341,7 +2342,7 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
     return;
   }
   if (meetingType === "standup") {
-    await fetch(`${API_URL}/v1/meetings/standup`, {
+    await apiWrite(`${API_URL}/v1/meetings/standup`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
@@ -2375,7 +2376,7 @@ export async function runSimulatedMeetingAction(formData: FormData): Promise<voi
   const path = meetingId
     ? `/v1/meetings/${encodeURIComponent(meetingId)}/simulated-run`
     : "/v1/meetings/simulated-run";
-  await fetch(`${API_URL}${path}`, {
+  await apiWrite(`${API_URL}${path}`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -2431,7 +2432,7 @@ export async function loadMeetingEvidenceAction(
 
 export async function seedAssuranceDemoAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
-  await fetch(`${API_URL}/v1/assurance/seed-demo`, {
+  await apiWrite(`${API_URL}/v1/assurance/seed-demo`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -2689,7 +2690,7 @@ function failureText(detail: unknown, status: number): string {
 
 async function post(path: string, body: unknown): Promise<any> {
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -2747,7 +2748,7 @@ export async function purgeTargetAction(targetId: string, confirm: string): Prom
 export async function updateTargetAction(targetId: string,
                                          patch: Record<string, unknown>): Promise<any> {
   try {
-    const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
+    const res = await apiWrite(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
       method: "PATCH",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ ...patch, actor: CONSOLE_ACTOR }),
@@ -2763,7 +2764,7 @@ export async function updateTargetAction(targetId: string,
 
 export async function reactivateTargetAction(targetId: string): Promise<any> {
   try {
-    const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
+    const res = await apiWrite(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
       method: "PATCH",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ status: "active", actor: CONSOLE_ACTOR }),
@@ -2884,7 +2885,7 @@ export async function getDeploymentHealthAction(projectId?: string): Promise<any
 /** Retry THIS deployment run (same row) — for one that failed or was blocked. */
 export async function executeDeploymentAction(deploymentRunId: string): Promise<any> {
   try {
-    const res = await fetch(
+    const res = await apiWrite(
       `${API_URL}/v1/delivery/deployments/${encodeURIComponent(deploymentRunId)}/execute`,
       {
         method: "POST",
@@ -2905,7 +2906,7 @@ export async function executeDeploymentAction(deploymentRunId: string): Promise<
 /** Ship the same target again as a NEW run, preserving the previous run's history. */
 export async function redeployAction(deploymentRunId: string): Promise<any> {
   try {
-    const res = await fetch(
+    const res = await apiWrite(
       `${API_URL}/v1/delivery/deployments/${encodeURIComponent(deploymentRunId)}/redeploy`,
       {
         method: "POST",
@@ -2939,7 +2940,7 @@ export async function getShepherdOverviewAction(projectId?: string): Promise<any
 export async function shepherdSweepAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;
   try {
-    const res = await fetch(`${API_URL}/v1/shepherd/sweep`, {
+    const res = await apiWrite(`${API_URL}/v1/shepherd/sweep`, {
       method: "POST",
       headers: { ...authHeaders(), "content-type": "application/json" },
       body: JSON.stringify({ project_id: pid, limit: 20 }),
@@ -2953,7 +2954,7 @@ export async function shepherdSweepAction(projectId?: string): Promise<any> {
 
 export async function shepherdAnswerAction(escalationId: string, answer: string): Promise<any> {
   try {
-    const res = await fetch(
+    const res = await apiWrite(
       `${API_URL}/v1/shepherd/escalations/${encodeURIComponent(escalationId)}/answer`,
       {
         method: "POST",
@@ -3603,7 +3604,7 @@ export async function createPreviewFixtureAction(
 ): Promise<{ id?: string; error?: string; open_url?: string }> {
   const projectId = getProjectId(formData);
   try {
-    const res = await fetch(`${API_URL}/v1/previews/fixture`, {
+    const res = await apiWrite(`${API_URL}/v1/previews/fixture`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({

@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { RoleTable } from "./settings-knobs-ui";
 import { HelpTip } from "./help-tip";
+import { apiWrite } from "../lib/api-write";
 
 type Step = { id: string; title: string; done: boolean; detail: string;
               from_environment?: boolean; repository?: string | null };
@@ -91,7 +92,7 @@ type Decision = { error?: string; message?: string; backend?: string };
 async function call<T>(body: Record<string, unknown>): Promise<
   { ok: boolean; data?: T; error?: string; decision?: Decision }> {
   try {
-    const r = await fetch("/api/setup", {
+    const r = await apiWrite("/api/setup", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });

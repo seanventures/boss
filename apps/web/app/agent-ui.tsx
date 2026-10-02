@@ -11,6 +11,7 @@ import {
   runAgentActionAction,
 } from "./actions";
 import { LedgerStrip } from "./memory-ui";
+import { apiWrite } from "../lib/api-write";
 
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
@@ -711,7 +712,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       let live = threadId;
       if (!live) {
         try {
-          const r = await fetch("/api/agent-thread", {
+          const r = await apiWrite("/api/agent-thread", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ project_id: projectId, actor }),
@@ -898,7 +899,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     if (!threadId || clearing) return;
     setClearing(true);
     try {
-      const r = await fetch("/api/agent", {
+      const r = await apiWrite("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "clear", project_id: projectId, actor,

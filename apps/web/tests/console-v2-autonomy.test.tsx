@@ -102,7 +102,8 @@ describe("attribution", () => {
     // A Server Action re-renders the whole route to reply — the defect that made "Set target"
     // appear to hang for 115 seconds.
     const src = source();
-    expect(src).toContain('fetch("/api/autonomy"');
+    // Through the shared write helper (lib/api-write.ts), still to the route handler.
+    expect(src).toContain('apiWrite("/api/autonomy"');
     expect(src).not.toMatch(/useActionState|from "\.\.\/\.\.\/app\/actions"/);
   });
 });

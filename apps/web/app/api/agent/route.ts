@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Everything the chat dock READS, off the Server Action path.
@@ -156,7 +157,7 @@ export async function POST(req: Request) {
   // ONE THREAD ID. Bounded to this agent's chat by construction — there is no wildcard here
   // to get wrong, and no way to express "every conversation".
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/agent/threads/${encodeURIComponent(thread)}/clear`
       + `?project_id=${encodeURIComponent(project)}&actor=${encodeURIComponent(actor)}`,
       { method: "POST", headers: authHeaders({}), cache: "no-store" },

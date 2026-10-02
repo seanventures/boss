@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Retire a deployment target — the "unbind" the console never had.
@@ -58,7 +59,7 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "actor is required" }, { status: 422 });
   }
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`
         + `?actor=${encodeURIComponent(actor)}`,
       { method: "DELETE", headers: authHeaders({}), cache: "no-store" },

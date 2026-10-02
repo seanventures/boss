@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Talk to an agent, from the v2 chat drawer.
@@ -34,7 +35,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const r = await fetch(`${API_URL}/v1/engine/agent/chat`, {
+    const r = await apiWrite(`${API_URL}/v1/engine/agent/chat`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({

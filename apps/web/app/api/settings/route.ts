@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /** Route handler rather than a server action: the console takes seconds to re-render, and a
  *  knob that appears to hang while the value has already been written reads as broken. */
@@ -26,7 +27,7 @@ export async function PUT(req: Request) {
   const key = String(body.key ?? "").trim();
   if (!key) return NextResponse.json({ error: "key is required" }, { status: 400 });
   try {
-    const r = await fetch(`${API_URL}/v1/settings/${encodeURIComponent(key)}`, {
+    const r = await apiWrite(`${API_URL}/v1/settings/${encodeURIComponent(key)}`, {
       method: "PUT",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),

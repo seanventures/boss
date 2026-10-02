@@ -7,6 +7,7 @@ import {
   describeMetatronCaptainUnavailable,
   isCaptainUnavailableStatus,
 } from "../lib/metatron-captain";
+import { apiWrite } from "../lib/api-write";
 
 export type MetatronCaptainActionResult = {
   ok: boolean;
@@ -72,7 +73,7 @@ async function captainPost(
   revalidate = true,
 ): Promise<MetatronCaptainActionResult> {
   try {
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),

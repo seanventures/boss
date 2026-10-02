@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Start a Discovery run without re-rendering the console.
@@ -26,7 +27,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "project_id and seed are required" }, { status: 400 });
   }
   try {
-    const r = await fetch(`${API_URL}/v1/discoveries`, {
+    const r = await apiWrite(`${API_URL}/v1/discoveries`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ project_id: projectId, seed, title: body.title, context: body.context }),

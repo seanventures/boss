@@ -4,6 +4,7 @@
  * Never handles raw secrets — only secret_ref names.
  */
 
+import { writeAwareFetch } from "./api-write";
 import { API_URL, PROJECT_ID, authHeaders, resolveProjectId } from "./client";
 
 export type IdpCatalogItem = {
@@ -118,7 +119,7 @@ export type IdpProjectStatusResponse = {
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_URL}${path}`;
-  const response = await fetch(url, {
+  const response = await writeAwareFetch(url, {
     ...init,
     headers: {
       Accept: "application/json",

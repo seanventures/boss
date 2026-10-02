@@ -48,7 +48,7 @@ describe("agent chat", () => {
   });
 
   it("goes through a route handler", () => {
-    expect(src("AgentChat")).toContain('fetch("/api/agent-chat"');
+    expect(src("AgentChat")).toContain('apiWrite("/api/agent-chat"');
   });
 
   it("shows what the agent is doing, so a question can be about the real work", () => {
@@ -72,7 +72,7 @@ describe("agent chat", () => {
     // What they typed must never be the thing that goes missing while they wait.
     const s = src("AgentChat");
     const appended = s.indexOf('role: "you"');
-    const requested = s.indexOf('fetch("/api/agent-chat"');
+    const requested = s.indexOf('apiWrite("/api/agent-chat"');
     expect(appended).toBeGreaterThan(-1);
     expect(appended).toBeLessThan(requested);
   });

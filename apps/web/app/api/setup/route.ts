@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * The setup wizard's reads and writes, off the Server Action path.
@@ -72,7 +73,7 @@ export async function POST(req: Request) {
                + "'coding-agent-credential' or 'decision-key'" }, { status: 400 });
   }
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body.payload ?? {}),

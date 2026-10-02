@@ -1,4 +1,5 @@
 import { API_URL, PROJECT_ID, authHeaders, resolveProjectId } from "./client";
+import { apiWrite } from "./api-write";
 
 export type KgNode = {
   id: string;
@@ -86,7 +87,7 @@ async function getJson<T>(path: string): Promise<T | null> {
 
 async function postJson<T>(path: string, body: unknown): Promise<T | null> {
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),

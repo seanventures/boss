@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * The end-of-run report: what each step cost, who did it, and what went wrong.
@@ -39,7 +40,7 @@ export async function POST(req: Request) {
   const { runId, projectId } = ids(req);
   if (!runId) return NextResponse.json({ ok: false, error: "missing run_id" }, { status: 400 });
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/workflow-runs/${encodeURIComponent(runId)}/report`
         + `?project_id=${encodeURIComponent(projectId)}`,
       { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),

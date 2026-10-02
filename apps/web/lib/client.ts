@@ -1,5 +1,6 @@
 import { createBossApiClient } from "@boss/api-client";
 
+import { writeAwareFetch } from "./api-write";
 import { installFeedCache } from "./feed-cache";
 
 /**
@@ -75,4 +76,9 @@ export function authHeaders(extra?: Record<string, string>): Record<string, stri
 // is and is not cached, and why the window is deliberately tiny.
 installFeedCache(API_URL);
 
-export const client = createBossApiClient({ baseUrl: API_URL, apiKey: API_KEY });
+// Every typed write goes through lib/api-write.ts, so a server action's calls carry the
+// Idempotency-Key derived from the press that started it. Reads pass straight to fetch (and so
+// through the feed cache above).
+export const client = createBossApiClient({
+  baseUrl: API_URL, apiKey: API_KEY, fetchImpl: writeAwareFetch,
+});
