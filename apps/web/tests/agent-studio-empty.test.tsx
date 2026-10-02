@@ -56,7 +56,7 @@ function emptyLibrary(overrides: Partial<AgentStudioFeed> = {}): AgentStudioFeed
 
 function html(feed: AgentStudioFeed): string {
   return renderToStaticMarkup(
-    <AgentStudio feed={feed} roles={[]} skills={[]} />,
+    <AgentStudio feed={feed} roles={[]} skills={[]} actor="ceo" />,
   );
 }
 

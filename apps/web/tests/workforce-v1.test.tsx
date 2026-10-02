@@ -21,7 +21,7 @@ const wf = (over: Partial<Workforce> = {}): Workforce => ({
   agents: [agent()], handoffs: [], ...over,
 } as Workforce);
 
-const html = (w: Workforce) => renderToStaticMarkup(<WorkforceArea workforce={w} />);
+const html = (w: Workforce) => renderToStaticMarkup(<WorkforceArea workforce={w} actor="ceo" />);
 
 describe("v1 Workforce", () => {
   it("explains a genuinely empty work feed and points to definitions", () => {

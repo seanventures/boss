@@ -27,6 +27,8 @@ const ROSTER = codeOnly("app/workforce-ui.tsx");
 describe("making a new agent", () => {
   it("the roster has a way to add one", () => {
     expect(ROSTER).toContain('data-testid="wf-new-agent"');
+    // The one-screen create is what the button opens; the full Studio wizard is one press on.
+    expect(ROSTER).toContain("<AgentQuickCreate");
     expect(ROSTER).toContain("<AgentCreationWizard");
   });
 
@@ -37,30 +39,33 @@ describe("making a new agent", () => {
     expect(WIZARD).toContain("draft.roleKey === NEW_ROLE");
   });
 
-  it("and the submission carries that role", () => {
+  // REWRITTEN. These asserted the wizard POSTed /v1/roles with the chosen skills in
+  // `spec.allowed_skills` and `autonomy_level: 0` before the Studio definition. That was the
+  // defect: allowed_skills is prose the runtime never reads, so the agent held nothing; and
+  // /v1/roles took its UPDATE path on an existing key, so naming a new agent "QA" overwrote the
+  // bundled qa role. The agent is now created through POST /v1/agents, which grants its skills
+  // and MCP servers in the same transaction and refuses an existing key (autonomy 0 is set
+  // server-side: apps/api/tests/test_one_agent_model.py).
+  it("and the submission carries that agent, with its grants", () => {
     expect(LIB).toContain("const makingRole = draft.roleKey === NEW_ROLE;");
     expect(LIB).toContain("role_key: newRoleKey");
-    // The version must point at the role being made, not at whatever was selected before.
-    expect(LIB).toContain("role_key: makingRole ? newRoleKey : draft.roleKey");
+    expect(LIB).toContain("const roleKey = makingRole ? newRoleKey : draft.roleKey;");
+    expect(LIB).toContain("skills,");
+    expect(LIB).toContain("mcp_servers: mcpServers,");
   });
 
-  it("the role is registered BEFORE the definition", () => {
-    // An agent whose role does not exist is one the roster cannot list and the assignment model
-    // cannot assign. Order matters: the version references the role_key.
-    const role = ACTIONS.indexOf('post("/v1/roles"');
+  it("the agent is created, with its grants, BEFORE the Studio profile", () => {
+    const agent = ACTIONS.indexOf('post("/v1/agents"');
     const definition = ACTIONS.indexOf('post("/v1/agent-studio/agents"');
-    expect(role).toBeGreaterThan(-1);
-    expect(role).toBeLessThan(definition);
+    expect(agent).toBeGreaterThan(-1);
+    expect(agent).toBeLessThan(definition);
+    // An existing agent is GIVEN what the profile uses, through the same agent resource.
+    expect(ACTIONS).toContain("patch(");
+    expect(ACTIONS).not.toContain('post("/v1/roles"');
   });
 
-  it("and a failed registration stops there rather than half-creating", () => {
-    expect(ACTIONS).toContain("The agent's role could not be registered");
-  });
-
-  it("a hand-made agent starts at autonomy zero", () => {
-    // It has done nothing yet. An autonomy level it did not earn is the one number on this page
-    // that must not be self-awarded.
-    expect(LIB).toContain("autonomy_level: 0");
+  it("and a failed creation stops there rather than half-creating", () => {
+    expect(ACTIONS).toContain("The agent could not be created");
   });
 
   it("and the roster keeps its own class namespace", () => {

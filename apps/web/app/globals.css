@@ -5675,6 +5675,22 @@ select.input:focus {
 .aw-skill-list b { overflow: hidden; font-size: 0.63rem; text-overflow: ellipsis; white-space: nowrap; text-transform: capitalize; }
 .aw-skill-list small { overflow: hidden; color: var(--muted); font-size: 0.52rem; text-overflow: ellipsis; white-space: nowrap; }
 .aw-skill-list em { color: var(--muted); font-family: var(--mono); font-size: 0.5rem; font-style: normal; }
+
+/* Quick create (agent-quick-create.tsx) and the agent page's edit/MCP/delete blocks. The
+   wizard's checkbox rows carry an icon column; these lists have none, so the grid drops it. */
+.aq-dialog { grid-template-rows: auto minmax(0, 1fr) auto; width: min(760px, 100%); }
+.aq-form { display: grid; gap: 14px; padding: 22px 26px 28px; }
+.aq-list label { grid-template-columns: 18px minmax(0, 1fr); }
+.aq-list b { text-transform: none; }
+.aq-list small { white-space: normal; }
+.aq-group { margin: 0; padding: 0; border: 0; display: grid; gap: 6px; }
+.aq-group legend { font-size: 0.68rem; font-weight: 600; margin-bottom: 4px; }
+.aq-filter, .aq-tools { width: 100%; margin-top: 4px; font-size: 0.6rem; }
+.aq-bad { color: var(--danger, #ff8a8a); font-size: 0.66rem; margin: 0; }
+.ad-edit { display: grid; gap: 10px; max-width: 720px; }
+.ad-edit label { display: grid; gap: 4px; font-size: 0.66rem; }
+.ad-edit-actions, .ad-danger-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ad-danger { border-color: rgba(255, 138, 138, 0.35); }
 .aw-empty-line { margin: 0; padding: 22px 8px; color: var(--muted); font-size: 0.65rem; }
 .aw-limit-grid {
   display: grid;

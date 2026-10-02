@@ -29,7 +29,9 @@ import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { formatDate } from "../lib/datetime";
-import { apiWrite } from "../lib/api-write";
+import {
+  deleteAgent, grantMcp, grantSkill, parseToolList, revokeMcp, revokeSkill, updateAgent,
+} from "../lib/agents";
 
 type App = {
   app: string; raw_title?: string; calls: number; tokens: number; spend_usd: number;
@@ -49,6 +51,20 @@ type Skill = {
   missing?: boolean; assigned_by?: string; assigned_at?: string | null;
 };
 type SkillPanel = { role_key: string; holds: Skill[]; available: Skill[] };
+/** One MCP server held (with its tool allowlist), or available to be given. */
+type McpHeld = {
+  mcp_server_id: string; server: string; tools: string[]; enabled: boolean;
+  url?: string | null; risk_tier?: number | null; description?: string | null;
+};
+type McpAvailable = {
+  mcp_server_id: string; server: string; url: string; enabled: boolean;
+  risk_tier: number; description?: string | null;
+};
+type McpPanel = { role_key: string; holds: McpHeld[]; available: McpAvailable[] };
+type NamedOn = {
+  workflow_key: string; workflow: string; version: number; step_id: string; step: string;
+  how: string; because: string;
+};
 type Detail = {
   role_key: string; name: string; registered: boolean;
   autonomy_level: number | null; trust_score: number | null; successful_runs: number | null;
@@ -56,13 +72,21 @@ type Detail = {
   spec: Spec; owns_stages: string[]; apps: App[]; panels: Panel[];
   assigned_to: Array<{ app_name: string; source: string }>;
   skills?: SkillPanel;
+  mcp?: McpPanel;
+  named_on_steps?: NamedOn[];
+  studio_profiles?: Array<{ id: string; agent_key: string; name: string; status: string }>;
   window_hours: number;
 };
 
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`);
 
-export function AgentDetail({ projectId, roleKey, onClose }: {
-  projectId: string; roleKey: string; onClose: () => void;
+export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted }: {
+  projectId: string; roleKey: string;
+  /** The signed-in actor every change on this page is made as — never a literal. */
+  actor: string;
+  onClose: () => void;
+  /** Told when the agent is deleted, so the roster can drop it before its next refresh. */
+  onDeleted?: (roleKey: string) => void;
 }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [failed, setFailed] = useState("");
@@ -241,8 +265,19 @@ export function AgentDetail({ projectId, roleKey, onClose }: {
                 operator could look at a fully specced agent and conclude BOSS had given it
                 nothing. Above the history deliberately: the first question about an agent is
                 what it is able to do, not what it has already done. */}
-            <AgentSkills projectId={projectId} roleKey={detail.role_key}
+            <AgentSkills projectId={projectId} roleKey={detail.role_key} actor={actor}
                          panel={detail.skills} spec={spec} onChanged={load} />
+
+            {/* AND THE MCP SERVERS IT HOLDS — the grant that did not exist. A workflow step this
+                agent works is offered exactly these servers' tools. */}
+            {detail.registered ? (
+              <AgentMcp projectId={projectId} roleKey={detail.role_key} actor={actor}
+                        panel={detail.mcp} onChanged={load} />
+            ) : null}
+
+            {detail.registered ? (
+              <AgentEdit projectId={projectId} actor={actor} detail={detail} onChanged={load} />
+            ) : null}
 
             {/* THE CAPABILITY MODEL, on screen for the first time. */}
             <section className="ct-block">
@@ -294,6 +329,11 @@ export function AgentDetail({ projectId, roleKey, onClose }: {
                 </>
               ) : null}
             </section>
+
+            {detail.registered ? (
+              <AgentDelete projectId={projectId} actor={actor} detail={detail}
+                           onDeleted={() => { onDeleted?.(detail.role_key); onClose(); }} />
+            ) : null}
           </>
         ) : null}
       </div>
@@ -317,8 +357,9 @@ export function AgentDetail({ projectId, roleKey, onClose }: {
  * to call anything. A page that showed only the first is why an agent with eleven allowed skills
  * and an empty `role_skills` row looked capable and could do nothing.
  */
-export function AgentSkills({ projectId, roleKey, panel, spec, onChanged }: {
-  projectId: string; roleKey: string; panel?: SkillPanel; spec: Spec; onChanged: () => void;
+export function AgentSkills({ projectId, roleKey, actor, panel, spec, onChanged }: {
+  projectId: string; roleKey: string; actor: string; panel?: SkillPanel; spec: Spec;
+  onChanged: () => void;
 }) {
   const [busy, setBusy] = useState("");
   const [failed, setFailed] = useState("");
@@ -328,25 +369,18 @@ export function AgentSkills({ projectId, roleKey, panel, spec, onChanged }: {
   const holds = panel?.holds ?? [];
   const available = panel?.available ?? [];
 
+  // AS THE SIGNED-IN ACTOR. This posted the literal 'executive_console', so the audit event
+  // for every grant named the console rather than the person who pressed the button.
   const write = useCallback(async (action: "assign" | "unassign", skillId: string) => {
     setBusy(skillId);
     setFailed("");
-    try {
-      const r = await apiWrite("/api/skills", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, project_id: projectId, role_key: roleKey,
-                               skill_id: skillId, actor: "executive_console" }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) { setFailed(String(body?.error ?? `HTTP ${r.status}`)); return; }
-      onChanged();
-    } catch (e) {
-      setFailed(String((e as Error)?.message ?? e));
-    } finally {
-      setBusy("");
-    }
-  }, [projectId, roleKey, onChanged]);
+    const r = action === "assign"
+      ? await grantSkill(projectId, actor, roleKey, skillId)
+      : await revokeSkill(projectId, actor, roleKey, skillId);
+    setBusy("");
+    if (!r.ok) { setFailed(r.error); return; }
+    onChanged();
+  }, [projectId, roleKey, actor, onChanged]);
 
   // GROUPED THE WAY THE DECISION IS MADE. A skill the agent's own spec already names is the
   // uncontroversial one; anything else works too — the grant itself is the permission — but
@@ -394,7 +428,8 @@ export function AgentSkills({ projectId, roleKey, panel, spec, onChanged }: {
         </ul>
       ) : (
         <p className="detail" data-testid="agent-skills-empty">
-          This agent holds no skills, so every step that names it will be refused at the gate.
+          This agent holds no skills. Unless it holds an MCP server, every step that names it
+          will be refused at the gate.
           {named.size
             ? " Its spec says it may use " + [...named].slice(0, 6).join(", ")
               + " — give it those below."
@@ -449,6 +484,282 @@ export function AgentSkills({ projectId, roleKey, panel, spec, onChanged }: {
           Its spec forbids {[...forbidden].join(", ")}. Those are left out of the list above.
         </p>
       ) : null}
+    </section>
+  );
+}
+
+
+/**
+ * The MCP servers one agent holds, and the ones it could be given.
+ *
+ * THE GRANT THAT DID NOT EXIST. There was no way to give an agent an MCP server: the Studio
+ * wizard's "integrations" was free text nothing read, and a bounded agent step was offered no MCP
+ * tool at all. A server given here (all its tools, or only those named) is what a workflow step
+ * this agent works is offered; the server's own risk tier still decides when a call waits for a
+ * person.
+ */
+export function AgentMcp({ projectId, roleKey, actor, panel, onChanged }: {
+  projectId: string; roleKey: string; actor: string; panel?: McpPanel; onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState("");
+  const [failed, setFailed] = useState("");
+  const [pick, setPick] = useState("");
+  const [tools, setTools] = useState("");
+  const [open, setOpen] = useState(false);
+  const holds = panel?.holds ?? [];
+  const available = panel?.available ?? [];
+
+  const give = useCallback(async () => {
+    if (!pick) return;
+    setBusy(pick);
+    setFailed("");
+    const r = await grantMcp(projectId, actor, roleKey, pick, parseToolList(tools));
+    setBusy("");
+    if (!r.ok) { setFailed(r.error); return; }
+    setPick(""); setTools(""); setOpen(false);
+    onChanged();
+  }, [pick, tools, projectId, actor, roleKey, onChanged]);
+
+  const take = useCallback(async (serverId: string) => {
+    setBusy(serverId);
+    setFailed("");
+    const r = await revokeMcp(projectId, actor, roleKey, serverId);
+    setBusy("");
+    if (!r.ok) { setFailed(r.error); return; }
+    onChanged();
+  }, [projectId, actor, roleKey, onChanged]);
+
+  return (
+    <section className="ct-block" data-testid="agent-mcp">
+      <div className="ct-block-title">
+        MCP servers it can use
+        <span className="detail"> · {holds.length
+          ? `${holds.length} server${holds.length === 1 ? "" : "s"} held` : "none yet"}</span>
+      </div>
+      {holds.length ? (
+        <ul className="ad-list" data-testid="agent-mcp-held">
+          {holds.map((m) => (
+            <li key={m.mcp_server_id} data-server={m.mcp_server_id}>
+              <code>{m.server}</code>
+              <span className="detail"> · {m.tools.length ? `only ${m.tools.join(", ")}` : "every tool it offers"}</span>
+              {!m.enabled ? (
+                <span className="ad-bad"> · disabled in this project, so it is not offered until
+                  enabled on the Skills and MCP page</span>
+              ) : null}
+              {m.risk_tier != null && m.risk_tier >= 2 ? (
+                <span className="detail"> · its calls wait for approval (tier {m.risk_tier})</span>
+              ) : null}
+              <button type="button" className="linklike" disabled={busy === m.mcp_server_id}
+                      data-testid={`agent-mcp-drop-${m.mcp_server_id}`}
+                      onClick={() => void take(m.mcp_server_id)}>
+                {busy === m.mcp_server_id ? "…" : "remove"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="detail" data-testid="agent-mcp-empty">
+          It holds no MCP server, so a workflow step it works is offered no MCP tool.
+        </p>
+      )}
+      {failed ? <p className="ad-bad" data-testid="agent-mcp-failed">{failed}</p> : null}
+      {open ? (
+        <div className="skill-assign-pick">
+          <select value={pick} data-testid="agent-mcp-select"
+                  onChange={(e) => setPick(e.target.value)}>
+            <option value="">Choose an MCP server…</option>
+            {available.map((m) => (
+              <option key={m.mcp_server_id} value={m.mcp_server_id}>
+                {m.server}{m.enabled ? "" : " (disabled)"}
+              </option>
+            ))}
+          </select>
+          <input placeholder="Only these tools (comma-separated) — empty for all" value={tools}
+                 data-testid="agent-mcp-tools" onChange={(e) => setTools(e.target.value)} />
+          <button type="button" className="cap-btn" disabled={!pick || busy !== ""}
+                  data-testid="agent-mcp-confirm" onClick={() => void give()}>
+            Give it this server
+          </button>
+          <button type="button" className="linklike"
+                  onClick={() => { setOpen(false); setPick(""); setTools(""); }}>Cancel</button>
+        </div>
+      ) : (
+        <div className="skill-assign-actions">
+          {available.length ? (
+            <button type="button" className="linklike" data-testid="agent-mcp-open"
+                    onClick={() => setOpen(true)}>Give this agent an MCP server</button>
+          ) : holds.length ? (
+            <span className="detail">It already holds every MCP server in this project.</span>
+          ) : (
+            <span className="detail">No MCP servers are registered — register one on the Skills
+              and MCP page first.</span>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+/**
+ * Edit what the agent is: its name, mission, boundaries and who it reports to.
+ *
+ * There was no edit path for an agent in the console beyond its skills — mission, display name
+ * and boundaries could only be changed through the API, and POST /v1/roles used as an update
+ * reset its autonomy and reporting line. Only the fields changed here are sent, and the API
+ * changes only those. An edited bundled agent stays edited across upgrades.
+ */
+export function AgentEdit({ projectId, actor, detail, onChanged }: {
+  projectId: string; actor: string; detail: Detail; onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(detail.name);
+  const [mission, setMission] = useState(detail.spec.mission ?? "");
+  const [must, setMust] = useState((detail.spec.boundaries?.must ?? []).join("\n"));
+  const [mustNot, setMustNot] = useState((detail.spec.boundaries?.must_not ?? []).join("\n"));
+  const [reportsTo, setReportsTo] = useState(detail.reports_to ?? "");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState("");
+  const [saved, setSaved] = useState("");
+
+  const lines = (v: string) => v.split("\n").map((x) => x.trim()).filter(Boolean);
+  const save = async () => {
+    const changes: Parameters<typeof updateAgent>[3] = {};
+    if (name.trim() !== detail.name) changes.display_name = name.trim();
+    if (mission.trim() !== (detail.spec.mission ?? "")) changes.mission = mission.trim();
+    const b = { must: lines(must), must_not: lines(mustNot) };
+    if (JSON.stringify(b) !== JSON.stringify({
+      must: detail.spec.boundaries?.must ?? [], must_not: detail.spec.boundaries?.must_not ?? [],
+    })) changes.boundaries = b;
+    if ((reportsTo.trim() || null) !== (detail.reports_to || null)) {
+      changes.reports_to = reportsTo.trim() || null;
+    }
+    if (!Object.keys(changes).length) { setSaved("Nothing changed."); return; }
+    setBusy(true); setFailed(""); setSaved("");
+    const r = await updateAgent(projectId, actor, detail.role_key, changes);
+    setBusy(false);
+    if (!r.ok) { setFailed(r.error); return; }
+    setSaved("Saved.");
+    setOpen(false);
+    onChanged();
+  };
+
+  return (
+    <section className="ct-block" data-testid="agent-edit">
+      <div className="ct-block-title">
+        Edit this agent
+        {!open ? (
+          <button type="button" className="linklike" data-testid="agent-edit-open"
+                  onClick={() => setOpen(true)}> change name, mission, boundaries or manager</button>
+        ) : null}
+      </div>
+      {saved ? <p className="detail" data-testid="agent-edit-saved">{saved}</p> : null}
+      {open ? (
+        <form className="ad-edit" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+          <label>Name
+            <input value={name} data-testid="agent-edit-name" onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>Mission
+            <textarea rows={3} value={mission} data-testid="agent-edit-mission"
+                      onChange={(e) => setMission(e.target.value)} />
+          </label>
+          <label>It must… (one per line)
+            <textarea rows={3} value={must} data-testid="agent-edit-must"
+                      onChange={(e) => setMust(e.target.value)} />
+          </label>
+          <label>It must never… (one per line)
+            <textarea rows={3} value={mustNot} data-testid="agent-edit-must-not"
+                      onChange={(e) => setMustNot(e.target.value)} />
+          </label>
+          <label>Reports to (an agent key — empty for nobody)
+            <input value={reportsTo} data-testid="agent-edit-reports-to"
+                   onChange={(e) => setReportsTo(e.target.value)} />
+          </label>
+          {failed ? <p className="ad-bad" data-testid="agent-edit-failed">{failed}</p> : null}
+          <div className="ad-edit-actions">
+            <button type="submit" className="cap-btn" disabled={busy} data-testid="agent-edit-save">
+              {busy ? "Saving…" : "Save"}
+            </button>
+            <button type="button" className="linklike" disabled={busy}
+                    onClick={() => { setOpen(false); setFailed(""); }}>Cancel</button>
+          </div>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+
+/**
+ * Delete the agent — or be told, before pressing, why it cannot be deleted yet.
+ *
+ * Refused by the API while a workflow step names it, because deleting the agent under a step
+ * turns a working workflow into one that fails at that step minutes into a run. The steps are
+ * listed here first so the refusal is never a surprise.
+ */
+export function AgentDelete({ projectId, actor, detail, onDeleted }: {
+  projectId: string; actor: string; detail: Detail; onDeleted: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState("");
+  const named = detail.named_on_steps ?? [];
+  const profiles = (detail.studio_profiles ?? []).filter((p) => p.status !== "retired");
+
+  const remove = async () => {
+    setBusy(true); setFailed("");
+    const r = await deleteAgent(projectId, actor, detail.role_key);
+    setBusy(false);
+    if (!r.ok) { setFailed(r.error); setConfirming(false); return; }
+    onDeleted();
+  };
+
+  return (
+    <section className="ct-block ad-danger" data-testid="agent-delete">
+      <div className="ct-block-title">Delete this agent</div>
+      {named.length ? (
+        <>
+          <p className="detail" data-testid="agent-delete-blocked">
+            It cannot be deleted while {named.length} workflow step{named.length === 1 ? " names" : "s name"} it.
+            Give {named.length === 1 ? "that step" : "those steps"} to another agent (or leave
+            them for BOSS to pick), save the workflow, then come back.
+          </p>
+          <ul className="ad-list" data-testid="agent-named-on">
+            {named.map((n) => (
+              <li key={`${n.workflow_key}:${n.version}:${n.step_id}`}>
+                {n.workflow} · <code>{n.step}</code>
+                <span className="detail"> · {n.how}{n.because === "live run" ? " · a run in flight" : ` · v${n.version}`}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="detail">
+          Its skills and MCP servers are released{profiles.length
+            ? `, its ${profiles.length} Studio profile${profiles.length === 1 ? " is" : "s are"} retired (their runs are kept)`
+            : ""}, and anyone reporting to it moves up to {detail.reports_to
+            ? <code>{detail.reports_to}</code> : "the top of the team"}. An upgrade will not bring
+          it back.
+        </p>
+      )}
+      {failed ? <p className="ad-bad" role="alert" data-testid="agent-delete-failed">{failed}</p> : null}
+      <div className="ad-danger-actions">
+        {confirming ? (
+          <>
+            <button type="button" className="cap-btn" data-tone="danger" disabled={busy}
+                    data-testid="agent-delete-confirm" onClick={() => void remove()}>
+              {busy ? "Deleting…" : `Yes, delete ${detail.name}`}
+            </button>
+            <button type="button" className="linklike" disabled={busy}
+                    onClick={() => setConfirming(false)}>Keep it</button>
+          </>
+        ) : (
+          <button type="button" className="linklike" disabled={named.length > 0}
+                  data-testid="agent-delete-open" onClick={() => setConfirming(true)}>
+            Delete {detail.name}
+          </button>
+        )}
+      </div>
     </section>
   );
 }

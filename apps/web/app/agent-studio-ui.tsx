@@ -103,10 +103,14 @@ export function AgentStudio({
   feed,
   roles,
   skills,
+  actor,
 }: {
   feed: AgentStudioFeed;
   roles: RoleFeedItem[];
   skills: SkillFeedItem[];
+  /** The signed-in actor every Studio write is made as. It was the literal 'vp_agents', which
+   *  a 'ceo' API key may not act as, so every Studio write 403'd on an authed install. */
+  actor: string;
 }) {
   const initial: Selection | undefined = feed.agents[0]
     ? { kind: "agent", item: feed.agents[0] }
@@ -271,12 +275,12 @@ export function AgentStudio({
     startTransition(async () => {
       const next =
         kind === "test" && selection.kind === "agent"
-          ? await callAction(testStudioAgent)(feed.projectId, activeVersion.id)
+          ? await callAction(testStudioAgent)(feed.projectId, activeVersion.id, actor)
           : selection.kind === "workflow"
-            ? await callAction(runStudioWorkflow)(feed.projectId, activeVersion.id, objective)
+            ? await callAction(runStudioWorkflow)(feed.projectId, activeVersion.id, objective, actor)
           : selection.kind === "panel"
-            ? await callAction(runStudioPanel)(feed.projectId, activeVersion.id, objective)
-            : await callAction(runStudioAgent)(feed.projectId, activeVersion.id, objective);
+            ? await callAction(runStudioPanel)(feed.projectId, activeVersion.id, objective, actor)
+            : await callAction(runStudioAgent)(feed.projectId, activeVersion.id, objective, actor);
       setResult(next);
     });
   };
@@ -284,14 +288,14 @@ export function AgentStudio({
   const runCatalogSmoke = () => {
     setResult(undefined);
     startTransition(async () => {
-      setResult(await callAction(runStudioCatalogSmoke)(feed.projectId));
+      setResult(await callAction(runStudioCatalogSmoke)(feed.projectId, actor));
     });
   };
 
   const installStarterCatalog = () => {
     setResult(undefined);
     startTransition(async () => {
-      const seeded = await callAction(seedStudioCatalog)(feed.projectId);
+      const seeded = await callAction(seedStudioCatalog)(feed.projectId, actor);
       setResult(seeded);
       if (seeded.ok) router.refresh();
     });
@@ -321,11 +325,12 @@ export function AgentStudio({
     startTransition(async () => {
       const next =
         action === "validate"
-          ? await callAction(validateStudioWorkflow)(feed.projectId, spec)
+          ? await callAction(validateStudioWorkflow)(feed.projectId, spec, actor)
           : await callAction(publishStudioWorkflowVersion)(
               feed.projectId,
               selection.item.id,
               spec,
+              actor,
             );
       setResult(next);
     });
@@ -344,7 +349,7 @@ export function AgentStudio({
     }
     setResult(undefined);
     startTransition(async () => {
-      const validated = await callAction(validateStudioWorkflow)(feed.projectId, spec);
+      const validated = await callAction(validateStudioWorkflow)(feed.projectId, spec, actor);
       if (!validated.ok) {
         setResult(validated);
         return;
@@ -355,6 +360,7 @@ export function AgentStudio({
         newWorkflowName.trim(),
         newWorkflowDescription.trim(),
         spec,
+        actor,
       );
       setResult(created);
       if (created.ok) {
@@ -425,6 +431,7 @@ export function AgentStudio({
           createPortal(
             <AgentCreationWizard
               projectId={feed.projectId}
+              actor={actor}
               roles={roles}
               skills={skills}
               onClose={() => setWizardOpen(false)}
@@ -835,6 +842,7 @@ export function AgentStudio({
         createPortal(
           <AgentCreationWizard
             projectId={feed.projectId}
+            actor={actor}
             roles={roles}
             skills={skills}
             onClose={() => setWizardOpen(false)}
