@@ -113,6 +113,10 @@ RECORDED_ON_APPROVAL = frozenset({
     "configure_target_github_and_retry_phase",
     "coordinate_with_surface_owner",
     "create_budget_reservation",
+    # Community's discovery spend (discovery_spend.py) asks a person to reconcile a stage whose
+    # paid call may already have been charged — the same shape as typed_decision_reconciliation.
+    # Unknown to the console-a stream, which was written on the private tree (integration).
+    "discovery_reconciliation",
     "fix_phase_spec_and_retry",
     "github.community.triage_review",
     "implement_governed_host_deployment",
@@ -125,7 +129,6 @@ RECORDED_ON_APPROVAL = frozenset({
     "reserve_budget_before_deployment",
     "reserve_provider_budget",
     "resolve_assurance_case",
-    "resolve_cluster_validation_blockers",
     "restore_metric_evaluator",
     "restore_verifier_preconditions",
     "review_commitment",

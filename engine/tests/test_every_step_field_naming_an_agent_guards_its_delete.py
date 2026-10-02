@@ -40,6 +40,8 @@ NOT_AN_AGENT_ON_A_STEP = {
     (("binding", "agent_work"), "services/step_agents.py"): "the same flag",
     (("binding", "agent_work"), "services/workflow_readiness.py"): "the same flag",
     (("binding", "agent_work"), "tools/builtin.py"): "the same flag",
+    (("binding", "agent_work"), "services/command_center.py"):
+        "the same flag, read to say BOSS will pick the agent when the step starts",
     (("binding", "agent_group_version_id"), "services/workflows.py"):
         "an agent GROUP version id, not a role key",
     (("role_key",), "services/agent_loop.py"):
