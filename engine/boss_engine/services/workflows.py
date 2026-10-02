@@ -1495,7 +1495,10 @@ def start_run(
         if not parent:
             raise WorkflowNotFoundError("Parent workflow run not found.")
         root_run_id = parent["root_run_id"] or parent_run_id
-    connection.execute(
+    # TWO PRESSES, ONE RUN. The unique (project_id, dedupe_key) index settles a race between two
+    # identical starts; the loser gets the winner's run back instead of an error. ON CONFLICT DO
+    # NOTHING rather than catching the error: a failed INSERT would abort this transaction.
+    inserted = connection.execute(
         text(
             """
             INSERT INTO workflow_runs (
@@ -1508,6 +1511,7 @@ def start_run(
                 CAST(:input AS JSONB), CAST(:context AS JSONB),
                 CAST(:policy AS JSONB), :dedupe_key
             )
+            ON CONFLICT DO NOTHING
             """
         ),
         {
@@ -1525,6 +1529,15 @@ def start_run(
             "dedupe_key": dedupe_key,
         },
     )
+    if not inserted.rowcount:
+        winner = connection.execute(
+            text("SELECT id FROM workflow_runs WHERE project_id=:p AND dedupe_key=:d"),
+            {"p": project_id, "d": dedupe_key},
+        ).mappings().first()
+        if winner:
+            result = get_run(connection, project_id, winner["id"])
+            result["duplicate"] = True
+            return result
     for step in spec["steps"]:
         _insert_step_run(
             connection,

@@ -16,6 +16,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from sqlalchemy import text
+
 from ..config import Settings
 from .core import create_blocking_decision, emit_event
 from .jobs import JOB_PRIORITY_INTERACTIVE, JobDeferredError, LeaseNotFoundError
@@ -103,12 +105,66 @@ def _uncertain(error: BaseException) -> bool:
     return "timeout" in name or "connect" in name
 
 
-def governed_decider(settings: Settings, role: str):
-    """One provider, one try. Internal retries would be a second call on one receipt."""
-    from .typed_decisions import ClaudeDecider, TypeSafeDecider
+def consumer_for(connection, project_id: str, source_id: Optional[str], actor: str,
+                 settings=None) -> str:
+    """Whom a governed call books capacity FOR, given the source that will answer it.
 
-    backend = (getattr(settings, "decision_backend", None) or "claude").strip().lower()
-    if role == "primary" and backend == "typesafe":
+    The gateway refuses to pool owner-scoped capacity: the consumer must be the source's owner.
+    The seed gives every subscription to the WORKSPACE OPERATOR (owner_type workspace_operator,
+    owner_id "founder"), and sources are seeded per project — so a call made inside that
+    project is the workspace operator's own work, and is booked for them. Using the actor
+    ("ceo") instead refused every governed discovery stage and decision on a default install
+    ("…owner scoped and cannot be pooled"). A PERSONALLY owned source (owner_type operator)
+    still needs the actor to be its owner: one person's subscription is not lent to another.
+    """
+    if not source_id:
+        return actor
+    row = connection.execute(
+        text("SELECT owner_type, owner_id FROM entitlement_sources "
+             "WHERE project_id = :p AND source_id = :s"),
+        {"p": project_id, "s": source_id},
+    ).mappings().first()
+    if row and row["owner_type"] == "workspace_operator" and row["owner_id"]:
+        return str(row["owner_id"])
+    # COMMUNITY HAS ONE OPERATOR AND NO IDENTITY LAYER. Telling one person's subscription from
+    # another's needs users BOSS can tell apart, which Community does not have yet — so the
+    # owner of an owner-scoped source was whichever principal last pressed Connect (on boss-1
+    # the console's own "executive_console"), and research the member "ceo" started was
+    # refused as "pooling" the only subscription on the install. In Community the project's
+    # connected subscription serves the project's work. Editions with real identities keep the
+    # per-person check.
+    edition = str(getattr(settings, "boss_edition", "community") or "community").strip().lower()
+    if row and row["owner_id"] and edition in {"community", "oss", "local"}:
+        return str(row["owner_id"])
+    return actor
+
+
+def capacity_after_failure(error: BaseException) -> dict:
+    """What a failed call says about the SOURCE's capacity: only a capacity failure counts.
+
+    Every failure used to be recorded as `capacity_state: unavailable`, and the router skips an
+    unavailable source — so one crashed research call, or one rejected key, took the operator's
+    only Claude subscription out of routing until something marked it available again.
+    """
+    text_ = str(error).lower()
+    if any(term in text_ for term in ("rate limit", "rate_limit", " 429", "too many requests")):
+        return {"capacity_state": "rate_limited"}
+    if any(term in text_ for term in ("quota", "usage limit", "limit reached", "overloaded",
+                                      " 529", "exhausted")):
+        return {"capacity_state": "unavailable"}
+    return {"capacity_state": "available"}
+
+
+def governed_decider(settings: Settings, role: str):
+    """One provider, one try. Internal retries would be a second call on one receipt.
+
+    The primary is TypeSafe whenever it decides on this project (chosen, the default, and a key
+    held); everything else — no key, the fallback after a Jev failure, the second opinion when
+    Jev is unsure — is Claude, or the worker's API model where the CLI is absent.
+    """
+    from .typed_decisions import ClaudeDecider, TypeSafeDecider, typesafe_decides
+
+    if role == "primary" and typesafe_decides(settings):
         return TypeSafeDecider(settings, attempts=1)
     return ClaudeDecider(
         settings, model=getattr(settings, "decision_model", None) or None, attempts=1,
@@ -156,6 +212,7 @@ class TypedDecisionSpend:
         self.workspace_id = workspace_id
         self.before_provider_call = before_provider_call
         self.ttl_seconds = ttl_seconds
+        self._primary_backend = ""
 
     @classmethod
     def for_runner(
@@ -194,10 +251,24 @@ class TypedDecisionSpend:
             decider_factory=lambda role, bound: governed_decider(bound, role),
         )
 
-    def execute(self, settings: Settings, binding: dict, state: Any) -> dict:
+    def execute(self, settings: Settings, binding: dict, state: Any, *,
+                fallback: bool = True) -> dict:
+        """`fallback=False` is for proving a key: an answer from another model would prove
+        nothing about it."""
         identity = _identity(self.project_id, self.run_id, self.step_id, binding, state)
-        primary = self._attempt(settings, binding, state, identity, "primary")
-        if not _needs_second_opinion(settings, primary):
+        try:
+            primary = self._attempt(settings, binding, state, identity, "primary")
+        except TypedDecisionSpendError as error:
+            # JEV FAILED OUTRIGHT, so Claude answers — its own attempt, lease and receipt.
+            # Not after an UNCERTAIN outcome: that one stays for reconciliation.
+            if not (fallback and self._primary_backend == "typesafe"):
+                raise
+            self._emit_now("typed_decision.fallback", {
+                "run_id": self.run_id, "step_id": self.step_id, "attempt": self.attempt,
+                "reason": str(error)[:300],
+            })
+            return self._attempt(settings, binding, state, identity, "careful")
+        if not fallback or not _needs_second_opinion(settings, primary):
             return primary
         self._emit_now("typed_decision.second_opinion", {
             "run_id": self.run_id, "step_id": self.step_id, "attempt": self.attempt,
@@ -218,8 +289,19 @@ class TypedDecisionSpend:
     def _attempt(
         self, settings: Settings, binding: dict, state: Any, identity: str, role: str,
     ) -> dict:
+        # THE DECIDER FIRST, because it names the source that will answer — the lease is booked
+        # against that source. Building one makes no call; one that cannot be built is a
+        # refusal before anything is reserved.
+        factory = self.decider_factory or (lambda asked, bound: governed_decider(bound, asked))
+        try:
+            decider = factory(role, settings)
+        except RuntimeError as error:
+            raise TypedDecisionSpendError(str(error)) from error
+        if role == "primary":
+            self._primary_backend = getattr(decider, "backend", "")
+        source_id = getattr(decider, "source_id", None)
         authority = self.commit(lambda connection: self._prepare(
-            connection, settings, binding, state, identity, role,
+            connection, settings, binding, state, identity, role, source_id,
         ))
         if authority.outcome == "replay":
             return authority.output or {}
@@ -240,7 +322,7 @@ class TypedDecisionSpend:
             raise TypedDecisionSpendError(str(reason)) from reason
         self._ensure_lease(authority)
         try:
-            batch = self._call(settings, binding, state, role)
+            batch = self._call(decider, binding, state)
         except Exception as error:
             reason = error
             if _uncertain(reason):
@@ -277,6 +359,7 @@ class TypedDecisionSpend:
 
     def _prepare(
         self, connection, settings, binding, state, identity: str, role: str,
+        source_id: Optional[str] = None,
     ) -> _Authority:
         dedupe = _invocation_dedupe(identity, self.attempt, role)
         existing = self._existing(connection, identity, dedupe)
@@ -362,12 +445,17 @@ class TypedDecisionSpend:
                 skill_id=SKILL_ID,
                 preferred_capabilities=["classify"],
                 risk_tier=1,
-                consumer_owner_id=self.project_id,
+                # Owner-scoped capacity is booked for its owner when the work is the
+                # workspace's own; see consumer_for.
+                consumer_owner_id=(self.gateway.consumer_for(
+                    connection, self.project_id, source_id, self.actor)
+                    if hasattr(self.gateway, "consumer_for") else self.actor),
                 estimated_cost_usd_micros=MAX_COST_USD_MICROS,
                 max_usage={"total_tokens": 20_000},
                 dedupe_key=dedupe,
                 ttl_seconds=self.ttl_seconds,
                 existing_reservation_id=reservation_id,
+                source_id=source_id,
             )
         except ModelCapacityDeniedError as denied:
             self.budget.release(connection, self.project_id, reservation_id, str(denied))
@@ -556,9 +644,7 @@ class TypedDecisionSpend:
             "receipt_id": authority.receipt_id,
         })
 
-    def _call(self, settings, binding, state, role: str) -> DecisionBatch:
-        factory = self.decider_factory or (lambda asked, bound: governed_decider(bound, asked))
-        decider = factory(role, settings)
+    def _call(self, decider, binding, state) -> DecisionBatch:
         spec = binding["typed_decision"]
         options = {str(key): str(value) for key, value in spec["options"].items()}
         question = Question("decision", str(spec["question"]), options)
@@ -625,7 +711,7 @@ class TypedDecisionSpend:
             provider_ref=None,
             usage_units={},
             actual_cost_usd_micros=actual,
-            observed_capacity={"capacity_state": "unavailable"},
+            observed_capacity=capacity_after_failure(error),
             error={"reason": str(error)[:500]},
         )
         try:
@@ -707,9 +793,9 @@ class TypedDecisionSpend:
 
 
 def _needs_second_opinion(settings: Settings, output: dict) -> bool:
-    backend = (getattr(settings, "decision_backend", None) or "claude").strip().lower()
+    """Only an answer Jev gave is second-guessed; Claude's own answer is not re-asked."""
     floor = float(getattr(settings, "decision_fallback_below", 0) or 0)
-    if backend != "typesafe" or floor <= 0:
+    if output.get("backend") != "typesafe" or floor <= 0:
         return False
     confidence = output.get("confidence")
     return output.get("answer") is None or confidence is None or float(confidence) < floor

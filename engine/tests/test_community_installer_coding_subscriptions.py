@@ -21,8 +21,10 @@ class _Response(io.BytesIO):
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude_code", "grok"])
-def test_community_cli_connection_skips_live_proof_and_reports_unverified(
+def test_the_installer_asks_boss_to_prove_the_connection_with_a_live_turn(
         monkeypatch, capsys, provider):
+    """Recorded unproved, a wrong Claude credential looked connected until a workflow failed on
+    it with a 401 (boss-1). BOSS now answers one reserved, receipted test turn first."""
     sent = []
 
     def answer(request, timeout):
@@ -30,7 +32,7 @@ def test_community_cli_connection_skips_live_proof_and_reports_unverified(
         return _Response(json.dumps({
             "connected": True,
             "entitlement_recorded": True,
-            "proof": {"ok": True, "skipped": True},
+            "proof": {"ok": True, "replied": "BOSS_OK", "receipt_id": "rcpt_1"},
         }).encode())
 
     monkeypatch.setattr(coding_subscriptions.urllib.request, "urlopen", answer)
@@ -40,29 +42,39 @@ def test_community_cli_connection_skips_live_proof_and_reports_unverified(
     assert timeout == 120
     assert request.full_url.endswith("/v1/setup/coding-agents/connect")
     assert json.loads(request.data) == {
-        "project_id": "boss-dogfood", "actor": "ceo", "provider": provider,
-        "prove": False,
+        "project_id": "boss-dogfood", "actor": "ceo", "provider": provider, "prove": True,
     }
     output = capsys.readouterr().out
-    assert "connection recorded" in output
-    assert "unverified" in output
+    assert "answered a test turn" in output
     assert "private-api-key" not in output
-    assert "proved" not in output
 
 
 @pytest.mark.parametrize("reply", [
-    {"connected": False, "entitlement_recorded": False,
-     "proof": {"ok": True, "skipped": True}},
-    {"connected": True, "entitlement_recorded": False,
-     "proof": {"ok": True, "skipped": True}},
-    {"connected": True, "entitlement_recorded": True,
-     "proof": {"ok": True}},
+    {"connected": False, "entitlement_recorded": False, "proof": {"ok": True}},
+    {"connected": True, "entitlement_recorded": False, "proof": {"ok": True}},
+    {"connected": True, "entitlement_recorded": True, "proof": {"ok": True, "skipped": True}},
+    {"connected": True, "entitlement_recorded": True, "proof": {"ok": False}},
     {"connected": True, "entitlement_recorded": True, "proof": None},
 ])
-def test_installer_refuses_to_claim_an_unrecorded_or_unexpected_connection(monkeypatch, reply):
+def test_installer_refuses_to_claim_an_unrecorded_or_unproved_connection(monkeypatch, reply):
     monkeypatch.setattr(coding_subscriptions.urllib.request, "urlopen",
                         lambda *_args, **_kwargs: _Response(json.dumps(reply).encode()))
-    with pytest.raises(RuntimeError, match="BOSS (did not record|returned an unexpected)"):
+    with pytest.raises(RuntimeError, match="BOSS did not (record|prove)"):
+        coding_subscriptions.connect("http://127.0.0.1:8000", "private-api-key", "claude_code")
+
+
+def test_a_refused_connection_shows_boss_s_own_reason(monkeypatch):
+    import io
+    import urllib.error
+
+    def refuse(*_a, **_k):
+        raise urllib.error.HTTPError(
+            "http://x", 422, "Unprocessable", {}, io.BytesIO(json.dumps({"detail": (
+                "The Claude Code subscription login was rejected, so no model call can run. "
+                "Reconnect it in Setup → Model.")}).encode()))
+
+    monkeypatch.setattr(coding_subscriptions.urllib.request, "urlopen", refuse)
+    with pytest.raises(RuntimeError, match="login was rejected"):
         coding_subscriptions.connect("http://127.0.0.1:8000", "private-api-key", "claude_code")
 
 
@@ -125,3 +137,34 @@ def test_local_claude_connect_does_not_read_or_upload_a_token(monkeypatch):
 
     assert coding_subscriptions.main() == 0
     assert calls == ["status", "connect"]
+
+
+@pytest.mark.parametrize("backend", ["infisical", "local_vault", "database"])
+def test_a_claude_token_in_any_secret_store_is_recorded_as_connected(monkeypatch, backend):
+    """The server stores a Claude token in the install's secret store — Infisical on an install
+    made with --secret-store infisical. The installer demanded "local_vault" exactly, so it
+    called the stored token a failure and never recorded the connection (found 2026-09-30:
+    "BOSS did not store the Claude setup token in the local secret store")."""
+    connected = []
+    monkeypatch.setenv("BOSS_API_KEY", "k")
+    monkeypatch.setattr(coding_subscriptions, "discover", lambda: {"codex": False, "claude_code": True})
+    monkeypatch.setattr(coding_subscriptions, "claude_credential", lambda: "tok")
+    monkeypatch.setattr(coding_subscriptions, "send_to_boss",
+                        lambda *a, **k: {"ok": True, "backend": backend})
+    monkeypatch.setattr(coding_subscriptions, "connect",
+                        lambda _url, _key, provider: connected.append(provider))
+    monkeypatch.setattr(sys, "argv", ["coding_subscriptions.py", "--connect-claude"])
+    assert coding_subscriptions.main() == 0
+    assert connected == ["claude_code"]
+
+
+def test_a_reply_that_does_not_say_where_the_token_went_is_refused(monkeypatch):
+    monkeypatch.setenv("BOSS_API_KEY", "k")
+    monkeypatch.setattr(coding_subscriptions, "discover", lambda: {"codex": False, "claude_code": True})
+    monkeypatch.setattr(coding_subscriptions, "claude_credential", lambda: "tok")
+    monkeypatch.setattr(coding_subscriptions, "send_to_boss", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(coding_subscriptions, "connect",
+                        lambda *a: pytest.fail("recorded a token with no confirmed store"))
+    monkeypatch.setattr(sys, "argv", ["coding_subscriptions.py", "--connect-claude"])
+    with pytest.raises(RuntimeError, match="did not confirm"):
+        coding_subscriptions.main()

@@ -829,6 +829,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             context=(args.get("context") or "").strip(),
             settings=ctx.settings,
             deep=bool(args.get("deep")),
+            actor=actor,
         )
         return {"status": "running", "run_id": run_id, "project_id": pid}
 
@@ -1363,19 +1364,19 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         workflow_name = (args.get("workflow_name") or "").strip()
         if objective:
             directive = (
-                f"{ms.PANEL_BRIEF_MARKER}\n"
+                f"--- WHAT THIS PANEL IS FOR ---\n"
                 f"You are the panel inside BOSS's "
                 f"{workflow_name or 'delivery'} workflow. That workflow's objective:\n\n"
                 f"{objective}\n\n"
                 f"Write for THAT outcome. A PRD that suits a different workflow is the wrong "
                 f"document however good it is.\n"
-                f"{ms.REQUEST_MARKER}\n\n{directive}"
+                f"--- WHAT YOU ARE BEING ASKED ABOUT ---\n\n{directive}"
             )
         research = (args.get("research") or "").strip()
         if research:
             directive = (
                 f"{directive}\n\n"
-                f"{ms.RESEARCH_MARKER}\n"
+                f"--- RESEARCH ALREADY DONE FOR THIS ---\n"
                 f"BOSS researched this before convening you. Argue from it: agree, disagree, "
                 f"or say what it missed — do not re-derive it from scratch.\n\n{research}"
             )
@@ -2476,16 +2477,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         reversibility="safe",
     )
     def connect_coding_agent(ctx, *, project_id, actor, args):
-        from ..services.setup_service import (
-            SetupError, coding_agent_live_proof_available,
-            connect_coding_agent as _connect,
-        )
+        from ..services.setup_service import SetupError, connect_coding_agent as _connect
 
+        # Proved by default; in Community the one test turn is reserved and receipted
+        # (setup_service.governed_proof).
         prove = args.get("prove") is not False
-        if prove and not coding_agent_live_proof_available(ctx.settings):
-            return {"ok": False, "error": "Community live CLI proof is paused until its "
-                    "model turn has a budget reservation, worker lease, and cost receipt. "
-                    "Use prove=false for CLIs that permit an unverified connection."}
 
         with ctx.begin() as c:
             try:

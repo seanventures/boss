@@ -887,12 +887,25 @@ class JobLeaseService:
         job_id: str,
         lease_token: str,
         lease_ttl_seconds: int,
+        handing_back: bool = False,
     ) -> dict[str, Any]:
         current_time = now_utc()
         lease_expires_at = current_time + timedelta(seconds=lease_ttl_seconds)
         row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token)
         if row["lease_expires_at"] <= current_time:
             raise LeaseNotFoundError("Lease has expired.")
+        if handing_back:
+            # A DEPLOY IS NOT THE JOB'S FAILURE. The stopping worker shortens its lease so the job
+            # is reclaimed in seconds, and reclaiming it adds an attempt — so two deploys during
+            # one long build used two of its three attempts, and a third would have deadlettered
+            # work that never failed (boss-1, 2026-10-02). Give the attempt back now; the
+            # reclaim's increment then leaves the count where the work actually is.
+            connection.execute(
+                text("UPDATE jobs SET attempt = GREATEST(attempt - 1, 0) WHERE id = :job_id"),
+                {"job_id": job_id},
+            )
+            emit_event(connection, row["project_id"], "job.handed_back", worker_id, "job",
+                       job_id, {"reason": "worker stopping", "attempt_not_counted": True})
 
         next_status = "running" if row["status"] == "leased" else row["status"]
         connection.execute(
@@ -1261,12 +1274,59 @@ class JobLeaseService:
             connection, row, error, terminal=True, actor=worker_id
         )
         self._mark_related_code_task_failed(connection, row, error, actor=worker_id)
+        self._mark_related_discovery_failed(connection, row, error, actor=worker_id)
         return {
             "job_id": job_id,
             "status": "deadlettered",
             "run_after": None,
             "deadletter_id": deadletter_id,
         }
+
+    def _mark_related_discovery_failed(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        error: dict[str, Any],
+        *,
+        actor: str,
+    ) -> None:
+        """A deadlettered discovery.run job fails its discovery, with the reason in words.
+
+        When the API refused the worker (409) the job deadlettered and the discovery stayed
+        `running` at phase "queued": the Discovery page showed nothing wrong and a workflow
+        waiting on its research waited forever. Only while this job is still the run's job, so
+        a newer job queued for the same run is not undone. `failed_by_job` lets a requeue of
+        this deadletter resume the same run (discovery_service.execute_discovery_job).
+        """
+        if row.get("kind") != "discovery.run":
+            return
+        payload = row.get("payload") or {}
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        run_id = str(payload.get("discovery_run_id") or "")
+        if not run_id:
+            return
+        from .model_failures import explain
+
+        said = explain(error.get("message", ""), source_id="anthropic_claude_code")
+        changed = connection.execute(
+            text(
+                """
+                UPDATE discovery_runs
+                SET status = 'failed', error = :error,
+                    state = state || jsonb_build_object('failed_by_job', CAST(:job AS text),
+                                                        'job_error', CAST(:raw AS text)),
+                    updated_at = now()
+                WHERE id = :run_id AND status = 'running' AND state->>'job_id' = :job
+                """
+            ),
+            {"run_id": run_id, "job": row["id"], "raw": str(error.get("message", ""))[:1000],
+             "error": f"Its worker job stopped. {said['headline']} {said['action']}"[:1000]},
+        ).rowcount
+        if changed:
+            emit_event(connection, row["project_id"], "discovery.failed", actor,
+                       "discovery_run", run_id,
+                       {"reason": "job_deadlettered", "job_id": row["id"], "kind": said["kind"]})
 
     def _mark_related_code_task_failed(
         self,

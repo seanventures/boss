@@ -24,36 +24,84 @@ class _Ctx:
         raise AssertionError("the gate must run before database or external work")
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
-@pytest.mark.parametrize("args", [{"provider": "codex"},
-                                  {"provider": "codex", "prove": True}])
-def test_live_cli_proof_tool_stops_before_setup_or_model(edition, args, monkeypatch):
-    def no_model(*_args, **_kwargs):
-        raise AssertionError("live model proof must not run")
-
-    monkeypatch.setattr(setup_service, "connect_coding_agent", no_model)
-    monkeypatch.setattr(setup_service, "prove_coding_agent", no_model)
-    ctx = _Ctx(edition)
-    result = build_default_registry().invoke(
-        "connect_coding_agent", ctx, project_id="project-a", actor="member", args=args,
-    )
-    assert result["ok"] is False
-    assert "Community live CLI proof is paused" in result["error"]
-    assert ctx.began is False
+class _Engine:
+    def begin(self):
+        from contextlib import nullcontext
+        return nullcontext(_Conn())
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
-def test_setup_service_stops_default_proof_before_cli_detection(edition, monkeypatch):
-    def no_model(*_args, **_kwargs):
-        raise AssertionError("live model proof or detection must not run")
+class _Conn:
+    """A request connection whose engine the governed proof commits through."""
+    engine = _Engine()
 
-    monkeypatch.setattr(setup_service, "prove_coding_agent", no_model)
+    def execute(self, *_a, **_k):
+        class _R:
+            rowcount = 0
+        return _R()
+
+
+def _signed_in_codex(monkeypatch):
     from boss_engine.services import cli_harness
-    monkeypatch.setattr(cli_harness, "load_specs", no_model)
-    with pytest.raises(setup_service.SetupError, match="Live coding-agent proof is paused"):
+
+    monkeypatch.setattr(cli_harness, "detect", lambda _spec: {
+        "installed": True, "authenticated": True, "version": "1.0", "auth_detail": "signed in",
+    })
+
+
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
+def test_community_proves_a_connection_only_through_the_governed_path(edition, monkeypatch):
+    """A connection is PROVED with one live turn before it is called connected — a wrong Claude
+    credential "connected" unproved on boss-1 and failed later inside a workflow with a 401. In
+    Community that turn spends only through governed_proof (reservation and receipt first);
+    the ungoverned direct proof is never called."""
+    _signed_in_codex(monkeypatch)
+    monkeypatch.setattr(setup_service, "prove_coding_agent",
+                        lambda *_a, **_k: pytest.fail("ungoverned live proof in Community"))
+    seen = []
+    monkeypatch.setattr(setup_service, "governed_proof",
+                        lambda engine, settings, project, provider, actor: seen.append(
+                            (engine, provider, actor)) or {"ok": True, "replied": "BOSS_OK"})
+
+    class _Broker:
+        def __init__(self, _settings):
+            pass
+
+        def upsert_source(self, *_a, **_k):
+            return None
+
+    from boss_engine.services import entitlements
+    monkeypatch.setattr(entitlements, "EntitlementBrokerService", _Broker)
+    result = setup_service.connect_coding_agent(
+        _Conn(), _Settings(edition), "project-a", "codex", actor="member")
+    assert result["connected"] is True and result["proof"]["ok"] is True
+    assert seen == [(_Conn.engine, "codex", "member")]
+
+
+def test_a_rejected_login_is_not_connected_and_says_what_to_do(monkeypatch):
+    _signed_in_codex(monkeypatch)
+    monkeypatch.setattr(setup_service, "governed_proof", lambda *_a, **_k: {
+        "ok": False, "error": "Failed to authenticate. API Error: 401 Invalid bearer token"})
+    with pytest.raises(setup_service.SetupError) as refused:
         setup_service.connect_coding_agent(
-            None, _Settings(edition), "project-a", "codex", actor="member",
-        )
+            _Conn(), _Settings("community"), "project-a", "codex", actor="member")
+    message = str(refused.value)
+    assert "login was rejected" in message and "not connected" in message
+
+
+def test_the_agent_tool_proves_by_default(monkeypatch):
+    seen = []
+    monkeypatch.setattr(setup_service, "connect_coding_agent",
+                        lambda c, s, p, provider, *, actor, prove: seen.append(prove) or {"ok": True})
+
+    class _OkCtx(_Ctx):
+        def begin(self):
+            from contextlib import nullcontext
+            return nullcontext(None)
+
+    result = build_default_registry().invoke(
+        "connect_coding_agent", _OkCtx("community"), project_id="project-a", actor="member",
+        args={"provider": "codex"})
+    assert result.get("ok") is not False and seen == [True]
 
 
 def test_explicit_no_proof_keeps_safe_subscription_registration(monkeypatch):
