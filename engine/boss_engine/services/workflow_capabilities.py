@@ -63,7 +63,9 @@ class Capability:
     #: True when the step waits on a person and cannot be executed by a runner at all.
     is_gate: bool = False
     #: Long-running work whose completion arrives later. The runner starts it and the step
-    #: stays `waiting` until the thing it started reports back.
+    #: stays `waiting` until the thing it started reports back. Every async capability MUST
+    #: have an await spec in the runner (`_AWAIT_KINDS`) — otherwise nothing waits and the step
+    #: goes green on "accepted" — and `test_every_async_capability_is_awaited` enforces it.
     is_async: bool = False
     #: WHO ANSWERS FOR THIS STEP — a registered role, not a description.
     #:
@@ -164,7 +166,11 @@ CAPABILITIES: dict[str, Capability] = {
             optional_inputs=("seats",),
             produces=("verdicts",),
             typical_minutes=10,
-            is_async=True,
+            # NOT async. It reads a verdict the build's pipeline has already written down, in
+            # the call, and waits on nothing. Declaring it async was a claim nothing could
+            # honour: "async" means the runner parks the step against an await table, and a
+            # capability marked async with none is how deploy went green on "planned".
+            is_async=False,
         ),
         _cap(
             key="test",
@@ -178,7 +184,11 @@ CAPABILITIES: dict[str, Capability] = {
             optional_inputs=("commands",),
             produces=("tests_passed", "evidence"),
             typical_minutes=5,
-            is_async=True,
+            # NOT async. It reads a verdict the build's pipeline has already written down, in
+            # the call, and waits on nothing. Declaring it async was a claim nothing could
+            # honour: "async" means the runner parks the step against an await table, and a
+            # capability marked async with none is how deploy went green on "planned".
+            is_async=False,
         ),
         _cap(
             key="report",
@@ -318,7 +328,10 @@ CAPABILITIES: dict[str, Capability] = {
                              "made_for_kids"),
             produces=("post_url", "post_id"),
             typical_minutes=5,
-            is_async=True,
+            # NOT async AS A BARE CAPABILITY: with no tool behind it there is nothing to wait on.
+            # The publishing itself is done by the skill or custom step the workflow binds, and
+            # that path declares its own waiting.
+            is_async=False,
         ),
         _cap(
             key="monitor",

@@ -12,6 +12,10 @@ fifteen hours showing the operator a running timer, and the only clue was a log 
 Two lessons, both encoded below: a guard must not assume every async capability is awaitable,
 and every async capability that IS awaitable must have a spec — otherwise the guard silently
 stops applying to it.
+
+A third, from the review of the failed-step change (2026-10-02): an async capability with NO
+spec is itself the defect. Deploy went green on "planned" because nothing waited, so deploy now
+waits on its deployment run and the catalogue refuses an async capability without a spec.
 """
 
 from __future__ import annotations
@@ -22,24 +26,26 @@ from boss_engine.services import workflow_capability_runner as runner
 from boss_engine.services.workflow_capabilities import CAPABILITIES
 
 
-ASYNC_KEYS = sorted(k for k, c in CAPABILITIES.items() if c.is_async)
-
-
-def test_deploy_is_async_but_has_no_await_spec():
-    """The exact combination that broke: the guard has to tolerate it."""
+def test_deploy_is_async_and_now_waits_on_its_deployment():
+    """REWRITTEN to the new rule. This asserted the combination that broke — deploy async with
+    no await spec — so the guard had to tolerate it. Tolerating it was the second bug: with
+    nothing to wait on, deploy went green on `{"status": "planned"}` before anything shipped.
+    Deploy now waits on its deployment run, and every async capability has an await spec
+    (`test_every_async_capability_is_awaited`)."""
     assert CAPABILITIES["deploy"].is_async is True
-    assert "deploy" not in runner._AWAIT_KINDS
+    assert runner._AWAIT_KINDS["deploy"][0] == "deployment"
 
 
-@pytest.mark.parametrize("key", ASYNC_KEYS)
-def test_the_guard_never_indexes_a_missing_await_spec(key):
-    """Every async capability without an await spec can settle without a KeyError."""
-    if key in runner._AWAIT_KINDS:
-        return
-    # The guard now lives in _settle_started_work, called by execute_step. Exercise the
-    # behavior so moving that guard again cannot make this test inspect the wrong function.
+def test_the_guard_never_indexes_a_missing_await_spec():
+    """The original lesson still holds for the guard itself: a capability with no await spec —
+    there are none in the catalogue now, but a guard must not assume — settles without a
+    KeyError rather than stranding a leased step for fifteen hours."""
+    import dataclasses
+
+    phantom = dataclasses.replace(CAPABILITIES["deploy"], key="phantom_async")
+    assert "phantom_async" not in runner._AWAIT_KINDS
     assert runner._settle_started_work(
-        CAPABILITIES[key], key, {"status": "accepted", "tool": "test_tool"},
+        phantom, "phantom_async", {"status": "accepted", "tool": "test_tool"},
     ) == {"status": "accepted", "tool": "test_tool"}
 
 

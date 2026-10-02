@@ -32,6 +32,7 @@ from .core import create_blocking_decision, emit_event, now_utc
 # Named import so "who approved this" is compared against one constant rather than a
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
+from . import workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -136,7 +137,10 @@ def _resolve_inputs(
                               "skipped_by": skipped.get("skipped_by")}
                     context.setdefault(SKIPPED_INPUTS, {})[name] = marker
                     continue
-                raise CapabilityExecutionError(
+                # SETTLED, NOT RETRIED. The skip is a recorded fact and will not change between
+                # attempts; retrying spent ticks and minutes to reach the same sentence, which is
+                # what SettledCapabilityError exists to prevent (wfr_c8578ea1abbf4a1383cc).
+                raise SettledCapabilityError(
                     f"step '{step_id}' was skipped"
                     + (f" by {skipped.get('skipped_by')}" if skipped.get("skipped_by") else "")
                     + (f" ({skipped.get('reason')})" if skipped.get("reason") else "")
@@ -1432,7 +1436,7 @@ def _execute_step(
         # on; the audit trail names the decision, so "who approved this" is still answerable.
         adopted_gate = _adopted_gate(connection, key, context)
         if adopted_gate:
-            return {
+            return workflow_outcomes.apply(key, {
                 "capability": key,
                 "tool": None,
                 "status": "adopted",
@@ -1441,7 +1445,7 @@ def _execute_step(
                     f"({adopted_gate['decision_status']})."
                 ),
                 **adopted_gate,
-            }
+            }, {})
         # Otherwise: gates are turned into decisions before they are claimable.
         raise CapabilityExecutionError(
             f"'{capability.label}' waits for a person and is not executable work."
@@ -1451,6 +1455,35 @@ def _execute_step(
                              optional=frozenset(capability.optional_inputs or ()))
     inputs = _fill_optional_from_run_input(capability, inputs, context)
 
+    # EVERY CAPABILITY'S RESULT IS JUDGED BY ITS OWN VERDICT (services/workflow_outcomes.py).
+    #
+    # Whether work happened used to be decided by generic checks — a `status` in a short list,
+    # or `ok: false` — and real tools do not all speak that way: a smoke test of an app that was
+    # down went green because `http_probe` reports `{"status": 503}`, and a deploy went green on
+    # `{"status": "planned"}` before anything had shipped. Each capability now says, in one
+    # table beside the catalogue, what success, failure and "still going" look like for it.
+    return workflow_outcomes.apply(
+        key,
+        _perform_capability(connection, ctx, project_id=project_id, actor=actor, step=step,
+                            context=context, key=key, capability=capability, inputs=inputs),
+        inputs,
+    )
+
+
+def _perform_capability(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    actor: str,
+    step: dict[str, Any],
+    context: dict[str, Any],
+    key: str,
+    capability: Any,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Do the work of catalogue capability `key`, with its inputs already resolved. What it
+    returns is judged by `workflow_outcomes` before the runner records anything."""
     if capability.tool is None:
         # `document` has no tool because it commissions nothing — it WRITES, from what the run
         # already produced. Falling through to the no-op below made the one step whose entire
@@ -1671,6 +1704,24 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # task and waits for it exactly as `build` does. A review that only files findings leaves
     # the operator to do the work the review exists to prevent.
     "plrr": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # PLANNED IS NOT SHIPPED. `deploy_app` answers `{"status": "planned", "deployment_run_id"}`
+    # and `redeploy` starts a new deployment run; both went green on that answer, so a
+    # deployment that then failed its health check — or was never applied — never reached the
+    # step, and the workflow walked on to monitoring an app that was not there. The step waits
+    # on the deployment run, like a build waits on its code task.
+    "deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
+    "redeploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
+    # RETRIED IS NOT REBUILT. `retry_code_task` answers `{"status": "retried", "result":
+    # {"run_id": <the new attempt>}}` the moment the attempt is queued; the step waits on that
+    # attempt as `build` waits on the first.
+    "retry_build": ("code_task", ("code_task_run_id", "run_id", "id")),
+}
+
+#: Envelopes a capability's tool nests its handle in, beyond the ones named after the kind and
+#: the capability. Named per capability rather than searched for, for the reason
+#: `_awaited_handle` gives: a blind search finds the wrong id as happily as the right one.
+_AWAIT_ENVELOPES: dict[str, tuple[str, ...]] = {
+    "retry_build": ("result",),
 }
 
 
@@ -1696,7 +1747,7 @@ _CANONICAL_FIELD: dict[str, str] = {kind: fields[0] for kind, fields in _AWAIT_K
 #:
 #: A step that reports it did not do the thing must not be recorded as having done it. What
 #: happens next is a policy question; claiming success is not an answer to it.
-_DID_NOT_SHIP = frozenset({"failed", "blocked", "refused", "error"})
+_DID_NOT_SHIP = workflow_outcomes.DID_NOT_SHIP
 
 
 def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -1723,6 +1774,13 @@ def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> d
             if nested:
                 result["run_id"] = nested
 
+    # A TOOL THAT SAID IT DID NOT DO THE WORK IS NOT PARKED. `deploy_build` answers a policy
+    # block as `{"status": "blocked", "deployment_run_id": ...}` — there is an id, but nothing
+    # will ever run under it, and overwriting `blocked` with `awaiting` would hide the refusal
+    # behind a wait. The verdict (`workflow_outcomes`) fails it now, with the tool's reason.
+    if str(result.get("status") or "").lower() in _DID_NOT_SHIP:
+        return result
+
     awaited = _awaited_handle(key, result)
     if awaited:
         result["status"] = "awaiting"
@@ -1747,14 +1805,13 @@ def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> d
     # ONLY FOR WORK THIS RUNTIME KNOWS HOW TO WAIT ON.
     #
     # `key in _AWAIT_KINDS` is not decoration, it is the bug this line already caused once.
-    # `deploy` is declared is_async — it does take a while — but there is no await table for a
-    # deployment, so it has no entry here. The first version indexed _AWAIT_KINDS[key] while
-    # building the error message and raised KeyError('deploy') on every deploy step. That
-    # escaped the handler that releases leases, so five deploy steps sat `leased` for fifteen
-    # hours showing a running timer, and the log read `(non-fatal): 'deploy'`.
+    # `deploy` was declared is_async with no await table, and the first version indexed
+    # _AWAIT_KINDS[key] while building the error message: KeyError('deploy') on every deploy
+    # step, which escaped the handler that releases leases, so five deploy steps sat `leased`
+    # for fifteen hours showing a running timer, and the log read `(non-fatal): 'deploy'`.
     #
-    # A capability with no await spec cannot be parked against anything, so demanding a handle
-    # from it is asking for something that does not exist.
+    # Every async capability now HAS an await spec — deploy waits on its deployment run — and
+    # the catalogue test refuses one without. The guard stays, because a guard must not assume.
     if (capability.is_async and key in _AWAIT_KINDS
             and str(result.get("status") or "") not in _DONE_STATUSES):
         tool_name = result.get("tool") or capability.tool or key
@@ -1785,7 +1842,8 @@ def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]
     if not spec:
         return None
     kind, fields = spec
-    for scope in (output, output.get(kind), output.get(key)):
+    envelopes = tuple(output.get(name) for name in _AWAIT_ENVELOPES.get(key, ()))
+    for scope in (output, output.get(kind), output.get(key), *envelopes):
         if not isinstance(scope, dict):
             continue
         for field in fields:
@@ -1836,7 +1894,17 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "agent_run": ("agent_runs",
                   frozenset({"completed"}),
                   frozenset({"failed", "cancelled", "denied", "error"})),
+    # A deployment has SUCCEEDED when its health check passed (`succeeded`, or `healthy` from
+    # Resource Plane's verify). `deployed` is not here: it means the release was placed and has
+    # not been health-checked yet. `blocked` is a policy or preflight refusal.
+    "deployment": ("deployment_runs",
+                   frozenset({"succeeded", "healthy"}),
+                   frozenset({"failed", "blocked", "cancelled", "rolled_back",
+                              "rollback_pending", "unhealthy"})),
 }
+
+#: Where a table keeps the reason its run ended, when it is not a column called `error`.
+_REASON_COLUMN: dict[str, str] = {"deployment_runs": "failure_reason"}
 
 
 def _terminal_evidence(
@@ -1908,6 +1976,29 @@ def _terminal_evidence(
                 # directive; this is the specification being implemented, and a requirement
                 # dropped by truncation is a requirement the build silently will not meet.
                 evidence["prd_markdown"] = prd[:_PRD_CHARS]
+            return evidence
+        if kind == "deployment":
+            # Where it went, so `smoke_test` can bind {"from_step": "deploy", "field":
+            # "deployed_url"} instead of an operator pasting the address in.
+            row = connection.execute(
+                text("SELECT status, deployment_target_id FROM deployment_runs WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            if not row:
+                return {}
+            evidence = {"deployment_id": awaited_id, "deployment_status": row["status"]}
+            domains = connection.execute(
+                text("SELECT domains FROM deployment_targets WHERE id = :t"),
+                {"t": row["deployment_target_id"]},
+            ).scalar()
+            if isinstance(domains, str):
+                try:
+                    domains = json.loads(domains)
+                except ValueError:
+                    domains = [domains]
+            first = next((str(d) for d in (domains or []) if str(d).strip()), "")
+            if first:
+                evidence["deployed_url"] = first if "://" in first else f"http://{first}"
             return evidence
         if kind == "agent_run":
             # WHAT THE AGENT ACTUALLY PRODUCED, read after the approval, not the snapshot
@@ -2213,8 +2304,9 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
     # the every-await-kind test in test_a_failed_step_stops_the_run.py.
     point = connection.begin_nested()
     try:
+        column = _REASON_COLUMN.get(table, "error")
         row = connection.execute(
-            text(f"SELECT error FROM {table} WHERE id = :id"),  # noqa: S608 - fixed set
+            text(f"SELECT {column} AS error FROM {table} WHERE id = :id"),  # noqa: S608
             {"id": awaited_id},
         ).mappings().first()
         reason = str((row or {}).get("error") or "").strip()

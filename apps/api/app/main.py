@@ -23478,7 +23478,7 @@ def recheck_delivery_run(run_id: str, payload: WorkflowRecheckBody) -> dict:
         actor = _delivery_workflow_actor(payload)
         require_project_actor(connection, project_id, actor, "workflow_execute")
         return recheck_run(connection, project_id=project_id, run_id=run_id,
-                           requeue=bool(payload.get("requeue", True)))
+                           requeue=bool(payload.get("requeue", True)), actor=actor)
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/deploy-target")

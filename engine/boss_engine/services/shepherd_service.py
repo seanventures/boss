@@ -1103,6 +1103,29 @@ def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
     )
 
 
+def redeploy_latest_deployment(engine, settings, run_id: str, actor: str) -> Optional[dict]:
+    """Redeploy this build's latest deployment and return what the redeploy returned — the NEW
+    deployment run's id included. None when the build was never deployed.
+
+    `_act_on_deployment` reduces the outcome to "started" / "failed: …", which is all the
+    shepherd's remedy needs. A workflow's `redeploy` step needs more: the id of the deployment
+    it started, so it can WAIT for it. Without that the step went green on "started" while the
+    deployment it had begun went on to fail its health check, unseen.
+    """
+    from ..db import begin
+    from .delivery_pipeline import redeploy
+
+    with begin(engine) as c:
+        row = c.execute(
+            sql("SELECT id FROM deployment_runs "
+                "WHERE release_packet->>'code_task_run_id' = :i "
+                "ORDER BY created_at DESC LIMIT 1"),
+            {"i": run_id}).mappings().first()
+    if not row:
+        return None
+    return redeploy(engine, settings, row["id"], actor=actor)
+
+
 def _act_on_deployment(engine, settings, run_id: str, action: str, actor: str) -> str:
     """Carry out the two DEPLOY_FAILED remedies against this run's latest deployment.
 

@@ -367,7 +367,10 @@ describe("the workflow drawn as a path", () => {
   it("opens on the step that wants attention", () => {
     // Landing on "research succeeded" while a gate three steps along waits for you is the
     // wrong answer to "what is happening".
-    expect(DW).toContain("steps.find(needsYou) ?? steps.find((s) => phaseOf(s) === \"now\")");
+    // A step the run STOPPED at comes straight after an open approval: it is the other thing
+    // on this page waiting on a person (see `stoppedStep`).
+    expect(DW).toContain(
+      "steps.find(needsYou) ?? stoppedStep(run) ?? steps.find((s) => phaseOf(s) === \"now\")");
   });
 
   it("names a step by what it IS, from the engine's registry", () => {
@@ -497,7 +500,10 @@ describe("managing runs, not just watching them", () => {
   });
 
   it("can put a failed step back in the queue", () => {
-    expect(DW2).toContain('data-testid="dw-step-retry"');
+    // One component carries Try again (and Skip) for the step's detail and the run card; its
+    // test ids are prefixed per place, "dw-step" by default.
+    expect(DW2).toContain("data-testid={`${idPrefix}-retry`}");
+    expect(DW2).toContain('idPrefix = "dw-step"');
     expect(DW2).toContain('"retry_step"');
   });
 

@@ -281,12 +281,67 @@ function skipReason(step: RunStep): string {
   return String(out.note ?? out.reason ?? "").slice(0, 220);
 }
 
+/** The step states a run STOPS at for the operator — the engine's `STOPPED_STEP_STATES`, which
+ *  a test holds this list to. */
+export const STOPPED_STEP_STATUSES: readonly string[] = ["failed", "deadlettered"];
+
 /** Whether "Skip and proceed" is offered: a step whose work failed, and never an approval gate
  *  or a cancelled step. Mirrors `workflows.skip_failed_step`, which refuses the same cases. */
 export function canSkip(step: RunStep, capability?: { is_gate?: boolean }): boolean {
-  if (!["failed", "deadlettered"].includes(step.status)) return false;
+  if (!STOPPED_STEP_STATUSES.includes(step.status)) return false;
   if (step.kind === "decision") return false;
   return !capability?.is_gate;
+}
+
+/** The step a run has STOPPED AT and is waiting for the operator to decide about: its work
+ *  failed (or was dead-lettered) and nobody has retried or skipped it yet.
+ *
+ *  A STOPPED RUN NEEDS SOMEBODY. When a failed step started stopping its run (boss-1,
+ *  2026-10-02), the run landed under "Stopped" beside runs that were cancelled on purpose, the
+ *  page did not open on it, and the card said nothing about why — the Try again and Skip
+ *  buttons were two clicks deep. Read that way it is "something broke"; it is actually "research
+ *  failed, decide: try again or skip". So a stopped step counts as needing the operator
+ *  everywhere the console triages runs (`runNeedsYou`), exactly as an open approval does.
+ *
+ *  Not a refused approval gate: that one is a person's no, already answered, and the card says
+ *  so in its own words (see `DENIED`). */
+export function stoppedForYou(step: RunStep): boolean {
+  if (!STOPPED_STEP_STATUSES.includes(step.status)) return false;
+  if (step.kind === "decision") return false;
+  return !step.decision_id;
+}
+
+/** The first step this run stopped at for the operator, or null. */
+export function stoppedStep(run: { status: string; steps?: RunStep[] | null }): RunStep | null {
+  // A run somebody stopped, or one that finished, is history — nothing there waits on anybody.
+  if (["cancelled", "completed", "compensated"].includes(run.status)) return null;
+  return (run.steps ?? []).find(stoppedForYou) ?? null;
+}
+
+/** Does this run need a person right now — an open approval, or a step it stopped at? The ONE
+ *  rule the bucket, the page's opening run and the run card all read, so they cannot disagree. */
+export function runNeedsYou(run: { status: string; steps?: RunStep[] | null }): boolean {
+  return (run.steps ?? []).some(needsYou) || stoppedStep(run) !== null;
+}
+
+/** Which heading a run is listed under. Exported so the rule is tested, not only rendered. */
+export function bucketOf(run: { status: string; steps?: RunStep[] | null }):
+    "needs_you" | "running" | "blocked" | "done" {
+  if (runNeedsYou(run)) return "needs_you";
+  if (["failed", "deadlettered", "blocked", "cancelled"].includes(run.status)) return "blocked";
+  return LIVE.includes(run.status) ? "running" : "done";
+}
+
+/** Who skipped a step and why, when an OPERATOR skipped it — "" for a branch never taken.
+ *  The two read the same on the rail otherwise, and they mean opposite things: one is a
+ *  decision somebody made about this step, the other is a path the run did not go down. */
+export function skippedBy(step: RunStep): string {
+  const out = (step.output ?? {}) as {
+    skipped_by_operator?: unknown; skipped_by?: unknown; skip_reason?: unknown };
+  if (step.status !== "skipped" || !out.skipped_by_operator) return "";
+  const who = String(out.skipped_by ?? "").trim() || "an operator";
+  const why = String(out.skip_reason ?? "").trim();
+  return why ? `skipped by ${who}: ${why}` : `skipped by ${who}`;
 }
 
 function notApplicable(step: RunStep): boolean {
@@ -2285,12 +2340,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   // Every run sat under one heading called Running, so a run stopped dead and a run waiting on
   // a person looked like a run making progress. These are the four states an operator acts on
   // differently: one needs them, one needs nothing, one needs a decision about a failure, and
-  // one is history.
-  const bucketOf = (run: Run): Bucket =>
-    run.steps.some(needsYou) ? "needs_you"
-      : ["failed", "deadlettered", "blocked", "cancelled"].includes(run.status) ? "blocked"
-      : LIVE.includes(run.status) ? "running"
-      : "done";
+  // one is history. A run that stopped at a failed step is the third kind and goes under
+  // "Needs you" — see `bucketOf` and `runNeedsYou`.
   const counts = BUCKETS.reduce((acc, b) => {
     acc[b] = runs.filter((r) => bucketOf(r) === b).length;
     return acc;
@@ -2324,6 +2375,10 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
       ) : null}
       {shown.map((run) => {
         const open = openRun === run.id;
+        // The step this run stopped at for the operator, if any — see `stoppedStep`.
+        const stopped = stoppedStep(run);
+        const stoppedCapability = stopped
+          ? capabilities.find((c) => c.key === stopped.capability) : undefined;
         return (
           // OPEN IS A STATE THE CARD SHOULD LOOK LIKE.
           //
@@ -2376,7 +2431,30 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                 </span>
               ) : null}
             </button>
-            {run.blocked_reason ? (
+            {stopped ? (
+              // STOPPED, AND WAITING ON YOU — SAID ON THE CARD, WITH BOTH ANSWERS.
+              //
+              // A run that stopped at a failed step showed no reason here (the runtime wrote
+              // `error`, this rendered only `blocked_reason`), sat under "Stopped" beside runs
+              // somebody cancelled, and offered "Run this workflow again" and "Remove this run"
+              // — both of which throw the run away. The two answers that keep it were inside the
+              // run, on the step, two clicks deep. The runtime now writes the sentence
+              // ("Stopped at Research: … Try it again, or skip it and carry on.") and the card
+              // carries it with the buttons, so the decision is visible without opening anything.
+              <div className="dw-blocked dw-stopped" data-testid="dw-run-stopped">
+                <p>
+                  {run.blocked_reason
+                    || `Stopped at ${stoppedCapability?.label ?? stopped.step_id}: `
+                       + `${stopped.error || run.error || "its work failed"}. `
+                       + "Try it again, or skip it and carry on."}
+                </p>
+                <FailedStepActions key={stopped.step_id} step={stopped}
+                                   capability={stoppedCapability} busy={busy}
+                                   idPrefix="dw-run-stopped"
+                                   onRetry={() => onRetryStep(run.id, stopped.step_id)}
+                                   onSkip={(reason) => onSkipStep(run.id, stopped.step_id, reason)} />
+              </div>
+            ) : run.blocked_reason ? (
               // A DENIED RELEASE IS A DECISION, NOT A FAULT. "step 'deploy' was rejected"
               // rendered in the same red as a crash, with no hint of what happens next — so a
               // deliberate no looked like a failure the operator had to debug.
@@ -2452,7 +2530,8 @@ function phaseOf(step: RunStep):
  */
 export function runToOpen(runs: Run[]): string | null {
   if (!runs.length) return null;
-  const needsMe = runs.find((r) => (r.steps ?? []).some(needsYou));
+  // An open approval OR a step the run stopped at — the same rule the "Needs you" bucket reads.
+  const needsMe = runs.find(runNeedsYou);
   if (needsMe) return needsMe.id;
   const live = runs.find((r) => ACTIVE_RUN_STATES.has(r.status));
   return (live ?? runs[0]).id;
@@ -2580,7 +2659,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   // Open on the step that wants attention, then the one in flight, then the first. Landing on
   // "research succeeded" when a gate three steps along is waiting for you is the wrong answer
   // to "what is happening".
-  const initial = steps.find(needsYou) ?? steps.find((s) => phaseOf(s) === "now")
+  const initial = steps.find(needsYou) ?? stoppedStep(run) ?? steps.find((s) => phaseOf(s) === "now")
     ?? steps.find((s) => phaseOf(s) === "failed") ?? steps[0];
   const [picked, setPicked] = useState<string | null>(initial?.step_id ?? null);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
@@ -2700,10 +2779,20 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                     // why — "No research phase — this project was started directly, and the
                     // build was already running when this workflow began" — and the chain
                     // threw that sentence away and printed two words that sound like a defect.
-                    <span className="dw-node-skipped" data-testid="dw-node-skipped"
-                          title={skipReason(step) || "this step did not apply to this run"}>
-                      skipped{skipReason(step) ? " ⓘ" : ""}
-                    </span>
+                    // AN OPERATOR'S SKIP IS SAID, NOT HIDDEN IN A TOOLTIP. "skipped ⓘ" read
+                    // the same for a branch the run never took and for a failed step somebody
+                    // chose to go on without — opposite things. Who and why are on the rail.
+                    skippedBy(step) ? (
+                      <span className="dw-node-skipped" data-by-operator="true"
+                            data-testid="dw-node-skipped-by-operator" title={skippedBy(step)}>
+                        {skippedBy(step)}
+                      </span>
+                    ) : (
+                      <span className="dw-node-skipped" data-testid="dw-node-skipped"
+                            title={skipReason(step) || "this step did not apply to this run"}>
+                        skipped{skipReason(step) ? " ⓘ" : ""}
+                      </span>
+                    )
                   ) : railMeta(step)}
                 </span>
               </button>
@@ -2721,6 +2810,9 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
         // notch can be positioned without threading a ref through StepDetail's props.
         <div ref={detailRef} className="dw-detail-wrap">
         <StepDetail
+          // KEYED BY THE STEP. Without it React reuses one StepDetail for every step picked on
+          // the rail, so state that belongs to one step survived onto the next.
+          key={current.step_id}
           step={current}
           // Its position in the run, so the card can wear the same number as the rail node.
           stepIndex={run.steps.findIndex((s) => s.step_id === current.step_id)}
@@ -3344,6 +3436,79 @@ function useLearned(topic: string): [boolean, () => void] {
   return [learned, mark];
 }
 
+/** "Try … again" and "Skip and proceed" for a step whose work failed.
+ *
+ *  BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that did not
+ *  exist, a service that was down — had no way back: the run sat stopped and the only recourse
+ *  was to start the whole workflow again and repeat everything before it.
+ *
+ *  OR GO ON WITHOUT IT. A failed step stops its run — every kind of step, since research that
+ *  died was shown green and the run walked on into a panel and a build (boss-1, 2026-10-02).
+ *  Whether the run proceeds without it is the operator's call, so both choices sit together.
+ *  Skip is not offered on an approval: a refused gate is somebody's "no", and skipping it would
+ *  turn that into a yes.
+ *
+ *  ONE COMPONENT, TWO PLACES. The step's own detail, and the run card itself — where a stopped
+ *  run says why it stopped and offers both answers without being opened first. `idPrefix`
+ *  keeps the two sets of test ids distinct when both are on screen. */
+function FailedStepActions({ step, capability, busy, onRetry, onSkip, idPrefix = "dw-step" }: {
+  step: RunStep; capability?: Capability; busy: string | null;
+  onRetry: () => void; onSkip: (reason: string) => void; idPrefix?: string;
+}) {
+  // The reason box for "Skip and proceed" — open only after the operator asks to skip, so the
+  // decision is two deliberate acts: choose to skip, then say why.
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipWhy, setSkipWhy] = useState("");
+  const name = capability?.label ?? step.step_id;
+  return (
+    <div className="dw-step-decide" data-testid={`${idPrefix}-decide`}>
+      <button type="button" className="cap-btn primary" onClick={onRetry} disabled={!!busy}
+              data-testid={`${idPrefix}-retry`}>
+        {busy === "Retry" ? "Queueing…" : `Try ${name} again`}
+      </button>
+      <Explain label="What retrying this step does">
+        Runs this step only; everything before it stays done.
+      </Explain>
+      {canSkip(step, capability) ? (
+        <button type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
+                disabled={!!busy || skipOpen} data-testid={`${idPrefix}-skip`}>
+          {busy === "Skip" ? "Skipping…" : "Skip and proceed"}
+        </button>
+      ) : null}
+      {canSkip(step, capability) ? (
+        <Explain label="What skipping this step does">
+          Marks it skipped with your reason and carries on. Steps that use what it would
+          have produced are told it was skipped — never handed a made-up value.
+        </Explain>
+      ) : null}
+      {canSkip(step, capability) && skipOpen ? (
+        <form className="dw-skip-why" data-testid={`${idPrefix}-skip-form`}
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!skipWhy.trim()) return;
+                onSkip(skipWhy.trim());
+                setSkipOpen(false);
+                setSkipWhy("");
+              }}>
+          <label>
+            Why go on without {name}?{" "}
+            <input type="text" value={skipWhy} autoFocus required
+                   data-testid={`${idPrefix}-skip-reason`}
+                   placeholder="kept on the run's record"
+                   onChange={(e) => setSkipWhy(e.target.value)} />
+          </label>
+          <button type="submit" className="cap-btn primary"
+                  disabled={!!busy || !skipWhy.trim()} data-testid={`${idPrefix}-skip-confirm`}>
+            Skip it
+          </button>
+          <button type="button" className="linklike"
+                  onClick={() => { setSkipOpen(false); setSkipWhy(""); }}>Cancel</button>
+        </form>
+      ) : null}
+    </div>
+  );
+}
+
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      previewStarting, busy }: {
@@ -3366,10 +3531,6 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   busy: string | null;
 }) {
   const phase = phaseOf(step);
-  // The reason box for "Skip and proceed" — open only after the operator asks to skip, so the
-  // decision is two deliberate acts: choose to skip, then say why.
-  const [skipOpen, setSkipOpen] = useState(false);
-  const [skipWhy, setSkipWhy] = useState("");
   // HAS ANYONE SHIPPED FROM THIS PROJECT? — not "has this browser".
   //
   // Keying only on localStorage was wrong in the one case that matters: an operator who has
@@ -3857,61 +4018,12 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         </button>
       </div>
 
-      {/* BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that
-          did not exist, a service that was down — had no way back: the run sat stopped and the
-          only recourse was to start the whole workflow again and repeat everything before it.
-
-          OR GO ON WITHOUT IT. A failed step stops its run — every kind of step, since research
-          that died was shown green and the run walked on into a panel and a build (boss-1,
-          2026-10-02). Whether the run proceeds without it is the operator's call, so both
-          choices sit together. Skip is not offered on an approval: a refused gate is somebody's
-          "no", and skipping it would turn that into a yes. */}
+      {/* Try again / Skip and proceed — see FailedStepActions for why both sit together. */}
       {["failed", "deadlettered", "cancelled"].includes(step.status) ? (
-        <div className="dw-step-decide">
-          <button type="button" className="cap-btn primary" onClick={onRetry} disabled={!!busy}
-                  data-testid="dw-step-retry">
-            {busy === "Retry" ? "Queueing…" : `Try ${capability?.label ?? step.step_id} again`}
-          </button>
-          <Explain label="What retrying this step does">
-            Runs this step only; everything before it stays done.
-          </Explain>
-          {canSkip(step, capability) ? (
-            <button type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
-                    disabled={!!busy || skipOpen} data-testid="dw-step-skip">
-              {busy === "Skip" ? "Skipping…" : "Skip and proceed"}
-            </button>
-          ) : null}
-          {canSkip(step, capability) ? (
-            <Explain label="What skipping this step does">
-              Marks it skipped with your reason and carries on. Steps that use what it would
-              have produced are told it was skipped — never handed a made-up value.
-            </Explain>
-          ) : null}
-          {canSkip(step, capability) && skipOpen ? (
-            <form className="dw-skip-why" data-testid="dw-step-skip-form"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!skipWhy.trim()) return;
-                    onSkip(skipWhy.trim());
-                    setSkipOpen(false);
-                    setSkipWhy("");
-                  }}>
-              <label>
-                Why go on without {capability?.label ?? step.step_id}?{" "}
-                <input type="text" value={skipWhy} autoFocus required
-                       data-testid="dw-step-skip-reason"
-                       placeholder="kept on the run's record"
-                       onChange={(e) => setSkipWhy(e.target.value)} />
-              </label>
-              <button type="submit" className="cap-btn primary"
-                      disabled={!!busy || !skipWhy.trim()} data-testid="dw-step-skip-confirm">
-                Skip it
-              </button>
-              <button type="button" className="linklike"
-                      onClick={() => { setSkipOpen(false); setSkipWhy(""); }}>Cancel</button>
-            </form>
-          ) : null}
-        </div>
+        // KEYED BY THE STEP, so a reason half-typed for one step is not still open, pre-filled,
+        // when the operator clicks a different failed step in the rail.
+        <FailedStepActions key={step.step_id} step={step} capability={capability} busy={busy}
+                           onRetry={onRetry} onSkip={onSkip} />
       ) : null}
 
       {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the

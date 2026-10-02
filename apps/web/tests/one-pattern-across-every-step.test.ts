@@ -21,7 +21,8 @@ const CSS = codeOnly("app/globals.css");
 
 describe("every step follows the same rule", () => {
   it("retrying a failed step explains itself on the dot", () => {
-    const at = UI.indexOf('data-testid="dw-step-retry"');
+    const at = UI.indexOf("data-testid={`${idPrefix}-retry`}");
+    expect(at).toBeGreaterThan(-1);
     expect(UI.slice(at, at + 400)).toContain("<Explain");
     expect(UI).toContain("Runs this step only; everything before it stays done.");
   });

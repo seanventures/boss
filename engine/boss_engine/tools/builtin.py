@@ -1634,12 +1634,27 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         reversibility="safe",
     )
     def redeploy(ctx, *, project_id, actor, args):
-        from ..services.shepherd_service import _act_on_deployment
-        outcome = _act_on_deployment(
-            ctx.engine, ctx.settings, str(args["run_id"]), "redeploy_deployment", actor)
-        return {"ok": not outcome.startswith(("no_action", "failed")),
-                "run_id": args["run_id"], "outcome": outcome,
-                "reason": args.get("reason") or "operator asked BOSS to retry the deployment"}
+        from ..services.shepherd_service import _act_on_deployment, redeploy_latest_deployment
+        reason = args.get("reason") or "operator asked BOSS to retry the deployment"
+        result = redeploy_latest_deployment(ctx.engine, ctx.settings, str(args["run_id"]), actor)
+        if result is None:
+            # Never deployed: the explanation of what IS there comes from the shared remedy.
+            outcome = _act_on_deployment(
+                ctx.engine, ctx.settings, str(args["run_id"]), "redeploy_deployment", actor)
+            return {"ok": False, "run_id": args["run_id"], "outcome": outcome, "reason": reason}
+        # THE NEW DEPLOYMENT'S ID AND STATUS, not only "started". A workflow's redeploy step
+        # waits on that deployment run; with only a word to go on it went green while the
+        # deployment it had begun failed its health check. `blocked` is a refusal too — it used
+        # to read "started".
+        status = str(result.get("status") or "")
+        refused = status in ("failed", "error", "blocked", "not_found")
+        return {"ok": not refused, "run_id": args["run_id"],
+                "outcome": f"failed: {status}" if refused else "started",
+                "deployment_run_id": result.get("deployment_run_id"),
+                "deployment_status": status,
+                **({"error": str(result.get("reason") or result.get("error") or status)}
+                   if refused else {}),
+                "reason": reason}
 
     @reg.tool(
         "deploy_app",
@@ -4397,6 +4412,64 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                          "describe_workflow_run.")}
 
     @reg.tool(
+        "skip_workflow_step",
+        "Go on WITHOUT one failed or dead-lettered workflow step: it is marked skipped (never "
+        "succeeded) with the reason and who decided, and the run proceeds to the next steps. "
+        "This is the console's \"Skip and proceed\" button — the other answer to a step that "
+        "stopped its run, beside retry_workflow_step. Steps that use what it would have "
+        "produced are told it was skipped, never handed a value. Refused for an approval "
+        "gate (a refused gate is a person's no) and for a step that did not fail. A reason is "
+        "required, in the operator's words.",
+        _obj({"run_id": {"type": "string", "description": "the wfr_... the step belongs to"},
+              "step_id": {"type": "string",
+                          "description": "the step's id, e.g. 'research' — NOT its label"},
+              "reason": {"type": "string",
+                         "description": "why the run should go on without it — kept on the "
+                                        "run's record"},
+              "project_id": {"type": "string"}},
+             ["run_id", "step_id", "reason"]),
+        kind="write",
+        reversibility="safe",
+    )
+    def skip_workflow_step(ctx, *, project_id, actor, args):
+        """The agent's half of "Skip and proceed".
+
+        A failed step now stops its run (boss-1, 2026-10-02: research died, was recorded green,
+        and the run walked on into a panel and a build). The console offers Try again and Skip;
+        the agent could only offer Try again, so asked "can we just go on without research?" it
+        could diagnose the stop and not perform the answer — the same dead end
+        `retry_workflow_step` was added to close. Same implementation as the console's button
+        (`workflows.skip_failed_step`), so the two cannot drift.
+        """
+        pid = args.get("project_id") or project_id
+        run_id = str(args.get("run_id") or "").strip()
+        step_id = str(args.get("step_id") or "").strip()
+        reason = str(args.get("reason") or "").strip()
+        if not run_id or not step_id:
+            return {"ok": False, "error": "run_id and step_id are required"}
+        from ..services import workflows as _workflows
+        with ctx.begin() as c:
+            try:
+                done = _workflows.skip_failed_step(
+                    c, project_id=pid, run_id=run_id, step_id=step_id, actor=actor,
+                    reason=reason)
+            except _workflows.WorkflowError as error:
+                if isinstance(error, _workflows.WorkflowNotFoundError):
+                    available = c.execute(
+                        _text("SELECT step_id, status FROM workflow_step_runs "
+                              " WHERE workflow_run_id=:r AND project_id=:p ORDER BY created_at"),
+                        {"r": run_id, "p": pid}).mappings().all()
+                    return {"ok": False, "error": str(error),
+                            "steps_on_this_run": [
+                                {"step_id": s["step_id"], "status": s["status"]}
+                                for s in available]}
+                return {"ok": False, "error": str(error)}
+        return {"ok": True, **done,
+                "note": (f"Skipped; the run is now {done.get('run_status')}. Steps that read "
+                         "this one's output are told it was skipped. Check back with "
+                         "describe_workflow_run.")}
+
+    @reg.tool(
         "describe_workflow_run",
         "THE ONE CALL for 'what happened to this workflow run' (wfr_...): its status, the "
         "inputs it was started with, every step with attempts and its error, and — when it "
@@ -4540,7 +4613,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
 
         with ctx.begin() as c:
             return recheck_run(c, project_id=project_id, run_id=str(args["run_id"]),
-                               requeue=bool(args.get("requeue", True)))
+                               requeue=bool(args.get("requeue", True)), actor=actor)
 
     @reg.tool(
         "get_investigation",
@@ -6565,6 +6638,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # so it ended with "tell me to go ahead" and no button. Reachable from chat means the
     # operator gets the button; it is still a write, so nothing runs until they press it.
     "retry_workflow_step",
+    # ...and its other half. A failed step stops its run; the operator's two answers are try
+    # it again or go on without it, and the agent has to be able to offer both.
+    "skip_workflow_step",
     # MEMORY IS WORTHLESS IF THE AGENT CANNOT REACH IT FROM A CONVERSATION. The moment an
     # operator corrects you is the only moment that correction exists — it has to be writable
     # from the turn in which it is said, not from a separate admin path.

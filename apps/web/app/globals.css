@@ -8307,6 +8307,13 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 /* A denial is a decision, not a crash: same row, different voice. */
 .dw-blocked[data-denied="true"] { color: var(--warn, #d29922); }
+/* A run stopped at a failed step: the reason, then the two answers that keep the run, on the
+   card itself. Amber, not red: it is waiting on a decision, not broken beyond one. */
+.dw-stopped { color: var(--warn, #d29922); display: grid; gap: 6px; }
+.dw-stopped p { margin: 0; }
+.dw-stopped .dw-step-decide { margin-left: 0; flex-wrap: wrap; }
+/* An operator's skip is a decision somebody made; it reads as one, not as a tooltip. */
+.dw-node-skipped[data-by-operator="true"] { cursor: default; font-style: italic; }
 .dw-target-set { margin: 0; font-size: 12px; }
 
 /* The decision somebody was sent here to make, brought into view and marked. */
