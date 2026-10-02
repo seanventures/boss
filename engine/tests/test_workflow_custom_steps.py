@@ -83,7 +83,7 @@ def project(eng):
         c.execute(text("DELETE FROM workflow_runs WHERE project_id=:p"), {"p": pid})
         for table in ("workflow_custom_steps", "workflow_mappings", "workflow_versions",
                       "workflow_definitions", "project_skills", "mcp_servers",
-                      "decisions", "events", "receipts"):
+                      "decisions", "events", "receipts", "role_skills", "roles"):
             try:
                 c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
             except Exception:
@@ -91,7 +91,28 @@ def project(eng):
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
 
-def _skill(c, project_id, skill_id, *, risk_tier, trusted=True, enabled=True):
+#: The agent these tests give their skills to. A step that names nobody is run by the agent
+#: that HOLDS its skill — the runner no longer borrows the skill by widening its callers — so a
+#: project whose steps run needs an agent holding them, exactly as a real one does.
+HOLDER = "clerk"
+
+
+def _agent(c, project_id, role_key, *skills):
+    c.execute(
+        text("INSERT INTO roles (id, project_id, role_key, display_name, spec) "
+             "VALUES (:i, :p, :r, :r, '{}'::jsonb) ON CONFLICT (project_id, role_key) DO NOTHING"),
+        {"i": f"role_{uuid.uuid4().hex[:10]}", "p": project_id, "r": role_key},
+    )
+    for skill_id in skills:
+        c.execute(
+            text("INSERT INTO role_skills (id, project_id, role_key, skill_id, source) "
+                 "VALUES (:i, :p, :r, :s, 'builtin') ON CONFLICT DO NOTHING"),
+            {"i": f"rs_{uuid.uuid4().hex[:10]}", "p": project_id, "r": role_key, "s": skill_id},
+        )
+
+
+def _skill(c, project_id, skill_id, *, risk_tier, trusted=True, enabled=True,
+           held_by=HOLDER):
     import json
     c.execute(
         text("INSERT INTO project_skills (id, project_id, skill_id, enabled, config, provenance) "
@@ -100,6 +121,8 @@ def _skill(c, project_id, skill_id, *, risk_tier, trusted=True, enabled=True):
          "c": json.dumps({} if risk_tier is None else {"risk_tier": risk_tier}),
          "pr": json.dumps({"trusted": trusted})},
     )
+    if held_by:
+        _agent(c, project_id, held_by, skill_id)
 
 
 def _mcp(c, project_id, *, risk_tier, overrides=None, trusted=True, enabled=True):
@@ -349,7 +372,11 @@ def test_a_safe_custom_step_runs_through_the_governed_skill_path(eng, project, m
         row = _step_row(c, run["id"])
 
     assert seen["skill_id"] == "tracker.file_issue"
-    assert seen["caller"] == custom_steps.RUNNER_CALLER
+    # REWRITTEN: this asserted the anonymous `workflow_runner`. A step naming nobody is now run
+    # by the agent that holds its skill, which is who the permission gate should see.
+    assert seen["caller"] == HOLDER
+    assert row["output"]["ran_as"]["agent"] == HOLDER
+    assert row["output"]["ran_as"]["how"] == "only_holder"
     assert seen["args"] == {"ticket": "T-1"}
     assert row["status"] == "succeeded"
     # Flat, because the next step reads it with {"from_step": …, "field": "issue_url"}.
@@ -531,28 +558,40 @@ def test_a_tools_own_output_cannot_overwrite_the_steps_recorded_risk(eng, projec
     assert row["output"]["_step"]["label"] == "Guard it"
 
 
-def test_defining_a_step_is_what_grants_the_runner_permission_to_call_the_skill(eng, project,
-                                                                               monkeypatch):
-    """Skills declare who may call them, and none of them listed a runner that did not exist
-    when they were written. Without the grant every custom step is denied on its first run and
-    the feature is a demo — so defining the step, by name, in this project, IS the grant."""
-    passed = {}
-
-    def fake_invoke(connection, settings, project_id, skill_id, caller, args, *, actor,
-                    skill_spec=None, approved_by=None, approval_about=None):
-        passed["spec"] = skill_spec
-        passed["caller"] = caller
-        return {"status": "succeeded", "result": {}}
-
-    import boss_engine.services.agent_loop as agent_loop
+def _registered(monkeypatch, callers):
+    """The skill registry answering with a spec whose allowed callers are `callers`."""
     import boss_engine.services.entitlements as entitlements
-    monkeypatch.setattr(agent_loop, "_invoke_agent_skill", fake_invoke)
+
     monkeypatch.setattr(
         entitlements.EntitlementBrokerService, "get_skill",
         lambda self, skill_id, project_id=None, *, connection=None: {
-            "id": skill_id, "permissions": {"allowed_callers": ["agent_loop"]},
+            "id": skill_id, "permissions": {"allowed_callers": list(callers)},
         },
     )
+
+
+def _recording_invoke(monkeypatch):
+    passed: dict = {}
+
+    def fake_invoke(connection, settings, project_id, skill_id, caller, args, *, actor,
+                    skill_spec=None, approved_by=None, approval_about=None):
+        passed.update({"spec": skill_spec, "caller": caller, "actor": actor})
+        return {"status": "succeeded", "result": {}}
+
+    import boss_engine.services.agent_loop as agent_loop
+    monkeypatch.setattr(agent_loop, "_invoke_agent_skill", fake_invoke)
+    return passed
+
+
+def test_a_step_naming_nobody_is_run_by_the_agent_holding_its_skill_and_nothing_is_widened(
+        eng, project, monkeypatch):
+    """REWRITTEN. This test used to pin "defining the step IS the grant": a step naming nobody
+    ran as `workflow_runner`, added on the fly to the skill's allowed_callers. That made any
+    skill callable by anybody who could draw a step, and contradicted the rule the rest of BOSS
+    runs on — an agent HOLDS a skill and that grant is what the permission gate cashes. The step
+    now goes to the holder, and the skill's own spec reaches the runtime unwidened."""
+    passed = _recording_invoke(monkeypatch)
+    _registered(monkeypatch, ["agent_loop"])
 
     with eng.begin() as c:
         _skill(c, project, "tracker.file_issue", risk_tier=0)
@@ -565,56 +604,103 @@ def test_defining_a_step_is_what_grants_the_runner_permission_to_call_the_skill(
         runner.tick(c, Ctx(eng), project_id=project)
         row = _step_row(c, run["id"])
 
-    assert row["status"] == "succeeded"
-    assert passed["caller"] == "workflow_runner"
-    # WIDENED, not replaced: the callers the skill already trusted are still there.
-    assert passed["spec"]["permissions"]["allowed_callers"] == ["agent_loop", "workflow_runner"]
+    assert row["status"] == "succeeded", row["last_error"]
+    assert passed["caller"] == HOLDER
+    # The agent is the actor on the record, not whoever started the run.
+    assert passed["actor"] == HOLDER
+    # NOTHING WIDENED: the runtime resolves the skill's own registered spec.
+    assert passed["spec"] is None
+    assert row["output"]["ran_as"]["skills_offered"] == ["tracker.file_issue"]
 
 
-def test_the_grant_widens_who_may_call_and_never_what_may_be_done(eng, project, monkeypatch):
-    """The one thing that would make the grant dangerous. Everything except the caller list
-    must reach the runtime exactly as the skill registry wrote it."""
-    passed = {}
-    registered = {
-        "id": "prod.reset",
-        "permissions": {"allowed_callers": ["agent_loop"], "required_permissions": ["deploy"]},
-        "risk_tier": 3,
-        "cost": {"category": "skill", "estimator": "fixed"},
-        "policy": {"requires_receipt": True},
-        "data_boundary": "restricted",
-    }
-
-    import boss_engine.services.agent_loop as agent_loop
-    import boss_engine.services.entitlements as entitlements
-    monkeypatch.setattr(
-        agent_loop, "_invoke_agent_skill",
-        lambda *a, **k: passed.update(spec=k.get("skill_spec")) or {
-            "status": "succeeded", "result": {}},
-    )
-    monkeypatch.setattr(
-        entitlements.EntitlementBrokerService, "get_skill",
-        lambda self, skill_id, project_id=None, *, connection=None: dict(registered),
-    )
-
+def test_a_skill_nobody_may_run_is_refused_at_publish_with_what_to_do(eng, project, monkeypatch):
+    """Where the runner used to borrow the skill, the operator is now told the one thing that
+    fixes it — while they are still in the builder, not twenty minutes into a run."""
+    _registered(monkeypatch, ["agent_loop"])
     with eng.begin() as c:
-        _skill(c, project, "prod.reset", risk_tier=3)
+        _skill(c, project, "tracker.file_issue", risk_tier=0, held_by=None)
         custom_steps.create(
-            c, project_id=project, label="Reset prod", binding_kind="skill",
-            skill_id="prod.reset", actor="test", step_key="reset_prod",
+            c, project_id=project, label="File issue", binding_kind="skill",
+            skill_id="tracker.file_issue", actor="test", step_key="file_issue",
         )
-        version = _publish_custom(c, project, "wf_scope", "reset_prod", mode="manual")
+        with pytest.raises(workflows.WorkflowBindingBlockedError) as error:
+            _publish_custom(c, project, "wf_nobody", "file_issue")
+    said = str(error.value)
+    assert "no agent on this project may run it" in said
+    assert "Give tracker.file_issue to an agent on the Agents page" in said
+
+
+def test_a_skill_that_names_an_agent_as_its_caller_is_run_by_that_agent(eng, project,
+                                                                         monkeypatch):
+    """The permission gate allows a caller the skill LISTS as well as one that holds it, so the
+    resolver must find that agent too — or it refuses steps the runtime would happily run."""
+    passed = _recording_invoke(monkeypatch)
+    _registered(monkeypatch, ["auditor"])
+    with eng.begin() as c:
+        _skill(c, project, "tracker.file_issue", risk_tier=0, held_by=None)
+        _agent(c, project, "auditor")
+        custom_steps.create(
+            c, project_id=project, label="File issue", binding_kind="skill",
+            skill_id="tracker.file_issue", actor="test", step_key="file_issue",
+        )
+        version = _publish_custom(c, project, "wf_listed", "file_issue")
         run = _start(c, project, version["id"])
         runner.tick(c, Ctx(eng), project_id=project)
         row = _step_row(c, run["id"])
-        c.execute(text("UPDATE decisions SET status='approved' WHERE id=:d"),
-                  {"d": row["decision_id"]})
-        runner.tick(c, Ctx(eng), project_id=project)
-        runner.tick(c, Ctx(eng), project_id=project)
 
-    spec = passed["spec"]
-    for field in ("risk_tier", "cost", "policy", "data_boundary"):
-        assert spec[field] == registered[field], f"{field} was altered by the grant"
-    assert spec["permissions"]["required_permissions"] == ["deploy"]
+    assert row["status"] == "succeeded", row["last_error"]
+    assert passed["caller"] == "auditor"
+    assert "lists as a caller" in row["output"]["ran_as"]["why"]
+
+
+def test_a_skill_that_lets_the_workflow_call_it_runs_as_the_workflow(eng, project, monkeypatch):
+    """Not a widening: the skill's OWN policy names the workflow runner. Every MCP tool BOSS
+    synthesises does, which is why an MCP step nobody holds keeps working."""
+    passed = _recording_invoke(monkeypatch)
+    _registered(monkeypatch, ["workflow_runner"])
+    with eng.begin() as c:
+        _skill(c, project, "tracker.file_issue", risk_tier=0, held_by=None)
+        custom_steps.create(
+            c, project_id=project, label="File issue", binding_kind="skill",
+            skill_id="tracker.file_issue", actor="test", step_key="file_issue",
+        )
+        version = _publish_custom(c, project, "wf_runner", "file_issue")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        row = _step_row(c, run["id"])
+
+    assert row["status"] == "succeeded", row["last_error"]
+    assert passed["caller"] == "workflow_runner"
+    assert passed["spec"] is None
+    assert row["output"]["ran_as"]["how"] == "workflow_runner"
+    assert "Give it to an agent" in row["output"]["ran_as"]["why"]
+
+
+def test_a_named_agent_that_does_not_exist_is_refused_with_the_agents_there_are(eng, project):
+    """The picker used to offer a hard-coded list, so a step could name `engineering_captain`
+    on a project that has no such agent and be told to "give it that skill" — impossible."""
+    with eng.begin() as c:
+        _skill(c, project, "tracker.file_issue", risk_tier=0)
+        custom_steps.create(
+            c, project_id=project, label="File issue", binding_kind="skill",
+            skill_id="tracker.file_issue", actor="test", step_key="file_issue",
+        )
+        definition = workflows.create_definition(
+            c, project_id=project, workflow_key="wf_ghost", name="wf", description=None,
+            actor="test", namespace="product",
+        )
+        with pytest.raises(workflows.WorkflowBindingBlockedError) as error:
+            workflows.publish_version(
+                c, project_id=project, definition_id=definition["id"], actor="test",
+                spec={"entry_step": "s", "steps": [
+                    {"id": "s", "kind": "capability", "next": [], "captain": "engineering_captain",
+                     "binding": {"custom_step": "file_issue", "inputs": {"ticket": "T-1"}}},
+                ]},
+            )
+    said = str(error.value)
+    assert "which this project does not have" in said
+    assert HOLDER in said, "the refusal must name the agents the project does have"
+    assert "give engineering_captain that skill" not in said
 
 
 # ── Removing a workflow ────────────────────────────────────────────────────────

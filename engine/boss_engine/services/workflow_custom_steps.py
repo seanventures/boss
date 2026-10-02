@@ -511,6 +511,11 @@ def validate_step(
     # possible moment: the operator has waited for a render before learning the step could
     # never have run. Both facts are known when the workflow is saved.
     captain = str(step.get("captain") or "").strip().lower()
+    # Only for an agent this project HAS. Telling the operator to "give engineering_captain that
+    # skill on the Agents page" is impossible advice when there is no such agent to open — and
+    # `step_agents.assignment_problems` already says that, with the agents there are.
+    if captain and not _is_project_agent(connection, project_id, captain):
+        return problems
     if captain and definition["binding_kind"] == "skill" and definition["skill_id"]:
         skill_id = str(definition["skill_id"])
         callers = _allowed_callers(connection, project_id, skill_id)
@@ -529,6 +534,18 @@ def validate_step(
                 f"page, or use one of: {', '.join(sorted(callers))}."
             )
     return problems
+
+
+def _is_project_agent(connection: Connection, project_id: str, role_key: str) -> bool:
+    """Whether this project has an agent by that key. Fails OPEN: the caller then gives its
+    usual advice, which is right for every agent that does exist."""
+    try:
+        return connection.execute(
+            text("SELECT 1 FROM roles WHERE project_id=:p AND role_key=:r LIMIT 1"),
+            {"p": project_id, "r": role_key},
+        ).first() is not None
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _agent_holds(connection: Connection, project_id: str, role_key: str, skill_id: str) -> bool:
@@ -605,6 +622,7 @@ def execute(
     run_id: str,
     step_index: int = 0,
     approved_by: Optional[str] = None,
+    ran_as: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Run one custom step and return what it produced.
 
@@ -618,18 +636,26 @@ def execute(
     path the chat agent uses. A second, ungoverned way to call a customer's tools is exactly
     what a workflow product must not grow.
 
-    WHO RUNS IT. A step may name a captain, and for a BUILT-IN capability that captain has
-    always become the actor — which is why BOSS's own pipelines read as agents doing the work.
-    A custom step ignored it and ran as `workflow_runner` every time, so a customer's workflow
-    had no agent in it anywhere. Same mechanism, same validation, now the same behaviour.
+    WHO RUNS IT is `ran_as`, decided by `step_agents.resolve` — the agent the step names, or
+    the agent that holds the skill, or BOSS's pick among several holders. That agent is both
+    the permission identity and the actor on the record.
 
-    AND NAMING ONE IS NOT A GRANT. Without a captain the runner is added to the skill's allowed
-    callers, because choosing the skill for a step IS the grant (see
-    `_spec_granting_the_runner`). With one, the ROLE has to be allowed on its own merits — no
-    widening. That asymmetry is the whole value of naming an agent: putting `video_editor` on a
-    publish step is refused, because that role is forbidden to publish. Auto-granting whatever
-    captain was typed would make the assignment decorative, which is worse than not having it.
+    NOTHING IS WIDENED. This used to run a step that named nobody as `workflow_runner` and add
+    that caller to the skill's allowed_callers on the fly — "defining the step IS the grant".
+    That made every skill callable by anyone who could draw a step, and it is the opposite of
+    the rule the rest of BOSS runs on: an agent HOLDS a skill (role_skills), and that grant is
+    what the permission gate cashes. The runner now calls as `workflow_runner` only where the
+    binding's own policy already lists it (every MCP tool does), and is otherwise refused with
+    "give <skill> to an agent" — except in a version published before that rule, which keeps
+    the grant it was published with (`_spec_granting_the_runner`, `legacy_workflow_runner`).
     """
+    if ran_as is None:
+        from .step_agents import StepAgentError, resolve
+
+        try:
+            ran_as = resolve(connection, settings, project_id, step, actor=actor)
+        except StepAgentError as error:
+            raise CustomStepError(str(error)) from error
     binding = step.get("binding") or {}
     key = str(binding.get("custom_step") or "")
     row = connection.execute(
@@ -671,9 +697,10 @@ def execute(
     if knowledge.strip():
         inputs = {**inputs, "knowledge": knowledge.strip()}
 
-    # The agent this step names, if it names one. Validated at publish time by
-    # workflow_capabilities.validate_captain, which refuses a role the workforce does not have.
-    captain = str(step.get("captain") or "").strip().lower()
+    # The agent that runs it, and the identity every permission check sees. The workflow
+    # itself only where the binding's own policy names it — see the docstring.
+    caller = str(ran_as.get("agent") or RUNNER_CALLER)
+    on_record = actor if caller == RUNNER_CALLER else caller
 
     # What the gate decision has to be about: this run, this step. The MCP effect checks it
     # (mcp_registry.approval_stands), so another step's approval cannot release this one.
@@ -685,13 +712,14 @@ def execute(
 
         result = _invoke_agent_skill(
             connection, settings, project_id, str(row["skill_id"]),
-            captain or RUNNER_CALLER, inputs, actor=captain or actor,
-            # No widening when an agent was named — see the docstring. The grant exists for the
-            # anonymous runner, which no skill could have listed because it did not exist when
-            # they were written; a role is something a skill can and does decide about.
-            skill_spec=None if captain else _spec_granting_the_runner(
-                connection, settings, project_id, str(row["skill_id"])
-            ),
+            caller, inputs, actor=on_record,
+            # The skill's own spec, unwidened. The agent is allowed because it HOLDS the skill
+            # or the skill names it — never because it was put on a step. The one exception is a
+            # version published under the old rules, which keeps the grant it was published
+            # with; `step_agents.resolve` says so on the run (`legacy_workflow_runner`).
+            skill_spec=(_spec_granting_the_runner(connection, settings, project_id,
+                                                  str(row["skill_id"]))
+                        if ran_as.get("how") == "legacy_workflow_runner" else None),
             approved_by=approved_by, approval_about=approval_about,
         )
         if str(result.get("status")) == "denied":
@@ -716,6 +744,8 @@ def execute(
                 "custom_step": key, "label": row["label"], "binding": "skill",
                 "skill_id": row["skill_id"], "risk_tier": risk["risk_tier"],
             },
+            "ran_as": {**ran_as, "skills_offered": [str(row["skill_id"])],
+                       "skills_used": [str(row["skill_id"])]},
         }
 
     from .agent_loop import _invoke_mcp_skill
@@ -727,8 +757,8 @@ def execute(
     result = _invoke_mcp_skill(
         connection, settings, project_id,
         dict(server), {"name": row["mcp_tool_name"]}, inputs,
-        run_id=run_id, step=step_index, actor=captain or actor,
-        caller=captain or RUNNER_CALLER, approved_by=approved_by,
+        run_id=run_id, step=step_index, actor=on_record,
+        caller=caller, approved_by=approved_by,
         approval_about=approval_about,
     )
     if str(result.get("status")) in ("denied", "failed"):
@@ -747,6 +777,8 @@ def execute(
             "tool": f"{server['name']} · {row['mcp_tool_name']}",
             "risk_tier": risk["risk_tier"],
         },
+        "ran_as": {**ran_as, "skills_offered": [], "skills_used": [],
+                   "mcp_offered": [f"{server['name']} · {row['mcp_tool_name']}"]},
     }
 
 
@@ -755,22 +787,15 @@ def _spec_granting_the_runner(
 ) -> Optional[dict[str, Any]]:
     """The skill's real spec, with the workflow runner added to its allowed callers.
 
-    DEFINING A CUSTOM STEP IS THE GRANT, and this is where that is cashed in. Skills declare
-    which callers may invoke them, and none of them listed a runner that did not exist when
-    they were written — so without this, every custom step bound to a skill is denied on its
-    first run with "caller 'workflow_runner' not in allowed_callers", and the feature is a
-    demo.
+    ONLY FOR A VERSION PUBLISHED UNDER THE OLD RULES. Until step agents were settled by
+    `step_agents`, defining a custom step was itself the grant: a step naming nobody ran as
+    `workflow_runner`, and this widened the skill's callers so it could. That was removed for new
+    versions — a step is not a way to grant anything — but workflows published under it were
+    working, and refusing them on upgrade killed runs mid-way. So it is kept for exactly those,
+    and the run says "give <skill> to an agent and publish again" every time it is used.
 
-    This is not forging permission. The grant is:
-
-      * EXPLICIT — somebody chose this skill for a step, by name, in this project.
-      * SCOPED — only to skills a `workflow_custom_steps` row exists for. The caller of this
-        function has already loaded that row.
-      * RECORDED — `workflow.custom_step_created` names the actor who granted it.
-      * REVOCABLE — delete the step and the grant goes with it.
-
-    Everything else still applies unchanged: the risk floor, the approval gate, the budget
-    reservation, the effect receipt. What is widened is WHO may call, never WHAT it may do.
+    What is widened is WHO may call, never WHAT it may do: the risk floor, the approval gate,
+    the budget reservation and the effect receipt all still apply.
     """
     try:
         from .entitlements import EntitlementBrokerService
@@ -780,7 +805,7 @@ def _spec_granting_the_runner(
                 skill_id, project_id, connection=connection
             )
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         # No spec to widen — let the runtime resolve it and deny if it must. A step that runs
         # because its permissions could not be read is the wrong failure direction.
         return None

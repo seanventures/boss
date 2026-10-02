@@ -82,24 +82,35 @@ def test_a_model_naming_somebody_outside_the_pool_is_not_obeyed(monkeypatch, poo
     assert "'cto'" in chosen["why"]
 
 
-def test_a_tie_goes_to_the_agent_that_holds_more_then_to_its_key(monkeypatch, pool):
+def test_a_tie_goes_to_the_most_specialised_agent_then_to_its_key(monkeypatch, pool):
+    """REWRITTEN AT INTEGRATION. The agents stream broke a tie toward the agent holding MORE; the
+    steps stream, which owns who runs a step (R4), toward the one holding FEWEST — the most
+    specialised, the least authority handed to work nobody's words matched — and
+    test_who_runs_a_step pins that. One rule is kept (the steps stream's); what this test
+    protects is unchanged: a tie is broken deterministically, the same pool in any order gives
+    the same agent, and the key decides between equals."""
     _adapter(monkeypatch, RuntimeError("down"))
     tie = [{"role_key": "b_agent", "name": "", "mission": "", "holds": ["x.one"]},
            {"role_key": "a_agent", "name": "", "mission": "", "holds": ["x.one"]},
            {"role_key": "c_agent", "name": "", "mission": "", "holds": ["x.one", "x.two"]}]
     monkeypatch.setattr(agent_steps, "candidates", lambda *_a, **_k: tie)
     assert agent_steps.choose_agent(None, Settings(), "p",
-                                    instructions="nothing matches")["role_key"] == "c_agent"
-    monkeypatch.setattr(agent_steps, "candidates", lambda *_a, **_k: tie[:2])
+                                    instructions="nothing matches")["role_key"] == "a_agent"
+    monkeypatch.setattr(agent_steps, "candidates", lambda *_a, **_k: list(reversed(tie)))
     assert agent_steps.choose_agent(None, Settings(), "p",
                                     instructions="nothing matches")["role_key"] == "a_agent"
+    monkeypatch.setattr(agent_steps, "candidates", lambda *_a, **_k: [tie[2], tie[0]])
+    assert agent_steps.choose_agent(None, Settings(), "p",
+                                    instructions="nothing matches")["role_key"] == "b_agent"
 
 
 def test_the_code_never_calls_a_method_adapters_do_not_have():
     import inspect
 
     # Code only: the comment explaining the old call names it.
-    source = "\n".join(line for line in inspect.getsource(agent_steps.choose_agent).splitlines()
+    # choose_agent asks through `_ask_the_model` since the steps stream; both are read.
+    source = "\n".join(line for fn in (agent_steps.choose_agent, agent_steps._ask_the_model)
+                       for line in inspect.getsource(fn).splitlines()
                        if not line.strip().startswith("#"))
     assert ".complete(" not in source
     assert "create_text_response(" in source

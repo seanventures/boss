@@ -10246,6 +10246,18 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
    long, and this is a choice most steps leave on their default. */
 .dw-draft-captain { max-width: 190px; font-size: 0.74rem; }
 
+/* An agent step's scope — which of its agent's skills and which MCP servers it may use. Its own
+   line under the row, like the wiring: a list of checkboxes would crush the row's controls. */
+.dw-agent-scope { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px;
+  padding-left: 34px; font-size: 0.72rem; }
+.dw-agent-scope-list { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.dw-agent-scope-item { display: inline-flex; align-items: center; gap: 4px; }
+
+/* "Ran as <agent> — how and why" on a run's step. Quiet: it answers a question, it is not an
+   alert. */
+.dw-ran-as { margin: 6px 0 2px; font-size: 0.74rem; }
+.dw-ran-as-skills { opacity: .8; }
+
 /* WHERE EACH INPUT COMES FROM. Its own block below the step row, because a step with four
    inputs is four lines and they must not squeeze the row's own controls. */
 .dw-draft-wire-toggle { flex-basis: 100%; text-align: left; padding-left: 34px; font-size: 0.72rem; }

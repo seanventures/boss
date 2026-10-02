@@ -40,12 +40,18 @@ describe("every step has somebody who answers for it", () => {
   it("one resolver decides who it is, so the override cannot be half-honoured", () => {
     // A workflow may name a captain for a step, because two steps can run the same capability
     // against different accounts — "publish to our channel" and "publish to a client's" are one
-    // step kind and two agents. Resolved in one function: workflow's choice, else the
-    // capability's default.
+    // step kind and two agents. Resolved in one function: workflow's choice, else the agent
+    // that actually ran it (`ran_as`, when BOSS picked one), else the capability's default.
+    // REWRITTEN for the middle term: a step BOSS gave to an agent showed the default captain,
+    // an agent that did not run it. REWRITTEN AGAIN: a built-in step that ran as whoever started
+    // the run still fell back to the default captain, so the chip read "engineering_captain —
+    // answers for this step" above "Ran as ceo". The rule moved to `stepAgentChip` in
+    // step-agents-ui.tsx, where its behaviour is tested (a-step-says-who-ran-it.test.tsx); here
+    // only that the run view asks it, for both the agent and the chip's note.
     expect(UI).toContain("function stepCaptain(step: RunStep, capability?: Capability): string {");
-    expect(UI).toContain("return named || String(capability?.captain ?? \"\").trim();");
-    // And the chip says WHICH of the two it is, so an override is visible as an override.
-    expect(UI).toContain('note={step.captain ? "named by this workflow" : "answers for this step"}');
+    expect(UI).toContain(
+      "return stepAgentChip(step.captain, step.output, capability?.captain)?.role ?? \"\";");
+    expect(UI).toContain("note={stepAgentChip(step.captain, step.output, capability?.captain)?.note");
   });
 });
 

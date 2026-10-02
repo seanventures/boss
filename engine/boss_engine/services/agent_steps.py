@@ -62,6 +62,152 @@ class AgentStepError(RuntimeError):
 DEFAULT_MAX_STEPS = 24
 
 
+def _runnable_catalogue(connection: Connection, settings: Optional[Settings],
+                        project_id: str) -> dict[str, dict[str, Any]]:
+    """The skills an agent loop can actually offer as tools on this project, by id.
+
+    THE ONE CATALOGUE (skill_catalogue): built-in, authored and registered skills, read the
+    same way resolve_risk and the custom-step builder read them. The steps stream read the spec
+    pack alone here (EntitlementBrokerService) while the skills-mcp stream moved held_skills to
+    skill_catalogue; merged, both readings are this one, so an agent given an AUTHORED skill is
+    offered it, and a skill that is off or whose MCP server is gone is not.
+    """
+    from .skill_catalogue import entries
+
+    if settings is None:
+        from ..config import get_settings
+
+        settings = get_settings()
+    return {
+        sid: item["spec"]
+        for sid, item in entries(connection, project_id, settings=settings).items()
+        if item.get("spec") is not None and item.get("enabled") and item.get("usable")
+    }
+
+
+def holdings(
+    connection: Connection,
+    settings: Optional[Settings],
+    project_id: str,
+    role_key: Optional[str] = None,
+) -> dict[str, dict[str, list[str]]]:
+    """What each agent was given, split into what it can USE and what it cannot.
+
+    {role: {"granted": [...], "runnable": [...], "unrunnable": [...]}}
+
+    THE ONE READING OF "WHAT AN AGENT HOLDS". It used to be read twice: the publish check
+    (`step_agents`) took raw `role_skills`, and the runtime (`held_skills`, below) dropped every
+    grant not in the entitlements catalogue — an authored skill, a skill removed from a spec
+    pack, a disabled one. So an agent step scoped to an authored skill PUBLISHED cleanly and then
+    failed at run time with "<agent> does not hold X", which was false: it held it, and the
+    runtime could not run it. Both sides now ask this, and say which of the two is true.
+
+    `granted` is kept beside `runnable` because a CUSTOM step's permission gate
+    (`skill_runtime`) reads raw `role_skills`, not the catalogue — that check must see what it
+    sees.
+    """
+    sql = ("SELECT role_key, skill_id FROM role_skills WHERE project_id = :p"
+           + (" AND role_key = :r" if role_key else "") + " ORDER BY role_key, skill_id")
+    params: dict[str, Any] = {"p": project_id}
+    if role_key:
+        params["r"] = str(role_key).strip().lower()
+    granted: dict[str, list[str]] = {}
+    for row in connection.execute(text(sql), params).mappings().all():
+        granted.setdefault(str(row["role_key"]), []).append(str(row["skill_id"]))
+    # THE MCP SERVERS IT HOLDS (role_mcp_servers, the agents stream's grant), switched on. An
+    # agent given the Mattermost server and nothing else can post; leaving it out of every pool
+    # would make an MCP grant decorative.
+    servers = _held_servers(connection, project_id, role_key)
+    if not granted and not servers:
+        return {}
+    catalogue = _runnable_catalogue(connection, settings, project_id) if granted else {}
+    return {
+        role: {"granted": granted.get(role, []),
+               "runnable": [s for s in granted.get(role, []) if s in catalogue],
+               "unrunnable": [s for s in granted.get(role, []) if s not in catalogue],
+               "mcp": [str(srv["name"]) for srv in servers.get(role, [])],
+               "mcp_ids": [str(srv["id"]) for srv in servers.get(role, [])]}
+        for role in sorted(set(granted) | set(servers))
+    }
+
+
+def _held_servers(connection: Connection, project_id: str,
+                  role_key: Optional[str] = None) -> dict[str, list[dict[str, Any]]]:
+    """{role: [{id, name}]} for the switched-on servers each agent holds."""
+    sql = ("SELECT g.role_key, s.id, s.name FROM role_mcp_servers g JOIN mcp_servers s "
+           "ON s.id = g.mcp_server_id WHERE g.project_id = :p AND s.enabled"
+           + (" AND g.role_key = :r" if role_key else "") + " ORDER BY g.role_key, s.name")
+    params: dict[str, Any] = {"p": project_id}
+    if role_key:
+        params["r"] = str(role_key).strip().lower()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in connection.execute(text(sql), params).mappings().all():
+        out.setdefault(str(row["role_key"]), []).append({"id": row["id"], "name": row["name"]})
+    return out
+
+
+def mcp_scope_problem(connection: Connection, project_id: str, role: str,
+                      wanted: list[str]) -> Optional[str]:
+    """Why `role` cannot take a step scoped to the MCP servers `wanted`, or None.
+
+    The MCP half of :func:`scope_problem`, used at publish and at run time so they agree. A step
+    NARROWS what an agent holds; it never hands it a server (role_mcp_servers is the grant).
+    """
+    from .step_agents import resolve_mcp
+
+    named, missing = resolve_mcp(connection, project_id, wanted)
+    if missing:
+        return (f"this step names MCP server {', '.join(missing)}, which this project has not "
+                "registered. Add it under Skills and MCP, or take it off the step.")
+    off = [str(s.get("name")) for s in named if not s.get("enabled", True)]
+    if off:
+        return (f"MCP server {', '.join(off)} is turned off, so this step cannot reach it. "
+                "Turn it on under Skills and MCP, or take it off the step.")
+    held = {str(s["id"]) for s in _held_servers(connection, project_id, role).get(role, [])}
+    lacking = [str(s.get("name")) for s in named if str(s["id"]) not in held]
+    if lacking:
+        return (f"this step names MCP server {', '.join(lacking)}, which {role} does not hold. "
+                f"Give {role} {'that server' if len(lacking) == 1 else 'those servers'} on the "
+                "Agents page, or take it off the step — a step does not grant an agent "
+                "anything.")
+    return None
+
+
+def scope_problem(role: str, wanted: list[str], held: dict[str, list[str]]) -> Optional[str]:
+    """Why `role` cannot be given a step scoped to `wanted`, or None.
+
+    ONE sentence, used at publish (`step_agents.assignment_problems`) and at run time (`run`),
+    so the two cannot disagree about whether the step can run, or about why not.
+    """
+    runnable = set(held.get("runnable") or [])
+    unrunnable = set(held.get("unrunnable") or [])
+    lacking = [s for s in wanted if s not in runnable and s not in unrunnable]
+    cannot_run = [s for s in wanted if s in unrunnable]
+    if lacking:
+        return (f"this step is scoped to {', '.join(lacking)}, which {role} does not hold. Give "
+                f"{role} those skills on the Agents page, or take them off the step — a step "
+                "does not grant an agent anything.")
+    if cannot_run:
+        return (f"{role} holds {', '.join(cannot_run)}, but an agent step cannot offer "
+                f"{'it' if len(cannot_run) == 1 else 'them'} as a tool on this project — not "
+                "in the skill catalogue, or turned off. An authored skill runs as a custom step "
+                "(Add step → your skills); otherwise turn it on, or take it off the step.")
+    return None
+
+
+def empty_handed_problem(role: str, held: dict[str, list[str]]) -> str:
+    """Why an unscoped agent step given to `role` has nothing to work with. Shared with the
+    publish check for the same reason as `scope_problem`."""
+    if held.get("unrunnable"):
+        return (f"{role} holds only {', '.join(held['unrunnable'])}, which an agent step cannot "
+                "offer as tools on this project — not in the skill catalogue, or turned off. "
+                f"Give {role} a skill it can use on the Agents page, or run that skill as a "
+                "custom step.")
+    return (f"{role} holds no skills and no MCP servers, so it cannot do anything. Open the "
+            "agent and give it what this work needs — a step naming an agent that holds nothing "
+            "is refused here rather than at the first tool call.")
+
+
 def held_skills(
     connection: Connection,
     settings: Settings,
@@ -75,6 +221,11 @@ def held_skills(
     `role_skills`, which is what somebody actually gave the agent and what the runtime checks
     before every call. The two disagreeing is how an agent came to look capable and hold nothing.
 
+    HELD BUT NOT RUNNABLE — not in the catalogue, or turned off — is left out of the tool list
+    rather than offered and then failing: a tool the model can call and nothing can execute
+    wastes a whole turn discovering it. Which grants those are is `holdings`, the same reading
+    the publish check makes.
+
     Each spec is returned with `caller` set to the agent, because the caller identity IS the
     agent — that is what makes the grant the thing being cashed in rather than an anonymous
     runner borrowing a permission.
@@ -82,40 +233,13 @@ def held_skills(
     role = str(role_key or "").strip().lower()
     if not role:
         raise AgentStepError("role_key is required — which agent is doing this work.")
-
-    granted = [
-        str(r)
-        for r in connection.execute(
-            text("SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r "
-                 "ORDER BY skill_id"),
-            {"p": project_id, "r": role},
-        ).scalars().all()
-    ]
-    if not granted:
+    held = holdings(connection, settings, project_id, role).get(role)
+    if not held or not held["runnable"]:
         return []
-
-    # THE ONE CATALOGUE (skill_catalogue): built-in, authored and registered skills, read the
-    # same way resolve_risk and the custom-step builder read them. This used to read the spec
-    # pack alone, so an agent given an AUTHORED skill was shown holding it and was never
-    # offered it — the skill was silently dropped here as "not in the catalogue".
-    from .skill_catalogue import entries
-
-    catalogue = entries(connection, project_id, settings=settings)
-
+    catalogue = _runnable_catalogue(connection, settings, project_id)
     specs: list[dict[str, Any]] = []
-    for skill_id in granted:
-        item = catalogue.get(skill_id)
-        spec = None if item is None else item["spec"]
-        if spec is None:
-            # HELD BUT NOT IN THE CATALOGUE — a skill removed from a spec pack, or authored and
-            # then deleted. Left out of the tool list rather than offered and then failing: a
-            # tool the model can call and nothing can execute wastes a whole turn discovering it.
-            continue
-        if not (item["enabled"] and item["usable"]):
-            # Turned off, or what it runs through is gone (an mcp_tool skill whose server was
-            # removed). Same reasoning as above: not offered, rather than offered and failing.
-            continue
-        offered = dict(spec)
+    for skill_id in held["runnable"]:
+        offered = dict(catalogue[skill_id])
         offered["caller"] = role
         specs.append(offered)
     return specs
@@ -185,25 +309,17 @@ def candidates(connection: Connection, settings: Settings,
         {"p": project_id},
     ).mappings().all()
 
-    holdings: dict[str, list[str]] = {}
-    for row in connection.execute(
-            text("SELECT role_key, skill_id FROM role_skills WHERE project_id = :p "
-                 "ORDER BY role_key, skill_id"),
-            {"p": project_id}).mappings().all():
-        holdings.setdefault(str(row["role_key"]), []).append(str(row["skill_id"]))
-    # AN AGENT HOLDING ONLY MCP SERVERS IS STILL SOMEBODY. An agent given the Mattermost server
-    # and nothing else can post; leaving it out of the pool would make an MCP grant decorative.
-    for row in connection.execute(
-            text("SELECT g.role_key, s.name FROM role_mcp_servers g JOIN mcp_servers s "
-                 "ON s.id = g.mcp_server_id WHERE g.project_id = :p AND s.enabled "
-                 "ORDER BY g.role_key, s.name"),
-            {"p": project_id}).mappings().all():
-        holdings.setdefault(str(row["role_key"]), []).append(f"mcp:{row['name']}")
+    # RUNNABLE holdings, the same reading `run` makes: an agent whose only grants cannot run
+    # would otherwise be picked here and then refused there.
+    held = holdings(connection, settings, project_id)
 
     out: list[dict[str, Any]] = []
     for row in rows:
         role = str(row["role_key"])
-        skills = holdings.get(role) or []
+        mine = held.get(role) or {}
+        # An MCP grant counts as holding something: `mcp:<server>` beside the skills, so the
+        # model choosing among agents sees the connector too.
+        skills = list(mine.get("runnable") or []) + [f"mcp:{n}" for n in mine.get("mcp") or []]
         if not skills:
             continue
         spec = row["spec"] if isinstance(row["spec"], dict) else {}
@@ -223,6 +339,7 @@ def choose_agent(
     *,
     instructions: str,
     only: Optional[list[str]] = None,
+    pool: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Which agent should do this, from what each one is for and what it holds.
 
@@ -232,13 +349,18 @@ def choose_agent(
     which is a judgement — so it is made by a model, from data that is already recorded, and the
     reason is returned so the operator can see why rather than trusting it.
 
-    IT FALLS BACK TO SOMETHING DETERMINISTIC. A project with no model configured must still be
-    able to run a workflow, so an unavailable model degrades to matching the instruction's words
-    against the skills each agent holds. Worse, and honest about being worse: `how` says which
-    happened.
+    `pool` is who may be chosen. `step_agents.resolve` passes the agents that HOLD what the step
+    needs; left out, it is every agent holding any skill, narrowed by `only`.
+
+    IT FALLS BACK TO SOMETHING DETERMINISTIC, AND SAYS WHY IT HAD TO. This used to call a
+    method named `complete` on the adapter, which no chat adapter has. The AttributeError was swallowed by a
+    bare `except`, so every multi-agent pick fell through to word overlap with the reason "no
+    model was available" — false, on installs whose model was fine. The adapters' real one-shot
+    call is `create_text_response`, and when it does fail the reason recorded is the real error.
     """
-    pool = [c for c in candidates(connection, settings, project_id)
-            if not only or c["role_key"] in set(only)]
+    if pool is None:
+        pool = [c for c in candidates(connection, settings, project_id)
+                if not only or c["role_key"] in set(only)]
     if not pool:
         raise AgentStepError(
             "no agent on this project holds any skill, so there is nobody to give this step to. "
@@ -247,9 +369,10 @@ def choose_agent(
         return {"role_key": pool[0]["role_key"], "why": "the only agent holding any skill",
                 "how": "only_candidate"}
 
+    keys = [c["role_key"] for c in pool]
     described = "\n".join(
-        f"  {c['role_key']}: {c['mission'] or 'no stated mission'}\n"
-        f"    holds: {', '.join(c['holds'])}"
+        f"  {c['role_key']}: {c.get('mission') or 'no stated mission'}\n"
+        f"    holds: {', '.join(c.get('holds') or []) or 'nothing yet'}"
         for c in pool
     )
     prompt = (
@@ -269,40 +392,75 @@ def choose_agent(
     # `create_text_response(prompt, system_prompt=...) -> (ref, text, usage)`.
     model_failure = ""
     try:
-        from .claude_cli_adapter import make_agent_chat_adapter
-        from .setup_service import chat_engine_for
-
-        resolved = settings
-        engine = chat_engine_for(connection, settings, project_id)
-        if engine:
-            resolved = settings.model_copy(update={"chat_llm_engine": engine})
-        adapter = make_agent_chat_adapter(resolved)
-        _ref, text_out, _usage = adapter.create_text_response(
-            prompt,
-            system_prompt="You route work to the agent that can do it. You output JSON only.",
-        )
-        picked = json.loads(_only_json(str(text_out or "")))
-        role = str(picked.get("role_key") or "").strip().lower()
-        if role in {c["role_key"] for c in pool}:
-            return {"role_key": role,
-                    "why": str(picked.get("why") or "").strip() or "chosen for this instruction",
-                    "how": "model"}
-        model_failure = f"the model named {role or 'nobody'!r}, which is not in the pool"
-    except Exception as error:  # noqa: BLE001 — a routing failure must not fail the step outright
-        model_failure = f"the model could not be asked ({type(error).__name__}: {str(error)[:160]})"
+        text_out = _ask_the_model(connection, settings, project_id, prompt)
+    except Exception as error:  # noqa: BLE001 — a routing failure must not fail the step
+        not_model = f"the model could not be asked ({_short(error)})"
+    else:
+        try:
+            picked = json.loads(_only_json(text_out))
+        except ValueError:
+            picked = None
+        if not isinstance(picked, dict):
+            not_model = "the model's answer named no agent"
+        else:
+            role = str(picked.get("role_key") or "").strip().lower()
+            if role in keys:
+                return {"role_key": role,
+                        "why": str(picked.get("why") or "").strip()
+                        or "chosen for this instruction",
+                        "how": "model"}
+            not_model = (f"the model named '{role}', which is not one of the {len(keys)} "
+                         "agents that could do it")
 
     # THE DETERMINISTIC FALLBACK. Overlap between the words in the instruction and the words in
-    # the skill ids each agent holds. Crude, and it beats refusing to run. A tie goes to the
-    # agent holding MORE (it can do more of whatever the words missed), then to the key, so the
-    # same pool always gives the same answer.
+    # the skill ids each agent holds. Crude, and it beats refusing to run. On a tie the most
+    # specialised agent — the one holding the fewest skills — wins, then the earliest key, so
+    # the same project and instruction always give the same answer; the reason says which.
     words = {w for w in _words(instructions) if len(w) > 3}
-    best = max(pool, key=lambda c: (
-        len(words & {w for skill in c["holds"] for w in _words(skill)}), len(c["holds"]),
-        [-ord(ch) for ch in c["role_key"]]))
-    return {"role_key": best["role_key"],
-            "why": "its skills share the most words with the instruction — "
-                   f"{model_failure or 'no model judged it'}",
-            "how": "word_overlap"}
+
+    def shared(c: dict[str, Any]) -> set[str]:
+        return words & {w for skill in (c.get("holds") or []) for w in _words(skill)}
+
+    best = sorted(pool, key=lambda c: (-len(shared(c)), len(c.get("holds") or []),
+                                       c["role_key"]))[0]
+    common = sorted(shared(best))
+    if common:
+        why = (f"{not_model}, so BOSS matched the instruction's words against the skills each "
+               f"agent holds: {best['role_key']} shares {', '.join(common)}")
+    else:
+        why = (f"{not_model}, and no agent's skills share a word with the instruction, so BOSS "
+               f"took {best['role_key']}, the most specialised of the {len(keys)}")
+    return {"role_key": best["role_key"], "why": why, "how": "word_overlap"}
+
+
+def _ask_the_model(connection: Connection, settings: Settings, project_id: str,
+                   prompt: str) -> str:
+    """One routing question to the project's chat model. Raises whatever the adapter raises."""
+    from .claude_cli_adapter import make_agent_chat_adapter
+    from .setup_service import chat_engine_for
+
+    resolved = settings
+    try:
+        engine = chat_engine_for(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 — no project setting means the install default
+        engine = None
+    if engine:
+        resolved = settings.model_copy(update={"chat_llm_engine": engine})
+    adapter = make_agent_chat_adapter(resolved)
+    reply = adapter.create_text_response(
+        prompt,
+        system_prompt="You route work to the agent that can do it. You output JSON only.",
+    )
+    # Every adapter returns (session_ref, text, usage); a bare string is tolerated.
+    if isinstance(reply, tuple):
+        return str(reply[1] if len(reply) > 1 else reply[0] or "")
+    return str(reply or "")
+
+
+def _short(error: BaseException) -> str:
+    """An exception as one line an operator can read on the run card."""
+    said = str(error).strip().splitlines()[0][:160] if str(error).strip() else ""
+    return f"{type(error).__name__}: {said}" if said else type(error).__name__
 
 
 def _words(value: str) -> set[str]:
@@ -335,11 +493,22 @@ def run(
     max_steps: Optional[int] = None,
     only: Optional[list[str]] = None,
     produces: Optional[list[str]] = None,
+    skills: Optional[list[str]] = None,
+    mcp: Optional[list[str]] = None,
+    chosen: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Hand one instruction to one agent and let it work.
 
     `role_key` names the agent. Left out, BOSS picks one — which is the difference between "I
     know who should do this" and "you work it out", and both are things an operator says.
+    `chosen` is the record `step_agents.resolve` already made, so the reason shown on the run is
+    the one the decision was actually taken for.
+
+    `skills` and `mcp` SCOPE the step. An agent holding twelve skills given a step that should
+    only trim a video is offered the trim skill and nothing else — the step, not the agent's
+    whole grant, is the bound. Every scoped skill must be one the agent HOLDS: a step is never a
+    way to give an agent something. MCP servers named here are the only ones the bounded run
+    can reach.
 
     `context` is what earlier steps produced, passed through as facts rather than as prose. An
     agent editing a video needs the artifact id the fetch step made, and inventing one is the
@@ -350,21 +519,49 @@ def run(
         raise AgentStepError(
             "instructions are required — this step's whole specification is what you want done.")
 
-    chosen = ({"role_key": str(role_key).strip().lower(), "why": "named on the step",
-               "how": "named"} if role_key
-              else choose_agent(connection, settings, project_id,
-                                instructions=said, only=only))
+    if chosen is None:
+        chosen = ({"role_key": str(role_key).strip().lower(), "why": "named on the step",
+                   "how": "named"} if role_key
+                  else choose_agent(connection, settings, project_id,
+                                    instructions=said, only=only))
+    else:
+        chosen = {"role_key": str(chosen.get("agent") or chosen.get("role_key") or role_key
+                                  or "").strip().lower(),
+                  "why": str(chosen.get("why") or ""), "how": str(chosen.get("how") or "")}
     role = chosen["role_key"]
 
-    skills = held_skills(connection, settings, project_id, role)
+    held = held_skills(connection, settings, project_id, role)
+    wanted = [str(s).strip() for s in (skills or []) if str(s).strip()]
+    if wanted:
+        problem = scope_problem(
+            role, wanted, holdings(connection, settings, project_id, role).get(role) or {})
+        if problem:
+            raise AgentStepError(problem)
+        held = [s for s in held if str(s["id"]) in set(wanted)]
+
+    # MCP: WHAT THE AGENT HOLDS (role_mcp_servers), narrowed by the step. ONE ownership model
+    # (integration of the agents and steps streams): the steps stream let a step name any
+    # registered server and reach it, which made a step a way to grant an agent a connector —
+    # the thing the skills half of the same stream forbids ("a step does not grant an agent
+    # anything"). A step's `mcp` list now scopes the agent's own grants, exactly as `skills`
+    # scopes its skills; with no list the agent reaches every server it holds.
     from .agents import held_mcp_servers
 
     servers = held_mcp_servers(connection, project_id, role)
-    if not skills and not servers:
-        raise AgentStepError(
-            f"{role} holds no skills and no MCP servers, so it cannot do anything. Open the "
-            "agent and give it what this work needs — a step naming an agent that holds nothing "
-            "is refused here rather than at the first tool call.")
+    if mcp:
+        problem = mcp_scope_problem(connection, project_id, role, [str(m) for m in mcp])
+        if problem:
+            raise AgentStepError(problem)
+        from .step_agents import resolve_mcp
+
+        named, _missing = resolve_mcp(connection, project_id, [str(m) for m in mcp])
+        named_ids = {str(n["id"]) for n in named}
+        servers = [s for s in servers if str(s["id"]) in named_ids]
+
+    skills_offered = held
+    if not skills_offered and not servers:
+        raise AgentStepError(empty_handed_problem(
+            role, holdings(connection, settings, project_id, role).get(role) or {}))
 
     # WHAT THE NEXT STEP NEEDS FROM THIS ONE.
     #
@@ -424,8 +621,10 @@ def run(
         finalize_ctx={
             "agent_step": {
                 "role_key": role,
-                "skill_ids": [str(s["id"]) for s in skills],
-                # Pinned like the skills: a server revoked mid-run stops being offered on resume.
+                "skill_ids": [str(s["id"]) for s in skills_offered],
+                # The ONLY MCP servers this run may reach: what the agent holds, narrowed by the
+                # step, pinned like the skills — a grant revoked mid-run stops being offered on
+                # resume, and one added mid-run is not picked up by a run already under way.
                 "mcp_server_ids": [str(s["id"]) for s in servers],
                 "actor": actor,
             },
@@ -452,6 +651,10 @@ def run(
                 # travel on as an answer.
                 declared.pop(key, None)
     produced.update(declared)
+    offered = [str(s["id"]) for s in skills_offered]
+    used = produced.pop("_used", []) if "_used" in produced else _used_skills(
+        connection, str(result.get("run_id") or ""))
+    mcp_offered = [str(s.get("name") or s.get("id")) for s in servers]
     return {
         # EVERY FIELD THE SKILLS RETURNED, FLATTENED IN, so a later step can wire from this one
         # with {from_step: ..., field: media_artifact_id} exactly as it does from a fixed step.
@@ -461,10 +664,15 @@ def run(
         "agent": role,
         "chosen_because": chosen["why"],
         "chosen_how": chosen["how"],
-        "skills_offered": [str(s["id"]) for s in skills],
-        "mcp_servers_offered": [str(s["name"]) for s in servers],
-        "skills_used": produced.pop("_used", []) if "_used" in produced else _used_skills(
-            connection, str(result.get("run_id") or "")),
+        "skills_offered": offered,
+        "skills_used": used,
+        "mcp_offered": mcp_offered,
+        # Kept under the agents stream's name too: its run card and tests read it.
+        "mcp_servers_offered": mcp_offered,
+        # THE SAME RECORD EVERY STEP KIND CARRIES, so the run view reads one shape.
+        "ran_as": {"agent": role, "how": chosen["how"], "why": chosen["why"],
+                   "skills_offered": offered, "skills_used": used,
+                   "mcp_offered": mcp_offered},
         "status": result.get("status"),
         "summary": result.get("output_text") or "",
         "tool_calls": result.get("tool_calls") or len(result.get("transcript") or []),

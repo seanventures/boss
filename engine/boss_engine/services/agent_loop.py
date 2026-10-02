@@ -1843,7 +1843,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # ONE OWNERSHIP MODEL (integration of the agents and skills-mcp streams): a bounded run is
     # offered what its agent HOLDS (role_mcp_servers, via agents.held_mcp_servers); the
     # registry's reachability memory and review rule then apply to those servers exactly as
-    # they do to an unbounded run's.
+    # they do to an unbounded run's. A step's own `mcp` list (the steps stream's scope) narrows
+    # that set — agent_steps.run pins held-and-named into mcp_server_ids — and never widens it.
     for server in (_granted_mcp_servers(connection, project_id, finalize_ctx["agent_step"])
                    if bounded
                    else list_mcp_servers(connection, project_id, enabled_only=True)):

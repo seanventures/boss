@@ -4,70 +4,136 @@ BOSS's own pipelines read as agents doing the work because a capability step's `
 becomes the actor. A CUSTOM step — the only kind a customer can build — ignored it and ran as
 `workflow_runner` every time, so a customer's workflow had no agent in it anywhere. That is
 the asymmetry: what BOSS does for itself, and what it lets a customer do.
+
+REWRITTEN. These were assertions about source text ("captain or RUNNER_CALLER" appears in
+execute), and they pinned the runner borrowing a skill by widening its allowed_callers. The rule
+now lives in `step_agents` and is asked, not read: the named agent, else the agent that holds
+the skill, else the workflow only where the skill's own policy names it, else a refusal. The
+end-to-end runs are in test_workflow_custom_steps.py and apps/api/tests/test_who_runs_a_step.py.
 """
 import inspect
 
+import pytest
+
+from boss_engine.services import step_agents
 from boss_engine.services import workflow_custom_steps as steps
 from boss_engine.services import workflows
+from boss_engine.services.workflow_capabilities import validate_captain
 
 
-def test_a_custom_step_runs_as_the_agent_it_names():
-    source = inspect.getsource(steps.execute)
-    assert 'captain = str(step.get("captain")' in source
-    # The captain is both the permission identity and the actor on the record: a step that
-    # publishes as the publisher must not be attributed to whoever started the run.
-    assert "captain or RUNNER_CALLER" in source
-    assert "actor=captain or actor" in source
+def test_a_named_agent_runs_the_step_however_it_was_typed():
+    """validate_captain lowercases and strips, so the resolver must too — or a step could pass
+    validation and then act as a role that does not exist."""
+    ran_as = step_agents.resolve(
+        None, None, "p",
+        {"id": "publish", "kind": "capability", "captain": " Media_Publisher ",
+         "binding": {"custom_step": "publish"}},
+        actor="ceo")
+    assert ran_as == {"agent": "media_publisher", "how": "named", "why": "named on the step",
+                      "considered": ["media_publisher"]}
 
 
-def test_naming_an_agent_is_not_a_way_to_grant_it_something():
-    """THE POINT OF NAMING ONE.
-
-    Without a captain the runner is added to the skill's allowed callers, because choosing the
-    skill for a step IS the grant. With one, the ROLE has to be permitted on its own merits —
-    so `video_editor` on a publish step is refused, because that role is forbidden to publish.
-    Auto-granting whatever captain was typed would make the assignment decorative, which is
-    worse than not having it at all.
-    """
-    source = inspect.getsource(steps.execute)
-    assert "skill_spec=None if captain else _spec_granting_the_runner(" in source
+def _nobody_may_run(monkeypatch):
+    definition = {"binding_kind": "skill", "skill_id": "tracker.file_issue", "label": "File"}
+    monkeypatch.setattr(steps, "get", lambda *a: definition)
+    monkeypatch.setattr(step_agents, "project_agents", lambda *a, **k: [])
+    monkeypatch.setattr(step_agents, "_allowed_callers", lambda *a: set())
+    return {"id": "file", "kind": "capability", "binding": {"custom_step": "file"}}
 
 
-def test_the_anonymous_runner_still_works_exactly_as_before():
-    """Every workflow that exists names no captain, and none of them may change behaviour."""
-    source = inspect.getsource(steps.execute)
-    # The grant, and the runner caller, both survive for the no-captain path.
-    assert "RUNNER_CALLER" in source and "_spec_granting_the_runner(" in source
-    assert steps.RUNNER_CALLER == "workflow_runner"
+def test_naming_an_agent_is_not_a_way_to_grant_it_something(monkeypatch):
+    """REWRITTEN. This asserted the widening helper was deleted. It is back, for one case only —
+    a version published under the old rules (see the next test) — so what is pinned now is the
+    behaviour: a step under the current rules that nobody may run is REFUSED, with what to do,
+    instead of running as the workflow on a widened grant."""
+    step = _nobody_may_run(monkeypatch)
+    with pytest.raises(step_agents.StepAgentError, match="Give tracker.file_issue to an agent"):
+        step_agents.resolve(None, None, "p", step, actor="ceo")
 
 
-def validate_captain_with_roster_refuses_a_typo() -> bool:
-    from boss_engine.services.workflow_capabilities import validate_captain
+def test_a_version_published_under_the_old_rules_still_runs_as_the_workflow(monkeypatch):
+    """THE INCIDENT: the builder's default for a custom step was "no agent — runs as the
+    workflow". The new rule refused those steps everywhere, including in runs already going, so
+    an upgrade killed working runs mid-way. A step `_run_spec` tagged as published under the old
+    rules keeps that behaviour, and says on the run how to move it to an agent."""
+    step = _nobody_may_run(monkeypatch)
+    step[step_agents.AGENT_RULES_KEY] = step_agents.LEGACY_AGENT_RULES
+    ran_as = step_agents.resolve(None, None, "p", step, actor="ceo")
+    assert (ran_as["agent"], ran_as["how"]) == ("workflow_runner", "legacy_workflow_runner")
+    assert "Give tracker.file_issue to an agent" in ran_as["why"]
+    assert "publish the workflow again" in ran_as["why"]
 
-    return bool(validate_captain({"id": "publish", "captain": "vidoe_editor"},
-                                 roster={"video_editor", "release_auditor"}))
+    # Tagged as current — what every version published from now on carries — it is refused.
+    step[step_agents.AGENT_RULES_KEY] = step_agents.CURRENT_AGENT_RULES
+    with pytest.raises(step_agents.StepAgentError):
+        step_agents.resolve(None, None, "p", step, actor="ceo")
+
+
+def test_the_runner_is_used_only_where_the_skills_own_policy_names_it(monkeypatch):
+    """REWRITTEN from "the anonymous runner still works exactly as before". It does — for a
+    binding whose policy lists `workflow_runner` (every synthesised MCP tool) — and nowhere else."""
+    agents = [{"role_key": "clerk", "holds": [], "name": "clerk", "mission": ""}]
+    definition = {"binding_kind": "skill", "skill_id": "tracker.file_issue", "label": "File"}
+
+    monkeypatch.setattr(step_agents, "_allowed_callers", lambda *a: {"workflow_runner"})
+    pool, basis, fallback = step_agents.who_may_run(None, "p", definition, agents)
+    assert (pool, fallback) == ([], "workflow_runner")
+
+    monkeypatch.setattr(step_agents, "_allowed_callers", lambda *a: {"agent_loop"})
+    pool, basis, fallback = step_agents.who_may_run(None, "p", definition, agents)
+    assert (pool, fallback) == ([], ""), "nobody may run it, so it must be refused"
+
+
+def test_the_holder_is_found_before_the_skills_listed_callers(monkeypatch):
+    """The permission gate allows a role_skills grant OR a listed caller; both count."""
+    agents = [{"role_key": "clerk", "holds": ["tracker.file_issue"], "name": "", "mission": ""},
+              {"role_key": "auditor", "holds": [], "name": "", "mission": ""}]
+    definition = {"binding_kind": "skill", "skill_id": "tracker.file_issue"}
+    monkeypatch.setattr(step_agents, "_allowed_callers", lambda *a: {"auditor"})
+    pool, basis, _ = step_agents.who_may_run(None, "p", definition, agents)
+    assert [a["role_key"] for a in pool] == ["clerk"] and basis == "holds"
+
+    agents[0]["holds"] = []
+    pool, basis, _ = step_agents.who_may_run(None, "p", definition, agents)
+    assert [a["role_key"] for a in pool] == ["auditor"] and basis == "listed"
+
+
+def test_a_misspelt_agent_is_refused_against_the_projects_own_agents():
+    """REWRITTEN: this checked a hard-coded set of 29 role keys, which is why an agent made on
+    the Agents page could never be put on a step. The check is against the project's agents."""
+    project = ["media_publisher", "video_editor", "docs_writer"]
+    refused = validate_captain({"id": "publish", "captain": "vidoe_editor"}, roster=project)
+    assert refused and "which this project does not have" in refused[0]
+    assert "video_editor" in refused[0], "the refusal names the agents there are"
+    # An agent the project made itself — refused by the old constant — is accepted.
+    assert validate_captain({"id": "publish", "captain": "docs_writer"}, roster=project) == []
+    # No captain is not an error: BOSS picks the agent that holds what the step needs.
+    assert validate_captain({"id": "publish"}, roster=project) == []
+
+
+def test_a_person_can_answer_a_gate_but_cannot_run_a_step():
+    """`human` was accepted on every kind of step, and a build step then ran as actor 'human'."""
+    assert validate_captain({"id": "gate", "kind": "decision", "captain": "human"}) == []
+    refused = validate_captain(
+        {"id": "build", "kind": "capability", "captain": "human",
+         "binding": {"capability": "build"}})
+    assert refused and "only an approval gate waits for a person" in refused[0]
 
 
 def test_a_misspelt_agent_is_caught_when_the_workflow_is_published():
     """Only the built-in capabilities had their captain checked.
 
     So a typo on a customer's step published cleanly and was denied at RUN time — twenty
-    minutes into a workflow — as "caller 'vidoe_editor' not in allowed_callers".
+    minutes into a workflow — as "caller 'vidoe_editor' not in allowed_callers". Every step kind
+    passes the project's roster (tests/test_a_created_agent_can_captain_a_step.py), so an agent
+    the operator created is accepted and a typo is not. (Integration: the agents stream's
+    roster check and the steps stream's shape check are one validate_captain; without a roster
+    only the shape is checked, which the test above pins.)
     """
     source = inspect.getsource(workflows)
-    # The call now passes the project's roster, so an agent the operator created is accepted
-    # and a typo still is not (tests/test_a_created_agent_can_captain_a_step.py). Updated from
-    # the one-argument form in review round 1 of milestone/agents; the check itself is unchanged.
     assert "captain_problems = validate_captain(step, roster)" in source
-    assert validate_captain_with_roster_refuses_a_typo()
-
-    from boss_engine.services.workflow_capabilities import validate_captain
-
-    assert validate_captain({"id": "publish", "captain": "vidoe_editor"}), \
-        "a role the workforce does not have must be refused"
-    assert validate_captain({"id": "publish", "captain": "media_publisher"}) == []
-    # No captain is not an error: it is the existing behaviour every workflow relies on.
-    assert validate_captain({"id": "publish"}) == []
+    assert validate_captain({"id": "publish", "captain": "vidoe_editor"},
+                            roster={"video_editor", "release_auditor"})
 
 
 def test_the_builder_palette_endpoint_actually_runs():
@@ -80,7 +146,9 @@ def test_the_builder_palette_endpoint_actually_runs():
     tests are string comparisons. So a 500 on the endpoint that draws the entire builder
     palette shipped, and the first sign of it was an empty list on a live install.
 
-    This test exists because the cheap check answered a different question than the one I asked.
+    REWRITTEN for project agents: with no project there are no agents to offer, only the
+    person a gate can name. The project's own list is checked against a database in
+    apps/api/tests/test_who_runs_a_step.py.
     """
     import os
 
@@ -89,58 +157,18 @@ def test_the_builder_palette_endpoint_actually_runs():
 
     payload = main.list_delivery_capabilities(project_id=None)
     assert payload["capabilities"], "the palette must not be empty"
-    assert payload["roles"], "a step must have agents to offer"
-    assert "media_publisher" in payload["roles"]
+    assert payload["roles"] == ["human"]
+    assert payload["agents"] == []
     assert isinstance(payload["manual_approval_risk_floor"], int)
 
 
-def test_an_agent_that_cannot_run_the_step_is_caught_when_the_workflow_is_saved():
-    """Not twenty minutes into a run.
+@pytest.mark.parametrize("field", ["skills", "mcp"])
+def test_a_scope_on_a_step_that_cannot_use_one_is_refused(field):
+    """Silently accepted and ignored before: `binding.skills` validated on any step and nothing
+    read it. Only an agent step can be given a set of skills or MCP servers."""
+    from boss_engine.services.workflows import WorkflowValidationError, validate_workflow_spec
 
-    The captain IS the permission identity, so assigning video_editor to a publish step is
-    refused by the runtime — correctly, and at the worst possible moment: the operator has
-    waited through a render to learn the last step could never have run. Both facts are known
-    at save time.
-    """
-    source = inspect.getsource(steps.validate_step)
-    assert "_allowed_callers(" in source
-    assert "which is not " in source and "allowed to run" in source
-
-
-def test_the_check_does_not_fail_closed_on_its_own_lookup():
-    """A skill whose spec cannot be read here must not make every workflow using it
-    unpublishable. The runtime performs the real check either way."""
-    source = inspect.getsource(steps._allowed_callers)
-    assert "return set()" in source
-    assert "if callers and captain not in callers" in inspect.getsource(steps.validate_step), \
-        "an empty set must mean 'do not judge', not 'refuse everything'"
-
-
-def test_the_allowed_caller_lookup_actually_returns_callers(tmp_path):
-    """EXERCISED, NOT READ.
-
-    The first version of this guard passed `None` where a Settings was wanted. That threw in
-    EntitlementBrokerService's constructor, the fail-open `except` swallowed it, and the check
-    silently never ran — so assigning video_editor to a publish step saved cleanly, which is
-    the exact thing the guard exists to refuse.
-
-    Two tests asserted the source looked right and both passed. This one asks the function.
-    """
-    import os
-
-    from sqlalchemy import create_engine
-
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        import pytest
-
-        pytest.skip("no database configured")
-
-    engine = create_engine(url)
-    with engine.connect() as connection:
-        callers = steps._allowed_callers(connection, "boss-dogfood", "publish_youtube")
-
-    # An empty set means the guard silently does nothing, which is the failure being tested.
-    assert callers, "the lookup returned nothing, so the guard would never fire"
-    assert "media_publisher" in callers
-    assert "video_editor" not in callers, "the whole separation depends on this"
+    with pytest.raises(WorkflowValidationError, match="only an agent step"):
+        validate_workflow_spec({"entry_step": "s", "steps": [
+            {"id": "s", "kind": "capability",
+             "binding": {"custom_step": "x", field: ["a"]}}]})

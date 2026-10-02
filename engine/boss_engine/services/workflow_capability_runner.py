@@ -1302,7 +1302,7 @@ def _execute_step(
     # instruction asking for something new needs the agent to HOLD a skill, not BOSS to ship a
     # step. See services/agent_steps.py.
     if binding.get("agent_work"):
-        from . import agent_steps
+        from . import agent_steps, step_agents
 
         resolved = _resolve_inputs(
             binding.get("inputs") or {}, context,
@@ -1310,27 +1310,35 @@ def _execute_step(
             # that may or may not exist on a given run, and a framework step cannot know which.
             frozenset(k for k in (binding.get("inputs") or {}) if k != "instructions"))
         said = str(resolved.pop("instructions", "") or "").strip()
+        if not said:
+            raise CapabilityExecutionError(
+                "instructions are required — this step's whole specification is what you want "
+                "done. Fill in the instructions when you start the run, or pin them on the step.")
+        settings = getattr(ctx, "settings", None)
+        skills, mcp = step_agents.step_scope(step)
         try:
+            # WHO, decided by the one rule every step kind uses: the agent the step names (the
+            # same `captain` field as everywhere else), otherwise the agent holding what the
+            # step is scoped to, otherwise BOSS's pick among the agents that could do it.
+            ran_as = step_agents.resolve(connection, settings, project_id, step,
+                                         actor=actor, instructions=said)
             outcome = agent_steps.run(
-                connection, getattr(ctx, "settings", None), project_id,
+                connection, settings, project_id,
                 instructions=said,
-                # Named, or left to BOSS. Both are things an operator says, and which
-                # happened is reported in the output rather than inferred.
-                # THE SAME `captain` EVERY OTHER STEP USES. A second field meaning "which
-                # agent" would be a second thing to validate, a second control to build and a
-                # second place for the two to disagree. `binding.agent` is read as a fallback
-                # for a spec written by hand.
-                role_key=(str(step.get("captain")
-                              or binding.get("agent") or "").strip() or None),
+                role_key=ran_as["agent"],
+                chosen=ran_as,
                 context=resolved,
                 actor=actor,
                 max_steps=(int(binding["max_steps"]) if binding.get("max_steps") else None),
-                only=list(binding.get("agents") or []) or None,
                 # Preserve explicit outputs that the next step wires to.
                 produces=list(binding.get("produces") or []) or None,
+                skills=skills or None,
+                mcp=mcp or None,
             )
-        except agent_steps.AgentStepError as error:
+        except (agent_steps.AgentStepError, step_agents.StepAgentError) as error:
             raise CapabilityExecutionError(str(error)) from error
+        if isinstance(outcome.get("ran_as"), dict):
+            outcome["ran_as"]["considered"] = ran_as.get("considered") or []
         # SUSPENDED IS NOT DONE.
         #
         # The agent loop stops on a skill above the autonomous risk floor and returns
@@ -1389,7 +1397,16 @@ def _execute_step(
                 worker_id=str(context.get("worker_id") or actor),
             )
         try:
-            return typed_decisions.run_step(settings, binding, state, spend=spend)
+            answered = typed_decisions.run_step(settings, binding, state, spend=spend)
+            if isinstance(answered, dict):
+                # WHO ANSWERED, in the shape every other step records. No agent: a typed
+                # decision is put to the project's decision model, with its answers fixed.
+                answered = {**answered, "ran_as": {
+                    "agent": "decision model", "how": "decision_model",
+                    "why": "a typed decision is answered by the project's decision model from "
+                           "the options the step names; no agent runs it",
+                    "considered": [], "skills_offered": [], "skills_used": []}}
+            return answered
         except typed_decisions.TypedDecisionGovernanceHold as error:
             # No reservation, lease, and receipt on this call. Settled, not retried
             # into a provider. fail_step records it and emits its audit event.
@@ -1412,7 +1429,14 @@ def _execute_step(
     # capability key at all — falling through to the capability lookup would report it as an
     # unknown capability, which is true and useless.
     if binding.get("custom_step"):
+        from . import step_agents
+
         try:
+            # WHO RUNS IT — the named agent, or the agent that holds the skill or tool. It used
+            # to be the anonymous `workflow_runner`, granted the skill on the fly by widening
+            # its allowed_callers; a step is not a way to grant anything.
+            ran_as = step_agents.resolve(
+                connection, getattr(ctx, "settings", None), project_id, step, actor=actor)
             # THE STEP'S OWN OPTIONAL INPUTS ARE OPTIONAL HERE TOO. Without this every
             # `from_input` was mandatory, so a workflow offering "an image to overlay, if you
             # have one" failed the moment somebody left it blank — and the message named a
@@ -1429,7 +1453,10 @@ def _execute_step(
                 # The gate decision that released this step, if it had one. The MCP effect
                 # checks it is APPROVED before an unreviewed server's tool runs.
                 approved_by=context.get("approval_decision_id"),
+                ran_as=ran_as,
             )
+        except step_agents.StepAgentError as error:
+            raise CapabilityExecutionError(str(error)) from error
         except custom_steps.CustomStepError as error:
             # Translated, not wrapped: the runner's failure path records
             # CapabilityExecutionError, and the customer's sentence is the part worth keeping.
@@ -1774,9 +1801,19 @@ def _perform_capability(
     # That is the whole point of naming one. An agent holds the connection, the knowledge and
     # the standing to act — a step that names the publisher and then publishes as the operator
     # has authorised nothing and attributed the act to the wrong party.
-    step_actor = str(step.get("captain") or "").strip().lower() or actor
+    #
+    # Decided by the same rule as every other step kind (services/step_agents.py): the named
+    # agent, or — for a built-in, whose tool is BOSS's own and needs no grant — whoever started
+    # the run, which is what every catalogue workflow has always done. Recorded as `ran_as`.
+    from .step_agents import resolve as who_runs_it
+
+    ran_as = who_runs_it(connection, getattr(ctx, "settings", None), project_id, step,
+                         actor=actor)
+    step_actor = ran_as["agent"]
     output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
-    result = {"capability": key, "tool": capability.tool, **output}
+    result = {"capability": key, "tool": capability.tool, **output,
+              "ran_as": {**ran_as, "tool": capability.tool,
+                         "skills_offered": [], "skills_used": []}}
     failed = _tool_failed_to_start(key, result)
     if failed:
         raise CapabilityExecutionError(failed)
@@ -2608,6 +2645,24 @@ def _gate_subject(
     binding = spec_step.get("binding") or {}
     approval = spec_step.get("approval") or {}
     requested = str(approval.get("mode") or "").lower() or None
+
+    if binding.get("agent_work"):
+        # MANUAL MEANS A PERSON SAYS GO FIRST, on an agent step as on any other. The builder
+        # offered "manual" here and the card said "needs you", and this returned None because
+        # the step has no capability key — so the agent ran without anybody being asked.
+        if requested != "manual":
+            return None
+        named = str(spec_step.get("captain") or binding.get("agent") or "").strip()
+        return {
+            "key": "agent_work",
+            "label": "Let an agent work it out",
+            "summary": (f"Approve before {named or 'the agent BOSS picks'} starts on this "
+                        "step's instructions."),
+            # An agent's own risky skill calls still stop for a person on their own; this is
+            # the step-level "ask me first" the workflow's author chose.
+            "risk_tier": 1,
+            "completes_step": False,
+        }
 
     custom_key = str(binding.get("custom_step") or "")
     if custom_key:

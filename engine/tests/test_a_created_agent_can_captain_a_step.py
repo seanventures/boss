@@ -93,7 +93,10 @@ def test_with_a_roster_a_bundled_role_missing_from_it_is_refused():
     the human approver); project_roster is what keeps undeleted bundled roles in it."""
     [problem] = validate_captain({"id": "s", "captain": "qa"}, roster={"release_auditor"})
     assert "not a role this workforce has" in problem and "Agents page" in problem
-    assert validate_captain({"id": "s", "captain": "human"}, roster={"release_auditor"}) == []
+    # The human approver, on a gate — `human` is only ever accepted where a person can answer
+    # (the steps stream's shape rule; a bare step with no kind is not a gate).
+    assert validate_captain({"id": "s", "kind": "decision", "captain": "human"},
+                            roster={"release_auditor"}) == []
     assert validate_captain({"id": "s", "captain": "qa"}) == [], "no project: the bundled list"
 
 

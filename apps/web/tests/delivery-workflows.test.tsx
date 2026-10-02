@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DeliveryWorkflows } from "../app/delivery-workflows-ui";
+import { draftFromSpecStep, specFromDraft } from "../lib/workflow-spec";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -95,13 +96,23 @@ describe("the builder cannot produce something the runtime will refuse", () => {
     expect(UI).toContain("while (taken.has(`${stem}_${n}`)) n += 1;");
   });
 
+  // REWRITTEN AS BEHAVIOUR: the save moved to lib/workflow-spec.ts as a merge over the loaded
+  // spec, so these run it instead of reading the builder's source.
   it("wires each step to the next one", () => {
-    expect(UI).toContain("const next = index + 1 < draft.length ? [draft[index + 1].id] : [];");
+    const saved = specFromDraft(
+      [{ id: "a", kind: "capability", capability: "notify" },
+       { id: "b", kind: "timer", config: { wait_seconds: 60 } }],
+      { capabilities: [{ key: "notify", required_inputs: ["message"] }], customSteps: [] });
+    expect((saved.steps as { next: string[] }[]).map((s) => s.next)).toEqual([["b"], []]);
+    expect(saved.entry_step).toBe("a");
   });
 
   it("reads required inputs from the run's input instead of inventing values", () => {
     // A workflow that hard-codes the thing being built only works once.
-    expect(UI).toContain("{ from_input: name }");
+    const saved = specFromDraft([{ id: "a", kind: "capability", capability: "notify" }],
+      { capabilities: [{ key: "notify", required_inputs: ["message"] }], customSteps: [] });
+    expect((saved.steps as { binding: { inputs: unknown } }[])[0].binding.inputs)
+      .toEqual({ message: { from_input: "message" } });
   });
 
   it("only offers a customer's own workflows for editing", () => {
@@ -240,9 +251,14 @@ describe("the builder opens with what is already there", () => {
   });
 
   it("keeps configuration it does not understand", () => {
-    // wait_seconds, workflow_version_id. Dropping them on load would silently reset one step
-    // while the customer edited another.
-    expect(UI).toContain('!["id", "kind", "binding", "approval", "next"].includes(k)');
+    // wait_seconds, question, guidance — and anything else. Dropping them on load would
+    // silently reset one step while the customer edited another. REWRITTEN to load and save.
+    const loaded = { entry_step: "pause", steps: [
+      { id: "pause", kind: "timer", wait_seconds: 900, house_note: "kept", binding: {},
+        next: [] }] };
+    const saved = specFromDraft(loaded.steps.map(draftFromSpecStep),
+                                { loaded, capabilities: [], customSteps: [] });
+    expect(saved).toEqual(loaded);
   });
 });
 
@@ -272,16 +288,22 @@ describe("the flow blocks the runtime always had", () => {
   });
 
   it("emits a control block in the shape the runtime reads", () => {
-    // wait_seconds and workflow_version_id live at the top level of the step, not in binding.
-    // Asserted WITHOUT the empty-object literals: `codeOnly` collapses `{}` to a space when
-    // it strips leftover JSX-comment braces, so a string containing one never matches.
-    expect(UI).toContain("id: step.id, kind: step.kind, binding:");
-    expect(UI).toContain("...(step.config ?? ");
-    // AND ITS CAPTAIN. An Approval gate is a control block, and it is the one step where naming
-    // who answers is the entire point; the save used to drop it.
-    // Without the trailing `{}`, for the reason stated above: `codeOnly` collapses an empty
-    // object literal, so a string containing one can never match.
-    expect(UI).toContain("...(step.captain ? { captain: step.captain } :");
+    // REWRITTEN. This asserted that wait_seconds AND workflow_version_id were written at the
+    // top level; the validator reads `binding.workflow_version_id`, so "Run another workflow"
+    // could never be saved from the builder. wait_seconds and a gate's question stay at the
+    // top level, where the runtime reads them.
+    const saved = specFromDraft([
+      { id: "pause", kind: "timer", config: { wait_seconds: 60 } },
+      { id: "child", kind: "subworkflow", config: { workflow_version_id: "wfv_1" } },
+      // AND ITS CAPTAIN. An Approval gate is a control block, and it is the one step where
+      // naming who answers is the entire point; the save used to drop it.
+      { id: "gate", kind: "decision", captain: "human", config: { question: "Ship?" } },
+    ], { capabilities: [], customSteps: [] });
+    const [pause, child, gate] = saved.steps as Record<string, unknown>[];
+    expect(pause).toMatchObject({ kind: "timer", wait_seconds: 60, binding: {} });
+    expect(child).toMatchObject({ kind: "subworkflow",
+                                  binding: { workflow_version_id: "wfv_1" } });
+    expect(gate).toMatchObject({ kind: "decision", question: "Ship?", captain: "human" });
   });
 });
 
@@ -543,12 +565,18 @@ describe("a customer's own steps are first-class in the palette", () => {
     expect(UI).toContain("|| mine?.approval_forced_manual");
   });
 
+  // REWRITTEN to run the save and the load instead of reading the builder's source.
   it("emits the binding the runtime reads", () => {
-    expect(UI).toContain("custom_step: step.customStep");
+    const saved = specFromDraft([{ id: "s", kind: "capability", customStep: "file_issue",
+                                   inputs: {} }], { capabilities: [], customSteps: [] });
+    expect((saved.steps as { binding: unknown }[])[0].binding)
+      .toEqual({ custom_step: "file_issue", inputs: {} });
   });
 
   it("reads one back off a saved spec, so editing does not drop it", () => {
-    expect(UI).toContain("customStep: binding.custom_step");
+    expect(draftFromSpecStep({ id: "s", kind: "capability",
+                               binding: { custom_step: "file_issue" } }).customStep)
+      .toBe("file_issue");
   });
 });
 

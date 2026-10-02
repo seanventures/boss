@@ -29,6 +29,14 @@ from .workflow_capabilities import (
     validate_step as capability_problems,
     validate_captain,
 )
+from .step_agents import (
+    AGENT_RULES_KEY,
+    CURRENT_AGENT_RULES,
+    assignment_problems as step_agent_problems,
+    shape_problems as step_agent_shape_problems,
+    tag_steps as tag_steps_with_agent_rules,
+    under_current_rules as under_current_agent_rules,
+)
 from .typed_decisions import step_problems as typed_decision_problems
 
 logger = logging.getLogger(__name__)
@@ -275,9 +283,19 @@ def project_roster(connection: Connection, project_id: str) -> frozenset[str]:
 
 
 def validate_workflow_spec(spec: dict[str, Any],
-                           roster: Optional[Iterable[str]] = None) -> dict[str, Any]:
-    """Normalise and check a spec. `roster` is the project's agents (project_roster); without
-    it a captain must be a bundled role, which is right only where there is no project."""
+                           roster: Optional[Iterable[str]] = None, *,
+                           check_agents: bool = True) -> dict[str, Any]:
+    """Normalise a spec, refusing anything the runtime would misread.
+
+    `roster` is the project's agents (project_roster); with it a named agent must be one of
+    them. Without it only the step-agent SHAPE is checked (`human` only on a gate, scopes only on
+    agent steps) — whether a named agent exists and holds what the step needs is then
+    `step_agents.assignment_problems`, run at publish and at start with the project in hand.
+
+    `check_agents=False` skips the step-agent rules altogether. Those rules are new. A version
+    published before them carries no `step_agent_rules` stamp, and is started and run under the
+    rules it was published under — see `_published_spec`. Publishing always applies them.
+    """
     if not isinstance(spec, dict):
         raise WorkflowValidationError("workflow spec must be an object.")
     raw_steps = spec.get("steps")
@@ -321,6 +339,15 @@ def validate_workflow_spec(spec: dict[str, Any],
         if not isinstance(binding, dict):
             raise WorkflowValidationError(f"step '{step_id}' binding must be an object.")
         step["binding"] = binding
+        # WHO RUNS IT, FOR EVERY KIND OF STEP — the part that needs no project to see: `human`
+        # only on a gate, a name that is an agent key, and skills/MCP lists only where something
+        # reads them. Whether the named agent EXISTS, and whether it holds what the step needs,
+        # is `step_agents.assignment_problems`, run at publish and at start with the project in
+        # hand. That used to be a hard-coded set of role keys checked here, which refused every
+        # agent made on the Agents page.
+        agent_problems = step_agent_shape_problems(step) if check_agents else []
+        if agent_problems:
+            raise WorkflowValidationError(" ".join(agent_problems))
         if kind == "capability" and binding.get("agent_work"):
             # A STEP WHOSE SPECIFICATION IS A SENTENCE. It binds no capability and no custom
             # step, so neither of the checks below applies — what it needs is an instruction and,
@@ -330,12 +357,14 @@ def validate_workflow_spec(spec: dict[str, Any],
                 raise WorkflowValidationError(
                     f"step '{step_id}' must wire 'instructions' — that is the whole of what it "
                     "tells the agent to do. Read it from the run's input, or pin a literal.")
-            # WHETHER THE NAMED AGENT EXISTS is checked here; whether it HOLDS anything is
-            # checked in `_validate_bindings`, which has the project in hand. Both fail closed,
-            # because a step given to an agent that can do nothing is a run that wastes a gate.
-            captain_problems = validate_captain(step, roster)
-            if captain_problems:
-                raise WorkflowValidationError(" ".join(captain_problems))
+            # WHETHER THE NAMED AGENT EXISTS is checked here against the project's roster
+            # (agents stream); whether it HOLDS what the step is scoped to is
+            # `step_agents.assignment_problems` at publish and at start (steps stream). Both
+            # fail closed, because a step given to an agent that can do nothing wastes a run.
+            if check_agents:
+                captain_problems = validate_captain(step, roster)
+                if captain_problems:
+                    raise WorkflowValidationError(" ".join(captain_problems))
             approval = dict(step.get("approval") or {})
             mode = str(approval.get("mode", "auto")).lower()
             if mode not in ("auto", "manual"):
@@ -370,10 +399,12 @@ def validate_workflow_spec(spec: dict[str, Any],
             # A CUSTOM STEP MAY NAME AN AGENT TOO, and until now only the built-in capabilities
             # had their captain checked — so a typo in a role on a customer's step published
             # cleanly and was denied at run time, twenty minutes into a workflow, as
-            # "caller 'vidoe_editor' not in allowed_callers".
-            captain_problems = validate_captain(step, roster)
-            if captain_problems:
-                raise WorkflowValidationError(" ".join(captain_problems))
+            # "caller 'vidoe_editor' not in allowed_callers". Who may RUN it is
+            # `step_agents.assignment_problems`.
+            if check_agents:
+                captain_problems = validate_captain(step, roster)
+                if captain_problems:
+                    raise WorkflowValidationError(" ".join(captain_problems))
             approval = dict(step.get("approval") or {})
             mode = str(approval.get("mode", "auto")).lower()
             if mode not in ("auto", "manual"):
@@ -386,7 +417,9 @@ def validate_workflow_spec(spec: dict[str, Any],
         elif kind == "capability":
             # Every problem at once. A builder that surfaces one error at a time makes a
             # customer fix a workflow five times to publish it once.
-            problems = capability_problems(step, roster)
+            problems = capability_problems(
+                step if check_agents else {k: v for k, v in step.items() if k != "captain"},
+                roster if check_agents else None)
             if problems:
                 raise WorkflowValidationError(" ".join(problems))
             # Store the EFFECTIVE approval mode, not the requested one: a plan that reads
@@ -978,6 +1011,12 @@ def publish_version(
     if not definition:
         raise WorkflowNotFoundError("Workflow definition not found.")
     normalized = validate_workflow_spec(spec, project_roster(connection, project_id))
+    # STAMPED WITH THE AGENT RULES IT WAS CHECKED UNDER, so a start or a run months from now
+    # applies those rules and not whatever this code says then. A step-level copy (which
+    # `_run_spec` adds for the runner) is never trusted from a caller.
+    normalized[AGENT_RULES_KEY] = CURRENT_AGENT_RULES
+    for step in normalized["steps"]:
+        step.pop(AGENT_RULES_KEY, None)
     _hold_new_typed_decision_work(normalized)
 
     # Custom steps are checked HERE as well as at start_run, and only these. Their risk tier
@@ -991,6 +1030,13 @@ def publish_version(
                 problems = defined_step_problems(connection, project_id, step)
                 if problems:
                     raise WorkflowBindingBlockedError(" ".join(problems))
+    # WHO RUNS EACH STEP, settled while the operator is still in the builder: a named agent
+    # this project has, holding what its step is scoped to, or — where nobody is named — at
+    # least one agent that may run it. After the risk checks above, because "this needs a
+    # person" is the more fundamental thing to fix. See services/step_agents.py.
+    agent_problems = step_agent_problems(connection, project_id, normalized)
+    if agent_problems:
+        raise WorkflowBindingBlockedError(" ".join(agent_problems))
 
     digest = json_hash(normalized)
     existing = connection.execute(
@@ -1737,6 +1783,13 @@ def _validate_bindings(
                     f"step '{step['id']}' cannot recursively invoke its own version."
                 )
             _version_row(connection, project_id, child_id)
+    # WHO RUNS EACH STEP, re-asked at start: an agent can be deleted, or a grant taken away,
+    # after the workflow was published. See services/step_agents.py. A version published before
+    # those rules is started under the ones it was published under.
+    agent_problems = step_agent_problems(connection, project_id, spec,
+                                         legacy=not under_current_agent_rules(spec))
+    if agent_problems:
+        raise WorkflowBindingBlockedError(" ".join(agent_problems))
 
 
 #: Run inputs that claim work already happened. Only the server sets them — see `start_run`.
@@ -1807,8 +1860,7 @@ def start_run(
     # A run started now reaches its version's steps: not while an agent delete is deciding.
     hold_workflow_reach(connection, project_id)
     version = _version_row(connection, project_id, str(workflow_version_id))
-    spec = validate_workflow_spec(_json(version["spec"], {}),
-                                  project_roster(connection, project_id))
+    spec = _published_spec(version["spec"], project_roster(connection, project_id))
     _hold_new_typed_decision_work(spec)
     version_namespace = connection.execute(
         text(
@@ -2005,10 +2057,28 @@ def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Workflow run not found.")
+    # A run in flight keeps the rules its version was published under — see _published_spec.
+    # Each step is tagged with them, because the runner is handed a step, not the version.
     # Re-read on every step of a run, so a run whose step names an operator-made agent must not
-    # be refused half-way through by a check that only knows the bundled roles.
-    return validate_workflow_spec(_json(row["spec"], {}),
-                                  project_roster(connection, str(row["project_id"])))
+    # be refused half-way through by a check that only knows the bundled roles: the project's
+    # roster goes with it.
+    return tag_steps_with_agent_rules(
+        _published_spec(row["spec"], project_roster(connection, str(row["project_id"]))))
+
+
+def _published_spec(raw: Any, roster: Optional[Iterable[str]] = None) -> dict[str, Any]:
+    """A STORED version's spec, validated under the agent rules it was published under.
+
+    THE INCIDENT THIS PREVENTS. The step-agent rules (`human` only on a gate; a custom step that
+    names nobody needs an agent holding its skill) arrived after workflows had been published
+    without them — the builder's default for a custom step was "no agent — runs as the
+    workflow". Applying them to those versions refused their starts and failed their in-flight
+    runs mid-way, on an upgrade, for something the operator had done right at the time. So a
+    version without the `step_agent_rules` stamp is read under the old rules, everywhere it is
+    read; publishing a new version is where the new rules are met, with the reason given.
+    """
+    spec = _json(raw, {})
+    return validate_workflow_spec(spec, roster, check_agents=under_current_agent_rules(spec))
 
 
 def _what_there_is_to_review(connection: Connection, run_id: str) -> dict[str, Any]:
@@ -4797,8 +4867,7 @@ def migrate_run(
     if target["workflow_definition_id"] != run["workflow_definition_id"]:
         raise WorkflowValidationError("Target version belongs to another workflow definition.")
     old_spec = _run_spec(connection, run_id)
-    new_spec = validate_workflow_spec(_json(target["spec"], {}),
-                                      project_roster(connection, project_id))
+    new_spec = _published_spec(target["spec"], project_roster(connection, project_id))
     old_steps = _step_map(old_spec)
     new_steps = _step_map(new_spec)
     rows = connection.execute(

@@ -71,8 +71,18 @@ def _draft(monkeypatch, *, existing, args):
         def mappings(self):
             return self
 
+        def scalars(self):
+            # The project's roster (workflows.project_roster), read by the agent check since the
+            # agents and steps streams met: its role keys, none here.
+            return self
+
         def first(self):
             return existing
+
+        def all(self):
+            # The project's agents and their holdings, read by draft_workflow's agent check —
+            # none here, which is right for steps that name no agent.
+            return []
 
     class _Conn:
         def execute(self, _statement, _params=None):
@@ -196,11 +206,22 @@ def test_a_step_can_name_its_own_captain():
 
 def test_but_not_a_captain_the_workforce_does_not_have():
     """Addressing the dock to an unregistered role is worse than not addressing it: it looks
-    like it worked and answers with no lens, no remit and no record."""
-    with pytest.raises(WorkflowValidationError) as caught:
+    like it worked and answers with no lens, no remit and no record.
+
+    REWRITTEN: this asserted that the spec validator refused it against a hard-coded set of
+    role keys — the set that also refused every agent made on the Agents page. Whether an agent
+    exists is a fact about the PROJECT, checked where there is one (publish, start, and
+    draft_workflow before it writes anything; see apps/api/tests/test_who_runs_a_step.py)."""
+    from boss_engine.services.workflow_capabilities import validate_captain
+
+    step = _steps({"id": "tell", "capability": "notify", "input": {"message": "x"},
+                   "captain": "nobody"})["steps"][0]
+    refused = validate_captain(step, roster=["release_manager", "qa"])
+    assert refused and "which this project does not have" in refused[0]
+    # And a person is not somebody a notify step can be given to.
+    with pytest.raises(WorkflowValidationError, match="only an approval gate"):
         validate_workflow_spec(_steps({"id": "tell", "capability": "notify",
-                                       "input": {"message": "x"}, "captain": "nobody"}))
-    assert "not a role this workforce has" in str(caught.value)
+                                       "input": {"message": "x"}, "captain": "human"}))
 
 
 def test_a_declared_input_reaches_the_start_form():
@@ -219,11 +240,15 @@ def test_a_declared_input_reaches_the_start_form():
         [{"capability": "video_edit"}, {"capability": "social_publish"}],
         {"inputs": ["media_artifact_id", "title"]},
     )
-    # Declared, so the form has something to render.
-    assert "media_artifact_id" in spec["input_schema"]
-    assert "title" in spec["input_schema"]
+    # Declared, so the form has something to render. REWRITTEN for JSON Schema: this asserted
+    # the `{name: "string"}` shape, which gave the form a bare box named after a variable and
+    # never said which values a run cannot start without.
+    schema = spec["input_schema"]
+    assert {"media_artifact_id", "title"} <= set(schema["properties"])
+    assert set(schema["required"]) == {"media_artifact_id", "title"}
+    assert schema["properties"]["media_artifact_id"]["title"] == "Media artifact id"
     # And it survives the validator, which used to default the field to {}.
-    assert validate_workflow_spec(spec)["input_schema"]["title"] == "string"
+    assert validate_workflow_spec(spec)["input_schema"]["properties"]["title"]["type"] == "string"
 
 
 def test_an_input_no_step_consumes_is_not_put_on_the_form():
@@ -236,7 +261,8 @@ def test_an_input_no_step_consumes_is_not_put_on_the_form():
         [{"capability": "video_edit"}, {"capability": "social_publish"}],
         {"inputs": ["media_artifact_id", "title", "unused_extra"]},
     )
-    assert "unused_extra" not in spec.get("input_schema", {})
+    assert "unused_extra" not in spec["input_schema"]["properties"]
+    assert "unused_extra" not in spec["input_schema"]["required"]
 
 
 def test_a_workflow_that_needs_nothing_declares_nothing():
