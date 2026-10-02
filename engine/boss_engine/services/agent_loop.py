@@ -219,6 +219,7 @@ def _invoke_mcp_skill(
     step: int,
     actor: str,
     caller: str = "agent_loop",
+    approved_by: Optional[str] = None,
 ) -> dict[str, Any]:
     tool_name = str(tool.get("name") or "tool")
     skill_spec = _mcp_skill_spec(server, tool)
@@ -227,6 +228,7 @@ def _invoke_mcp_skill(
         connection=connection,
         project_id=project_id,
         actor=actor,
+        approved_by=approved_by,
     )
 
     def execute(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -248,6 +250,7 @@ def _invoke_mcp_skill(
             inputs,
             dedupe_key=f"mcp:{run_id}:{step}:{server['id']}:{tool_name}:{args_digest}",
             tenant_scope=context.tenant_scope(),
+            approved_by=approved_by,
         )
 
     return SkillRuntimeService(settings).invoke(
@@ -1515,6 +1518,7 @@ def _invoke_agent_skill(
     *,
     actor: str,
     skill_spec: Optional[dict[str, Any]] = None,
+    approved_by: Optional[str] = None,
 ) -> dict[str, Any]:
     return SkillRuntimeService(settings).invoke(
         connection,
@@ -1528,6 +1532,7 @@ def _invoke_agent_skill(
             connection=connection,
             project_id=project_id,
             actor=actor,
+            approved_by=approved_by,
         ),
         skill_spec=skill_spec,
         actor=actor,
@@ -1659,6 +1664,8 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 run_id=run_id,
                 step=int(pending.get("step") or run.get("step") or 0),
                 actor="decision_approval",
+                # Checked approved above; the MCP effect reads it again (needs_person).
+                approved_by=decision_id,
             )
             emit_event(
                 connection,
@@ -1715,6 +1722,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 pending.get("args") or {},
                 actor="decision_approval",
                 skill_spec=still_resolved,
+                approved_by=decision_id,
             )
             emit_event(
                 connection,
@@ -1801,7 +1809,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     }
     mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     from .mcp_registry import known_unreachable, record_reachability_quietly
-    from .mcp_registry import reviewed as reviewed_server
+    from .mcp_registry import needs_person, unreviewed_sentence
 
     for server in ([] if bounded
                    else list_mcp_servers(connection, project_id, enabled_only=True)):
@@ -1842,8 +1850,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         "name": ns,
                         "description": (
                             f"[MCP · {server['name']}"
-                            + ("" if reviewed_server(server)
-                               else " · UNREVIEWED server: every call waits for a person")
+                            + (" · UNREVIEWED server: every call waits for a person"
+                               if needs_person(server) else "")
                             + f"] {t.get('description', '')}"),
                         "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
                     },
@@ -2027,7 +2035,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 # (mcp_registry.reviewed) that claim is the only thing standing between a
                 # registered URL and an unattended call. Round-1 review: a chat-registered
                 # tier-0 server's tools ran in every chat without anyone being asked.
-                unreviewed = not reviewed_server(server)
+                unreviewed = needs_person(server)
                 if risk > threshold or unreviewed:
                     decision_id = create_blocking_decision(
                         connection,
@@ -2055,9 +2063,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         "message": (
                             f"MCP tool '{tool_name}' (risk tier {risk}) requires "
                             "human approval."
-                            + (f" Server '{server['name']}' has not been reviewed: mark it "
-                               "reviewed on the Skills and MCP page once a person has "
-                               "checked it." if unreviewed else "")
+                            + (f" {unreviewed_sentence(server)}" if unreviewed else "")
                         ),
                     }
                     is_deferred = True
@@ -2175,12 +2181,20 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     or skill_resolution.get("role_key")
                     or "agent_loop"
                 )
-                if risk > threshold:
+                # THE SAME REVIEW RULE AS A DIRECT MCP CALL (mcp_registry.needs_person), read
+                # from the catalogue: an authored mcp_tool skill on an unreviewed server carries
+                # policy.requires_person. Round-2 review: this branch asked only the tier, so
+                # the tool an agent could not call directly without a person ran unattended
+                # once it was wrapped in a skill the agent held.
+                person_reason = str(
+                    (skill.get("policy") or {}).get("requires_person") or "")
+                if risk > threshold or person_reason:
                     decision_id = create_blocking_decision(
                         connection,
                         project_id,
                         task_id,
-                        f"Approve agent skill: {skill_id}",
+                        f"Approve agent skill: {skill_id}"
+                        + (" (its MCP server is not reviewed yet)" if person_reason else ""),
                         {
                             "action": "resume_agent_run",
                             "run_id": run_id,
@@ -2201,6 +2215,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         "message": (
                             f"'{skill_id}' (risk tier {risk}) requires human "
                             "approval; the run is paused and resumes on approval."
+                            + (f" {person_reason}" if person_reason else "")
                         ),
                     }
                     is_deferred = True

@@ -1426,6 +1426,9 @@ def _execute_step(
                         connection, project_id, str(binding["custom_step"]))),
                 run_id=str(context.get("run_id") or ""),
                 step_index=int(context.get("step_index") or 0),
+                # The gate decision that released this step, if it had one. The MCP effect
+                # checks it is APPROVED before an unreviewed server's tool runs.
+                approved_by=context.get("approval_decision_id"),
             )
         except custom_steps.CustomStepError as error:
             # Translated, not wrapped: the runner's failure path records
@@ -2520,9 +2523,10 @@ def _gate_subject(
             # that cannot run, and an unusable step defaults to the risk floor — so a deleted
             # skill would have produced an approval request rather than an error.
             return None
-        if custom_steps.approval_for(
-            {"risk_tier": definition["risk_tier"]}, requested
-        ) != "manual":
+        # The whole resolved definition, not just its tier: a step on an unreviewed MCP server
+        # needs a person at ANY tier (requires_person), and passing the tier alone is how
+        # round 2 found a tier-0 step on such a server running with nobody asked.
+        if custom_steps.approval_for(definition, requested) != "manual":
             return None
         return {
             "key": custom_key,
@@ -2530,6 +2534,8 @@ def _gate_subject(
             "summary": (
                 f"Approve before '{definition['label']}' runs. It calls "
                 f"{definition['risk_source']} at risk tier {definition['risk_tier']}."
+                + (f" {definition['requires_person']}"
+                   if definition.get("requires_person") else "")
             ),
             "risk_tier": definition["risk_tier"],
             "completes_step": False,
@@ -3108,6 +3114,9 @@ def tick(
                             **_run_context(connection, run_id),
                             "step_attempt": int(claimed.get("attempt") or 1),
                             "worker_id": worker_id,
+                            # Set only on a step a gate released (_resume_answered_gates keeps
+                            # decision_id on the row); read by a custom step's MCP effect.
+                            "approval_decision_id": claimed.get("decision_id"),
                         },
                     )
                 except BaseException:

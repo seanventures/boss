@@ -144,7 +144,9 @@ def _row(r) -> dict[str, Any]:
         "last_error": col("last_error"),
         "tools": tools if isinstance(tools, list) else [],
     }
-    item["trusted"] = bool(item["provenance"].get("trusted", False))
+    # The same answer the agent loop, the catalogue and resolve_risk get (reviewed), so a badge
+    # cannot say "unreviewed" about a server the runtime treats as reviewed.
+    item["trusted"] = reviewed(item)
     item["status_note"] = status_note(item)
     return item
 
@@ -238,11 +240,65 @@ def reviewed(server: dict[str, Any]) -> bool:
     below the approval threshold without asking. `trusted` only gated PLACING tier >= 2 tools in
     a workflow. Now an unreviewed server's tool never runs from an agent turn without a person's
     approval (agent_loop), and a server registered from chat lands switched off.
+
+    THE FLAG DECIDES, whoever wrote it. Round-2 review: a built-in counted as reviewed because
+    its provenance said source "builtin" — whatever `trusted` said — so an operator who
+    re-pointed a seeded 127.0.0.1 server at another host, or unticked Reviewed, saw
+    "unreviewed" on the panel while the agent loop ran its tools unattended. BOSS seeds its own
+    servers with trusted=True, so the release's review is the flag like anybody else's, and
+    :func:`update_mcp_server` drops it (and the "builtin" source) when a person re-points one.
+    A legacy built-in row written before the flag existed — source "builtin" and no `trusted`
+    key at all — still counts, because nobody has touched it since the release seeded it.
     """
     provenance = server.get("provenance") or {}
     if isinstance(provenance, str):
         provenance = _loads(provenance, {}) or {}
-    return bool(provenance.get("trusted", False)) or provenance.get("source") == "builtin"
+    if "trusted" in provenance:
+        return provenance.get("trusted") is True
+    return provenance.get("source") == "builtin"
+
+
+class McpServerUnreviewed(McpServerError):
+    """A tool on an unreviewed server was about to run with nobody's approval. The API answers
+    409; a run records the sentence."""
+
+
+def unreviewed_sentence(server: dict[str, Any]) -> str:
+    """What to tell a person when an unreviewed server's tool is held for them — one wording for
+    every road (agent turn, skill, custom step), so the operator learns one fix."""
+    return (f"MCP server '{server.get('name') or server.get('id')}' has not been reviewed, so "
+            "its tools only run with a person's approval. Check it is the server you meant and "
+            "mark it Reviewed on the Skills and MCP page.")
+
+
+def needs_person(server: Optional[dict[str, Any]]) -> bool:
+    """THE RULE, for every road to an MCP tool: a tool on an unreviewed server never runs
+    unattended, whatever tier it claims.
+
+    Round-2 review: this was asked only at agent_loop's direct-call site, so the same tool
+    reached through an authored ``mcp_tool`` skill, or a custom workflow step bound to it, ran
+    on an unreviewed server with nobody asked. Every gate now asks this function — the skill
+    catalogue (``requires_person`` on the entry and the SkillSpec), ``resolve_risk`` for custom
+    steps, the workflow ``kind: skill`` validator and agent_loop's skill branch — and the effect
+    itself (:func:`call_tool_with_receipt`) refuses without an approved decision, so a road
+    nobody has thought of yet fails closed with :func:`unreviewed_sentence`.
+    """
+    return server is not None and not reviewed(server)
+
+
+def approval_stands(connection: Connection, project_id: str,
+                    decision_id: Optional[str]) -> bool:
+    """Is ``decision_id`` a decision in this project that a person (or the policy acting for
+    them) APPROVED? Read, never assumed: a decision id that is pending, rejected or from
+    another project is not an approval."""
+    wanted = str(decision_id or "").strip()
+    if not wanted:
+        return False
+    status = connection.execute(
+        text("SELECT status FROM decisions WHERE id = :id AND project_id = :p"),
+        {"id": wanted, "p": project_id},
+    ).scalar()
+    return status == "approved"
 
 
 def _name_taken(
@@ -254,6 +310,35 @@ def _name_taken(
         {"p": project_id, "n": name.strip(), "x": except_id},
     ).first()
     return str(row[0]) if row else None
+
+
+def _name_taken_sentence(name: str) -> str:
+    return (f"an MCP server called '{name}' is already registered in this project. Edit that "
+            "one, or register this under another name — two servers with one name make their "
+            "tools indistinguishable to an agent.")
+
+
+def _write_unique_name(connection: Connection, name: str, statement: Callable[[], Any]) -> Any:
+    """Run a write that may collide on uq_mcp_servers_project_name, and say so in words.
+
+    `_name_taken` is a check-then-write, so two registrations of one name racing each other
+    (a double-pressed Register, two tabs) both pass it and the second INSERT hits the unique
+    index. Round-2 review: that IntegrityError escaped as a bare 500. Run inside a savepoint so
+    the caller's transaction is still usable, and turned into the same McpServerConflict (409)
+    the check raises.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    savepoint = connection.begin_nested()
+    try:
+        result = statement()
+    except IntegrityError as error:
+        savepoint.rollback()
+        if "uq_mcp_servers_project_name" in str(error):
+            raise McpServerConflict(_name_taken_sentence(name)) from error
+        raise
+    savepoint.commit()
+    return result
 
 
 def _reviewed(provenance: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -298,12 +383,9 @@ def register_mcp_server(
     tool_risk_overrides = _validated_overrides(tool_risk_overrides)
     name = name.strip()
     if _name_taken(connection, project_id, name):
-        raise McpServerConflict(
-            f"an MCP server called '{name}' is already registered in this project. Edit that "
-            "one, or register this under another name — two servers with one name make their "
-            "tools indistinguishable to an agent.")
+        raise McpServerConflict(_name_taken_sentence(name))
     server_id = make_id("mcp")
-    connection.execute(
+    _write_unique_name(connection, name, lambda: connection.execute(
         text(
             """
             INSERT INTO mcp_servers
@@ -328,7 +410,7 @@ def register_mcp_server(
             "tool_risk_overrides": json.dumps(tool_risk_overrides or {}),
             "enabled": bool(enabled),
         },
-    )
+    ))
     # REGISTERED BY HAND, so a deletion recorded earlier no longer stands in its way: the newer
     # decision wins (seed_exclusions.lift).
     if actor != "bootstrap":
@@ -387,7 +469,7 @@ def update_mcp_server(
     _validated_server_identity(name, url, transport)
     if name.lower() != current["name"].lower() and _name_taken(
             connection, project_id, name, except_id=server_id):
-        raise McpServerConflict(f"another MCP server in this project is already called '{name}'.")
+        raise McpServerConflict(_name_taken_sentence(name))
     risk = _validated_risk(given.get("risk_tier", current["risk_tier"]))
     boundary = normalize_data_boundary(given.get("data_boundary", current["data_boundary"]))
     overrides = _validated_overrides(
@@ -395,7 +477,15 @@ def update_mcp_server(
     enabled = bool(given.get("enabled", current["enabled"]))
     provenance = dict(current["provenance"])
     url_changed = url != current["url"]
-    if url_changed and provenance.get("trusted") and provenance.get("source") != "builtin":
+    if provenance.get("source") == "builtin" and (url_changed or "trusted" in given):
+        # A PERSON HAS TAKEN OVER A SERVER BOSS SHIPPED. The release vouched for the address
+        # it seeded, not for wherever the server points now, and an operator's own Reviewed
+        # choice is theirs to record. Round-2 review: "builtin" stayed on the row, so a
+        # re-pointed built-in kept the release's review — the panel said unreviewed while the
+        # agent loop ran its tools unattended. The seeded address is kept for the record.
+        provenance["source"] = "builtin_edited"
+        provenance.setdefault("seeded_url", current["url"])
+    if url_changed and reviewed({"provenance": provenance}):
         provenance = {k: v for k, v in provenance.items()
                       if k not in ("reviewed_by", "reviewed_at")}
         provenance["trusted"] = False
@@ -415,7 +505,7 @@ def update_mcp_server(
 
     provenance["edited_by"] = actor
     provenance["edited_at"] = datetime.now(timezone.utc).isoformat()
-    row = connection.execute(
+    row = _write_unique_name(connection, name, lambda: connection.execute(
         text(
             "UPDATE mcp_servers SET name = :name, url = :url, transport = :transport, "
             "description = :desc, risk_tier = :risk, data_boundary = :db, "
@@ -429,7 +519,7 @@ def update_mcp_server(
          "desc": given.get("description", current["description"]),
          "risk": risk, "db": boundary, "o": json.dumps(overrides), "enabled": enabled,
          "prov": json.dumps(provenance), "id": server_id, "p": project_id},
-    ).mappings().first()
+    ).mappings().first())
     changed = sorted(k for k in given if k in UPDATABLE_FIELDS)
     emit_event(
         connection, project_id, "mcp.server_updated", actor, "mcp_server", server_id,
@@ -572,7 +662,8 @@ def delete_mcp_server(
                             actor=actor, reason="deleted")
     emit_event(connection, project_id, "mcp.server_removed", actor, "mcp_server", server_id,
                {"name": current["name"], "url": current["url"], "released_from": holders,
-                "builtin": (current["provenance"] or {}).get("source") == "builtin"})
+                "builtin": (current["provenance"] or {}).get("source")
+                           in ("builtin", "builtin_edited")})
     return True
 
 
@@ -792,8 +883,17 @@ def call_tool_with_receipt(
     dedupe_key: str,
     tenant_scope: tuple[str, str],
     created_by_job_id: Optional[str] = None,
+    approved_by: Optional[str] = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
+
+    THE BACKSTOP FOR THE REVIEW RULE (:func:`needs_person`). Every road to an MCP tool ends
+    here, so this is where an unreviewed server's tool is refused unless ``approved_by`` names
+    an APPROVED decision in this project — the agent run's resume decision, or the workflow
+    step's gate. The gates upstream (agent_loop, the catalogue, resolve_risk) are what make
+    that decision exist; this makes a road that skips them fail closed with a sentence instead
+    of running unattended. Round-2 review found two such roads (an authored mcp_tool skill and
+    a custom step) after the rule had been written at one call site.
 
     Shared by the agent loop's MCP tools (`agent_loop._invoke_mcp_skill`) and the authored
     `mcp_tool` skill executor, so a tool reached either way leaves the same evidence and is
@@ -806,6 +906,10 @@ def call_tool_with_receipt(
     from .mcp_client import MCPClient
     from .receipts import ReceiptService
 
+    if needs_person(server) and not approval_stands(connection, project_id, approved_by):
+        raise McpServerUnreviewed(
+            f"Did not call {tool_name}: {unreviewed_sentence(server)} Then run it again, or "
+            "approve it when BOSS asks.")
     org_id, workspace_id = tenant_scope
     receipts = ReceiptService()
     receipt, created = receipts.create_or_reuse(

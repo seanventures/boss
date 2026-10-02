@@ -909,7 +909,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 # already trusted with (draft_custom_step is on the write allowlist), so it is
                 # done here rather than handed back as an error nobody can act on.
                 made = _ensure_steps_for_skills(c, pid, spec, actor)
-                problems = _draft_problems(c, pid, spec, caps_by_key, caps)
+                # One catalogue build for the whole draft, not one per step (round-2 review).
+                with services_module("skill_catalogue").one_pass(c):
+                    problems = _draft_problems(c, pid, spec, caps_by_key, caps)
                 if problems:
                     return {"ok": False, "error": "; ".join(problems[:4])}
                 existing = c.execute(
@@ -1257,7 +1259,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "behaviour_kind": item["behaviour_kind"] if item["source"] == "authored"
                                   else item["kind"],
                 "risk_tier": item["risk_tier"],
-                "requires_approval": item["risk_tier"] >= 2,
+                # The same answer the runtime gives: the floor, or a person whatever the tier
+                # while the skill's MCP server is unreviewed (requires_person says why).
+                "requires_approval": (item["risk_tier"] >= 2
+                                      or bool(item.get("requires_person"))),
+                **({"requires_person": item["requires_person"]}
+                   if item.get("requires_person") else {}),
                 "trusted": item["trusted"],
                 "enabled": item["enabled"],
                 "usable": item["usable"] and item["enabled"],
@@ -3608,6 +3615,7 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
                 "skill_key": skill_key, "risk_tier": found["risk_tier"],
                 "enabled": found["enabled"] and found["usable"],
                 "provenance": {"trusted": found["trusted"]},
+                "requires_person": found.get("requires_person"),
             }
             problems.extend(caps_module.validate_custom_step(
                 {**entry, "binding": {"skill_id": skill_key}}, skill))

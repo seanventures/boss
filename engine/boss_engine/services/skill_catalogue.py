@@ -38,14 +38,16 @@ lowers:
 * an authored ``builtin`` wrapper: its own tier or the wrapped executor's, whichever is higher —
   otherwise wrapping ``github.create_pr_real`` (tier 3) as an authored tier-0 skill would be the
   documented way past every approval in the product;
-* an authored ``mcp_tool``: its own tier or the MCP server's tier for that tool;
+* an authored ``mcp_tool``: its own tier or the MCP server's tier for that tool — and while
+  that server is unreviewed, ``requires_person`` (mcp_registry.needs_person) whatever the tier;
 * a legacy ``project_skills`` row with no spec: its recorded tier, or the approval floor when it
   has none, because an unclassified skill is one nobody looked at.
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -150,6 +152,7 @@ def _authored_facts(
     tier = UNKNOWN_RISK if own_tier is None else own_tier
     trusted = bool(row["trusted"])
     usable, reason = True, None
+    requires_person: Optional[str] = None
     input_schema: dict[str, Any] = _declared_input_schema(inputs)
     runs_through = ""
 
@@ -180,8 +183,17 @@ def _authored_facts(
             tier = max(tier, mcp_tool_tier(server, tool_name))
             # THE SERVER IS WHAT DOES THE WORK, so its review counts too. A reviewed skill on
             # an unreviewed server is an unreviewed integration with a reviewed label on it.
-            provenance = _loads(server.get("provenance"), {}) or {}
-            trusted = trusted and bool(provenance.get("trusted", False))
+            from .mcp_registry import needs_person, reviewed, unreviewed_sentence
+
+            server_view = {**server, "provenance": _loads(server.get("provenance"), {}) or {}}
+            trusted = trusted and reviewed(server_view)
+            # AND IT NEVER RUNS UNATTENDED while the server is unreviewed (the one rule,
+            # mcp_registry.needs_person). Round-2 review: a tier-0 skill on an unreviewed
+            # server came out of here with requires_approval False, and every road through a
+            # skill — an agent holding it, a custom step bound to it — ran it with no person
+            # asked, while the same tool called directly waited for one.
+            if needs_person(server_view):
+                requires_person = unreviewed_sentence(server_view)
             if not server.get("enabled", True):
                 usable = False
                 reason = (f"MCP server '{server['name']}' is disabled. Enable it on the Skills "
@@ -194,6 +206,7 @@ def _authored_facts(
     return {
         "risk_tier": tier, "trusted": trusted, "usable": usable, "reason": reason,
         "input_schema": input_schema, "runs_through": runs_through,
+        "requires_person": requires_person,
     }
 
 
@@ -243,7 +256,11 @@ def authored_specs(
             "policy": {
                 "authored": True,
                 "behaviour_kind": str(row["behaviour_kind"]),
-                "requires_approval": facts["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR,
+                "requires_approval": (facts["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR
+                                      or bool(facts["requires_person"])),
+                # WHY a person is needed whatever the tier, as the sentence to show them; None
+                # when nothing but the tier decides. agent_loop's skill branch reads it.
+                "requires_person": facts["requires_person"],
                 "usable": facts["usable"],
                 # The operator's own switch, kept apart from `enabled` below so a screen can
                 # say whether a skill is off because somebody turned it off or because what it
@@ -270,6 +287,34 @@ def authored_specs(
 # The catalogue                                                                 #
 # --------------------------------------------------------------------------- #
 
+#: Where :func:`one_pass` keeps the catalogue it built, on the connection's own info dict.
+_PASS_KEY = "boss.skill_catalogue.one_pass"
+
+
+@contextmanager
+def one_pass(connection: Connection) -> Iterator[None]:
+    """Build the catalogue at most once per project while this block runs.
+
+    Every :func:`entry` builds the whole catalogue — every skill YAML parsed, plus
+    project_skills, skill_definitions and mcp_servers read — and publishing a workflow asks
+    once per step (resolve_risk for each custom step, the validator for each ``kind: skill``
+    step), so a workflow with twenty skill steps built it twenty times (round-2 review).
+    Validation passes wrap themselves in this; nothing they do in between writes a skill or
+    a server, so one build answers them all. Scoped to the block rather than the connection
+    because a caller that writes and then reads (save a skill, then list) must see its write.
+    Nested blocks share the outermost one's build.
+    """
+    info = getattr(connection, "info", None)
+    if not isinstance(info, dict) or _PASS_KEY in info:
+        yield
+        return
+    info[_PASS_KEY] = {}
+    try:
+        yield
+    finally:
+        info.pop(_PASS_KEY, None)
+
+
 def entries(
     connection: Connection,
     project_id: str,
@@ -279,9 +324,26 @@ def entries(
     """Every skill this project has, keyed by id, with the facts every consumer needs.
 
     Each entry: skill_id, source (builtin | authored | registered), label, summary, kind,
-    behaviour_kind, risk_tier, risk_declared, trusted, enabled, system, usable, reason, and
-    `spec` — the SkillSpec the runtime will load, or None for a registered row no spec describes.
+    behaviour_kind, risk_tier, risk_declared, trusted, enabled, system, usable, reason,
+    requires_person, and `spec` — the SkillSpec the runtime will load, or None for a registered
+    row no spec describes. Inside :func:`one_pass` the same build is returned for the project.
     """
+    info = getattr(connection, "info", None)
+    cache = info.get(_PASS_KEY) if isinstance(info, dict) else None
+    if cache is not None and project_id in cache:
+        return cache[project_id]
+    built = _build_entries(connection, project_id, settings=settings)
+    if cache is not None:
+        cache[project_id] = built
+    return built
+
+
+def _build_entries(
+    connection: Connection,
+    project_id: str,
+    *,
+    settings: Any = None,
+) -> dict[str, dict[str, Any]]:
     from .entitlements import EntitlementBrokerService
 
     catalogue = EntitlementBrokerService(_settings(settings)).list_skills(
@@ -327,6 +389,7 @@ def entries(
             "system": bool(spec.get("system", False)),
             "usable": usable,
             "reason": policy.get("unusable_reason"),
+            "requires_person": policy.get("requires_person") if authored else None,
             "spec": spec,
         }
 
@@ -354,6 +417,7 @@ def entries(
             "system": False,
             "usable": True,
             "reason": None,
+            "requires_person": None,
             "spec": None,
         }
     return out
@@ -389,7 +453,8 @@ def risk_facts(item: Optional[dict[str, Any]], skill_id: str) -> dict[str, Any]:
                 "enabled": True, "source": f"skill {skill_id}",
                 "reason": f"skill '{skill_id}' cannot run: {item['reason']}"}
     return {"risk_tier": item["risk_tier"], "trusted": item["trusted"], "usable": True,
-            "enabled": True, "source": f"skill {skill_id}"}
+            "enabled": True, "source": f"skill {skill_id}",
+            "requires_person": item.get("requires_person")}
 
 
 def bindable(connection: Connection, project_id: str, *, settings: Any = None) -> list[dict]:
@@ -414,6 +479,8 @@ def bindable(connection: Connection, project_id: str, *, settings: Any = None) -
             "reason": item["reason"] if item["enabled"] else "turned off",
             # Said here rather than left for the operator to infer from a number.
             "unclassified": not item["risk_declared"],
-            "requires_approval": item["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR,
+            "requires_approval": (item["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR
+                                  or bool(item.get("requires_person"))),
+            "requires_person": item.get("requires_person"),
         })
     return sorted(items, key=lambda s: (s["source"] != "authored", s["skill_id"]))

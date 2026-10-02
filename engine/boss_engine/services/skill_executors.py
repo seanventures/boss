@@ -41,6 +41,11 @@ class SkillExecutorContext:
     github_adapter: Optional[Any] = None
     deployment_service: Optional[Any] = None
     receipt_service: Optional[Any] = None
+    #: The APPROVED decision this invocation runs under, when a person was asked first — the
+    #: agent run's resume decision or the workflow step's gate. Read by the MCP effect
+    #: (mcp_registry.call_tool_with_receipt), which refuses an unreviewed server's tool
+    #: without one; None for everything that ran without asking.
+    approved_by: Optional[str] = None
 
     @property
     def github(self) -> Any:
@@ -758,7 +763,10 @@ def execute_mcp_tool(
     budget reservation and retry — at the skill's catalogue tier, which is never below the
     server's tier for this tool (skill_catalogue's risk rule). What is left is the EFFECT, and
     that goes through ``mcp_registry.call_tool_with_receipt``, the same function the agent loop
-    uses: a receipt before the call, deduplicated, settled after it.
+    uses: a receipt before the call, deduplicated, settled after it — and, for a server nobody
+    has reviewed, a refusal unless this invocation carries an approved decision
+    (``context.approved_by``). Round-2 review: this road ran an unreviewed server's tool with
+    no person asked while the direct agent call waited for one.
 
     The definition and the server are re-read here, at execution, so a skill re-pointed or a
     server turned off between publishing a workflow and running it behaves as it is now.
@@ -803,6 +811,8 @@ def execute_mcp_tool(
         context.connection, context.settings, context.project_id, server, tool_name,
         arguments, dedupe_key=f"mcp:skill:{skill_key}:{occasion}:{digest}",
         tenant_scope=context.tenant_scope(), created_by_job_id=context.created_by_job_id,
+        # An unreviewed server's tool needs the approval this run was given (needs_person).
+        approved_by=context.approved_by,
     )
     output = called.get("output")
     return {

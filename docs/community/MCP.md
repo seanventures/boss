@@ -281,3 +281,9 @@ Customer secret-management routes remain available through API permission checks
 No Community JSON body remains loose at the top level. The 79 pass-through bodies help MCP clients construct requests, but their field types are not enforced by Pydantic, and some nested payloads remain intentionally flexible.
 
 The matrix's `request_body_type_enforcement` field makes this distinction explicit. Its legacy `runtime_validated_input_schema` field describes the mounted field schema and does not guarantee field-type enforcement. The API handler and its policy checks remain authoritative.
+
+## MCP servers BOSS calls: review before unattended use
+
+The servers you register on **Skills and MCP** (or ask BOSS to register from the chat) are the other direction: BOSS is the client. A tool on a server nobody has marked **Reviewed** never runs unattended, whatever risk tier it declares. That holds on every road to the tool: an agent calling it directly, an agent holding an authored `mcp_tool` skill that names it, and a workflow custom step bound to the tool or to such a skill. Each call becomes an approval, a custom step on an unreviewed server is always a manual step, and BOSS refuses a call that arrives without an approved decision.
+
+**After upgrading:** servers registered before this rule were never marked, so calls that used to run now ask first. The Skills and MCP page lists every turned-on server that needs review. Open each with **Edit**, check its address, and choose *A person has checked this server*. Changing a server's URL clears its review, including a server BOSS seeded.

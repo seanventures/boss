@@ -50,7 +50,8 @@ TEST_DB = os.environ.get(
 #: list_project_skills by hand, invisible to the scan. Each entry is now `file::qualname`.
 _READERS = {
     # THE catalogue: the merge every consumer reads.
-    "engine/boss_engine/services/skill_catalogue.py::entries": "the catalogue itself",
+    # entries() returns it (once per skill_catalogue.one_pass); _build_entries is the merge.
+    "engine/boss_engine/services/skill_catalogue.py::_build_entries": "the catalogue itself",
     "engine/boss_engine/services/skill_catalogue.py::authored_specs": "the authored half",
     # The spec-pack half of the merge: YAML plus a project's imported SkillSpecs and its
     # per-project state, which is what SkillRuntimeService loads specs from.

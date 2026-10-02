@@ -57,6 +57,7 @@ def test_resolve_risk_still_reads_that_exact_field():
 
     assert "skill_catalogue import entry, risk_facts" in inspect.getsource(
         workflow_custom_steps.resolve_risk)
-    source = inspect.getsource(skill_catalogue.entries)
+    # _build_entries is the merge; entries() returns it, once per skill_catalogue.one_pass.
+    source = inspect.getsource(skill_catalogue._build_entries)
     assert "FROM project_skills" in source
     assert '.get("risk_tier")' in source

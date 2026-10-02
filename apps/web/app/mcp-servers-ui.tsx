@@ -61,6 +61,13 @@ export function parseOverrides(raw: string): Record<string, number> | string {
   return out;
 }
 
+/** The servers whose tools wait for a person on every call: turned on and not reviewed. A
+ *  switched-off server runs nothing, so it is not why approvals appear. `trusted` here is the
+ *  API's `reviewed()` — the same answer every runtime road gets. */
+export function serversNeedingReview(rows: McpServerRow[]): McpServerRow[] {
+  return rows.filter((s) => s.enabled && !s.trusted);
+}
+
 function overridesText(o?: Record<string, number>): string {
   return Object.entries(o ?? {}).map(([k, v]) => `${k} = ${v}`).join("\n");
 }
@@ -176,6 +183,7 @@ export function McpServersPanel({
 
   const ordered = useMemo(() => [...(servers ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
                           [servers]);
+  const unreviewed = useMemo(() => serversNeedingReview(ordered), [ordered]);
 
   if (mode === "summary") {
     return (
@@ -282,10 +290,13 @@ export function McpServersPanel({
               Choose it again only once a person has checked what answers at the new address.
             </p>
           ) : null}
-          {Number(form.risk_tier) >= 2 && !form.trusted ? (
+          {!form.trusted ? (
             <p className="detail" data-testid="mcp-risk-note">
-              Until it is marked reviewed, its tools at tier 2 or above cannot be placed in a
-              workflow.
+              Until it is marked reviewed, every call to its tools waits for a person — from a
+              chat, a skill or a workflow step — whatever its tier
+              {Number(form.risk_tier) >= 2
+                ? ", and its tools at tier 2 or above cannot be placed in a workflow."
+                : "."}
             </p>
           ) : null}
           <span className="skill-assign-actions">
@@ -300,6 +311,20 @@ export function McpServersPanel({
 
       {note ? (
         <p className={note.ok ? "setup-ok" : "setup-bad"} data-testid="mcp-note">{note.text}</p>
+      ) : null}
+
+      {unreviewed.length > 0 ? (
+        // WHY THE APPROVALS STARTED. A tool on an unreviewed server now waits for a person on
+        // every road (round-2 review of the skills-mcp milestone), and servers registered
+        // before that rule were never marked — so after an upgrade, calls that used to just
+        // run start asking. This says which servers and what to do, for as long as it is true.
+        <p className="setup-bad" data-testid="mcp-needs-review">
+          {unreviewed.length === 1 ? "1 MCP server needs" : `${unreviewed.length} MCP servers need`}
+          {" "}review ({unreviewed.map((s) => s.name).join(", ")}). Until a person marks a server
+          Reviewed, every call to its tools waits for approval. Servers registered before this
+          rule were never marked: open each one with Edit, check its address, and choose
+          “A person has checked this server”.
+        </p>
       ) : null}
 
       {servers === null ? <p className="detail">Loading…</p>

@@ -99,9 +99,16 @@ def resolve_risk(connection: Connection, project_id: str, row: Any) -> dict[str,
     Returns the tier, where it came from, whether the binding is still usable, and whether its
     provenance is trusted — everything the approval floor and the builder need, from one place,
     so validation and execution cannot disagree about a step's risk.
+
+    ``requires_person`` is the sentence saying why a person must approve the step whatever its
+    tier, or None. Today that is one rule — an MCP tool on an unreviewed server
+    (mcp_registry.needs_person), reached directly or through an authored mcp_tool skill — and
+    approval_for turns it into a manual step. Round-2 review: a tier-0 step bound to an
+    unreviewed server's tool ran unattended, because only the tier was asked.
     """
     kind = str(row["binding_kind"])
-    unusable = {"risk_tier": UNKNOWN_RISK, "trusted": False, "usable": False}
+    unusable = {"risk_tier": UNKNOWN_RISK, "trusted": False, "usable": False,
+                "requires_person": None}
 
     if kind == "skill":
         # THE ONE CATALOGUE. This read `project_skills` alone, so a step bound to a skill the
@@ -115,7 +122,8 @@ def resolve_risk(connection: Connection, project_id: str, row: Any) -> dict[str,
                            str(row["skill_id"]))
         if not facts["usable"]:
             return {**unusable, "source": facts["source"], "reason": facts["reason"]}
-        return {key: facts[key] for key in ("risk_tier", "trusted", "usable", "source")}
+        return {**{key: facts[key] for key in ("risk_tier", "trusted", "usable", "source")},
+                "requires_person": facts.get("requires_person")}
 
     if kind == "mcp_tool":
         server = connection.execute(
@@ -129,7 +137,10 @@ def resolve_risk(connection: Connection, project_id: str, row: Any) -> dict[str,
         if not server["enabled"]:
             return {**unusable, "source": "mcp",
                     "reason": f"MCP server '{server['name']}' is disabled."}
-        provenance = server["provenance"] if isinstance(server["provenance"], dict) else {}
+        from .mcp_registry import needs_person, reviewed, unreviewed_sentence
+
+        server_view = {**dict(server), "provenance": server["provenance"]
+                       if isinstance(server["provenance"], dict) else {}}
         # A per-tool override beats the server's blanket tier: one dangerous tool on an
         # otherwise ordinary server is exactly the case the override column exists for. The
         # rule lives in skill_catalogue so an authored mcp_tool skill and a step bound straight
@@ -139,17 +150,22 @@ def resolve_risk(connection: Connection, project_id: str, row: Any) -> dict[str,
         tier = mcp_tool_tier(dict(server), str(row["mcp_tool_name"]))
         return {
             "risk_tier": int(tier),
-            "trusted": bool(provenance.get("trusted", False)),
+            "trusted": reviewed(server_view),
             "usable": True,
             "source": f"{server['name']} · {row['mcp_tool_name']}",
+            "requires_person": (unreviewed_sentence(server_view)
+                                if needs_person(server_view) else None),
         }
 
     raise CustomStepError(f"unknown binding kind '{kind}'.")
 
 
 def approval_for(risk: dict[str, Any], requested: Optional[str]) -> str:
-    """The approval mode a custom step will run under. Same floor as everything else."""
+    """The approval mode a custom step will run under. Same floor as everything else, and a
+    step resolve_risk says needs a person (an unreviewed MCP server) is manual at any tier."""
     if int(risk.get("risk_tier", UNKNOWN_RISK)) >= MANUAL_APPROVAL_RISK_FLOOR:
+        return "manual"
+    if risk.get("requires_person"):
         return "manual"
     mode = (requested or "auto").strip().lower()
     if mode not in ("auto", "manual"):
@@ -263,7 +279,11 @@ def serialize(connection: Connection, project_id: str, row: Any) -> dict[str, An
         "trusted": risk["trusted"],
         "usable": risk["usable"],
         "unusable_reason": risk.get("reason"),
-        "approval_forced_manual": risk["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR,
+        "approval_forced_manual": (risk["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR
+                                   or bool(risk.get("requires_person"))),
+        # Why a person is asked whatever the tier, or None — shown by the builder and the
+        # publish refusal, so "requires a person" at tier 0 is never a mystery.
+        "requires_person": risk.get("requires_person"),
     }
 
 
@@ -450,6 +470,11 @@ def validate_step(
         problems.append(
             f"step '{step_id}' ({definition['label']}) runs something at risk tier "
             f"{definition['risk_tier']} and always requires a person."
+            if not definition.get("requires_person") or (
+                definition["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR)
+            else f"step '{step_id}' ({definition['label']}) requires a person: "
+                 f"{definition['requires_person']} Set its approval to manual, or review the "
+                 "server first."
         )
     on_timeout = approval.get("on_timeout")
     if on_timeout is not None:
@@ -457,6 +482,13 @@ def validate_step(
         if action not in TIMEOUT_ACTIONS:
             problems.append(
                 f"step '{step_id}' on_timeout must be one of: {', '.join(TIMEOUT_ACTIONS)}."
+            )
+        elif action == "approve" and definition.get("requires_person"):
+            # A timeout that approves is nobody approving — exactly what an unreviewed
+            # server's tool may not have.
+            problems.append(
+                f"step '{step_id}' ({definition['label']}) cannot approve itself on a timeout: "
+                f"{definition['requires_person']} Use 'escalate' or 'block'."
             )
         elif action == "approve" and definition["risk_tier"] >= TIMEOUT_APPROVE_RISK_CEILING:
             problems.append(
@@ -572,8 +604,14 @@ def execute(
     inputs: dict[str, Any],
     run_id: str,
     step_index: int = 0,
+    approved_by: Optional[str] = None,
 ) -> dict[str, Any]:
     """Run one custom step and return what it produced.
+
+    ``approved_by`` is the APPROVED gate decision this step was released by, when it had one.
+    It travels to the MCP effect, which refuses an unreviewed server's tool without it
+    (mcp_registry.call_tool_with_receipt) — so a step that reached here without its gate fails
+    with the sentence rather than running unattended.
 
     Neither branch calls a skill or an MCP server directly. Both go through
     SkillRuntimeService, which is where permission, budget and effect receipts live — the same
@@ -649,6 +687,7 @@ def execute(
             skill_spec=None if captain else _spec_granting_the_runner(
                 connection, settings, project_id, str(row["skill_id"])
             ),
+            approved_by=approved_by,
         )
         if str(result.get("status")) == "denied":
             # The runtime denies rather than raises, so a denial would otherwise be recorded as
@@ -684,7 +723,7 @@ def execute(
         connection, settings, project_id,
         dict(server), {"name": row["mcp_tool_name"]}, inputs,
         run_id=run_id, step=step_index, actor=captain or actor,
-        caller=captain or RUNNER_CALLER,
+        caller=captain or RUNNER_CALLER, approved_by=approved_by,
     )
     if str(result.get("status")) in ("denied", "failed"):
         raise CustomStepError(

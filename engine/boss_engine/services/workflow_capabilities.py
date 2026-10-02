@@ -770,6 +770,13 @@ def validate_custom_step(
             f"step '{step_id}' attaches skill '{skill_id}' at risk tier {risk} and always "
             "requires a person. Set approval to manual."
         )
+    elif skill.get("requires_person") and str(approval.get("mode", "")).lower() == "auto":
+        # At any tier: the skill calls a tool on an MCP server nobody has reviewed
+        # (mcp_registry.needs_person). Round-2 review found this road running unattended.
+        problems.append(
+            f"step '{step_id}' attaches skill '{skill_id}', which requires a person: "
+            f"{skill['requires_person']} Set approval to manual, or review the server first."
+        )
 
     provenance = skill.get("provenance") or {}
     if not provenance.get("trusted", False) and risk >= MANUAL_APPROVAL_RISK_FLOOR:
@@ -787,7 +794,7 @@ def validate_custom_step(
 def custom_step_approval(skill: Mapping[str, Any], requested: Optional[str]) -> str:
     """The approval mode a custom step will run under, under the same floor."""
     risk = int((skill or {}).get("risk_tier") or 0)
-    if risk >= MANUAL_APPROVAL_RISK_FLOOR:
+    if risk >= MANUAL_APPROVAL_RISK_FLOOR or (skill or {}).get("requires_person"):
         return "manual"
     mode = (requested or "auto").strip().lower()
     if mode not in ("auto", "manual"):
