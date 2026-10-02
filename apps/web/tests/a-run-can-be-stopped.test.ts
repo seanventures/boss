@@ -25,7 +25,10 @@ describe("stopping a run", () => {
     expect(UI).toContain('testId: "dw-stop"');
     // REWRITTEN to the verdict form; cancel_run now refuses through the same verdict.
     // Live means every status the engine's cancel_run will stop — `blocked` included.
-    expect(ENGINE).toMatch(/if active:\n\s+out\.append\(_verdict\("stop", "Stop this run", ENABLED\)/);
+    // REWRITTEN (review of c8de36b): and a run STOPPED at a failed step — waiting for the
+    // operator, not over — so it can be abandoned, and a branch still working under it stopped.
+    expect(ENGINE).toMatch(
+      /if active or stopped:\n\s+out\.append\(_verdict\("stop", "Stop this run", ENABLED\)/);
   });
 
   it("reaches the cancel endpoint, addressed to the run", () => {

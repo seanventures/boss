@@ -23201,6 +23201,10 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             # assignment does not keep its own list of terminal states (it had one, and it left
             # out `compensated`).
             "finished": run["status"] in _run_actions.FINISHED_RUN_STATES,
+            # Where it stands — active, stopped, closed, compensating — so the console files
+            # it without a list of run states of its own. Its `LIVE` list left out `paused` and
+            # `compensating` and filed both under "Done" (review of 0fd6c45).
+            "standing": _run_actions.standing(run["status"]),
         })
     return {"project_id": project_id, "runs": out}
 
@@ -23878,59 +23882,39 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     # which then argues FROM the evidence rather than re-deriving it.
     source_run = str(payload.get("from_run") or "").strip()
     source_discovery = str(payload.get("from_discovery") or "").strip()
+    adopted: dict = {}
     if source_run or source_discovery:
-        with begin(engine) as connection:
-            if source_run:
-                owner = connection.execute(
-                    text("SELECT project_id, input FROM workflow_runs WHERE id = :r"),
-                    {"r": source_run},
-                ).mappings().first()
-                if not owner or owner["project_id"] != project_id:
-                    raise HTTPException(status_code=404, detail="source run not found")
-                if not source_discovery:
-                    # THE BUTTON'S OWN RULE, ENFORCED. This used to be its own query — "any step
-                    # succeeded with `output ? 'discovery_id'`" — and the console had a third
-                    # copy. A research step from before the runner stopped forgiving failures is
-                    # `succeeded` with output `failed_continued` and a dead discovery's id, so
-                    # both copies said "researched" about research that had failed. Then it read
-                    # the shared research rule but not the run's state, and so built on a run
-                    # that was still going, which the button never offers. `require` is the
-                    # whole "Build on this research" decision: a finished run, research that
-                    # succeeded, a dossier that completed with findings — refused otherwise, in
-                    # the words the console would have shown.
-                    from boss_engine.services import workflow_run_actions as _run_actions
+        # ONE RESEARCH RULE FOR EVERY DOOR — `workflow_run_actions.research_to_adopt`, which the
+        # agent's start_workflow asks too. `from_run` is the run's own "Build on this research"
+        # action (a finished run, research that succeeded, a dossier that completed WITH
+        # findings); `from_discovery` is the same dossier test. Naming both is refused: a
+        # request with both used to skip the from_run rule entirely and copy a live run's input
+        # (review of 0fd6c45).
+        from boss_engine.services import workflow_run_actions as _run_actions
 
-                    try:
-                        offered = _run_actions.require(
-                            connection, project_id, source_run, "build_on_research")
-                    except workflow_runtime.WorkflowNotFoundError as error:
-                        raise HTTPException(status_code=404,
-                                            detail="source run not found") from error
-                    except _run_actions.RunActionRefused as error:
-                        # NAMING WHAT IS MISSING. "Carry it forward" on a run that never
-                        # researched anything would silently start an ordinary run, and the
-                        # operator would pay for research a second time believing they had not.
-                        raise HTTPException(
-                            status_code=409,
-                            detail=f"{source_run} has no completed research to carry forward: "
-                                   f"{error.reason}") from error
-                    source_discovery = str(offered["discovery_id"])
-                if not run_input.get("directive"):
-                    run_input = {**(owner["input"] or {}), **run_input}
-                    run_input = {k: v for k, v in run_input.items()
-                                 if not k.startswith("adopt_")}
-            dossier = connection.execute(
-                text("SELECT project_id, status FROM discovery_runs WHERE id = :d"),
-                {"d": source_discovery},
-            ).mappings().first()
-            if not dossier or dossier["project_id"] != project_id:
-                raise HTTPException(status_code=404, detail="research run not found")
-            if str(dossier["status"] or "") != "completed":
+        with begin(engine) as connection:
+            try:
+                found = _run_actions.research_to_adopt(
+                    connection, project_id, from_run=source_run, from_discovery=source_discovery)
+            except workflow_runtime.WorkflowNotFoundError as error:
                 raise HTTPException(
-                    status_code=409,
-                    detail=f"that research is {dossier['status']}, not completed — "
-                           "there is nothing finished to build on yet")
-        run_input["adopt_discovery_run_id"] = source_discovery
+                    status_code=404,
+                    detail="source run not found" if source_run and not source_discovery
+                    else str(error)) from error
+            except workflow_runtime.WorkflowValidationError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except _run_actions.RunActionRefused as error:
+                # NAMING WHAT IS MISSING. "Carry it forward" on a run that never researched
+                # anything would silently start an ordinary run, and the operator would pay for
+                # research a second time believing they had not.
+                raise HTTPException(status_code=409, detail=error.reason) from error
+            if source_run and not run_input.get("directive"):
+                owner = connection.execute(
+                    text("SELECT input FROM workflow_runs WHERE id = :r AND project_id = :p"),
+                    {"r": source_run, "p": project_id},
+                ).mappings().first()
+                run_input = {**((owner or {}).get("input") or {}), **run_input}
+        adopted = {"adopt_discovery_run_id": found}
 
     if not project_id or not (work_class or workflow_key):
         raise HTTPException(
@@ -23991,6 +23975,9 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
                 workflow_version_id=version_id,
                 selector_kind=None if version_id else "work_class",
                 selector_value=None if version_id else work_class,
+                # The adoption the server resolved above — `start_run` drops any `adopt_*` key
+                # a caller put in `input`.
+                adopted=adopted,
             )
         except workflow_runtime.WorkflowMappingNotFoundError as error:
             # The honest failure: nobody chose a workflow for this class of work. Picking one

@@ -11,12 +11,16 @@
  */
 import { describe, it, expect } from "vitest";
 import { runToOpen } from "../app/delivery-workflows-ui";
+import { standingOf } from "./_helpers/run-standing";
 
 type Run = Parameters<typeof runToOpen>[0][number];
 
+// REWRITTEN (2026-10-02): a run carries `standing` from the server, which is what "live" now
+// means to the console; the fixture takes it from the engine's own sets.
 function run(over: Partial<Run>): Run {
+  const status = over.status ?? "completed";
   return {
-    id: "wfr_x", status: "completed", workflow_key: "standard_product_delivery",
+    id: "wfr_x", status, standing: standingOf(status), workflow_key: "standard_product_delivery",
     workflow_name: "Standard Product Delivery", steps: [], input: {},
     created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z",
     ...over,

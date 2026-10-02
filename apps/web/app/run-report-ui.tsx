@@ -78,8 +78,12 @@ function duration(seconds: number | null | undefined): string {
   return m > 0 ? `${m}m ${seconds % 60}s` : `${seconds}s`;
 }
 
+/** The run's own "Build on this research" verdict, as the server sent it with the run. */
+type ResearchAction = { key: string; enabled: boolean } | null | undefined;
+
 export function RunReportPanel(
-  { runId, projectId }: { runId: string; projectId: string },
+  { runId, projectId, researchAction }:
+    { runId: string; projectId: string; researchAction?: ResearchAction },
 ) {
   const [report, setReport] = useState<RunReport | null>(null);
   const [pdfHref, setPdfHref] = useState<string>("");
@@ -139,6 +143,15 @@ export function RunReportPanel(
   // `from_run` carries the finished research forward: the server resolves it and adopts the
   // dossier, so the fix-up run argues from evidence already paid for instead of commissioning
   // it again. It deliberately does NOT adopt the panel — a new panel argues the fix.
+  //
+  // ONLY WHEN THE SERVER OFFERS IT. This sent `from_run` whenever the report had next steps —
+  // a second "Build on this research" deciding for itself — and the server refused it on every
+  // run still going ("this run is still going…") and on every run with no completed research
+  // ("this run did not research anything"), which is every fix-up run this button starts
+  // (review of 0fd6c45). The research is carried exactly when the run's own
+  // `build_on_research` action is enabled; otherwise the fix-up starts without it.
+  const carriesResearch = researchAction?.key === "build_on_research"
+    && researchAction.enabled === true;
   const buildFromThis = useCallback(async () => {
     const items = report?.next_steps ?? [];
     if (!items.length) return;
@@ -162,7 +175,7 @@ export function RunReportPanel(
           project_id: projectId,
           workflow_key: workflowKey,
           actor: "executive_console",
-          from_run: runId,
+          ...(carriesResearch ? { from_run: runId } : {}),
           input: {
             title: `Fix: ${name}`,
             directive:
@@ -184,7 +197,7 @@ export function RunReportPanel(
     } finally {
       setBuilding(false);
     }
-  }, [report, projectId, runId]);
+  }, [report, projectId, runId, carriesResearch]);
 
   if (!report) return null;
   if (!report.ok) {

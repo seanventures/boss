@@ -8,6 +8,9 @@ import {
   type RunAction, type RunStep,
 } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
+import { schemaRunStatuses, standingOf } from "./_helpers/run-standing";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * A run's buttons are the server's list, rendered — never decided here.
@@ -182,6 +185,26 @@ describe("which buttons a run has is the server's decision", () => {
     expect(stray, "a run action reached without the server's list").toEqual([]);
   });
 
+  it("no pass-through component renames, defaults or spreads a run-action handler", () => {
+    // THE REVIEWER'S ESCAPE (review of 0fd6c45): `onBuildOnThis: buildIt` in StepPath's
+    // destructuring sat inside the allowed signature span, so a status-gated
+    // `<button onClick={() => buildIt()}>` never mentioned a handler name and passed every
+    // check. A pass-through takes each handler under its own name, or the scan cannot follow it.
+    const escapes: string[] = [];
+    for (const fn of PASS_THROUGH) {
+      const at = UI.indexOf(`function ${fn}(`);
+      const open = UI.indexOf("{", at + `function ${fn}(`.length - 1);
+      const pattern = UI.slice(open, closing(open) + 1);
+      if (/\.\.\./.test(pattern)) escapes.push(`${fn} spreads its props (...)`);
+      for (const name of RUN_ACTION_HANDLERS) {
+        if (new RegExp(`\\b${name}\\s*[:=]`).test(pattern)) {
+          escapes.push(`${fn} renames or defaults ${name}`);
+        }
+      }
+    }
+    expect(escapes).toEqual([]);
+  });
+
   it("every request that performs a run action is made in the one handler set", () => {
     // The other way round: the requests themselves (retry, skip, re-check, stop, build on a
     // run) are issued only from the handler attributes on <RunsView>, which reach the screen
@@ -198,6 +221,47 @@ describe("which buttons a run has is the server's decision", () => {
       expect(handlerSet.some(([a, b]) => m.index! >= a && m.index! < b),
              `${m[0]} at line ${lineOf(m.index!)} is outside the run-action handlers`).toBe(true);
     }
+  });
+
+  it("and no OTHER file in the console makes one on its own say-so", () => {
+    // THE SECOND ENTRY POINT (review of 0fd6c45). The run report's "Build from this" POSTed
+    // `from_run` whenever it had next steps, deciding for itself, and the server refused it on
+    // every live run and every run without research. The scan above read one file, so it could
+    // not see it. Every source file under app/, components/ and lib/ is read here: a run-action
+    // request key outside the handler set is refused, and `from_run` anywhere else must be
+    // sent only when the run's own `build_on_research` action is enabled.
+    const roots = ["app", "components", "lib"];
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      let names: string[] = [];
+      try { names = readdirSync(dir); } catch { return; }
+      for (const name of names) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) {
+          if (name !== "node_modules" && !(dir === "app" && name === "api")) walk(path);
+        } else if (/\.(tsx?|jsx?)$/.test(name) && !/\.test\./.test(name)) {
+          files.push(path);
+        }
+      }
+    };
+    roots.forEach(walk);
+    expect(files.length).toBeGreaterThan(50);
+    const stray: string[] = [];
+    for (const file of files) {
+      if (file === join("app", "delivery-workflows-ui.tsx")) continue;
+      const code = codeOnly(file);
+      for (const m of code.matchAll(/\baction:\s*"(retry_step|skip_step|recheck)"|\bact\("[^"]*",\s*"(retry_step|skip_step|recheck|stop)"/g)) {
+        stray.push(`${file}: ${m[0]}`);
+      }
+      for (const m of code.matchAll(/\bfrom_run:/g)) {
+        const before = code.slice(Math.max(0, m.index! - 40), m.index!);
+        const gated = /carriesResearch \? \{ $/.test(before)
+          && /const carriesResearch = researchAction\?\.key === "build_on_research"\s*&& researchAction\.enabled === true/
+            .test(code);
+        if (!gated) stray.push(`${file}: from_run sent without the run's build_on_research action`);
+      }
+    }
+    expect(stray).toEqual([]);
   });
 
   it("the console's old private rules are gone", () => {
@@ -304,7 +368,7 @@ describe("the whole run view shows nothing the server did not send", () => {
       timeout_applied: null, attempt: 1, started_at: null, completed_at: null, decision_id: null,
     }) as unknown as RunStep;
     return {
-      ...run(actions), status, finished: status !== "running",
+      ...run(actions), status, standing: standingOf(status), finished: status !== "running",
       steps: [s("research", "succeeded", "research", { discovery_id: "drun_1" }),
               s("panel", "failed", "meeting")],
       step_count: 2, steps_done: 1, input: { title: "Lead triage" },
@@ -324,7 +388,9 @@ describe("the whole run view shows nothing the server did not send", () => {
   const ACTION_TEST_IDS = ["dw-recheck", "dw-stop", "dw-stop-and-rerun", "dw-rerun",
                            "dw-delete-run", "dw-build-on-this"];
 
-  for (const status of ["cancelled", "failed", "running"]) {
+  // EVERY status the database allows, not three. The reviewer's mutation gated its button on
+  // `run.status === "completed"`, a status this loop never rendered.
+  for (const status of schemaRunStatuses()) {
     it(`a ${status} run sent no actions renders no workflow-management button, no Try again, no Skip`, () => {
       for (const opened of [true, false]) {
         const html = view(incident([], status), opened);

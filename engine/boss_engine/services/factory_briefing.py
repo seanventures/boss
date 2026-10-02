@@ -156,45 +156,76 @@ def _decisions(connection, project_id: str) -> list[dict[str, Any]]:
     return out
 
 
-def _stuck_steps(connection, project_id: str) -> list[dict[str, Any]]:
-    """Workflow steps that failed, with what the failure means."""
-    rows = connection.execute(
-        sql("SELECT s.id, s.step_id, s.status, s.last_error, s.output, s.workflow_run_id, "
-            "       s.updated_at, r.input "
-            "FROM workflow_step_runs s JOIN workflow_runs r ON r.id = s.workflow_run_id "
-            "WHERE s.project_id = :p AND s.status IN ('failed', 'deadlettered') "
-            "ORDER BY s.updated_at DESC LIMIT :n"),
-        {"p": project_id, "n": PER_KIND}).mappings().all()
-    out = []
-    for row in rows:
-        error = str(row["last_error"] or "")
-        item = {
-            "kind": "workflow_step", "id": row["id"], "step": row["step_id"],
-            "run_id": row["workflow_run_id"], "status": row["status"],
-            # No name is better than a wrong one: the step id and its run are real, and the
-            # operator can act on those.
-            "app": _app_of(str((row["input"] or {}).get("title") or ""),
-                           fallback=f"run {str(row['workflow_run_id'])[:16]}"),
-            "error": error[:300], "since": str(row["updated_at"]),
-            "actions": [{"tool": "recheck_workflow_run",
-                         "args": {"run_id": row["workflow_run_id"]},
-                         "label": "Re-check what stopped it"}],
-        }
-        diagnosis = _diagnosis(error)
-        if diagnosis:
-            item["diagnosis"] = diagnosis
-        # IS IT STILL TRUE? Two of these asserted "this project has no active deployment
-        # target" while it had six — an error written days ago and read as current. A row whose
-        # reason has since cleared is not something that wants you.
-        try:
-            from .workflow_recheck import blocker_status
+#: The briefing's tool for each run action — what the agent calls to take the same answer the
+#: console's button takes. Skip asks for the operator's reason, so it is named, not pre-filled.
+_ACTION_TOOLS = {"retry_step": "retry_workflow_step", "skip_step": "skip_workflow_step"}
 
-            blocker = blocker_status(connection, project_id, dict(row))
-        except Exception:  # noqa: BLE001 — a re-check must never lose the row it checks
-            blocker = None
-        if blocker:
-            item["blocker"] = blocker
-        out.append(item)
+
+def _stuck_steps(connection, project_id: str) -> list[dict[str, Any]]:
+    """Workflow runs stopped at a failed step, waiting for somebody — with what the failure
+    means and the answers the run offers.
+
+    THE CONSOLE'S RULE, NOT ITS OWN. This listed every failed step in the project, whatever its
+    run: a COMPLETED run's dead-lettered step appeared under "Stopped" with "Re-check what
+    stopped it" — an action the run's own rules refuse on a closed run — and a run that really
+    was stopped was never offered Skip (review of c8de36b). Which steps count, and which answers
+    each has, now come from `workflow_run_actions.stopped_for_operator`, the rule the run card
+    and "Needs you" read.
+    """
+    from .workflow_run_actions import (CLOSED_RUN_STATES, COMPENSATING, STOPPED_STEP_STATES,
+                                       load_runs, stopped_for_operator)
+
+    candidates = connection.execute(
+        sql("SELECT s.workflow_run_id, max(s.updated_at) AS at "
+            "FROM workflow_step_runs s JOIN workflow_runs r ON r.id = s.workflow_run_id "
+            "WHERE s.project_id = :p AND s.status = ANY(:stopped) "
+            "  AND NOT (r.status = ANY(:closed)) "
+            "GROUP BY s.workflow_run_id ORDER BY at DESC LIMIT :n"),
+        {"p": project_id, "stopped": sorted(STOPPED_STEP_STATES),
+         "closed": sorted(CLOSED_RUN_STATES | {COMPENSATING}), "n": PER_KIND * 4},
+    ).mappings().all()
+    loaded = load_runs(connection, project_id, [r["workflow_run_id"] for r in candidates])
+    out = []
+    for candidate in candidates:
+        run_id = candidate["workflow_run_id"]
+        if run_id not in loaded:
+            continue
+        run, steps = loaded[run_id]
+        for step, answers in stopped_for_operator(run, steps):
+            error = str(step.get("last_error") or "")
+            item = {
+                "kind": "workflow_step", "id": step.get("id"), "step": step["step_id"],
+                "run_id": run_id, "status": step["status"],
+                # No name is better than a wrong one: the step id and its run are real, and the
+                # operator can act on those.
+                "app": _app_of(str((run.get("input") or {}).get("title") or ""),
+                               fallback=f"run {str(run_id)[:16]}"),
+                "error": error[:300], "since": str(step.get("updated_at") or ""),
+                "actions": [
+                    {"tool": _ACTION_TOOLS[a["key"]],
+                     "args": {"run_id": run_id, "step_id": step["step_id"]},
+                     "label": a["label"],
+                     **({"asks_for": ["reason"]} if a["key"] == "skip_step" else {})}
+                    for a in answers if a["key"] in _ACTION_TOOLS
+                ],
+            }
+            diagnosis = _diagnosis(error)
+            if diagnosis:
+                item["diagnosis"] = diagnosis
+            # IS IT STILL TRUE? Two of these asserted "this project has no active deployment
+            # target" while it had six — an error written days ago and read as current. A row
+            # whose reason has since cleared is not something that wants you.
+            try:
+                from .workflow_recheck import blocker_status
+
+                blocker = blocker_status(connection, project_id, dict(step))
+            except Exception:  # noqa: BLE001 — a re-check must never lose the row it checks
+                blocker = None
+            if blocker:
+                item["blocker"] = blocker
+            out.append(item)
+            if len(out) >= PER_KIND:
+                return out
     return out
 
 

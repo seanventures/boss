@@ -171,36 +171,43 @@ def _resolve_inputs(
 
 def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
     """What earlier steps in this run produced, keyed by step id."""
+    # WHAT WAS PRODUCED, AND WHAT AN OPERATOR SKIPPED — one pass, the LATEST row per step.
+    #
+    # A skipped step's output still holds whatever its failed attempt recorded; putting it in
+    # `steps` would hand that to the next step as though it were a result, so `_resolve_inputs`
+    # turns a binding to a skipped step into an explicit marker instead. Two rules keep that
+    # marker honest (review of c8de36b):
+    #
+    # * ONLY AN OPERATOR'S SKIP. A branch the run never took (`condition_not_selected`,
+    #   `path_not_reached`) is not "skipped" in that sense — nobody decided anything about it,
+    #   and a step reading from it was failed with "Retry x" for an x that never failed.
+    # * THE LATEST ATTEMPT WINS. A loop body skipped in iteration N and succeeding in N+1 has
+    #   produced a value; a later step must not be told it was skipped. Ordered as
+    #   `workflow_run_actions.latest_attempts` orders them: created, then iteration.
     rows = connection.execute(
         text(
             """
-            SELECT step_id, output FROM workflow_step_runs
-            WHERE workflow_run_id = :run_id AND status = 'succeeded'
-            ORDER BY completed_at
+            SELECT step_id, status, output FROM workflow_step_runs
+            WHERE workflow_run_id = :run_id AND status IN ('succeeded', 'skipped')
+            ORDER BY created_at, iteration, completed_at
             """
         ),
         {"run_id": run_id},
     ).mappings().all()
     steps: dict[str, Any] = {}
-    for row in rows:
-        output = row["output"]
-        if isinstance(output, dict):
-            steps[row["step_id"]] = output
-    # WHAT WAS SKIPPED, AND WHY — kept apart from what was produced. A skipped step's output
-    # still holds whatever its failed attempt recorded; putting it in `steps` would hand that to
-    # the next step as though it were a result. `_resolve_inputs` turns a binding to one of
-    # these into an explicit marker instead.
     skipped: dict[str, Any] = {}
-    for row in connection.execute(
-        text("SELECT step_id, output FROM workflow_step_runs "
-             "WHERE workflow_run_id = :run_id AND status = 'skipped'"),
-        {"run_id": run_id},
-    ).mappings():
+    for row in rows:
         output = row["output"] if isinstance(row["output"], dict) else {}
-        skipped[row["step_id"]] = {
-            "reason": output.get("skip_reason") or output.get("reason"),
-            "skipped_by": output.get("skipped_by"),
-        }
+        if row["status"] == "succeeded":
+            if isinstance(row["output"], dict):
+                steps[row["step_id"]] = output
+            skipped.pop(row["step_id"], None)
+        elif workflows.skipped_by_operator(row):
+            steps.pop(row["step_id"], None)
+            skipped[row["step_id"]] = {
+                "reason": output.get("skip_reason") or output.get("reason"),
+                "skipped_by": output.get("skipped_by"),
+            }
     # WHAT THIS RUN IS FOR, not just what it was asked to do.
     #
     # A step knew its own inputs and nothing about the workflow it was part of, so every panel

@@ -53,22 +53,24 @@ def test_an_adopted_step_still_yields_the_dossier_for_the_panel():
 
 @pytest.mark.parametrize("field", ["from_run", "from_discovery"])
 def test_the_api_resolves_a_named_source_rather_than_trusting_a_claim(field):
+    """REWRITTEN (review of 0fd6c45). This pinned the endpoint's own copy of the rule —
+    `_run_actions.require(` for from_run and its own "not completed" check for from_discovery,
+    which accepted a dossier with NO findings and was skipped entirely when both were named.
+    The rule now lives once, in `workflow_run_actions.research_to_adopt`, which the agent's
+    start_workflow asks too; the behaviour is enforced in
+    test_a_caller_cannot_claim_work_happened.py."""
+    import inspect
     from pathlib import Path
+
+    from boss_engine.services import workflow_run_actions as actions
 
     api = Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py"
     source = api.read_text(encoding="utf-8")
     assert f'payload.get("{field}")' in source
-    # Ownership and completeness are checked before the adopt key is set.
-    assert 'detail="research run not found"' in source
-    # Found by what it produced, not by a step name a customer may have changed — and by the
-    # SAME decision that offers "Build on this research" in the console, so the button and the
-    # request it sends cannot disagree (a cancelled run whose research failed once offered the
-    # button anyway; then the request accepted a run still going, which the button never
-    # offered). REWRITTEN from `research_to_build_on(` to the whole action: `require` checks
-    # the run's state as well as its research. Its own private query is gone.
-    assert "_run_actions.require(" in source
-    assert 'source_run, "build_on_research")' in source
+    assert "_run_actions.research_to_adopt(" in source
+    rule = inspect.getsource(actions.research_to_adopt)
+    assert 'require(connection, project_id, run_id, "build_on_research")' in rule
+    assert "not completed — " in rule and "no findings" in rule
     assert "AND output ? 'discovery_id'" not in source
-    assert "not completed — " in source
     # And the blanket strip of caller-supplied adoption is still there.
     assert 'k.startswith("adopt_")' in source

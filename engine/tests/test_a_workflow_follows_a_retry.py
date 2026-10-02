@@ -177,8 +177,14 @@ class TestReopeningIsNarrow:
         assert "completed_at=NULL" in body
 
     def test_the_run_stops_reporting_failed_too(self):
+        """REWRITTEN (2026-10-02). This pinned the run UPDATE's own text — `status='waiting',
+        error=NULL` — written here, which left the run's "Stopped at Build: … Try it again"
+        sentence on a run that the retried build then carried to completion. The run now moves
+        through the one door out of a stop, which clears the status, error and sentence
+        together; the behaviour is enforced in test_a_stopped_run_is_the_operators.py."""
         body = inspect.getsource(workflows.reopen_failed_step)
-        assert "UPDATE workflow_runs SET status='waiting', error=NULL" in body
+        assert "_set_moving_again(connection, row[\"workflow_run_id\"])" in body
+        assert "UPDATE workflow_runs" not in body
 
     def test_the_substitution_is_recorded(self):
         """A step that silently changed which run it was watching would be worse than the stuck

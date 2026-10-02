@@ -63,11 +63,26 @@ CASES = [
     ("waiting on an approval", "waiting",
      [researched(), step("approve", "waiting", "spec_review")],
      None, {"stop": True, "stop_and_rerun": True}),
+    # A STOPPED RUN IS THE OPERATOR'S, NOT OVER. REWRITTEN (review of c8de36b): these rows
+    # offered Run again and no Stop, as on a finished run — so a stopped run could only be
+    # abandoned by deleting it, and a branch still working under it could not be stopped. Stop
+    # (and Stop and run again, which replaces Run again) are offered; Remove waits until
+    # nothing under the run is live.
     ("failed at research — stopped for the operator", "failed",
      [step("research", "failed", "research"), step("panel", "pending", "meeting")],
      None,
-     {"recheck": True, "rerun": True, "remove": True,
+     {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": True,
       "retry_step:research": True, "skip_step:research": True}),
+    ("dead-lettered — stopped for the operator", "deadlettered",
+     [step("deploy", "deadlettered", "deploy")],
+     None,
+     {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": True,
+      "retry_step:deploy": True, "skip_step:deploy": True}),
+    ("stopped with a parallel branch still working: Stop, and Remove waits", "deadlettered",
+     [step("a", "deadlettered", "build"), step("b", "leased", "build")],
+     None,
+     {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": False,
+      "retry_step:a": True, "skip_step:a": True}),
     # A STOPPED RUN OFFERS NO TRY AGAIN — not greyed, absent. It will never become possible
     # (Stop promises "it cannot be resumed"), and a dead button under the red ✗ is the
     # incident's bad experience with less colour. REWRITTEN from `retry_step:panel: False`.
@@ -149,10 +164,12 @@ CASES = [
       "retry_step:deploy": False, "skip_step:deploy": False}),
     ("a refused approval: Try again reopens it, Skip never offered", "failed",
      [step("approve", "failed", "spec_review")],
-     None, {"recheck": True, "rerun": True, "remove": True, "retry_step:approve": True}),
+     None, {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": True,
+            "retry_step:approve": True}),
     ("a failed decision step is a gate too", "failed",
      [step("gate", "failed", kind="decision", capability="")],
-     None, {"recheck": True, "rerun": True, "remove": True, "retry_step:gate": True}),
+     None, {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": True,
+            "retry_step:gate": True}),
 ]
 
 
@@ -287,10 +304,14 @@ def test_every_action_is_enforced_by_the_operation_that_performs_it():
         source = inspect.getsource(operation)
         assert "require(" in source and f'"{key}"' in source, (
             f"{operation.__name__} performs '{key}' without asking the run's actions")
+    # REWRITTEN (review of 0fd6c45): `from_run` is resolved by `research_to_adopt`, the one
+    # research rule every start asks (the HTTP endpoint and the agent's start_workflow), and
+    # that rule asks `require` for this run's "build_on_research".
     main = (Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py").read_text()
     start = main[main.index('source_run = str(payload.get("from_run")'):]
-    assert '_run_actions.require(' in start[:4000]
-    assert 'source_run, "build_on_research")' in start[:4000]
+    assert '_run_actions.research_to_adopt(' in start[:4000]
+    rule = inspect.getsource(actions_mod.research_to_adopt)
+    assert 'require(connection, project_id, run_id, "build_on_research")' in rule
 
 
 def test_the_operations_keep_no_private_copy_of_the_rule():

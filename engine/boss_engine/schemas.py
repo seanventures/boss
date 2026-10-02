@@ -3463,6 +3463,10 @@ class WorkflowRunSummary(BaseModel):
     #: every operation on the run enforces. On the summary, not only the detail, so the agent's
     #: and the MCP list surface see what a run offers without fetching each one.
     actions: list[dict[str, Any]] = Field(default_factory=list)
+    #: Where the run stands — active, stopped (at a failed step, waiting for the operator),
+    #: closed or compensating — from `workflow_run_actions.standing`, so no client keeps its
+    #: own list of run states.
+    standing: Optional[str] = None
 
 
 class WorkflowRunDetail(WorkflowRunSummary):

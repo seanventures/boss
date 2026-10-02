@@ -177,7 +177,10 @@ class TestItWillNotStrandAParentThatIsStillWaiting:
         assert source.index("child_workflow_run_id = :run_id") < source.index(
             "SET {column} = NULL")
         assert "TERMINAL_STEP_STATES" in source
-        assert "TERMINAL_RUN_STATES" in source
+        # REWRITTEN (2026-10-02): the parent's states are CLOSED_RUN_STATES now, not
+        # TERMINAL_RUN_STATES. A parent stopped at a failed step is waiting for its operator,
+        # not over, and its subworkflow step resumes from this child after a retry or skip.
+        assert "CLOSED_RUN_STATES" in source
 
 
 class TestTheEndpointIsReachable:

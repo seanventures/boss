@@ -61,10 +61,22 @@ class _Conn:
 DECISION = {"id": "dec_1", "question": "Merge PR #186", "status": "pending", "risk_tier": 2,
             "deadline_at": "2026-09-07T02:33Z", "default_action": "hold",
             "created_at": "2026-09-06T02:31Z"}
-STEP = {"id": "wfs_1", "step_id": "deploy", "status": "deadlettered",
+STEP = {"id": "wfs_1", "step_id": "deploy", "step_kind": "capability", "status": "deadlettered",
         "last_error": "deployment failed: connection refused", "output": {},
+        "binding_snapshot": {}, "iteration": 0, "created_at": "2026-09-06T06:00Z",
+        "completed_at": "2026-09-06T06:04Z",
         "workflow_run_id": "wfr_1", "updated_at": "2026-09-06T06:04Z",
         "input": {"title": "Build a lead triage inbox.\nWho it is for: a small team"}}
+#: The run STEP stopped. REWRITTEN (2026-10-02): the briefing used to read failed steps alone,
+#: whatever their run, and so listed a completed run's failure under "Stopped". It now asks the
+#: run's own rule (`workflow_run_actions.stopped_for_operator`), so the fixture has a run.
+RUN = {"id": "wfr_1", "status": "deadlettered", "input": STEP["input"],
+       "spec": {"steps": [{"id": "deploy", "kind": "capability",
+                           "binding": {"capability": "deploy"}}]}}
+
+
+def _stopped(step=STEP, run=RUN):
+    return {"workflow_step_runs": [step], "workflow_runs": [run]}
 
 
 class TestTheBriefingIsTheWholeFactory:
@@ -85,7 +97,7 @@ class TestTheBriefingIsTheWholeFactory:
                     raise RuntimeError("relation does not exist")
                 return super().execute(statement, params)
 
-        out = factory_briefing(Half(workflow_step_runs=[STEP]), "p")
+        out = factory_briefing(Half(**_stopped()), "p")
         assert out["counts"]["decisions"] == 0
         assert out["counts"]["workflow_steps"] == 1
 
@@ -112,11 +124,11 @@ class TestTheBriefingIsTheWholeFactory:
 
 class TestTheShepherdsJudgementWithoutItsAutopilot:
     def test_a_failure_is_named_in_words(self):
-        out = factory_briefing(_Conn(workflow_step_runs=[STEP]), "p")
+        out = factory_briefing(_Conn(**_stopped()), "p")
         assert out["items"][0]["diagnosis"]["kind"] == "deployment failed"
 
     def test_and_carries_what_usually_fixes_it(self):
-        out = factory_briefing(_Conn(workflow_step_runs=[STEP]), "p")
+        out = factory_briefing(_Conn(**_stopped()), "p")
         remedies = out["items"][0]["diagnosis"]["remedies"]
         assert remedies and all("describe" in r for r in remedies)
 
@@ -139,7 +151,7 @@ class TestTheShepherdsJudgementWithoutItsAutopilot:
 
     def test_an_unclassifiable_failure_is_still_shown(self):
         out = factory_briefing(
-            _Conn(workflow_step_runs=[{**STEP, "last_error": "something nobody has seen"}]), "p")
+            _Conn(**_stopped({**STEP, "last_error": "something nobody has seen"})), "p")
         assert out["total"] == 1
 
     @pytest.mark.parametrize("error,expected", [
@@ -152,12 +164,12 @@ class TestTheShepherdsJudgementWithoutItsAutopilot:
 
 class TestWhatTheAgentIsHanded:
     def test_the_lines_name_the_app_not_the_directive(self):
-        lines = briefing_lines(factory_briefing(_Conn(workflow_step_runs=[STEP]), "p"))
+        lines = briefing_lines(factory_briefing(_Conn(**_stopped()), "p"))
         assert "Lead Triage Inbox" in lines[0]
         assert "Who it is for" not in lines[0]
 
     def test_and_the_failure_class_travels_with_the_error(self):
-        lines = briefing_lines(factory_briefing(_Conn(workflow_step_runs=[STEP]), "p"))
+        lines = briefing_lines(factory_briefing(_Conn(**_stopped()), "p"))
         assert "(deployment failed)" in lines[0]
 
     def test_it_is_reachable_as_a_tool_so_the_agent_reads_the_same_picture(self):
