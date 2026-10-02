@@ -99,6 +99,13 @@ ROSTER_AUTHORITY_WRITES = frozenset({
     ("DELETE", "/v1/agents/{role_key}"),
     ("POST", "/v1/role-mcp-servers"),
     ("DELETE", "/v1/role-mcp-servers"),
+    # A SKILL GRANT CAN BE AN MCP GRANT (review of milestone/integration): an `mcp_tool` skill
+    # calls a server's tool, so giving one was a non-human caller's way round the hold on
+    # POST /v1/role-mcp-servers. The route cannot see which skill it is given, so every skill
+    # grant from a non-human is held; the run-time gate (agents.mcp_reach_gap) still requires
+    # the server itself, so a confirmed skill grant adds no server either.
+    ("POST", "/v1/role-skills"),
+    ("POST", "/v1/role-skills/sync"),
 })
 _OPERATOR_ONLY_EXACT = frozenset({
     "/v1/orgs", "/v1/members", "/v1/break-glass/grants",

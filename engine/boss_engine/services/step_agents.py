@@ -284,13 +284,32 @@ def who_may_run(
     skill_id = str(definition.get("skill_id") or "")
     holders = [a for a in agents if skill_id in _granted(a)]
     if holders:
-        return holders, "holds", ""
+        # AN MCP-CALLING SKILL ALSO NEEDS ITS SERVER (agents.mcp_reach_gap — the gate the
+        # runtime applies). Picking a holder the gate then denies is the failure this function
+        # exists to prevent, so a holder without the server is not in the pool.
+        holders = [a for a in holders if not _lacks_server(connection, project_id,
+                                                           a["role_key"], skill_id)]
+        if holders:
+            return holders, "holds", ""
+        return [], "", ""
     callers = _allowed_callers(connection, project_id, skill_id)
     fallback = WORKFLOW_RUNNER if WORKFLOW_RUNNER in callers else ""
     if "*" in callers:
         return list(agents), "anyone", fallback
     listed = [a for a in agents if a["role_key"] in callers]
     return listed, ("listed" if listed else ""), fallback
+
+
+def _lacks_server(connection: Connection, project_id: str, role_key: str,
+                  skill_id: str) -> Optional[str]:
+    """Why this holder still may not run the skill (it lacks the MCP server it calls), or None."""
+    from .agents import mcp_reach_gap
+
+    try:
+        gap = mcp_reach_gap(connection, project_id, role_key, skill_id)
+    except Exception:  # noqa: BLE001 — a missing table is "no MCP skills", not a crash
+        return None
+    return gap["message"] if gap else None
 
 
 def _granted(agent: dict[str, Any]) -> list[str]:
@@ -565,6 +584,14 @@ def resolve(
                 f"agent holding its skill, so it ran as the workflow, as it always has. Give "
                 f"{runs} to an agent on the Agents page and publish the workflow again to have "
                 "that agent run it — a new version is refused until one holds it.")
+        # A HOLDER WITHOUT THE SERVER is a different repair from "nobody holds it", so it is
+        # named: the agent and the server it still needs.
+        short = next((why for why in (
+            _lacks_server(connection, project_id, a["role_key"], str(definition.get("skill_id")))
+            for a in agents if str(definition.get("skill_id") or "") in _granted(a)) if why),
+            None)
+        if short:
+            raise StepAgentError(f"nobody can do '{definition['label']}': {short}")
         raise StepAgentError(
             f"no agent on this project may run {runs}, so nobody can do "
             f"'{definition['label']}'. Give {runs} to an agent on the Agents page, or name an "

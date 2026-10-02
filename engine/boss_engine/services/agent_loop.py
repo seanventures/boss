@@ -202,7 +202,10 @@ def _mcp_skill_spec(
             "required_permissions": ["mcp_call"],
         },
         "data_boundary": server.get("data_boundary") or "internal",
-        "policy": {"requires_receipt": True},
+        # WHICH SERVER AND TOOL this is, for the runtime's permission gate: holding the server
+        # (role_mcp_servers) is how an agent holds its tools — the one MCP ownership model.
+        "policy": {"requires_receipt": True, "mcp_server_id": str(server["id"]),
+                   "mcp_tool": tool_name},
         "publisher": server.get("publisher") or {},
         "provenance": server.get("provenance") or {},
     }

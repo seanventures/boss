@@ -207,6 +207,12 @@ def _authored_facts(
         "risk_tier": tier, "trusted": trusted, "usable": usable, "reason": reason,
         "input_schema": input_schema, "runs_through": runs_through,
         "requires_person": requires_person,
+        # WHICH SERVER AND TOOL an mcp_tool skill reaches — the same policy keys agent_loop's
+        # synthesised MCP spec carries, so the runtime's gate asks "does the caller hold this
+        # server for this tool?" of both alike (agents.mcp_grant_gap).
+        "mcp": ({"mcp_server_id": str(config.get("mcp_server_id") or ""),
+                 "mcp_tool": str(config.get("tool_name") or "")}
+                if behaviour == "mcp_tool" else {}),
     }
 
 
@@ -262,6 +268,7 @@ def authored_specs(
                 # when nothing but the tier decides. agent_loop's skill branch reads it.
                 "requires_person": facts["requires_person"],
                 "usable": facts["usable"],
+                **facts["mcp"],
                 # The operator's own switch, kept apart from `enabled` below so a screen can
                 # say whether a skill is off because somebody turned it off or because what it
                 # runs through went away.

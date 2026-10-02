@@ -664,7 +664,15 @@ def assign_skill_to_role(
                          seed_exclusions.role_skill_subject(role, skill))
     emit_event(connection, project_id, "skill.assigned_to_agent", actor, "role_skill",
                str(row["id"]), {"role_key": role, "skill_id": skill, "source": source})
-    return {"role_key": role, "skill_id": skill, "source": source, "assigned": True}
+    # SAY NOW WHAT THE RUN WOULD SAY LATER. A skill that calls an MCP tool runs only for an
+    # agent that also holds the server (agents.mcp_reach_gap). The grant is kept — a person
+    # may be about to give the server next — but the answer names the missing half.
+    from .agents import mcp_reach_gap
+
+    gap = mcp_reach_gap(connection, project_id, role, skill)
+    return {"role_key": role, "skill_id": skill, "source": source, "assigned": True,
+            **({"needs_mcp_server": {k: gap[k] for k in ("mcp_server_id", "server", "tool")},
+                "warning": gap["message"]} if gap else {})}
 
 
 def sync_role_skills(

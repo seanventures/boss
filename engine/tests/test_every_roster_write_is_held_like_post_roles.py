@@ -28,13 +28,17 @@ from boss_engine.mcp.api_surface import (
 API = Path(__file__).resolve().parents[2] / "apps" / "api" / "app"
 
 #: The functions that change an agent's identity, mission, boundaries or MCP reach.
+#:
+#: A SKILL GRANT IS ONE OF THEM (review of milestone/integration, blocker). This list once left
+#: out `assign_skill_to_role` and `sync_role_skills` on the grounds that "a skill's own risk tier
+#: decides when a use of it waits for a person" — but an `mcp_tool` skill reaches an MCP server,
+#: and POST /v1/role-skills then let a non-human caller do through a skill what POST
+#: /v1/role-mcp-servers holds for a person.
 ROSTER_WRITERS = re.compile(
     r"\b(?:specpack\.register_role|agents\.(?:create_agent|update_agent|delete_agent|grant_mcp"
-    r"|revoke_mcp))\s*\(")
+    r"|revoke_mcp)|assign_skill_to_role|sync_role_skills)\s*\(")
 
 #: Routes that call a roster writer and are deliberately classified otherwise, with why.
-#: (Empty today. A skill grant, POST /v1/role-skills, does not call one: a skill's own risk
-#: tier decides when a use of it waits for a person.)
 DIFFERENTLY_CLASSIFIED: dict[tuple[str, str], str] = {}
 
 
@@ -61,7 +65,8 @@ def _routes() -> dict[tuple[str, str], str]:
 def test_the_scan_finds_the_routes_it_exists_for():
     routes = _routes()
     for route in [("POST", "/v1/roles"), ("POST", "/v1/agents"),
-                  ("PATCH", "/v1/agents/{role_key}"), ("POST", "/v1/role-mcp-servers")]:
+                  ("PATCH", "/v1/agents/{role_key}"), ("POST", "/v1/role-mcp-servers"),
+                  ("POST", "/v1/role-skills"), ("POST", "/v1/role-skills/sync")]:
         assert route in routes, f"the scan no longer finds {route}; it would pass vacuously"
 
 

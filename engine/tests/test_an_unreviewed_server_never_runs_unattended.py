@@ -115,12 +115,26 @@ def _unreviewed_server(c, project) -> str:
 
 
 def _skill_on(c, project, server_id: str) -> None:
+    """The agent `pm` holds an mcp_tool skill on the server — AND the server itself.
+
+    CHANGED (review of milestone/integration): holding the skill alone no longer reaches the
+    server (agents.mcp_reach_gap; test_a_skill_never_carries_an_mcp_servers_reach.py), so the
+    fixture gives `pm` both, which is what an operator does. The subject here is still the
+    review rule: every road below must still wait for a person on an unreviewed server. `pm`
+    is created as an agent too — the custom-step road picks among the project's real agents
+    (step_agents), and a role_skills row for a role that does not exist is picked by nobody."""
+    from boss_engine.services import agents
+
     sd.save_skill(c, project_id=project, actor="op", skill_key="file_ticket",
                   label="File ticket", behaviour_kind="mcp_tool", risk_tier=0,
                   config={"mcp_server_id": server_id, "tool_name": TOOL})
+    if c.execute(text("SELECT 1 FROM roles WHERE project_id=:p AND role_key='pm'"),
+                 {"p": project}).first() is None:
+        agents.create_agent(c, project, actor="op", name="PM", role_key="pm")
     c.execute(text("INSERT INTO role_skills (id, project_id, role_key, skill_id, source) "
                    "VALUES (:i, :p, 'pm', 'file_ticket', 'authored')"),
               {"i": f"rs_{uuid.uuid4().hex[:10]}", "p": project})
+    agents.grant_mcp(c, project, actor="op", role_key="pm", mcp_server_id=server_id)
 
 
 class _Model:

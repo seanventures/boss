@@ -50,6 +50,10 @@ class SkillExecutorContext:
     #: ``{"run_id": …}`` or ``{"workflow_run_id": …, "step_id": …}``. Round-3 review: an
     #: approved decision about some other run would otherwise have counted.
     approval_about: Optional[dict[str, Any]] = None
+    #: WHO the skill runtime let through its permission gate (a role key, or `workflow_runner`).
+    #: Set by SkillRuntimeService.invoke. skill.mcp_tool reads it: the caller must hold the
+    #: server the skill calls (agents.mcp_reach_gap).
+    caller: Optional[str] = None
 
     @property
     def github(self) -> Any:
@@ -803,6 +807,22 @@ def execute_mcp_tool(
     tool_name = str(config.get("tool_name") or "").strip()
     if not tool_name:
         raise SkillExecutorConfigurationError(f"{skill_key} names no tool to call.")
+    # THE CALLER MUST HOLD THE SERVER (review of milestone/integration). The runtime's gate
+    # already asks; this is the backstop where the effect happens, so a road that reaches the
+    # executor some other way still cannot use a server through a skill. No caller on the
+    # context means nobody vouched for one, which is a refusal, not a pass.
+    from .agents import SERVERLESS_MCP_CALLERS, mcp_grant_gap
+
+    caller = str(context.caller or "").strip()
+    if caller not in SERVERLESS_MCP_CALLERS:
+        gap = (mcp_grant_gap(context.connection, context.project_id, caller,
+                             server_id=str(server["id"]), tool=tool_name, skill_key=skill_key)
+               if caller else {"message": (
+                   f"{skill_key} calls the MCP server '{server['name']}' and this invocation "
+                   "names no agent holding it. Run it as an agent that holds the server "
+                   "(Agents page, Give this agent an MCP server).")})
+        if gap is not None:
+            raise SkillExecutorConfigurationError(gap["message"])
 
     # The runtime's own reserved keys never reach a third party's tool.
     arguments = {k: v for k, v in inputs.items() if not str(k).startswith("_")}

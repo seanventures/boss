@@ -260,6 +260,92 @@ def held_mcp_servers(connection: Connection, project_id: str, role_key: str, *,
     return out
 
 
+def holds_mcp_tool(connection: Connection, project_id: str, role_key: str, server_id: str,
+                   tool: str) -> bool:
+    """Does this agent hold this server for this tool? (An empty tool list means all of them.)"""
+    row = connection.execute(
+        text("SELECT tools FROM role_mcp_servers WHERE project_id = :p AND role_key = :r "
+             "AND mcp_server_id = :s"),
+        {"p": project_id, "r": str(role_key or "").strip().lower(), "s": server_id},
+    ).first()
+    if row is None:
+        return False
+    allowed = [str(t) for t in (row[0] or [])]
+    return not allowed or tool in allowed
+
+
+#: Who may run an MCP-calling skill WITHOUT holding its server: the workflow itself, for a step
+#: that names nobody and whose own policy lets the workflow call it (step_agents' documented
+#: exceptions, `ran_as.how` "workflow_runner" / "legacy_workflow_runner"). Nothing else.
+SERVERLESS_MCP_CALLERS = frozenset({"workflow_runner"})
+
+
+def mcp_grant_gap(connection: Connection, project_id: str, role_key: str, *,
+                  server_id: str, tool: str, skill_key: str) -> Optional[dict[str, Any]]:
+    """What `role_key` is missing to call `tool` on `server_id` through `skill_key`, or None.
+
+    None also when the server is gone: the executor and the catalogue say that in their own
+    words ("the MCP server it calls has been removed"), and saying "you do not hold it" about a
+    server that does not exist would send the operator to grant something they cannot.
+    """
+    server = connection.execute(
+        text("SELECT id, name FROM mcp_servers WHERE project_id = :p AND id = :s"),
+        {"p": project_id, "s": server_id},
+    ).mappings().first()
+    if server is None:
+        return None
+    role = str(role_key or "").strip().lower()
+    held = connection.execute(
+        text("SELECT tools FROM role_mcp_servers WHERE project_id = :p AND role_key = :r "
+             "AND mcp_server_id = :s"),
+        {"p": project_id, "r": role, "s": server_id},
+    ).first()
+    gap = {"skill": skill_key, "role_key": role, "mcp_server_id": server_id,
+           "server": str(server["name"]), "tool": tool}
+    who = role or "this caller"
+    if held is None:
+        return {**gap, "message": (
+            f"{who} may not run {skill_key}: it calls the MCP server '{server['name']}', and "
+            f"{who} does not hold that server. Holding a skill does not carry a server's reach "
+            "— give the agent the server on the Agents page (Give this agent an MCP server), "
+            "or ask BOSS to offer assign_mcp_to_agent.")}
+    allowed = [str(t) for t in (held[0] or [])]
+    if allowed and tool not in allowed:
+        return {**gap, "message": (
+            f"{who} may not run {skill_key}: it calls '{tool}' on the MCP server "
+            f"'{server['name']}', and {who} holds that server only for {', '.join(allowed)}. "
+            f"Add '{tool}' to its grant on the Agents page.")}
+    return None
+
+
+def mcp_reach_gap(connection: Connection, project_id: str, role_key: str,
+                  skill_key: str) -> Optional[dict[str, Any]]:
+    """What an agent is missing to run a skill that calls an MCP tool, or None.
+
+    A GRANT WHOSE SKILL REACHES AN MCP SERVER IS AN MCP GRANT. Review of milestone/integration:
+    `assign_mcp_to_agent` is offered to the operator, never run by the chat model, because a
+    server carries its credentials and every action it exposes. But `draft_skill` (an
+    `mcp_tool` skill) and `assign_skill_to_agent` were both `safe`, and nothing at execution
+    asked whether the agent held the server — so the model could give any agent any registered
+    server's tool on its own, one skill at a time. The rule now lives here and every road asks
+    it: the skill runtime's permission gate and the mcp_tool executor (through mcp_grant_gap,
+    with the server they already hold), the step auto-pick, the chat grant and the API grant's
+    answer. An agent reaches exactly the servers (and tools) it holds in role_mcp_servers.
+
+    None when the skill does not call an MCP tool, or the agent holds that server for that tool.
+    Otherwise a dict naming the server and tool, and a `message` saying what to do.
+    """
+    from .skill_catalogue import entry
+
+    item = entry(connection, project_id, skill_key)
+    policy = ((item or {}).get("spec") or {}).get("policy") or {}
+    if not policy.get("mcp_server_id"):
+        return None
+    return mcp_grant_gap(connection, project_id, role_key,
+                         server_id=str(policy["mcp_server_id"]),
+                         tool=str(policy.get("mcp_tool") or ""), skill_key=skill_key)
+
+
 def list_role_mcp(connection: Connection, project_id: str,
                   role_key: Optional[str] = None) -> list[dict[str, Any]]:
     sql = ("SELECT g.role_key, g.mcp_server_id, g.tools, g.assigned_by, g.created_at, "

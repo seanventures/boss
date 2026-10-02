@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import text
+
 from .._compat import services_module
 from .registry import ToolRegistry
 
@@ -42,6 +44,7 @@ def register_agent_tools(reg: ToolRegistry) -> None:
     )
     def assign_skill_to_agent(ctx, *, project_id, actor, args) -> dict[str, Any]:
         skills = services_module("skill_definitions")
+        agents = services_module("agents")
         pid = args.get("project_id") or project_id
         role = str(args.get("agent") or "").strip().lower()
         skill = str(args.get("skill") or "").strip()
@@ -50,6 +53,42 @@ def register_agent_tools(reg: ToolRegistry) -> None:
                 if args.get("remove"):
                     return skills.unassign_skill_from_role(
                         c, project_id=pid, actor=actor, role_key=role, skill_id=skill)
+                # A SKILL THAT CALLS AN MCP SERVER IS AN MCP GRANT. Review of
+                # milestone/integration: this tool is `safe`, so the model ran it itself, and
+                # an `mcp_tool` skill handed the agent a server that assign_mcp_to_agent (which
+                # only an operator's click runs) had been made to protect. When the agent does
+                # not already hold the server, nothing is written: the model is told to OFFER
+                # the server grant, which carries this skill with it on the same click.
+                known = c.execute(text("SELECT 1 FROM roles WHERE project_id = :p "
+                                       "AND role_key = :r"), {"p": pid, "r": role}).first()
+                gap = agents.mcp_reach_gap(c, pid, role, skill) if known else None
+                if gap is not None:
+                    # WIDEN, NEVER NARROW: an agent that holds the server for other tools keeps
+                    # them (a grant's tool list is replaced, not merged, by grant_mcp).
+                    held = c.execute(text(
+                        "SELECT tools FROM role_mcp_servers WHERE project_id = :p "
+                        "AND role_key = :r AND mcp_server_id = :s"),
+                        {"p": pid, "r": role, "s": gap["mcp_server_id"]}).scalar()
+                    tools = sorted({*(held or []), gap["tool"]} - {""})
+                    proposed = {"agent": role, "server": gap["mcp_server_id"],
+                                "tools": tools, "skill": skill}
+                    return {
+                        "ok": False, "status": "confirmation_required",
+                        "requires_confirmation": True,
+                        "error": "the skill reaches an MCP server the agent does not hold",
+                        "reversibility": "grants_authority",
+                        "message": (
+                            f"{skill} calls '{gap['tool']}' on the MCP server '{gap['server']}', "
+                            f"which {role} does not hold. Giving it this skill gives it that "
+                            "server's reach on somebody's account, so a person decides. Nothing "
+                            "was assigned."),
+                        "do_this": (
+                            "call assign_mcp_to_agent with these exact args. It is offered to "
+                            "the operator as a button; one click gives the agent the server "
+                            "(this tool only) and the skill together."),
+                        "proposed_tool": "assign_mcp_to_agent",
+                        "proposed_args": proposed,
+                    }
                 return skills.assign_skill_to_role(
                     c, project_id=pid, actor=actor, role_key=role, skill_id=skill)
             except skills.SkillDefinitionError as error:
@@ -68,6 +107,9 @@ def register_agent_tools(reg: ToolRegistry) -> None:
             "tools": {"type": "array", "items": {"type": "string"},
                       "description": "only these tools; leave out for all of them"},
             "remove": {"type": "boolean", "description": "take it away instead"},
+            "skill": {"type": "string", "description": (
+                "also give the agent this skill, which calls a tool on the server — what "
+                "assign_skill_to_agent asks for when a skill needs the server too")},
             "project_id": {"type": "string"},
         }, ["agent", "server"]),
         kind="write",
@@ -83,13 +125,22 @@ def register_agent_tools(reg: ToolRegistry) -> None:
         pid = args.get("project_id") or project_id
         role = str(args.get("agent") or "").strip().lower()
         server = str(args.get("server") or "").strip()
-        with ctx.begin() as c:
-            try:
+        skills = services_module("skill_definitions")
+        skill = str(args.get("skill") or "").strip()
+        try:
+            with ctx.begin() as c:
                 if args.get("remove"):
                     return agents.revoke_mcp(c, pid, actor=actor, role_key=role,
                                              mcp_server_id=server)
-                return agents.grant_mcp(c, pid, actor=actor, role_key=role,
-                                        mcp_server_id=server,
-                                        tools=list(args.get("tools") or []))
-            except agents.AgentError as error:
-                return {"ok": False, "error": str(error)}
+                granted = agents.grant_mcp(c, pid, actor=actor, role_key=role,
+                                           mcp_server_id=server,
+                                           tools=list(args.get("tools") or []))
+                if skill:
+                    # The same click carries the skill that needed the server, so the
+                    # operator's one decision leaves the agent able to do what was asked. A
+                    # refused skill raises, so the transaction takes the server grant back too.
+                    granted["skill"] = skills.assign_skill_to_role(
+                        c, project_id=pid, actor=actor, role_key=role, skill_id=skill)
+                return granted
+        except (agents.AgentError, skills.SkillDefinitionError) as error:
+            return {"ok": False, "error": str(error)}
