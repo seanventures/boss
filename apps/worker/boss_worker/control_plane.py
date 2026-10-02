@@ -79,16 +79,17 @@ class ControlPlaneClient:
         job_id: str,
         lease_token: str,
         lease_ttl_seconds: int,
+        handing_back: bool = False,
     ) -> dict[str, Any]:
-        response = self._client.post(
-            "/v1/worker/heartbeat",
-            json={
-                "worker_id": worker_id,
-                "job_id": job_id,
-                "lease_token": lease_token,
-                "lease_ttl_seconds": lease_ttl_seconds,
-            },
-        )
+        body = {
+            "worker_id": worker_id,
+            "job_id": job_id,
+            "lease_token": lease_token,
+            "lease_ttl_seconds": lease_ttl_seconds,
+        }
+        if handing_back:
+            body["handing_back"] = True
+        response = self._client.post("/v1/worker/heartbeat", json=body)
         response.raise_for_status()
         return response.json()
 
