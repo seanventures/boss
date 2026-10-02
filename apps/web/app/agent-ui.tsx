@@ -51,7 +51,9 @@ async function readAttachment(file: File): Promise<Attached> {
            data: await file.text() };
 }
 type Task = { id?: string; task_id?: string; title?: string; status?: string };
-type Thread = { thread_id: string; external_ref?: string | null; updated_at?: string; title?: string | null; message_count?: number };
+type Thread = { thread_id: string; external_ref?: string | null; updated_at?: string; title?: string | null; message_count?: number;
+                /** The agent the conversation is with, lower-cased as the server stores it. */
+                agent_role?: string | null };
 type CodeTask = { id?: string; status?: string; phase?: string; pull_request_url?: string; pull_request_number?: number; task_id?: string };
 
 // A turn is normally single-digit seconds; past NORMAL the operator is told it is running
@@ -513,10 +515,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     return () => window.clearInterval(id);
   }, [busy]);
 
+  // ONE THREAD PER (SUBJECT, AGENT) — the key the turn itself uses (agent_service: project,
+  // surface, external_ref, agent_role). Matching the subject alone opened whichever agent's
+  // conversation about it came first. An API older than `agent_role` on the list matches by
+  // subject, as before.
+  const roleKey = (roleName ?? "").trim().toLowerCase();
   const threadFor = useCallback(
     (id: string, list: Thread[]): Thread | undefined =>
-      list.find((t) => (t.external_ref ?? null) === (id === GENERAL ? null : id)),
-    [],
+      list.find((t) => (t.external_ref ?? null) === (id === GENERAL ? null : id)
+        && (t.agent_role ?? roleKey) === roleKey),
+    [roleKey],
   );
 
   /**
@@ -593,6 +601,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       const ts = d.tasks ?? [];
       const ths = d.threads ?? [];
       setTasks(ts); setThreads(ths);
+      // A DOOR ABOUT A SUBJECT OPENS THAT SUBJECT'S CONVERSATION WITH THIS AGENT. "Ask Qa about
+      // this" mounted with both a subject and a role, and this loaded the role's GENERAL thread
+      // — Qa's unrelated history and its still-clickable proposals — above a question about the
+      // step; the turn then moved to the (subject, role) thread mid-panel, and an earlier answer
+      // about the same step was never shown (review of 374ba07). The subject's thread, matched
+      // on the same (subject, role) key the turn uses, wins; the role's general thread is for a
+      // door with no subject.
+      if (initialTaskId && !fresh) { openThreadAndContext(initialTaskId, ths); return; }
       const mine = roleRef ? ths.find((t) => (t.external_ref ?? null) === roleRef) : undefined;
       if (mine?.thread_id) {
         setThreadId(mine.thread_id);

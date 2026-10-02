@@ -343,11 +343,18 @@ class EngineAgent:
         # not the whole reply.
         answer_step = max(1, max_steps - 1)
         #: THE BUTTON SURVIVES THE CLOCK. When the TURN's budget (not this pass's step limit)
-        #: forces the answer, the model may still attach the fix it found as a button — one
-        #: propose_action round, then the answer. A read → read → propose chain that crossed the
-        #: budget used to end as prose describing a fix with nothing to press, and the
-        #: action-claim re-ask that would have caught it does not start on a spent budget.
-        #: propose_action changes nothing, so this cannot buy a write the turn was not given.
+        #: forces the answer, the model may still attach the fix it found as a button. A
+        #: read → read → propose chain that crossed the budget used to end as prose describing a
+        #: fix with nothing to press, and the action-claim re-ask that would have caught it does
+        #: not start on a spent budget. propose_action changes nothing, so this cannot buy a
+        #: write the turn was not given.
+        #:
+        #: IN THE SAME CALL AS THE ANSWER, INSIDE THE BUDGET. The first version gave the offer a
+        #: round-trip of its own and then the answer another, so a turn forced to answer made
+        #: model_calls + 1 calls and could run two full round-trips past its clock — ~474 s on
+        #: boss-1's measured 157 s calls against the console's 240 s stall line (review of
+        #: 374ba07). The forced answer step now offers propose_action alongside the answer: one
+        #: call, its proposals run here without another model call, its text is the answer.
         offer_schemas = [sc for sc in schemas if sc["function"]["name"] == "propose_action"]
         offer_spent = False
 
@@ -358,9 +365,9 @@ class EngineAgent:
             # waits on, so the turn is what is counted.
             out_of_turn = budget is not None and budget.must_answer_now()
             last = i >= answer_step or out_of_turn
-            # Only when another step remains to write the answer in.
-            closing_offer = bool(last and out_of_turn and offer_schemas and not offer_spent
-                                 and i < max_steps - 1)
+            # The forced answer, with the button allowed in the same call — never a call of its
+            # own (see `offer_schemas`).
+            closing_offer = bool(last and out_of_turn and offer_schemas and not offer_spent)
             if last:
                 messages.append({
                     "role": "user",
@@ -374,7 +381,9 @@ class EngineAgent:
                         "3. The single next action you would take.\n"
                         "Partial findings are useful; a report of running out of steps is not."
                         + ("\nIf you have found a fix and have not yet offered it, you may call "
-                           "propose_action ONCE now to attach it as a button; then answer."
+                           "propose_action ONCE in this same message to attach it as a button "
+                           "— and write the answer in this message too. There is no further "
+                           "turn after this one."
                            if closing_offer else "")
                     ),
                 })
@@ -426,11 +435,27 @@ class EngineAgent:
             )
             messages.append(msg["raw"])
             if closing_offer:
+                # THE ANSWER AND ITS BUTTON, FROM ONE CALL. Only propose_action runs; whatever
+                # else the model reached for is ignored. No further model call is made: the
+                # text is the answer, and an empty one falls to the report from the trace below.
                 offer_spent = True
-                tool_calls = [tc for tc in (msg.get("tool_calls") or [])
-                              if tc.get("name") == "propose_action"] or None
-            else:
-                tool_calls = None if last else msg.get("tool_calls")
+                for tc in (msg.get("tool_calls") or []):
+                    if tc.get("name") != "propose_action":
+                        continue
+                    try:
+                        offer_args = json.loads(tc.get("arguments") or "{}")
+                    except Exception:
+                        offer_args = {}
+                    result = self._run_tool(
+                        "propose_action", offer_args, project_id=project_id, actor=actor,
+                        allow_writes=allow_writes, pending=pending,
+                    )
+                    trace.append({"tool": "propose_action", "args": offer_args,
+                                  "result": result})
+                    break
+                final_text = msg.get("content") or ""
+                break
+            tool_calls = None if last else msg.get("tool_calls")
             if not tool_calls:
                 final_text = msg.get("content") or ""
                 if final_text.strip():

@@ -457,7 +457,8 @@ class _ToolHappyAdapter:
 
     def create_chat_completion(self, messages, tools=None):
         self.calls.append({"tools": tools, "last": messages[-1]})
-        if tools:
+        names = [t["function"]["name"] for t in (tools or [])]
+        if tools and names != ["propose_action"]:
             return ({"raw": {"role": "assistant", "content": ""},
                      "tool_calls": [{"id": f"t{len(self.calls)}", "name": "read_preview_log",
                                      "arguments": json.dumps(
@@ -473,45 +474,62 @@ def _agent(adapter):
     agent._adapter = adapter
     agent._notes = []
     agent.ambient = {}
+    # propose_action IS IN THE REAL REGISTRY, ALWAYS. The budget tests ran without it, so the
+    # closing offer — which only exists when propose_action does — never ran under them, and a
+    # turn that overran its budget by one call and two round-trips passed (review of 374ba07).
     agent.registry = type("R", (), {"openai_schema": lambda self: [
-        {"type": "function", "function": {"name": "read_preview_log", "parameters": {}}}]})()
+        {"type": "function", "function": {"name": n, "parameters": {}}}
+        for n in ("read_preview_log", "propose_action")]})()
     agent._run_tool = lambda name, args, **kw: {"ok": True, "log": "…"}
     return agent
 
 
-def test_a_model_that_keeps_calling_tools_is_made_to_answer_within_the_turns_budget():
+@pytest.mark.parametrize("cap", [2, 3, 4, 7])
+def test_a_model_that_keeps_calling_tools_is_made_to_answer_within_the_turns_budget(cap):
     adapter = _ToolHappyAdapter()
-    budget = TurnBudget(seconds=600, model_calls=4)
+    budget = TurnBudget(seconds=600, model_calls=cap)
     turn = _agent(adapter).chat(project_id="p", message=QUESTION, max_steps=14, budget=budget)
-    assert len(adapter.calls) == 4, "the turn ran past its model-call budget"
-    assert adapter.calls[-1]["tools"] is None, "the last call must be the answer, with no tools"
+    assert len(adapter.calls) <= cap, "the turn ran past its model-call budget"
+    assert budget.used <= cap
+    # The last call is the answer: no tools but the button it may attach.
+    assert [t["function"]["name"] for t in (adapter.calls[-1]["tools"] or [])] \
+        in ([], ["propose_action"])
     final_prompt = str(adapter.calls[-1]["last"]["content"])
     assert "budget is spent" in final_prompt
     assert "could NOT check" in final_prompt
     assert "ImportError" in turn.reply
 
 
-def test_the_wall_clock_ends_the_turn_too():
+@pytest.mark.parametrize("seconds,round_trip", [(90, 40), (180, 60), (180, 157)])
+def test_the_wall_clock_ends_the_turn_too(seconds, round_trip):
+    """Within the turn's seconds plus ONE round-trip — the forced answer — and never two: the
+    closing offer used to add a whole round-trip of its own (300 s on a 180 s budget at 60 s a
+    call)."""
     now = [0.0]
     adapter = _ToolHappyAdapter()
-    budget = TurnBudget(seconds=90, model_calls=50, clock=lambda: now[0])
+    budget = TurnBudget(seconds=seconds, model_calls=50, clock=lambda: now[0])
 
     original = adapter.create_chat_completion
 
     def slow(messages, tools=None):
-        now[0] += 40          # each round-trip takes 40 s of the turn's 90
+        now[0] += round_trip
         return original(messages, tools)
 
     adapter.create_chat_completion = slow
     _agent(adapter).chat(project_id="p", message=QUESTION, max_steps=14, budget=budget)
-    assert len(adapter.calls) <= 3
-    assert adapter.calls[-1]["tools"] is None
+    assert now[0] <= seconds + round_trip, f"the turn ran {now[0]} s on a {seconds} s budget"
+    assert [t["function"]["name"] for t in (adapter.calls[-1]["tools"] or [])] \
+        in ([], ["propose_action"])
 
 
 def test_a_spent_turn_can_still_attach_its_fix_as_a_button():
     """Review of 20b0abf: past the turn's budget the next call had no tools, so a read → read →
     propose chain ended as prose with nothing to press. The forced answer may make ONE
-    propose_action call, and only that."""
+    propose_action call, and only that.
+
+    REWRITTEN (review of 374ba07): the offer was a round-trip of its own, then the answer
+    another — model_calls + 1 calls. The offer now rides on the answer: ONE call, inside the
+    budget, whose proposal runs and whose text is the reply."""
     seen: list = []
 
     class _Offerer:
@@ -521,7 +539,9 @@ def test_a_spent_turn_can_still_attach_its_fix_as_a_button():
             self.calls.append(tools)
             names = [t["function"]["name"] for t in (tools or [])]
             if names == ["propose_action"]:
-                return ({"raw": {"role": "assistant", "content": ""}, "tool_calls": [
+                return ({"raw": {"role": "assistant", "content": "x"},
+                         "content": "It crashed on ImportError; the retry is one click away.",
+                         "tool_calls": [
                     {"id": "p1", "name": "propose_action",
                      "arguments": json.dumps({"tool": "retry_workflow_step"})},
                     {"id": "p2", "name": "redeploy", "arguments": "{}"}]}, {})
@@ -538,11 +558,11 @@ def test_a_spent_turn_can_still_attach_its_fix_as_a_button():
         {"type": "function", "function": {"name": n, "parameters": {}}}
         for n in ("read_preview_log", "propose_action", "redeploy")]})()
     agent._run_tool = lambda name, args, **kw: seen.append(name) or {"ok": True}
-    turn = agent.chat(project_id="p", message=QUESTION, max_steps=14,
-                      budget=TurnBudget(seconds=600, model_calls=3))
+    budget = TurnBudget(seconds=600, model_calls=3)
+    turn = agent.chat(project_id="p", message=QUESTION, max_steps=14, budget=budget)
     assert "propose_action" in seen, "the closing offer was not allowed"
     assert "redeploy" not in seen, "the closing step ran a tool other than propose_action"
-    assert adapter.calls[-1] is None, "the answer itself must have no tools"
+    assert len(adapter.calls) == 3 and budget.used == 3, "the offer cost a call of its own"
     assert "ImportError" in turn.reply
 
 
@@ -645,3 +665,122 @@ def test_the_ensure_endpoint_passes_the_role_the_turn_will_use():
     ui = (REPO / "apps" / "web" / "app" / "agent-ui.tsx").read_text(encoding="utf-8")
     assert "external_ref: scopeRef || undefined," in ui
     assert "role: roleName || undefined" in ui
+
+
+# --------------------------------------------------------------------------------------------
+# Review of 374ba07: grounded means the CAUSE, and on-topic means not about something else.
+# --------------------------------------------------------------------------------------------
+def _checker_sentences():
+    """Every sentence the preview checker itself writes — its labels and its advice."""
+    from boss_engine.services.preview_service import CHECKER_LABELS, START_FAILURE_ADVICE
+
+    return [*CHECKER_LABELS, *START_FAILURE_ADVICE.values()]
+
+
+@pytest.mark.parametrize("sentence", _checker_sentences())
+def test_repeating_the_checkers_own_words_does_not_ground_an_answer(db, sentence):
+    """The incident's misdiagnosis WAS the checker's label: "app did not serve HTTP within
+    timeout … ensure HOST/PORT are honored". Every label and every piece of advice the checker
+    writes is enumerated here; none of them, repeated, counts as using the recorded failure."""
+    step = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
+    assert not cites_the_record(sentence, step), sentence
+    assert not cites_the_record(f"The preview failed: {sentence}", step), sentence
+
+
+@pytest.mark.parametrize("reply", [
+    "The app did not serve HTTP within timeout. Ensure HOST/PORT are honored on the host and "
+    "retry in Docker mode.",
+    "The preview started but nothing answered; the port is probably blocked on the host.",
+    "The preview it started finished as failed — see the traceback, most recent call last.",
+])
+def test_the_reviewers_ungrounded_replies_are_not_grounded(db, reply):
+    step = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
+    assert not cites_the_record(reply, step)
+
+
+def test_an_answer_that_names_the_cause_still_is(db):
+    step = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
+    assert cites_the_record(ANSWER, step)
+    assert cites_the_record("approvals.py does a relative import, so it cannot run as a "
+                            "script.", step)
+    # A plain-words failure keeps its plain-words mark once the checker's words are gone.
+    deploy = resolve_subject(db, "boss-dogfood", EXAMPLES["deployment"])
+    assert cites_the_record("The host refused the connection — connection refused on 3013.",
+                            deploy)
+
+
+def test_the_incidents_wrong_answer_is_re_asked_not_accepted(db, monkeypatch):
+    """Through the router, with role=Qa: the label-only answer used to make exactly ONE call —
+    no lookup floor, no role re-ask — and the port_timeout misdiagnosis stood."""
+    wrong = ("The app did not serve HTTP within timeout. Ensure HOST/PORT are honored on the "
+             "host and retry in Docker mode.")
+    agent = _Scripted(wrong, ANSWER, ANSWER)
+    router, _ = _router(monkeypatch, agent)
+    _ask(router, db)
+    assert len(agent.calls) >= 2, "the checker's label was taken as a grounded answer"
+
+
+#: On-topic continuations, per subject kind, that the reviewer's probes refused: code
+#: identifiers that merely start like an id prefix, and liveness answers to liveness questions.
+ON_TOPIC = [
+    ("code_task", "Which criteria are untested?",
+     "The `dec_rate` field in pricing.py is never validated, and the audit export has no test."),
+    ("code_task", "Which criteria are untested?",
+     "The `dept_id` column has no index, and nothing tests the keyboard path."),
+    ("code_task", "Is it live yet?",
+     "It is not deployed yet: the PR is open and waiting for review."),
+    ("code_task", "Can customers use it?",
+     "Not yet — it has never been deployed; the PR is open and the preview is the only copy."),
+    ("workflow_step", QUESTION,
+     "approvals.py does a relative import. Set `dec_threshold` aside — the fix is to run "
+     "`python -m lead_triage_core.server` so the ImportError goes away."),
+    ("workflow_step", QUESTION,
+     "The ImportError is in approvals.py; `prev_state` in the reducer is unrelated."),
+    ("workflow_run", "Is this live?",
+     "Not yet: the run stopped at Preview, so it has not been deployed."),
+    ("deployment", "Why is it not answering?",
+     "The health check gets connection refused on 3013; the service is not listening."),
+]
+
+
+@pytest.mark.parametrize("kind,question,reply", ON_TOPIC,
+                         ids=[f"{k}-{i}" for i, (k, _q, _r) in enumerate(ON_TOPIC)])
+def test_an_on_topic_continuation_never_strays(db, kind, question, reply):
+    ev = resolve_subject(db, "boss-dogfood", EXAMPLES[kind])
+    assert strays_from_subject(reply, ev, question) == "", reply
+
+
+def test_the_incidents_off_subject_answer_still_strays(db):
+    """The fix must not reopen the incident: on the Preview step, "never been deployed … zero
+    hosts" is still about something else."""
+    ev = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
+    assert strays_from_subject("Lead Triage Inbox has never been deployed — not failed, never "
+                               "shipped. list_deployment_hosts returns zero hosts.", ev, QUESTION)
+    assert strays_from_subject("Lead Triage Inbox has never been deployed.", ev, QUESTION)
+
+
+def test_a_minted_id_the_project_does_not_have_is_not_another_subject(db):
+    """Before an id counts against a reply, it must be a real object in this project."""
+    from boss_engine.services.turn_subject import id_exists
+
+    ev = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
+    reply = "Compare it with deprun_0000aaaa1111bbbb2222, which shipped the same module."
+    assert strays_from_subject(reply, ev, QUESTION)          # no check: counted
+    assert strays_from_subject(reply, ev, QUESTION,
+                               exists=lambda t: id_exists(db, "boss-dogfood", t)) == ""
+
+
+def test_a_deployment_links_the_build_that_shipped_it(db):
+    """A deployment's continuation naming the build behind the outage was refused: deployment
+    records never linked a crun id. The release packet names it."""
+    db.execute(text("ALTER TABLE deployment_runs ADD COLUMN release_packet TEXT"))
+    db.execute(text(
+        "INSERT INTO deployment_runs (id, project_id, deployment_target_id, app_name, "
+        "environment, status, failure_reason, target_ref, commit_ref, created_at, release_packet)"
+        " VALUES ('deprun_3','boss-dogfood','deptgt_2','HookWatch','staging','succeeded',NULL,"
+        "'host-1','fed789','2026-10-01',:p)"),
+        {"p": json.dumps({"code_task_run_id": "crun_99aa88bb77cc66dd55ee"})})
+    ev = resolve_subject(db, "boss-dogfood", SubjectRef("deployment", "deptgt_2"))
+    assert any("crun_99aa88bb77cc66dd55ee" in line for line in ev.linked)
+    assert strays_from_subject("Build crun_99aa88bb77cc66dd55ee changed the port to 3021, so "
+                               "the health check misses it.", ev, "Why is it down?") == ""

@@ -457,7 +457,7 @@ class AgentService:
         rows = connection.execute(
             text(
                 """
-                SELECT t.id, t.status, t.external_ref, t.created_at, t.updated_at,
+                SELECT t.id, t.status, t.external_ref, t.agent_role, t.created_at, t.updated_at,
                        (SELECT m.content FROM agent_messages m
                           WHERE m.thread_id = t.id AND m.role = 'user'
                           ORDER BY m.created_at, m.id LIMIT 1) AS first_user,
@@ -490,6 +490,9 @@ class AgentService:
                 {
                     "thread_id": r["id"],
                     "external_ref": r["external_ref"],
+                    # Which agent this conversation is with. A subject has one thread PER
+                    # agent, and the console must open the one the turn will land in.
+                    "agent_role": r["agent_role"] or "",
                     "title": title or "New conversation",
                     "message_count": int(r["message_count"] or 0),
                     "status": r["status"],

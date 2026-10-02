@@ -212,17 +212,66 @@ def subject_context(evidence: SubjectEvidence, question: str) -> str:
     return evidence.render(question) + "\n\n" + answer_contract(evidence.ref)
 
 
-#: Ids BOSS mints, by prefix. A reply naming one of these names an object of that kind.
+#: Ids BOSS mints, by prefix — in the SHAPE it mints them: the prefix, then a long lowercase
+#: hex tail (`make_id` gives twenty). A reply naming one of these names an object of that kind.
+#:
+#: NOT ANY WORD THAT STARTS WITH A PREFIX. This matched `[0-9a-z]+` after the prefix,
+#: case-insensitively, so ordinary code names — `dec_rate`, `dept_id`, `prev_state`,
+#: `dec_threshold` — were read as a decision, a deployment and a preview "the record does not
+#: link to", and a correct ImportError fix that mentioned one was thrown away (review of
+#: 374ba07). Case-sensitive, eight hex characters at least, and not glued to more identifier.
 _ID_IN_TEXT = re.compile(
-    r"\b(" + "|".join(re.escape(p) for p, _ in _PREFIX_KIND) + r")[0-9a-z]{1,}\b", re.I)
+    r"(?<![\w`])(" + "|".join(re.escape(p) for p, _ in _PREFIX_KIND)
+    + r")[0-9a-f]{8,}(?![\w`])")
 
-#: The vocabulary of the deployment chain. The incident's off-subject answer was made of it:
-#: "has never been deployed … describe_deployment_target and list_deployments both return
-#: empty … list_deployment_hosts returns zero hosts".
-_DEPLOY_TALK = re.compile(
-    r"never (?:been )?deployed|not (?:been )?deployed|deployment (?:target|host|record)s?|"
-    r"deployment hosts?|zero hosts|no hosts|list_deployment_hosts|describe_deployment_target|"
-    r"list_deployments|preflight_deployment_target", re.I)
+#: The deployment chain's INVESTIGATION vocabulary — hosts, targets, the tools that list them.
+#: The incident's off-subject answer was made of it: "describe_deployment_target and
+#: list_deployments both return empty … list_deployment_hosts returns zero hosts".
+_DEPLOY_CHAIN = re.compile(
+    r"deployment (?:target|host|record)s?|deployment hosts?|zero hosts|no hosts|"
+    r"list_deployment_hosts|describe_deployment_target|list_deployments|"
+    r"preflight_deployment_target", re.I)
+
+#: A statement of whether the thing is LIVE. On the incident's Preview step it was a swap of
+#: subject ("has never been deployed"); on a build it is often the answer — "not deployed yet,
+#: the PR is open" to "Is it live yet?".
+_LIVENESS = re.compile(r"never (?:been )?deployed|not (?:been |yet )?deployed|not (?:yet )?live",
+                       re.I)
+
+#: Subjects whose own next state is being shipped. Whether they are live is about THEM.
+_SHIPS = {"code_task", "workflow_run"}
+
+#: What makes the operator's question about shipping — then deploy talk is the answer.
+_ASKS_ABOUT_SHIPPING = re.compile(
+    r"\bdeploy|\blive\b|\bship|\brelease|\bproduction\b|\bcustomers?\b|\bgo(?:ne)? live|"
+    r"\blaunch|\bin prod\b|\bavailable\b", re.I)
+
+#: Where each kind of minted id lives, for "does this object exist in this project?".
+_ID_TABLE = {
+    "code_task": "code_task_runs", "workflow_run": "workflow_runs", "preview": "app_previews",
+    "discovery": "discovery_runs", "decision": "decisions",
+}
+
+
+def id_exists(connection, project_id: str, token: str) -> Optional[bool]:
+    """Whether a minted id names a real object in this project — None when that cannot be
+    read (then the caller keeps its stricter rule rather than waving the id through)."""
+    kind = _kind_of_id(token)
+    tables = (["deployment_runs", "deployment_targets"] if kind == "deployment"
+              else [_ID_TABLE[kind]] if kind in _ID_TABLE else [])
+    if not tables or connection is None:
+        return None
+    seen = False
+    for table in tables:
+        try:
+            with connection.begin_nested():
+                row = connection.execute(
+                    text(f"SELECT 1 FROM {table} WHERE id = :i AND project_id = :p"),  # noqa: S608
+                    {"i": token, "p": project_id}).first()
+        except Exception:  # noqa: BLE001 — unreadable is "unknown", not "absent"
+            return None
+        seen = seen or row is not None
+    return seen
 
 
 def _kind_of_id(token: str) -> str:
@@ -251,31 +300,72 @@ def subject_marks(evidence: SubjectEvidence) -> set[str]:
     return {m for m in marks if m} | cause_marks(evidence)
 
 
-def cause_marks(evidence: SubjectEvidence) -> set[str]:
-    """The distinctive tokens of the recorded failure — what an answer that USED the failure
-    would repeat: the exception's name, the file it names, a code, a two-word symptom.
+def checker_phrases() -> tuple[str, ...]:
+    """Sentences that are the CHECKER'S words, not the failure's: the label a check wraps every
+    failure in, and the advice it attaches. Read from where the checker keeps them
+    (`preview_service.START_FAILURE_ADVICE`, `CHECKER_LABELS`), plus the generic wrappers every
+    check uses."""
+    from .preview_service import CHECKER_LABELS, START_FAILURE_ADVICE
 
-    Generic words are not marks: an answer saying "failed" or "timeout" has not cited anything.
+    advice = tuple(START_FAILURE_ADVICE.values())
+    # Each advice sentence is matched clause by clause too: an answer paraphrases "Inspect
+    # startup logs, ensure HOST/PORT are honored, or retry in Docker mode" one clause at a time.
+    clauses = tuple(c.strip(" .") for a in advice for c in re.split(r"[,;]| or | and |\.", a)
+                    if len(c.strip(" .")) >= 8)
+    generic = ("health check", "within timeout", "timed out", "finished as", "log tail",
+               "most recent call last")
+    return tuple(dict.fromkeys((*CHECKER_LABELS, *advice, *clauses, *generic)))
+
+
+def _without_checker_words(text_: str) -> str:
+    out = text_
+    for phrase in sorted(checker_phrases(), key=len, reverse=True):
+        out = re.sub(re.escape(phrase), " ", out, flags=re.I)
+    return out
+
+
+def cause_marks(evidence: SubjectEvidence) -> set[str]:
+    """The distinctive tokens of the recorded CAUSE — what an answer that USED the failure would
+    repeat: the exception and its detail, a file it names, an error code.
+
+    NEVER THE CHECKER'S OWN WORDS. The first version took every two-word phrase with one long
+    word from the whole error, and the error is mostly the checker's wrapper — "the preview it
+    started finished as 'failed' — app did not serve HTTP within timeout … Traceback (most recent
+    call last)". So "within timeout", "preview started" and "traceback most" were marks, and the
+    incident's own wrong answer — "The app did not serve HTTP within timeout. Ensure HOST/PORT
+    are honored and retry in Docker mode." — counted as grounded, switching off the lookup floor
+    and the role re-ask: one model call, the port_timeout misdiagnosis delivered (review of
+    374ba07). Marks now come from the exception lines, then from paths and codes in what is left
+    once the checker's sentences are removed; the plain two-word fallback ("connection refused")
+    only when the record names no exception and no such token.
     """
-    blob = evidence.error or ""
+    error = evidence.error or ""
+    exceptions = [m.group(0) for m in _EXCEPTION_LINE.finditer(error)]
     # The exception line of a log tail counts as the record of the failure too: a preview
     # whose error column is empty still says why in its log.
-    for match in _EXCEPTION_LINE.finditer(evidence.log_tail or ""):
-        blob += "\n" + match.group(0)
+    exceptions += [m.group(0) for m in _EXCEPTION_LINE.finditer(evidence.log_tail or "")]
+    cause = _without_checker_words("\n".join([error, *exceptions]))
     marks: set[str] = set()
-    for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_./-]{3,}", blob):
+    for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_./-]{3,}", cause):
         w = word.strip("./-")
         if len(w) < 5:
             continue
         if (re.search(r"[._/]", w) or re.match(r"[A-Z][a-z]+[A-Z]", w)
                 or re.search(r"(?:Error|Exception)$", w) or re.match(r"^[A-Z][A-Z0-9_]{4,}$", w)):
             marks.add(w.lower())
-    # Plain-words failures ("health check: connection refused") have no such token, so a
-    # two-word phrase with one long word is the mark: "connection refused".
-    words = re.findall(r"[a-z]{4,}", blob.lower())
-    for a, b in zip(words, words[1:]):
-        if max(len(a), len(b)) >= 7:
-            marks.add(f"{a} {b}")
+    # The exception's own words: "attempted relative import with no known parent package"
+    # yields "relative import" and "parent package" — what an answer about THIS failure says.
+    def pairs(blob: str) -> set[str]:
+        words = re.findall(r"[a-z]{4,}", blob.lower())
+        return {f"{a} {b}" for a, b in zip(words, words[1:]) if max(len(a), len(b)) >= 7}
+
+    for line in exceptions:
+        detail = _EXCEPTION_LINE.match(line)
+        marks |= pairs(_without_checker_words(detail.group(2) if detail else line))
+    # Plain-words failures ("health check: connection refused") have no exception and no
+    # token; there a two-word phrase from what is left after the checker's words is the mark.
+    if not marks:
+        marks |= pairs(cause)
     return marks
 
 
@@ -296,7 +386,8 @@ def cites_the_record(reply: str, evidence: Optional[SubjectEvidence]) -> bool:
     return any(m in low for m in cause_marks(evidence))
 
 
-def strays_from_subject(reply: str, evidence: SubjectEvidence, question: str = "") -> str:
+def strays_from_subject(reply: str, evidence: SubjectEvidence, question: str = "",
+                        exists: Optional[Callable[[str], Optional[bool]]] = None) -> str:
     """Why a replacement answer is about some OTHER object, or "" when it is not.
 
     THIS IS A NEGATIVE TEST, deliberately. The first version demanded a positive match — the
@@ -310,8 +401,11 @@ def strays_from_subject(reply: str, evidence: SubjectEvidence, question: str = "
       * the deployment chain's vocabulary on a subject that is not, and does not link to, a
         deployment — and nothing of the subject itself (boss-1's "never been deployed … zero
         hosts", which named neither the step, the preview nor the error).
-    The operator's own question widens what is on subject: asked about the deploy, deploy talk
-    is the answer.
+    The operator's own question widens what is on subject: asked about the deploy — or whether
+    it is live, shipped, in front of customers — deploy talk is the answer. And a subject that
+    ships (a build, a run) may say it is not live yet; only the deployment chain's
+    investigation vocabulary needs that link. `exists`, when given, confirms a named id is a
+    real object in the project before it counts against the reply.
     """
     if not (reply or "").strip():
         return "empty"
@@ -320,21 +414,28 @@ def strays_from_subject(reply: str, evidence: SubjectEvidence, question: str = "
     linked_kinds = {evidence.ref.kind} | {
         _kind_of_id(m.group(0)) for m in _ID_IN_TEXT.finditer(record)}
     for m in _ID_IN_TEXT.finditer(reply):
-        token = m.group(0).lower()
+        token = m.group(0)
         kind = _kind_of_id(token)
-        if kind and kind not in linked_kinds and token not in record:
-            return f"names {kind} {m.group(0)}, which {evidence.ref.label} does not link to"
-    deploy_linked = "deployment" in linked_kinds or re.search(r"\bdeploy", question or "", re.I)
-    if not deploy_linked and _DEPLOY_TALK.search(reply):
-        if not any(mark in low for mark in subject_marks(evidence)):
+        if not kind or kind in linked_kinds or token.lower() in record:
+            continue
+        if exists is not None and exists(token) is False:
+            continue          # not an object anywhere in this project, so not another subject
+        return f"names {kind} {token}, which {evidence.ref.label} does not link to"
+    deploy_linked = ("deployment" in linked_kinds
+                     or bool(_ASKS_ABOUT_SHIPPING.search(question or "")))
+    if not deploy_linked:
+        chain = _DEPLOY_CHAIN.search(reply)
+        liveness = _LIVENESS.search(reply) and evidence.ref.kind not in _SHIPS
+        if (chain or liveness) and not any(mark in low for mark in subject_marks(evidence)):
             return (f"answers about deployments, and says nothing of {evidence.ref.label} "
                     "or its recorded failure")
     return ""
 
 
-def stays_on_subject(reply: str, evidence: SubjectEvidence, question: str = "") -> bool:
+def stays_on_subject(reply: str, evidence: SubjectEvidence, question: str = "",
+                     exists: Optional[Callable[[str], Optional[bool]]] = None) -> bool:
     """A re-ask may refine an answer; it may not swap it for one about another object."""
-    return not strays_from_subject(reply, evidence, question)
+    return not strays_from_subject(reply, evidence, question, exists)
 
 
 # --------------------------------------------------------------------------------------------
@@ -682,6 +783,21 @@ def _resolve_deployment(connection, project_id: str, ref: SubjectRef) -> Subject
         if not s.get("ok") and s.get("error"):
             health = f"latest health check ({s.get('checked_at')}): {s['error']}"
             ev.error = _cap(f"{ev.error}\n{health}" if ev.error else health)
+    # THE BUILD BEHIND IT. A deployment ships a build, and "build crun_… changed the port" is
+    # the cause of the outage more often than anything about the host. The record never linked
+    # one, so a correct continuation naming it was refused as off-subject (review of 374ba07).
+    # The deploy endpoint records it in the release packet. Its own read: an older table without
+    # the column must not cost the deployment its record.
+    builds = _rows(connection,
+                   "SELECT id, release_packet FROM deployment_runs "
+                   "WHERE (id = :r OR deployment_target_id = :t) AND project_id = :p "
+                   "ORDER BY created_at DESC LIMIT 5",
+                   {"r": ref.id, "t": target_id, "p": project_id})
+    for row in builds:
+        packet = _json(row.get("release_packet")) or {}
+        build = packet.get("code_task_run_id") if isinstance(packet, dict) else None
+        if build and not any(str(build) in line for line in ev.linked):
+            ev.linked.append(f"build {build} — shipped by deployment {row['id']}")
     ev.findings = _crash_findings(ev.error)
     ev.open_points = [
         ("the target as configured", f"describe_deployment_target(app_name={app})"),

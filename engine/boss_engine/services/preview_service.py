@@ -1328,6 +1328,29 @@ def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
     return None
 
 
+#: What the preview checker tells the operator to do, per failure kind. One table, so anything
+#: that must recognise the checker's OWN words — rather than the failure's — can read them all:
+#: `turn_subject.cause_marks` refuses to count an answer that only repeats this advice as one
+#: that used the recorded failure (the port_timeout misdiagnosis was exactly that).
+START_FAILURE_ADVICE: dict[str, str] = {
+    "no_page_at_root": ("The app started but serves nothing at '/'. Check that the build "
+                        "produced a UI and not only an API, then preview it again."),
+    "clone_failed": "Check repository access and the task branch, then retry.",
+    "command_missing": "Add boss.preview.command or retry with an explicit command.",
+    "port_timeout": ("Inspect startup logs, ensure HOST/PORT are honored, or retry in Docker "
+                     "mode."),
+    "boot_crash": "Inspect startup logs and retry in Docker mode.",
+}
+
+#: The checker's own wrapper sentences around a failure, as they appear in a step's error.
+CHECKER_LABELS: tuple[str, ...] = (
+    "app did not serve HTTP within timeout",
+    "container did not serve HTTP",
+    "the preview it started finished as",
+    "Traceback (most recent call last)",
+)
+
+
 def _classify_start_failure(message: str) -> tuple[str, str]:
     lowered = message.lower()
     # AN APP THAT IS LISTENING DID NOT TIME OUT. Checked before the generic "port" rule below,
@@ -1335,16 +1358,16 @@ def _classify_start_failure(message: str) -> tuple[str, str]:
     # operator to "ensure HOST/PORT are honored" about an app that honoured both and bound
     # exactly as asked. The fix here is a UI, not a port.
     if "no page at the site root" in lowered:
-        return ("no_page_at_root",
-                "The app started but serves nothing at '/'. Check that the build produced a UI "
-                "and not only an API, then preview it again.")
-    if "clone" in lowered:
-        return "clone_failed", "Check repository access and the task branch, then retry."
-    if "detect" in lowered or "command" in lowered:
-        return "command_missing", "Add boss.preview.command or retry with an explicit command."
-    if "did not serve" in lowered or "port" in lowered:
-        return "port_timeout", "Inspect startup logs, ensure HOST/PORT are honored, or retry in Docker mode."
-    return "boot_crash", "Inspect startup logs and retry in Docker mode."
+        kind = "no_page_at_root"
+    elif "clone" in lowered:
+        kind = "clone_failed"
+    elif "detect" in lowered or "command" in lowered:
+        kind = "command_missing"
+    elif "did not serve" in lowered or "port" in lowered:
+        kind = "port_timeout"
+    else:
+        kind = "boot_crash"
+    return kind, START_FAILURE_ADVICE[kind]
 
 
 def _candidate_ports(log_path: str, port_hint: int) -> list[int]:
