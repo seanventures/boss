@@ -53,3 +53,47 @@ def test_the_advice_names_the_controls_that_exist():
     tok = (SERVICES / "token_efficiency.py").read_text(encoding="utf-8")
     assert "Deploy monitoring stack" in obs
     assert "Save cap" in tok
+
+
+#: The keys whose text the Govern and Observability panels show as a sentence.
+ADVICE_KEYS = ("action", "finding", "message")
+#: A raw column or field name: snake_case with at least two underscores (max_tokens_per_day).
+FIELD_NAME = re.compile(r"\b[a-z0-9]+(?:_[a-z0-9]+){2,}\b")
+
+
+def _literal_text(node: ast.AST) -> str:
+    """The words an operator reads: string literals and the literal parts of f-strings, not the
+    names inside {...} placeholders (those are code, and are replaced by values)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value for v in node.values if isinstance(v, ast.Constant))
+    if isinstance(node, ast.BinOp):
+        return _literal_text(node.left) + _literal_text(node.right)
+    if isinstance(node, ast.IfExp):
+        return _literal_text(node.body) + " " + _literal_text(node.orelse)
+    return ""
+
+
+def test_console_rendered_advice_names_no_raw_field():
+    """The review of milestone/console-b (2026-10-02) found a cost alert still telling operators to
+    "adjust max_cost_usd_micros_per_day", and the endpoint scan above could not see it. Every
+    action/finding/message sentence in these services is enumerated; none may name a column."""
+    offenders = []
+    checked = 0
+    for name in RENDERED_BY_THE_CONSOLE:
+        tree = ast.parse((SERVICES / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if not (isinstance(key, ast.Constant) and key.value in ADVICE_KEYS):
+                    continue
+                words = _literal_text(value)
+                if not words.strip():
+                    continue
+                checked += 1
+                for field in FIELD_NAME.findall(words):
+                    offenders.append(f"{name}:{value.lineno}: '{field}' in {words[:90]!r}")
+    assert checked >= 15, "the scan read too few advice sentences to be a real check"
+    assert offenders == [], "\n".join(offenders)

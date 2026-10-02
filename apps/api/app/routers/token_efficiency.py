@@ -93,7 +93,13 @@ def put_policies(payload: PoliciesPutRequest) -> dict[str, Any]:
             return te.upsert_policies(
                 connection,
                 project_id=payload.project_id,
-                policies=[p.model_dump() for p in payload.policies],
+                # exclude_unset: a key the caller did not send must reach the engine as absent,
+                # not as None, or the merge in upsert_policies reads it as "clear this cap"
+                # (the Govern cap form wiped the daily caps on '*' that way, 2026-10-02).
+                policies=[
+                    {"stage": p.stage, **p.model_dump(exclude_unset=True)}
+                    for p in payload.policies
+                ],
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
