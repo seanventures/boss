@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { V2Agent } from "../../lib/v2/workforce";
+import { apiWrite } from "../../lib/api-write";
 
 /**
  * Talk to one agent.
@@ -57,7 +58,7 @@ export function AgentChat({
     setTurns((t) => [...t, { role: "you", text: message }]);
     setBusy(true);
     try {
-      const res = await fetch("/api/agent-chat", {
+      const res = await apiWrite("/api/agent-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

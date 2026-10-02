@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Everything the delivery-workflow screen reads and does, in one place.
@@ -111,7 +112,7 @@ const ACTIONS: Record<string, string> = {
  *  dance drift, and the one that drifts is the one that swallows the API's sentence. */
 async function proxyPost(path: string, payload: unknown) {
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(payload),
@@ -133,7 +134,7 @@ async function proxyPost(path: string, payload: unknown) {
 
 async function proxyDelete(path: string) {
   try {
-    const r = await fetch(`${API_URL}${path}`,
+    const r = await apiWrite(`${API_URL}${path}`,
                           { method: "DELETE", headers: authHeaders({}), cache: "no-store" });
     const raw = await r.text();
     let parsed: unknown;
@@ -208,7 +209,7 @@ export async function POST(req: Request) {
   }
   const { action: _drop, ...payload } = body;
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(payload),
@@ -252,7 +253,7 @@ export async function PATCH(req: Request) {
   }
   const { step_key: _drop, ...payload } = body;
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/delivery-workflows/custom-steps/${encodeURIComponent(key)}`,
       {
         method: "PATCH",
@@ -308,7 +309,7 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "project_id and step_key are required" }, { status: 400 });
   }
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/delivery-workflows/custom-steps/${encodeURIComponent(key)}`
         + `?project_id=${encodeURIComponent(project)}&actor=${encodeURIComponent(actor)}`,
       { method: "DELETE", headers: authHeaders({}), cache: "no-store" },

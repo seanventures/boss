@@ -29,6 +29,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { formatDate } from "../lib/datetime";
+import { apiWrite } from "../lib/api-write";
 
 type App = {
   app: string; raw_title?: string; calls: number; tokens: number; spend_usd: number;
@@ -331,7 +332,7 @@ export function AgentSkills({ projectId, roleKey, panel, spec, onChanged }: {
     setBusy(skillId);
     setFailed("");
     try {
-      const r = await fetch("/api/skills", {
+      const r = await apiWrite("/api/skills", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, project_id: projectId, role_key: roleKey,

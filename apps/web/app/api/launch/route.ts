@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Start a project from a brief — the reference's launch modal.
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const r = await fetch(`${API_URL}/v1/meetings/prd`, {
+    const r = await apiWrite(`${API_URL}/v1/meetings/prd`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ project_id: projectId, actor, directive }),

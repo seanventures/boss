@@ -1,4 +1,5 @@
 import { API_URL, PROJECT_ID, authHeaders, resolveProjectId } from "./client";
+import { apiWrite } from "./api-write";
 
 export type BoardColumn = "built" | "building" | "planned" | "blocked";
 
@@ -278,7 +279,7 @@ export async function createReleasePlan(input: {
 }): Promise<ReleasePlan | { error: string }> {
   const pid = resolveProjectId(input.projectId);
   try {
-    const r = await fetch(`${API_URL}/v1/release-planning/releases`, {
+    const r = await apiWrite(`${API_URL}/v1/release-planning/releases`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
@@ -311,7 +312,7 @@ export async function linkReleaseIssue(input: {
 }): Promise<ReleasePlan | { error: string }> {
   const pid = resolveProjectId(input.projectId);
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/release-planning/releases/${encodeURIComponent(input.releaseId)}/link-issue`,
       {
         method: "POST",
@@ -343,7 +344,7 @@ export async function syncReleaseFromFeatures(
 ): Promise<{ ok: boolean; upserted?: number; error?: string }> {
   const pid = resolveProjectId(projectId);
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/release-planning/sync-from-features`,
       {
         method: "POST",
@@ -370,7 +371,7 @@ export async function syncReleaseFromTrackers(
 ): Promise<{ ok: boolean; upserted?: number; error?: string }> {
   const pid = resolveProjectId(projectId);
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/release-planning/sync-from-trackers`,
       {
         method: "POST",

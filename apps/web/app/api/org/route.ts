@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /** Route handler rather than a server action: the console takes seconds to re-render, and a
  *  drag whose effect appears only after a full re-render reads as a drag that did nothing. */
@@ -27,7 +28,7 @@ export async function PUT(req: Request) {
   const agentId = String(body.agent_id ?? "").trim();
   if (!agentId) return NextResponse.json({ error: "agent_id is required" }, { status: 400 });
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/console/v2/org/${encodeURIComponent(agentId)}`, {
         method: "PUT",
         headers: authHeaders({ "Content-Type": "application/json" }),
@@ -57,7 +58,7 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "project_id and agent_id are required" }, { status: 400 });
   }
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/console/v2/org/${encodeURIComponent(agentId)}`
       + `?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actor)}`,
       { method: "DELETE", headers: authHeaders(), cache: "no-store" });

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { SandboxSummary, SandboxExecResult, SandboxStats, SandboxHost } from "@boss/api-client";
+import { apiWrite } from "../lib/api-write";
 
 // Same-origin proxies (Next route handlers) — the browser never calls the
 // control-plane API directly (avoids CORS + keeps the API off the browser).
@@ -14,7 +15,7 @@ async function apiFile(id: string, path: string): Promise<{ content: string; err
   return r.json();
 }
 async function apiExec(id: string, command: string, breakGlass: boolean, reason?: string): Promise<SandboxExecResult> {
-  const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/exec`, {
+  const r = await apiWrite(`/api/sandboxes/${encodeURIComponent(id)}/exec`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ command, break_glass: breakGlass, reason }),
   });

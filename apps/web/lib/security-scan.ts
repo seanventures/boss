@@ -1,4 +1,5 @@
 import { API_URL, PROJECT_ID, resolveProjectId, authHeaders } from "./client";
+import { apiWrite } from "./api-write";
 
 export type SecurityScanner = {
   id: string;
@@ -97,7 +98,7 @@ export async function runSecurityScan(opts: {
   path?: string;
 }): Promise<SecurityScanRun> {
   try {
-    const r = await fetch(`${API_URL}/v1/security-scan/run`, {
+    const r = await apiWrite(`${API_URL}/v1/security-scan/run`, {
       method: "POST",
       cache: "no-store",
       headers: authHeaders({ "Content-Type": "application/json" }),
@@ -121,7 +122,7 @@ export async function evaluateSecurityGate(
   failOn?: string[],
 ): Promise<SecurityScanGate | null> {
   try {
-    const r = await fetch(`${API_URL}/v1/security-scan/runs/${encodeURIComponent(runId)}/gate`, {
+    const r = await apiWrite(`${API_URL}/v1/security-scan/runs/${encodeURIComponent(runId)}/gate`, {
       method: "POST",
       cache: "no-store",
       headers: authHeaders({ "Content-Type": "application/json" }),

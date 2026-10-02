@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /** A thread id before the first message.
  *
@@ -49,7 +50,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "project_id and actor are required" }, { status: 400 });
   }
   try {
-    const r = await fetch(`${API_URL}/v1/agent/threads/ensure`, {
+    const r = await apiWrite(`${API_URL}/v1/agent/threads/ensure`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ project_id, actor }),

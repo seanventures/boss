@@ -86,6 +86,7 @@ def clean_tables(engine):
         # Delete only tables inside this run's confined schema, in child-to-parent order.
         # Missing tables in partial Community schemas are skipped.
         for tbl in [
+            "api_idempotency_keys",
             "metatron_watch_ticks",
             "metatron_memories",
             "metatron_goals",

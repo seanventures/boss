@@ -1,4 +1,5 @@
 import { API_URL, apiUrlProblem, authHeaders, resolveProjectId } from "./client";
+import { apiWrite } from "./api-write";
 
 export type CaptainPlaybook = {
   playbookKey: string;
@@ -14,7 +15,7 @@ export async function compileCaptainPlaybook(text: string, name?: string): Promi
   const misconfigured = apiUrlProblem();
   if (misconfigured) return { error: misconfigured };
   try {
-    const response = await fetch(`${API_URL}/v1/captain/playbooks/compile`, {
+    const response = await apiWrite(`${API_URL}/v1/captain/playbooks/compile`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ text, name }),
@@ -42,7 +43,7 @@ export async function saveCaptainPlaybook(
 ): Promise<{ ok: boolean; error?: string }> {
   const project = resolveProjectId(projectId);
   try {
-    const response = await fetch(`${API_URL}/v1/captain/playbooks`, {
+    const response = await apiWrite(`${API_URL}/v1/captain/playbooks`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({

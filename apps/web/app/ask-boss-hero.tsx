@@ -30,6 +30,7 @@ import { DefaultAgentPicker } from "./default-agent-picker";
 import { SplitAction } from "./split-action";
 import { HelpTip } from "./help-tip";
 import { askBossAction, runAgentActionAction } from "./actions";
+import { apiWrite } from "../lib/api-write";
 
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
@@ -885,7 +886,7 @@ async function postBounded(
   const stalled = Symbol("stalled");
   try {
     const r = await Promise.race([
-      fetch(url, {
+      apiWrite(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -944,7 +945,7 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
     setSaving(true);
     setNote(null);
     try {
-      const res = await fetch("/api/delivery-workflows", {
+      const res = await apiWrite("/api/delivery-workflows", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // `project.new` is the work class the catalogue gives Standard Product Delivery, and

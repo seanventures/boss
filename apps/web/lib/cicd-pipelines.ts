@@ -1,4 +1,5 @@
 import { API_URL, PROJECT_ID, resolveProjectId, authHeaders } from "./client";
+import { apiWrite } from "./api-write";
 
 export type CICDVendor = {
   id: string;
@@ -159,7 +160,7 @@ export async function generateCICDConfig(input: {
 }): Promise<{ ok: true; result: CICDGenerateResult } | { ok: false; error: string }> {
   if (!API_URL) return { ok: false, error: "API URL not configured" };
   try {
-    const res = await fetch(`${API_URL}/v1/cicd/generate`, {
+    const res = await apiWrite(`${API_URL}/v1/cicd/generate`, {
       method: "POST",
       cache: "no-store",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
@@ -181,7 +182,7 @@ export async function validateCICDYaml(input: {
 }): Promise<{ ok: true; result: CICDValidateResult } | { ok: false; error: string }> {
   if (!API_URL) return { ok: false, error: "API URL not configured" };
   try {
-    const res = await fetch(`${API_URL}/v1/cicd/validate`, {
+    const res = await apiWrite(`${API_URL}/v1/cicd/validate`, {
       method: "POST",
       cache: "no-store",
       headers: { ...authHeaders(), "Content-Type": "application/json" },

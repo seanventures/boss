@@ -6107,3 +6107,30 @@ CREATE TABLE IF NOT EXISTS hardware_agent_enroll_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_hardware_agent_enroll_tokens_place
   ON hardware_agent_enroll_tokens (place_id, consumed_at);
+
+-- ONE PRESS, ONE EFFECT. Every POST/PUT/PATCH/DELETE under /v1/ that carries an
+-- Idempotency-Key header is claimed here before its handler runs; a repeat of the same key
+-- replays the stored response instead of running again. Keyed by the authenticated principal so
+-- one caller's key can never answer for another's. See apps/api/app/idempotency.py for the
+-- incidents (two runs from one "Stop and run again", a preview opened twice) and the rules.
+CREATE TABLE IF NOT EXISTS api_idempotency_keys (
+  principal TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'in_progress',
+  status_code INTEGER,
+  response_body BYTEA,
+  content_type TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT now() + interval '24 hours',
+  PRIMARY KEY (principal, idempotency_key),
+  CONSTRAINT api_idempotency_keys_state CHECK (state IN ('in_progress', 'completed')),
+  CONSTRAINT api_idempotency_keys_completed_has_status CHECK (
+    state <> 'completed' OR status_code IS NOT NULL
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_api_idempotency_keys_expiry
+  ON api_idempotency_keys (expires_at);

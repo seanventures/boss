@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { API_KEY, API_URL } from "../lib/client";
 import type { AgentWizardSubmission } from "../lib/agent-wizard";
+import { apiWrite } from "../lib/api-write";
 
 export type StudioActionResult = {
   ok: boolean;
@@ -21,7 +22,7 @@ async function post(
         message: "BOSS API URL is not configured; cannot reach Agent Studio.",
       };
     }
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

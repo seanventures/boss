@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { apiWrite } from "../lib/api-write";
 
 /** What BOSS knows about this project, and the rules waiting to be allowed to bind.
  *
@@ -71,7 +72,7 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
   ) => {
     setBusy(memory.id);
     try {
-      const r = await fetch("/api/memory", {
+      const r = await apiWrite("/api/memory", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

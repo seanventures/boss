@@ -3,6 +3,7 @@
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React, { useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 /**
  * The autonomy switch — Supervised or Full auto.
@@ -54,7 +55,7 @@ export function AutonomyControl({
     setNote(null);
     setConfirming(false);
     try {
-      const res = await fetch("/api/autonomy", {
+      const res = await apiWrite("/api/autonomy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: projectId, actor, mode }),

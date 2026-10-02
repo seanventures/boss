@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { API_URL, authHeaders } from "../lib/client";
+import { apiWrite } from "../lib/api-write";
 
 export type FocusedAgentActionResult = {
   ok: boolean;
@@ -26,7 +27,7 @@ async function post(
   body: Record<string, unknown>,
 ): Promise<FocusedAgentActionResult> {
   try {
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),

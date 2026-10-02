@@ -4,6 +4,32 @@ import {
   consoleAuthConfig, localHttp, sameOriginMutation, secureConsoleTransport,
   sessionCookieName, validSession,
 } from "./lib/console-session";
+import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
+
+/**
+ * Lift a server action's press into a request header.
+ *
+ * A browser cannot add headers to a server action's POST, but SubmitButton puts the press's key
+ * in the form (`__boss_intent`). The action's API calls happen on the server, where only request
+ * headers are reachable, so the key is moved here — the one place every action passes — and
+ * lib/api-write.ts derives each call's Idempotency-Key from it. Next tees the body for
+ * middleware, so reading a clone leaves the action's own copy intact. Large bodies (uploads) are
+ * not read: they carry no press worth the cost, and behave as before.
+ */
+async function pressIntentHeaders(request: NextRequest): Promise<Headers | null> {
+  if (request.method !== "POST" || !request.headers.get("next-action")) return null;
+  const length = Number(request.headers.get("content-length") ?? "0");
+  if (!length || length > 256_000) return null;
+  try {
+    const intent = intentFromActionBody(await request.clone().text());
+    if (!intent) return null;
+    const headers = new Headers(request.headers);
+    headers.set(INTENT_HEADER, intent);
+    return headers;
+  } catch {
+    return null;
+  }
+}
 
 /** Gate the entire console before any route can attach the server's BOSS_API_KEY. */
 export async function middleware(request: NextRequest) {
@@ -43,7 +69,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.json({ error: "Cross-origin console mutation denied." },
       { status: 403, headers: { "Cache-Control": "no-store" } });
   }
-  const response = NextResponse.next();
+  const intentHeaders = await pressIntentHeaders(request);
+  const response = intentHeaders
+    ? NextResponse.next({ request: { headers: intentHeaders } })
+    : NextResponse.next();
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }

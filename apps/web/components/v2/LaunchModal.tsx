@@ -3,6 +3,7 @@
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React, { useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 /**
  * Start a project from a brief.
@@ -41,7 +42,7 @@ export function LaunchModal({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/launch", {
+      const res = await apiWrite("/api/launch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: projectId, actor, directive }),

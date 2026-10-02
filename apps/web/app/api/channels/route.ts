@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * The channels area's reads and writes.
@@ -53,7 +54,7 @@ export async function POST(req: Request) {
       + `&connection_key=${encodeURIComponent(String(body.connection_key ?? ""))}`
       + `&actor=${encodeURIComponent(String(body.actor ?? "executive_console"))}`;
     try {
-      const r = await fetch(`${API_URL}/v1/channels/youtube${q}`, {
+      const r = await apiWrite(`${API_URL}/v1/channels/youtube${q}`, {
         method: "DELETE",
         headers: authHeaders({ "Content-Type": "application/json" }),
         cache: "no-store",
@@ -73,7 +74,7 @@ export async function POST(req: Request) {
     ? "/v1/channels/youtube/client"
     : "/v1/channels/youtube/connect";
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: action === "save_client" ? "PUT" : "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),

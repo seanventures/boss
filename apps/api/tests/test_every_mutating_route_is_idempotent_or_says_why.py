@@ -1,0 +1,98 @@
+"""Every state-changing route honours Idempotency-Key, or is named here with its reason.
+
+Four duplicate-action incidents (2026-08-22 a run started twice by the operator and the
+autopilot, 2026-08-30 "Open preview happened twice", 2026-09-10 duplicate chat actions,
+2026-10-02 "Stop and run again" started two workflows) were each fixed for the one endpoint that
+broke, and the next button had the same hole. The rule is now global middleware — and a global
+rule is only as good as its exceptions. This enumerates every mutating route the app mounts, so
+an exclusion cannot be added quietly and a new route cannot fall outside the contract unseen.
+"""
+import inspect
+import os
+
+os.environ.setdefault("BOSS_EDITION", "community")
+
+from fastapi.routing import APIRoute  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+
+from apps.api.app import idempotency  # noqa: E402
+from apps.api.app.main import app  # noqa: E402
+
+# Exactly what the exclusion list is allowed to take out, by route template. Adding a route
+# here is a design decision about that route; write the reason into idempotency.EXCLUSIONS.
+EXPECTED_EXCLUDED = {
+    ("POST", "/v1/worker/poll"), ("POST", "/v1/worker/heartbeat"),
+    ("POST", "/v1/worker/complete"), ("POST", "/v1/worker/fail"),
+    *{(m, p) for m in ("POST", "PUT", "PATCH", "DELETE")
+      for p in ("/v1/previews/{preview_id}/web", "/v1/previews/{preview_id}/web/{path:path}")},
+}
+
+# Mutating routes outside /v1/ speak someone else's protocol (SCIM, SAML ACS); the identity
+# provider defines their retry semantics, and they are outside this contract by design.
+FOREIGN_PROTOCOL_PREFIXES = ("/scim/v2/", "/saml/v2/")
+
+
+def _mutating_routes():
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            for method in sorted(route.methods & idempotency.MUTATING_METHODS):
+                yield method, route
+
+
+def test_every_mutating_v1_route_is_covered_or_explicitly_excluded():
+    excluded, covered = set(), set()
+    for method, route in _mutating_routes():
+        if not route.path.startswith("/v1/"):
+            continue
+        reason = idempotency.exclusion_reason(method, route.path)
+        (excluded if reason else covered).add((method, route.path))
+    assert len(covered) > 400, "the enumeration found too few routes to be the real app"
+    unexpected = excluded - EXPECTED_EXCLUDED
+    assert not unexpected, (
+        f"routes silently outside the idempotency contract: {sorted(unexpected)}")
+    missing = EXPECTED_EXCLUDED - excluded
+    assert not missing, f"listed as excluded but now covered or gone: {sorted(missing)}"
+
+
+def test_every_exclusion_names_a_real_route_and_a_real_reason():
+    """An exclusion nobody can point at is a hole waiting for the next route to fall into."""
+    paths = [route.path for _, route in _mutating_routes()]
+    for pattern, reason in idempotency.EXCLUSIONS:
+        assert any(pattern.search(path) for path in paths), f"stale exclusion {pattern.pattern}"
+        assert len(reason.split()) >= 12, f"say why {pattern.pattern} is excluded, in a sentence"
+
+
+def test_no_mutating_route_outside_v1_except_foreign_protocols():
+    outside = sorted((m, r.path) for m, r in _mutating_routes() if not r.path.startswith("/v1/"))
+    strays = [item for item in outside if not item[1].startswith(FOREIGN_PROTOCOL_PREFIXES)]
+    assert not strays, f"a write outside /v1/ is outside the idempotency contract: {strays}"
+
+
+def test_a_streaming_write_is_excluded_rather_than_buffered():
+    """A stream cannot be stored to be replayed; buffering one would hang the request."""
+    for method, route in _mutating_routes():
+        streams = (route.response_class is StreamingResponse
+                   or "StreamingResponse(" in inspect.getsource(route.endpoint))
+        if streams and route.path.startswith("/v1/"):
+            assert idempotency.exclusion_reason(method, route.path), (method, route.path)
+    assert idempotency.is_streaming("text/event-stream; charset=utf-8")
+
+
+def test_the_middleware_is_installed_inside_authentication():
+    """Inside, so it keys by the authenticated principal and a request refused for auth never
+    claims a key. Starlette wraps each later @app.middleware around the earlier ones, and
+    `user_middleware[0]` is the outermost."""
+    names = [getattr(m.kwargs.get("dispatch"), "__name__", None) for m in app.user_middleware]
+    assert "one_effect_per_idempotency_key" in names
+    assert "require_transport_auth_for_v1" in names
+    assert (names.index("require_transport_auth_for_v1")
+            < names.index("one_effect_per_idempotency_key"))
+
+
+def test_what_a_key_remembers():
+    """Outcomes that describe the request are kept; outcomes that describe the moment free the
+    key so the same press can try again — the "you'll never trigger a run" fear."""
+    assert idempotency.remembers(200) and idempotency.remembers(201)
+    assert idempotency.remembers(404) and idempotency.remembers(422)
+    for transient in (408, 409, 425, 429, 500, 502, 503):
+        assert not idempotency.remembers(transient), transient

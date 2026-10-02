@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Convene the PRD panel without re-rendering the console.
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
   // after it is visible from the first second.
   const title = directive.length > 72 ? `${directive.slice(0, 69)}…` : directive;
   try {
-    const r = await fetch(`${API_URL}/v1/delivery-workflows/start`, {
+    const r = await apiWrite(`${API_URL}/v1/delivery-workflows/start`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       // No invented actor. Claiming a principal you are not is impersonation even when it is

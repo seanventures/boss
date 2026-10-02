@@ -13,6 +13,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { apiWrite } from "../lib/api-write";
 
 type ClientStatus = {
   configured: boolean;
@@ -103,7 +104,7 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
     if (busy) return;
     setBusy(true); setNote(null);
     try {
-      const r = await fetch("/api/channels", {
+      const r = await apiWrite("/api/channels", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "save_client", project_id: projectId, actor, ...form }),
       });
@@ -127,7 +128,7 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
     if (busy) return;
     setBusy(true); setNote(null);
     try {
-      const r = await fetch("/api/channels", {
+      const r = await apiWrite("/api/channels", {
         method: "POST", headers: { "Content-Type": "application/json" },
         // RECONNECT AND CONNECT-ANOTHER ARE THE SAME CALL, differing only in the key. Passing
         // the EXISTING key re-authorises that channel in place and keeps its identity;
@@ -164,7 +165,7 @@ export function ChannelsHome({ projectId, actor }: { projectId: string; actor: s
       + "channel until it is reconnected.")) return;
     setBusy(true); setNote(null);
     try {
-      const r = await fetch("/api/channels", {
+      const r = await apiWrite("/api/channels", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "disconnect", project_id: projectId, actor, connection_key: connectionKey,

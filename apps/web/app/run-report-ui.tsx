@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { FilePdf, Hammer, Warning } from "@phosphor-icons/react";
+import { apiWrite } from "../lib/api-write";
 
 /**
  * What the whole run cost, who did it, and what went wrong — read at the end, in one place.
@@ -112,7 +113,7 @@ export function RunReportPanel(
     setSaving(true);
     setProblem("");
     try {
-      const res = await fetch(
+      const res = await apiWrite(
         `/api/workflow-report?run_id=${encodeURIComponent(runId)}`
           + `&project_id=${encodeURIComponent(projectId)}`,
         { method: "POST" },
@@ -153,7 +154,7 @@ export function RunReportPanel(
       // path — panel, spec review, preview and a UX review — rather than the quick one.
       const workflowKey = items.some((n) => n.priority === "P1")
         ? "major_feature" : "minor_feature";
-      const res = await fetch("/api/delivery-workflows", {
+      const res = await apiWrite("/api/delivery-workflows", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

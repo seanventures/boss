@@ -19,6 +19,7 @@ import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { RunReportPanel } from "./run-report-ui";
 import { HelpTip } from "./help-tip";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
+import { apiWrite, writeInFlight } from "../lib/api-write";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -634,13 +635,16 @@ async function get<T>(view: string, projectId: string): Promise<T | { error: str
   }
 }
 
+/** Every run action on this panel shares one scope: one at a time, decided by lib/api-write. */
+const RUN_ACTIONS = "delivery-workflows";
+
 async function post(action: string, payload: Record<string, unknown>) {
   try {
-    const r = await fetch("/api/delivery-workflows", {
+    const r = await apiWrite("/api/delivery-workflows", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...payload }),
-    });
+    }, { action: RUN_ACTIONS });
     const body = await r.json();
     return r.ok ? { ok: true as const, data: body } : { ok: false as const, error: body?.error };
   } catch (e) {
@@ -952,11 +956,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
   // ONE ACTION AT A TIME, CHECKED SYNCHRONOUSLY. `busy` disables the buttons only after React
   // re-renders, so a quick second click still fired: "Stop and run again" pressed twice
-  // started two workflows. A ref is set before the first await, so the second click sees it.
-  const inFlight = useRef(false);
+  // started two workflows. lib/api-write registers the write before its first await, so the
+  // second click sees it here — the same rule every console write now follows, not a ref of
+  // this panel's own; and the press's Idempotency-Key makes the API run it once regardless.
   const act = useCallback(async (label: string, action: string, payload: Record<string, unknown>) => {
-    if (inFlight.current) return { ok: false, error: "already running" } as Awaited<ReturnType<typeof post>>;
-    inFlight.current = true;
+    if (writeInFlight(RUN_ACTIONS)) return { ok: false, error: "already running" } as Awaited<ReturnType<typeof post>>;
     setBusy(label);
     setNotice(null);
     try {
@@ -974,7 +978,6 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       return result;
     } finally {
       // In a finally so a throw cannot leave the console stuck showing "Advancing…" forever.
-      inFlight.current = false;
       setBusy(null);
     }
   }, [projectId, actor, load]);
@@ -1124,7 +1127,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               const query = new URLSearchParams({
                 project_id: projectId, actor, run_id: run.id,
               });
-              const response = await fetch(`/api/delivery-workflows?${query}`,
+              const response = await apiWrite(`/api/delivery-workflows?${query}`,
                                            { method: "DELETE" });
               const body = await response.json().catch(() => ({}));
               setNotice(response.ok
@@ -1249,7 +1252,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onToggleSchedule={async (id, enabled) => {
             setBusy(enabled ? "Resume schedule" : "Pause schedule");
             try {
-              const r = await fetch("/api/delivery-workflows", {
+              const r = await apiWrite("/api/delivery-workflows", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ action: "schedule_enabled", schedule_id: id,
@@ -1263,7 +1266,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onDeleteSchedule={async (id) => {
             setBusy("Remove schedule");
             try {
-              const r = await fetch(
+              const r = await apiWrite(
                 `/api/delivery-workflows?view=schedules&schedule_id=${encodeURIComponent(id)}`
                   + `&project_id=${encodeURIComponent(projectId)}`
                   + `&actor=${encodeURIComponent(actor)}`,
@@ -1336,7 +1339,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             if (fields.step_key) {
               setBusy(`Save ${fields.label}`);
               try {
-                const r = await fetch("/api/delivery-workflows", {
+                const r = await apiWrite("/api/delivery-workflows", {
                   method: "PATCH",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ ...fields, actor }),
@@ -1359,7 +1362,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onRemoveStep={async (stepKey) => {
             setBusy(`Remove ${stepKey}`);
             try {
-              const r = await fetch(
+              const r = await apiWrite(
                 `/api/delivery-workflows?project_id=${encodeURIComponent(projectId)}`
                   + `&step_key=${encodeURIComponent(stepKey)}`
                   + `&actor=${encodeURIComponent(actor)}`,
@@ -1820,7 +1823,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
         && chosen.every((a) => defaultAgents.includes(a));
       if (chosen.length && !sameAsDefault) {
         try {
-          await fetch("/api/project-agents", {
+          await apiWrite("/api/project-agents", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ project_id: projectId, app: title, actor,
@@ -1829,7 +1832,7 @@ function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted,
           // Anyone the operator took OFF the default list has to come off for real, or the
           // wizard would show a choice the run does not honour.
           for (const gone of defaultAgents.filter((d) => !chosen.includes(d))) {
-            await fetch("/api/project-agents", {
+            await apiWrite("/api/project-agents", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ project_id: projectId, app: title, actor,
@@ -3165,7 +3168,7 @@ function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
     setMsg(null);
     setPlan(null);
     try {
-      const r = await fetch("/api/app-deploy", {
+      const r = await apiWrite("/api/app-deploy", {
         method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
         body: JSON.stringify({
           op: "deploy", project_id: projectId, run_id: buildRunId,
@@ -3330,7 +3333,7 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound
         // creates the target from the workflow's own title. Both end at the same target row.
         if (buildRunId) {
           try {
-            const r = await fetch("/api/app-deploy", {
+            const r = await apiWrite("/api/app-deploy", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -6282,7 +6285,7 @@ export function CaptainCanRunIt({ projectId, step, mine, holdings, onGranted }: 
     setBusy(true);
     setFailed("");
     try {
-      const r = await fetch("/api/skills", {
+      const r = await apiWrite("/api/skills", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "assign", project_id: projectId, role_key: captain,

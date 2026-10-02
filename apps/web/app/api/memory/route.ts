@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /** What this project knows, and the rules waiting to be allowed to bind.
  *
@@ -57,7 +58,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "action must be 'review' or 'forget'" }, { status: 400 });
   }
   try {
-    const r = await fetch(
+    const r = await apiWrite(
       `${API_URL}/v1/memory/${encodeURIComponent(id)}/${action}`,
       {
         method: "POST",

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 /**
  * Read and change the gate-autonomy mode.
@@ -45,7 +46,7 @@ export async function POST(req: Request) {
   const apply = Boolean(body.apply);
   const path = apply ? "/v1/console/v2/autonomy/apply" : "/v1/console/v2/autonomy";
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),

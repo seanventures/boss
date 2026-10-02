@@ -16,6 +16,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { MemoryHome } from "./memory-ui";
+import { apiWrite } from "../lib/api-write";
 
 type Skill = {
   skill_key: string; label: string; summary: string; behaviour_kind: string;
@@ -136,7 +137,7 @@ export function SkillsHome(
     if (busy) return;
     setBusy(true); setNote(null);
     try {
-      const r = await fetch("/api/skills", {
+      const r = await apiWrite("/api/skills", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: assign ? "assign" : "unassign",
@@ -199,7 +200,7 @@ export function SkillsHome(
           ? { mcp_server_id: draft.mcp_server_id.trim(), tool_name: draft.tool_name.trim() }
           : { executor_id: draft.executor_id.trim() };
     try {
-      const r = await fetch("/api/skills", {
+      const r = await apiWrite("/api/skills", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           project_id: projectId, actor,
@@ -229,7 +230,7 @@ export function SkillsHome(
   const remove = useCallback(async (key: string) => {
     setBusy(true); setNote(null);
     try {
-      const r = await fetch("/api/skills", {
+      const r = await apiWrite("/api/skills", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", skill_key: key, project_id: projectId, actor }),
       });

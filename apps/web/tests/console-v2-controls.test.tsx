@@ -56,7 +56,7 @@ describe("before it knows anything", () => {
 
 describe("what it talks to", () => {
   it("deploy and retry go through the app-deploy route handler", () => {
-    expect(source()).toContain('fetch("/api/app-deploy"');
+    expect(source()).toContain('apiWrite("/api/app-deploy"');
   });
 
   it("unbind goes through the deployment-targets route handler", () => {
