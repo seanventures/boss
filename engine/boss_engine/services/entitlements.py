@@ -166,6 +166,7 @@ class EntitlementBrokerService:
         project_id: Optional[str] = None,
         *,
         connection: Optional[Connection] = None,
+        include_authored: bool = True,
     ) -> list[dict[str, Any]]:
         if project_id is not None and connection is None:
             raise ValueError("connection is required when project_id is provided")
@@ -187,6 +188,8 @@ class EntitlementBrokerService:
                 {"project_id": project_id},
             ).mappings().all()
             project_state = {str(row["skill_id"]): dict(row) for row in rows}
+
+        from .skill_catalogue import raised_tier
 
         items: list[dict[str, Any]] = []
         for path in self._skill_files():
@@ -229,7 +232,13 @@ class EntitlementBrokerService:
                         ),
                         "enabled": enabled if project_id is not None else system,
                         "on_demand": on_demand,
-                        "risk_tier": int(skill.get("risk_tier", 0)),
+                        # THE CATALOGUE'S TIER, not the YAML's: the spec's tier, raised to the
+                        # project's recorded tier when that is higher (skill_catalogue's risk
+                        # rule). Folded in HERE because this is what SkillRuntimeService,
+                        # held_skills and resolve_for_task load specs from — round-1 review
+                        # found an agent offered the raw spec tier while a custom step bound
+                        # to the same skill needed approval at the raised one.
+                        "risk_tier": raised_tier(skill.get("risk_tier", 0), state),
                         "description": skill.get("description", ""),
                         "mock_mode": bool(skill.get("mock_mode", False)),
                         "input_schema": skill.get("input_schema", {}) or {},
@@ -276,6 +285,24 @@ class EntitlementBrokerService:
                         "provenance": provenance,
                     }
                 )
+        if project_id is not None and include_authored:
+            # THE SKILLS THIS PROJECT AUTHORED, in the same list. This is what
+            # SkillRuntimeService, held_skills and the agent loop load specs from; without this
+            # an authored skill was shown everywhere and could run nowhere — invoke raised
+            # SkillNotFoundError. See skill_catalogue for the whole story and the risk rule.
+            #
+            # A key that is already in the catalogue is skipped rather than overriding it:
+            # save_skill refuses a key that shadows a built-in, so a collision here is a row
+            # that predates that refusal, and the shipped skill must stay reachable.
+            from .skill_catalogue import authored_specs
+
+            assert connection is not None
+            by_id = {str(item["id"]): item for item in items}
+            for spec in authored_specs(connection, project_id, by_id):
+                if spec["id"] in by_id:
+                    continue
+                self.validate_skill_spec(spec, f"authored:{project_id}")
+                items.append(spec)
         items.sort(key=lambda item: item["id"])
         return items
 

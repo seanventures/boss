@@ -1625,6 +1625,9 @@ def _skill_facts(row: Any) -> dict[str, Any]:
         "enabled": bool(row.get("enabled", True)),
         "risk_tier": int(declared) if declared is not None else 2,
         "provenance": provenance,
+        # The catalogue's sentence when a person must approve whatever the tier (an authored
+        # mcp_tool skill on an unreviewed server — mcp_registry.needs_person), else None.
+        "requires_person": row.get("requires_person"),
     }
 
 
@@ -1651,15 +1654,18 @@ def _validate_bindings(
                 )
         if step["kind"] == "skill":
             skill_id = binding["skill_id"]
-            row = connection.execute(
-                text(
-                    """
-                    SELECT enabled, config, provenance FROM project_skills
-                    WHERE project_id=:project_id AND skill_id=:skill_id
-                    """
-                ),
-                {"project_id": project_id, "skill_id": skill_id},
-            ).mappings().first()
+            # THE ONE CATALOGUE (skill_catalogue). Reading project_skills here refused every
+            # authored skill and every shipped skill without a per-project row — which on a
+            # real install was all of the ones agents actually hold.
+            from .skill_catalogue import entry as _catalogue_entry
+
+            found = _catalogue_entry(connection, project_id, str(skill_id))
+            row = None if found is None else {
+                "enabled": found["enabled"] and found["usable"],
+                "config": {"risk_tier": found["risk_tier"]} if found["risk_declared"] else {},
+                "provenance": {"trusted": found["trusted"]},
+                "requires_person": found.get("requires_person"),
+            }
             if not row or not bool(row["enabled"]):
                 raise WorkflowBindingBlockedError(
                     f"step '{step['id']}' skill '{skill_id}' is missing or disabled."
@@ -1811,7 +1817,11 @@ def start_run(
         ),
         {"definition_id": version["workflow_definition_id"]},
     ).scalar() or SYSTEM_NAMESPACE
-    _validate_bindings(connection, project_id, version["id"], spec, str(version_namespace))
+    # One catalogue build for the whole publish, not one per skill step (round-2 review).
+    from .skill_catalogue import one_pass
+
+    with one_pass(connection):
+        _validate_bindings(connection, project_id, version["id"], spec, str(version_namespace))
 
     # REFUSED HERE, NOT FOUR STEPS IN. A workflow that fails on its third step because nobody
     # supplied a video URL has already paid for the first two, and the error it gives is about

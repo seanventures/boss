@@ -341,14 +341,19 @@ def resolve_for_task(
         "role": {},
     }
 
-    catalog = EntitlementBrokerService(settings).list_skills(
-        project_id,
-        connection=connection,
-    )
+    # THE ONE CATALOGUE (skill_catalogue.entries), like every other consumer. This read
+    # EntitlementBrokerService.list_skills AND list_project_skills and merged them by hand: the
+    # second merge of the same two stores, which round-1 review found hiding inside this owner
+    # module where the enforcing scan could not see it. Every per-project fact it took from the
+    # row (source, enabled, on_demand, publisher, provenance) is already on the spec the
+    # catalogue returns, and so is the catalogue's risk tier. An AUTHORED skill the operator
+    # switched off used to resolve here anyway (no row, so "enabled"); now it does not.
+    from .skill_catalogue import entries
+
+    catalog = [item["spec"] for item in entries(connection, project_id, settings=settings)
+               .values() if item["spec"] is not None]
     by_id = {str(skill["id"]): skill for skill in catalog}
     catalog_ids = set(by_id)
-    rows = list_project_skills(connection, project_id)
-    rows_by_id = {str(row["skill_id"]): row for row in rows}
 
     resolution_sources: dict[str, set[str]] = {}
 
@@ -367,9 +372,9 @@ def resolve_for_task(
         for skill_id in matching_skill_ids(reference.strip(), catalog_ids):
             include(skill_id, "module")
 
-    for row in rows:
-        if row["source"] == "tenant" and row["enabled"]:
-            include(str(row["skill_id"]), "tenant")
+    for skill in catalog:
+        if skill.get("source") == "tenant" and skill.get("enabled"):
+            include(str(skill["id"]), "tenant")
 
     role = runtime_context.get("role") or {}
     role_key = role.get("role_key")
@@ -388,10 +393,8 @@ def resolve_for_task(
     eager: list[dict[str, Any]] = []
     on_demand: list[dict[str, Any]] = []
     for skill_id in sorted(resolution_sources):
-        row = rows_by_id.get(skill_id)
         if (
-            row is not None
-            and not row["enabled"]
+            not by_id[skill_id].get("enabled", True)
             and by_id[skill_id].get("system") is not True
         ):
             continue
@@ -407,32 +410,12 @@ def resolve_for_task(
             ):
                 continue
         skill = dict(by_id[skill_id])
-        skill["source"] = (
-            row["source"]
-            if row is not None
-            else "system"
-            if skill.get("system") is True
-            else "module"
-        )
-        skill["enabled"] = (
-            True
-            if skill.get("system") is True
-            else bool(row["enabled"])
-            if row is not None
-            else True
-        )
-        skill["on_demand"] = (
-            bool(row["on_demand"])
-            if row is not None
-            else skill.get("load") == "on_demand"
-        )
+        if skill.get("system") is True:
+            skill["enabled"] = True
+        skill["on_demand"] = bool(skill.get("on_demand", skill.get("load") == "on_demand"))
         skill["resolved_from"] = sorted(resolution_sources[skill_id])
-        skill["publisher"] = (
-            row["publisher"] if row is not None else skill.get("publisher") or {}
-        )
-        skill["provenance"] = (
-            row["provenance"] if row is not None else skill.get("provenance") or {}
-        )
+        skill["publisher"] = skill.get("publisher") or {}
+        skill["provenance"] = skill.get("provenance") or {}
         skill["role_key"] = role_key
         allowed_callers = skill.get("permissions", {}).get("allowed_callers") or []
         preferred_caller = str(task.get("skill_caller") or "").strip()

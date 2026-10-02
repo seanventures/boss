@@ -1,10 +1,5 @@
 import type { NativeTool, McpServerWithTools, SkillSummary } from "../lib/capabilities";
-import {
-  deleteMcpServerAction,
-  registerMcpServerAction,
-  setMcpServerEnabledAction,
-} from "./actions";
-import { SubmitButton } from "./submit-button";
+import { McpServersPanel, type McpServerRow } from "./mcp-servers-ui";
 
 function riskLabel(tier: number): { label: string; tone: string } {
   if (tier <= 0) return { label: "read-only", tone: "muted" };
@@ -14,6 +9,7 @@ function riskLabel(tier: number): { label: string; tone: string } {
 
 export function CapabilitiesView({
   projectId,
+  actor = "executive_console",
   nativeTools,
   skills,
   mcpServers,
@@ -22,6 +18,8 @@ export function CapabilitiesView({
   engineModel,
 }: {
   projectId: string;
+  /** Who is signed in, so a server change is recorded against them. */
+  actor?: string;
   nativeTools: NativeTool[];
   skills: SkillSummary[];
   mcpServers: McpServerWithTools[];
@@ -146,92 +144,21 @@ export function CapabilitiesView({
         ))
       )}
 
-      {/* ---- MCP servers ---- */}
+      {/* ---- MCP servers ----
+          THE SAME PANEL the Skills and MCP page mounts. This screen had its own list and its
+          own form, built on server actions that threw on any refusal — a bad URL or a taken
+          name showed the generic error page — had no tier 0, called tier 1 "auto", could not
+          edit a server and removed one with no question asked while steps still used it. */}
       <div className="cap-section-head">
         <h3>MCP servers</h3>
         <span className="cap-section-sub">Pluggable tool backends · JSON-RPC over HTTP · plug in external &amp; org-specific servers</span>
       </div>
       {!apiReachable ? (
         <p className="detail">Capabilities API unreachable.</p>
-      ) : mcpServers.length === 0 ? (
-        <p className="detail">No MCP servers registered yet. Add one below.</p>
       ) : (
-        <div className="cap-servers">
-          {mcpServers.map((s) => (
-            <div key={s.id} className={`cap-server${s.enabled ? "" : " disabled"}`}>
-              <div className="cap-server-head">
-                <span className={`cap-dot ${s.reachable ? "live" : "down"}`} />
-                <span className="cap-server-name">{s.name}</span>
-                <span className={`cap-badge tone-${s.enabled ? "green" : "muted"}`}>{s.enabled ? "enabled" : "disabled"}</span>
-                <span className={`cap-badge tone-${s.reachable ? "blue" : "red"}`}>{s.reachable ? "reachable" : "unreachable"}</span>
-                <span className="cap-badge tone-muted">risk {s.risk_tier}</span>
-                <span className="cap-badge tone-muted">{s.data_boundary}</span>
-                <div className="cap-server-actions">
-                  <form action={setMcpServerEnabledAction}>
-                    <input type="hidden" name="project_id" value={projectId} />
-                    <input type="hidden" name="server_id" value={s.id} />
-                    <input type="hidden" name="enabled" value={s.enabled ? "false" : "true"} />
-                    <SubmitButton type="submit" className="cap-btn">{s.enabled ? "Disable" : "Enable"}</SubmitButton>
-                  </form>
-                  <form action={deleteMcpServerAction}>
-                    <input type="hidden" name="project_id" value={projectId} />
-                    <input type="hidden" name="server_id" value={s.id} />
-                    <SubmitButton type="submit" className="cap-btn danger">Remove</SubmitButton>
-                  </form>
-                </div>
-              </div>
-              <code className="cap-server-url">{s.url}</code>
-              {s.description ? <p className="cap-server-desc">{s.description}</p> : null}
-              {s.error ? <p className="cap-server-err">{s.error}</p> : null}
-              {s.tools.length > 0 ? (
-                <div className="cap-server-tools">
-                  {s.tools.map((tool) => (
-                    <div key={tool.name} className="cap-mcp-tool">
-                      <code className="cap-mcp-tool-name">{tool.name}</code>
-                      <span className="cap-mcp-tool-desc">{tool.description}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : s.reachable ? (
-                <p className="cap-server-desc">No tools advertised.</p>
-              ) : null}
-            </div>
-          ))}
-        </div>
+        <McpServersPanel projectId={projectId} actor={actor}
+                         initial={mcpServers as unknown as McpServerRow[]} />
       )}
-
-      {/* ---- Add server ---- */}
-      <div className="cap-section-head">
-        <h3>Add an MCP server</h3>
-        <span className="cap-section-sub">Register a new tool backend for agents to use</span>
-      </div>
-      <form action={registerMcpServerAction} className="cap-add">
-        <input type="hidden" name="project_id" value={projectId} />
-        <div className="cap-add-row">
-          <label>Name<input name="name" placeholder="e.g. web-intel" required /></label>
-          <label>URL (JSON-RPC endpoint)<input name="url" placeholder="http://127.0.0.1:8770/mcp" required /></label>
-        </div>
-        <div className="cap-add-row">
-          <label>Risk tier
-            <select name="risk_tier" defaultValue="1">
-              <option value="1">1 — auto</option>
-              <option value="2">2 — needs approval</option>
-              <option value="3">3 — high</option>
-            </select>
-          </label>
-          <label>Data boundary
-            <select name="data_boundary" defaultValue="internal">
-              <option value="internal">internal</option>
-              <option value="public">public</option>
-              <option value="confidential">confidential</option>
-              <option value="restricted">restricted</option>
-              <option value="local-only">local-only</option>
-            </select>
-          </label>
-          <label>Description<input name="description" placeholder="What this server provides" /></label>
-        </div>
-        <SubmitButton type="submit" className="cap-btn primary">Register server</SubmitButton>
-      </form>
     </div>
   );
 }

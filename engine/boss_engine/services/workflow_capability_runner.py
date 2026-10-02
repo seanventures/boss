@@ -1426,6 +1426,9 @@ def _execute_step(
                         connection, project_id, str(binding["custom_step"]))),
                 run_id=str(context.get("run_id") or ""),
                 step_index=int(context.get("step_index") or 0),
+                # The gate decision that released this step, if it had one. The MCP effect
+                # checks it is APPROVED before an unreviewed server's tool runs.
+                approved_by=context.get("approval_decision_id"),
             )
         except custom_steps.CustomStepError as error:
             # Translated, not wrapped: the runner's failure path records
@@ -2520,9 +2523,10 @@ def _gate_subject(
             # that cannot run, and an unusable step defaults to the risk floor — so a deleted
             # skill would have produced an approval request rather than an error.
             return None
-        if custom_steps.approval_for(
-            {"risk_tier": definition["risk_tier"]}, requested
-        ) != "manual":
+        # The whole resolved definition, not just its tier: a step on an unreviewed MCP server
+        # needs a person at ANY tier (requires_person), and passing the tier alone is how
+        # round 2 found a tier-0 step on such a server running with nobody asked.
+        if custom_steps.approval_for(definition, requested) != "manual":
             return None
         return {
             "key": custom_key,
@@ -2530,9 +2534,14 @@ def _gate_subject(
             "summary": (
                 f"Approve before '{definition['label']}' runs. It calls "
                 f"{definition['risk_source']} at risk tier {definition['risk_tier']}."
+                + (f" {definition['requires_person']}"
+                   if definition.get("requires_person") else "")
             ),
             "risk_tier": definition["risk_tier"],
             "completes_step": False,
+            # Why only a PERSON may answer this gate — carried to _open_gate, which writes
+            # on_timeout=block into the snapshot so the timeout sweep cannot answer it.
+            "requires_person": definition.get("requires_person"),
         }
 
     key = str(binding.get("capability") or "")
@@ -2579,6 +2588,16 @@ def _open_gate(
     spec_step = step_row.get("_spec") or {}
     subject = step_row["_subject"]
     approval = spec_step.get("approval") or {}
+    # A GATE ONLY A PERSON MAY ANSWER NEVER TIMES OUT INTO AN APPROVAL.
+    #
+    # Round-3 review: a custom step published before the review rule existed could carry
+    # on_timeout=approve with an sla. Its gate is forced manual at run time (requires_person),
+    # but the snapshot kept on_timeout=approve, so the timeout sweep approved the gate BY
+    # POLICY and an unreviewed server's tool ran with nobody asked. The snapshot is what the
+    # sweep reads, so it is corrected here, where the gate opens, whatever the version says.
+    requires_person = str(subject.get("requires_person") or "").strip() or None
+    if requires_person and str(approval.get("on_timeout") or "block").lower() == "approve":
+        approval = {**approval, "on_timeout": "block"}
 
     # ASSIGNMENT, ENFORCED WHERE IT MATTERS: at the gate.
     #
@@ -2692,6 +2711,7 @@ def _open_gate(
                 # Recorded, not recomputed on resume: the answer to "did approving this finish
                 # it?" must not change if the workflow is edited while somebody is deciding.
                 "gate_completes_step": bool(subject["completes_step"]),
+                "requires_person": requires_person,
                 "opened_at": now_utc().isoformat(),
                 "due_at": (
                     (now_utc() + timedelta(hours=float(sla_hours))).isoformat()
@@ -3108,6 +3128,9 @@ def tick(
                             **_run_context(connection, run_id),
                             "step_attempt": int(claimed.get("attempt") or 1),
                             "worker_id": worker_id,
+                            # Set only on a step a gate released (_resume_answered_gates keeps
+                            # decision_id on the row); read by a custom step's MCP effect.
+                            "approval_decision_id": claimed.get("decision_id"),
                         },
                     )
                 except BaseException:
@@ -3310,6 +3333,10 @@ def sweep_gate_timeouts(
         snapshot = row["binding_snapshot"] or {}
         approval = snapshot.get("approval") or {}
         action = str(approval.get("on_timeout") or "block").lower()
+        if action == "approve" and snapshot.get("requires_person"):
+            # Belt to _open_gate's braces: a gate opened because only a person may answer it
+            # is never approved by policy, even from a snapshot written before that rule.
+            action = "block"
         try:
             if action == "approve":
                 evidence = [{

@@ -94,23 +94,26 @@ def held_skills(
     if not granted:
         return []
 
-    from .entitlements import EntitlementBrokerService
+    # THE ONE CATALOGUE (skill_catalogue): built-in, authored and registered skills, read the
+    # same way resolve_risk and the custom-step builder read them. This used to read the spec
+    # pack alone, so an agent given an AUTHORED skill was shown holding it and was never
+    # offered it — the skill was silently dropped here as "not in the catalogue".
+    from .skill_catalogue import entries
 
-    catalogue = {
-        str(s.get("id")): s
-        for s in EntitlementBrokerService(settings).list_skills(project_id,
-                                                               connection=connection)
-    }
+    catalogue = entries(connection, project_id, settings=settings)
 
     specs: list[dict[str, Any]] = []
     for skill_id in granted:
-        spec = catalogue.get(skill_id)
+        item = catalogue.get(skill_id)
+        spec = None if item is None else item["spec"]
         if spec is None:
             # HELD BUT NOT IN THE CATALOGUE — a skill removed from a spec pack, or authored and
             # then deleted. Left out of the tool list rather than offered and then failing: a
             # tool the model can call and nothing can execute wastes a whole turn discovering it.
             continue
-        if spec.get("system") is not True and not spec.get("enabled", True):
+        if not (item["enabled"] and item["usable"]):
+            # Turned off, or what it runs through is gone (an mcp_tool skill whose server was
+            # removed). Same reasoning as above: not offered, rather than offered and failing.
             continue
         offered = dict(spec)
         offered["caller"] = role

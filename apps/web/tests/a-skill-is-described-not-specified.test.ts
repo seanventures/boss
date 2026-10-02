@@ -36,11 +36,17 @@ describe("skills are authored by conversation", () => {
 
   it("the form survives, folded away rather than deleted", () => {
     // A wrong risk tier should be one field to fix, not a second conversation.
-    expect(SKILLS).toContain('<details className="stack-card" data-testid="skill-form">');
+    expect(SKILLS).toContain('<details className="stack-card" data-testid="skill-form" open={formOpen}');
     expect(SKILLS).toContain("skill-form-summary");
     expect(SKILLS).toContain("Write one by hand instead");
-    // And editing still reaches it by name.
-    expect(SKILLS).toContain("`Edit ${draft.skill_key} by hand`");
+    // And editing still reaches it by name — the name Edit LOADED.
+    //
+    // REWRITTEN: this asserted `Edit ${draft.skill_key} by hand`, i.e. the header turned into
+    // "Edit" as soon as a key was typed. That was the bug — nothing had been loaded, and the
+    // save silently replaced any skill that already had the key. The header now names the
+    // skill an Edit button opened, and a new skill's save refuses a taken key.
+    expect(SKILLS).toContain("`Edit ${editing} by hand`");
+    expect(SKILLS).not.toContain("`Edit ${draft.skill_key} by hand`");
   });
 
   it("the door is addressed to the role whose remit this is", () => {

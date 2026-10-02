@@ -14,7 +14,6 @@ from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .mcp_client import MCPClient
 from .mcp_registry import list_mcp_servers
-from .receipts import ReceiptService
 from .role_governance import RoleGovernanceService
 from .claude_cli_adapter import make_chat_adapter
 from .openai_adapter import OpenAIAdapter, _usage_from_response  # noqa: F401
@@ -164,18 +163,14 @@ def _append_skill_tools(
 
 
 def _mcp_tool_risk(server: dict[str, Any], tool: dict[str, Any]) -> int:
-    tool_name = str(tool.get("name") or "")
-    overrides = server.get("tool_risk_overrides") or {}
+    # mcp_registry.tool_tier is the one statement of this rule. This had its own copy, which let
+    # a tool's self-declared tier REPLACE the operator's blanket tier for the server — so the
+    # same tool could need an approval in a workflow step and not in a chat.
+    from .mcp_registry import tool_tier
+
     annotations = tool.get("annotations") or {}
-    candidate = overrides.get(
-        tool_name,
-        tool.get("risk_tier", annotations.get("risk_tier", server.get("risk_tier", 1))),
-    )
-    try:
-        risk = int(candidate)
-    except (TypeError, ValueError):
-        risk = int(server.get("risk_tier") or 1)
-    return max(0, min(risk, 3))
+    return tool_tier(server, str(tool.get("name") or ""),
+                     declared=tool.get("risk_tier", annotations.get("risk_tier")))
 
 
 def _mcp_skill_spec(
@@ -242,6 +237,8 @@ def _invoke_mcp_skill(
     step: int,
     actor: str,
     caller: str = "agent_loop",
+    approved_by: Optional[str] = None,
+    approval_about: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     tool_name = str(tool.get("name") or "tool")
     skill_spec = _mcp_skill_spec(server, tool)
@@ -250,64 +247,32 @@ def _invoke_mcp_skill(
         connection=connection,
         project_id=project_id,
         actor=actor,
+        approved_by=approved_by,
+        approval_about=approval_about,
     )
 
     def execute(inputs: dict[str, Any]) -> dict[str, Any]:
-        org_id, workspace_id = context.tenant_scope()
-        receipts = ReceiptService()
+        # THE EFFECT is shared with the authored `mcp_tool` skill executor
+        # (skill_executors.execute_mcp_tool), so a tool reached directly and one reached through
+        # a skill leave the same receipt, are deduplicated the same way, and both tell the
+        # registry when the server did not answer.
+        from .mcp_registry import call_tool_with_receipt
+
         args_digest = sha256(
             json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()[:20]
-        dedupe_key = (
-            f"mcp:{run_id}:{step}:{server['id']}:{tool_name}:{args_digest}"
-        )
-        receipt, created = receipts.create_or_reuse(
+        return call_tool_with_receipt(
             connection,
-            org_id,
-            workspace_id,
+            settings,
             project_id,
-            dedupe_key,
-            "mcp.tool.call",
-            {
-                "server_id": server["id"],
-                "server": server["name"],
-                "tool": tool_name,
-                "data_boundary": server.get("data_boundary") or "internal",
-            },
+            server,
+            tool_name,
             inputs,
-            data_boundary=server.get("data_boundary") or "internal",
+            dedupe_key=f"mcp:{run_id}:{step}:{server['id']}:{tool_name}:{args_digest}",
+            tenant_scope=context.tenant_scope(),
+            approved_by=approved_by,
+            approval_about=approval_about,
         )
-        if not created:
-            if receipt.get("status") == "succeeded":
-                return {
-                    "output": receipt.get("result") or {},
-                    "receipt_id": receipt["id"],
-                    "actual_cost_usd_micros": 0,
-                    "deduplicated": True,
-                }
-            raise RuntimeError(
-                f"MCP effect receipt already exists with status {receipt.get('status')}"
-            )
-        try:
-            output = MCPClient(settings).call_tool(server["url"], tool_name, inputs)
-        except Exception as exc:
-            receipts.mark_failed(
-                connection,
-                receipt["id"],
-                {"type": type(exc).__name__, "message": str(exc)},
-            )
-            raise
-        receipts.mark_succeeded(
-            connection,
-            receipt["id"],
-            f"{server['id']}:{tool_name}",
-            output if isinstance(output, dict) else {"value": output},
-        )
-        return {
-            "output": output,
-            "receipt_id": receipt["id"],
-            "actual_cost_usd_micros": 0,
-        }
 
     return SkillRuntimeService(settings).invoke(
         connection,
@@ -1574,6 +1539,8 @@ def _invoke_agent_skill(
     *,
     actor: str,
     skill_spec: Optional[dict[str, Any]] = None,
+    approved_by: Optional[str] = None,
+    approval_about: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     return SkillRuntimeService(settings).invoke(
         connection,
@@ -1587,6 +1554,8 @@ def _invoke_agent_skill(
             connection=connection,
             project_id=project_id,
             actor=actor,
+            approved_by=approved_by,
+            approval_about=approval_about,
         ),
         skill_spec=skill_spec,
         actor=actor,
@@ -1718,6 +1687,10 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 run_id=run_id,
                 step=int(pending.get("step") or run.get("step") or 0),
                 actor="decision_approval",
+                # Checked approved above; the MCP effect reads it again (needs_person),
+                # and checks it is THIS run's decision (approval_stands).
+                approved_by=decision_id,
+                approval_about={"run_id": run_id},
             )
             emit_event(
                 connection,
@@ -1774,6 +1747,8 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 pending.get("args") or {},
                 actor="decision_approval",
                 skill_spec=still_resolved,
+                approved_by=decision_id,
+                approval_about={"run_id": run_id},
             )
             emit_event(
                 connection,
@@ -1862,12 +1837,27 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         for schema in schemas
     }
     mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    from .mcp_registry import known_unreachable, record_reachability_quietly
+    from .mcp_registry import needs_person, unreviewed_sentence
+
+    # ONE OWNERSHIP MODEL (integration of the agents and skills-mcp streams): a bounded run is
+    # offered what its agent HOLDS (role_mcp_servers, via agents.held_mcp_servers); the
+    # registry's reachability memory and review rule then apply to those servers exactly as
+    # they do to an unbounded run's.
     for server in (_granted_mcp_servers(connection, project_id, finalize_ctx["agent_step"])
                    if bounded
                    else list_mcp_servers(connection, project_id, enabled_only=True)):
+        if known_unreachable(server):
+            # A SERVER THAT JUST FAILED IS NOT ASKED AGAIN EVERY TURN. The three servers BOSS
+            # seeds point at ports the community compose never starts, and every chat turn paid
+            # a connection timeout per server to rediscover that. The registry remembers the
+            # failure for a minute; the screens show it with what to do about it.
+            continue
         try:
             server_tools = mcp.list_tools(server["url"])
         except Exception as exc:
+            record_reachability_quietly(connection, project_id, server, reachable=False,
+                                        error=f"{type(exc).__name__}: {exc}")
             emit_event(
                 connection,
                 project_id,
@@ -1878,6 +1868,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 {"server": server["name"], "error": str(exc)},
             )
             continue
+        record_reachability_quietly(connection, project_id, server, reachable=True,
+                                    tools=server_tools)
         allow = set(server.get("granted_tools") or [])
         for t in server_tools:
             tool_name = str(t.get("name") or "tool")
@@ -1893,7 +1885,11 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     "type": "function",
                     "function": {
                         "name": ns,
-                        "description": f"[MCP · {server['name']}] {t.get('description', '')}",
+                        "description": (
+                            f"[MCP · {server['name']}"
+                            + (" · UNREVIEWED server: every call waits for a person"
+                               if needs_person(server) else "")
+                            + f"] {t.get('description', '')}"),
                         "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
                     },
                 }
@@ -2071,12 +2067,19 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 server, tool = mcp_map[name]
                 tool_name = str(tool.get("name") or "tool")
                 risk = _mcp_tool_risk(server, tool)
-                if risk > threshold:
+                # AN UNREVIEWED SERVER'S TOOL ALWAYS WAITS FOR A PERSON, whatever its tier.
+                # The tier is the server's own claim; until somebody has reviewed the server
+                # (mcp_registry.reviewed) that claim is the only thing standing between a
+                # registered URL and an unattended call. Round-1 review: a chat-registered
+                # tier-0 server's tools ran in every chat without anyone being asked.
+                unreviewed = needs_person(server)
+                if risk > threshold or unreviewed:
                     decision_id = create_blocking_decision(
                         connection,
                         project_id,
                         task_id,
-                        f"Approve MCP tool: {server['name']} / {tool_name}",
+                        (f"Approve MCP tool: {server['name']} / {tool_name}"
+                         + (" (server not reviewed yet)" if unreviewed else "")),
                         {
                             "action": "resume_agent_run",
                             "run_id": run_id,
@@ -2097,6 +2100,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         "message": (
                             f"MCP tool '{tool_name}' (risk tier {risk}) requires "
                             "human approval."
+                            + (f" {unreviewed_sentence(server)}" if unreviewed else "")
                         ),
                     }
                     is_deferred = True
@@ -2214,12 +2218,20 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     or skill_resolution.get("role_key")
                     or "agent_loop"
                 )
-                if risk > threshold:
+                # THE SAME REVIEW RULE AS A DIRECT MCP CALL (mcp_registry.needs_person), read
+                # from the catalogue: an authored mcp_tool skill on an unreviewed server carries
+                # policy.requires_person. Round-2 review: this branch asked only the tier, so
+                # the tool an agent could not call directly without a person ran unattended
+                # once it was wrapped in a skill the agent held.
+                person_reason = str(
+                    (skill.get("policy") or {}).get("requires_person") or "")
+                if risk > threshold or person_reason:
                     decision_id = create_blocking_decision(
                         connection,
                         project_id,
                         task_id,
-                        f"Approve agent skill: {skill_id}",
+                        f"Approve agent skill: {skill_id}"
+                        + (" (its MCP server is not reviewed yet)" if person_reason else ""),
                         {
                             "action": "resume_agent_run",
                             "run_id": run_id,
@@ -2240,6 +2252,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         "message": (
                             f"'{skill_id}' (risk tier {risk}) requires human "
                             "approval; the run is paused and resumes on approval."
+                            + (f" {person_reason}" if person_reason else "")
                         ),
                     }
                     is_deferred = True

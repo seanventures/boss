@@ -85,7 +85,15 @@ def _context(**overrides) -> SkillExecutorContext:
 #: `skill.sandboxed_command` has been registered since authored skills shipped and this test has
 #: been failing on it ever since — it read as "somebody registered an executor for a skill that
 #: does not exist", which is exactly the defect worth catching and exactly not what this is.
-BEHAVIOUR_DISPATCHERS = {"skill.sandboxed_command", "skill.agent_program"}
+# EVERY AUTHORED BEHAVIOUR BUT `builtin` IS RUN BY A DISPATCHER NAMED FOR IT (resolve_executor
+# maps an authored skill to `skill.<behaviour>`). Derived from skill_definitions.BEHAVIOURS rather
+# than listed by hand: the hand list named two of the three, so registering `skill.mcp_tool` (the
+# executor whose absence made every authored MCP skill fail on its first run) turned this test
+# red for doing the right thing. REWRITTEN to read the behaviours, so a new behaviour without a
+# dispatcher fails below and a dispatcher for no behaviour fails above.
+from boss_engine.services.skill_definitions import BEHAVIOURS as _BEHAVIOURS  # noqa: E402
+
+BEHAVIOUR_DISPATCHERS = {f"skill.{b}" for b in _BEHAVIOURS if b != "builtin"}
 
 
 def test_registry_only_exposes_skill_specs_with_real_bindings():

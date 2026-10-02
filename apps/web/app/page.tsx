@@ -129,6 +129,7 @@ import { fetchAgentRuns } from "../lib/agent-runs";
 import { fetchTaskOutputs } from "../lib/outputs";
 import { fetchCapabilities } from "../lib/capabilities";
 import { CapabilitiesView } from "./capabilities-ui";
+import { McpServersPanel, type McpServerRow } from "./mcp-servers-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
@@ -1942,32 +1943,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Registered tool backends the agent can call — governed by policy, budget, and receipts.</h2>
             </div>
           </div>
-          {mcpServers.items.length === 0 ? (
-            <p className="detail">
-              {mcpServers.apiReachable
-                ? "No MCP servers registered. Register one via POST /v1/mcp/servers."
-                : mcpServers.blockedReason ?? "MCP registry unavailable."}
-            </p>
+          {/* THE SHARED MCP PANEL, in summary: status from the same registry every screen
+              reads, and a link to where servers are managed. This said "Register one via POST
+              /v1/mcp/servers" — an API call, on an operator's screen — and showed the three
+              seeded servers as enabled while none of them answered. */}
+          {mcpServers.apiReachable ? (
+            <McpServersPanel projectId={activeProjectId} actor={activeActorId} mode="summary"
+                             initial={mcpServers.items as unknown as McpServerRow[]} />
           ) : (
-            <div className="feed-list">
-              {mcpServers.items.map((server) => (
-                <div className="feed-row" key={server.id}>
-                  <div>
-                    <h4 style={{ margin: "0 0 4px", display: "flex", gap: 8, alignItems: "center" }}>
-                      {server.name}
-                      <span className={`pill${server.enabled ? "" : " warn"}`}>
-                        {server.enabled ? "enabled" : "disabled"}
-                      </span>
-                    </h4>
-                    {server.description ? <p className="detail">{server.description}</p> : null}
-                    <p className="detail">
-                      <code className="mono">{server.url}</code> · {server.transport} · risk tier{" "}
-                      {server.risk_tier} · {server.data_boundary}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <p className="detail">{mcpServers.blockedReason ?? "MCP registry unavailable."}</p>
           )}
         </section>
         ) : null}
@@ -5072,6 +5056,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <CapabilitiesView
             projectId={activeProjectId}
+            actor={activeActorId}
             nativeTools={capabilities.nativeTools}
             skills={capabilities.skills}
             mcpServers={capabilities.mcpServers}
