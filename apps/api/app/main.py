@@ -22809,6 +22809,9 @@ def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
         )
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_manage")
+        # Repointing a mapping changes which version work starts: not while an agent delete is
+        # deciding (workflows.hold_workflow_reach).
+        workflow_runtime.hold_workflow_reach(connection, project_id)
         row = connection.execute(
             text(
                 # `name` too: the confirmation this returns is read by a person standing in
@@ -24161,6 +24164,28 @@ def create_workflow_mapping(payload: WorkflowMappingCreateRequest) -> WorkflowMa
                     actor=payload.actor,
                 )
             )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-mappings/{mapping_id}/repoint")
+def repoint_workflow_mapping(mapping_id: str, payload: ProjectBody) -> dict[str, Any]:
+    """Point one mapping at its workflow's current version (workflows.repoint_mapping).
+
+    The move an agent-delete refusal names when a mapping still sends work to an older version
+    that names the agent (review of milestone/agents, round 3): nothing else an operator could
+    press moved a mapping at any scope or priority.
+    """
+    body = payload.payload()
+    project_id = str(body.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, body.get("actor"), "workflow_manage")
+        try:
+            return workflow_runtime.repoint_mapping(
+                connection, project_id=project_id, mapping_id=mapping_id, actor=actor)
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
 

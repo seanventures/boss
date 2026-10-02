@@ -30,8 +30,8 @@ import { createPortal } from "react-dom";
 
 import { formatDate } from "../lib/datetime";
 import {
-  deleteAgent, grantMcp, grantSkill, loadGrantable, parseToolList, revokeMcp, revokeSkill,
-  updateAgent, type AgentSummary,
+  deleteAgent, grantMcp, grantSkill, loadGrantable, parseToolList, repointMapping, revokeMcp,
+  revokeSkill, updateAgent, type AgentSummary,
 } from "../lib/agents";
 
 type App = {
@@ -62,19 +62,48 @@ type McpAvailable = {
   risk_tier: number; description?: string | null;
 };
 type McpPanel = { role_key: string; holds: McpHeld[]; available: McpAvailable[] };
+/** A mapping or parent workflow step that starts the version naming the agent. */
+type Pointer = {
+  via: "mapped" | "subworkflow";
+  mapping_id?: string; selector_kind?: string; selector_value?: string;
+  workflow?: string; version?: number; step?: string;
+};
 type NamedOn = {
   workflow_key: string; workflow: string; version: number; step_id: string; step: string;
   how: string; because: string;
   /** Only an OLDER version nothing starts by default: deleting may retire it (agents.py). */
   retirable?: boolean;
+  /** Where it is and what to do about it, written ONCE by the API (agents.REACH_SAID) — the
+   *  same words its 409 uses, so the page and the refusal cannot disagree. */
+  where?: string; remedy?: string;
+  pointed_by?: Pointer[];
+  /** Older parent versions a delete retires along with this one. */
+  also_retires?: Array<{ workflow: string; version: number }>;
 };
 
 /** Which version names the agent, the way the API's refusal says it. */
 export function whereNamed(n: NamedOn): string {
+  if (n.where) return n.where;
+  // An API from before the round-3 review sends no `where`.
   if (n.because === "live run") return "a run in flight";
   if (n.because === "active") return `v${n.version}, the version it runs`;
   if (n.because === "older") return `v${n.version}, an older version still startable by id`;
   return `v${n.version}, ${n.because}`;
+}
+
+/** What to do so the steps stop blocking the delete: each step's own remedy, once each.
+ *
+ *  Review of milestone/agents, round 3: the page said "save the workflow" for every reach, and
+ *  saving moves neither a mapping (it pins one exact version) nor a parent's subworkflow
+ *  binding, so doing what it said left the delete blocked for good. */
+export function remediesFor(blocking: NamedOn[]): string[] {
+  const out: string[] = [];
+  for (const n of blocking) {
+    const said = n.remedy
+      ?? "give the step to another agent (or leave it for BOSS to pick) and save the workflow";
+    if (!out.includes(said)) out.push(said);
+  }
+  return out;
 }
 type Detail = {
   role_key: string; name: string; registered: boolean;
@@ -343,6 +372,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted }: {
 
             {detail.registered ? (
               <AgentDelete projectId={projectId} actor={actor} detail={detail}
+                           onChanged={() => void load()}
                            onDeleted={() => { onDeleted?.(detail.role_key); onClose(); }} />
             ) : null}
           </>
@@ -743,9 +773,16 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
  * only the newest version, so the version that actually ran was not protected; reading every
  * startable version without this way through would make an agent once named in v1 of a
  * workflow now at v5 impossible to delete.
+ *
+ * WHAT TO DO IS SAID PER STEP (review of milestone/agents, round 3). Every blocking step got
+ * "save the workflow", which moves neither a mapping nor a parent's subworkflow binding; each
+ * step now carries the API's own `remedy`, and a mapping that still sends work to the old
+ * version gets the button that moves it.
  */
-export function AgentDelete({ projectId, actor, detail, onDeleted }: {
+export function AgentDelete({ projectId, actor, detail, onDeleted, onChanged }: {
   projectId: string; actor: string; detail: Detail; onDeleted: () => void;
+  /** Told when something on this panel changed what names the agent, so it is read again. */
+  onChanged?: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -753,6 +790,16 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
   const named = detail.named_on_steps ?? [];
   const blocking = named.filter((n) => !n.retirable);
   const older = named.filter((n) => n.retirable);
+  const alsoRetired = older.flatMap((n) => (n.also_retires ?? [])
+    .map((p) => `${p.workflow} v${p.version}`));
+  const mappings: Array<{ id: string; label: string }> = [];
+  for (const n of blocking) {
+    for (const p of n.pointed_by ?? []) {
+      if (p.via === "mapped" && p.mapping_id && !mappings.some((m) => m.id === p.mapping_id)) {
+        mappings.push({ id: p.mapping_id, label: `${n.workflow}: ${p.selector_value ?? "work"}` });
+      }
+    }
+  }
   const profiles = (detail.studio_profiles ?? []).filter((p) => p.status !== "retired");
 
   const remove = async () => {
@@ -764,6 +811,14 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
     onDeleted();
   };
 
+  const repoint = async (mappingId: string) => {
+    setBusy(true); setFailed("");
+    const r = await repointMapping(projectId, actor, mappingId);
+    setBusy(false);
+    if (!r.ok) { setFailed(r.error); return; }
+    onChanged?.();
+  };
+
   return (
     <section className="ct-block ad-danger" data-testid="agent-delete">
       <div className="ct-block-title">Delete this agent</div>
@@ -771,10 +826,7 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
         <>
           <p className="detail" data-testid="agent-delete-blocked">
             It cannot be deleted while {blocking.length} workflow step{blocking.length === 1 ? " names" : "s name"} it.
-            Give {blocking.length === 1 ? "that step" : "those steps"} to another agent (or leave
-            them for BOSS to pick), save the workflow
-            {blocking.some((n) => n.because === "live run") ? ", let the run in flight finish" : ""},
-            then come back.
+            To delete it: {remediesFor(blocking).join("; ")} — then come back.
           </p>
           <ul className="ad-list" data-testid="agent-named-on">
             {blocking.map((n) => (
@@ -784,6 +836,17 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
               </li>
             ))}
           </ul>
+          {mappings.length ? (
+            <div className="ad-danger-actions" data-testid="agent-delete-repoint">
+              {mappings.map((m) => (
+                <button key={m.id} type="button" className="cap-btn" disabled={busy}
+                        data-testid={`agent-delete-repoint-${m.id}`}
+                        onClick={() => void repoint(m.id)}>
+                  Point at the current version ({m.label})
+                </button>
+              ))}
+            </div>
+          ) : null}
         </>
       ) : (
         <p className="detail">
@@ -798,6 +861,13 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
               so deleting also retires {older.length === 1 ? "that version" : "those versions"}{" "}
               ({Array.from(new Set(older.map((n) => `${n.workflow} v${n.version}`))).join(", ")}):
               their history is kept, but no run can start from them.
+              {alsoRetired.length ? (
+                <>
+                  {" "}Older versions that start {older.length === 1 ? "it" : "them"} as a
+                  subworkflow are retired with {older.length === 1 ? "it" : "them"} too
+                  ({Array.from(new Set(alsoRetired)).join(", ")}).
+                </>
+              ) : null}
             </span>
           ) : null}
         </p>

@@ -156,6 +156,38 @@ describe("an agent can be deleted, or you are told why not", () => {
     expect(codeOnly("lib/agents.ts")).toContain("retire_older_versions=true");
   });
 
+  it("says each blocking step's own remedy, never 'save the workflow' for a mapping", () => {
+    // Review of milestone/agents, round 3: every blocking step got "save the workflow", which
+    // moves neither a mapping (it pins one exact version) nor a parent's subworkflow binding,
+    // so an operator who did what the page said was refused again, for good. The page now
+    // shows the API's own `where` and `remedy`, and a button that moves the mapping.
+    const remedy = "point bug fixes at the current version of 'Ship it' (Point at the current "
+      + "version on this agent's page, or POST /v1/workflow-mappings/wfm_1/repoint)";
+    const html = render(<AgentDelete projectId="p" actor="ceo" onDeleted={() => {}}
+      detail={detail({ named_on_steps: [{
+        workflow_key: "ship", workflow: "Ship it", version: 1, step_id: "audit",
+        step: "Audit the release", how: "runs it", because: "mapped", retirable: false,
+        where: "v1, where a mapping still sends bug fixes", remedy,
+        pointed_by: [{ via: "mapped", mapping_id: "wfm_1", selector_kind: "work_class",
+                       selector_value: "bugfix" }] }] })} />);
+    expect(html).toContain("v1, where a mapping still sends bug fixes");
+    expect(html).toContain("point bug fixes at the current version of &#x27;Ship it&#x27;");
+    expect(html).not.toContain("save the workflow");
+    expect(html).toContain('data-testid="agent-delete-repoint-wfm_1"');
+    expect(codeOnly("lib/agents.ts")).toContain("/v1/workflow-mappings/${enc(mappingId)}/repoint");
+    expect(codeOnly("app/agent-detail-ui.tsx")).toContain("onChanged={() => void load()}");
+  });
+
+  it("names the older parent versions a delete retires with the version", () => {
+    const html = render(<AgentDelete projectId="p" actor="ceo" onDeleted={() => {}}
+      detail={detail({ named_on_steps: [{
+        workflow_key: "ship", workflow: "Ship it", version: 1, step_id: "audit",
+        step: "Audit the release", how: "runs it", because: "older", retirable: true,
+        also_retires: [{ workflow: "Parent", version: 1 }] }] })} />);
+    expect(html).toContain("Parent v1");
+    expect(html).toContain("retired with it too");
+  });
+
   it("otherwise says what deleting does before it is confirmed", () => {
     const html = render(<AgentDelete projectId="p" actor="ceo" onDeleted={() => {}}
       detail={detail({ studio_profiles: [{ id: "a", agent_key: "k", name: "K", status: "active" }] })} />);

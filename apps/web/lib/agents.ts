@@ -120,6 +120,16 @@ export function deleteAgent(projectId: string, actor: string, roleKey: string,
     "DELETE", null, { scope: `agent-${roleKey}`, label: "Delete agent" });
 }
 
+/** Point one workflow mapping at its workflow's current version (workflows.repoint_mapping).
+ *  The move an agent-delete refusal names when a mapping still sends work to an older version
+ *  that names the agent — saving the workflow never moved it (review of milestone/agents,
+ *  round 3). */
+export function repointMapping(projectId: string, actor: string, mappingId: string) {
+  return send(`/v1/workflow-mappings/${enc(mappingId)}/repoint`, "POST",
+    { project_id: projectId, actor },
+    { scope: `mapping-${mappingId}`, label: "Point at the current version" });
+}
+
 export function grantSkill(projectId: string, actor: string, roleKey: string, skillId: string) {
   return send("/v1/role-skills", "POST",
     { project_id: projectId, actor, role_key: roleKey, skill_id: skillId },
