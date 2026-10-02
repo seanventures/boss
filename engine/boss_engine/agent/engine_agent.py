@@ -585,15 +585,38 @@ class EngineAgent:
                     args = json.loads(tc.get("arguments") or "{}")
                 except Exception:
                     args = {}
+                # NO TOOL OUTLIVES THE TURN EITHER (services/call_deadline.py, tool_timeout).
+                # Review of the 240 s fix: only the model calls were bounded, so a slow host,
+                # URL or query inside a turn still carried it past the console's stall line and
+                # the out-of-time report arrived after the console had said "Still working".
+                # A tool is not started once the turn's tool time is spent — it is recorded as
+                # not run, and the next call is the answer — and one that is started waits no
+                # longer than that time.
+                from ..services.call_deadline import MIN_TOOL_SECONDS
+                from ..services.call_deadline import until as _until
+
+                tool_left = (budget.seconds - budget.elapsed) if budget is not None else None
+                if tool_left is not None and tool_left < MIN_TOOL_SECONDS:
+                    out_of_time = True
+                    result = {"ok": False, "not_run": True,
+                              "error": (f"{name} was not run: this turn's time for tools is "
+                                        "spent. Answer from what is already established and "
+                                        "name this check as the next thing to do.")}
+                    trace.append({"tool": name, "args": args, "result": result})
+                    messages.append({"role": "tool", "tool_call_id": tc.get("id"),
+                                     "content": json.dumps(result)})
+                    continue
                 if on_step is not None:
                     try:
                         on_step(_step_label(name, args))
                     except Exception:  # noqa: BLE001 — never fail a turn to report progress
                         pass
-                result = self._run_tool(
-                    name, args, project_id=project_id, actor=actor,
-                    allow_writes=allow_writes, pending=pending,
-                )
+                with _until(budget.deadline(answering=False)) if budget is not None \
+                        else _no_deadline():
+                    result = self._run_tool(
+                        name, args, project_id=project_id, actor=actor,
+                        allow_writes=allow_writes, pending=pending,
+                    )
                 trace.append({"tool": name, "args": args, "result": result})
                 messages.append(
                     {

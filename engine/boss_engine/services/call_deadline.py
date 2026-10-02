@@ -90,6 +90,31 @@ def bounded_timeout(default: float) -> float:
     return float(min(float(default), left))
 
 
+#: Below this many seconds a TOOL is not started: it could not finish and report in time.
+MIN_TOOL_SECONDS = 3.0
+
+
+def tool_timeout(default: float) -> float:
+    """The timeout a tool's own wait (SSH, HTTP, a SQL statement) should use inside a turn.
+
+    THE TOOLS WERE THE OTHER HALF OF THE 240 s LINE (review of the fix above). Only the model
+    calls were bounded, so a slow `inspect_host`, `http_probe` or `query_db` inside a turn still
+    carried it past the console's stall line, and the out-of-time report then arrived after
+    the console had already said "Still working". A tool now waits no longer than the turn's
+    tool time (the deadline EngineAgent sets around every tool call) — and outside a turn, its
+    own setting, unchanged.
+
+    Raises TurnDeadlineExceeded when too little is left to start it at all.
+    """
+    left = remaining()
+    if left is None:
+        return float(default)
+    if left < MIN_TOOL_SECONDS:
+        raise TurnDeadlineExceeded(
+            f"this turn has {max(0, int(left))}s left, too little to run another tool")
+    return float(min(float(default), left))
+
+
 def deadline_cut(timeout: float, default: float) -> bool:
     """Was `timeout` set by the turn's deadline rather than the adapter's own setting?"""
     return float(timeout) < float(default)

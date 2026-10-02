@@ -463,6 +463,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         max_rows = int(args.get("max_rows") or 100)
         try:
             with ctx.begin() as c:
+                _bound_statement(c)
                 rows = c.execute(_text(sql)).mappings().all()
         except Exception as error:  # noqa: BLE001 — the schema belongs in the reply
             # A WRONG COLUMN NAME MUST NOT COST A WHOLE TURN.
@@ -6655,7 +6656,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 return {"ok": False, "error": f"no usable credential for this host: {exc}"[:200]}
         try:
             res = _ssh(key, host["address"], (host.get("ssh_user") or "root"),
-                       int(host.get("ssh_port") or 22), command, timeout=45)
+                       int(host.get("ssh_port") or 22), command,
+                       timeout=_turn_seconds(45))
         finally:
             if ephemeral:
                 _discard_key_file(ephemeral)
@@ -6755,7 +6757,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 f"https://api.github.com{path}",
                 headers={"Accept": "application/vnd.github+json",
                          **({"Authorization": f"Bearer {token}"} if token else {})})
-            with _ureq.urlopen(req, timeout=25) as resp:
+            with _ureq.urlopen(req, timeout=_turn_seconds(25)) as resp:
                 return _json.loads(resp.read().decode() or "{}")
 
         try:
@@ -6913,7 +6915,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": "url must start with http:// or https://"}
         started = _time.time()
         try:
-            with _ureq.urlopen(url, timeout=int(args.get("timeout_s") or 10)) as resp:
+            with _ureq.urlopen(url, timeout=_turn_seconds(int(args.get("timeout_s") or 10))) \
+                    as resp:
                 body = resp.read(4000).decode("utf-8", errors="replace")
                 return {"url": url, "status": resp.status,
                         "ms": round((_time.time() - started) * 1000),
@@ -7042,6 +7045,27 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 # Keep direct/admin tools registered separately, but hold raw SQL out of this surface until
 # a database-enforced project boundary exists.
 _DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset({"query_db"})
+
+
+def _turn_seconds(default: float) -> float:
+    """A tool's own timeout, cut to the chat turn's tool time (services/call_deadline.py).
+
+    Outside a turn it is the tool's own setting. Inside one, a slow host, URL or API cannot
+    carry the turn past the console's 240 s stall line: the tool gives up when the turn would,
+    and the agent answers with what it has.
+    """
+    from ..services.call_deadline import tool_timeout
+
+    return tool_timeout(default)
+
+
+def _bound_statement(connection) -> None:
+    """Cut a read-only SQL statement at the turn's tool time, on Postgres. See _turn_seconds."""
+    from ..services.call_deadline import remaining, tool_timeout
+
+    if remaining() is None or connection.dialect.name != "postgresql":
+        return
+    connection.execute(_text(f"SET LOCAL statement_timeout = {int(tool_timeout(3600) * 1000)}"))
 
 
 def build_default_registry() -> ToolRegistry:
