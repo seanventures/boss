@@ -1,10 +1,4 @@
-"""A TypeSafe key is proved through the governed spend path before it is kept (BOSS-451 step 5).
-
-The proof is a billed provider call. It used to run inside the setup request's transaction,
-before any reservation or receipt, so a failed key write or a crash erased all evidence of the
-charge. It now runs through TypedDecisionSpend — reservation, lease and receipt committed on
-their own connections before the call, settled after — exactly like a workflow decision.
-"""
+"""Typed-decision key proof is held until model spend has durable evidence."""
 from __future__ import annotations
 
 import pytest
@@ -13,179 +7,66 @@ from boss_engine.config import Settings
 from boss_engine.services import project_settings
 from boss_engine.services.setup_service import (
     DecisionModelGovernanceHold,
-    SecretFallbackNotAccepted,
     SetupError,
     decision_model_status,
     store_decision_key,
 )
-from boss_engine.services.typed_decision_spend import (
-    TypedDecisionReconciliationRequired,
-    TypedDecisionSpendError,
-)
-
-
-class _Result:
-    def mappings(self):
-        return self
-
-    def first(self):
-        return None
-
-
-class _Engine:
-    def __init__(self) -> None:
-        self.statements: list[str] = []
-
-    def begin(self):
-        engine = self
-
-        class _Tx:
-            def __enter__(self):
-                return _Connection(engine)
-
-            def __exit__(self, *exc):
-                return False
-
-        return _Tx()
 
 
 class _Connection:
-    def __init__(self, engine: "_Engine | None" = None) -> None:
-        self.engine = engine if engine is not None else _Engine()
-        self.statements = self.engine.statements
+    def __init__(self) -> None:
+        self.statements: list[str] = []
 
     def execute(self, statement, params=None):
         self.statements.append(str(statement))
-        return _Result()
-
-
-class _Spend:
-    """Stands in for TypedDecisionSpend; records what it was asked and in what order."""
-
-    def __init__(self, seen, outcome):
-        self.seen, self.outcome = seen, outcome
-
-    def execute(self, settings, binding, state, *, fallback=True):
-        self.seen["order"].append("spend")
-        self.seen["fallback"] = fallback
-        self.seen["proving"] = settings
-        self.seen["binding"] = binding
-        if isinstance(self.outcome, BaseException):
-            raise self.outcome
-        return self.outcome
+        return self
 
 
 @pytest.fixture
 def world(monkeypatch):
-    seen = {"stored": {}, "knobs": {}, "events": [], "order": [], "for_runner": None,
-            "names": [], "bound": [],
-            "outcome": {"answer": "yes", "model": "jev-1", "latency_ms": 180,
-                        "receipt_id": "rcpt_1", "cost_usd_micros": 12}}
+    seen = {"stored": {}, "knobs": {}, "events": []}
     monkeypatch.setattr("boss_engine.services.secret_backends.default_secret_backend",
                         lambda settings: "infisical")
-
-    def put_secret(*a, **k):
-        seen["order"].append("store")
-        seen["names"].append(k["name"])
-        seen["stored"].update(k)
-        return {"secret_ref_id": "sref_1", "ref_key": "BOSS_SUBSCRIPTION_TYPESAFE_API_KEY",
-                "backend": k.get("backend"), "fingerprint": "fp"}
-
-    monkeypatch.setattr("boss_engine.services.secrets_service.put_secret", put_secret)
+    monkeypatch.setattr(
+        "boss_engine.services.secrets_service.put_secret",
+        lambda *a, **k: seen["stored"].update(k) or {
+            "secret_ref_id": "sref_1", "ref_key": "BOSS_SUBSCRIPTION_TYPESAFE_API_KEY",
+            "backend": k.get("backend"), "fingerprint": "fp"})
     monkeypatch.setattr(project_settings, "set_one",
                         lambda c, p, k, v, actor="": seen["knobs"].update({k: v}))
     monkeypatch.setattr("boss_engine.services.core.emit_event",
-                        lambda *a: seen["events"].append((a[2], a[-1])))
-
-    def for_runner(settings, **kwargs):
-        seen["for_runner"] = kwargs
-        return _Spend(seen, seen["outcome"])
-
-    monkeypatch.setattr(
-        "boss_engine.services.typed_decision_spend.TypedDecisionSpend.for_runner", for_runner)
-    monkeypatch.setattr(
-        "boss_engine.services.entitlements.EntitlementBrokerService.seed_default_sources",
-        lambda self, c, p, actor="": None)
-    monkeypatch.setattr(
-        "boss_engine.services.model_gateway.ModelGatewayService.bind_credential_secret_ref",
-        lambda self, c, p, source, ref, actor="": seen["bound"].append((source, ref)))
-    monkeypatch.setattr("boss_engine.services.typed_decisions.TypeSafeDecider.decide",
-                        lambda *a, **k: pytest.fail("TypeSafe was called outside the spend path"))
+                        lambda *a: seen["events"].append(a[2]))
     return seen
 
 
-def test_a_key_is_proved_through_the_spend_path_then_stored(world):
-    result = store_decision_key(_Connection(), Settings(), "p", " ts_key ", actor="ceo")
-
-    assert world["order"] == ["store", "spend", "store"], "held as a candidate, proved, kept"
-    assert world["names"] == ["TYPESAFE_API_KEY_CANDIDATE", "TYPESAFE_API_KEY"]
-    assert [source for source, _ in world["bound"]] == ["typesafe_jev", "typesafe_jev"], (
-        "the key is TypeSafe's own source's credential, not a pooled subscription's")
-    assert world["for_runner"]["project_id"] == "p"
-    assert isinstance(world["for_runner"]["engine"], _Engine), "committed on its own connection"
-    proving = world["proving"]
-    assert proving.decision_backend == "typesafe" and proving.typesafe_api_key == "ts_key"
-    assert proving.decision_fallback_below == 0.0, "a Claude second opinion proves nothing"
-    assert world["fallback"] is False, "nor does a Claude answer after a Jev failure"
-    assert set(world["binding"]["typed_decision"]["options"]) == {"yes", "no"}
-
-    assert world["stored"]["value"] == "ts_key" and world["stored"]["backend"] == "infisical"
-    assert world["knobs"] == {"decision_backend": "typesafe"}
-    assert result["ok"] and result["receipt_id"] == "rcpt_1" and result["cost_usd_micros"] == 12
-    assert result["raw_secret_stored"] is False and "ts_key" not in repr(result)
-    event, data = world["events"][0]
-    assert event == "setup.decision_model_connected" and data["receipt_id"] == "rcpt_1"
-
-
-def test_nowhere_safe_to_store_it_is_settled_before_anything_is_spent(world, monkeypatch):
-    monkeypatch.setattr("boss_engine.services.secret_backends.default_secret_backend",
-                        lambda settings: "database")
-    monkeypatch.delenv("BOSS_COMMUNITY_SECRET_STORE", raising=False)
-    with pytest.raises(SecretFallbackNotAccepted):
-        store_decision_key(_Connection(), Settings(), "p", "ts_key")
-    assert world["order"] == [], "no proof is paid for a key that cannot be kept"
-
-
-@pytest.mark.parametrize(("failure", "says"), [
-    (TypedDecisionSpendError("TypeSafe HTTP 401 unauthorized"), "rejected that key"),
-    (TypedDecisionSpendError("TypeSafe HTTP 402 insufficient funds"), "no credit"),
-    (TypedDecisionSpendError("Budget reservation denied."), "could not check that key"),
-    (TypedDecisionReconciliationRequired("timed out"), "reconciled rather than charged twice"),
-])
-def test_a_failed_proof_keeps_nothing_and_says_why(world, failure, says):
-    world["outcome"] = failure
-    with pytest.raises(SetupError, match=says):
-        store_decision_key(_Connection(), Settings(), "p", "ts_key")
-    assert world["order"] == ["store", "spend"], "only the candidate was ever stored"
-    assert world["names"] == ["TYPESAFE_API_KEY_CANDIDATE"]
-    assert not world["knobs"] and not world["events"]
-
-
-def test_without_a_separate_connection_there_is_no_call(world):
-    bare = _Connection()
-    bare.engine = None
+@pytest.mark.parametrize("accept_database_fallback", [False, True])
+def test_key_proof_is_held_before_provider_call_or_secret_write(
+    monkeypatch, world, accept_database_fallback,
+):
+    monkeypatch.setattr("boss_engine.services.typed_decisions.TypeSafeDecider.decide",
+                        lambda *a, **k: pytest.fail("TypeSafe was called before reservation"))
+    connection = _Connection()
     with pytest.raises(DecisionModelGovernanceHold, match="BOSS-451"):
-        store_decision_key(bare, Settings(), "p", "ts_key")
-    assert world["order"] == []
+        store_decision_key(connection, Settings(), "p", " ts_key ", actor="ceo",
+                           accept_database_fallback=accept_database_fallback)
+    assert connection.statements == []
+    assert not world["stored"] and not world["knobs"] and not world["events"]
 
 
 def test_blank_key_still_has_an_actionable_validation_error(world):
     with pytest.raises(SetupError, match="paste the API key"):
         store_decision_key(_Connection(), Settings(), "p", "")
-    assert not world["stored"] and world["order"] == []
+    assert not world["stored"]
 
 
-def test_status_says_who_is_actually_deciding(monkeypatch):
+def test_typesafe_without_a_key_is_reported_as_paused_with_saved_preference(monkeypatch):
     monkeypatch.setattr(project_settings, "applied",
                         lambda c, p, s: s.model_copy(update={"decision_backend": "typesafe"}))
     monkeypatch.setattr("boss_engine.services.typed_decisions._typesafe_key", lambda s: None)
     status = decision_model_status(None, Settings(), "p")
-    assert status["backend"] == "typesafe" and status["effective_backend"] == "claude", (
-        "typesafe chosen with no key still means Claude")
-    assert status["execution_available"] is True and status["hold_reason"] == ""
-
-    monkeypatch.setattr("boss_engine.services.typed_decisions._typesafe_key", lambda s: "k")
-    assert decision_model_status(None, Settings(), "p")["effective_backend"] == "typesafe"
+    assert status["backend"] == "typesafe" and status["configured_backend"] == "claude"
+    assert status["effective_backend"] == "paused"
+    assert status["execution_available"] is False and "BOSS-451" in status["hold_reason"]
 
 
 def test_the_backend_knob_accepts_only_the_two_it_knows():

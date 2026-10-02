@@ -19,7 +19,7 @@ shared with the Claude path and lives in `CliChatBrain`. Only three things are C
     `turn.completed` carries input, cached-input, cache-write, output and reasoning counts.
   * `--sandbox read-only` and `--ignore-user-config`, so a brain that is supposed to be pure
     reasoning cannot edit the filesystem and does not inherit the operator's own Codex
-    configuration. This is the same intent as the Claude path's `--tools ""`.
+    configuration. This is the same intent as the Claude path's `--disallowedTools`.
 """
 from __future__ import annotations
 

@@ -4,11 +4,12 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 983,
+  "operation_count": 982,
   "counts": {
     "api_policy_gated": 851,
-    "excluded": 68,
-    "human_confirmation_gated": 64
+    "excluded": 67,
+    "human_confirmation_gated": 64,
+    "operator_only_unavailable": 0
   },
   "operations": [
     {
@@ -6399,24 +6400,6 @@
       "runtime_validated_input_schema": true,
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
-      "read_only_available": false
-    },
-    {
-      "method": "POST",
-      "path": "/v1/discoveries/{run_id}/execute",
-      "alias": "post_v1_discoveries_run_id_execute_6ac80599",
-      "domain": "knowledge",
-      "summary": "Execute Discovery Endpoint",
-      "mcp_status": "excluded",
-      "reason": "discovery_worker_lease_protocol",
-      "input_schema_quality": "typed_json_body",
-      "mounted_input_schema_quality": "typed_json_body",
-      "request_body_type_enforcement": "pydantic_fields",
-      "curated_input_fields": false,
-      "typed_input_schema": false,
-      "runtime_validated_input_schema": false,
-      "domain_scoped_direct_tool": false,
-      "requires_explicit_bound_api_credential": false,
       "read_only_available": false
     },
     {

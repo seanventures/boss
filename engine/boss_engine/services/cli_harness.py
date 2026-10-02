@@ -28,7 +28,6 @@ from dataclasses import dataclass
 import json
 import logging
 import os
-import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -116,17 +115,15 @@ class CliHarnessSpec:
     prompt_prefix: str = ""
     #: Flag that selects a model, e.g. "--model". Empty means the CLI has no such flag.
     model_flag: str = ""
-    #: HOW TO ASK THE CLI WHICH MODELS THE SIGNED-IN ACCOUNT HAS — never a list of names.
-    #: "codex_debug_models", "claude_initialize" or "grok_models"; empty means the CLI cannot
-    #: say, and the picker offers only its default plus free text. A list written here went
-    #: stale twice: codex showed gpt-5.2-codex/o3 while the account had gpt-6-*, and Claude
-    #: offered `fable`, which that account's CLI did not list. See `offered_models`.
-    models_catalog: str = ""
-    #: Regex a pasted token must match before BOSS stores it. A credential pasted into the wrong
-    #: prompt — on boss-1 a 10-character value sat where a Claude setup token belonged — was
-    #: stored without a word and surfaced much later as "401 Invalid bearer token" inside a
-    #: workflow. Empty means the CLI's token has no checkable shape.
-    token_format: str = ""
+    #: Model names worth OFFERING for this harness. The console had one hardcoded Claude list
+    #: for every model knob, so an operator running codex as the reviewer was shown four Claude
+    #: names none of which codex accepts.
+    models: tuple[str, ...] = ()
+    #: Whether `models` is the complete set. Claude's is — BOSS maps those four aliases itself.
+    #: Codex's is not: `codex --model` takes free text and OpenAI adds names faster than this
+    #: file changes, so the list is a suggestion and anything else is still accepted. Pretending
+    #: to enumerate would reject a model that works.
+    models_exhaustive: bool = False
     #: Seconds before BOSS gives up on a build step. Review steps get review_timeout.
     timeout: int = 2400
     review_timeout: int = 420
@@ -280,12 +277,11 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         # as a first-class route rather than a workaround.
         prompt_via="stdin",
         model_flag="--model",
-        # Asked of the CLI: the stream-json `initialize` control request answers with the
-        # account's models (value + description) without running a model turn — measured at
-        # 0.6s on boss-1. Nothing maps names here; the value goes to `--model` unchanged.
-        models_catalog="claude_initialize",
-        # `claude setup-token` mints a long `sk-ant-…` OAuth token.
-        token_format=r"^sk-ant-[A-Za-z0-9_\-]{40,}$",
+        # The four aliases BOSS maps itself — opus -> claude-opus-5, sonnet -> claude-sonnet-5,
+        # fable -> claude-fable-5-1, haiku -> claude-haiku-4-5-20251001. Exhaustive because the
+        # mapping lives here: a name outside this set has nothing to resolve to.
+        models=("opus", "sonnet", "fable", "haiku"),
+        models_exhaustive=True,
         # A governed task HAS completed on claude_code; this is the same engine, reached
         # through its own adapter.
         verified=True,
@@ -341,9 +337,11 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         read_only_args=("--sandbox", "read-only"),
         prompt_via="argv",
         model_flag="--model",
-        # `codex debug models` (verified on 0.154 and 0.158) prints the catalog the ChatGPT
-        # login is entitled to — the same list the CLI's own /model picker shows.
-        models_catalog="codex_debug_models",
+        # NOT ENUMERABLE. `codex --model <MODEL>` is free text — its own --help offers `o3` as
+        # an example and lists no set. These two are the names this repo already uses
+        # (gpt-5.2-codex is settings.openai_model's default) plus that example; the operator can
+        # type any other, which is why models_exhaustive stays False.
+        models=("gpt-5.2-codex", "o3"),
         final_message_flag="--output-last-message",
         token_pattern=r"tokens used\s+([\d,]+)",
         verified=False,
@@ -381,8 +379,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
                         "--tools", "read_file,grep,list_dir", "--max-turns", "12"),
         prompt_prefix="--single=",
         model_flag="--model",
-        # `grok models` prints "Available models:" then one `* name` / `- name` per line.
-        models_catalog="grok_models",
+        models_exhaustive=False,
         verified=False,
         fail_on_nonzero=True,
         description="Official xAI Grok Build CLI using the owner-local Grok subscription "
@@ -559,112 +556,6 @@ def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20,
     except OSError as exc:
         return 127, str(exc)
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
-
-
-_CATALOG_TTL = 600.0
-_CATALOG_RETRY = 60.0
-_catalog_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
-
-
-def offered_models(name: str) -> tuple[str, ...]:
-    """The models the signed-in account can use on this harness, as its own CLI reports them.
-
-    Nothing is written here and nothing is assumed: when the CLI cannot answer (not
-    installed, signed out, no catalog command) the answer is empty, and the picker offers the
-    CLI's default plus free text rather than a guess that goes stale. Cached ten minutes on
-    success, one minute after a failure so a fresh sign-in shows up quickly. Never raises.
-    """
-    spec = BUILTIN_CLI_HARNESSES.get(str(name or "").lower())
-    if spec is None or not spec.models_catalog:
-        return ()
-    now = time.monotonic()
-    cached = _catalog_cache.get(spec.name)
-    if cached and now < cached[0]:
-        return cached[1]
-    try:
-        found = tuple(_read_model_catalog(spec))
-    except Exception:  # noqa: BLE001 — a picker must not break because a CLI did
-        _log.warning("could not read %s's model catalog", spec.name, exc_info=True)
-        found = ()
-    _catalog_cache[spec.name] = (now + (_CATALOG_TTL if found else _CATALOG_RETRY), found)
-    return found
-
-
-def _read_model_catalog(spec: CliHarnessSpec) -> tuple[str, ...]:
-    binary = shutil.which(spec.binary)
-    if not binary:
-        return ()
-    reader = {"codex_debug_models": _codex_catalog, "claude_initialize": _claude_catalog,
-              "grok_models": _grok_catalog}.get(spec.models_catalog)
-    return reader(spec, binary) if reader else ()
-
-
-def _codex_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:
-    """The models codex marks for its own picker, in its own order; hidden ones left out."""
-    code, output = _run_probe(binary, ("debug", "models"), timeout=20,
-                              exclude_env=spec.env_exclude)
-    if code != 0 or "{" not in output:
-        return ()
-    # The probe joins stdout and stderr; the catalog is the JSON object in it.
-    data, _ = json.JSONDecoder().raw_decode(output[output.index("{"):])
-    models = data.get("models") if isinstance(data, dict) else None
-    listed = [m for m in models or [] if isinstance(m, dict)
-              and m.get("visibility") == "list" and isinstance(m.get("slug"), str)]
-    listed.sort(key=lambda m: m["priority"] if isinstance(m.get("priority"), int) else 10**9)
-    return tuple(m["slug"] for m in listed)
-
-
-def _claude_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:
-    """Ask Claude Code the way its Agent SDK does: an `initialize` control request.
-
-    The response lists the account's models without a model turn. Its "default" entry is the
-    CLI's own default, which the picker's empty option already means, so it is not repeated.
-    Run with the same environment as a real run, so the stored subscription token is the
-    login it reports for.
-    """
-    from ..config import get_settings
-
-    env = GenericCliCodeAgent(get_settings(), spec)._env()
-    request = json.dumps({"type": "control_request", "request_id": "boss-models",
-                          "request": {"subtype": "initialize"}})
-    proc = subprocess.Popen(
-        [binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-         "--verbose"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-        env=env, cwd=os.path.expanduser("~") or "/")
-    try:
-        proc.stdin.write(request + "\n")
-        proc.stdin.flush()
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            line = proc.stdout.readline()
-            if not line:
-                return ()
-            try:
-                message = json.loads(line)
-            except ValueError:
-                continue
-            if message.get("type") != "control_response":
-                continue
-            body = message.get("response") or {}
-            body = body.get("response", body)
-            return tuple(str(m["value"]) for m in body.get("models") or []
-                         if isinstance(m, dict) and m.get("value")
-                         and str(m["value"]) != "default")
-        return ()
-    finally:
-        proc.kill()
-        proc.wait(timeout=5)
-
-
-def _grok_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:
-    code, output = _run_probe(binary, ("--no-auto-update", "models"), timeout=20,
-                              exclude_env=spec.env_exclude)
-    if code != 0 or "Available models:" not in output:
-        return ()
-    listed = output.split("Available models:", 1)[1]
-    return tuple(match.group(1) for match in
-                 re.finditer(r"(?m)^\s*[*-]\s+(\S+)", listed))
 
 
 def detect(spec: CliHarnessSpec, settings=None) -> dict:

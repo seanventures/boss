@@ -126,36 +126,29 @@ def claude_credential() -> str:
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
-    # PROVED, NOT ASSUMED. BOSS runs one trivial turn on the subscription — reserved and
-    # receipted like any model call — before it calls it connected. Recording it unproved let a
-    # wrong Claude credential look connected until a workflow failed on it with a 401.
+    # Community cannot run an unmetered CLI proof turn from setup. The credential is
+    # restored and the CLI login is checked by BOSS, but the first governed job must
+    # establish whether this subscription can actually answer.
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/v1/setup/coding-agents/connect", method="POST",
         data=json.dumps({"project_id": "boss-dogfood", "actor": "ceo",
-                         "provider": provider, "prove": True}).encode(),
+                         "provider": provider, "prove": False}).encode(),
         headers={"x-boss-api-key": api_key, "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             result = json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
-        # BOSS's own 422 explanation says what to do and never contains the credential. Any
-        # other body is not echoed: a provider error could contain private data.
-        detail = ""
-        if exc.code == 422:
-            try:
-                detail = str(json.loads(exc.read().decode() or "{}").get("detail") or "")
-            except (ValueError, OSError):
-                detail = ""
-        raise RuntimeError(f"BOSS did not connect {provider}: {detail or f'HTTP {exc.code}'}") from None
+        # Do not echo a response body: a provider error could contain private data.
+        raise RuntimeError(f"BOSS connection refused {provider}: HTTP {exc.code}") from None
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"BOSS connection check could not finish for {provider}") from exc
     if not result.get("connected") or not result.get("entitlement_recorded"):
         raise RuntimeError(f"BOSS did not record the {provider} connection")
     proof = result.get("proof")
-    if not isinstance(proof, dict) or proof.get("ok") is not True or proof.get("skipped"):
-        raise RuntimeError(f"BOSS did not prove the {provider} connection with a live turn")
-    print(f"  {provider}: connected — it answered a test turn")
+    if not isinstance(proof, dict) or proof.get("skipped") is not True:
+        raise RuntimeError(f"BOSS returned an unexpected {provider} proof state")
+    print(f"  {provider}: connection recorded; model use remains unverified")
 
 
 def claude_local_session_ready(api_url: str, api_key: str) -> None:
@@ -276,7 +269,7 @@ def main() -> int:
         print("Then rerun the installer with --connect-claude-local; no token is copied "
               "and no model call is made.")
         print("To import a Claude setup token you supply, rerun with --connect-claude. "
-              "It is stored encrypted, with its key outside BOSS's database.")
+              "It is stored only in the local secret store.")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
     if not api_key:
@@ -297,14 +290,9 @@ def main() -> int:
         fallback = False if provider == "claude_code" else args.accept_database_fallback
         result = send_to_boss(args.api_url, api_key, "boss-dogfood", provider, credential,
                               accept_database_fallback=fallback)
-        # THE SERVER DECIDES WHERE A CLAUDE TOKEN MAY LIVE (setup_service.
-        # store_coding_agent_credential): a secret store, or the database store only when its
-        # key is outside the database. This demanded "local_vault" exactly, so a token the
-        # server had correctly stored was reported as a failure and the connection was never
-        # recorded. Only a reply that does not say where the token went is refused.
-        if provider == "claude_code" and not result.get("backend"):
+        if provider == "claude_code" and result.get("backend") != "local_vault":
             raise RuntimeError(
-                "BOSS did not confirm where it stored the Claude setup token. "
+                "BOSS did not store the Claude setup token in the local secret store. "
                 "Nothing else was accepted."
             )
         print(f"  {provider}: credential stored by BOSS (value never displayed)")

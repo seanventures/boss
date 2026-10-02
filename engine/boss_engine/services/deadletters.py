@@ -838,7 +838,7 @@ class DeadletterRemediationService:
             text(
                 """
                 SELECT id, project_id, task_id, kind, priority, status, payload,
-                       data_boundary, max_attempts, workload_class
+                       data_boundary, max_attempts
                 FROM jobs
                 WHERE id = :job_id AND project_id = :project_id
                 FOR UPDATE
@@ -868,9 +868,6 @@ class DeadletterRemediationService:
             max_attempts=job["max_attempts"],
             run_after_seconds=run_after_seconds,
             data_boundary=job["data_boundary"],
-            # THE SAME KIND OF WORK. Left out, a requeued job became `general`, and model work
-            # whose source only serves owner_sandbox found no eligible model on its retry.
-            workload_class=job["workload_class"] or "general",
         )
         resolved_at = now_utc()
         connection.execute(

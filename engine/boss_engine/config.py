@@ -119,10 +119,7 @@ class Settings(BaseSettings):
     # Jev model, which needs the operator's own TYPESAFE_API_KEY and bills that account.
     # Opus by default: measured on evals/task_rigor it missed 0 of 22 sensitive tasks for about
     # $0.10 a decision, against Haiku's 1 and the keyword lists' 14.
-    # TypeSafe BY DEFAULT, Claude as the fallback: Jev answers whenever this project holds a
-    # TypeSafe key, and Claude (or the worker's API model) answers when there is none, when Jev
-    # fails, or when it is unsure. "claude" opts out of Jev entirely.
-    decision_backend: str = Field(default="typesafe", alias="BOSS_DECISION_BACKEND")
+    decision_backend: str = Field(default="claude", alias="BOSS_DECISION_BACKEND")
     decision_model: str = Field(default="opus", alias="BOSS_DECISION_MODEL")
     # With the typesafe backend, a decision below this confidence is asked again of Claude
     # instead of acted on. 0 disables the second opinion.

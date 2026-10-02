@@ -1474,6 +1474,43 @@ def execute_step(
                     f"this project was started with",
         }
 
+    # RESEARCH IS PAUSED IN COMMUNITY, SO THE STEP STANDS ASIDE AND SAYS SO.
+    #
+    # Discovery research makes model calls that do not yet run under a durable lease, a budget
+    # reservation and a reconciled receipt, so Community refuses to start it (see
+    # discovery_service.COMMUNITY_DISCOVERY_BLOCK_REASON). Calling the tool anyway raised that
+    # refusal as a step failure, and Standard Product Delivery — the workflow Build starts —
+    # deadlettered at its first step on every Community install. The gate itself stays shut:
+    # nothing is commissioned and nothing is spent. What changes is that the run records the
+    # step as not applicable, with the reason, and carries on to the panel, whose research
+    # binding is optional. An adopted dossier above still wins: reading research that already
+    # exists spends nothing.
+    if key == "research":
+        from .discovery_service import (
+            COMMUNITY_DISCOVERY_BLOCK_REASON,
+            community_research_paused,
+        )
+
+        settings = getattr(ctx, "settings", None)
+        if settings is not None and community_research_paused(settings):
+            note = ("Skipped: research is paused in Community. The panel works from your "
+                    "request instead. " + COMMUNITY_DISCOVERY_BLOCK_REASON)
+            if connection is not None:
+                emit_event(
+                    connection, project_id, "workflow.research_skipped", actor,
+                    "workflow_run", str(context.get("run_id") or ""),
+                    {"step_id": str(step.get("id") or ""),
+                     "reason": "paused_in_community",
+                     "detail": COMMUNITY_DISCOVERY_BLOCK_REASON},
+                )
+            return {
+                "capability": key,
+                "tool": None,
+                "status": "not_applicable",
+                "reason": "paused_in_community",
+                "note": note,
+            }
+
     # NO PREVIEW, NO DEPLOY.
     #
     # A workflow that has a `preview` step has it for a reason: somebody looks at the thing

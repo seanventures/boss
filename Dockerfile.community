@@ -62,10 +62,6 @@ COPY scripts/metatron_tui.py ./scripts/metatron_tui.py
 COPY scripts/reliability_mcp_server.py ./scripts/reliability_mcp_server.py
 COPY scripts/seed_demo.py ./scripts/seed_demo.py
 COPY scripts/wait_for_postgres.py ./scripts/wait_for_postgres.py
-# install.sh runs this INSIDE the api container to record the installer's machine. It was never
-# copied into the image, so the step died with "can't open file" on every install — hidden until
-# the node agent before it stopped failing under `sh`.
-COPY scripts/install/ensure_local_place.py ./scripts/install/ensure_local_place.py
 COPY tools ./tools
 COPY docs/product/V1_FEATURE_LOCK.md ./docs/product/V1_FEATURE_LOCK.md
 COPY docs/product/TRACEABILITY.md ./docs/product/TRACEABILITY.md

@@ -121,8 +121,6 @@ class TypeSafeDecider:
     """
 
     backend = "typesafe"
-    #: The model source a governed attempt books its capacity lease against.
-    source_id = "typesafe_jev"
 
     def __init__(self, settings: Settings, *, api_key: Optional[str] = None,
                  client=None, attempts: int = 3):
@@ -233,17 +231,10 @@ class SecondOpinionDecider:
         )
 
 
-def typesafe_decides(settings: Settings) -> bool:
-    """TypeSafe answers when it is the chosen backend (the default) and a key is available.
-    Chosen with no key still means Claude — never a call that can only fail."""
-    chosen = (settings.decision_backend or "typesafe").strip().lower() == "typesafe"
-    return chosen and bool(_typesafe_key(settings))
-
-
 def make_decider(settings: Settings) -> "Decider":
-    """The decider this install is configured for: Jev when it is chosen AND a key is held."""
+    """The decider this install is configured for. TypeSafe only when asked for by name."""
     claude = ClaudeDecider(settings, model=settings.decision_model or None)
-    if not typesafe_decides(settings):
+    if (settings.decision_backend or "claude").strip().lower() != "typesafe":
         return claude
     jev = TypeSafeDecider(settings)
     if settings.decision_fallback_below > 0:
@@ -269,12 +260,8 @@ class ClaudeDecider:
         from .claude_cli_adapter import ClaudeCliAdapter, openai_fallback_usable
 
         cli = ClaudeCliAdapter(settings, model=model)
-        # `source_id` is the model source a governed attempt books its lease against: the one
-        # this decider will actually call, so capacity is never booked on a provider that does
-        # not answer.
         if shutil.which(cli._claude_bin()):
             self._adapter, self.backend = cli, "claude_code"
-            self.source_id = "anthropic_claude_code"
             self.model = model or getattr(settings, "claude_cli_model", None) or ""
         elif openai_fallback_usable(settings):
             from .openai_adapter import OpenAIAdapter
@@ -282,7 +269,6 @@ class ClaudeDecider:
             # A Claude alias ("opus") means nothing to this API, so its own configured model
             # answers.
             self._adapter, self.backend, self.model = OpenAIAdapter(settings), "openai", ""
-            self.source_id = "openai_api"
         else:
             raise RuntimeError(
                 "no model can answer decisions in this process: the claude CLI is not installed "

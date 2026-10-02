@@ -79,17 +79,16 @@ class ControlPlaneClient:
         job_id: str,
         lease_token: str,
         lease_ttl_seconds: int,
-        handing_back: bool = False,
     ) -> dict[str, Any]:
-        body = {
-            "worker_id": worker_id,
-            "job_id": job_id,
-            "lease_token": lease_token,
-            "lease_ttl_seconds": lease_ttl_seconds,
-        }
-        if handing_back:
-            body["handing_back"] = True
-        response = self._client.post("/v1/worker/heartbeat", json=body)
+        response = self._client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": worker_id,
+                "job_id": job_id,
+                "lease_token": lease_token,
+                "lease_ttl_seconds": lease_ttl_seconds,
+            },
+        )
         response.raise_for_status()
         return response.json()
 
@@ -154,14 +153,6 @@ class ControlPlaneClient:
         """Ask the API container to run one investigation — that is where the CLI lives."""
         response = self._client.post(
             f"/v1/investigations/{payload['investigation_id']}/run", json={})
-        response.raise_for_status()
-        return response.json()
-
-    def run_discovery(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Ask the API container to run one leased Discovery job — that is where the CLI lives."""
-        response = self._client.post(
-            f"/v1/discoveries/{payload['run_id']}/execute",
-            json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
         response.raise_for_status()
         return response.json()
 

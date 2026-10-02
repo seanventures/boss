@@ -15,24 +15,8 @@ KEY = "BOSS_CONSOLE_PASSWORD"
 
 
 def private_env(path: Path) -> list[str]:
-    # MISSING IS NOT A SYMLINK. Both failed with one sentence about symlinks, so running this
-    # on a laptop checkout — where BOSS was never installed — sent people looking for a link that
-    # does not exist. The usual cause is simply the wrong machine.
-    if path.is_symlink():
+    if path.is_symlink() or not path.is_file():
         raise SystemExit(f"{path} must be a regular .env file, not a symlink")
-    if not path.is_file():
-        # THE COMMONEST CAUSE IS THE RIGHT MACHINE, WRONG DIRECTORY: a development checkout,
-        # with BOSS installed beside it in ~/boss. Say so when that install is right there.
-        home_install = Path.home() / "boss"
-        if (home_install / ".env").is_file() and home_install.resolve() != path.resolve().parent:
-            raise SystemExit(
-                f"No BOSS install in this directory, but there is one at {home_install}:\n"
-                f"  cd {home_install} && python3 scripts/install/console_password.py show")
-        raise SystemExit(
-            f"No BOSS install here: {path} does not exist. The console password lives on the "
-            "server where BOSS is installed. Run this there, in its install directory "
-            "(~/boss by default), or from here: "
-            "ssh -t user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'")
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o077:
         raise SystemExit(f"{path} must be private (chmod 600) before reading credentials")
@@ -75,10 +59,7 @@ def main() -> int:
     lines = private_env(args.env_file)
     if args.action == "show":
         if not sys.stdout.isatty():
-            raise SystemExit(
-                "Refusing to print a console password outside a terminal (it would land in a "
-                "pipe or a log). Over SSH, add -t: "
-                "ssh -t user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'")
+            raise SystemExit("Refusing to print a console password outside a terminal")
         print(password_from(lines))
     else:
         reset(args.env_file, lines)

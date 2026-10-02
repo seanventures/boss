@@ -1595,6 +1595,99 @@ def test_a_run_with_nothing_adopted_still_researches(eng, project, monkeypatch):
     assert discovery.calls, "the ordinary forward path stopped doing research"
 
 
+class _Edition:
+    def __init__(self, edition):
+        self.boss_edition = edition
+
+
+class EditionCtx(Ctx):
+    """A context whose settings name an edition, as EngineContext.create() does."""
+
+    def __init__(self, engine, edition):
+        super().__init__(engine)
+        self.settings = _Edition(edition)
+
+
+def test_community_skips_paused_research_visibly_and_the_panel_still_convenes(
+        eng, project, monkeypatch):
+    """Build starts Standard Product Delivery, whose first step is research. Community refuses
+    to start research until its model calls are leased, reserved and receipted, so calling the
+    tool deadlettered every Community Build at step one. The gate stays shut — nothing is
+    commissioned — but the step now records that it stood aside, and why, and the run reaches
+    the panel."""
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_never"})
+    meeting = RecordingTool("request_meeting", {"run_id": "mrun_community"})
+    monkeypatch.setattr(runner, "_tool_registry",
+                        lambda: RecordingRegistry([discovery, meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "communitybuild", [
+            {"id": "research", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "a todo app"}},
+             "next": ["meeting"]},
+            {"id": "meeting", "kind": "capability",
+             "binding": {"capability": "meeting",
+                         "inputs": {"directive": "a todo app",
+                                    "research": {"from_step": "research",
+                                                 "field": "dossier"}}},
+             "next": []},
+        ], "research")
+        run = _start(c, project, version["id"], {})
+        ctx = EditionCtx(eng, "community")
+        runner.tick(c, ctx, project_id=project)
+        runner.tick(c, ctx, project_id=project)
+        steps = _steps(c, run["id"])
+        events = c.execute(
+            text("SELECT event_type, data FROM events WHERE project_id=:p "
+                 "AND event_type IN ('workflow.research_skipped', 'workflow.step_succeeded')"),
+            {"p": project},
+        ).mappings().all()
+
+    assert not discovery.calls, "Community commissioned research its gate refuses"
+    research = steps["research"]
+    assert research["status"] == "succeeded", research["last_error"]
+    assert research["output"]["status"] == "not_applicable"
+    assert research["output"]["reason"] == "paused_in_community"
+    assert "paused in Community" in research["output"]["note"]
+    assert meeting.calls, "the panel was never convened after the skipped research"
+    assert "research" not in meeting.calls[0]["args"]
+    skipped = [e for e in events if e["event_type"] == "workflow.research_skipped"]
+    assert skipped and skipped[0]["data"]["reason"] == "paused_in_community"
+
+
+def test_community_still_adopts_research_that_already_exists(eng, project, monkeypatch):
+    """Reading a dossier that already exists spends nothing, so the pause does not hide it."""
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_second"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "communityadopt", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        run = _start(c, project, version["id"], {"adopt_discovery_run_id": "drun_first"})
+        runner.tick(c, EditionCtx(eng, "community"), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert not discovery.calls
+    assert steps["r"]["output"]["await"]["id"] == "drun_first"
+
+
+def test_other_editions_still_research(eng, project, monkeypatch):
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_ent"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "enterpriseresearch", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        _start(c, project, version["id"], {})
+        runner.tick(c, EditionCtx(eng, "enterprise"), project_id=project)
+
+    assert discovery.calls, "the research pause leaked out of Community"
+
+
 def test_an_approved_spec_is_not_approved_again(eng, project, monkeypatch):
     """The panel path approves the spec BEFORE the project exists. Opening a spec_review gate
     then asks the same person the same question a second time, about a build already running —
