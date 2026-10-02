@@ -20,7 +20,8 @@ from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
 from .turn_budget import TurnBudget
 from .turn_subject import (
-    cites_the_record, parse_subject, resolve_subject, stays_on_subject, strays_from_subject,
+    cites_the_record, id_exists, parse_subject, resolve_subject, stays_on_subject,
+    strays_from_subject,
     subject_context,
 )
 from .discovery_service import start_discovery
@@ -2311,7 +2312,8 @@ class IntentRouter:
                         if grounded and any(c.get("tool") == "recall_role_experience"
                                             for c in tool_calls) and (
                                 subject_ev is None or stays_on_subject(
-                                    str(grounded), subject_ev, _question or latest)):
+                                    str(grounded), subject_ev, _question or latest,
+                                    lambda token: id_exists(connection, project_id, token))):
                             reply = str(grounded).strip()
                         else:
                             # Could not ground it. Say which kind of answer this is rather
@@ -2502,7 +2504,12 @@ class IntentRouter:
                         # first answer stands. A NEGATIVE test — see strays_from_subject: an
                         # on-topic continuation that never quotes the run id (every good answer
                         # on a build thread) must still replace a hand-back.
-                        _stray = (strays_from_subject(improved, subject_ev, _question or latest)
+                        _stray = (strays_from_subject(
+                                      improved, subject_ev, _question or latest,
+                                      # A named id counts against the reply only if it is a
+                                      # real object in this project.
+                                      exists=lambda token: id_exists(connection, project_id,
+                                                                     token))
                                   if improved and subject_ev is not None else "")
                         if _stray:
                             _log.warning("continuation refused, keeping the first answer: %s",
