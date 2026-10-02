@@ -69,9 +69,16 @@ def test_a_gate_defaults_to_a_person_approving():
     assert _gate_block()["defaults"]["approver_role"] == "human"
     assert "human" in REGISTERED_ROLES
     assert HUMAN_ROLES == {"human"}
-    assert validate_captain({"id": "gate", "captain": "human"}) == []
+    # REWRITTEN: the step is now a gate (`kind: decision`). `human` was accepted on ANY step,
+    # and a build step naming it then ran as actor 'human'; only a gate may name a person.
+    assert validate_captain({"id": "gate", "kind": "decision", "captain": "human"}) == []
+    assert validate_captain({"id": "gate", "kind": "decision", "captain": "human"},
+                            roster=["video_editor"]) == [], "no project has a role row for a person"
 
 
 def test_naming_a_role_that_does_not_exist_is_still_refused():
-    """Adding `human` must not turn the captain check into a rubber stamp."""
-    assert validate_captain({"id": "gate", "captain": "the_ceos_dog"})
+    """Adding `human` must not turn the captain check into a rubber stamp.
+
+    REWRITTEN to pass the project's agents: the check is against the PROJECT, not a constant."""
+    assert validate_captain({"id": "gate", "kind": "decision", "captain": "the_ceos_dog"},
+                            roster=["video_editor", "media_publisher"])

@@ -55,6 +55,11 @@ CALLERS = {
     "tools/agent_tools.py::* -> assign_skill_to_role": "operator: assign_skill_to_agent",
     "tools/agent_tools.py::* -> grant_mcp": "operator: assign_mcp_to_agent",
     "main.py::* -> register_mcp_server": "operator: POST /v1/mcp/servers",
+    # Integration of the agents and skills-mcp streams: skills-mcp's chat tool connects a server
+    # on an operator's request. It lands switched off and unreviewed, and register_mcp_server
+    # lifts any earlier deletion because a person asked for it again.
+    "tools/builtin.py::_register_write_tools -> register_mcp_server":
+        "operator: the register_mcp_server chat tool",
     "main.py::* -> assign_skill_to_role": "operator: POST /v1/role-skills",
     "main.py::* -> register_role": "operator: POST /v1/roles",
     "routers/agents.py::* -> create_agent": "operator: POST /v1/agents",

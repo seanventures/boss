@@ -88,12 +88,29 @@ def project(eng):
                       # A settled failure deadletters on the FIRST attempt, so these rows now
                       # exist where before three retries were still pending at teardown.
                       "deadletters", "quality_gates",
-                      "deployment_health_samples", "deployment_targets"):
+                      "deployment_health_samples", "deployment_targets",
+                      "role_skills", "roles"):
             try:
                 c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
             except Exception:
                 pass
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
+
+
+def _editor(c, project_id, role_key="video_editor", skill_id="video.trim"):
+    """An agent that holds a skill. An agent step that names nobody is refused at publish on a
+    project where nobody holds anything — there would be nobody to give it to — so the tests
+    that exercise one give the project the agent a real one would have."""
+    c.execute(
+        text("INSERT INTO roles (id, project_id, role_key, display_name, spec) "
+             "VALUES (:i, :p, :r, :r, '{}'::jsonb) ON CONFLICT (project_id, role_key) DO NOTHING"),
+        {"i": f"role_{uuid.uuid4().hex[:10]}", "p": project_id, "r": role_key},
+    )
+    c.execute(
+        text("INSERT INTO role_skills (id, project_id, role_key, skill_id, source) "
+             "VALUES (:i, :p, :r, :s, 'builtin') ON CONFLICT DO NOTHING"),
+        {"i": f"rs_{uuid.uuid4().hex[:10]}", "p": project_id, "r": role_key, "s": skill_id},
+    )
 
 
 class Ctx:
@@ -579,6 +596,7 @@ def test_an_agent_that_stops_for_approval_does_not_release_the_next_step(
     monkeypatch.setattr(agent_steps, "run", stopped)
 
     with eng.begin() as c:
+        _editor(c, project)
         _, version = _publish(c, project, "agent_waits", [
             {"id": "edit", "kind": "capability",
              "binding": {"agent_work": True, "inputs": {"instructions": "trim it"}},
@@ -645,6 +663,7 @@ def test_an_agent_that_finishes_still_completes_its_step(eng, project, monkeypat
     })
 
     with eng.begin() as c:
+        _editor(c, project)
         _, version = _publish(c, project, "agent_done", [
             {"id": "edit", "kind": "capability",
              "binding": {"agent_work": True, "inputs": {"instructions": "trim it"}},

@@ -161,7 +161,12 @@ def test_every_call_to_an_owners_read_is_a_writer_or_one_skills_execution():
 
 #: Every consumer named in the design, and the catalogue call it must make.
 _CONSUMERS = [
-    ("boss_engine.services.agent_steps", "held_skills", "from .skill_catalogue import entries"),
+    # Integration: agent_steps reads the catalogue in ONE place, `_runnable_catalogue`, which
+    # held_skills and the steps stream's `holdings` (publish and run) both go through.
+    ("boss_engine.services.agent_steps", "_runnable_catalogue",
+     "from .skill_catalogue import entries"),
+    ("boss_engine.services.agent_steps", "held_skills", "_runnable_catalogue("),
+    ("boss_engine.services.agent_steps", "holdings", "_runnable_catalogue("),
     ("boss_engine.services.workflow_custom_steps", "resolve_risk",
      "from .skill_catalogue import entry, risk_facts"),
     ("boss_engine.services.workflows", "_validate_bindings",

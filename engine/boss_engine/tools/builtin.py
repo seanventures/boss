@@ -863,22 +863,39 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                               "area so a person chooses what Build follows"},
                 "steps": {
                     "type": "array",
-                    "description": "in order: [{id, capability, skill?, captain?, approval?}]. "
-                                   "`approval` is 'manual' or 'auto' — a capability at or above "
-                                   "the risk floor is forced manual whatever you ask for. You "
-                                   "do NOT wire inputs: a step's required input is connected "
-                                   "to the nearest earlier step that produces it.",
+                    "description": "in order. Each is one of: "
+                                   "{id, capability, captain?, approval?} a built-in step; "
+                                   "{id, skill: <skill or custom step key>, captain?} runs one "
+                                   "skill; {id, mcp_tool: {server, tool}, captain?} runs one MCP "
+                                   "tool; {id, agent: true, instructions?, captain?, skills?: "
+                                   "[...], mcp?: [server names], produces?: [...]} lets an "
+                                   "agent work it out (instructions default to the run's "
+                                   "'instructions' input; leave captain out and BOSS picks the "
+                                   "agent holding the skills); {id, gate: {question, guidance}} "
+                                   "stops for a person; {id, wait_seconds} pauses. `captain` "
+                                   "is one of the project's agents. `approval` is 'manual' or "
+                                   "'auto' — a capability at or above the risk floor is forced "
+                                   "manual whatever you ask for. You do NOT wire inputs: a "
+                                   "step's required input is connected to the nearest earlier "
+                                   "step that produces it.",
                     "items": {"type": "object"},
                 },
                 "inputs": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "What the OPERATOR supplies when starting a run, e.g. "
-                                   "['media_artifact_id', 'title']. Needed only for inputs no "
+                                   "['media_artifact_id', 'title'] (describe each in "
+                                   "input_details). Needed only for inputs no "
                                    "step produces — typically the first step's. Anything "
                                    "neither produced upstream nor listed here is refused, "
                                    "because a workflow that publishes and then dies on a "
                                    "missing value is worse than one that will not publish.",
+                },
+                "input_details": {
+                    "type": "object",
+                    "description": "Optional, per input name: {title, description, required} "
+                                   "— the label and hint the start form shows. required "
+                                   "defaults to true.",
                 },
                 "project_id": {"type": "string"},
             },
@@ -916,10 +933,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 # operator means. Defining the step that binds it is a safe write the agent is
                 # already trusted with (draft_custom_step is on the write allowlist), so it is
                 # done here rather than handed back as an error nobody can act on.
-                made = _ensure_steps_for_skills(c, pid, spec, actor)
+                made = _ensure_steps_for_mcp_tools(c, pid, spec, actor)
+                made += _ensure_steps_for_skills(c, pid, spec, actor)
+                problems = _resolve_subworkflows(c, pid, spec)
                 # One catalogue build for the whole draft, not one per step (round-2 review).
                 with services_module("skill_catalogue").one_pass(c):
-                    problems = _draft_problems(c, pid, spec, caps_by_key, caps)
+                    problems += _draft_problems(c, pid, spec, caps_by_key, caps)
                 if problems:
                     return {"ok": False, "error": "; ".join(problems[:4])}
                 existing = c.execute(
@@ -3451,6 +3470,21 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
         if not isinstance(raw, dict):
             return {"ok": False, "error": f"step {index + 1} is not an object"}
         capability = str(raw.get("capability") or raw.get("kind") or "").strip().lower()
+        # THE SHAPES THE BUILDER CAN DRAW, so the agent can draft them too. Only built-in
+        # capabilities and skill-bound custom steps were expressible here, so a workflow the
+        # agent drafted could never leave the agent to BOSS, scope a step's skills, call an MCP
+        # tool, or stop for a person — and "agent_work" was refused as "not a capability".
+        if raw.get("agent") is True or capability in _AGENT_STEP_WORDS:
+            capability = "agent_work"
+        elif isinstance(raw.get("gate"), dict) or raw.get("gate") is True \
+                or capability in _GATE_WORDS:
+            capability = "gate"
+        elif raw.get("wait_seconds") is not None or capability in _WAIT_WORDS:
+            capability = "wait"
+        elif raw.get("run_workflow") or capability in _SUBWORKFLOW_WORDS:
+            capability = "run_workflow"
+        elif isinstance(raw.get("mcp_tool"), dict):
+            capability = "mcp_tool"
         if not capability:
             return {"ok": False, "error": f"step {index + 1} has no capability"}
         step_id = re.sub(r"[^a-z0-9_]+", "_",
@@ -3469,7 +3503,33 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
         # have been refused by `validate_workflow_spec`, which is the good outcome; writing a
         # shape it ACCEPTS but the runtime reads differently is the bad one.
         entry: dict[str, Any] = {"id": step_id, "kind": "capability", "next": []}
-        if raw.get("skill") or capability == "custom":
+        if capability == "agent_work":
+            entry["binding"] = _agent_step_binding(raw)
+        elif capability == "gate":
+            gate = raw.get("gate") if isinstance(raw.get("gate"), dict) else {}
+            entry = {"id": step_id, "kind": "decision", "next": [], "binding": {},
+                     "question": str(gate.get("question") or raw.get("question") or "").strip(),
+                     "guidance": str(gate.get("guidance") or raw.get("guidance") or "").strip(),
+                     # A PERSON answers a gate unless the draft names somebody else.
+                     "captain": str(raw.get("captain") or "human").strip().lower()}
+        elif capability == "wait":
+            entry = {"id": step_id, "kind": "timer", "next": [], "binding": {},
+                     "wait_seconds": int(raw.get("wait_seconds") or 3600)}
+        elif capability == "run_workflow":
+            # Named by KEY, the way a model knows a workflow; resolved to the version that is
+            # live now once there is a connection (`_resolve_subworkflows`).
+            entry = {"id": step_id, "kind": "subworkflow", "next": [],
+                     "binding": {"workflow_version_id": ""},
+                     "_workflow_key": str(raw.get("run_workflow") or raw.get("workflow")
+                                          or "").strip()}
+        elif capability == "mcp_tool":
+            tool = raw["mcp_tool"]
+            entry["binding"] = {"custom_step": "", "inputs": raw.get("input") or {}}
+            # Resolved to a custom step (made if missing) once there is a connection; see
+            # `_ensure_steps_for_mcp_tools`.
+            entry["_mcp_tool"] = {"server": str(tool.get("server") or "").strip(),
+                                  "tool": str(tool.get("tool") or tool.get("name") or "").strip()}
+        elif raw.get("skill") or capability == "custom":
             entry["binding"] = {"custom_step": str(raw.get("skill") or "").strip().lower(),
                                 "inputs": raw.get("input") or {}}
             # The binding names the step, not the capability — but the capability is where
@@ -3478,10 +3538,10 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
             entry["_capability"] = capability
         else:
             entry["binding"] = {"capability": capability, "inputs": raw.get("input") or {}}
-        if raw.get("captain"):
+        if raw.get("captain") and entry["kind"] != "decision":
             entry["captain"] = str(raw["captain"]).strip().lower()
         mode = str(raw.get("approval") or "").strip().lower()
-        if mode in ("manual", "auto"):
+        if mode in ("manual", "auto") and entry["kind"] == "capability":
             entry["approval"] = {"mode": mode}
         built.append(entry)
     # THE CHAIN, BUILT NOT ASKED FOR. `next` is a LIST in the runtime's format; a bare string
@@ -3503,7 +3563,7 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     # produces a field of that name, and otherwise by the run's own input.
     # What the OPERATOR supplies when they start this workflow. Declared, never guessed: see
     # `_wire_inputs`.
-    declared = {str(x).strip() for x in (args.get("inputs") or []) if str(x).strip()}
+    declared = set(_drafted_input_details(args.get("inputs"), args.get("input_details")))
     _wire_inputs(built, declared)
     for entry in built:
         entry.pop("_capability", None)
@@ -3521,15 +3581,98 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     #
     # Taken from what the wiring actually BOUND, not from what was asked for: an input the
     # model listed but no step consumes is not something to put on a form.
-    required: dict[str, Any] = {}
+    #
+    # AND AS JSON SCHEMA, with a label and a hint per field. It was `{name: "string"}`, which the
+    # start form can only render as a bare box named after a variable, and which says nothing
+    # about required — so a run started without the one value every step needed was accepted,
+    # and failed three steps in. Every name here is read with `from_input` by some step, so each
+    # IS required; one the model marked `required: false` is offered and not demanded.
+    described = _drafted_input_details(args.get("inputs"), args.get("input_details"))
+    bound: list[str] = []
     for entry in built:
         for value in ((entry.get("binding") or {}).get("inputs") or {}).values():
             if isinstance(value, dict) and value.get("from_input"):
-                required[str(value["from_input"])] = "string"
+                name = str(value["from_input"])
+                if name not in bound:
+                    bound.append(name)
     spec: dict[str, Any] = {"entry_step": built[0]["id"], "steps": built}
-    if required:
-        spec["input_schema"] = required
+    if bound:
+        properties: dict[str, Any] = {}
+        for name in bound:
+            said = described.get(name, {})
+            prop: dict[str, Any] = {
+                "type": "string",
+                "title": str(said.get("title") or name.replace("_", " ").strip().capitalize()),
+            }
+            if said.get("description"):
+                prop["description"] = str(said["description"])
+            if said.get("format"):
+                prop["format"] = str(said["format"])
+            elif name == "instructions":
+                # What an agent step is told to do is a paragraph, not a one-line box.
+                prop["format"] = "textarea"
+            properties[name] = prop
+        spec["input_schema"] = {
+            "type": "object",
+            "required": [n for n in bound if described.get(n, {}).get("required", True)],
+            "properties": properties,
+        }
     return spec
+
+
+#: Words a model uses for "let an agent work it out". All mean binding.agent_work.
+_AGENT_STEP_WORDS = frozenset({"agent_work", "agent", "agent_step"})
+#: Words for "stop and ask a person". All mean a `decision` step.
+_GATE_WORDS = frozenset({"gate", "approval", "approval_gate", "decision", "human_approval"})
+#: Words for "pause for a while". All mean a `timer` step.
+_WAIT_WORDS = frozenset({"wait", "timer", "delay"})
+#: Words for "run another workflow here". All mean a `subworkflow` step.
+_SUBWORKFLOW_WORDS = frozenset({"run_workflow", "subworkflow"})
+
+
+def _agent_step_binding(raw: dict[str, Any]) -> dict[str, Any]:
+    """An agent step from what a model wrote: an instruction, and optionally a scope.
+
+    The instruction defaults to the run's own `instructions` field — "say what you want when you
+    start it", the shape almost every one of these has — and a literal pins it.
+    """
+    said = raw.get("instructions")
+    if said is None or (isinstance(said, str) and not said.strip()):
+        said = {"from_input": "instructions"}
+    binding: dict[str, Any] = {
+        "agent_work": True,
+        "inputs": {**(raw.get("input") or {}), "instructions": said},
+    }
+    for field, source in (("skills", "skills"), ("mcp", "mcp"), ("mcp", "mcp_servers"),
+                          ("produces", "produces"), ("agents", "agents")):
+        value = raw.get(source)
+        if isinstance(value, list) and value:
+            binding[field] = [str(v).strip() for v in value if str(v).strip()]
+    if raw.get("max_steps"):
+        binding["max_steps"] = int(raw["max_steps"])
+    return binding
+
+
+def _drafted_input_details(raw: Any, details: Any = None) -> dict[str, dict[str, Any]]:
+    """`inputs` as a model writes it — names, or {name, title, description, required, format} —
+    with `input_details` ({name: {title, description, required}}) folded in.
+
+    NOT `_declared_inputs`, which reads a PUBLISHED version's input_schema in either shape. This
+    helper was first written under that same name further down the module; Python kept the later
+    definition, so `describe_workflow_run` began reading JSON Schema with it and reported inputs
+    called "required" and "properties" again — the exact incident `_declared_inputs` was written
+    to end. test_no_module_defines_a_name_twice now refuses any such shadowing."""
+    out: dict[str, dict[str, Any]] = {}
+    for item in raw or []:
+        if isinstance(item, dict) and str(item.get("name") or "").strip():
+            out[str(item["name"]).strip()] = dict(item)
+        elif str(item).strip() and not isinstance(item, dict):
+            out[str(item).strip()] = {}
+    if isinstance(details, dict):
+        for name, said in details.items():
+            if str(name).strip() and isinstance(said, dict):
+                out.setdefault(str(name).strip(), {}).update(said)
+    return out
 
 
 def _wire_inputs(built: list[dict[str, Any]], declared: set[str]) -> None:
@@ -3633,10 +3776,30 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
     """
     problems: list[str] = []
     catalogue = services_module("skill_catalogue")
+    custom_steps = services_module("workflow_custom_steps")
     for entry in spec.get("steps", []):
         binding = entry.get("binding") or {}
+        if entry.get("kind") != "capability" or binding.get("agent_work") \
+                or binding.get("typed_decision"):
+            # A gate, a wait or an agent step binds no capability. What can be wrong with one —
+            # who answers it, what an agent is scoped to — is the agent check below.
+            continue
         if binding.get("custom_step"):
             step_key = str(binding.get("custom_step") or "")
+            if step_key.startswith("mcp:"):
+                _, server, tool = (step_key.split(":", 2) + ["", ""])[:3]
+                problems.append(
+                    f"step '{entry.get('id')}' calls {tool} on MCP server '{server}', which this "
+                    "project has not registered. Register the server under Skills and MCP "
+                    "first, then draft the workflow again.")
+                continue
+            defined = custom_steps.get(connection, project_id, step_key)
+            if defined and defined.get("binding_kind") == "mcp_tool":
+                # AN MCP STEP HAS NO SKILL. Resolving its key as one refused every MCP-bound
+                # step as "attaches skill <key>, which this project does not have". The
+                # custom-step check is the one that knows what an MCP step needs.
+                problems.extend(custom_steps.validate_step(connection, project_id, entry))
+                continue
             # THE STEP, THEN THE SKILL BEHIND IT.
             #
             # This looked the step key up in `skill_definitions` directly — so a step whose key
@@ -3682,7 +3845,79 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
             problems.append(
                 f"step '{entry.get('id')}' is {kind}, which always requires a person — it "
                 "cannot be set to auto.")
+    # WHO RUNS EACH STEP — the same check publish makes, made before anything is written, so
+    # the agent can say "nobody holds that skill" instead of creating a workflow that cannot
+    # publish. Names checked against the PROJECT's agents.
+    problems.extend(services_module("step_agents").assignment_problems(
+        connection, project_id, spec))
     return problems
+
+
+def _resolve_subworkflows(connection, project_id: str, spec: dict) -> list[str]:
+    """Point each "run another workflow" step at the live version of the workflow it names."""
+    problems: list[str] = []
+    for entry in spec.get("steps", []):
+        if "_workflow_key" not in entry:
+            continue
+        key = entry.pop("_workflow_key")
+        version = connection.execute(
+            _text("SELECT active_version_id FROM workflow_definitions "
+                  "WHERE project_id = :p AND workflow_key = :k LIMIT 1"),
+            {"p": project_id, "k": key},
+        ).scalar() if key else None
+        if not version:
+            problems.append(
+                f"step '{entry.get('id')}' runs workflow '{key or '?'}', which this project has "
+                "no published version of. Name a workflow this project has "
+                "(describe_workflow lists them).")
+            continue
+        entry["binding"]["workflow_version_id"] = str(version)
+    return problems
+
+
+def _ensure_steps_for_mcp_tools(connection, project_id: str, spec: dict, actor: str) -> list[str]:
+    """Bind each `{mcp_tool: {server, tool}}` step to a custom step that runs that tool.
+
+    Reuses a step already bound to the same server and tool, and defines one otherwise — the
+    same thing the builder's "New step" does — so a drafted MCP step is an ordinary custom step.
+    A server that is not registered is left unbound; `_draft_problems` says so.
+    """
+    step_agents = services_module("step_agents")
+    steps_service = services_module("workflow_custom_steps")
+    created: list[str] = []
+    for entry in spec.get("steps", []):
+        wanted = entry.pop("_mcp_tool", None)
+        if not wanted:
+            continue
+        servers, missing = step_agents.resolve_mcp(connection, project_id, [wanted["server"]])
+        if missing or not wanted["tool"]:
+            entry["binding"]["custom_step"] = (
+                f"mcp:{wanted['server'] or '?'}:{wanted['tool'] or '?'}")
+            continue
+        server = servers[0]
+        existing = connection.execute(
+            _text("SELECT step_key FROM workflow_custom_steps WHERE project_id = :p "
+                  "AND binding_kind = 'mcp_tool' AND mcp_server_id = :s AND mcp_tool_name = :t "
+                  "ORDER BY created_at LIMIT 1"),
+            {"p": project_id, "s": server["id"], "t": wanted["tool"]},
+        ).scalar()
+        if existing:
+            entry["binding"]["custom_step"] = str(existing)
+            continue
+        label = f"{server['name']} {wanted['tool']}".replace("_", " ").strip().title()
+        try:
+            made = steps_service.create(
+                connection, project_id=project_id, actor=actor, label=label,
+                summary=f"Calls {wanted['tool']} on {server['name']}.",
+                binding_kind="mcp_tool", mcp_server_id=str(server["id"]),
+                mcp_tool_name=wanted["tool"], inputs=[], produces=[], knowledge="",
+            )
+        except Exception:  # noqa: BLE001 — reported by _draft_problems as a missing step
+            entry["binding"]["custom_step"] = f"mcp:{server['name']}:{wanted['tool']}"
+            continue
+        entry["binding"]["custom_step"] = made["step_key"]
+        created.append(made["step_key"])
+    return created
 
 
 def _text(sql: str):

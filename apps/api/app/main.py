@@ -22659,17 +22659,21 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
         MANUAL_APPROVAL_RISK_FLOOR,
-        REGISTERED_ROLES,
         blocks,
         palette,
     )
+    from boss_engine.services import step_agents
     from boss_engine.services import workflow_custom_steps as custom_steps
 
     # The project's own steps belong in the same palette as the built-in ones — a customer
     # should not have to know which of their steps BOSS wrote. Optional, because the palette is
     # also browsed before a project is chosen.
     custom: list[dict] = []
+    # WHO A STEP CAN BE GIVEN TO: this project's roster, the same list the publish check uses
+    # (workflows.project_roster). It was a hard-coded set of role keys, so an agent made on the
+    # Agents page was never offered. `human` is offered for gates only.
     roster: frozenset[str] = frozenset()
+    agents: list[dict] = []
     if project_id and database_is_reachable(engine):
         from boss_engine.services.workflows import project_roster
 
@@ -22677,6 +22681,7 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
             custom = [s for s in custom_steps.list_steps(connection, project_id)
                       if s["enabled"]]
             roster = project_roster(connection, project_id)
+            agents = step_agents.project_agents(connection, project_id)
 
     return {
         "capabilities": palette(),
@@ -22687,8 +22692,13 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         # THE PROJECT'S AGENTS, not only the bundled ones: an agent made on the Agents page has
         # to be offered as a captain, or the builder cannot put it on the step it was made for.
         # And not a bundled one the operator deleted: project_roster leaves those out, so the
-        # builder never offers a captain publish would then refuse.
-        "roles": sorted(roster or REGISTERED_ROLES),
+        # builder never offers a captain publish would then refuse. Before a project is chosen
+        # only a person can be named.
+        "roles": sorted(roster) if roster else [step_agents.HUMAN],
+        "agents": [{"role_key": a["role_key"], "name": a["name"], "holds": a["holds"],
+                    "mcp": a.get("mcp") or []}
+                   for a in agents],
+        "human_role": step_agents.HUMAN,
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
             "A capability at or above the risk floor always requires a person, whatever a "

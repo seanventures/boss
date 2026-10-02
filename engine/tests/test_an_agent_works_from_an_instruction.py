@@ -214,6 +214,11 @@ def test_the_loop_gives_a_bounded_run_no_native_tools():
     # (role_mcp_servers), never the project's list.
     mcp_choice = source.split("list_mcp_servers")[0][-300:]
     assert "_granted_mcp_servers(" in mcp_choice and "if bounded" in mcp_choice
+    # The step's own MCP list (steps stream) NARROWS that set and never widens it: agent_steps.run
+    # pins held-and-named servers into `mcp_server_ids`, and only those pinned ids are offered.
+    # (Integration: the steps stream let a step name any registered server; one ownership model,
+    # the agents stream's role_mcp_servers grant, is kept.)
+    assert 'step.get("mcp_server_ids")' in inspect.getsource(agent_loop._granted_mcp_servers)
 
 
 def test_a_bounded_run_resolves_its_skills_from_the_grant():

@@ -512,37 +512,6 @@ def run_echo_exercise(
                 close()
 
 
-@runtime_checkable
-class Sandbox(Protocol):
-    """The surface the code pipeline uses — implemented by EphemeralSandbox and,
-    later, by a microVM-backed sandbox."""
-
-    path: Optional[object]
-
-    def provision(
-        self,
-        owner: str,
-        repo: str,
-        *,
-        base_branch: str = "main",
-        work_branch: Optional[str] = None,
-        token: Optional[str] = None,
-    ) -> object: ...
-
-    def run(self, command: str, *, timeout: Optional[int] = None): ...
-
-    def diff(self) -> list[FileChange]: ...
-
-    def diff_summary(self) -> DiffSummary: ...
-
-    def teardown(self) -> None: ...
-
-
-class SandboxProvider(Protocol):
-    def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox: ...
-
-
-
 def make_sandbox_provider(settings: Settings) -> SandboxProvider:
     kind = (getattr(settings, "sandbox_provider", "local") or "local").lower()
     if kind in ("local", "subprocess"):

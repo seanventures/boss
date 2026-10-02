@@ -577,10 +577,14 @@ def approval_mode_for(capability_key: str, requested: Optional[str]) -> str:
     return mode
 
 
-#: Every role this workforce registers. A step that names anything else would address the dock
-#: to a role with no definition and no record — worse than asking BOSS in general, because it
-#: looks like it worked. Kept here beside the defaults so adding a captain and validating one
-#: are the same file.
+#: The roles BOSS's own capabilities name as their DEFAULT captain — the vocabulary the palette
+#: is written in, checked by test_every_step_has_a_captain.
+#:
+#: NOT WHO A STEP MAY NAME. That used to be this set, so an agent made on the Agents page could
+#: never be put on a step ("names captain 'docs_writer', which is not a role this workforce
+#: has") while roles no project has were offered in the picker. Who a step may name is the
+#: PROJECT's agents — the `roles` table — and `step_agents.assignment_problems` checks that at
+#: publish and at start, where there is a project to ask.
 REGISTERED_ROLES = frozenset({
     "adversarial_reviewer", "cao", "chief_architect", "coo", "cto", "deployment_manager",
     "design_critic", "engineering_captain", "finops_sentinel", "infra_steward",
@@ -615,32 +619,42 @@ HUMAN_ROLES = frozenset({"human"})
 
 def validate_captain(step: Mapping[str, Any],
                      roster: Optional[Iterable[str]] = None) -> list[str]:
-    """Whether a step's named captain is somebody this workforce has.
+    """Whether a step's named agent is somebody this PROJECT has, and may be put there.
 
-    `roster` is everything the PROJECT's steps may name (workflows.project_roster: its agents
-    plus the bundled roles it has not deleted). REGISTERED_ROLES alone is the bundled
-    workforce, so an agent an operator made with POST /v1/agents — whose quick-create screen
-    says it can be put on a step — was refused here as "not a role this workforce has". Every
-    caller with the project in hand passes its roster (workflows.project_roster); one without a
-    project (the catalogue, which only names bundled roles) still gets the fixed list.
+    First the SHAPE (steps stream): `human` only on a gate, a name that is an agent key.
+
+    Then, when `roster` is given, EXISTENCE (agents stream): `roster` is everything the
+    PROJECT's steps may name (workflows.project_roster: its agents plus the bundled roles it
+    has not deleted). REGISTERED_ROLES alone is the bundled workforce, so an agent an operator
+    made with POST /v1/agents — whose quick-create screen says it can be put on a step — was
+    refused here as "not a role this workforce has". Every caller with the project in hand
+    passes its roster (tests/test_a_created_agent_can_captain_a_step.py enforces it), so the
+    fixed bundled list applies only where there is no project — the catalogue, which names only
+    bundled roles. `step_agents.assignment_problems` checks existence again at publish and start.
     """
-    named = str(step.get("captain") or "").strip().lower()
+    from .step_agents import HUMAN, captain_shape_problems, named_agent
+
+    named = named_agent(dict(step))
     if not named:
         return []
+    problems = captain_shape_problems(dict(step))
+    if problems or named == HUMAN:
+        return problems
     # THE ROSTER IS THE WHOLE ANSWER WHEN THERE IS ONE. It already holds the bundled roles the
     # project has not deleted (workflows.project_roster); unioning REGISTERED_ROLES back in here
     # let a step name a bundled agent the operator had deleted (review of milestone/agents,
     # round 2), and the refusal that says what to do never fired.
-    known = (REGISTERED_ROLES if roster is None
+    known = (set(REGISTERED_ROLES) if roster is None
              else {str(r).strip().lower() for r in roster} | HUMAN_ROLES)
     if named in known:
         return []
     others = sorted(known - HUMAN_ROLES)
     return [
-        f"step '{step.get('id', '?')}' names captain '{named}', which is not a role this "
-        f"workforce has. Pick an agent this project has (for example "
-        f"{', '.join(others[:6])}), create it on the Agents page first, or leave the captain "
-        "empty for BOSS to pick."
+        f"step '{step.get('id', '?')}' names agent '{named}', which this project does not "
+        f"have: it is not a role this workforce has. Its agents include: "
+        f"{', '.join(others[:6]) or 'none yet'}{', …' if len(others) > 6 else ''}. Pick one of "
+        f"them, create '{named}' on the Agents page first, or leave the captain empty for BOSS "
+        "to pick."
     ]
 
 

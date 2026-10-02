@@ -25,6 +25,8 @@ import { RunReportPanel } from "./run-report-ui";
 import { HelpTip } from "./help-tip";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
+import { draftFromSpecStep, specFromDraft } from "../lib/workflow-spec";
+import { AgentStepScope, RanAs, StepAgentPicker, stepAgentChip } from "./step-agents-ui";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -519,8 +521,13 @@ type Draft = {
    *  here for a workflow that always does the same thing. */
   agentWork?: boolean;
   instructions?: unknown;
+  /** An agent step's scope — the skills it may use and the MCP servers it may reach. */
+  skills?: string[];
+  mcp?: string[];
   approval?: string;
   config?: Record<string, unknown>;
+  /** The step as loaded; a save is a merge over it (see lib/workflow-spec.ts). */
+  original?: Record<string, unknown>;
 };
 
 type Block = {
@@ -3446,8 +3453,7 @@ function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
  *  waiting for the second caller.
  */
 function stepCaptain(step: RunStep, capability?: Capability): string {
-  const named = String(step.captain ?? "").trim();
-  return named || String(capability?.captain ?? "").trim();
+  return stepAgentChip(step.captain, step.output, capability?.captain)?.role ?? "";
 }
 
 /** A registered role key, as an operator would say it. */
@@ -4272,6 +4278,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         </ol>
       ) : null}
 
+      {/* WHO RAN IT AND WHY. When BOSS picked the agent the console never said which one, or
+          on what grounds; every executed step now records `ran_as`. */}
+      <RanAs output={step.output} stepId={step.step_id} />
+
       {/* ASK ABOUT THIS STEP, WITHOUT LEAVING IT.
           A step that will not ship states its reason and then leaves the operator to act on
           it alone. The dock can read the run, the code, the host and the logs — so the
@@ -4286,7 +4296,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             Reviewer. The engine says so now, per capability. */}
         {stepCaptain(step, capability) ? (
           <AgentChip roleKey={stepCaptain(step, capability)}
-                     note={step.captain ? "named by this workflow" : "answers for this step"} />
+                     note={stepAgentChip(step.captain, step.output, capability?.captain)?.note
+                       ?? ""} />
         ) : null}
         <button type="button" className="cap-btn" data-testid="dw-ask-boss"
                 title={stepCaptain(step, capability)
@@ -5545,43 +5556,20 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
     if (!target && editable.length) setTarget(editable[0].id);
   }, [editable, target, setTarget]);
 
-  /** Turn a stored spec into canvas steps. */
+  /** Turn a stored spec into canvas steps. Each keeps the step it came from, because a save
+   *  is a MERGE over it — see lib/workflow-spec.ts for what was being lost before. */
   const toDraft = useCallback((steps: Record<string, unknown>[]): Draft[] =>
-    steps.map((step) => {
-      const binding = (step.binding ?? {}) as Record<string, unknown>;
-      const approval = (step.approval ?? {}) as Record<string, unknown>;
-      return {
-        id: String(step.id),
-        kind: String(step.kind ?? "capability"),
-        capability: binding.capability ? String(binding.capability) : undefined,
-        customStep: binding.custom_step ? String(binding.custom_step) : undefined,
-        approval: approval.mode ? String(approval.mode) : "auto",
-        // Carried through untouched. The builder cannot yet AUTHOR a step-to-step reference,
-        // which is a gap; silently discarding one somebody else authored is a bug.
-        inputs: (binding.inputs ?? undefined) as Record<string, unknown> | undefined,
-        captain: step.captain ? String(step.captain) : undefined,
-        // AN AGENT STEP, which binds no capability and no custom step. Read back off the same
-        // binding it was saved into, so opening a workflow and saving it cannot turn one into a
-        // step that runs nothing — the bug that destroyed step wiring once already.
-        agentWork: Boolean(binding.agent_work) || undefined,
-        instructions: binding.agent_work
-          ? ((binding.inputs ?? {}) as Record<string, unknown>).instructions
-          : undefined,
-        // Everything that is not id/kind/binding/approval/next is the block's own
-        // configuration — wait_seconds, workflow_version_id — and must survive a round trip
-        // or editing one step would quietly reset another.
-        config: Object.fromEntries(
-          Object.entries(step).filter(([k]) =>
-            !["id", "kind", "binding", "approval", "next"].includes(k)),
-        ),
-      };
-    }), []);
+    steps.map(draftFromSpecStep), []);
+  /** The spec the canvas was IMPORTED from, while creating — its input_schema and every field
+   *  the canvas does not draw travel into the new workflow with its steps. */
+  const [importedSpec, setImportedSpec] = useState<Record<string, unknown> | null>(null);
 
   /** Open the new-workflow panel on an EMPTY canvas. */
   const beginCreating = useCallback(() => {
     setStashed(draft);
     setDraft([]);
     setImportedFrom(null);
+    setImportedSpec(null);
     setImportError(null);
     setNewName("");
     setImportFrom("");
@@ -5593,6 +5581,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
     setNewName("");
     setImportFrom("");
     setImportedFrom(null);
+    setImportedSpec(null);
     setImportError(null);
     if (stashed) setDraft(stashed);
     setStashed(null);
@@ -5620,6 +5609,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
       }
       const steps = toDraft(body.spec.steps);
       setDraft(steps);
+      setImportedSpec(body.spec as Record<string, unknown>);
       setImportedFrom({
         key: importFrom,
         name: installed.find((i) => i.workflow_key === importFrom)?.name ?? importFrom,
@@ -5815,90 +5805,15 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
       return next;
     });
 
-  const spec = useMemo(() => ({
-    entry_step: draft[0]?.id,
-    steps: draft.map((step, index) => {
-      const next = index + 1 < draft.length ? [draft[index + 1].id] : [];
-      if (step.kind !== "capability") {
-        // A control block carries its own configuration at the top level, which is where the
-        // runtime looks for `wait_seconds` and `workflow_version_id`.
-        //
-        // AND ITS CAPTAIN, which this dropped. An Approval gate is the one step where naming
-        // who answers is the whole point, and the save threw it away — so even once the control
-        // appeared, choosing `human` on a gate would not have survived the version.
-        return {
-          id: step.id, kind: step.kind, binding: {}, ...(step.config ?? {}),
-          ...(step.captain ? { captain: step.captain } : {}),
-          next,
-        };
-      }
-      if (step.agentWork) {
-        return {
-          id: step.id,
-          kind: "capability",
-          binding: {
-            agent_work: true,
-            inputs: {
-              // Everything else the step passes along is context the agent is given as facts —
-              // an artifact id an earlier step produced, which it must use verbatim.
-              ...(step.inputs ?? {}),
-              // The instruction is the step. Defaulted to the run's own `instructions` field,
-              // because "say what you want when you start it" is the shape almost every one of
-              // these has.
-              instructions: step.instructions ?? { from_input: "instructions" },
-            },
-          },
-          approval: { mode: step.approval },
-          // NO CAPTAIN IS A REAL CHOICE HERE, and a different one from the other kinds: it means
-          // "whichever agent fits this instruction", which BOSS works out from what each agent
-          // is for and what it holds.
-          ...(step.captain ? { captain: step.captain } : {}),
-          next,
-        };
-      }
-      if (step.customStep) {
-        const defined = customSteps.find((c) => c.step_key === step.customStep);
-        return {
-          id: step.id,
-          kind: "capability",
-          binding: {
-            custom_step: step.customStep,
-            // What the step was saved with wins. The default below — every input read from the
-            // run's input by name — is a starting point for a step just dropped on the canvas,
-            // not a rule to impose on one that already has wiring.
-            inputs: step.inputs ?? Object.fromEntries(
-              (defined?.inputs ?? []).map((i) => [i.name, { from_input: i.name }]),
-            ),
-          },
-          approval: { mode: step.approval },
-          // Only when one was chosen. An absent captain is the existing behaviour — the step
-          // runs as the anonymous workflow runner — and writing an empty string would make
-          // every step look like it had been assigned to nobody on purpose.
-          ...(step.captain ? { captain: step.captain } : {}),
-          next,
-        };
-      }
-      const capability = capabilities.find((c) => c.key === step.capability);
-      return {
-        id: step.id,
-        kind: "capability",
-        binding: {
-          capability: step.capability,
-          // Required inputs are read from the run's input by name. The builder does not invent
-          // values — a workflow that hard-codes the thing being built only works once. Same
-          // rule as above: existing wiring is preserved rather than overwritten.
-          inputs: step.inputs ?? Object.fromEntries(
-            (capability?.required_inputs ?? []).map((name) => [name, { from_input: name }]),
-          ),
-        },
-        approval: { mode: step.approval },
-        // A capability already has a default captain; naming one here overrides it for this
-        // workflow, which the runtime has honoured all along.
-        ...(step.captain ? { captain: step.captain } : {}),
-        next,
-      };
-    }),
-  }), [draft, capabilities, customSteps]);
+  // THE SPEC IS A MERGE OVER WHAT WAS LOADED, not a rebuild from the canvas. Rebuilding dropped
+  // input_schema (so Start fell back to a sample), an agent step's produces/agents/max_steps, a
+  // typed decision's binding and every field the canvas does not draw — one save broke every
+  // bundled example. See lib/workflow-spec.ts.
+  const spec = useMemo(() => specFromDraft(draft, {
+    loaded: creating ? importedSpec : (loaded?.spec as Record<string, unknown> | undefined),
+    capabilities,
+    customSteps,
+  }), [draft, capabilities, customSteps, creating, importedSpec, loaded]);
 
   return (
     <div className="dw-builder">
@@ -6386,27 +6301,38 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
                       `decision` — showed no agent control at all: the operator could place the
                       one step whose entire purpose is that a PERSON answers it, and had nowhere
                       to say who. */}
+                  {/* THE PROJECT'S AGENTS, not a constant list — and what an empty choice MEANS
+                      for this kind of step, said in the option itself: BOSS picks the agent
+                      that holds what the step needs (services/step_agents.py). A person is
+                      offered on a gate only. */}
                   {(step.kind === "capability" || step.kind === "decision")
                    && stepRoles.length ? (
-                    <select className="input dw-draft-captain" value={step.captain ?? ""}
-                            onChange={(e) => setDraft((c) =>
-                              c.map((st, i) => (i === index
-                                ? { ...st, captain: e.target.value || undefined } : st)))}
-                            aria-label={`Agent for ${step.id}`}
-                            data-testid={`dw-draft-captain-${step.id}`}>
-                      <option value="">
-                        {step.kind === "decision"
-                          ? "human (default)"
-                          : step.agentWork
-                            ? "whichever agent fits — BOSS picks"
-                            : capability?.captain
-                              ? `${capability.captain} (default)`
-                              : "no agent — runs as the workflow"}
-                      </option>
-                      {stepRoles.map((role) => (
-                        <option key={role} value={role}>{role}</option>
-                      ))}
-                    </select>
+                    <StepAgentPicker
+                      value={step.captain}
+                      onChange={(next) => setDraft((c) =>
+                        c.map((st, i) => (i === index ? { ...st, captain: next } : st)))}
+                      roles={stepRoles} holdings={holdings}
+                      isGate={step.kind === "decision" || Boolean(capability?.is_gate)}
+                      emptyLabel={step.kind === "decision"
+                        ? "a person (default)"
+                        : step.agentWork
+                          ? "whichever agent fits — BOSS picks"
+                          : mine
+                            ? `the agent holding ${mine.skill_id ?? "this step's tool"} — BOSS picks`
+                            : "whoever starts the run (built-in step)"}
+                      testId={`dw-draft-captain-${step.id}`}
+                      ariaLabel={`Agent for ${step.id}`} />
+                  ) : null}
+                  {step.agentWork ? (
+                    <AgentStepScope
+                      stepId={step.id}
+                      skills={step.skills ?? []} mcp={step.mcp ?? []}
+                      available={step.captain
+                        ? (holdings[step.captain] ?? [])
+                        : [...new Set(Object.values(holdings).flat())].sort()}
+                      servers={bindable.mcp_servers.map((s) => ({ id: s.id, name: s.name }))}
+                      onChange={(scope) => setDraft((c) => c.map((st, i) => (i === index
+                        ? { ...st, skills: scope.skills, mcp: scope.mcp } : st)))} />
                   ) : null}
                   {/* CAN THAT AGENT ACTUALLY DO IT?
                       Naming an agent is half the decision; holding the skill is the other half,

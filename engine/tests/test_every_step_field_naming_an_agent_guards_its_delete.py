@@ -35,6 +35,11 @@ READ_INLINE = re.compile(
 NOT_AN_AGENT_ON_A_STEP = {
     (("binding", "agent_work"), "services/workflows.py"): "a flag: the step is an instruction",
     (("binding", "agent_work"), "services/workflow_capability_runner.py"): "the same flag",
+    # The same flag, read where the steps stream decides who runs a step, where the templates
+    # stream checks readiness, and where draft_workflow builds an agent step.
+    (("binding", "agent_work"), "services/step_agents.py"): "the same flag",
+    (("binding", "agent_work"), "services/workflow_readiness.py"): "the same flag",
+    (("binding", "agent_work"), "tools/builtin.py"): "the same flag",
     (("binding", "agent_group_version_id"), "services/workflows.py"):
         "an agent GROUP version id, not a role key",
     (("role_key",), "services/agent_loop.py"):
