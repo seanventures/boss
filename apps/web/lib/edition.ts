@@ -161,7 +161,7 @@ export function communityNavCopy(areaId: string): { label?: string; sub?: string
   }
   if (areaId === "discovery") {
     return {
-      sub: "Cited research dossiers and candidate outcomes",
+      sub: "Saved dossiers and candidate outcomes; new research paused",
     };
   }
   if (areaId === "reports") {

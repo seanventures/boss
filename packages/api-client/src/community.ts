@@ -1021,21 +1021,8 @@ export type DiscoveryRun = {
   error?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
-  /** Why the run is not moving, in words an operator can act on; null when it is fine. */
-  attention?: ModelAttention | null;
 };
 export type DiscoveriesResponse = { discoveries: DiscoveryRun[] };
-
-/** engine/boss_engine/services/model_failures.py `explain`, plus where the work stands. */
-export type ModelAttention = {
-  kind: string;          // login_rejected | budget_wait | budget_refused | no_model | ...
-  state?: string;        // stopped | waiting | retrying
-  headline: string;
-  action: string;
-  href?: string | null;
-  retry?: boolean;
-  detail?: string;
-};
 
 export type SandboxSummary = {
   sandbox_id: string;

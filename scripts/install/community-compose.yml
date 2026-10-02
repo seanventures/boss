@@ -79,7 +79,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-    image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       db:
@@ -132,11 +132,6 @@ services:
       BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
-      # The operator's store choice and the database store's key, both from .env. Without the
-      # key the database store keeps its key inside Postgres; without the choice, BOSS ignored
-      # the installer's "database or infisical" answer.
-      BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
-      BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
@@ -213,7 +208,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-    image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       api:
@@ -256,11 +251,6 @@ services:
       BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
       BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
       BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
-      # The operator's store choice and the database store's key, both from .env. Without the
-      # key the database store keeps its key inside Postgres; without the choice, BOSS ignored
-      # the installer's "database or infisical" answer.
-      BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
-      BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
@@ -326,7 +316,7 @@ services:
         # correct, and the only way in was unreachable.
         NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-http://127.0.0.1:${BOSS_API_PORT:-8000}}
         NEXT_PUBLIC_BOSS_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
-    image: boss-community-web:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: boss-community-web:${BOSS_COMMUNITY_IMAGE_TAG:-local}
     restart: unless-stopped
     depends_on:
       api:

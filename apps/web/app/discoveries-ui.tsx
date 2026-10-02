@@ -3,7 +3,7 @@
 import React, { useActionState, useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
-import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome, ModelAttention } from "@boss/api-client";
+import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome } from "@boss/api-client";
 
 import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
 import { SubmitButton } from "./submit-button";
@@ -238,12 +238,7 @@ export function DiscoveriesHome({
                   })}
                 </span>
 
-                {d.attention ? (
-                  <span className={d.attention.state === "waiting" ? "dx-row-wait" : "dx-row-fail"}
-                        data-testid="discovery-row-attention">
-                    {d.attention.state === "waiting" ? "⏳" : "⚠"} {d.attention.headline}
-                  </span>
-                ) : d.status === "failed" ? (
+                {d.status === "failed" ? (
                   <span className="dx-row-fail">✗ {(d.error ?? "failed").slice(0, 120)}</span>
                 ) : (
                   <span className="dx-row-stats">
@@ -323,8 +318,7 @@ function DiscoveryDetail({ run, orgId, researchAvailable, onBack }: {
         })}
       </div>
 
-      {run.attention ? <AttentionBanner attention={run.attention} /> : run.error
-        ? <div className="panel" style={{ padding: 12, color: "#f85149" }}>⚠ {run.error}</div> : null}
+      {run.error ? <div className="panel" style={{ padding: 12, color: "#f85149" }}>⚠ {run.error}</div> : null}
 
       {/* Evidence gate — compact, always visible */}
       {gate ? (
@@ -425,27 +419,6 @@ function DiscoveryDetail({ run, orgId, researchAvailable, onBack }: {
           ) : null}
         </Collapsible>
       ) : null}
-    </div>
-  );
-}
-
-
-/**
- * WHY IT IS NOT MOVING, AND WHAT TO DO. A run that said "queued" while its worker was refused,
- * its budget was capped or its Claude login was rejected gave the operator nothing to act on.
- * The API now explains each of those (model_failures.explain); this puts it where they look.
- */
-function AttentionBanner({ attention }: { attention: ModelAttention }) {
-  const waiting = attention.state === "waiting";
-  return (
-    <div className={`panel dx-attention ${waiting ? "is-waiting" : "is-stopped"}`} role="status"
-         data-testid="discovery-attention" data-kind={attention.kind}>
-      <div className="dx-attention-head">{waiting ? "⏳" : "⚠"} {attention.headline}</div>
-      <div className="dx-attention-action">
-        {attention.action}
-        {attention.href ? <> <a href={attention.href}>Open →</a></> : null}
-      </div>
-      {attention.detail ? <div className="detail dx-attention-detail">{attention.detail}</div> : null}
     </div>
   );
 }

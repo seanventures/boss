@@ -10813,28 +10813,20 @@ def start_discovery_endpoint(payload: open_bodies.DiscoveryStartBody):
     actor = str(current_api_principal.get() or payload.get("actor") or "executive_console").strip()
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
-    from .services.discovery_service import start_discovery
-
+    from .services.discovery_service import (
+        DiscoveryExecutionBlocked,
+        require_discovery_runtime,
+        start_discovery,
+    )
+    try:
+        require_discovery_runtime(settings)
+    except DiscoveryExecutionBlocked as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     run_id = start_discovery(
         project_id=project_id, title=title, seed=seed,
-        context=(payload.get("context") or "").strip(), settings=settings, actor=actor,
+        context=(payload.get("context") or "").strip(), settings=settings,
     )
     return {"status": "running", "run_id": run_id}
-
-
-@app.post("/v1/discoveries/{run_id}/execute")
-def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecuteBody):
-    """The worker hands a leased `discovery.run` job here: the research agent (the Claude CLI)
-    lives in this container. Each stage spends under the job's lease, with its own
-    reservation and receipt; stages already paid for replay. Fenced by the lease token."""
-    if not database_is_reachable(engine):
-        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.discovery_service import execute_discovery_job
-
-    return execute_discovery_job(
-        settings, run_id=run_id, job_id=payload.job_id,
-        worker_id=payload.worker_id, lease_token=payload.lease_token,
-    )
 
 
 @app.get("/v1/discoveries")
@@ -10956,17 +10948,26 @@ def deepen_discovery_endpoint(run_id: str, payload: Optional[dict] = None):
     (competitor/pain/demand/timing) for a richer, more-cited dossier. Returns the new run_id."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.discovery_service import load_discovery_run, start_discovery
+    from .services.discovery_service import (
+        DiscoveryExecutionBlocked,
+        load_discovery_run,
+        require_discovery_runtime,
+        start_discovery,
+    )
     with begin(engine) as c:
         parent = load_discovery_run(c, run_id)
         if parent is None:
             raise HTTPException(status_code=404, detail="discovery run not found")
         actor = str(current_api_principal.get() or (payload or {}).get("actor") or "executive_console").strip()
         require_project_actor(c, parent["project_id"], actor, "workflow_execute")
+    try:
+        require_discovery_runtime(settings)
+    except DiscoveryExecutionBlocked as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     new_id = start_discovery(
         project_id=parent["project_id"], title=f"[deep] {parent['title']}"[:300],
         seed=parent["seed"] or "", context=parent["context"] or "",
-        settings=settings, deep=True, parent_run_id=run_id, actor=actor,
+        settings=settings, deep=True, parent_run_id=run_id,
     )
     return {"status": "running", "run_id": new_id, "deep": True}
 
@@ -20493,9 +20494,6 @@ def get_project_settings(project_id: str) -> dict:
     with begin(engine) as connection:
         chosen = ps.get_all(connection, project_id)
         connected = connected_engines(connection, settings, project_id)
-        from boss_engine.services.setup_service import engine_login_states
-
-        login_states = engine_login_states(connection, project_id)
         # THE PROJECT'S OWN CHOICES DECIDE WHICH MODELS A LANE OFFERS. The lists were drawn from
         # the deployment settings, so choosing codex as the reviewer here still offered Claude's
         # models beside it — the reviewer's model list follows the reviewer's harness, and that
@@ -20540,9 +20538,7 @@ def get_project_settings(project_id: str) -> dict:
             # So the console can say WHY the list is short, and what to do about it, instead
             # of showing a one-item picker with no explanation.
             "connected_engines": sorted(connected),
-            "connected_engine_detail": [connected[name] for name in sorted(connected)],
-            # A connected engine whose login the provider just rejected: shown as broken.
-            "engine_login_states": login_states}
+            "connected_engine_detail": [connected[name] for name in sorted(connected)]}
 
 
 @app.put("/v1/settings/{key}")
@@ -20901,7 +20897,6 @@ def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse
                 payload.job_id,
                 payload.lease_token,
                 payload.lease_ttl_seconds,
-                handing_back=payload.handing_back,
             )
         except LeaseNotFoundError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
@@ -23849,9 +23844,6 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         try:
             run = workflow_runtime.start_run(
                 connection, project_id=project_id, actor=actor, input_data=run_input,
-                # IDEMPOTENT WHEN THE CALLER SAYS SO: the same dedupe_key returns the run it
-                # already started. The console sends one per intent ("replace run X"), so a
-                # second press of Stop-and-run-again cannot start a second workflow.
                 dedupe_key=str(payload.get("dedupe_key") or "")
                            or f"delivery:{work_class or workflow_key}:{uuid4().hex[:12]}",
                 workflow_version_id=version_id,

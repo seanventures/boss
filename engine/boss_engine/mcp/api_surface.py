@@ -62,11 +62,6 @@ _EXCLUDED_EXACT = {
     "/v1/kms/keys/{key_entry_id}/lease": "secret_lease_may_reveal_raw_material",
     "/v1/kms/leases/{lease_id}/resolve": "secret_resolution_returns_raw_material",
     "/v1/github/community/jobs/{job_id}/execute": "github_worker_lease_protocol",
-    # The worker hands its leased discovery.run job to the API, where the research agent lives.
-    # Every stage spends only under that job's lease token, so the route is a worker protocol,
-    # not an operator action. Held as `execute`, it answered the worker 409 and every Community
-    # discovery sat queued until its job deadlettered.
-    "/v1/discoveries/{run_id}/execute": "discovery_worker_lease_protocol",
     "/v1/github/code-sync-runs/{sync_run_id}/apply": "github_worker_lease_protocol",
     "/v1/github/resolution-plans/{plan_id}/apply": "github_worker_lease_protocol",
     "/v1/github/merge-authorizations/{authorization_id}/apply": "github_worker_lease_protocol",

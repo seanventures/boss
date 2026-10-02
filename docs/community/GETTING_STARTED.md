@@ -178,11 +178,11 @@ boss connect ollama --local-model qwen2.5-coder:7b --yes
 
 ```text
   Ollama connected: qwen2.5-coder:7b at http://host.docker.internal:11434/v1 (unverified until a governed job uses it; no model was called)
-  No hosted model is connected; every role already has a model you chose, so none was changed
+  The 4 role(s) BOSS had given the previous local model now use Ollama qwen2.5-coder:7b
   Chat and the other OPENAI_* surfaces now use qwen2.5-coder:7b too (no hosted model is connected)
 ```
 
-As the second line says, the build roles keep their old model. Change them in Mission Control: **Settings → Repo and model → Who does what**. Set the model for the **Implementer**, the **Reviewer**, **Hard problems**, and **Routine work** to `qwen2.5-coder:7b`. Each setting is saved for the project and applies on the next run.
+The build roles BOSS set (the **Implementer**, the **Reviewer**, **Hard problems**, and **Routine work**) move to the new model with chat. A role you set yourself in **Settings → Repo and model → Who does what** stays as you set it; the second line then ends with `1 role(s) you chose were left alone`. See [Model connections](MODEL_CONNECTIONS.md#ollama).
 
 ### If something goes wrong
 
@@ -214,8 +214,10 @@ BOSS writes code on a branch named `boss/code/...` and opens a pull request. It 
 Without a connected repository, a build gets through the panel and the PRD, then stops at the build step with:
 
 ```text
-No repository registered for project boss-dogfood and no legacy default configured. Register a GitHub connection and a repository binding first.
+No repository registered for project boss-dogfood and no legacy default configured. Connect a GitHub repository in Mission Control, Settings, Repo and model, Repository, then rerun this step.
 ```
+
+The **+ New project** form says the same before you start: with no repository connected, its **Which repository?** step reads "This project has no repository connected yet, and a build needs one" and links to the **Repository** card.
 
 Connect the repository as above, then retry the step from the run (step 6).
 
@@ -223,21 +225,19 @@ Connect the repository as above, then retry the step from the run (step 6).
 
 A project in Mission Control is one piece of software you want built. Each one runs down a workflow: a panel writes a PRD, BOSS builds the code on a branch, runs your tests, and opens a pull request.
 
-!!! warning "Choose a path without a research step"
-    In this release, the default path, **Standard Product Delivery**, starts with a research step that BOSS Community does not run. A run on that path stops at once with `Discovery research is unavailable in Community until model calls have durable leases, budget reservations, and reconciled receipts.` Pick **Backend Service Setup** instead, as below. It runs a panel, a spec review, and the build.
+**Build** uses the default path, **Standard Product Delivery**. Its first step is research, which is paused in BOSS Community, so the run records that step as **skipped** with the reason and goes straight on to the panel. You do not need to choose another workflow.
 
 1. Open **Command Center**. The top of the page reads **Ask BOSS** and **What do you want to do?**
-2. In the **Workflow** dropdown under the input, choose **Backend Service Setup**. BOSS saves it as this project's default path and shows **Saved**. You only need to do this once.
-3. Type what you want built. Keep the first one small and testable, for example:
+2. Type what you want built. Keep the first one small and testable, for example:
 
     ```text
     A tiny command-line tip calculator in Python: tip.py takes a bill amount and a tip
     percent and prints the tip and total, with a pytest test.
     ```
 
-4. Press **Build →** (or Ctrl+Enter, ⌘+Enter on a Mac). The hint under the button reads "Down the governed path — a panel, a PRD you approve, then code". BOSS replies **Started.** and opens the run on the **Workflow** page.
+3. Press **Build →** (or Ctrl+Enter, ⌘+Enter on a Mac). The hint under the button reads "Down the governed path — a panel, a PRD you approve, then code". BOSS replies **Started.** and opens the run on the **Workflow** page.
 
-The **+ New project** button in the top bar does the same thing as a four-step form: **What you are building**, **How it gets built**, **Where it lives**, and **Review**. In **How it gets built**, set **Which path should it take?** to **Backend Service Setup**. In **Where it lives**, pick the repository you connected in step 4. Then press **Start the project**.
+The **+ New project** button in the top bar does the same thing as a four-step form: **What you are building**, **How it gets built**, **Where it lives**, and **Review**. Leave **Which path should it take?** at the default. In **Where it lives**, pick the repository you connected in step 4. If none is connected, the form says a build needs one and links to the **Repository** card. Then press **Start the project**.
 
 ### From a terminal instead
 
@@ -247,31 +247,33 @@ The same start, through the API. Run it from the install directory; `boss-commun
 cd ~/boss
 source ./boss-community.env.sh
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" -H "Content-Type: application/json" \
-  -d "{\"project_id\":\"$BOSS_PROJECT_ID\",\"workflow_key\":\"backend_service_setup\",\"input\":{\"title\":\"Tip calculator\",\"directive\":\"A tiny command-line tip calculator in Python with a pytest test.\"}}" \
+  -d "{\"project_id\":\"$BOSS_PROJECT_ID\",\"actor\":\"ceo\",\"work_class\":\"project.new\",\"input\":{\"title\":\"Tip calculator\",\"directive\":\"A tiny command-line tip calculator in Python with a pytest test.\"}}" \
   "$BOSS_API_URL/v1/delivery-workflows/start"
 ```
 
-The reply is the new run. It starts with `"status":"running"`, `"workflow_name":"Backend Service Setup"`, and the `meeting` step first in `current_frontier`.
+This is the same call **Build** makes. The reply is the new run. It starts with `"status":"running"`, `"workflow_name":"Standard Product Delivery"`, and the `research` step in `current_frontier`; a few seconds later research shows as skipped and `meeting` is running.
 
 ### If something goes wrong
 
-- **The run stops at `research` with `Discovery research is unavailable in Community...`.** The run used Standard Product Delivery. Set the **Workflow** dropdown to **Backend Service Setup** and press **Build →** again.
 - **`Could not start the build.`** Check `boss doctor` and step 3.
 
 ## 6. Follow the governed path
 
-Open the run on the **Workflow** page. Runs are grouped as **Needs you**, **Running**, **Stopped**, and **Done**. On Backend Service Setup, the steps run in this order:
+Open the run on the **Workflow** page. Runs are grouped as **Needs you**, **Running**, **Stopped**, and **Done**. On Standard Product Delivery, the steps run in this order:
 
+1. **research.** Shown as **skipped**. Hover the ⓘ for the reason: `Skipped: research is paused in Community. The panel works from your request instead.` The skip is also recorded as a `workflow.research_skipped` event. Nothing is researched and nothing is spent.
 1. **meeting.** A panel of agents discusses the goal and drafts a PRD. On 8 CPUs with no GPU, this took about 24 minutes with the local 7b model.
-2. **spec_review.** The PRD is approved. In this release, PRD approval is automatic by default. **Approvals** shows the decision "Approve publishing the PRD the team drafted" marked **AUTO-APPROVED**, with the PRD attached. Read it here: it is what the build will be measured against.
-3. **build.** BOSS clones your repository and runs the governed coding pipeline. You can follow it in **Factory**: Queued, Cloning repo, Designing plan, QA writing tests, Engineer implementing, Running tests, Adversarial review, Mutation check, Opening PR, Done. If the plan touches something sensitive, it stops at **Awaiting plan approval** and an approval appears in **Approvals**.
-4. **report.** A run report with the cost per step.
-5. **deploy.** An approval gate. BOSS stops and asks before deploying anything. You do not need to deploy to see your software; stop at the pull request.
+1. **spec_review.** The PRD is approved. In this release, PRD approval is automatic by default. **Approvals** shows the decision "Approve publishing the PRD the team drafted" marked **AUTO-APPROVED**, with the PRD attached. The PRD is titled with your request, for example `PRD: A tiny command-line tip calculator in Python...`. Read it here: it is what the build will be measured against.
+1. **build.** BOSS clones your repository and runs the governed coding pipeline. You can follow it in **Factory**: Queued, Cloning repo, Designing plan, QA writing tests, Engineer implementing, Running tests, Adversarial review, Mutation check, Opening PR, Done. If the plan touches something sensitive, it stops at **Awaiting plan approval** and an approval appears in **Approvals**.
+1. **preview**, **plrr** (production launch readiness), and a second **preview.** BOSS starts a preview of the built app, checks it against what the PRD promised about running it, and previews again after any repair.
+1. **report.** A run report with the cost per step.
+1. **deploy.** An approval gate. BOSS stops and asks before deploying anything. You do not need to deploy to see your software; stop at the pull request.
+1. **monitor** and **notify**, after a deploy you approve.
 
 Every step is recorded in **Activity log**, and a step that fails says why on the run.
 
 !!! note "Verify this part on your own repository"
-    For this guide, the meeting and spec_review steps were run and the build step was run up to the missing-repository stop shown in step 4. The pipeline stages after cloning, and the pull request, need a connected GitHub repository; the stage names above are the ones Factory shows.
+    For this guide, Build was run on a Community install with the local `qwen2.5-coder:1.5b` model: research was skipped, the meeting (about 7 minutes) and spec_review steps ran, and the build step was run up to the missing-repository stop shown in step 4. The pipeline stages after cloning, and the pull request, need a connected GitHub repository; the stage names above are the ones Factory shows.
 
 ### If something goes wrong
 

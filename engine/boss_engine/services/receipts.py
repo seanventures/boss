@@ -32,13 +32,11 @@ class ReceiptService:
     ) -> list[dict]:
         """Receipts whose dedupe key starts with prefix, oldest first.
 
-        Used to replay the original typed-decision receipt. The prefix is matched
-        literally: LIKE's wildcards in it are escaped, not refused. Refusing them refused
-        every real prefix — each starts "model-gateway:<project>:typed_decision:", and `_`
-        is a LIKE wildcard — so every governed decision failed here on Postgres while the
-        unit doubles, which never ran this query, passed.
+        Used to replay the original typed-decision receipt. The prefix is a
+        composed identity, never a caller-supplied LIKE pattern.
         """
-        literal = (prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+        if any(character in prefix for character in "%_\\"):
+            raise ValueError("dedupe prefix cannot contain LIKE wildcards.")
         rows = connection.execute(
             text(
                 """
@@ -46,11 +44,11 @@ class ReceiptService:
                        status, provider_ref, created_by_job_id, data_boundary, result, error,
                        created_at, updated_at
                 FROM receipts
-                WHERE org_id = :org_id AND dedupe_key LIKE :prefix ESCAPE '\\'
+                WHERE org_id = :org_id AND dedupe_key LIKE :prefix
                 ORDER BY created_at ASC, id ASC
                 """
             ),
-            {"org_id": org_id, "prefix": literal + "%"},
+            {"org_id": org_id, "prefix": prefix + "%"},
         ).mappings().all()
         return [dict(row) for row in rows]
 

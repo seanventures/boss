@@ -123,44 +123,11 @@ def test_disabled_manifest_capability_is_not_actuated(engine):
         ).scalar_one() == 0
 
 
-def test_community_discovery_from_the_agent_is_a_governed_job_with_no_run_wide_reservation(
-    engine, monkeypatch
-):
-    """In Community each research stage reserves, leases and receipts itself
-    (discovery_spend.py). A run-wide reservation here would never be settled."""
-    settings = get_settings().model_copy(
-        update={"openai_api_key": "test-model-key", "plan_budget_usd_micros": 10_000,
-                "boss_edition": "community"}
-    )
-    started: list[dict] = []
-    monkeypatch.setattr(
-        "apps.api.app.services.intent_router.start_discovery",
-        lambda **kwargs: started.append(kwargs) or "drun_governed",
-    )
-    with engine.begin() as connection:
-        before = connection.execute(text("SELECT count(*) FROM budget_reservations")).scalar_one()
-        manifest = build_manifest(connection, settings, settings.default_project_id)
-        turn = IntentRouter(settings).route_turn(
-            connection,
-            project_id=settings.default_project_id,
-            actor="executive_console",
-            messages=[{"role": "user", "content": "Research auth providers"}],
-            manifest=manifest,
-        )
-        assert turn.actions[0]["kind"] == "discovery_started"
-        assert "governance" not in started[0]
-        assert started[0]["actor"] == "executive_console"
-        assert connection.execute(
-            text("SELECT count(*) FROM budget_reservations")).scalar_one() == before
-
-
 def test_discovery_tool_reserves_budget_and_creates_receipt_before_start(
     engine, monkeypatch
 ):
-    """Outside Community the legacy in-process path keeps its run-wide reservation."""
     settings = get_settings().model_copy(
-        update={"openai_api_key": "test-model-key", "plan_budget_usd_micros": 10_000,
-                "boss_edition": "enterprise"}
+        update={"openai_api_key": "test-model-key", "plan_budget_usd_micros": 10_000}
     )
     started: list[dict] = []
     monkeypatch.setattr(

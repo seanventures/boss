@@ -2000,9 +2000,6 @@ class WorkerHeartbeatRequest(BaseModel):
     job_id: str
     lease_token: str
     lease_ttl_seconds: int = Field(default=60, ge=5, le=3600)
-    # A worker that is stopping (deploy, restart) hands its job back: the reclaim that follows
-    # must not cost the job an attempt.
-    handing_back: bool = False
 
 
 class WorkerHeartbeatResponse(BaseModel):

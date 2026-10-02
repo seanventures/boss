@@ -861,34 +861,6 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
 _BACKEND_PREFERENCE = ("infisical", "platform_secret_store", "vault", "database", "local_vault")
 
 
-def operator_chosen_backend() -> Optional[str]:
-    """The secret store the operator chose at install time, if they chose one.
-
-    The installer asks "1 (database) or 2 (infisical)?" and writes the answer to
-    BOSS_COMMUNITY_SECRET_STORE — and nothing read it. Picking "database" on a machine where
-    Infisical was still running from an earlier install stored the next credential in Infisical
-    anyway, because the preference order below takes "the most protected store that answers".
-    An explicit choice is the operator's to make; the preference order is for when nobody chose.
-    """
-    chosen = (os.environ.get("BOSS_COMMUNITY_SECRET_STORE") or "").strip().lower()
-    return chosen if chosen in ("database", "infisical") else None
-
-
-def database_key_is_external() -> bool:
-    """Whether the database store's master key lives OUTSIDE the database.
-
-    With BOSS_KMS_MASTER_KEY in the environment (the installer writes it to .env), Postgres holds
-    only ciphertext and a database dump is not a key compromise. Without it, DatabaseBackend
-    provisions a key and keeps it in Postgres beside the ciphertext — fine against casual
-    inspection, not against anyone holding a backup.
-    """
-    try:
-        _load_kms_master_key()
-    except SecretUnavailable:
-        return False
-    return True
-
-
 def durable_secret_backend(settings: Settings) -> str:
     """A backend for a secret that MUST still be there after a redeploy.
 
@@ -905,8 +877,6 @@ def durable_secret_backend(settings: Settings) -> str:
     A backend that does not SAY it is durable is not assumed to be; the ordering is otherwise
     the same, so a managed store still wins where one exists.
     """
-    if operator_chosen_backend() == "database":
-        return "database"
     for kind in _BACKEND_PREFERENCE:
         try:
             impl = backend_for(kind, settings)
@@ -936,8 +906,6 @@ def default_secret_backend(settings: Settings) -> str:
     wizard that refuses to complete is worse than one that completes and can be improved, and
     because the alternative an operator falls back to is a plaintext env var anyway.
     """
-    if operator_chosen_backend() == "database":
-        return "database"
     for kind in _BACKEND_PREFERENCE:
         try:
             impl = backend_for(kind, settings)
