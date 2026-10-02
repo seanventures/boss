@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""An `ssh` that plays a deployment host for the end-to-end harness.
+
+BOSS deploys by running commands on a host over ssh (deploy_service._ssh): unpack a tarball,
+`docker run` the app, then poll `curl -w '%{http_code}' http://localhost:<port>/` until it
+answers. A real host for a test means a VM with sshd and Docker — too much to stand up on every
+run, and on boss-1 there were no deployment hosts at all, so every template that ends in
+`deploy` failed at the last step after a human approved it. This stub answers the way a healthy
+host does, records every command at the fakes' /deploy/ssh, and lets the deploy code path run
+unchanged. Only ever first on PATH inside the harness's own services.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import urllib.request
+import uuid
+from pathlib import Path
+
+
+def _fakes_url() -> str:
+    url = os.environ.get("BOSS_E2E_FAKES_URL", "")
+    if not url:
+        marker = Path.home() / ".boss-e2e-fakes-url"
+        url = marker.read_text().strip() if marker.exists() else ""
+    return url.rstrip("/")
+
+
+def _remote_command(argv: list[str]) -> tuple[str, str]:
+    """(destination, command) from an ssh argv."""
+    takes_value = set("BbcDEeFIiJLlmOopQRSWw")
+    i, positional = 0, []
+    while i < len(argv):
+        arg = argv[i]
+        if arg.startswith("-") and len(arg) >= 2 and not positional:
+            flag = arg[1]
+            if flag in takes_value and len(arg) == 2:
+                i += 2
+                continue
+            i += 1
+            continue
+        positional.append(arg)
+        i += 1
+    dest = positional[0] if positional else ""
+    return dest, " ".join(positional[1:])
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if argv[:1] == ["-V"]:
+        print("OpenSSH_9.9 boss-e2e stub", file=sys.stderr)
+        return 0
+    dest, command = _remote_command(argv)
+    received = 0
+    if "-n" not in argv and not sys.stdin.isatty():
+        try:
+            received = len(sys.stdin.buffer.read())
+        except Exception:  # noqa: BLE001
+            received = 0
+    url = _fakes_url()
+    if url:
+        try:
+            request = urllib.request.Request(
+                f"{url}/deploy/ssh", method="POST",
+                data=json.dumps({"dest": dest, "command": command[:4000],
+                                 "stdin_bytes": received}).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(request, timeout=10).read()
+        except Exception:  # noqa: BLE001 — the record is best-effort; the answer is not
+            pass
+    if "BOSS_SSH_OK" in command:
+        # deployment_fleet._connection_probe: reachable, docker present, the box's arch.
+        print("BOSS_SSH_OK\nDOCKER_OK\nx86_64")
+    elif re.search(r"curl\b.*http_code", command):
+        sys.stdout.write("200")
+    elif re.search(r"docker\s+(run|create)\b", command):
+        print(uuid.uuid4().hex)
+    elif re.search(r"docker\s+(ps|inspect)\b", command):
+        print("running")
+    elif re.search(r"\b(uname|arch)\b", command):
+        print("x86_64")
+    elif "docker version" in command or "docker info" in command:
+        print("27.0.0")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

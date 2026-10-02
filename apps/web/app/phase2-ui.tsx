@@ -29,7 +29,7 @@ export function EvalHarnessCard({ projectId, actor, run }: { projectId: string; 
         <ActionForm action={runEvalsAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
-          <SubmitButton className="button secondary" type="submit">Run evals</SubmitButton>
+          <SubmitButton className="button secondary" type="submit" data-testid="eval-run">Run evals</SubmitButton>
         </ActionForm>
       </div>
       <p className="detail">
@@ -40,7 +40,7 @@ export function EvalHarnessCard({ projectId, actor, run }: { projectId: string; 
         <p className="detail">No eval runs yet — click “Run evals”.</p>
       ) : (
         <>
-          <p className="detail" style={{ marginBottom: 8 }}>
+          <p className="detail" style={{ marginBottom: 8 }} data-testid="eval-latest">
             Latest: <b style={{ color: tone(run.status) }}>{run.status.toUpperCase()}</b> — {run.passed} pass · {run.failed} fail
           </p>
           <div style={{ display: "grid", gap: 5 }}>

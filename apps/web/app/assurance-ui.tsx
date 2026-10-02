@@ -92,7 +92,7 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
               </p>
               <ActionForm action={seedAssuranceDemoAction}>
                 <input type="hidden" name="project_id" value={feed.projectId} />
-                <SubmitButton type="submit" className="cap-btn">
+                <SubmitButton type="submit" className="cap-btn" data-testid="assurance-seed">
                   Seed one demo metric + case
                 </SubmitButton>
               </ActionForm>
@@ -101,7 +101,7 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
               </p>
             </div>
           ) : (
-            <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "grid", gap: 8 }} data-testid="assurance-cases">
               {overview.cases.slice(0, 6).map((item) => (
                 <div key={text(item, "id")} style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
                   <span>{text(item, "title")}</span>

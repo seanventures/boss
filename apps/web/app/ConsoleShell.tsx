@@ -1213,7 +1213,7 @@ export default function ConsoleShell({
             a slow area looks like a dead click on the old screen. A hairline across the top is
             the smallest honest signal that the press was taken and work is in flight. */}
         <style data-testid="bx-area-visibility" dangerouslySetInnerHTML={{ __html: AREA_VISIBILITY_CSS }} />
-        <main className="bx-content" data-active={active} aria-label={activeDef.label}
+        <main className="bx-content" data-testid="console-area" data-active={active} aria-label={activeDef.label}
               data-dock={dockedRun ? "open" : undefined}
               style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
           {activeLoading ? (

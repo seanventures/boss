@@ -55,6 +55,7 @@ export function BudgetIntensitySlider({
         <div>
           <SubmitButton
             type="submit"
+            data-testid="budget-intensity-apply"
             style={{
               background: "var(--accent)", color: "var(--accent-ink)", border: "none",
               borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer",
@@ -64,7 +65,8 @@ export function BudgetIntensitySlider({
           </SubmitButton>
         </div>
         {current != null && (
-          <p className="detail" style={{ margin: 0, color: "var(--muted)" }}>
+          <p className="detail" style={{ margin: 0, color: "var(--muted)" }}
+             data-testid="budget-intensity-current">
             Current: {current}
           </p>
         )}

@@ -121,7 +121,7 @@ function NewMeetingForm({
 }) {
   const [meetingType, setMeetingType] = useState<"prd_panel" | "standup">("prd_panel");
   return (
-    <ActionForm action={conveneMeetingAction} className="mr-convene">
+    <ActionForm action={conveneMeetingAction} className="mr-convene" data-testid="meeting-new-form">
       <input type="hidden" name="project_id" value={projectId} />
       <label className="mr-field-label" htmlFor="mr-type">Meeting type</label>
       <select
@@ -591,7 +591,8 @@ export function MeetingsHome({
           <button type="button" className="cap-btn" onClick={() => { setShowRoles((v) => !v); setShowNew(false); }}>
             {showRoles ? "Close" : "Manage roles"}
           </button>
-          <button type="button" className="cap-btn primary" onClick={() => { setShowNew((v) => !v); setShowRoles(false); }}>
+          <button type="button" className="cap-btn primary" data-testid="meeting-new"
+                  onClick={() => { setShowNew((v) => !v); setShowRoles(false); }}>
             {showNew ? "Close" : "＋ New meeting"}
           </button>
         </div>

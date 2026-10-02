@@ -176,7 +176,8 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
       <section className="ct-block">
         <div className="ct-block-title" style={{ display: "flex", justifyContent: "space-between" }}>
           <span>How it is thinking</span>
-          <button className="cap-btn" onClick={sweep} disabled={busy}>
+          <button className="cap-btn" onClick={sweep} disabled={busy}
+                  data-testid="shepherd-sweep">
             {busy ? "Reasoning…" : "↻ Re-examine failures"}
           </button>
         </div>

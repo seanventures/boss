@@ -104,7 +104,8 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
 
         <div className="org-gate-grid">
           {orgs.map((o) => (
-            <button key={o.org_id} type="button" className="org-card" onClick={() => enter(o.org_id)}
+            <button key={o.org_id} type="button" className="org-card" data-testid={`org-card-${o.org_id}`}
+                    onClick={() => enter(o.org_id)}
                     disabled={opening !== null} aria-busy={opening === o.org_id}>
               <span className="org-card-mark">{o.org_name.slice(0, 2).toUpperCase()}</span>
               <span className="org-card-body">
@@ -117,7 +118,8 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
               <span className="org-card-go">{opening === o.org_id ? "Opening…" : "Enter →"}</span>
             </button>
           ))}
-          <button type="button" className="org-card org-card-add" onClick={() => setShowOnboard((v) => !v)}>
+          <button type="button" className="org-card org-card-add" data-testid="org-card-onboard"
+                  onClick={() => setShowOnboard((v) => !v)}>
             <span className="org-card-mark add">＋</span>
             <span className="org-card-body">
               <span className="org-card-name">Onboard a new organization</span>

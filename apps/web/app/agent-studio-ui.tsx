@@ -622,6 +622,7 @@ export function AgentStudio({
           {mode === "agents" && (
             <button
               className="as-create-agent"
+              data-testid="as-create-agent"
               onClick={() => setWizardOpen(true)}
             >
               <Plus />

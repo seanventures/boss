@@ -5340,7 +5340,7 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
           it will not publish until it has been reviewed.
         </p>
       ) : null}
-      {failure ? <p className="detail dw-define-error">{failure}</p> : null}
+      {failure ? <p className="detail dw-define-error" data-testid="dw-define-error">{failure}</p> : null}
 
       <div className="dw-define-actions">
         <button type="submit" className="cap-btn" data-testid="dw-define-save"

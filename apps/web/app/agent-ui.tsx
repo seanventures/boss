@@ -1177,7 +1177,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 : `Ask ${roleName ?? "BOSS"} about this work.`}</p>
             </div>
           ) : messages.map((m, i) => (
-            <article className={`agent-message ${m.role}`} key={i}>
+            <article className={`agent-message ${m.role}`} key={i}
+                     data-testid={`agent-message-${m.role}`}>
               <span>{m.role === "assistant" ? "BOSS" : m.role === "user" ? "You" : "tool"}</span>
               {/* WHAT WAS SENT WITH IT. Without this the transcript shows "Look at what I've
                   attached." over nothing, and neither the operator nor a later reader can tell
