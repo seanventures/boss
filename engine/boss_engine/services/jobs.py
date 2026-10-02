@@ -1261,12 +1261,59 @@ class JobLeaseService:
             connection, row, error, terminal=True, actor=worker_id
         )
         self._mark_related_code_task_failed(connection, row, error, actor=worker_id)
+        self._mark_related_discovery_failed(connection, row, error, actor=worker_id)
         return {
             "job_id": job_id,
             "status": "deadlettered",
             "run_after": None,
             "deadletter_id": deadletter_id,
         }
+
+    def _mark_related_discovery_failed(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        error: dict[str, Any],
+        *,
+        actor: str,
+    ) -> None:
+        """A deadlettered discovery.run job fails its discovery, with the reason in words.
+
+        When the API refused the worker (409) the job deadlettered and the discovery stayed
+        `running` at phase "queued": the Discovery page showed nothing wrong and a workflow
+        waiting on its research waited forever. Only while this job is still the run's job, so
+        a newer job queued for the same run is not undone. `failed_by_job` lets a requeue of
+        this deadletter resume the same run (discovery_service.execute_discovery_job).
+        """
+        if row.get("kind") != "discovery.run":
+            return
+        payload = row.get("payload") or {}
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        run_id = str(payload.get("discovery_run_id") or "")
+        if not run_id:
+            return
+        from .model_failures import explain
+
+        said = explain(error.get("message", ""), source_id="anthropic_claude_code")
+        changed = connection.execute(
+            text(
+                """
+                UPDATE discovery_runs
+                SET status = 'failed', error = :error,
+                    state = state || jsonb_build_object('failed_by_job', CAST(:job AS text),
+                                                        'job_error', CAST(:raw AS text)),
+                    updated_at = now()
+                WHERE id = :run_id AND status = 'running' AND state->>'job_id' = :job
+                """
+            ),
+            {"run_id": run_id, "job": row["id"], "raw": str(error.get("message", ""))[:1000],
+             "error": f"Its worker job stopped. {said['headline']} {said['action']}"[:1000]},
+        ).rowcount
+        if changed:
+            emit_event(connection, row["project_id"], "discovery.failed", actor,
+                       "discovery_run", run_id,
+                       {"reason": "job_deadlettered", "job_id": row["id"], "kind": said["kind"]})
 
     def _mark_related_code_task_failed(
         self,

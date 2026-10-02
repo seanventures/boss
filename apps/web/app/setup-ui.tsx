@@ -911,6 +911,7 @@ function ConnectedModels(
 ) {
   const [roles, setRoles] = useState<Array<{ key: string; label: string; value: string }>>([]);
   const [connected, setConnected] = useState<string[]>([]);
+  const [loginStates, setLoginStates] = useState<Record<string, string>>({});
   const [jev, setJev] = useState<DecisionStatus | null>(null);
 
   useEffect(() => {
@@ -930,6 +931,7 @@ function ConnectedModels(
         if (!r.ok || !alive) return;
         const body = await r.json();
         setConnected((body.connected_engines ?? []) as string[]);
+        setLoginStates((body.engine_login_states ?? {}) as Record<string, string>);
         setRoles(((body.knobs ?? []) as Array<{ key: string; label: string; kind: string;
                                                 value: unknown }>)
           .filter((k) => k.kind === "choice")
@@ -953,6 +955,8 @@ function ConnectedModels(
       at: from?.saved_at ? from.saved_at.slice(0, 10) : "",
       // The jobs it holds right now. Empty is a real answer and says so below.
       jobs: roles.filter((r) => r.value === engine).map((r) => r.label),
+      // The provider rejected this login on its last call: it is connected and unusable.
+      rejected: loginStates[engine] === "rejected",
     };
   });
   if (jev?.typesafe_key) {
@@ -963,6 +967,7 @@ function ConnectedModels(
       verified: jev.execution_available,
       at: "",
       jobs: jev.effective_backend === "typesafe" ? ["Workflow decisions"] : ["Paused"],
+      rejected: false,
     });
   }
   if (!rows.length) return null;
@@ -987,13 +992,20 @@ function ConnectedModels(
             <tr key={row.engine}>
               <th scope="row">
                 <span className="setup-dot" aria-hidden
-                      style={row.kind === "saved key · paused" || (row.kind === "API key" && !row.verified)
+                      style={row.rejected ? { background: "var(--red, #F85149)" }
+                        : row.kind === "saved key · paused" || (row.kind === "API key" && !row.verified)
                         ? { background: "var(--amber)" } : undefined} />
                 {row.label}
               </th>
               <td className="setup-models-kind">
-                {row.kind}{row.kind === "API key" && !row.verified ? " · unverified" : ""}
-                {row.at ? ` · ${row.at}` : ""}
+                {row.rejected ? (
+                  <span className="setup-bad" data-testid={`setup-login-rejected-${row.engine}`}>
+                    login rejected — reconnect it below
+                  </span>
+                ) : <>
+                  {row.kind}{row.kind === "API key" && !row.verified ? " · unverified" : ""}
+                  {row.at ? ` · ${row.at}` : ""}
+                </>}
               </td>
               <td className="setup-models-jobs" data-empty={row.jobs.length ? undefined : "true"}>
                 {row.jobs.length ? row.jobs.join(" · ") : "no role yet"}

@@ -7266,6 +7266,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dx-pill b { color: var(--ink, #E8EEFC); font-weight: 700; font-variant-numeric: tabular-nums; }
 .dx-pill.muted { color: var(--muted, #7C8CB0); }
 .dx-row-fail { color: var(--red, #F85149); font-size: .82rem; }
+.dx-row-wait { color: var(--amber, #D29922); font-size: .82rem; }
+.dx-attention { padding: 12px 14px; display: grid; gap: 4px; border-left: 3px solid var(--red, #F85149); }
+.dx-attention.is-waiting { border-left-color: var(--amber, #D29922); }
+.dx-attention-head { font-weight: 600; }
+.dx-attention-action { font-size: .9rem; }
+.dx-attention-detail { font-family: var(--mono, ui-monospace, monospace); font-size: .78rem; opacity: .8; }
 
 @media (prefers-reduced-motion: reduce) {
   .dx-tick.current { animation: none; }
