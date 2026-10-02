@@ -174,6 +174,10 @@ _EXPECTED_TOOLS: set[str] = {
     "assign_mcp_to_agent",
     "list_capabilities",
     "list_skills",
+    # The MCP side of the same conversation: see what servers exist (and whether they answer),
+    # and connect one, so "use my server's search tool in this workflow" can be finished in chat.
+    "list_mcp_servers",
+    "register_mcp_server",
     "start_workflow",
     "steer_code_task",
     "stop_preview",
@@ -195,11 +199,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 109, (
+    assert len(reg.names()) == 111, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 61
-    assert len(write) == 48
+    assert len(read) == 62
+    assert len(write) == 49
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -419,6 +423,11 @@ _SAFE_WRITES = [
     # own risk tier still decides when a use of it waits for a person. (assign_mcp_to_agent was
     # listed here too; it hands over a server's credentials, so it is `grants_authority` now.)
     "assign_skill_to_agent",
+    # Connecting a server is undone by removing it, and it lands SWITCHED OFF, UNREVIEWED and at
+    # tier 2 or above: BOSS does not contact it and no agent is offered its tools until a person
+    # turns it on, and even then every call waits for approval until somebody reviews it
+    # (test_skills_and_mcp_from_chat.py). That is why it may stay one-shot.
+    "register_mcp_server",
     # Read-only by default and one at a time per project. The FIXING variant is not a separate
     # tool but a separate permission: it returns requires_confirmation, so only an operator's
     # click gets a writable shell on a host.

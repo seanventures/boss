@@ -80,6 +80,9 @@ export type V2Model = {
 export type V2Integration = {
   id: string; name: string; url: string | null; transport: string | null;
   enabled: boolean; risk_tier: number; data_boundary: string;
+  /** From the MCP server model: reviewed, whether it answered at the last check (null = never
+   *  checked), and what to do when it did not. */
+  trusted?: boolean; reachable?: boolean | null; status_note?: string | null;
 };
 
 export type InfraView = {

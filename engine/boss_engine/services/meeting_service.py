@@ -30,8 +30,11 @@ from ..db import begin
 from .claude_cli_adapter import make_agent_chat_adapter
 from .jobs import JOB_PRIORITY_INTERACTIVE
 from .core import stable_dedupe_key, create_artifact, create_blocking_decision, emit_event, make_id
-from .mcp_client import MCPClient
-from .mcp_registry import list_mcp_servers
+from .mcp_registry import (
+    McpServerUnreviewed,
+    call_tool_unattended,
+    list_mcp_servers,
+)
 from .openai_adapter import estimate_cost_usd_micros
 
 # ---- the role-agent template catalog -----------------------------------------
@@ -299,29 +302,33 @@ def _gather_research(connection: Connection, settings: Settings, project_id: str
          if s["name"] == "web-intel"),
         None,
     )
-    if not server:
-        return {"note": "web-intel MCP server not available", "pages": []}
-    try:
-        result = MCPClient(settings, timeout=120.0).call_tool(server["url"], "study_site", {"url": url, "max_pages": 6})
-    except Exception as exc:
-        return {"note": f"research failed: {type(exc).__name__}: {exc}", "pages": []}
-    # trim each page so the shared brief stays compact for every persona prompt
-    pages = []
-    for pg in (result.get("pages") or [])[:6]:
-        pages.append({"url": pg.get("url"), "title": pg.get("title"), "text": (pg.get("text") or "")[:1100]})
-    return {"entry_url": url, "sitemap": result.get("sitemap_routes", []), "pages": pages}
+    return _study_site(settings, url, server)
 
 
 def _study_site(settings: Settings, url: str, server: Optional[dict]) -> dict:
-    """Crawl the site via the web-intel MCP server (no DB connection held)."""
+    """Crawl the site via the web-intel MCP server (no DB connection held).
+
+    THROUGH THE REGISTRY, NEVER AROUND IT. Round-3 review: this called the server with
+    MCPClient directly, so a web-intel an operator had re-pointed at another host (which makes
+    it unreviewed), or a server registered from chat under that name after the built-in was
+    deleted, received every meeting's URL and wrote the reply into every persona prompt with
+    nobody asked. mcp_registry.call_tool_unattended refuses an unreviewed server; the meeting
+    still runs, from the directive alone, and the research note says why and what to do.
+    """
     if not url:
         return {"note": "no URL supplied; agents reason from the directive only", "pages": []}
     if not server:
         return {"note": "web-intel MCP server not available", "pages": []}
     try:
-        result = MCPClient(settings, timeout=120.0).call_tool(server["url"], "study_site", {"url": url, "max_pages": 6})
+        result = call_tool_unattended(settings, server, "study_site",
+                                      {"url": url, "max_pages": 6}, timeout=120.0)
+    except McpServerUnreviewed as refused:
+        return {"note": f"research skipped: {refused} The panel reasons from the directive "
+                        "only.", "pages": []}
     except Exception as exc:
         return {"note": f"research failed: {type(exc).__name__}: {exc}", "pages": []}
+    # trim each page so the shared brief stays compact for every persona prompt
+    result = result if isinstance(result, dict) else {}
     pages = []
     for pg in (result.get("pages") or [])[:6]:
         pages.append({"url": pg.get("url"), "title": pg.get("title"), "text": (pg.get("text") or "")[:1100]})

@@ -173,6 +173,9 @@ def seed_project_defaults(
                 "version": "1",
                 "trusted": True,
             },
+            # A re-seed must not undo the operator: a server they edited keeps their URL and
+            # tier, and one they removed stays removed. See ensure_mcp_server.
+            respect_operator=True,
         )
     seed_default_event_subscriptions(connection, project_id)
     FeatureCatalog(settings).seed_from_traceability(connection, project_id)

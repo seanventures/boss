@@ -75,11 +75,39 @@ class SkillDefinitionError(ValueError):
     """Something the operator can fix, phrased for them."""
 
 
+class SkillExistsError(SkillDefinitionError):
+    """A create named a key that is already taken. Its own class so the API can answer 409."""
+
+
+class SkillInUseError(SkillDefinitionError):
+    """A delete would leave something pointing at nothing. The API answers 409."""
+
+
+#: How a save says what it means. See save_skill.
+SAVE_MODES = ("create", "update", "upsert")
+
+
 def _clean(value: Any, field: str, *, limit: int = 400) -> str:
     text_value = str(value or "").strip()
     if not text_value:
         raise SkillDefinitionError(f"{field} is required.")
     return text_value[:limit]
+
+
+def _whole_number(value: Any, default: int, field: str) -> int:
+    """An integer field, refused with a sentence rather than escaping as a 500.
+
+    `int("five minutes")` raised a bare ValueError, which the API's SkillDefinitionError handler
+    did not catch, so a typo in a timeout came back as an Internal Server Error.
+    """
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        raise SkillDefinitionError(f"{field} must be a whole number.")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise SkillDefinitionError(f"{field} must be a whole number — got {value!r}.") from None
 
 
 def _named_list(raw: Any, field: str) -> list[dict[str, Any]]:
@@ -134,7 +162,7 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
             raise SkillDefinitionError(
                 "the program is over 60,000 characters. Something that big is a repository, not "
                 "a step.")
-        timeout = int(given.get("timeout_seconds") or 60)
+        timeout = _whole_number(given.get("timeout_seconds"), 60, "timeout_seconds")
         if not 5 <= timeout <= 300:
             raise SkillDefinitionError("timeout_seconds must be between 5 and 300.")
         return {
@@ -166,7 +194,7 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
     if unknown:
         raise SkillDefinitionError(
             f"the command uses {', '.join(unknown)}, which this skill does not take as input.")
-    timeout = int(given.get("timeout_seconds") or 300)
+    timeout = _whole_number(given.get("timeout_seconds"), 300, "timeout_seconds")
     if not 5 <= timeout <= 3600:
         raise SkillDefinitionError("timeout_seconds must be between 5 and 3600.")
     outputs = _named_list(given.get("outputs"), "outputs")
@@ -211,7 +239,10 @@ def _row(row: Any) -> dict[str, Any]:
     }
 
 
-def list_skills(connection: Connection, project_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+def list_skills(
+    connection: Connection, project_id: str, *, limit: int = 200,
+    with_references: bool = False,
+) -> list[dict[str, Any]]:
     rows = connection.execute(
         text(
             "SELECT * FROM skill_definitions WHERE project_id = :p "
@@ -219,7 +250,66 @@ def list_skills(connection: Connection, project_id: str, *, limit: int = 200) ->
         ),
         {"p": project_id, "lim": int(limit)},
     ).mappings().all()
-    return [_row(r) for r in rows]
+    items = [_row(r) for r in rows]
+    if with_references and items:
+        # One read for the whole page. The Skills page shows each skill's uses beside its
+        # Delete button, so the operator knows before pressing it what deleting would break.
+        refs = _references_by_key(connection, project_id)
+        for item in items:
+            item["references"] = refs.get(item["skill_key"], _no_references())
+    return items
+
+
+def _no_references() -> dict[str, list]:
+    return {"custom_steps": [], "agents": [], "workflows": []}
+
+
+def _references_by_key(connection: Connection, project_id: str) -> dict[str, dict[str, list]]:
+    refs: dict[str, dict[str, list]] = {}
+    for row in connection.execute(
+        text("SELECT skill_id, step_key, label, enabled FROM workflow_custom_steps "
+             "WHERE project_id = :p AND binding_kind = 'skill' ORDER BY step_key"),
+        {"p": project_id},
+    ).mappings().all():
+        refs.setdefault(str(row["skill_id"]), _no_references())[
+            "custom_steps"].append({"step_key": row["step_key"], "label": row["label"],
+                                    "enabled": bool(row["enabled"])})
+    for row in connection.execute(
+        text("SELECT skill_id, role_key FROM role_skills WHERE project_id = :p "
+             "ORDER BY role_key"),
+        {"p": project_id},
+    ).mappings().all():
+        refs.setdefault(str(row["skill_id"]), _no_references())[
+            "agents"].append(str(row["role_key"]))
+    # A WORKFLOW THAT BINDS THE SKILL DIRECTLY, with a `kind: skill` step
+    # (workflows._validate_bindings reads binding.skill_id). Round-1 review: the check read
+    # custom steps and agents only, so deleting a skill bound this way passed and the workflow
+    # then failed at its next publish or run. Read from each live workflow's ACTIVE version —
+    # the one a run would start from; a retired definition starts nothing.
+    for row in connection.execute(
+        text("SELECT DISTINCT step->'binding'->>'skill_id' AS skill_id, d.workflow_key, d.name "
+             "FROM workflow_definitions d "
+             "JOIN workflow_versions v ON v.id = d.active_version_id "
+             "CROSS JOIN LATERAL jsonb_array_elements("
+             "  CASE WHEN jsonb_typeof(v.spec->'steps') = 'array' THEN v.spec->'steps' "
+             "  ELSE '[]'::jsonb END) AS step "
+             "WHERE d.project_id = :p AND d.status <> 'retired' AND step->>'kind' = 'skill' "
+             "ORDER BY d.workflow_key"),
+        {"p": project_id},
+    ).mappings().all():
+        if not row["skill_id"]:
+            continue
+        refs.setdefault(str(row["skill_id"]), _no_references())[
+            "workflows"].append({"workflow_key": str(row["workflow_key"]),
+                                 "name": str(row["name"] or row["workflow_key"])})
+    return refs
+
+
+def skill_references(connection: Connection, project_id: str, skill_key: str) -> dict[str, list]:
+    """What points at one skill: the custom steps that run it, the workflows whose steps bind
+    it directly (`kind: skill`), and the agents that hold it."""
+    return _references_by_key(connection, project_id).get(
+        skill_key, _no_references())
 
 
 def get_skill(connection: Connection, project_id: str, skill_key: str) -> Optional[dict[str, Any]]:
@@ -240,13 +330,52 @@ def _shadows_a_builtin(connection: Connection, project_id: str, skill_key: str) 
         from ..config import get_settings
         from .entitlements import EntitlementBrokerService
 
+        # include_authored=False: the catalogue now carries authored skills too, and asking it
+        # with them in would refuse every EDIT of an authored skill as shadowing itself.
         catalogue = EntitlementBrokerService(get_settings()).list_skills(
-            project_id, connection=connection)
+            project_id, connection=connection, include_authored=False)
         return any(str(item.get("id")) == skill_key for item in catalogue)
     except Exception:  # noqa: BLE001
         # A catalogue that cannot be read must not block authoring — the collision is rare and
         # the refusal would be unexplainable.
         return False
+
+
+def _resolve_mcp_binding(
+    connection: Connection, project_id: str, config: dict[str, Any],
+) -> dict[str, Any]:
+    """Point an mcp_tool skill at a server that EXISTS, and at a tool it has, when that is known.
+
+    The form used to ask for a free-text "MCP server id" that no screen displayed, and nothing
+    checked it — so a typo saved fine and the skill failed on its first run with a lookup
+    error. The server may be named by id or by name (what an operator and a chat model actually
+    know); the stored value is always the id, because names can be edited.
+
+    The tool is checked against the server's last-seen tool list only when the server was
+    reachable at that check. A server that has never been reached says nothing about its tools,
+    and refusing then would make an mcp_tool skill impossible to author before its server is up.
+    """
+    wanted = str(config.get("mcp_server_id") or "").strip()
+    rows = connection.execute(
+        text("SELECT id, name, reachable, tools FROM mcp_servers WHERE project_id = :p "
+             "ORDER BY name"),
+        {"p": project_id},
+    ).mappings().all()
+    server = next((r for r in rows if r["id"] == wanted), None) or next(
+        (r for r in rows if str(r["name"]).strip().lower() == wanted.lower()), None)
+    if server is None:
+        known = ", ".join(f"{r['name']} ({r['id']})" for r in rows) or "none registered yet"
+        raise SkillDefinitionError(
+            f"there is no MCP server {wanted!r} in this project. Registered servers: {known}. "
+            "Register the server on the Skills and MCP page first.")
+    tool_name = str(config.get("tool_name") or "").strip()
+    tools = server["tools"] if isinstance(server["tools"], list) else []
+    names = [str(t.get("name")) for t in tools if isinstance(t, dict) and t.get("name")]
+    if server["reachable"] is True and names and tool_name not in names:
+        raise SkillDefinitionError(
+            f"MCP server '{server['name']}' has no tool {tool_name!r}. Its tools are: "
+            f"{', '.join(sorted(names))}.")
+    return {**config, "mcp_server_id": str(server["id"]), "tool_name": tool_name}
 
 
 def save_skill(
@@ -265,8 +394,20 @@ def save_skill(
     risk_tier: int = 1,
     trusted: bool = False,
     enabled: bool = True,
+    mode: str = "upsert",
 ) -> dict[str, Any]:
-    """Create or replace one skill. Idempotent on (project, skill_key)."""
+    """Create or replace one skill.
+
+    `mode` says which the caller MEANT, because the two look identical on the wire and are not:
+    ``create`` refuses a key that already exists, ``update`` refuses one that does not, and
+    ``upsert`` (the original behaviour, kept for scripts that rely on it) does either.
+
+    WHY THE DISTINCTION. The Skills page's form header switched to "Edit <key> by hand" as soon
+    as a key was typed, and saving silently replaced whatever skill already had that key — an
+    operator writing a new skill whose key happened to match an old one overwrote the old one,
+    knowledge body and all, with no warning. Creating and editing are different intentions and
+    the store now asks which one it is being given.
+    """
     key = str(skill_key or "").strip().lower()
     if not _KEY.match(key):
         raise SkillDefinitionError(
@@ -275,6 +416,21 @@ def save_skill(
     behaviour = str(behaviour_kind or "").strip().lower()
     if behaviour not in BEHAVIOURS:
         raise SkillDefinitionError(f"behaviour_kind must be one of: {', '.join(BEHAVIOURS)}.")
+    intent = str(mode or "upsert").strip().lower()
+    if intent not in SAVE_MODES:
+        raise SkillDefinitionError(f"mode must be one of: {', '.join(SAVE_MODES)}.")
+    exists = connection.execute(
+        text("SELECT 1 FROM skill_definitions WHERE project_id = :p AND skill_key = :k"),
+        {"p": project_id, "k": key},
+    ).first() is not None
+    if intent == "create" and exists:
+        raise SkillExistsError(
+            f"a skill called {key!r} already exists in this project. Open it with Edit to "
+            "change it, or pick another key for the new one.")
+    if intent == "update" and not exists:
+        raise SkillDefinitionError(
+            f"there is no skill {key!r} to update in this project — it may have been deleted. "
+            "Save it as a new skill instead.")
 
     # AN AUTHORED SKILL MAY NOT TAKE A BUILT-IN'S NAME.
     #
@@ -293,13 +449,15 @@ def save_skill(
             f"{key!r} is the name of a skill BOSS already ships. Pick another key — an "
             "authored skill with a built-in's name hides the built-in everywhere, and nothing "
             "downstream can tell which one it was supposed to run.")
-    tier = int(risk_tier)
+    tier = _whole_number(risk_tier, 1, "risk_tier")
     if not 0 <= tier <= 3:
         raise SkillDefinitionError("risk_tier must be between 0 and 3.")
     parsed_inputs = _named_list(inputs, "inputs")
     parsed_produces = _named_list(produces, "produces")
     parsed_config = validate_config(behaviour, config or {},
                                     [entry["name"] for entry in parsed_inputs])
+    if behaviour == "mcp_tool":
+        parsed_config = _resolve_mcp_binding(connection, project_id, parsed_config)
     # A sandboxed command's declared outputs ARE what it produces; asking an operator to list
     # the same names twice is a way to have them disagree.
     if behaviour == "sandboxed_command" and not parsed_produces:
@@ -341,24 +499,63 @@ def save_skill(
     return item
 
 
-def delete_skill(connection: Connection, *, project_id: str, actor: str, skill_key: str) -> dict[str, Any]:
+def set_skill_enabled(
+    connection: Connection, *, project_id: str, actor: str, skill_key: str, enabled: bool,
+) -> dict[str, Any]:
+    """Turn an authored skill on or off without touching anything else about it.
+
+    The delete refusal has always said "disable the skill instead", and there was no way to:
+    no control on the page, and no API short of re-saving every field with enabled=false.
+    """
+    row = connection.execute(
+        text("UPDATE skill_definitions SET enabled = :e, updated_at = now() "
+             "WHERE project_id = :p AND skill_key = :k RETURNING *"),
+        {"e": bool(enabled), "p": project_id, "k": skill_key},
+    ).mappings().first()
+    if row is None:
+        raise SkillDefinitionError(f"no skill {skill_key!r} in this project.")
+    item = _row(row)
+    emit_event(connection, project_id, "skill.enabled" if enabled else "skill.disabled", actor,
+               "skill_definition", item["id"], {"skill_key": skill_key})
+    return item
+
+
+def delete_skill(
+    connection: Connection, *, project_id: str, actor: str, skill_key: str,
+    release_grants: bool = False,
+) -> dict[str, Any]:
     """Remove a skill, refusing while anything still points at it.
 
     A dangling reference does not fail loudly — `validate_custom_step` reports "this project
     does not have that skill", which reads as a mistake in the WORKFLOW rather than as somebody
     having deleted the skill out from under it.
+
+    TWO KINDS OF REFERENCE, TREATED DIFFERENTLY ON PURPOSE.
+
+    * A custom step that runs the skill (enabled or not) always refuses the delete. Deleting
+      would break every workflow placing that step, and a disabled step is one somebody means
+      to turn back on.
+    * An agent holding the skill refuses UNLESS the caller says `release_grants`. Taking a skill
+      off an agent breaks nothing that is published, so it is a choice the operator can make in
+      the same breath — but a choice, made on purpose. Before this, deleting left the grant
+      behind and the agent page showed "no such skill here any more" forever.
     """
-    users = connection.execute(
-        text(
-            "SELECT step_key FROM workflow_custom_steps "
-            "WHERE project_id = :p AND skill_id = :k AND enabled LIMIT 5"
-        ),
-        {"p": project_id, "k": skill_key},
-    ).scalars().all()
-    if users:
-        raise SkillDefinitionError(
-            f"{skill_key} is still used by: {', '.join(users)}. Remove those steps first, or "
-            "disable the skill instead of deleting it.")
+    refs = skill_references(connection, project_id, skill_key)
+    if refs["custom_steps"]:
+        steps = ", ".join(s["label"] or s["step_key"] for s in refs["custom_steps"][:8])
+        raise SkillInUseError(
+            f"{skill_key} is run by these workflow steps: {steps}. Delete or re-point those "
+            "steps first — or turn the skill off instead of deleting it.")
+    if refs["workflows"]:
+        flows = ", ".join(w["name"] for w in refs["workflows"][:8])
+        raise SkillInUseError(
+            f"{skill_key} is a step in these workflows: {flows}. Remove it from those "
+            "workflows (or retire them) first — or turn the skill off instead of deleting it.")
+    if refs["agents"] and not release_grants:
+        raise SkillInUseError(
+            f"{skill_key} is held by {', '.join(refs['agents'])}. Deleting it takes it off "
+            f"{'that agent' if len(refs['agents']) == 1 else 'those agents'}; confirm to go "
+            "ahead, or turn the skill off instead.")
     removed = connection.execute(
         text("DELETE FROM skill_definitions WHERE project_id = :p AND skill_key = :k "
              "RETURNING id"),
@@ -366,9 +563,12 @@ def delete_skill(connection: Connection, *, project_id: str, actor: str, skill_k
     ).first()
     if not removed:
         raise SkillDefinitionError(f"no skill {skill_key!r} in this project.")
+    for role_key in refs["agents"]:
+        unassign_skill_from_role(connection, project_id=project_id, actor=actor,
+                                 role_key=role_key, skill_id=skill_key)
     emit_event(connection, project_id, "skill.deleted", actor, "skill_definition",
-               str(removed[0]), {"skill_key": skill_key})
-    return {"deleted": skill_key}
+               str(removed[0]), {"skill_key": skill_key, "released_from": refs["agents"]})
+    return {"deleted": skill_key, "released_from": refs["agents"]}
 
 
 # ---------------------------------------------------------------------------
@@ -398,20 +598,17 @@ def _skill_exists(connection: Connection, project_id: str, skill_id: str) -> Opt
     rejected every one of the seventeen shipped skills as "no skill in this project", which is
     exactly the population this feature was built to let an operator assign.
     """
-    authored = connection.execute(
-        text("SELECT 1 FROM skill_definitions WHERE project_id = :p AND skill_key = :k"),
-        {"p": project_id, "k": skill_id},
-    ).first()
-    if authored:
-        return "authored"
-    # Imported here, not at module scope: entitlements reaches back into this package, and the
-    # cycle only bites at import time.
-    from ..config import get_settings
-    from .entitlements import EntitlementBrokerService
+    # THE ONE CATALOGUE (skill_catalogue), so "can this be assigned" and "will this run" are
+    # the same question. A `registered` project_skills row is reported as builtin, which is the
+    # source vocabulary role_skills has always used for anything not authored here.
+    from .skill_catalogue import entry
 
-    catalogue = EntitlementBrokerService(get_settings()).list_skills(
-        project_id, connection=connection)
-    return "builtin" if any(s.get("id") == skill_id for s in catalogue) else None
+    found = entry(connection, project_id, skill_id)
+    if found is None or found["source"] == "registered":
+        # A registered row with no spec is something a custom step can bind but no agent can
+        # be offered as a tool, so it is not assignable.
+        return None
+    return "authored" if found["source"] == "authored" else "builtin"
 
 
 def assign_skill_to_role(
@@ -605,48 +802,41 @@ def assignable_catalogue(connection: Connection, project_id: str) -> list[dict[s
     authored but not enabled is exactly the one they are about to enable, and omitting it from
     the picker reads as "BOSS lost it".
     """
-    items: dict[str, dict[str, Any]] = {}
+    from .skill_catalogue import entries
 
-    # BUILT-IN FIRST, so an authored skill of the same key overwrites it below — which matches
-    # `_skill_exists`, where authored wins. The two must agree, or the picker offers a skill and
-    # the assignment records it under the other source.
+    items: list[dict[str, Any]] = []
     try:
-        from ..config import get_settings
-        from .entitlements import EntitlementBrokerService
-
-        for skill in EntitlementBrokerService(get_settings()).list_skills(
-                project_id, connection=connection):
-            skill_id = str(skill.get("id") or "").strip()
-            if not skill_id:
-                continue
-            items[skill_id] = {
-                "skill_id": skill_id,
-                "label": skill_id.replace("_", " ").replace(".", " · "),
-                "summary": str(skill.get("description") or ""),
-                "source": "builtin",
-                "behaviour_kind": str(skill.get("kind") or ""),
-                "risk_tier": int(skill.get("risk_tier") or 0),
-                "enabled": bool(skill.get("enabled", True)),
-            }
+        catalogue = entries(connection, project_id)
     except Exception:  # noqa: BLE001
-        # A broken entitlements catalogue must not empty the agent page. The authored half below
-        # still renders, and a missing built-in shows up as "cannot be assigned" at the point of
-        # assignment, with a sentence, rather than as a page that will not load.
-        pass
-
-    for authored in list_skills(connection, project_id):
-        key = str(authored["skill_key"])
-        items[key] = {
-            "skill_id": key,
-            "label": authored["label"] or key,
-            "summary": authored["summary"] or "",
-            "source": "authored",
-            "behaviour_kind": authored["behaviour_kind"],
-            "risk_tier": authored["risk_tier"],
-            "enabled": authored["enabled"],
+        # A broken spec pack must not empty the agent page. The authored half still renders,
+        # and a missing built-in shows up as "cannot be assigned" at the point of assignment,
+        # with a sentence, rather than as a page that will not load.
+        catalogue = {
+            a["skill_key"]: {"skill_id": a["skill_key"], "label": a["label"],
+                             "summary": a["summary"], "source": "authored",
+                             "behaviour_kind": a["behaviour_kind"], "risk_tier": a["risk_tier"],
+                             "enabled": a["enabled"]}
+            for a in list_skills(connection, project_id)
         }
-
-    return sorted(items.values(), key=lambda s: s["skill_id"])
+    for item in catalogue.values():
+        authored = item["source"] == "authored"
+        if item["source"] == "registered":
+            # A bare registration with no spec cannot be offered to an agent as a tool, so it
+            # is not offered to the agent page either — the same rule as `_skill_exists`.
+            continue
+        items.append({
+            "skill_id": item["skill_id"],
+            "label": item["label"] if authored
+                     else item["skill_id"].replace("_", " ").replace(".", " · "),
+            "summary": item["summary"],
+            # role_skills' vocabulary: anything not written here ships with BOSS.
+            "source": "authored" if authored else "builtin",
+            "behaviour_kind": item["behaviour_kind"] if authored
+                              else str((item.get("spec") or {}).get("kind") or item["kind"]),
+            "risk_tier": item["risk_tier"],
+            "enabled": item["enabled"],
+        })
+    return sorted(items, key=lambda s: s["skill_id"])
 
 
 def role_skill_detail(connection: Connection, project_id: str, role_key: str) -> dict[str, Any]:

@@ -2542,17 +2542,17 @@ class AgentStudioService:
     def _enabled_project_skill_ids(
         self, connection: Connection, project_id: str
     ) -> set[str]:
-        catalog = self._project_skill_ids(connection, project_id)
-        disabled = set(
-            connection.execute(
-                text(
-                    "SELECT skill_id FROM project_skills "
-                    "WHERE project_id=:project_id AND enabled=false"
-                ),
-                {"project_id": project_id},
-            ).scalars().all()
-        )
-        return catalog - disabled
+        # THE ONE CATALOGUE (skill_catalogue) decides what is enabled, so Studio cannot offer a
+        # skill the runtime would refuse, or refuse one it would run. It used to subtract
+        # disabled project_skills rows by hand, which knew nothing about authored skills.
+        from .skill_catalogue import entries
+
+        return {
+            skill_id
+            for skill_id, item in entries(
+                connection, project_id, settings=self.settings).items()
+            if item["spec"] is not None and item["enabled"] and item["usable"]
+        }
 
     def _role_allowed_skill_ids(
         self, role_spec: dict[str, Any], catalog: set[str]

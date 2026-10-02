@@ -1473,6 +1473,37 @@ export type McpServer = {
   enabled: boolean;
   description?: string;
   created_at: string;
+  updated_at?: string | null;
+  /** A person's review, recorded with who gave it (provenance.reviewed_by). */
+  trusted?: boolean;
+  provenance?: Record<string, unknown>;
+  tool_risk_overrides?: Record<string, number>;
+  /** What the last probe found. null = never checked, which is not the same as down. */
+  reachable?: boolean | null;
+  last_checked_at?: string | null;
+  last_error?: string | null;
+  /** One sentence on what is wrong and what to do, or null when nothing is. */
+  status_note?: string | null;
+  /** The last-known tools — kept across a failed probe. */
+  tools?: { name: string; description?: string; inputSchema?: unknown }[];
+  /** What calls this server: what a delete would break. */
+  references?: {
+    custom_steps: { step_key: string; label?: string; tool?: string }[];
+    skills: { skill_key: string; label?: string; tool?: string }[];
+  };
+};
+
+/** An edit to a registered server. Only the fields sent change; the id stays. */
+export type McpServerUpdatePayload = {
+  name?: string;
+  url?: string;
+  transport?: string;
+  description?: string;
+  risk_tier?: number;
+  data_boundary?: DataBoundary;
+  tool_risk_overrides?: Record<string, number>;
+  enabled?: boolean;
+  trusted?: boolean;
 };
 
 export type McpServersResponse = {
@@ -5900,14 +5931,22 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId, enabled },
       });
     },
+    updateMcpServer(serverId: string, projectId: string, changes: McpServerUpdatePayload) {
+      return request<McpServer>("PATCH", `/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
+        query: { project_id: projectId },
+        body: changes,
+      });
+    },
     deleteMcpServer(serverId: string, projectId: string) {
       return request<void>("DELETE", `/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
         query: { project_id: projectId },
       });
     },
-    getMcpServers(projectId: string) {
+    /** `check`: none (what was recorded), stale (probe servers not checked in the last
+     *  minute), now (probe every one). */
+    getMcpServers(projectId: string, check: "none" | "stale" | "now" = "none") {
       return request<McpServersResponse>("GET", "/v1/mcp/servers", {
-        query: { project_id: projectId },
+        query: { project_id: projectId, check },
       });
     },
     getHealth() {

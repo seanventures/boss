@@ -10,7 +10,7 @@ import threading
 from secrets import compare_digest
 import time
 from collections import defaultdict, deque
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import parse_qs
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
@@ -365,6 +365,7 @@ from .schemas import (
     MetatronQueryRequest,
     MetatronQueryResponse,
     McpServerRegisterRequest,
+    McpServerUpdateRequest,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
     MeetingCreateRequest,
@@ -838,12 +839,16 @@ from .services.saml import (
 )
 from .services.ops import OpsQueueService
 from .services.reports import ReportService
-from .services.mcp_client import MCPClient
 from .services.mcp_registry import (
+    McpServerConflict,
+    McpServerInUse,
     delete_mcp_server,
     list_mcp_servers,
+    mcp_server_references,
     register_mcp_server,
+    servers_with_tools,
     set_mcp_enabled,
+    update_mcp_server,
 )
 from .services.skill_packaging import (
     CapabilityBundleError,
@@ -5774,11 +5779,27 @@ def execute_github_community_job(
 
 
 @app.get("/v1/mcp/servers")
-def list_mcp(project_id: str):
+def list_mcp(project_id: str, check: Literal["none", "stale", "now"] = "none"):
+    """Every registered server, with what the last probe found and what points at it.
+
+    `check` asks the servers: `stale` probes the ones not checked in the last minute, `now`
+    probes all of them. The default reads what was recorded and probes nothing, so a page that
+    lists servers never waits on a dead one; the screens ask with `stale` once they are drawn.
+    Each item carries `references` (the custom steps and authored skills that call it), which
+    is what lets a screen say what a delete would break before anybody presses it.
+    """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    if check == "none":
+        with begin(engine) as connection:
+            items = list_mcp_servers(connection, project_id)
+    else:
+        items = servers_with_tools(lambda: begin(engine), get_settings(), project_id,
+                                   max_age_seconds=0 if check == "now" else 60)
     with begin(engine) as connection:
-        return {"project_id": project_id, "items": list_mcp_servers(connection, project_id)}
+        for item in items:
+            item["references"] = mcp_server_references(connection, project_id, item["id"])
+    return {"project_id": project_id, "items": items}
 
 
 @app.post("/v1/mcp/servers", status_code=201)
@@ -5802,6 +5823,10 @@ def register_mcp(payload: McpServerRegisterRequest):
                 tool_risk_overrides=payload.tool_risk_overrides,
                 actor=payload.actor,
             )
+        except McpServerConflict as error:
+            # 409: the name is taken — a double-pressed Register used to make a second server
+            # whose tools silently replaced the first's in every agent's tool list.
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -5839,26 +5864,61 @@ def export_mcp_bundle(server_id: str, project_id: str, actor: str = "ceo"):
 
 
 @app.patch("/v1/mcp/servers/{server_id}")
-def toggle_mcp(server_id: str, project_id: str, enabled: bool):
+def toggle_mcp(
+    server_id: str,
+    project_id: str,
+    enabled: Optional[bool] = None,
+    payload: Optional[McpServerUpdateRequest] = Body(default=None),
+):
+    """Change a registered server in place: url, name, description, tiers, trust, on/off.
+
+    `?enabled=` alone is the original toggle and still works. A JSON body edits any of the
+    other fields; only the fields given change, and the server keeps its id — which is what
+    every custom step and authored skill bound to it points at. Before this the only way to
+    change a URL was delete-and-re-register, which silently unbound every step using it.
+    """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    changes = payload.model_dump(exclude_unset=True) if payload is not None else {}
+    if enabled is not None:
+        changes["enabled"] = enabled
+    if not changes:
+        raise HTTPException(
+            status_code=422,
+            detail="Nothing to change: send ?enabled= or a JSON body with the fields to edit.")
     with begin(engine) as connection:
         actor = current_api_principal.get() or "executive_console"
         require_project_actor(connection, project_id, actor, "pack_manage")
-        row = set_mcp_enabled(connection, project_id, server_id, enabled, actor=actor)
+        try:
+            if set(changes) == {"enabled"}:
+                row = set_mcp_enabled(connection, project_id, server_id, changes["enabled"],
+                                      actor=actor)
+            else:
+                row = update_mcp_server(connection, project_id, server_id, actor=actor,
+                                        **changes)
+        except McpServerConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         if row is None:
             raise HTTPException(status_code=404, detail="MCP server not found.")
         return row
 
 
 @app.delete("/v1/mcp/servers/{server_id}", status_code=204)
-def remove_mcp(server_id: str, project_id: str):
+def remove_mcp(server_id: str, project_id: str, release_grants: bool = False):
+    """Remove a server, refusing (409, naming them) while a custom step or skill calls it, or
+    while an agent holds it unless `release_grants` says to take it off those agents too."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         actor = current_api_principal.get() or "executive_console"
         require_project_actor(connection, project_id, actor, "pack_manage")
-        ok = delete_mcp_server(connection, project_id, server_id, actor=actor)
+        try:
+            ok = delete_mcp_server(connection, project_id, server_id, actor=actor,
+                                   release_grants=release_grants)
+        except McpServerInUse as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         if not ok:
             raise HTTPException(status_code=404, detail="MCP server not found.")
     return Response(status_code=204)
@@ -11390,9 +11450,15 @@ def list_approval_rules(project_id: str):
         pass
 
     with begin(engine) as connection:
+        from boss_engine.services.mcp_registry import needs_person
+
         for srv in list_mcp_servers(connection, project_id):
+            # An unreviewed server's tools wait for a person at any tier (needs_person) — the
+            # rule every runtime road enforces, so the rules page states it too.
             tool_rules.append({"name": srv["name"], "source": "MCP server", "kind": "mcp",
-                               "risk_tier": srv["risk_tier"], "requires_approval": _req(srv["risk_tier"])})
+                               "risk_tier": srv["risk_tier"],
+                               "requires_approval": _req(srv["risk_tier"]) or needs_person(srv),
+                               "unreviewed": needs_person(srv)})
         bp = connection.execute(
             text("SELECT daily_cap_usd_micros, monthly_cap_usd_micros, soft_cap_pct, auto_lite_mode_pct, "
                  "freeze_provisioning_pct, freeze_tier2_pct FROM budget_policies "
@@ -11430,24 +11496,22 @@ def list_capabilities(project_id: str):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     settings = get_settings()
-    mcp = MCPClient(settings, timeout=6.0)
-    with begin(engine) as connection:
-        servers = list_mcp_servers(connection, project_id)
+    # The same read the Skills and MCP page and the step builder use
+    # (mcp_registry.servers_with_tools), so the three screens cannot disagree about whether a
+    # server is up. This probed every server inline with a 6-second timeout, every load, and
+    # remembered nothing.
     enriched: list[dict] = []
-    for s in servers:
+    for s in servers_with_tools(lambda: begin(engine), settings, project_id):
         entry = dict(s)
-        try:
-            tools = mcp.list_tools(s["url"])
-            entry["reachable"] = True
-            entry["tools"] = [
-                {"name": t.get("name"), "description": t.get("description", "")}
-                for t in (tools or [])
-            ]
-        except Exception as exc:  # server down / unreachable
-            entry["reachable"] = False
-            entry["tools"] = []
-            entry["error"] = f"{type(exc).__name__}: {exc}"
+        entry["reachable"] = s["reachable"] is not False
+        entry["tools"] = [{"name": t["name"], "description": t.get("description", "")}
+                          for t in s["tools"]]
+        if s["reachable"] is False:
+            entry["error"] = s["last_error"]
         enriched.append(entry)
+    with begin(engine) as connection:
+        for entry in enriched:
+            entry["references"] = mcp_server_references(connection, project_id, entry["id"])
     engine_kind = (settings.llm_engine or "auto").lower()
     if engine_kind == "claude_cli":
         engine_label = "Claude Code CLI (Max subscription)"
@@ -14870,6 +14934,13 @@ def _set_project_skill_state(
     skill = next((item for item in catalog if item["id"] == skill_id), None)
     if skill is None:
         raise HTTPException(status_code=404, detail="Skill not found in project catalog.")
+    if skill.get("source") == "authored":
+        # An authored skill's switch is its own `enabled` (PATCH /v1/skill-definitions/{key}).
+        # A project_skills row here would be a second switch the catalogue does not read.
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{skill_id} is a skill this project authored. Turn it on or off with "
+                    "its own switch on the Skills and MCP page."))
     if skill.get("system") is True and not enabled:
         raise HTTPException(status_code=409, detail="System skills cannot be disabled.")
     rows = list_project_skills(connection, payload.project_id)
@@ -15448,11 +15519,31 @@ def release_model_gateway_lease(
 # These endpoints are about the DEFINITION — the authored object — so they say so.
 @app.get("/v1/skill-definitions")
 def list_skill_definitions(project_id: str) -> dict:
-    """Every skill this project has authored, with whether it forces an approval."""
+    """Every skill this project has authored, with whether it forces an approval, what uses it
+    (`references`: the custom steps that run it and the agents that hold it) and what the
+    catalogue says about it (`catalogue`: its effective tier, and whether it can run)."""
+    from boss_engine.services.skill_catalogue import entries
     from .services.skill_definitions import list_skills
 
     with begin(engine) as connection:
-        return {"project_id": project_id, "skills": list_skills(connection, project_id)}
+        skills = list_skills(connection, project_id, with_references=True)
+        catalogue = entries(connection, project_id, settings=get_settings())
+    for skill in skills:
+        item = catalogue.get(skill["skill_key"]) or {}
+        skill["catalogue"] = {
+            # The tier the floor will USE — never below the wrapped executor's or the MCP
+            # tool's, whatever the skill itself declares (skill_catalogue's risk rule).
+            "risk_tier": item.get("risk_tier", skill["risk_tier"]),
+            "usable": bool(item.get("usable", False)),
+            "reason": item.get("reason"),
+            "runs_through": item.get("runs_through", ""),
+            # Why a person approves every run whatever the tier (its MCP server is not
+            # reviewed), or None. The Skills page shows it beside the tier.
+            "requires_person": item.get("requires_person"),
+        }
+        if item.get("requires_person"):
+            skill["requires_approval"] = True
+    return {"project_id": project_id, "skills": skills}
 
 
 @app.post("/v1/skill-definitions", status_code=201)
@@ -15464,7 +15555,7 @@ def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
     rules is three chances for them to disagree.
     """
     payload = payload.payload()
-    from .services.skill_definitions import SkillDefinitionError, save_skill
+    from .services.skill_definitions import SkillDefinitionError, SkillExistsError, save_skill
 
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip() or "executive_console"
@@ -15483,14 +15574,48 @@ def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
                 inputs=payload.get("inputs") or [],
                 produces=payload.get("produces") or [],
                 config=payload.get("config") or {},
-                risk_tier=int(payload.get("risk_tier") or 1),
+                # `int(x or 1)` saved every tier-0 skill as tier 1: 0 is falsy. Absent means 1;
+                # anything else is checked (with a sentence) by save_skill.
+                risk_tier=1 if payload.get("risk_tier") in (None, "") else payload["risk_tier"],
                 trusted=bool(payload.get("trusted", False)),
                 enabled=bool(payload.get("enabled", True)),
+                mode=str(payload.get("mode") or "upsert"),
             )}
+        except SkillExistsError as error:
+            # 409: a create named a key that is taken. Saving used to silently replace it.
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except SkillDefinitionError as error:
             # 422, not 500: everything this raises is something the operator can fix, and the
             # message is already written for them.
             raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.patch("/v1/skill-definitions/{skill_key}")
+def switch_skill_definition(
+    skill_key: str, payload: open_bodies.SkillDefinitionSwitchBody,
+) -> dict:
+    """Turn an authored skill on or off and change nothing else about it.
+
+    The delete refusal has always said "turn the skill off instead", and until this there was
+    no way to short of re-saving every field.
+    """
+    from .services.skill_definitions import SkillDefinitionError, set_skill_enabled
+
+    body = payload.payload()
+    project_id = str(body.get("project_id") or "").strip()
+    actor = str(body.get("actor") or "").strip() or "executive_console"
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not isinstance(body.get("enabled"), bool):
+        raise HTTPException(status_code=422, detail="enabled must be true or false.")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return {"skill": set_skill_enabled(
+                connection, project_id=project_id, actor=actor, skill_key=skill_key,
+                enabled=body["enabled"])}
+        except SkillDefinitionError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 # --------------------------------------------------------------------------- #
@@ -15814,14 +15939,22 @@ def unassign_role_skill(
 
 
 @app.delete("/v1/skill-definitions/{skill_key}")
-def delete_skill_definition(skill_key: str, project_id: str, actor: str = "executive_console") -> dict:
-    from .services.skill_definitions import SkillDefinitionError, delete_skill
+def delete_skill_definition(
+    skill_key: str, project_id: str, actor: str = "executive_console",
+    release_grants: bool = False,
+) -> dict:
+    """Delete an authored skill. 409 (naming them) while a custom step runs it, or while an
+    agent holds it and `release_grants` was not given — the Skills page asks first and then
+    sends it, so the agents lose the skill on purpose rather than keeping a dangling grant."""
+    from .services.skill_definitions import SkillDefinitionError, SkillInUseError, delete_skill
 
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_manage")
         try:
             return delete_skill(connection, project_id=project_id, actor=actor,
-                                skill_key=skill_key)
+                                skill_key=skill_key, release_grants=release_grants)
+        except SkillInUseError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except SkillDefinitionError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -22562,60 +22695,39 @@ def list_delivery_custom_steps(project_id: str) -> dict:
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
 
+    from boss_engine.services.mcp_registry import servers_with_tools, tool_tier
+    from boss_engine.services.skill_catalogue import bindable as catalogue_bindable
+
+    # THE ONE CATALOGUE (skill_catalogue). This read `project_skills`, labelled it "Your
+    # skills", and on a real install (boss-1) that was five BOSS system skills and none of the
+    # operator's — while every skill agents actually hold had no row there and could not be
+    # placed. Every skill the project has is bindable now, with the tier the floor will use.
     with begin(engine) as connection:
         steps = custom_steps.list_steps(connection, project_id)
-        skills = connection.execute(
-            text("SELECT skill_id, config, provenance FROM project_skills "
-                 "WHERE project_id=:p AND enabled ORDER BY skill_id"),
-            {"p": project_id},
-        ).mappings().all()
-        servers = connection.execute(
-            text("SELECT id, name, url, risk_tier, provenance, tool_risk_overrides "
-                 "FROM mcp_servers WHERE project_id=:p AND enabled ORDER BY name"),
-            {"p": project_id},
-        ).mappings().all()
+        bindable_skills = catalogue_bindable(connection, project_id, settings=get_settings())
 
-    bindable_skills = []
-    for row in skills:
-        config = row["config"] if isinstance(row["config"], dict) else {}
-        provenance = row["provenance"] if isinstance(row["provenance"], dict) else {}
-        declared = config.get("risk_tier")
-        bindable_skills.append({
-            "skill_id": row["skill_id"],
-            "risk_tier": int(declared) if declared is not None
-                         else custom_steps.UNKNOWN_RISK,
-            "trusted": bool(provenance.get("trusted", False)),
-            # Said here rather than left for the customer to infer from a number.
-            "unclassified": declared is None,
-        })
-
-    mcp = MCPClient(get_settings(), timeout=6.0)
+    # One read for every MCP screen (mcp_registry.servers_with_tools): probes only servers whose
+    # last check is over a minute old, records what it found, and keeps the last-known tools of
+    # a server that is down. This used to probe every server inline on every builder load with
+    # a 6-second timeout each and remember nothing.
     bindable_servers = []
-    for row in servers:
-        overrides = (row["tool_risk_overrides"]
-                     if isinstance(row["tool_risk_overrides"], dict) else {})
-        provenance = row["provenance"] if isinstance(row["provenance"], dict) else {}
+    for server in servers_with_tools(lambda: begin(engine), get_settings(), project_id,
+                                     enabled_only=True):
         entry = {
-            "id": row["id"], "name": row["name"],
-            "risk_tier": int(row["risk_tier"] if row["risk_tier"] is not None
-                             else custom_steps.UNKNOWN_RISK),
-            "trusted": bool(provenance.get("trusted", False)),
-            "tools": [], "reachable": True,
-        }
-        try:
-            for tool in (mcp.list_tools(row["url"]) or []):
-                name = tool.get("name")
-                entry["tools"].append({
-                    "name": name,
-                    "description": tool.get("description", ""),
-                    "risk_tier": int(overrides[name]) if name in overrides
-                                 else entry["risk_tier"],
-                })
-        except Exception as error:
+            "id": server["id"], "name": server["name"],
+            "risk_tier": server["risk_tier"], "trusted": server["trusted"],
+            "tools": [{"name": tool["name"], "description": tool.get("description", ""),
+                       "risk_tier": tool_tier(server, tool["name"])}
+                      for tool in server["tools"]],
             # An unreachable server is shown, not hidden. Hiding it would look like the server
-            # was never registered, and the customer would add it again.
-            entry["reachable"] = False
-            entry["error"] = f"{type(error).__name__}: {error}"
+            # was never registered, and the customer would add it again. `None` (never
+            # checked) is reported as reachable-unknown rather than as down.
+            "reachable": server["reachable"] is not False,
+            "last_checked_at": server["last_checked_at"],
+        }
+        if server["reachable"] is False:
+            entry["error"] = server["last_error"]
+            entry["status_note"] = server["status_note"]
         bindable_servers.append(entry)
 
     return {
