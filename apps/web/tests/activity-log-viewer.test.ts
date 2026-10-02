@@ -64,8 +64,8 @@ describe("levels make the default view readable", () => {
     // that read as a total — boss-1 showed ERROR 0 and Deadletters 0 beside 14 dead-letters in
     // Operations. The chips now read the server-side facets, and show "…" / "?" rather than a
     // zero nobody counted.
-    expect(UI).toContain("chipCount(facets?.levels, value)");
-    expect(UI).toContain("chipCount(facets?.sources, choice.value)");
+    expect(UI).toContain('chipCount("levels", value)');
+    expect(UI).toContain('chipCount("sources", choice.value)');
     expect(UI).not.toMatch(/Counts\[[a-z.]+\] \?\? 0/);
   });
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { activityLogSearchParams, mapActivityFacets, mapActivityLog } from "../lib/activity-log";
+import {
+  activityLogSearchParams, activityPagesByCursor, facetChipLabel, mapActivityFacets, mapActivityLog,
+} from "../lib/activity-log";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -50,7 +52,37 @@ describe("the chips", () => {
     const facets = mapActivityFacets({ levels: { error: 14 }, sources: { deadletter: 14 },
                                        levels_exact: false, note: "newest 2000" });
     expect(facets).toEqual({ levels: { error: 14 }, sources: { deadletter: 14 },
-                             levelsExact: false, note: "newest 2000" });
-    expect(UI).toContain('!facets.levelsExact ? "+" : ""');
+                             levelsExact: false, sourcesExact: true, note: "newest 2000" });
+    expect(facetChipLabel(facets, "levels", "error")).toBe("14+");
+    expect(facetChipLabel(facets, "sources", "deadletter")).toBe("14");
+    expect(facetChipLabel(null, "levels", "error")).toBe("…");
+    expect(facetChipLabel(facets, "levels", "warn")).toBe("?");
+  });
+
+  it("mark a scoped stream count as a floor too", () => {
+    // Review of milestone/console-b, 2026-10-02: under a run/agent/service scope the API counts
+    // each stream from at most its scan cap and says sources_exact=false; the console dropped
+    // that flag, so a capped stream count read as exact.
+    const facets = mapActivityFacets({ levels: { error: 3 }, sources: { event: 2000 },
+                                       levels_exact: true, sources_exact: false });
+    expect(facets?.sourcesExact).toBe(false);
+    expect(facetChipLabel(facets, "sources", "event")).toBe("2000+");
+    expect(facetChipLabel(facets, "levels", "error")).toBe("3");
+    expect(UI).toContain("facetChipLabel(facets, kind, key)");
+  });
+});
+
+describe("the end of the log", () => {
+  it("is claimed only in the order the API pages", () => {
+    // Review of milestone/console-b, 2026-10-02: sorted by kind or oldest-first the API sends no
+    // cursor, and the page said "That is the oldest row" with 200 of 33k rows on screen.
+    expect(activityPagesByCursor(undefined, undefined)).toBe(true);
+    expect(activityPagesByCursor("created_at", "desc")).toBe(true);
+    expect(activityPagesByCursor("created_at", "asc")).toBe(false);
+    expect(activityPagesByCursor("kind", "asc")).toBe(false);
+    expect(activityPagesByCursor("status", "desc")).toBe(false);
+    expect(UI).toContain("const pagesByCursor = activityPagesByCursor(serverSort, serverOrder);");
+    expect(UI).toContain('data-testid="activity-paging-newest-first"');
+    expect(UI).toContain("Older rows load only when");
   });
 });

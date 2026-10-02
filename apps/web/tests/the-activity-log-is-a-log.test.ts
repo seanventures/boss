@@ -106,6 +106,6 @@ describe("every stream is on until the operator says otherwise", () => {
     // A toggle with a count says whether unticking it will change anything — and a stream
     // reading 0 over a long window says BOSS is not writing it, not that the filter is wrong.
     // Counted against the LOG (server-side facets), not the page — see activity-log-viewer.
-    expect(UI).toContain("chipCount(facets?.sources, choice.value)");
+    expect(UI).toContain('chipCount("sources", choice.value)');
   });
 });
