@@ -135,7 +135,10 @@ export async function POST(req: Request) {
       return forward(where, { method: "PATCH", body: body.changes ?? {} });
     }
     if (action === "mcp_delete") {
-      return forward(where, { method: "DELETE" });
+      // Same rule as a skill: `release_grants` is only sent after the panel has named the
+      // agents that hold the server, and the API refuses without it while any do.
+      const release = body.release_grants === true ? "&release_grants=true" : "";
+      return forward(`${where}${release}`, { method: "DELETE" });
     }
     return NextResponse.json({ error: `unknown action ${action}` }, { status: 400 });
   }

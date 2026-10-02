@@ -3154,6 +3154,43 @@ CREATE INDEX IF NOT EXISTS idx_role_skills_role
 CREATE INDEX IF NOT EXISTS idx_role_skills_skill
   ON role_skills(project_id, skill_id);
 
+-- AN AGENT HOLDS MCP SERVERS THE WAY IT HOLDS SKILLS.
+--
+-- There was no way to give an agent an MCP server at all: no table, no API, no picker. The
+-- wizard's "integrations" field was free text nothing enforced, and a bounded agent step was
+-- handed no MCP tool whatever anyone had registered. So "this agent posts to our Mattermost" had
+-- no answer short of authoring a skill per tool. This is the grant, cashed in by agent_loop: a
+-- bounded run is offered exactly the tools of the servers its agent holds, filtered by `tools`
+-- when that list is non-empty (empty = every tool the server offers). The server's own risk tier
+-- and per-tool overrides still decide whether a call waits for a person.
+CREATE TABLE IF NOT EXISTS role_mcp_servers (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  mcp_server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+  tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+  assigned_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, role_key, mcp_server_id)
+);
+CREATE INDEX IF NOT EXISTS idx_role_mcp_servers_role
+  ON role_mcp_servers(project_id, role_key);
+
+-- WHAT AN OPERATOR TOOK AWAY, so a seed does not give it back. Every install and upgrade
+-- re-ran a converging seed that re-granted unassigned skills, re-registered deleted MCP servers
+-- and rewrote edited role specs (boss-1: 48 assignment events for 16 grants). The seed is
+-- additive only; see engine/boss_engine/services/seed_exclusions.py for the kinds.
+CREATE TABLE IF NOT EXISTS seed_exclusions (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  excluded_by TEXT NOT NULL DEFAULT 'system',
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, kind, subject),
+  CHECK (kind IN ('role_skill', 'mcp_server', 'role', 'role_spec'))
+);
+
 -- Model-agnostic agent toolchain intake. Third-party prompts, hooks, MCP
 -- configuration, commands, and scripts are untrusted supply-chain inputs.
 -- BOSS records immutable provenance and scan evidence but never stores or

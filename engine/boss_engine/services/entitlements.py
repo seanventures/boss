@@ -189,6 +189,8 @@ class EntitlementBrokerService:
             ).mappings().all()
             project_state = {str(row["skill_id"]): dict(row) for row in rows}
 
+        from .skill_catalogue import raised_tier
+
         items: list[dict[str, Any]] = []
         for path in self._skill_files():
             if allowed_bundles is not None and path.stem not in allowed_bundles:
@@ -230,7 +232,13 @@ class EntitlementBrokerService:
                         ),
                         "enabled": enabled if project_id is not None else system,
                         "on_demand": on_demand,
-                        "risk_tier": int(skill.get("risk_tier", 0)),
+                        # THE CATALOGUE'S TIER, not the YAML's: the spec's tier, raised to the
+                        # project's recorded tier when that is higher (skill_catalogue's risk
+                        # rule). Folded in HERE because this is what SkillRuntimeService,
+                        # held_skills and resolve_for_task load specs from — round-1 review
+                        # found an agent offered the raw spec tier while a custom step bound
+                        # to the same skill needed approval at the raised one.
+                        "risk_tier": raised_tier(skill.get("risk_tier", 0), state),
                         "description": skill.get("description", ""),
                         "mock_mode": bool(skill.get("mock_mode", False)),
                         "input_schema": skill.get("input_schema", {}) or {},

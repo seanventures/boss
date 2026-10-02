@@ -99,6 +99,51 @@ def test_every_screen_reads_reachability_from_the_registry():
     assert not strays, f"probe through mcp_registry.servers_with_tools instead: {strays}"
 
 
+def _tables_referencing_mcp_servers() -> set[str]:
+    schema = (ROOT / "db/schema.sql").read_text(encoding="utf-8")
+    found = set()
+    for match in re.finditer(r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\);", schema, re.S):
+        if re.search(r"REFERENCES\s+mcp_servers\s*\(\s*id\s*\)", match.group(2)):
+            found.add(match.group(1))
+    for match in re.finditer(r"ALTER TABLE (?:IF EXISTS )?(\w+)[^;]*REFERENCES\s+mcp_servers",
+                             schema):
+        found.add(match.group(1))
+    return found
+
+
+def test_every_table_that_points_at_a_server_is_checked_before_it_is_removed():
+    """Round-1 review of this milestone: the delete check read workflow_custom_steps and
+    skill_definitions, and the agents stream's role_mcp_servers (an agent HOLDING a server)
+    arrived beside it unseen — its FK cascades, so removing a server took it off every agent
+    with nothing said. Every table whose column REFERENCES mcp_servers(id) in db/schema.sql is
+    enumerated here, plus the one JSON reference (an authored mcp_tool skill's config), and
+    each must be a declared referrer that mcp_server_references reads."""
+    import inspect
+
+    declared = {table for table, _column, _key in reg.MCP_REFERRERS}
+    by_fk = _tables_referencing_mcp_servers()
+    assert "workflow_custom_steps" in by_fk, "the schema scan is not finding the FKs"
+    missing = (by_fk | {"skill_definitions"}) - declared
+    assert not missing, f"add these to mcp_registry.MCP_REFERRERS: {sorted(missing)}"
+    source = inspect.getsource(reg.mcp_server_references)
+    for table, _column, key in reg.MCP_REFERRERS:
+        assert f"FROM {table}" in source and f'"{key}"' in source, (
+            f"mcp_server_references does not read {table}")
+
+
+def test_one_memory_of_a_deleted_seed_server():
+    """Round 1 kept two: an events-table scan here and seed_exclusions in the agents stream.
+    The registry now writes and reads seed_exclusions only."""
+    import inspect
+
+    source = inspect.getsource(reg)
+    assert "_removed_by_operator" not in source
+    assert "event_type = 'mcp.server_removed'" not in source
+    assert "seed_exclusions.exclude(" in inspect.getsource(reg.delete_mcp_server)
+    assert "seed_exclusions.is_excluded(" in inspect.getsource(reg.ensure_mcp_server)
+    assert "seed_exclusions.lift(" in inspect.getsource(reg.register_mcp_server)
+
+
 def test_the_tier_rule_has_one_home():
     """Three copies of 'override, else blanket tier' drifted: one let a tool's own annotation
     replace the operator's tier, so a server could mark its tools tier 0."""
@@ -162,7 +207,8 @@ def project(eng):
                        "VALUES (:i, :w, 'mcp test', :s)"), {"i": pid, "w": wid, "s": pid})
     yield pid
     with eng.begin() as c:
-        for table in ("workflow_custom_steps", "skill_definitions", "mcp_servers", "events"):
+        for table in ("workflow_custom_steps", "skill_definitions", "role_mcp_servers",
+                      "seed_exclusions", "mcp_servers", "events"):
             c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
@@ -206,6 +252,25 @@ def test_an_edit_keeps_the_id_and_forgets_what_the_old_url_said(eng, project):
     assert edited["trusted"] and edited["provenance"]["reviewed_by"] == "operator"
 
 
+def test_a_new_address_voids_the_review(eng, project):
+    """Round-1 review: a reviewed server re-pointed at another host stayed "reviewed". A person
+    vouched for what answered at the OLD address."""
+    with eng.begin() as c:
+        server = _register(c, project, provenance={"trusted": True})
+        assert server["trusted"]
+        renamed = reg.update_mcp_server(c, project, server["id"], actor="operator",
+                                        description="still the same place")
+        moved = reg.update_mcp_server(c, project, server["id"], actor="someone",
+                                      url="http://elsewhere:9/mcp")
+        again = reg.update_mcp_server(c, project, server["id"], actor="reviewer",
+                                      url="http://third:9/mcp", trusted=True)
+    assert renamed["trusted"], "an edit that did not move the server dropped its review"
+    assert moved["trusted"] is False and "reviewed_by" not in moved["provenance"]
+    assert moved["provenance"]["review_voided_by_url_change"] == "http://tracker:9/mcp"
+    # Reviewed again in the same edit only by saying so, and stamped with who said it.
+    assert again["trusted"] and again["provenance"]["reviewed_by"] == "reviewer"
+
+
 def test_an_edit_cannot_take_another_servers_name_or_an_unknown_field(eng, project):
     with eng.begin() as c:
         _register(c, project, "tracker")
@@ -235,6 +300,33 @@ def test_delete_refuses_while_a_step_or_a_skill_calls_it(eng, project):
     assert "File an issue" in str(error.value) and "turn the server off" in str(error.value)
 
 
+def test_an_agent_holding_a_server_is_named_and_released_only_on_purpose(eng, project):
+    """Deleting a server an agent held cascaded the grant away silently (role_mcp_servers is
+    ON DELETE CASCADE). Now the refusal names the agent, and release_grants takes it off them
+    as a stated choice — the same rule as deleting a skill an agent holds."""
+    with eng.begin() as c:
+        server = _register(c, project)
+        c.execute(text("INSERT INTO role_mcp_servers (id, project_id, role_key, mcp_server_id) "
+                       "VALUES (:i, :p, 'support_agent', :s)"),
+                  {"i": f"rms_{uuid.uuid4().hex[:8]}", "p": project, "s": server["id"]})
+        refs = reg.mcp_server_references(c, project, server["id"])
+        with pytest.raises(reg.McpServerInUse) as error:
+            reg.delete_mcp_server(c, project, server["id"], actor="operator")
+    assert [a["role_key"] for a in refs["agents"]] == ["support_agent"]
+    assert "held by support_agent" in str(error.value)
+    assert "confirm" in str(error.value)
+    with eng.begin() as c:
+        assert reg.delete_mcp_server(c, project, server["id"], actor="operator",
+                                     release_grants=True)
+        left = c.execute(text("SELECT count(*) FROM role_mcp_servers WHERE project_id=:p"),
+                         {"p": project}).scalar()
+        event = c.execute(text("SELECT data FROM events WHERE project_id=:p "
+                               "AND event_type='mcp.server_removed'"), {"p": project}).scalar()
+    assert left == 0
+    assert (event if isinstance(event, dict) else json.loads(event))["released_from"] == [
+        "support_agent"]
+
+
 def test_a_reseed_respects_what_the_operator_did(eng, project):
     """The seed put 127.0.0.1 back over an operator's fixed URL, and recreated a server they
     had removed."""
@@ -252,6 +344,14 @@ def test_a_reseed_respects_what_the_operator_did(eng, project):
                                      respect_operator=True)
     assert again["url"] == "http://web-intel:8770/mcp"
     assert gone is None
+    # Remembered in seed_exclusions — the record every seed path asks — and lifted when a person
+    # registers the same name again by hand.
+    from boss_engine.services import seed_exclusions
+
+    with eng.begin() as c:
+        assert seed_exclusions.is_excluded(c, project, "mcp_server", "doc-render")
+        _register(c, project, "doc-render", "http://doc-render:8771/mcp")
+        assert not seed_exclusions.is_excluded(c, project, "mcp_server", "doc-render")
 
 
 def test_a_probe_is_recorded_and_a_fresh_one_is_not_repeated(eng, project, monkeypatch):

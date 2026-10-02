@@ -26,7 +26,9 @@ type Skill = {
   produces: Array<{ name: string }>; config: Record<string, unknown>;
   risk_tier: number; trusted: boolean; enabled: boolean; requires_approval: boolean;
   /** What points at it — read before Delete is pressed, not discovered after. */
-  references?: { custom_steps: Array<{ step_key: string; label?: string }>; agents: string[] };
+  references?: { custom_steps: Array<{ step_key: string; label?: string }>; agents: string[];
+                  // Workflows whose own steps bind the skill directly (`kind: skill`).
+                  workflows?: Array<{ workflow_key: string; name?: string }> };
   /** What the ONE skill catalogue says: the tier the floor will use (never below what it wraps
    *  or calls), and whether it can run right now. */
   catalogue?: { risk_tier: number; usable: boolean; reason?: string | null; runs_through?: string };
@@ -87,10 +89,18 @@ export function draftFromSkill(s: Skill): Draft {
 export function deleteConsequence(s: Skill): { blocked: string | null; confirm: string } {
   const steps = s.references?.custom_steps ?? [];
   const agents = s.references?.agents ?? [];
+  const flows = s.references?.workflows ?? [];
   if (steps.length > 0) {
     return {
       blocked: `${s.skill_key} is run by ${steps.map((x) => x.label || x.step_key).join(", ")}. `
         + "Delete or re-point those workflow steps first — or turn the skill off instead.",
+      confirm: "",
+    };
+  }
+  if (flows.length > 0) {
+    return {
+      blocked: `${s.skill_key} is a step in ${flows.map((w) => w.name || w.workflow_key)
+        .join(", ")}. Remove it from those workflows first — or turn the skill off instead.`,
       confirm: "",
     };
   }

@@ -1801,6 +1801,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     }
     mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     from .mcp_registry import known_unreachable, record_reachability_quietly
+    from .mcp_registry import reviewed as reviewed_server
 
     for server in ([] if bounded
                    else list_mcp_servers(connection, project_id, enabled_only=True)):
@@ -1839,7 +1840,11 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     "type": "function",
                     "function": {
                         "name": ns,
-                        "description": f"[MCP · {server['name']}] {t.get('description', '')}",
+                        "description": (
+                            f"[MCP · {server['name']}"
+                            + ("" if reviewed_server(server)
+                               else " · UNREVIEWED server: every call waits for a person")
+                            + f"] {t.get('description', '')}"),
                         "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
                     },
                 }
@@ -2017,12 +2022,19 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 server, tool = mcp_map[name]
                 tool_name = str(tool.get("name") or "tool")
                 risk = _mcp_tool_risk(server, tool)
-                if risk > threshold:
+                # AN UNREVIEWED SERVER'S TOOL ALWAYS WAITS FOR A PERSON, whatever its tier.
+                # The tier is the server's own claim; until somebody has reviewed the server
+                # (mcp_registry.reviewed) that claim is the only thing standing between a
+                # registered URL and an unattended call. Round-1 review: a chat-registered
+                # tier-0 server's tools ran in every chat without anyone being asked.
+                unreviewed = not reviewed_server(server)
+                if risk > threshold or unreviewed:
                     decision_id = create_blocking_decision(
                         connection,
                         project_id,
                         task_id,
-                        f"Approve MCP tool: {server['name']} / {tool_name}",
+                        (f"Approve MCP tool: {server['name']} / {tool_name}"
+                         + (" (server not reviewed yet)" if unreviewed else "")),
                         {
                             "action": "resume_agent_run",
                             "run_id": run_id,
@@ -2043,6 +2055,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         "message": (
                             f"MCP tool '{tool_name}' (risk tier {risk}) requires "
                             "human approval."
+                            + (f" Server '{server['name']}' has not been reviewed: mark it "
+                               "reviewed on the Skills and MCP page once a person has "
+                               "checked it." if unreviewed else "")
                         ),
                     }
                     is_deferred = True

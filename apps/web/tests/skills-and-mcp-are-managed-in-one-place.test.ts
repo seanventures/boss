@@ -139,6 +139,12 @@ describe("the skill editor edits what it loaded", () => {
       references: { custom_steps: [{ step_key: "file", label: "File it" }], agents: [] } });
     expect(used.blocked).toContain("File it");
     expect(used.blocked).toContain("turn the skill off");
+    // Round-1 review: a workflow binding the skill with its own `kind: skill` step was not a
+    // reference at all, so the delete passed and the workflow broke at its next run.
+    const inFlow = deleteConsequence({ ...base, references: {
+      custom_steps: [], agents: [], workflows: [{ workflow_key: "weekly", name: "Weekly digest" }] } });
+    expect(inFlow.blocked).toContain("Weekly digest");
+    expect(inFlow.blocked).toContain("turn the skill off");
     const held = deleteConsequence({ ...base, references: { custom_steps: [], agents: ["pm"] } });
     expect(held.blocked).toBeNull();
     expect(held.confirm).toContain("Pm will no longer hold it");

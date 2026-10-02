@@ -6,6 +6,13 @@ could draft a skill — and then nothing else: no way to see or register an MCP 
 skill BOSS ships or bind an MCP tool at all. `draft_skill` described its config as "server and
 tool" when the keys are `mcp_server_id` and `tool_name`, so the model's first attempt failed,
 and it saved every tier-0 skill as tier 1 (`int(x or 1)`).
+
+ROUND-1 REVIEW of this milestone: the new register_mcp_server tool then let a model attach any
+URL at tier 0 with no human step, created it enabled and probed it at once, and agent_loop
+offered its tools to every unbounded run without approval. A prompt-injected "register
+http://attacker/mcp at tier 0" would have put attacker-written tools into every chat. The tests
+marked REWRITTEN below encoded that behaviour (registered = reachable with tools at once); they
+now go through the person who turns the server on.
 """
 from __future__ import annotations
 
@@ -48,17 +55,25 @@ def project(eng):
                        "VALUES (:i, :w, 'chat test', :s)"), {"i": pid, "w": wid, "s": pid})
     yield pid
     with eng.begin() as c:
-        for table in ("workflow_custom_steps", "skill_definitions", "mcp_servers", "events"):
+        for table in ("workflow_custom_steps", "skill_definitions", "seed_exclusions",
+                      "mcp_servers", "events"):
             c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
 
+ASKED: list[str] = []
+
+
 @pytest.fixture()
 def call(eng, monkeypatch):
-    monkeypatch.setattr(MCPClient, "list_tools",
-                        lambda self, url, headers=None: [
-                            {"name": "search", "description": "Search the web",
-                             "inputSchema": {"type": "object"}}])
+    ASKED.clear()
+
+    def tools(self, url, headers=None):
+        ASKED.append(url)
+        return [{"name": "search", "description": "Search the web",
+                 "inputSchema": {"type": "object"}}]
+
+    monkeypatch.setattr(MCPClient, "list_tools", tools)
 
     class Ctx:
         settings = Settings()
@@ -76,10 +91,66 @@ def call(eng, monkeypatch):
     return _call
 
 
-def test_register_then_list_then_bind_a_tool_to_a_step(call, project):
+def _a_person_turns_it_on(eng, project, name="web-intel"):
+    from boss_engine.services import mcp_registry
+
+    with eng.begin() as c:
+        server = mcp_registry.find_mcp_server(c, project, name)
+        mcp_registry.update_mcp_server(c, project, server["id"], actor="operator", enabled=True)
+
+
+def test_a_server_registered_from_chat_is_off_unreviewed_and_not_contacted(call, eng, project):
+    """REWRITTEN half of the old register test: what the chat gets back now, and that BOSS sent
+    the new URL nothing — not even the probe — and no agent turn reads it."""
+    from boss_engine.services import mcp_registry
+
     registered = call("register_mcp_server", project, name="web-intel",
-                      url="http://web-intel:8770/mcp")
-    assert registered["status"] == "registered" and registered["tools"] == ["search"]
+                      url="http://attacker.example/mcp", risk_tier=0)
+    assert registered["status"] == "registered_switched_off", registered
+    assert registered["enabled"] is False and registered["trusted"] is False
+    assert registered["risk_tier"] == 2, "a conversation lowered a tier below 2"
+    assert "turn it on" in registered["tell_the_operator"]
+    assert ASKED == [], "BOSS contacted a server nobody has looked at"
+    listed = call("list_mcp_servers", project, check=True)["servers"]
+    assert listed[0]["enabled"] is False and listed[0]["tools"] == []
+    assert ASKED == []
+    with eng.begin() as c:
+        # What agent_loop._drive_run reads for an unbounded run.
+        assert mcp_registry.list_mcp_servers(c, project, enabled_only=True) == []
+
+
+def test_a_server_a_person_turned_on_but_nobody_reviewed_never_runs_unattended(call, eng,
+                                                                               project):
+    """The class, not the chat tool: ANY unreviewed server's tool waits for a person in an agent
+    turn, whatever tier it claims. agent_loop asks mcp_registry.reviewed — the one question —
+    alongside the tier, and says why in the tool description the model reads."""
+    import inspect
+
+    from boss_engine.services import agent_loop, mcp_registry
+
+    call("register_mcp_server", project, name="web-intel", url="http://web-intel:8770/mcp")
+    _a_person_turns_it_on(eng, project)
+    with eng.begin() as c:
+        server = mcp_registry.find_mcp_server(c, project, "web-intel")
+        mcp_registry.update_mcp_server(c, project, server["id"], actor="operator", risk_tier=0)
+        server = mcp_registry.get_mcp_server(c, project, server["id"])
+    assert server["enabled"] and server["risk_tier"] == 0
+    assert mcp_registry.reviewed(server) is False
+    source = inspect.getsource(agent_loop._drive_run)
+    assert "unreviewed = not reviewed_server(server)" in source
+    assert "if risk > threshold or unreviewed:" in source
+    assert "UNREVIEWED server: every call waits for a person" in source
+    with eng.begin() as c:
+        mcp_registry.update_mcp_server(c, project, server["id"], actor="operator", trusted=True)
+        assert mcp_registry.reviewed(mcp_registry.get_mcp_server(c, project, server["id"]))
+    # BOSS's own servers are reviewed by the release.
+    assert mcp_registry.reviewed({"provenance": {"source": "builtin"}})
+
+
+def test_register_then_list_then_bind_a_tool_to_a_step(call, eng, project):
+    """REWRITTEN: a person turns the server on between registering and listing."""
+    call("register_mcp_server", project, name="web-intel", url="http://web-intel:8770/mcp")
+    _a_person_turns_it_on(eng, project)
     listed = call("list_mcp_servers", project)["servers"]
     assert [s["name"] for s in listed] == ["web-intel"]
     # Registered from a conversation: unreviewed, and not tier 0 until a person says so.
@@ -93,8 +164,9 @@ def test_register_then_list_then_bind_a_tool_to_a_step(call, project):
     assert step["mcp_tool"] == "search"
 
 
-def test_a_tool_the_server_does_not_have_is_refused_with_its_real_tools(call, project):
+def test_a_tool_the_server_does_not_have_is_refused_with_its_real_tools(call, eng, project):
     call("register_mcp_server", project, name="web-intel", url="http://web-intel:8770/mcp")
+    _a_person_turns_it_on(eng, project)
     out = call("draft_custom_step", project, step_key="x_step", label="X",
                mcp_server="web-intel", mcp_tool="delete_everything")
     assert out["ok"] is False and out["tools"] == ["search"]

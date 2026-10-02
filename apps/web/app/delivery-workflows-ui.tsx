@@ -5100,12 +5100,17 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
           Register a skill, or connect an MCP server, and it will appear here.
         </p>
       ) : unreachable.length ? (
-        // Said even when there is something else to pick, because a server whose tools are
-        // missing from the list reads as a server that has none.
+        // Said even when there is something else to pick. The API lists an unreachable
+        // server's LAST-KNOWN tools (marked "(unreachable)" in the picker), so this used to
+        // claim they were "not listed" right above a list of them (round-1 review). What is
+        // true: they are what it offered when last reached, and a step on one fails until it
+        // answers again.
         <p className="detail dw-define-empty" data-testid="dw-define-unreachable">
-          {unreachable.join(", ")} {unreachable.length === 1 ? "is" : "are"} not answering, so
-          {unreachable.length === 1 ? " its" : " their"} tools are not listed. Fix the URL or
-          start the server on the Skills and MCP page.
+          {unreachable.join(", ")} {unreachable.length === 1 ? "is" : "are"} not answering.
+          Any tools shown under {unreachable.length === 1 ? "it" : "them"} are what
+          {unreachable.length === 1 ? " it" : " they"} offered when last reached, and a step
+          bound to one will fail until the server answers. Fix the URL or start the server on
+          the Skills and MCP page.
         </p>
       ) : null}
     </form>

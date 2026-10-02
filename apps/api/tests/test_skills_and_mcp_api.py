@@ -62,7 +62,9 @@ def test_a_skill_is_turned_off_without_resaving_it(client):
     assert row["enabled"] is False
     # The catalogue's view travels with the row, so the page can say whether it can run.
     assert set(row["catalogue"]) >= {"risk_tier", "usable", "reason"}
-    assert row["references"] == {"custom_steps": [], "agents": []}
+    # REWRITTEN for round-1 review: a workflow binding the skill with its own `kind: skill`
+    # step is a reference too, so the shape carries `workflows` beside the other two.
+    assert row["references"] == {"custom_steps": [], "agents": [], "workflows": []}
 
 
 def test_deleting_a_held_skill_asks_first_then_releases_it(client):
@@ -130,6 +132,45 @@ def test_a_server_in_use_is_not_removed(client):
     assert [s["skill_key"] for s in row["references"]["skills"]] == [ticket]
     refused = client.delete(f"/v1/mcp/servers/{server['id']}", params={"project_id": PROJECT})
     assert refused.status_code == 409 and ticket in refused.json()["detail"]
+
+
+def test_a_server_an_agent_holds_is_removed_only_when_the_operator_releases_it(client):
+    """Round-1 review: role_mcp_servers cascades, so removing a server an agent held took it
+    off the agent with nothing said. The listing names the agent, DELETE refuses naming it,
+    and `release_grants=true` (sent by the console only after asking) removes both."""
+    import uuid as _uuid
+
+    from sqlalchemy import text
+
+    from apps.api.app.main import begin, engine
+
+    server = _register(client).json()
+    with begin(engine) as connection:
+        connection.execute(
+            text("INSERT INTO role_mcp_servers (id, project_id, role_key, mcp_server_id) "
+                 "VALUES (:i, :p, 'support_agent', :s)"),
+            {"i": f"rms_{_uuid.uuid4().hex[:8]}", "p": PROJECT, "s": server["id"]})
+    listed = client.get("/v1/mcp/servers", params={"project_id": PROJECT}).json()["items"]
+    row = next(s for s in listed if s["id"] == server["id"])
+    assert [a["role_key"] for a in row["references"]["agents"]] == ["support_agent"]
+    refused = client.delete(f"/v1/mcp/servers/{server['id']}", params={"project_id": PROJECT})
+    assert refused.status_code == 409 and "support_agent" in refused.json()["detail"]
+    done = client.delete(f"/v1/mcp/servers/{server['id']}",
+                         params={"project_id": PROJECT, "release_grants": True})
+    assert done.status_code == 204
+    with begin(engine) as connection:
+        left = connection.execute(
+            text("SELECT count(*) FROM role_mcp_servers WHERE mcp_server_id = :s"),
+            {"s": server["id"]}).scalar()
+    assert left == 0
+
+
+def test_a_reviewed_server_moved_to_a_new_address_is_unreviewed(client):
+    server = _register(client, provenance={"trusted": True}).json()
+    assert server["trusted"] is True
+    moved = client.patch(f"/v1/mcp/servers/{server['id']}", params={"project_id": PROJECT},
+                         json={"url": "http://elsewhere:9/mcp"})
+    assert moved.status_code == 200 and moved.json()["trusted"] is False
 
 
 def test_listing_does_not_wait_on_a_dead_server_unless_asked(client, monkeypatch):

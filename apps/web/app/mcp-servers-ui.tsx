@@ -29,6 +29,9 @@ export type McpServerRow = {
   references?: {
     custom_steps: Array<{ step_key: string; label?: string; tool?: string }>;
     skills: Array<{ skill_key: string; label?: string; tool?: string }>;
+    // Agents that HOLD the server (role_mcp_servers). Not a blocker like the two above: the
+    // operator may take it off them in the same press, after being told who they are.
+    agents?: Array<{ role_key: string; tools?: string[] }>;
   };
 };
 
@@ -87,6 +90,7 @@ export function McpServersPanel({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [editedUrl, setEditedUrl] = useState("");
   const [form, setForm] = useState({ ...BLANK });
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -140,6 +144,7 @@ export function McpServersPanel({
 
   const startEdit = (s: McpServerRow) => {
     setEditing(s.id);
+    setEditedUrl(s.url);
     setForm({ name: s.name, url: s.url, description: s.description ?? "",
               risk_tier: String(s.risk_tier), data_boundary: s.data_boundary ?? "internal",
               trusted: Boolean(s.trusted), overrides: overridesText(s.tool_risk_overrides) });
@@ -234,7 +239,14 @@ export function McpServersPanel({
           <label className="setup-field"><span>URL (JSON-RPC endpoint)</span>
             <input type="text" value={form.url} data-testid="mcp-url" spellCheck={false}
                    placeholder="http://web-intel:8770/mcp"
-                   onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))} />
+                   onChange={(e) => {
+                     const url = e.target.value;
+                     // A REVIEW IS OF AN ADDRESS. Re-pointing a reviewed server at another host
+                     // kept it "reviewed"; the API now voids the review on a URL change, and the
+                     // form says so rather than silently sending the old answer back.
+                     const moved = editing !== "new" && url.trim() !== editedUrl.trim();
+                     setForm((f) => ({ ...f, url, ...(moved ? { trusted: false } : {}) }));
+                   }} />
           </label>
           <label className="setup-field"><span>What it provides</span>
             <input type="text" value={form.description} data-testid="mcp-description"
@@ -264,6 +276,12 @@ export function McpServersPanel({
               <option value="yes">A person has checked this server and vouches for it</option>
             </select>
           </label>
+          {editing !== "new" && form.url.trim() !== editedUrl.trim() ? (
+            <p className="detail" data-testid="mcp-url-voids-review">
+              A new address is a new server as far as a review goes: saving clears Reviewed.
+              Choose it again only once a person has checked what answers at the new address.
+            </p>
+          ) : null}
           {Number(form.risk_tier) >= 2 && !form.trusted ? (
             <p className="detail" data-testid="mcp-risk-note">
               Until it is marked reviewed, its tools at tier 2 or above cannot be placed in a
@@ -298,6 +316,7 @@ export function McpServersPanel({
               ...(s.references?.custom_steps ?? []).map((x) => `step “${x.label || x.step_key}”`),
               ...(s.references?.skills ?? []).map((x) => `skill “${x.label || x.skill_key}”`),
             ];
+            const holders = (s.references?.agents ?? []).map((a) => a.role_key);
             return (
               <li key={s.id} className="skill-row" data-enabled={s.enabled}
                   data-testid={`mcp-row-${s.id}`}>
@@ -336,6 +355,11 @@ export function McpServersPanel({
                 {users.length > 0 ? (
                   <span className="detail">Used by {users.join(", ")}.</span>
                 ) : null}
+                {holders.length > 0 ? (
+                  <span className="detail" data-testid={`mcp-holders-${s.id}`}>
+                    Held by {holders.join(", ")}.
+                  </span>
+                ) : null}
                 <span className="skill-assign-actions">
                   <button type="button" className="linklike" disabled={busy}
                           data-testid={`mcp-edit-${s.id}`} onClick={() => startEdit(s)}>Edit</button>
@@ -350,11 +374,18 @@ export function McpServersPanel({
                   </button>
                   {confirmDelete === s.id ? (
                     <span className="skill-assign-pick" data-testid={`mcp-delete-confirm-${s.id}`}>
-                      <span className="detail">Remove {s.name}? This cannot be undone.</span>
+                      <span className="detail">
+                        Remove {s.name}?{holders.length > 0
+                          ? ` This also takes it off ${holders.join(", ")}.` : ""} This cannot
+                        be undone.
+                      </span>
                       <button type="button" className="cap-btn danger" disabled={busy}
                               data-testid={`mcp-delete-yes-${s.id}`}
                               onClick={() => { setConfirmDelete(null);
-                                void send({ action: "mcp_delete", server_id: s.id },
+                                // release_grants only after the question above named
+                                // the agents that hold it.
+                                void send({ action: "mcp_delete", server_id: s.id,
+                                            release_grants: holders.length > 0 },
                                           `Removed ${s.name}.`); }}>Remove</button>
                       <button type="button" className="linklike"
                               onClick={() => setConfirmDelete(null)}>Keep it</button>

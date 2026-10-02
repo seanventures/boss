@@ -24,7 +24,10 @@ WHAT CHANGED, AND THE INCIDENTS BEHIND IT
   `last_error`, and the last tool list) by every probe — the builder, the Capabilities screen,
   the agent loop and an explicit check — and shown with a sentence saying what to do.
 * A re-seed undid the operator: `ensure_mcp_server` overwrote an edited URL and recreated a
-  server the operator had deleted. Seeding now respects both (see :func:`ensure_mcp_server`).
+  server the operator had deleted. Seeding now respects both (see :func:`ensure_mcp_server`);
+  a deletion is remembered in seed_exclusions, the record shared with every other seed path.
+* What points at a server is declared once, in :data:`MCP_REFERRERS`; a test fails when the
+  schema grows a referrer that list does not name.
 """
 from __future__ import annotations
 
@@ -225,6 +228,23 @@ def list_mcp_servers(connection: Connection, project_id: str, enabled_only: bool
     return [_row(r) for r in rows]
 
 
+def reviewed(server: dict[str, Any]) -> bool:
+    """Has a person vouched for this server? The servers BOSS ships count as reviewed by the
+    release; every other server counts only once somebody marks it trusted.
+
+    THE ONE QUESTION every unattended use asks. Round-1 review of this milestone: a chat model
+    could register any URL at tier 0 with no human step, and agent_loop then offered that
+    server's tools — and its tool descriptions — to every unbounded run, calling any tool at or
+    below the approval threshold without asking. `trusted` only gated PLACING tier >= 2 tools in
+    a workflow. Now an unreviewed server's tool never runs from an agent turn without a person's
+    approval (agent_loop), and a server registered from chat lands switched off.
+    """
+    provenance = server.get("provenance") or {}
+    if isinstance(provenance, str):
+        provenance = _loads(provenance, {}) or {}
+    return bool(provenance.get("trusted", False)) or provenance.get("source") == "builtin"
+
+
 def _name_taken(
     connection: Connection, project_id: str, name: str, *, except_id: Optional[str] = None,
 ) -> Optional[str]:
@@ -270,6 +290,7 @@ def register_mcp_server(
     provenance: Optional[dict[str, Any]] = None,
     tool_risk_overrides: Optional[dict[str, int]] = None,
     actor: str = "system",
+    enabled: bool = True,
 ) -> dict:
     _validated_server_identity(name, url, transport)
     risk_tier = _validated_risk(risk_tier)
@@ -287,10 +308,10 @@ def register_mcp_server(
             """
             INSERT INTO mcp_servers
               (id, project_id, name, url, transport, risk_tier, data_boundary,
-               description, publisher, provenance, tool_risk_overrides)
+               description, publisher, provenance, tool_risk_overrides, enabled)
             VALUES (:id, :p, :name, :url, :transport, :risk, :db, :desc,
                     CAST(:publisher AS JSONB), CAST(:provenance AS JSONB),
-                    CAST(:tool_risk_overrides AS JSONB))
+                    CAST(:tool_risk_overrides AS JSONB), :enabled)
             """
         ),
         {
@@ -305,8 +326,15 @@ def register_mcp_server(
             "publisher": json.dumps(publisher or {}),
             "provenance": json.dumps(_reviewed(dict(provenance or {}), actor)),
             "tool_risk_overrides": json.dumps(tool_risk_overrides or {}),
+            "enabled": bool(enabled),
         },
     )
+    # REGISTERED BY HAND, so a deletion recorded earlier no longer stands in its way: the newer
+    # decision wins (seed_exclusions.lift).
+    if actor != "bootstrap":
+        from . import seed_exclusions
+
+        seed_exclusions.lift(connection, project_id, "mcp_server", name)
     emit_event(
         connection,
         project_id,
@@ -337,6 +365,11 @@ def update_mcp_server(
 
     Changing the URL forgets the recorded reachability and tools: they described the old
     address, and showing them against the new one would claim a check that never happened.
+    It VOIDS THE REVIEW too, for the same reason: a person vouched for what answered at the old
+    address, and a reviewed server re-pointed at another host stayed "reviewed" (round-1
+    review). The same edit may review it again by saying ``trusted=True`` explicitly — the
+    console's form clears its Reviewed choice when the URL is changed, so that is a deliberate
+    second choice — and the new review is stamped with this actor.
 
     Marking a server trusted records the reviewer. Every edit records `edited_by`, which is
     what tells the next seed that this server is the operator's now (see ensure_mcp_server).
@@ -361,6 +394,12 @@ def update_mcp_server(
         given.get("tool_risk_overrides", current["tool_risk_overrides"]))
     enabled = bool(given.get("enabled", current["enabled"]))
     provenance = dict(current["provenance"])
+    url_changed = url != current["url"]
+    if url_changed and provenance.get("trusted") and provenance.get("source") != "builtin":
+        provenance = {k: v for k, v in provenance.items()
+                      if k not in ("reviewed_by", "reviewed_at")}
+        provenance["trusted"] = False
+        provenance["review_voided_by_url_change"] = current["url"]
     if "trusted" in given:
         if bool(given["trusted"]):
             # Recorded when it BECOMES trusted. The edit form sends `trusted` on every save, and
@@ -376,7 +415,6 @@ def update_mcp_server(
 
     provenance["edited_by"] = actor
     provenance["edited_at"] = datetime.now(timezone.utc).isoformat()
-    url_changed = url != current["url"]
     row = connection.execute(
         text(
             "UPDATE mcp_servers SET name = :name, url = :url, transport = :transport, "
@@ -422,11 +460,40 @@ def set_mcp_enabled(connection: Connection, project_id: str, server_id: str, ena
     return _row(row)
 
 
+#: EVERY PLACE THAT POINTS AT AN MCP SERVER, declared once.
+#:
+#: Each entry is (table, the column that names the server, the key of its list in
+#: :func:`mcp_server_references`). The delete check, the "used by" line every screen shows and
+#: the release option all read through it, and ``test_mcp_servers_are_managed`` parses
+#: db/schema.sql for every column that REFERENCES mcp_servers(id) and fails when one is missing
+#: here. That test is the reason this is a list: round 1 of this milestone checked custom steps
+#: and skills only, and the agents stream's ``role_mcp_servers`` (an agent HOLDING a server)
+#: arrived beside it unseen — deleting a server an agent held would have cascaded its grants
+#: away with nothing said.
+#:
+#: A referrer table that does not exist yet on an install is read as "nothing points from
+#: there", which is true.
+MCP_REFERRERS: tuple[tuple[str, str, str], ...] = (
+    ("workflow_custom_steps", "mcp_server_id", "custom_steps"),
+    ("skill_definitions", "config->>'mcp_server_id'", "skills"),
+    ("role_mcp_servers", "mcp_server_id", "agents"),
+)
+
+
+def _table_ready(connection: Connection, table: str) -> bool:
+    try:
+        return connection.execute(
+            text("SELECT to_regclass(:t)"), {"t": table}).scalar() is not None
+    except Exception:  # noqa: BLE001 — a non-Postgres test double
+        return False
+
+
 def mcp_server_references(
     connection: Connection, project_id: str, server_id: str,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Everything that points at one server: custom steps bound to its tools, and authored
-    skills whose behaviour calls one of them."""
+    """Everything that points at one server, one list per entry of :data:`MCP_REFERRERS`:
+    custom steps bound to its tools, authored skills whose behaviour calls one of them, and the
+    agents that hold it."""
     steps = connection.execute(
         text("SELECT step_key, label, mcp_tool_name FROM workflow_custom_steps "
              "WHERE project_id = :p AND mcp_server_id = :s ORDER BY step_key"),
@@ -438,21 +505,41 @@ def mcp_server_references(
              "AND config->>'mcp_server_id' = :s ORDER BY skill_key"),
         {"p": project_id, "s": server_id},
     ).mappings().all()
+    agents = [] if not _table_ready(connection, "role_mcp_servers") else connection.execute(
+        text("SELECT role_key, tools FROM role_mcp_servers "
+             "WHERE project_id = :p AND mcp_server_id = :s ORDER BY role_key"),
+        {"p": project_id, "s": server_id},
+    ).mappings().all()
     return {
         "custom_steps": [{"step_key": r["step_key"], "label": r["label"],
                           "tool": r["mcp_tool_name"]} for r in steps],
         "skills": [{"skill_key": r["skill_key"], "label": r["label"], "tool": r["tool_name"]}
                    for r in skills],
+        "agents": [{"role_key": str(r["role_key"]), "tools": _loads(r["tools"], []) or []}
+                   for r in agents],
     }
 
 
-def delete_mcp_server(connection: Connection, project_id: str, server_id: str, actor: str = "system") -> bool:
-    """Remove a server, refusing while a custom step or an authored skill still calls it.
+def delete_mcp_server(
+    connection: Connection, project_id: str, server_id: str, actor: str = "system", *,
+    release_grants: bool = False,
+) -> bool:
+    """Remove a server, refusing while anything in :data:`MCP_REFERRERS` still points at it.
 
     Refusing rather than cascading: a custom step whose server vanished became unusable with no
     warning (its FK is ON DELETE SET NULL) and every workflow placing it stopped publishing, and
     an authored skill kept an id that pointed at nothing. Turning the server off is the
     non-destructive alternative and the refusal says so.
+
+    AN AGENT HOLDING THE SERVER is the one reference the operator may release in the same
+    breath, exactly like a skill (skill_definitions.delete_skill): taking a server off an agent
+    breaks nothing published, so ``release_grants`` removes those grants first, on purpose and
+    named in the event. Without it the refusal names the agents. Before this the
+    role_mcp_servers FK cascaded and the agents lost the server with nothing said.
+
+    A server BOSS seeds stays deleted: its name goes to seed_exclusions, the one record every
+    seed path asks (services/seed_exclusions.py), so the next install upgrade does not bring it
+    back.
     """
     current = get_mcp_server(connection, project_id, server_id)
     if current is None:
@@ -464,24 +551,29 @@ def delete_mcp_server(connection: Connection, project_id: str, server_id: str, a
         raise McpServerInUse(
             f"MCP server '{current['name']}' is still used by {', '.join(users[:8])}. "
             "Re-point or delete those first — or turn the server off instead of removing it.")
+    holders = [a["role_key"] for a in refs["agents"]]
+    if holders and not release_grants:
+        raise McpServerInUse(
+            f"MCP server '{current['name']}' is held by {', '.join(holders[:8])}. Removing it "
+            f"takes it off {'that agent' if len(holders) == 1 else 'those agents'}; confirm to "
+            "go ahead, or turn the server off instead.")
+    if holders:
+        connection.execute(
+            text("DELETE FROM role_mcp_servers WHERE project_id = :p AND mcp_server_id = :s"),
+            {"p": project_id, "s": server_id},
+        )
     connection.execute(
         text("DELETE FROM mcp_servers WHERE id = :id AND project_id = :p"),
         {"id": server_id, "p": project_id},
     )
-    # The NAME is recorded so the next seed can tell this was removed on purpose — see
-    # ensure_mcp_server, which would otherwise recreate a built-in server by name.
+    from . import seed_exclusions
+
+    seed_exclusions.exclude(connection, project_id, "mcp_server", str(current["name"]),
+                            actor=actor, reason="deleted")
     emit_event(connection, project_id, "mcp.server_removed", actor, "mcp_server", server_id,
-               {"name": current["name"], "url": current["url"],
+               {"name": current["name"], "url": current["url"], "released_from": holders,
                 "builtin": (current["provenance"] or {}).get("source") == "builtin"})
     return True
-
-
-def _removed_by_operator(connection: Connection, project_id: str, name: str) -> bool:
-    return connection.execute(
-        text("SELECT 1 FROM events WHERE project_id = :p AND event_type = 'mcp.server_removed' "
-             "AND lower(data->>'name') = lower(:n) AND actor <> 'bootstrap' LIMIT 1"),
-        {"p": project_id, "n": name},
-    ).first() is not None
 
 
 def ensure_mcp_server(
@@ -501,13 +593,23 @@ def ensure_mcp_server(
 ) -> Optional[dict]:
     """Idempotently register a server by (project, name).
 
-    Two callers want different things. An explicit bundle IMPORT is an operator saying "make it
-    this", so it overwrites. The bootstrap SEED (``respect_operator=True``) runs on every
-    install upgrade and `make seed`, and an operator's decision must survive it: a server they
-    edited keeps their URL and tier, and a server they removed stays removed. Before this a
-    re-seed reverted both — on boss-1 the operator could not even point the built-in servers at
-    a reachable address, because the next seed put 127.0.0.1 back.
+    Returns None, and writes nothing, for a server an operator deleted: the seed is additive
+    only and never resurrects what a person removed. That memory is seed_exclusions (kind
+    ``mcp_server``, subject the NAME, because built-ins are ensured by name), the one record
+    every seed path asks. Round 1 of this milestone scanned the events table for
+    ``mcp.server_removed`` instead, which made two memories of one decision once the agents
+    stream added seed_exclusions. An explicit bundle IMPORT is an operator's decision and lifts
+    the record before it calls this.
+
+    For a server that EXISTS the two callers want different things. An import is an operator
+    saying "make it this", so it overwrites. The bootstrap SEED (``respect_operator=True``)
+    leaves a server a person EDITED alone: before this a re-seed put 127.0.0.1 back over the
+    reachable address the operator had just given a built-in server on boss-1.
     """
+    from . import seed_exclusions
+
+    if seed_exclusions.is_excluded(connection, project_id, "mcp_server", name):
+        return None
     _validated_server_identity(name, url, transport)
     risk_tier = _validated_risk(risk_tier)
     data_boundary = normalize_data_boundary(data_boundary)
@@ -538,8 +640,6 @@ def ensure_mcp_server(
             },
         ).mappings().first()
         return _row(row)
-    if respect_operator and _removed_by_operator(connection, project_id, name):
-        return None
     return register_mcp_server(
         connection, project_id, name, url,
         transport=transport, risk_tier=risk_tier, data_boundary=data_boundary, description=description,
