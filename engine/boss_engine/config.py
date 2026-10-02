@@ -144,7 +144,10 @@ class Settings(BaseSettings):
     #: Each pass had a step limit and the turn had none: boss-1's "Ask the Qa" chained three
     #: passes for 276 seconds. When either runs out the agent answers with what it has and
     #: says what it could not check.
-    chat_turn_seconds: int = Field(default=120, alias="BOSS_CHAT_TURN_SECONDS")
+    #: 180, not 120: one claude CLI round-trip measured 157 s in boss-1, so at 120 (less the
+    #: 20 s answer reserve) any turn past 100 s lost its tools — a read → read → propose chain
+    #: ended without its button. 180 still answers before the console's 240 s stall line.
+    chat_turn_seconds: int = Field(default=180, alias="BOSS_CHAT_TURN_SECONDS")
     chat_turn_model_calls: int = Field(default=16, alias="BOSS_CHAT_TURN_MODEL_CALLS")
     #: The investigation runner — a real Claude Code session with a shell, the repo, the
     #: database and the fleet. Its own model, because this is the deep-thinking seat and the

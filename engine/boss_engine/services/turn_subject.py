@@ -212,18 +212,30 @@ def subject_context(evidence: SubjectEvidence, question: str) -> str:
     return evidence.render(question) + "\n\n" + answer_contract(evidence.ref)
 
 
-def stays_on_subject(reply: str, evidence: SubjectEvidence) -> bool:
-    """Whether a replacement answer is still about the subject.
+#: Ids BOSS mints, by prefix. A reply naming one of these names an object of that kind.
+_ID_IN_TEXT = re.compile(
+    r"\b(" + "|".join(re.escape(p) for p, _ in _PREFIX_KIND) + r")[0-9a-z]{1,}\b", re.I)
 
-    A re-ask may refine an answer; it may not swap it for one about another object. In the
-    incident the continuation's reply — "has never been deployed … list_deployment_hosts
-    returns zero hosts" — named neither the step, the preview nor the error, and REPLACED an
-    answer drawn from the evidence. The test is objective: does the reply mention anything that
-    identifies this subject (its ids, its title, a distinctive fragment of its error)?
-    """
-    low = (reply or "").lower()
-    if not low.strip():
-        return False
+#: The vocabulary of the deployment chain. The incident's off-subject answer was made of it:
+#: "has never been deployed … describe_deployment_target and list_deployments both return
+#: empty … list_deployment_hosts returns zero hosts".
+_DEPLOY_TALK = re.compile(
+    r"never (?:been )?deployed|not (?:been )?deployed|deployment (?:target|host|record)s?|"
+    r"deployment hosts?|zero hosts|no hosts|list_deployment_hosts|describe_deployment_target|"
+    r"list_deployments|preflight_deployment_target", re.I)
+
+
+def _kind_of_id(token: str) -> str:
+    low = token.lower()
+    for prefix, kind in _PREFIX_KIND:
+        if low.startswith(prefix):
+            return kind
+    return ""
+
+
+def subject_marks(evidence: SubjectEvidence) -> set[str]:
+    """What identifies this subject in prose: its ids, its name where the name is the object's
+    own, and the distinctive tokens of its recorded failure."""
     marks = {evidence.ref.id.lower()}
     if evidence.ref.step:
         marks.add(evidence.ref.step.lower())
@@ -231,15 +243,98 @@ def stays_on_subject(reply: str, evidence: SubjectEvidence) -> bool:
     # — and the incident's off-subject answer named the app ("Lead Triage Inbox has never been
     # deployed"), so counting it would have waved that answer through.
     if evidence.title and len(evidence.title) >= 4 and evidence.ref.kind in {
-            "decision", "discovery", "deployment"}:
+            "decision", "discovery", "deployment", "code_task"}:
         marks.add(evidence.title.lower())
     for value in evidence.facts.values():
         if isinstance(value, str) and re.match(r"^[a-z]+_[0-9a-z]{6,}$", value):
             marks.add(value.lower())
-    for word in re.findall(r"[A-Za-z][A-Za-z_./]{5,}", evidence.error or "")[:40]:
-        if any(c in word for c in "._/") or word[0].isupper():
-            marks.add(word.lower())
-    return any(m and m in low for m in marks)
+    return {m for m in marks if m} | cause_marks(evidence)
+
+
+def cause_marks(evidence: SubjectEvidence) -> set[str]:
+    """The distinctive tokens of the recorded failure — what an answer that USED the failure
+    would repeat: the exception's name, the file it names, a code, a two-word symptom.
+
+    Generic words are not marks: an answer saying "failed" or "timeout" has not cited anything.
+    """
+    blob = evidence.error or ""
+    # The exception line of a log tail counts as the record of the failure too: a preview
+    # whose error column is empty still says why in its log.
+    for match in _EXCEPTION_LINE.finditer(evidence.log_tail or ""):
+        blob += "\n" + match.group(0)
+    marks: set[str] = set()
+    for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_./-]{3,}", blob):
+        w = word.strip("./-")
+        if len(w) < 5:
+            continue
+        if (re.search(r"[._/]", w) or re.match(r"[A-Z][a-z]+[A-Z]", w)
+                or re.search(r"(?:Error|Exception)$", w) or re.match(r"^[A-Z][A-Z0-9_]{4,}$", w)):
+            marks.add(w.lower())
+    # Plain-words failures ("health check: connection refused") have no such token, so a
+    # two-word phrase with one long word is the mark: "connection refused".
+    words = re.findall(r"[a-z]{4,}", blob.lower())
+    for a, b in zip(words, words[1:]):
+        if max(len(a), len(b)) >= 7:
+            marks.add(f"{a} {b}")
+    return marks
+
+
+def cites_the_record(reply: str, evidence: Optional[SubjectEvidence]) -> bool:
+    """Whether an answer was DRAWN FROM the subject's recorded failure.
+
+    The record being found is not enough: a build with no recorded error, a deployment whose
+    outage lives in its health samples, a quiet build asked "still working or stuck?" — the
+    record is there and holds no answer, and an answer to those still has to look. So: the
+    record holds a failure (an error or a finding), and the reply repeats something distinctive
+    from it.
+    """
+    if evidence is None or not evidence.found or not reply:
+        return False
+    if not (evidence.error or evidence.findings):
+        return False
+    low = reply.lower()
+    return any(m in low for m in cause_marks(evidence))
+
+
+def strays_from_subject(reply: str, evidence: SubjectEvidence, question: str = "") -> str:
+    """Why a replacement answer is about some OTHER object, or "" when it is not.
+
+    THIS IS A NEGATIVE TEST, deliberately. The first version demanded a positive match — the
+    subject's id, an id-shaped fact or a word of its error — and on a build thread ("which
+    criteria are untested?") a correct continuation names none of those: builds rarely have an
+    error and nobody quotes a run id. It refused the better answer and kept the hand-back,
+    which is the incident's failure in reverse.
+
+    A reply strays only when it names something else:
+      * an id of a KIND the subject's record does not link to (a `deprun_…` on a preview step); or
+      * the deployment chain's vocabulary on a subject that is not, and does not link to, a
+        deployment — and nothing of the subject itself (boss-1's "never been deployed … zero
+        hosts", which named neither the step, the preview nor the error).
+    The operator's own question widens what is on subject: asked about the deploy, deploy talk
+    is the answer.
+    """
+    if not (reply or "").strip():
+        return "empty"
+    low = reply.lower()
+    record = (evidence.render() + "\n" + (question or "")).lower()
+    linked_kinds = {evidence.ref.kind} | {
+        _kind_of_id(m.group(0)) for m in _ID_IN_TEXT.finditer(record)}
+    for m in _ID_IN_TEXT.finditer(reply):
+        token = m.group(0).lower()
+        kind = _kind_of_id(token)
+        if kind and kind not in linked_kinds and token not in record:
+            return f"names {kind} {m.group(0)}, which {evidence.ref.label} does not link to"
+    deploy_linked = "deployment" in linked_kinds or re.search(r"\bdeploy", question or "", re.I)
+    if not deploy_linked and _DEPLOY_TALK.search(reply):
+        if not any(mark in low for mark in subject_marks(evidence)):
+            return (f"answers about deployments, and says nothing of {evidence.ref.label} "
+                    "or its recorded failure")
+    return ""
+
+
+def stays_on_subject(reply: str, evidence: SubjectEvidence, question: str = "") -> bool:
+    """A re-ask may refine an answer; it may not swap it for one about another object."""
+    return not strays_from_subject(reply, evidence, question)
 
 
 # --------------------------------------------------------------------------------------------
@@ -399,42 +494,58 @@ def _resolve_workflow_step(connection, project_id: str, ref: SubjectRef) -> Subj
     ev.found = True
     out = _json(row.get("output")) or {}
     out = out if isinstance(out, dict) else {"output": out}
+    # WHAT THE STEP AWAITED, AS THE STEP RECORDS IT. A step that started something nests that
+    # thing's result under its own kind — the real boss-1 row is
+    # {"tool": "start_preview", "preview": {"id", "error", "failure_kind", "suggested_action"}}.
+    # Reading only the top level lost the checker's label and its advice, so the "port_timeout
+    # is only the label" finding never fired and "ensure HOST/PORT are honored" reached the
+    # model unlabelled, inside a raw dump.
+    nested = out.get("preview") if isinstance(out.get("preview"), dict) else {}
+    failure_kind = str(out.get("failure_kind") or nested.get("failure_kind") or "")
+    suggested = out.get("suggested_action") or nested.get("suggested_action")
+    preview_id = str(out.get("preview_id") or nested.get("id") or "")
     ev.status = str(row.get("status") or "")
-    ev.error = _cap(row.get("last_error") or out.get("error") or out.get("note"))
     ev.facts.update({
         "step kind": row.get("step_kind"), "attempt": row.get("attempt"),
-        "failure_kind": out.get("failure_kind"),
-        "suggested_action (the checker's, not verified)": out.get("suggested_action"),
-        "preview_id": out.get("preview_id"),
+        "failure_kind": failure_kind or None,
+        "suggested_action (the checker's, not verified)": suggested,
+        "preview_id": preview_id or None,
         "run_id": out.get("run_id") or out.get("build_run_id"),
         "decision_id": row.get("decision_id"),
     })
     for key in sorted(out):
         if key not in {"error", "note", "failure_kind", "suggested_action", "preview_id",
-                       "run_id", "build_run_id"} and len(ev.facts) < 24:
+                       "run_id", "build_run_id", "preview"} and len(ev.facts) < 24:
             ev.facts[f"output.{key}"] = out[key]
     preview = {}
-    if out.get("preview_id"):
-        preview = _preview_row(connection, project_id, str(out["preview_id"]))
-        if preview:
-            ev.facts["launch command"] = preview.get("command") or "(not recorded)"
-            ev.facts["log_path"] = preview.get("log_path")
-            ev.log_tail = _log_tail(preview.get("log_path"))
-            ev.linked.append(
-                f"preview {preview['id']} — {preview.get('status')}, "
-                f"failure_kind={preview.get('failure_kind') or 'none'}, mode={preview.get('mode')}")
+    if preview_id:
+        preview = _preview_row(connection, project_id, preview_id)
+    # THE ERROR, WHOLE. `last_error` is the workflow runtime's summary and may be cut; the
+    # preview's own row (or the copy nested in the step's output) is the full text. Prefer the
+    # longest record of the same failure.
+    ev.error = _cap(max(
+        (str(x) for x in (preview.get("error"), nested.get("error"), out.get("error"),
+                          row.get("last_error"), out.get("note")) if x),
+        key=len, default=""))
+    if preview:
+        ev.facts["launch command"] = preview.get("command") or "(not recorded)"
+        ev.facts["log_path"] = preview.get("log_path")
+        ev.log_tail = _log_tail(preview.get("log_path"))
+        ev.linked.append(
+            f"preview {preview['id']} — {preview.get('status')}, "
+            f"failure_kind={preview.get('failure_kind') or 'none'}, mode={preview.get('mode')}")
     build_id = str(out.get("run_id") or out.get("build_run_id") or preview.get("run_id") or "")
     if build_id:
         line, _ = _code_task_line(connection, project_id, build_id)
         if line:
             ev.linked.append(line)
     ev.findings = _crash_findings(ev.error, ev.log_tail,
-                                  failure_kind=str(out.get("failure_kind") or ""))
+                                  failure_kind=failure_kind or str(preview.get("failure_kind") or ""))
     ev.open_points = [("the run's other steps and its way out",
                        f"describe_workflow_run(run_id={ref.id})")]
-    if out.get("preview_id"):
+    if preview_id:
         ev.open_points.append(("the full start-up log",
-                               f"read_preview_log(preview_id={out['preview_id']})"))
+                               f"read_preview_log(preview_id={preview_id})"))
     if build_id:
         ev.open_points.append(("the app's code at the line the error names",
                                f"search_code / read_code with run_id={build_id}"))
@@ -554,6 +665,23 @@ def _resolve_deployment(connection, project_id: str, ref: SubjectRef) -> Subject
         app = t.get("app_name")
     else:
         app = runs[0].get("app_name")
+    # IS IT UP, AS THE HEALTH CHECKER LAST SAW IT. A deployment's outage is not in its run
+    # record — a run that SUCCEEDED last week says nothing about the app refusing connections
+    # now. The Monitoring door's "not answering" lives in deployment_health_samples, so that
+    # is part of this record; without it the answer had to come from lookups, and the gate that
+    # counts lookups was switched off for any subject that merely resolved.
+    samples = _rows(connection,
+                    "SELECT ok, status_code, error, checked_at FROM deployment_health_samples "
+                    "WHERE deployment_target_id = :t AND project_id = :p "
+                    "ORDER BY checked_at DESC LIMIT 1", {"t": target_id, "p": project_id})
+    if samples:
+        s = samples[0]
+        ev.facts["latest health check"] = (
+            f"{'ok' if s.get('ok') else 'FAILING'} at {s.get('checked_at')}"
+            + (f", HTTP {s['status_code']}" if s.get("status_code") else ""))
+        if not s.get("ok") and s.get("error"):
+            health = f"latest health check ({s.get('checked_at')}): {s['error']}"
+            ev.error = _cap(f"{ev.error}\n{health}" if ev.error else health)
     ev.findings = _crash_findings(ev.error)
     ev.open_points = [
         ("the target as configured", f"describe_deployment_target(app_name={app})"),

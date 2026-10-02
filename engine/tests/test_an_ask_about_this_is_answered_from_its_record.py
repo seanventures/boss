@@ -42,8 +42,8 @@ from sqlalchemy import create_engine, text
 from boss_engine.services import intent_router as ir
 from boss_engine.services.turn_budget import TurnBudget
 from boss_engine.services.turn_subject import (
-    RESOLVERS, SUBJECT_KINDS, SubjectRef, parse_subject, resolve_subject,
-    stays_on_subject,
+    RESOLVERS, SUBJECT_KINDS, SubjectRef, cites_the_record, parse_subject, resolve_subject,
+    stays_on_subject, strays_from_subject,
 )
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -94,6 +94,9 @@ def db(tmp_path):
             "CREATE TABLE decisions (id TEXT, project_id TEXT, question TEXT, status TEXT,"
             " recommendation TEXT, options TEXT, risk_tier INTEGER, default_action TEXT,"
             " external_ref TEXT)",
+            "CREATE TABLE deployment_health_samples (id TEXT, project_id TEXT,"
+            " deployment_target_id TEXT, checked_at TEXT, ok BOOLEAN, status_code INTEGER,"
+            " latency_ms INTEGER, error TEXT, observed_version TEXT)",
         ):
             c.execute(text(ddl))
         c.execute(text(
@@ -104,11 +107,17 @@ def db(tmp_path):
             "INSERT INTO workflow_step_runs VALUES ('wfs_1','boss-dogfood',"
             "'wfr_9c78b289633348c68246','preview','preview','failed','{}',:o,:e,1,0,NULL,"
             "'2026-10-02')"),
-            {"e": INCIDENT_ERROR, "o": json.dumps({
-                "preview_id": "prev_3f87d37f96b540198e28", "failure_kind": "port_timeout",
-                "error": INCIDENT_ERROR, "run_id": "crun_3e370c114b95425d8a7c",
-                "suggested_action": "Inspect startup logs, ensure HOST/PORT are honored, or "
-                                    "retry in Docker mode."})})
+            # THE REAL SHAPE, read from the VM's row: the preview's result is NESTED under
+            # "preview", and last_error is the runtime's summary — cut. The first fixture was
+            # flat, which is why the resolver's flat reads passed here and missed on the VM.
+            {"e": INCIDENT_ERROR[:160], "o": json.dumps({
+                "tool": "start_preview", "status": "awaiting", "capability": "preview",
+                "await": {"id": "prev_3f87d37f96b540198e28", "kind": "preview"},
+                "preview_id": "prev_3f87d37f96b540198e28",
+                "preview": {"id": "prev_3f87d37f96b540198e28", "status": "failed",
+                            "error": INCIDENT_ERROR, "failure_kind": "port_timeout",
+                            "suggested_action": "Inspect startup logs, ensure HOST/PORT are "
+                                                "honored, or retry in Docker mode."}})})
         c.execute(text(
             "INSERT INTO app_previews VALUES ('prev_3f87d37f96b540198e28','boss-dogfood',"
             "'crun_3e370c114b95425d8a7c','paramg/boss-sandbox','boss/crun_3e37','',NULL,NULL,"
@@ -129,6 +138,16 @@ def db(tmp_path):
             "INSERT INTO deployment_runs VALUES ('deprun_1','boss-dogfood','deptgt_1',"
             "'Change Calendar','staging','failed','health check: connection refused',"
             "'host-1','abc123','2026-10-02')"))
+        c.execute(text(
+            "INSERT INTO deployment_targets VALUES ('deptgt_2','boss-dogfood','HookWatch',"
+            "'staging','active','ssh','host-1','[]')"))
+        c.execute(text(
+            "INSERT INTO deployment_runs VALUES ('deprun_2','boss-dogfood','deptgt_2',"
+            "'HookWatch','staging','succeeded',NULL,'host-1','def456','2026-09-20')"))
+        c.execute(text(
+            "INSERT INTO deployment_health_samples VALUES ('hs_1','boss-dogfood','deptgt_2',"
+            "'2026-10-02T08:00:00',0,NULL,NULL,'GET http://192.0.2.202:3020/health: "
+            "ECONNREFUSED',NULL)"))
         c.execute(text(
             "INSERT INTO decisions VALUES ('dec_1','boss-dogfood','Merge PR #186','pending',"
             "'{}','[]',2,'approve','crun_3e370c114b95425d8a7c')"))
@@ -340,13 +359,91 @@ def test_the_continuation_is_sent_to_the_subjects_tools_not_the_deploy_chain(db,
     assert "describe_deployment_target" not in instruction
 
 
-def test_relevance_is_judged_by_the_subjects_own_identifiers(db):
+def test_a_reply_strays_only_when_it_names_something_else(db):
+    """The incident's continuation is refused; an answer that cites the step is not."""
     ev = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
     assert stays_on_subject(ANSWER, ev)
     assert stays_on_subject("The Preview step failed because prev_3f87d37f96b540198e28 "
                             "crashed.", ev)
+    # The build the step links to is on subject; it is IN the record.
+    assert stays_on_subject("Build crun_3e370c114b95425d8a7c shipped approvals.py as a "
+                            "package module.", ev)
     assert not stays_on_subject("Lead Triage Inbox has never been deployed — not failed, never "
                                 "shipped. list_deployment_hosts returns zero hosts.", ev)
+    # An object of a kind the record does not link to.
+    assert "deployment" in strays_from_subject(
+        "The real problem is deprun_77aa11bb22, which failed.", ev)
+
+
+def test_on_a_build_thread_an_on_topic_answer_without_the_run_id_is_on_subject(db):
+    """Review of 20b0abf: the positive-match test refused every good build-thread answer,
+    because builds rarely carry an error and nobody quotes a run id."""
+    ev = resolve_subject(db, "boss-dogfood", EXAMPLES["code_task"])
+    assert ev.found and not ev.error
+    assert stays_on_subject("Three acceptance criteria are untested: the decline disclaimer, "
+                            "the audit export and the keyboard path.", ev)
+
+
+def test_the_operators_own_question_decides_whether_deploy_talk_is_on_subject(db):
+    ev = resolve_subject(db, "boss-dogfood", EXAMPLES["code_task"])
+    reply = "It has never been deployed: list_deployments returns nothing for this app."
+    assert not stays_on_subject(reply, ev, "Which criteria are untested?")
+    assert stays_on_subject(reply, ev, "Was this build ever deployed?")
+
+
+def test_on_a_build_thread_an_on_topic_continuation_replaces_a_hand_back(db, monkeypatch):
+    """The reviewer's replay, as a test: before the fix CALLS 2 and the hand-back stood."""
+    better = ("Three acceptance criteria are untested: the decline disclaimer, the audit "
+              "export and the keyboard path.")
+    agent = _Scripted("I could not determine which criteria are untested. Would you like me "
+                      "to investigate further?", better)
+    router, _ = _router(monkeypatch, agent)
+    turn = _ask(router, db, external_ref="crun_3e370c114b95425d8a7c", role=None,
+                question="Which criteria are untested?")
+    assert len(agent.calls) == 2
+    assert turn.reply == better
+
+
+def test_a_found_record_without_the_cause_does_not_switch_off_the_lookup_floor(db, monkeypatch):
+    """Review of 20b0abf: `grounded = record found` turned the lookup floor off for every build
+    thread and briefing door. A build with no recorded error, asked an operational question and
+    answered with zero tools, is still re-asked to look."""
+    agent = _Scripted("It is still working; nothing looks stuck.",
+                      "diagnose_run shows the build is in its test phase, last activity 2 min ago.")
+    router, _ = _router(monkeypatch, agent)
+    _ask(router, db, external_ref="crun_3e370c114b95425d8a7c", role=None,
+         question="Is this build still working or stuck?")
+    assert len(agent.calls) == 2, "the lookup floor did not fire"
+    assert "diagnose_run" in str(agent.calls[1]["message"])
+
+
+def test_grounded_means_the_answer_used_the_recorded_failure(db):
+    step = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
+    assert cites_the_record(ANSWER, step)
+    assert not cites_the_record("The preview failed; I will look into it.", step)
+    build = resolve_subject(db, "boss-dogfood", EXAMPLES["code_task"])
+    assert not cites_the_record("The build is fine and the PR is open.", build), (
+        "a record with no failure grounds nothing")
+
+
+def test_a_deployments_record_carries_its_latest_health_check(db):
+    """The Monitoring door asks why an app is not answering; the outage is in the health
+    samples, not in a run that succeeded weeks ago."""
+    ev = resolve_subject(db, "boss-dogfood", SubjectRef("deployment", "deptgt_2"))
+    assert ev.found
+    assert "ECONNREFUSED" in ev.error
+    assert "FAILING" in str(ev.facts.get("latest health check"))
+    assert cites_the_record("It refuses connections (ECONNREFUSED on /health).", ev)
+
+
+def test_the_real_step_shape_yields_the_label_finding_and_the_whole_error(db):
+    """The VM row nests the preview's result under "preview" and cuts last_error."""
+    ev = resolve_subject(db, "boss-dogfood", EXAMPLES["workflow_step"])
+    assert ev.error == INCIDENT_ERROR, "the cut last_error was preferred over the whole text"
+    assert ev.facts["failure_kind"] == "port_timeout"
+    assert "HOST/PORT" in str(ev.facts["suggested_action (the checker's, not verified)"])
+    assert any("checker's label" in f for f in ev.findings)
+    assert not any(k == "output.preview" for k in ev.facts), "the nested record dumped raw"
 
 
 # --------------------------------------------------------------------------------------------
@@ -409,6 +506,44 @@ def test_the_wall_clock_ends_the_turn_too():
     _agent(adapter).chat(project_id="p", message=QUESTION, max_steps=14, budget=budget)
     assert len(adapter.calls) <= 3
     assert adapter.calls[-1]["tools"] is None
+
+
+def test_a_spent_turn_can_still_attach_its_fix_as_a_button():
+    """Review of 20b0abf: past the turn's budget the next call had no tools, so a read → read →
+    propose chain ended as prose with nothing to press. The forced answer may make ONE
+    propose_action call, and only that."""
+    seen: list = []
+
+    class _Offerer:
+        calls: list = []
+
+        def create_chat_completion(self, messages, tools=None):
+            self.calls.append(tools)
+            names = [t["function"]["name"] for t in (tools or [])]
+            if names == ["propose_action"]:
+                return ({"raw": {"role": "assistant", "content": ""}, "tool_calls": [
+                    {"id": "p1", "name": "propose_action",
+                     "arguments": json.dumps({"tool": "retry_workflow_step"})},
+                    {"id": "p2", "name": "redeploy", "arguments": "{}"}]}, {})
+            if tools:
+                return ({"raw": {"role": "assistant", "content": ""}, "tool_calls": [
+                    {"id": f"t{len(self.calls)}", "name": "read_preview_log",
+                     "arguments": "{}"}]}, {})
+            return ({"raw": {"role": "assistant", "content": "x"},
+                     "content": "It crashed on ImportError; the retry is one click away."}, {})
+
+    adapter = _Offerer()
+    agent = _agent(adapter)
+    agent.registry = type("R", (), {"openai_schema": lambda self: [
+        {"type": "function", "function": {"name": n, "parameters": {}}}
+        for n in ("read_preview_log", "propose_action", "redeploy")]})()
+    agent._run_tool = lambda name, args, **kw: seen.append(name) or {"ok": True}
+    turn = agent.chat(project_id="p", message=QUESTION, max_steps=14,
+                      budget=TurnBudget(seconds=600, model_calls=3))
+    assert "propose_action" in seen, "the closing offer was not allowed"
+    assert "redeploy" not in seen, "the closing step ran a tool other than propose_action"
+    assert adapter.calls[-1] is None, "the answer itself must have no tools"
+    assert "ImportError" in turn.reply
 
 
 def test_a_spent_budget_starts_no_re_ask(db, monkeypatch):

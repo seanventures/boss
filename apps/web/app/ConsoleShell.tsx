@@ -5,6 +5,7 @@ import { isInConsoleLink } from "./console-href";
 import { onChanged } from "./changed";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
+import { dockChatKey } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 
 import React, {
@@ -1249,8 +1250,11 @@ export default function ConsoleShell({
                          // `dockFresh` in the key so starting a discussion remounts with no
                          // thread and no history, rather than the component unpicking its own
                          // state — a reset that has to remember every field misses one.
+                         // And the SUBJECT: see dockChatKey — without it a second Ask door with
+                         // the same question sent its turn about the previous subject.
                          fresh={startFresh}
-                         key={`${dockAsk}|${dockRole}|${dockDiscussing}|${dockFresh}`} />
+                         key={dockChatKey({ agent: dockedRun, ask: dockAsk, role: dockRole,
+                                            discussing: dockDiscussing, fresh: dockFresh })} />
             </div>
           </aside>
         ) : null}
