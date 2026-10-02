@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""The host's real `docker`, with every container and image the harness's BOSS makes LABELLED.
+
+WHY THIS EXISTS. The first harness runs left four preview containers running on the
+developer's Docker — `boss-prev-prev-…`, each serving the fake repo on 0.0.0.0 — and their
+images, and the report said nothing was left behind. The product's preview step (and the
+container sandbox) call `docker build` / `docker run` on whatever `docker` is on PATH; the stack
+only knew about the Postgres container it started itself, so teardown could not find the rest.
+
+So the stack puts THIS first on PATH for the API and the worker. It forwards every call to the
+real binary unchanged, except that `run`, `create` and `build` gain
+`--label boss-e2e.run=<run id>`. Teardown then removes everything carrying the stack's label —
+whatever code path started it, including ones added after this file was written — and the
+`all` command fails if anything labelled is still there afterwards.
+
+The run id comes from BOSS_E2E_RUN_ID, or from the scratch HOME when a subprocess's environment
+was filtered (the code agent's is deny-by-default).
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import time
+from pathlib import Path
+
+LABEL_KEY = "boss-e2e.run"
+# Subcommands that create something on the daemon, as (tokens…). Longest first.
+CREATING = (("container", "run"), ("container", "create"), ("image", "build"),
+            ("buildx", "build"), ("run",), ("create",), ("build",))
+# Global options that take a value: `docker --context x run …`.
+GLOBAL_WITH_VALUE = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level",
+                     "--tlscacert", "--tlscert", "--tlskey"}
+
+
+def _from(variable: str, home_file: str) -> str:
+    value = os.environ.get(variable, "")
+    if value:
+        return value
+    path = Path.home() / home_file
+    return path.read_text().strip() if path.exists() else ""
+
+
+def run_id() -> str:
+    return _from("BOSS_E2E_RUN_ID", ".boss-e2e-run-id")
+
+
+def real_docker() -> str:
+    explicit = _from("BOSS_E2E_REAL_DOCKER", ".boss-e2e-real-docker")
+    if explicit:
+        return explicit
+    here = str(Path(__file__).resolve().parent)
+    rest = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep)
+                           if p and str(Path(p).resolve()) != here)
+    found = shutil.which("docker", path=rest)
+    if not found:
+        sys.stderr.write("boss-e2e docker shim: no real docker on PATH\n")
+        sys.exit(127)
+    return found
+
+
+def labelled(argv: list[str], run: str) -> list[str]:
+    """argv with `--label boss-e2e.run=<run>` right after a creating subcommand, else as is."""
+    if not run:
+        return list(argv)
+    i = 0
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in GLOBAL_WITH_VALUE else 1
+    for words in CREATING:
+        if tuple(argv[i:i + len(words)]) == words:
+            at = i + len(words)
+            return argv[:at] + ["--label", f"{LABEL_KEY}={run}"] + argv[at:]
+    return list(argv)
+
+
+def _ledger(argv: list[str], run: str) -> None:
+    run_dir = _from("BOSS_E2E_RUN_DIR", ".boss-e2e-run-dir")
+    if not run_dir or not run:
+        return
+    try:
+        with open(Path(run_dir) / "docker-ledger.jsonl", "a") as handle:
+            handle.write(json.dumps({"at": time.time(), "argv": argv}) + "\n")
+    except OSError:
+        pass  # the ledger is diagnostics; the label is what teardown relies on
+
+
+def main() -> None:
+    argv = sys.argv[1:]
+    run = run_id()
+    out = labelled(argv, run)
+    if out != argv:
+        _ledger(out, run)
+    binary = real_docker()
+    os.execv(binary, [binary] + out)
+
+
+if __name__ == "__main__":
+    main()

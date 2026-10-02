@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "boss-e2e: cursor-agent is not available in the harness; the scripted model answers through claude" >&2
+exit 127

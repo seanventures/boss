@@ -24,11 +24,15 @@ function tone(s: string): string {
   return "#8b949e";
 }
 
-function Result({ state }: { state: ActionResult | null }) {
+function Result({ state, testid }: { state: ActionResult | null; testid?: string }) {
   if (!state) return null;
-  if (!state.ok) return <p className="detail" style={{ color: "#f85149" }}>{state.error}</p>;
+  if (!state.ok) {
+    return <p className="detail" style={{ color: "#f85149" }} data-testid={testid}
+              data-ok="false">{state.error}</p>;
+  }
   return (
-    <pre className="mono" style={{ whiteSpace: "pre-wrap", fontSize: 11.5, marginTop: 8, color: "var(--ink-soft)" }}>
+    <pre className="mono" data-testid={testid} data-ok="true"
+         style={{ whiteSpace: "pre-wrap", fontSize: 11.5, marginTop: 8, color: "var(--ink-soft)" }}>
       {JSON.stringify(state.data, null, 2)}
     </pre>
   );
@@ -88,7 +92,8 @@ export function SlackToolsCard({ projectId }: { projectId: string }) {
         <div style={{ display: "flex", gap: 8 }}>
           <label className="field" style={{ flex: 1 }}>
             <span>Persona</span>
-            <input name="persona" className="input" placeholder="Metatron" required />
+            <input name="persona" className="input" placeholder="Metatron" required
+                   data-testid="slack-persona" />
           </label>
           <label className="field" style={{ flex: 1 }}>
             <span>Role</span>
@@ -101,13 +106,15 @@ export function SlackToolsCard({ projectId }: { projectId: string }) {
         </div>
         <label className="field">
           <span>Body</span>
-          <textarea name="body" className="textarea" rows={2} placeholder="All systems green." required />
+          <textarea name="body" className="textarea" rows={2} placeholder="All systems green." required
+                    data-testid="slack-body" />
         </label>
-        <SubmitButton className="button secondary" type="submit" disabled={renderPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={renderPending}
+                      data-testid="slack-render">
           {renderPending ? "Rendering…" : "Render Slack message"}
         </SubmitButton>
       </form>
-      <Result state={renderState} />
+      <Result state={renderState} testid="slack-render-result" />
       <form action={digestAction} style={{ marginTop: 10 }}>
         <input type="hidden" name="project_id" value={projectId} />
         <SubmitButton className="button secondary" type="submit" disabled={digestPending}>
@@ -266,16 +273,17 @@ export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
 
       <p className="detail" style={{ marginTop: 10 }}>Spec → chunk planner: small, shippable PRs instead of one giant PR.</p>
       <form action={chunkAction} className="composer compact">
-        <label className="field"><span>Title</span><input name="title" className="input" placeholder="Refactor auth module" /></label>
+        <label className="field"><span>Title</span><input name="title" className="input" placeholder="Refactor auth module" data-testid="chunk-title" /></label>
         <label className="field">
           <span>Files (one per line)</span>
           <textarea name="files" className="textarea" rows={3} placeholder={"a.py\nb.py\nc.py\nd.py\ne.py"} />
         </label>
-        <SubmitButton className="button secondary" type="submit" disabled={chunkPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={chunkPending}
+                      data-testid="chunk-plan">
           {chunkPending ? "Planning…" : "Plan chunks"}
         </SubmitButton>
       </form>
-      <Result state={chunkState} />
+      <Result state={chunkState} testid="chunk-plan-result" />
     </article>
   );
 }

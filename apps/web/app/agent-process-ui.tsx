@@ -505,6 +505,7 @@ export function AgentProcesses({
             type="button"
             className="button secondary"
             disabled={pending}
+            data-testid="agent-process-add-step"
             onClick={() =>
               setBuilderSteps((current) => [...current, emptyBuilderStep(current.length + 1)])
             }

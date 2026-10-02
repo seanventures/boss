@@ -107,6 +107,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
           <button
             type="button"
             disabled={pending}
+            data-testid="kg-seed"
             onClick={() =>
               startTransition(async () => {
                 const res = await seedGraphFromInfra(feed.projectId);
@@ -124,7 +125,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
             Seed from infra
           </button>
           {seedNote ? (
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>{seedNote}</span>
+            <span style={{ fontSize: 12, color: "var(--muted)" }} data-testid="kg-seed-note">{seedNote}</span>
           ) : null}
         </div>
       </section>

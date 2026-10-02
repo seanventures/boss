@@ -240,6 +240,7 @@ export function AgentCreationWizard({
       <div className="aw-backdrop">
         <section
           className="aw-dialog aw-complete"
+          data-testid="aw-complete"
           role="dialog"
           aria-modal="true"
           aria-labelledby="aw-complete-title"
@@ -277,6 +278,7 @@ export function AgentCreationWizard({
     <div className="aw-backdrop">
       <section
         className="aw-dialog"
+        data-testid="aw-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="aw-title"
@@ -338,6 +340,7 @@ export function AgentCreationWizard({
                         type="button"
                         key={pattern.id}
                         className={draft.pattern === pattern.id ? "active" : ""}
+                        data-testid={`aw-pattern-${pattern.id}`}
                         onClick={() => choosePattern(pattern.id)}
                       >
                         {pattern.label}
@@ -356,6 +359,7 @@ export function AgentCreationWizard({
                           }
                         }}
                         placeholder="Release Sentinel"
+                        data-testid="aw-name"
                         autoFocus
                       />
                     </Field>
@@ -561,6 +565,7 @@ export function AgentCreationWizard({
                         <label key={skill.id} className={selected ? "selected" : ""}>
                           <input
                             type="checkbox"
+                            data-testid={`aw-skill-${skill.id}`}
                             checked={selected}
                             onChange={() =>
                               update(
@@ -791,6 +796,7 @@ export function AgentCreationWizard({
                   {result && (
                     <div
                       className={`as-action-result ${result.ok ? "ok" : "bad"}`}
+                      data-testid="aw-result"
                       role="status"
                     >
                       {result.ok ? <CheckCircle /> : <Warning />}
@@ -877,7 +883,7 @@ export function AgentCreationWizard({
               </button>
             )}
             {step < STEPS.length - 1 ? (
-              <button className="as-button primary" onClick={goNext}>
+              <button className="as-button primary" onClick={goNext} data-testid="aw-next">
                 Continue <ArrowRight />
               </button>
             ) : (
@@ -891,6 +897,7 @@ export function AgentCreationWizard({
                 </button>
                 <button
                   className="as-button primary"
+                  data-testid="aw-publish"
                   onClick={() => submit(true)}
                   disabled={pending || allIssues.length > 0}
                 >

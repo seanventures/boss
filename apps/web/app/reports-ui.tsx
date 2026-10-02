@@ -66,7 +66,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
       {/* window toggle */}
       <div className="rep-toggle">
         {(Object.keys(WIN_LABEL) as Win[]).map((k) => (
-          <button key={k} type="button" className={`rep-tab${k === win ? " active" : ""}`} onClick={() => setWin(k)}>
+          <button key={k} type="button" className={`rep-tab${k === win ? " active" : ""}`} onClick={() => setWin(k)} data-testid={`rep-tab-${k}`}>
             {WIN_LABEL[k]}
           </button>
         ))}

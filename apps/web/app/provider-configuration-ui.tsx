@@ -1803,6 +1803,7 @@ export function ProviderConfigurationSuite({
               type="button"
               className={view === item.id ? "active" : ""}
               aria-current={view === item.id ? "page" : undefined}
+              data-testid={`infra-view-${item.id}`}
               onClick={() => changeView(item.id)}
             >
               <Icon size={17} weight={view === item.id ? "fill" : "regular"} aria-hidden />

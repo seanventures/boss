@@ -8,7 +8,7 @@ SHELL := /bin/sh
 DOCKER := $(shell if docker info >/dev/null 2>&1; then printf 'docker'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then printf 'sudo -n docker'; fi)
 COMPOSE := $(DOCKER) compose -f scripts/install/community-compose.yml --env-file .env
 
-.PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready
+.PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready e2e e2e-selftest
 
 docker-ready:
 	@test -n '$(DOCKER)' || { printf '%s\n' 'Docker is unavailable to this user. Start Docker or grant noninteractive sudo access to Docker; a new login also activates docker-group access.' >&2; exit 1; }
@@ -23,6 +23,7 @@ help:
 	  '  make mcp-setup  Create a dedicated project MCP credential' \
 	  '  make mcp    Start a scoped MCP stdio session for an agent client' \
 	  '  make stop    Stop services and keep data' \
+	  '  make e2e     Boot a disposable authed stack and drive every template (tests/e2e)' \
 	  'Install first: see docs/community/QUICKSTART.md for the reviewed-commit command'
 
 dev: .env docker-ready
@@ -58,3 +59,15 @@ stop: .env docker-ready
 	  '  ssh -t user@your-server "cd ~/boss && make metatron"' \
 	  'To install BOSS on this machine instead: ./install.sh --dir "$$PWD"' >&2
 	@exit 1
+
+# THE END-TO-END HARNESS (tests/e2e/README.md), from the harness stream. A disposable authed
+# stack with scripted models and fakes; drives every template and example and walks the
+# console. It needs no install here (no .env): it builds and tears down its own stack.
+#   make e2e                      everything, then tear down
+#   make e2e E2E_ARGS="--only fast_fix --no-web --keep"
+#   make e2e-selftest             the harness's own fast tests
+e2e:
+	scripts/e2e.sh all $(E2E_ARGS)
+
+e2e-selftest:
+	scripts/e2e.sh selftest

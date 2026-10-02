@@ -1605,7 +1605,7 @@ export function AskBossHero({
           </div>
 
           {!reply && !busy ? (
-            <details className="askboss-examples">
+            <details className="askboss-examples" data-testid="askboss-examples">
               <summary>Need an example?</summary>
             <div className="askboss-openers">
               {OPENERS.map((o) => (

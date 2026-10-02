@@ -149,7 +149,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               ))
             )}
           </div>
-          <details className="wo-editor">
+          <details className="wo-editor" data-testid="wo-add-work">
             <summary>Add or rescore work</summary>
             <ActionForm action={upsertRankedWorkAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />

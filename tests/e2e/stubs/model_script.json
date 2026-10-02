@@ -1,0 +1,140 @@
+{
+  "about": "Scripted replies for the e2e model stub. First rule whose markers ALL appear in the prompt wins (case-insensitive; a marker starting with re: is a regex). channel is chat (OpenAI), cli (fake claude) or any. A rule's files are written by the CLI lane directly and by the native lane as write_file tool calls. Order matters: put the narrow rules first. Every reply is chosen so it does not contain another rule's markers, because a later stage's prompt quotes an earlier stage's reply.",
+  "rules": [
+    {
+      "id": "captain.quality-improve",
+      "when": ["QUALITY IMPROVE PASS", "Do NOT invent ui_evidence"],
+      "reply": "No change: the e2e app is a two-function Python module with no UI flows to give loading, empty or error states."
+    },
+    {
+      "id": "build.mutation",
+      "when": ["Mutation testing is a standard QA practice"],
+      "files": {"e2e_feature.py": "def answer():\n    return 41\n\n\ndef label(value):\n    return f\"e2e:{value}\"\n"},
+      "reply": "Changed answer() to return 41 instead of 42."
+    },
+    {
+      "id": "build.write-tests",
+      "when": ["You are a QA engineer", "author tests"],
+      "files": {"test_e2e_feature.py": "import unittest\n\nimport e2e_feature\n\n\nclass E2EFeatureTest(unittest.TestCase):\n    def test_answer_is_42(self):\n        self.assertEqual(e2e_feature.answer(), 42)\n\n    def test_label_prefixes(self):\n        self.assertEqual(e2e_feature.label(\"x\"), \"e2e:x\")\n\n    def test_label_empty(self):\n        self.assertEqual(e2e_feature.label(\"\"), \"e2e:\")\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"},
+      "reply": "Wrote test_e2e_feature.py: answer, label, and the empty label."
+    },
+    {
+      "id": "build.implement",
+      "when": ["QA has ALREADY written the tests"],
+      "files": {"e2e_feature.py": "def answer():\n    return 42\n\n\ndef label(value):\n    return f\"e2e:{value}\"\n"},
+      "reply": "Implemented e2e_feature.answer and e2e_feature.label; the suite passes."
+    },
+    {
+      "id": "build.solo",
+      "when": ["one agent does both"],
+      "files": {
+        "e2e_feature.py": "def answer():\n    return 42\n\n\ndef label(value):\n    return f\"e2e:{value}\"\n",
+        "test_e2e_feature.py": "import unittest\n\nimport e2e_feature\n\n\nclass E2EFeatureTest(unittest.TestCase):\n    def test_answer_is_42(self):\n        self.assertEqual(e2e_feature.answer(), 42)\n\n    def test_label_prefixes(self):\n        self.assertEqual(e2e_feature.label(\"x\"), \"e2e:x\")\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      },
+      "reply": "Built e2e_feature with its unittest suite; it passes."
+    },
+    {
+      "id": "build.test-arbiter",
+      "when": ["INDEPENDENT test arbiter"],
+      "reply": "The failing test encodes the criteria.\nARBITER: CODE_WRONG — fix the implementation."
+    },
+    {
+      "id": "build.review-plan",
+      "when": ["You are a design reviewer with FRESH context"],
+      "reply": "The plan covers the change and its edge cases.\nPLAN: OK"
+    },
+    {
+      "id": "build.review-code",
+      "when": ["adversarial code reviewer"],
+      "reply": "Read the implementation and the tests; no in-scope defect.\nVERDICT: SURVIVED"
+    },
+    {
+      "id": "build.security",
+      "when": ["re:VERDICT: CLEAN"],
+      "reply": "No exploitable issue in this change.\nVERDICT: CLEAN"
+    },
+    {
+      "id": "build.consistency",
+      "when": ["CONSISTENT: YES"],
+      "reply": "Implementation, tests and criteria agree.\nCONSISTENT: YES"
+    },
+    {
+      "id": "build.standards",
+      "when": ["summarise the coding standards"],
+      "reply": "- stdlib unittest\n- snake_case functions\n- one module per feature"
+    },
+    {
+      "id": "build.spec",
+      "when": ["Turn the task above into a clear, testable specification"],
+      "reply": "Summary: add e2e_feature with answer() and label(value).\nAdded: e2e_feature.py, test_e2e_feature.py.\nCriteria: answer() returns 42; label(v) returns 'e2e:' + v."
+    },
+    {
+      "id": "build.plan",
+      "when": ["You are a software architect"],
+      "reply": "Files: e2e_feature.py (answer() -> int, label(value: str) -> str), test_e2e_feature.py. Edge: empty label."
+    },
+    {
+      "id": "meeting.extract-actions",
+      "when": ["write down what was DECIDED and what somebody has to DO"],
+      "reply": {"decisions": [{"what": "Ship CSV export of invoices by Friday", "why": "customers asked for it"}], "actions": [{"title": "Write the CSV exporter", "detail": "Bob: I will write the exporter.", "owner": "Bob", "due": "by Friday"}, {"title": "Update the docs for CSV export", "detail": "Carol: I will update the docs.", "owner": "Carol", "due": null}], "unclear": []}
+    },
+    {
+      "id": "agent.video-edit",
+      "when": ["WHAT I WANT DONE", "Trim the video to its first three seconds"],
+      "captures": {
+        "video_url": "(https://media\\.e2e\\.test/media/clip\\.mp4)",
+        "artifact": "\"media_artifact_id\":\\s*\"([^\"]+)\""
+      },
+      "turns": [
+        {"call": [{"tool": "media_fetch_link", "arguments": {"url": "{{video_url}}"}}]},
+        {"call": [{"tool": "video_trim", "arguments": {"media_artifact_id": "{{artifact}}", "start": "00:00:00", "end": "00:00:03"}}]}
+      ],
+      "reply": "Fetched the clip and trimmed it to three seconds.\n{\"title\": \"E2E clip\", \"description\": \"A three-second clip made by the e2e harness.\"}"
+    },
+    {
+      "id": "agent.e2e-journey-step",
+      "when": ["WHAT I WANT DONE", "e2e-journey-agent-step"],
+      "captures": {"skill": "use the skill (e2e_skill_[0-9]+)"},
+      "turns": [
+        {"call": [{"tool": "skill_{{skill}}", "arguments": {"question": "What is the answer?"}}]}
+      ],
+      "reply": "Did what the e2e journey asked, with the skills I hold."
+    },
+    {
+      "id": "plan.software-engineer-module",
+      "when": ["Operate only on approved, reviewable slices"],
+      "reply": "# e2e_feature — plan and record\n\n## What was asked\nAdd e2e_feature: answer() returns 42 and label(value) returns 'e2e:' + value.\n\n## What was done\nOne module and its unittest suite, reviewed and merged through a pull request.\n\n## Evidence\n- tests: 4 passed\n- review: survived; security: clean; consistency: yes\n"
+    },
+    {
+      "id": "build.decompose",
+      "when": ["deciding how to break a product spec into coding tasks"],
+      "reply": "[{\"title\": \"Add e2e_feature\", \"instructions\": \"Add e2e_feature.py with answer() returning 42 and label(value) returning 'e2e:' + value, with stdlib unittest tests.\", \"acceptance_criteria\": [\"answer() returns 42\", \"label('x') returns 'e2e:x'\"], \"order\": 1, \"depends_on\": []}]"
+    },
+    {
+      "id": "meeting.final-prd",
+      "when": ["writing the final PRD on behalf of the whole panel"],
+      "reply": "# PRD: e2e_feature\n\n## Summary\nAdd e2e_feature: answer() returns 42 and label(value) returns 'e2e:' + value.\n\n## Problem & Context\nThe end-to-end harness needs a small, testable change to carry through every step.\n\n## Goals & Non-goals\n- Goal: one module, two functions, fully tested.\n- Non-goal: any UI.\n\n## Requirements\n1. answer() returns 42.\n2. label(value) returns 'e2e:' + value.\n\n## Acceptance criteria\n- answer() returns 42\n- label('x') returns 'e2e:x'\n\n## Risks\nNone beyond the scope above.\n"
+    },
+    {
+      "id": "meeting.synthesis",
+      "when": ["You ran a cross-functional meeting and must reconcile"],
+      "reply": "Synthesis: the panel agrees on one module, e2e_feature, with answer() -> 42 and label(value) -> 'e2e:' + value, tested with stdlib unittest. No open disagreements."
+    },
+    {
+      "id": "meeting.panelist",
+      "when": ["in a cross-functional product meeting at the company BOSS runs"],
+      "reply": "- Scope it to one module: e2e_feature.\n- answer() returns 42; label(value) prefixes 'e2e:'.\n- Test the empty label as the edge case."
+    },
+    {
+      "id": "route.pick-one-agent",
+      "when": ["Pick the ONE agent"],
+      "captures": {"first_candidate": "what each one is for and holds\\s*\\n\\s*([a-z0-9_]+):"},
+      "reply": {"role_key": "{{first_candidate}}", "why": "e2e: scripted routing choice — the first candidate"}
+    }
+  ],
+  "default": {
+    "id": "default",
+    "when": ["*"],
+    "reply": "{\"summary\": \"e2e scripted answer for {{title}}\", \"ok\": true}"
+  }
+}

@@ -687,7 +687,8 @@ export function GitHubOperations({
       </div>
 
       {canManage ? (
-        <details className="ghx-admin" open={feed.connections.length === 0}>
+        <details className="ghx-admin" open={feed.connections.length === 0}
+                 data-testid="ghx-setup">
           <summary>Connection, repository, and policy setup</summary>
           <div className="ghx-admin-grid">
             <ActionForm action={easyConnectGitHubAction} className="ghx-admin-form">
