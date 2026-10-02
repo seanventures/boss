@@ -66,7 +66,10 @@ def test_area_id_union_still_includes_hidden_community_areas():
     union = shell[start:end]
     hidden = (
         "infra",
-        "metatron",
+        # "metatron" was dropped from this list (2026-10-02): the area was removed from AREAS
+        # when the BOSS Agent absorbed it, and the visibility rule is now generated from AREAS,
+        # so an AreaId with no AREAS entry is a blank screen
+        # (apps/web/tests/every-area-is-actually-visible.test.ts forbids it).
         "studio",
         "sandboxes",
         "github",
