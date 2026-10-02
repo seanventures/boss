@@ -202,7 +202,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** A few capabilities are paused in `v1.0-rc3` while their spend, recovery, and effect safeguards are finished: new Discovery web research, live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Saved dossiers, investigation results, and deployment records stay readable. A preview record is not proof that a deploy succeeded.
+> **About this release candidate.** A few capabilities are paused in `v1.0-rc3` while their spend, recovery, and effect safeguards are finished: live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Investigation results and deployment records stay readable. Discovery web research runs as a governed job, and needs a connected Claude Code subscription. A preview record is not proof that a deploy succeeded.
 
 ## Documentation
 

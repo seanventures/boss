@@ -1474,41 +1474,48 @@ def execute_step(
                     f"this project was started with",
         }
 
-    # RESEARCH IS PAUSED IN COMMUNITY, SO THE STEP STANDS ASIDE AND SAYS SO.
+    # RESEARCH RUNS WHEN IT CAN, AND STANDS ASIDE — SAYING WHY — ONLY WHEN IT CANNOT.
     #
-    # Discovery research makes model calls that do not yet run under a durable lease, a budget
-    # reservation and a reconciled receipt, so Community refuses to start it (see
-    # discovery_service.COMMUNITY_DISCOVERY_BLOCK_REASON). Calling the tool anyway raised that
-    # refusal as a step failure, and Standard Product Delivery — the workflow Build starts —
-    # deadlettered at its first step on every Community install. The gate itself stays shut:
-    # nothing is commissioned and nothing is spent. What changes is that the run records the
-    # step as not applicable, with the reason, and carries on to the panel, whose research
-    # binding is optional. An adopted dossier above still wins: reading research that already
-    # exists spends nothing.
+    # In Community a discovery is a governed `discovery.run` job: every research stage is
+    # reserved, leased and receipted (discovery_spend.py), so the tool below commissions it like
+    # any other edition and the step waits on it. Research is the Claude CLI's web search on
+    # the Claude Code subscription. Where that subscription cannot be used — not connected, its
+    # login rejected, out of capacity — the job could only be refused at its first stage, so the
+    # step is recorded as not applicable with that reason, a `workflow.research_skipped` event
+    # names it, and the run carries on to the panel, whose research binding is optional. The
+    # check is the model route the job itself would take (discovery_service.research_unavailable),
+    # never the edition. A budget refused at run time is not prejudged here: the job records it
+    # with a decision, and the step reports research that failed and the run continues. An
+    # adopted dossier above still wins: reading research that already exists spends nothing.
     if key == "research":
-        from .discovery_service import (
-            COMMUNITY_DISCOVERY_BLOCK_REASON,
-            community_research_paused,
-        )
+        from .discovery_service import RESEARCH_SOURCE_UNAVAILABLE, research_unavailable
 
         settings = getattr(ctx, "settings", None)
-        if settings is not None and community_research_paused(settings):
-            note = ("Skipped: research is paused in Community. The panel works from your "
-                    "request instead. " + COMMUNITY_DISCOVERY_BLOCK_REASON)
-            if connection is not None:
-                emit_event(
-                    connection, project_id, "workflow.research_skipped", actor,
-                    "workflow_run", str(context.get("run_id") or ""),
-                    {"step_id": str(step.get("id") or ""),
-                     "reason": "paused_in_community",
-                     "detail": COMMUNITY_DISCOVERY_BLOCK_REASON},
-                )
+        unavailable: Optional[dict[str, Any]] = None
+        if settings is not None and connection is not None:
+            try:
+                unavailable = research_unavailable(connection, settings, project_id, actor)
+            except Exception as error:  # noqa: BLE001 — recorded as the skip's reason below
+                log.warning("research availability check failed for %s: %s",
+                            context.get("run_id"), error)
+                unavailable = {
+                    "reason": "research_check_failed",
+                    "detail": f"BOSS could not check whether research can run: {error}"[:500],
+                }
+        if unavailable:
+            detail = str(unavailable.get("detail") or "")
+            emit_event(
+                connection, project_id, "workflow.research_skipped", actor,
+                "workflow_run", str(context.get("run_id") or ""),
+                {"step_id": str(step.get("id") or ""), **unavailable},
+            )
             return {
                 "capability": key,
                 "tool": None,
                 "status": "not_applicable",
-                "reason": "paused_in_community",
-                "note": note,
+                "reason": str(unavailable.get("reason") or RESEARCH_SOURCE_UNAVAILABLE),
+                "note": "Skipped: research cannot run here. The panel works from your "
+                        "request instead. " + detail,
             }
 
     # NO PREVIEW, NO DEPLOY.

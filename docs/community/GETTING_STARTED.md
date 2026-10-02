@@ -225,7 +225,7 @@ Connect the repository as above, then retry the step from the run (step 6).
 
 A project in Mission Control is one piece of software you want built. Each one runs down a workflow: a panel writes a PRD, BOSS builds the code on a branch, runs your tests, and opens a pull request.
 
-**Build** uses the default path, **Standard Product Delivery**. Its first step is research, which is paused in BOSS Community, so the run records that step as **skipped** with the reason and goes straight on to the panel. You do not need to choose another workflow.
+**Build** uses the default path, **Standard Product Delivery**. Its first step is research. Research is web research done by the Claude CLI on your Claude Code subscription, so it runs only when Claude Code is connected (step 3). Without it, for example with only a local Ollama model, the run records that step as **skipped** with the reason and goes straight on to the panel. You do not need to choose another workflow.
 
 1. Open **Command Center**. The top of the page reads **Ask BOSS** and **What do you want to do?**
 2. Type what you want built. Keep the first one small and testable, for example:
@@ -251,7 +251,7 @@ curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" -H "Content-Type: application
   "$BOSS_API_URL/v1/delivery-workflows/start"
 ```
 
-This is the same call **Build** makes. The reply is the new run. It starts with `"status":"running"`, `"workflow_name":"Standard Product Delivery"`, and the `research` step in `current_frontier`; a few seconds later research shows as skipped and `meeting` is running.
+This is the same call **Build** makes. The reply is the new run. It starts with `"status":"running"`, `"workflow_name":"Standard Product Delivery"`, and the `research` step in `current_frontier`; a few seconds later research is either running (Claude Code connected) or shows as skipped, and then `meeting` is running.
 
 ### If something goes wrong
 
@@ -261,7 +261,7 @@ This is the same call **Build** makes. The reply is the new run. It starts with 
 
 Open the run on the **Workflow** page. Runs are grouped as **Needs you**, **Running**, **Stopped**, and **Done**. On Standard Product Delivery, the steps run in this order:
 
-1. **research.** Shown as **skipped**. Hover the ⓘ for the reason: `Skipped: research is paused in Community. The panel works from your request instead.` The skip is also recorded as a `workflow.research_skipped` event. Nothing is researched and nothing is spent.
+1. **research.** With Claude Code connected, BOSS researches your request on the web as a governed job: each stage reserves budget, takes a model lease on the Claude Code subscription, and leaves a receipt, and the panel reads what it found. If the research fails partway, the step says so and the run carries on with whatever it had found. Without a usable Claude Code subscription, the step is shown as **skipped**. Hover the ⓘ for the reason, for example: `Skipped: research cannot run here. The panel works from your request instead. Research runs on the Claude Code subscription (the Claude CLI does the web search), and it cannot be used here: it is not connected.` The skip is also recorded as a `workflow.research_skipped` event. Nothing is researched and nothing is spent.
 1. **meeting.** A panel of agents discusses the goal and drafts a PRD. On 8 CPUs with no GPU, this took about 24 minutes with the local 7b model.
 1. **spec_review.** The PRD is approved. In this release, PRD approval is automatic by default. **Approvals** shows the decision "Approve publishing the PRD the team drafted" marked **AUTO-APPROVED**, with the PRD attached. The PRD is titled with your request, for example `PRD: A tiny command-line tip calculator in Python...`. Read it here: it is what the build will be measured against.
 1. **build.** BOSS clones your repository and runs the governed coding pipeline. You can follow it in **Factory**: Queued, Cloning repo, Designing plan, QA writing tests, Engineer implementing, Running tests, Adversarial review, Mutation check, Opening PR, Done. If the plan touches something sensitive, it stops at **Awaiting plan approval** and an approval appears in **Approvals**.

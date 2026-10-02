@@ -120,7 +120,7 @@ The engine registry has 106 tools: 61 read and 45 write. Examples:
 
 | Tool or area | Community behavior |
 |---|---|
-| `create_discovery` | Stays in the registry for compatibility, but Community refuses new Discovery research until its model calls use durable job leases, budget reservations, and reconciled receipts. The API's Discovery start and deepen routes return 503 for authorized callers while this release gate is open. |
+| `create_discovery` | Queues a governed `discovery.run` job: a worker leases it, and each research stage is budget-reserved, leased on the Claude Code subscription, and receipted. Without a usable Claude Code subscription the job's first stage is refused and the discovery fails with that reason; nothing is spent. |
 | Source tools and pull request reads | Accept a run ID from the session project or an active repository binding in that project. |
 | `read_logs` | Returns only project-tagged captured logs. |
 | Arbitrary URL probes | Unavailable until destinations can be verified against a project network policy. |
