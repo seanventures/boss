@@ -105,7 +105,8 @@ def _uncertain(error: BaseException) -> bool:
     return "timeout" in name or "connect" in name
 
 
-def consumer_for(connection, project_id: str, source_id: Optional[str], actor: str) -> str:
+def consumer_for(connection, project_id: str, source_id: Optional[str], actor: str,
+                 settings=None) -> str:
     """Whom a governed call books capacity FOR, given the source that will answer it.
 
     The gateway refuses to pool owner-scoped capacity: the consumer must be the source's owner.
@@ -124,6 +125,16 @@ def consumer_for(connection, project_id: str, source_id: Optional[str], actor: s
         {"p": project_id, "s": source_id},
     ).mappings().first()
     if row and row["owner_type"] == "workspace_operator" and row["owner_id"]:
+        return str(row["owner_id"])
+    # COMMUNITY HAS ONE OPERATOR AND NO IDENTITY LAYER. Telling one person's subscription from
+    # another's needs users BOSS can tell apart, which Community does not have yet — so the
+    # owner of an owner-scoped source was whichever principal last pressed Connect (on boss-1
+    # the console's own "executive_console"), and research the member "ceo" started was
+    # refused as "pooling" the only subscription on the install. In Community the project's
+    # connected subscription serves the project's work. Editions with real identities keep the
+    # per-person check.
+    edition = str(getattr(settings, "boss_edition", "community") or "community").strip().lower()
+    if row and row["owner_id"] and edition in {"community", "oss", "local"}:
         return str(row["owner_id"])
     return actor
 
