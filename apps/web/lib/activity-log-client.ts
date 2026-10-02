@@ -1,7 +1,9 @@
 import {
   activityLogSearchParams,
   emptyActivityLog,
+  mapActivityFacets,
   mapActivityLog,
+  type ActivityFacets,
   type ActivityLog,
   type ActivityLogQuery,
 } from "./activity-log";
@@ -38,5 +40,27 @@ export async function fetchActivityLog(
       error instanceof Error ? error.message : "Unknown API error",
       project,
     );
+  }
+}
+
+/**
+ * Per-level and per-stream counts for the whole log, for the chips.
+ *
+ * The chips counted the 200 rows on the page and read as totals: boss-1 showed ERROR 0 and
+ * Deadletters 0 while Operations reported 14 dead-letters. null when the counts could not be
+ * read, so the chips can say "count unavailable" instead of showing a zero that is not one.
+ */
+export async function fetchActivityFacets(
+  projectId: string,
+  scope: { run_id?: string; workflow_run_id?: string; agent?: string; service?: string } = {},
+): Promise<ActivityFacets | null> {
+  const params = new URLSearchParams({ project_id: resolveProjectId(projectId) });
+  for (const [key, value] of Object.entries(scope)) if (value) params.set(key, value);
+  try {
+    const res = await fetch(`/api/activity/facets?${params.toString()}`, { cache: "no-store" });
+    if (!res.ok) return null;
+    return mapActivityFacets(await res.json());
+  } catch {
+    return null;
   }
 }
