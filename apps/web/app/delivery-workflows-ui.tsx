@@ -220,7 +220,52 @@ type Run = {
   /** What the run was started with — `title` is the project it is delivering. */
   input?: Record<string, unknown> | null;
   created_at?: string | null;
+  /** What the operator may do to this run, decided by the SERVER from its real state — see
+   *  `RunAction`. Absent only from an API older than the field, which then offers nothing. */
+  actions?: RunAction[];
 };
+
+/** One thing the operator may do to a run, as the engine decided it
+ *  (boss_engine/services/workflow_run_actions.py).
+ *
+ *  THE CONSOLE DOES NOT DECIDE WHICH BUTTONS A RUN HAS. A cancelled run whose research FAILED
+ *  offered "Build on this research →" because this file kept its own copy of the rule ("a
+ *  succeeded step with a discovery id") and an old research step that had failed was recorded
+ *  as exactly that. Stop, Run again, Remove, Re-check, Try again and Skip were each decided the
+ *  same way — private conditions on `run.status` that disagreed with what the engine would
+ *  actually do. Now the API sends the list and this renders it: present means offered, absent
+ *  means it does not apply, and `enabled: false` carries the sentence saying why not. */
+export type RunAction = {
+  key: RunActionKey;
+  label: string;
+  enabled: boolean;
+  /** Why it cannot be taken right now — shown as the button's help. Null when enabled. */
+  reason: string | null;
+  /** Set on a per-step action (Try again, Skip and proceed): the step it acts on. */
+  step_id?: string;
+};
+
+/** Every key the engine can send. A test holds this equal to the engine's own list. */
+export const RUN_ACTION_KEYS = [
+  "recheck", "stop", "stop_and_rerun", "rerun", "remove", "build_on_research",
+] as const;
+export const STEP_ACTION_KEYS = ["retry_step", "skip_step"] as const;
+export type RunActionKey = typeof RUN_ACTION_KEYS[number] | typeof STEP_ACTION_KEYS[number];
+
+/** The run-level actions, in the order the engine sent them. */
+export function runLevelActions(run: Pick<Run, "actions">): RunAction[] {
+  return (run.actions ?? []).filter((a) => !a.step_id);
+}
+
+/** The actions on ONE step of a run, keyed so a caller asks for the one it renders. */
+export function stepActions(run: Pick<Run, "actions">, stepId: string):
+    { retry?: RunAction; skip?: RunAction } {
+  const mine = (run.actions ?? []).filter((a) => a.step_id === stepId);
+  return {
+    retry: mine.find((a) => a.key === "retry_step"),
+    skip: mine.find((a) => a.key === "skip_step"),
+  };
+}
 
 /** The project this run is delivering. Five runs of "Standard Product Delivery" are five
  *  identical rows unless the thing being delivered is on the row. */
@@ -268,7 +313,7 @@ function observedGates(step: RunStep, runAppName = ""): string | null {
 /** A step whose work FAILED and whose run carried on regardless.
  *
  *  HISTORY ONLY. The runner no longer does this — a failed step now stops its run until the
- *  operator retries or skips it (see `canSkip`). Runs recorded before that change still carry
+ *  operator retries or skips it (the run's `actions`). Runs recorded before that change still carry
  *  `failed_continued` outputs, and they must keep reading as failed rather than as green. */
 function failedButContinued(step: RunStep): boolean {
   return (step.output as { status?: string } | undefined)?.status === "failed_continued";
@@ -284,14 +329,6 @@ function skipReason(step: RunStep): string {
 /** The step states a run STOPS at for the operator — the engine's `STOPPED_STEP_STATES`, which
  *  a test holds this list to. */
 export const STOPPED_STEP_STATUSES: readonly string[] = ["failed", "deadlettered"];
-
-/** Whether "Skip and proceed" is offered: a step whose work failed, and never an approval gate
- *  or a cancelled step. Mirrors `workflows.skip_failed_step`, which refuses the same cases. */
-export function canSkip(step: RunStep, capability?: { is_gate?: boolean }): boolean {
-  if (!STOPPED_STEP_STATUSES.includes(step.status)) return false;
-  if (step.kind === "decision") return false;
-  return !capability?.is_gate;
-}
 
 /** The step a run has STOPPED AT and is waiting for the operator to decide about: its work
  *  failed (or was dead-lettered) and nobody has retried or skipped it yet.
@@ -2450,6 +2487,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                 </p>
                 <FailedStepActions key={stopped.step_id} step={stopped}
                                    capability={stoppedCapability} busy={busy}
+                                   actions={stepActions(run, stopped.step_id)}
                                    idPrefix="dw-run-stopped"
                                    onRetry={() => onRetryStep(run.id, stopped.step_id)}
                                    onSkip={(reason) => onSkipStep(run.id, stopped.step_id, reason)} />
@@ -2619,21 +2657,6 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   previewStarting?: string;
   busy: string | null;
 }) {
-  // DID THIS RUN ACTUALLY RESEARCH ANYTHING? Offering "build on this research" on a run with
-  // no dossier would start an ordinary delivery run while telling the operator they had skipped
-  // the expensive step — they would pay for research a second time believing they had not.
-  // READ THE OUTPUT, NOT THE STEP'S NAME. `kind` on a capability step is the literal string
-  // "capability" — the catalogue's "research" is its id — and a customer can rename their steps
-  // anyway. What a research step leaves behind is a discovery id, which is the contract. Keyed
-  // on the name, this rendered nothing on a run whose dossier was right there.
-  const researched = run.steps.some((step) => {
-    if (step.status !== "succeeded") return false;
-    const produced = (step.output ?? {}) as Record<string, unknown>;
-    const awaited = produced.await as { kind?: string; id?: string } | undefined;
-    return typeof produced.discovery_id === "string"
-      || (awaited?.kind === "discovery" && !!awaited.id);
-  });
-
   // Has a preview been asked for on THIS build and not yet appeared? The URL is the finish
   // line; the POST returning is not.
   // THE BUILD A PREVIEW IS FOR. Read from whichever step produced it rather than a step named
@@ -2820,6 +2843,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           targets={targets}
           hosts={hosts}
           runInput={run.input ?? {}}
+          actions={stepActions(run, current.step_id)}
           onRetry={() => onRetryStep(current.step_id)}
           onSkip={(reason) => onSkipStep(current.step_id, reason)}
           onSetTarget={(targetId) => onSetTarget(targetId)}
@@ -2842,130 +2866,132 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
         <RunReportPanel runId={run.id} projectId={projectId} />
       ) : null}
 
-      {/* START IT AGAIN, FROM THE TOP. A run that failed early had no way back except
-          retyping the directive into the New project form — the workflow, the title and the
-          instructions are all right here. */}
-      {/* NOT WHILE IT IS STILL GOING.
-          This button was offered on every run, including one mid-flight, and it does exactly
-          what it says: starts a SECOND run on the same directive. An operator whose deploy
-          step was stuck pressed it expecting a retry and got a duplicate — two workflows for
-          one project, both running, both at step 6, one of them titled from the raw directive
-          and the other from the cleaned name, so they did not even look like the same thing.
-          Re-running is for a run that has STOPPED; a step that needs another go has "Try …
-          again", which reruns that step and keeps everything before it. */}
-      {/* A ROW OF ACTIONS, NOT A COLUMN OF ESSAYS.
-          Three buttons, each followed by two or three lines of grey prose of the same visual
-          weight — six lines of explanation under a card that already had eight. Every sentence
-          is worth keeping and none is worth a permanent line, so each one moves onto the dot
-          beside its own button. The buttons become a row, which is what a set of alternatives
-          looks like. */}
-      <div className="dw-run-actions" data-testid="dw-run-actions">
-        {/* NAMING THE GROUP. Also from the Gemini sketch, and correct: three buttons under a
-            bare rule read as three loose ends, while "Workflow management" tells you in two
-            words that none of them is part of the step above — which is most of what their
-            paragraphs were doing. */}
-        <span className="dw-run-actions-label">Workflow management</span>
-        {/* ONE BUTTON, FOR THE WHOLE RUN.
-            The screen re-tests the recorded blockers by itself on arrival; this is the worst
-            case — the operator has just changed something outside BOSS and does not want to
-            wait for the next visit. Deliberately not per-step: somebody arriving at a stalled
-            workflow is asking "is any of this still true?" of the whole thing, and does not
-            know which step to point at. */}
-        <span className="dw-run-action">
-          <button type="button" className="cap-btn" onClick={onRecheck} disabled={!!busy}
-                  data-testid="dw-recheck">
-            {busy === "Re-check" ? "Re-checking…" : "Re-check this workflow"}
-          </button>
-          <Explain label="What re-checking does">
-            Re-tests what stopped each step against how things are now, and puts back the ones
-            whose reason has been dealt with. Nothing runs again unless its blocker is genuinely
-            gone.
-          </Explain>
-        </span>
-        {ACTIVE_RUN_STATES.has(run.status) ? (
-          <>
-            {/* THE ADVICE NOW EXISTS AS A BUTTON. This screen told an operator to "cancel this
-                run first" and offered no way to cancel — so three runs piled up on one
-                project, which is exactly what it was warning against. */}
-            <span className="dw-run-action">
-              <button type="button" className="cap-btn dw-stop" disabled={!!busy}
-                      data-testid="dw-stop" onClick={onStop}>
-                {busy === "Stop" ? "Stopping…" : "Stop this run"}
-              </button>
-              <Explain label="What stopping does">
-                Stops the work, not just the record: every pending step is cancelled and so is
-                anything this run started — including a build that is still going in its own
-                sandbox. It cannot be resumed; start it again to try afresh.
-              </Explain>
-            </span>
-            <span className="dw-run-action">
-              <button type="button" className="cap-btn" disabled={!!busy}
-                      data-testid="dw-stop-and-rerun" onClick={onStopAndRerun}>
-                {busy === "Stop" || busy === "Re-run" ? "Restarting…" : "Stop and run again"}
-              </button>
-              {/* WHY THIS IS ONE BUTTON AND NOT TWO PRESSES. Running again while this one is
-                  live makes a SECOND workflow on the same project rather than retrying this
-                  one — the thing the disabled button used to explain and leave you to solve. */}
-              <Explain label="What restarting does">
-                Stops this run and starts {run.workflow_name} again from the beginning on the
-                same directive. Starting it again WITHOUT stopping would leave two workflows
-                running on one project, which is why it happens in that order.
-                For one step that needs another go, use &ldquo;Try … again&rdquo; on the step
-                instead — that keeps everything already done.
-              </Explain>
-            </span>
-          </>
-        ) : (
-          <>
-            <span className="dw-run-action">
-              <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}
-                      data-testid="dw-rerun">
-                {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
-              </button>
-              <Explain label="What running it again does">
-                Starts {run.workflow_name} again on the same directive — its own research, its
-                own panel, its own build. The existing run is left as it is.
-              </Explain>
-            </span>
-            {/* GETTING RID OF IT. There was no way to remove a run at all: stopping leaves the
-                row, and a run that failed is already finished, so stopping one did nothing.
-                Building one workflow left eighteen on this screen with no way to clear any of
-                them. Offered only on a run that is over — a run still going is stopped first,
-                because deleting the record while the work carries on is the failure that once
-                cost a production database. */}
-            <span className="dw-run-action">
-              <button type="button" className="cap-btn dw-stop" disabled={!!busy}
-                      data-testid="dw-delete-run" onClick={onDelete}>
-                {busy === "Remove" ? "Removing…" : "Remove this run"}
-              </button>
-              <Explain label="What removing does">
-                Takes this run off the screen for good, with its steps and its history. Nothing
-                it produced is touched — files it wrote, issues it opened and anything it
-                published stay exactly where they are. It cannot be undone.
-              </Explain>
-            </span>
-          </>
-        )}
-        {/* THE ANSWER TO "I DON'T WANT TO PAY FOR THAT RESEARCH TWICE".
-            Offered only where it means something: a finished run that actually produced a
-            dossier. The delivery run adopts THAT research and holds its own panel, because a
-            Research-Led Discovery panel answered a go/no-go — its objective says in as many
-            words that its PRD is not an implementation plan. */}
-        {!ACTIVE_RUN_STATES.has(run.status) && researched ? (
-          <span className="dw-run-action">
-            <button type="button" className="cap-btn primary" onClick={onBuildOnThis}
-                    disabled={!!busy} data-testid="dw-build-on-this">
-              {busy === "Build on this research" ? "Starting…" : "Build on this research →"}
+      {/* WORKFLOW MANAGEMENT — exactly the actions the server sent for this run, in its order.
+          Which of Re-check, Stop, Stop and run again, Run again, Remove and Build on this
+          research a run has is decided by the engine from the run's real state
+          (workflow_run_actions.py); see `RunAction`. Nothing here looks at `run.status`. */}
+      <RunActionsBar run={run} busy={busy} handlers={{
+        recheck: onRecheck, stop: onStop, stop_and_rerun: onStopAndRerun, rerun: onRerun,
+        remove: onDelete, build_on_research: onBuildOnThis,
+      }} />
+    </div>
+  );
+}
+
+type RunLevelKey = typeof RUN_ACTION_KEYS[number];
+
+/** How each run-level action LOOKS and what it SAYS — never whether it is there.
+ *
+ *  The history of each, kept with the action it explains:
+ *
+ *  - recheck — ONE BUTTON, FOR THE WHOLE RUN. The screen re-tests the recorded blockers by
+ *    itself on arrival; this is for the operator who has just changed something outside BOSS.
+ *  - stop — THE ADVICE NOW EXISTS AS A BUTTON. The screen told an operator to "cancel this run
+ *    first" and offered no way to, so three runs piled up on one project.
+ *  - stop_and_rerun — ONE PRESS, NOT TWO. Running again while this one is live makes a SECOND
+ *    workflow on the same project rather than retrying this one.
+ *  - rerun — NOT WHILE IT IS STILL GOING. Offered on a run mid-flight it started a duplicate:
+ *    two workflows for one project, both at step 6.
+ *  - remove — there was no way to remove a run at all; building one workflow left eighteen on
+ *    this screen. Never on a run still going: deleting the record while the work carries on is
+ *    the failure that once cost a production database.
+ *  - build_on_research — "I don't want to pay for that research twice." Only where a finished
+ *    run's research actually succeeded and left a dossier with findings — the rule whose
+ *    console-side copy offered it on a cancelled run whose research had failed.
+ *
+ *  A test holds these keys equal to the engine's, so a new action cannot reach the screen
+ *  without its words. */
+const RUN_ACTION_VIEW: Record<RunLevelKey, {
+  testId: string; tone?: "primary" | "stop"; busyWhen: string[]; busyText: string;
+  explainLabel: string; explain: (run: Run) => React.ReactNode;
+}> = {
+  recheck: {
+    testId: "dw-recheck", busyWhen: ["Re-check"], busyText: "Re-checking…",
+    explainLabel: "What re-checking does",
+    explain: () => "Re-tests what stopped each step against how things are now, and puts back "
+      + "the ones whose reason has been dealt with. Nothing runs again unless its blocker is "
+      + "genuinely gone.",
+  },
+  stop: {
+    testId: "dw-stop", tone: "stop", busyWhen: ["Stop"], busyText: "Stopping…",
+    explainLabel: "What stopping does",
+    explain: () => "Stops the work, not just the record: every pending step is cancelled and so "
+      + "is anything this run started — including a build that is still going in its own "
+      + "sandbox. It cannot be resumed; start it again to try afresh.",
+  },
+  stop_and_rerun: {
+    testId: "dw-stop-and-rerun", busyWhen: ["Stop", "Re-run"], busyText: "Restarting…",
+    explainLabel: "What restarting does",
+    explain: (run) => <>
+      Stops this run and starts {run.workflow_name} again from the beginning on the same
+      directive. Starting it again WITHOUT stopping would leave two workflows running on one
+      project, which is why it happens in that order. For one step that needs another go, use
+      &ldquo;Try … again&rdquo; on the step instead — that keeps everything already done.
+    </>,
+  },
+  rerun: {
+    testId: "dw-rerun", busyWhen: ["Re-run"], busyText: "Starting…",
+    explainLabel: "What running it again does",
+    explain: (run) => <>
+      Starts {run.workflow_name} again on the same directive — its own research, its own
+      panel, its own build. The existing run is left as it is.
+    </>,
+  },
+  remove: {
+    testId: "dw-delete-run", tone: "stop", busyWhen: ["Remove"], busyText: "Removing…",
+    explainLabel: "What removing does",
+    explain: () => "Takes this run off the screen for good, with its steps and its history. "
+      + "Nothing it produced is touched — files it wrote, issues it opened and anything it "
+      + "published stay exactly where they are. It cannot be undone.",
+  },
+  build_on_research: {
+    testId: "dw-build-on-this", tone: "primary", busyWhen: ["Build on this research"],
+    busyText: "Starting…", explainLabel: "What building on this research does",
+    explain: () => <>
+      Starts Standard Product Delivery on the same directive and hands it this
+      run&rsquo;s dossier. The research step adopts what is already there — it does not
+      run again, and it does not cost anything a second time. The panel that follows argues
+      from those findings.
+    </>,
+  },
+};
+
+/** The run's workflow-management row: one button per run-level action the server sent.
+ *
+ *  A ROW OF ACTIONS, NOT A COLUMN OF ESSAYS — each sentence sits on the dot beside its own
+ *  button. A DISABLED ACTION SAYS WHY, on the button (`title`) and in its dot, because a greyed
+ *  button with no reason reads as broken. */
+export function RunActionsBar({ run, busy, handlers }: {
+  run: Run; busy: string | null;
+  handlers: Record<RunLevelKey, () => void>;
+}) {
+  const actions = runLevelActions(run)
+    .filter((a): a is RunAction & { key: RunLevelKey } => a.key in RUN_ACTION_VIEW);
+  if (!actions.length) return null;
+  return (
+    <div className="dw-run-actions" data-testid="dw-run-actions">
+      {/* NAMING THE GROUP: none of these is part of the step above. */}
+      <span className="dw-run-actions-label">Workflow management</span>
+      {actions.map((action) => {
+        const view = RUN_ACTION_VIEW[action.key];
+        return (
+          <span className="dw-run-action" key={action.key}>
+            <button type="button"
+                    className={`cap-btn${view.tone === "primary" ? " primary"
+                      : view.tone === "stop" ? " dw-stop" : ""}`}
+                    onClick={handlers[action.key]}
+                    disabled={!!busy || !action.enabled}
+                    title={action.reason ?? undefined}
+                    data-enabled={action.enabled ? "true" : "false"}
+                    data-testid={view.testId}>
+              {busy && view.busyWhen.includes(busy) ? view.busyText : action.label}
             </button>
-            <Explain label="What building on this research does">
-              Starts Standard Product Delivery on the same directive and hands it this
-              run&rsquo;s dossier. The research step adopts what is already there — it does not
-              run again, and it does not cost anything a second time. The panel that follows
-              argues from those findings.
+            <Explain label={view.explainLabel}>
+              {action.enabled ? view.explain(run) : `Not available: ${action.reason}.`}
             </Explain>
           </span>
-        ) : null}
-      </div>
+        );
+      })}
     </div>
   );
 }
@@ -3451,8 +3477,12 @@ function useLearned(topic: string): [boolean, () => void] {
  *  ONE COMPONENT, TWO PLACES. The step's own detail, and the run card itself — where a stopped
  *  run says why it stopped and offers both answers without being opened first. `idPrefix`
  *  keeps the two sets of test ids distinct when both are on screen. */
-function FailedStepActions({ step, capability, busy, onRetry, onSkip, idPrefix = "dw-step" }: {
+export function FailedStepActions({ step, capability, actions, busy, onRetry, onSkip,
+                            idPrefix = "dw-step" }: {
   step: RunStep; capability?: Capability; busy: string | null;
+  /** This step's Try again and Skip, as the server decided them (`stepActions`). Whichever is
+   *  absent is not rendered; whichever is disabled says why. Nothing here reads a status. */
+  actions: { retry?: RunAction; skip?: RunAction };
   onRetry: () => void; onSkip: (reason: string) => void; idPrefix?: string;
 }) {
   // The reason box for "Skip and proceed" — open only after the operator asks to skip, so the
@@ -3460,28 +3490,39 @@ function FailedStepActions({ step, capability, busy, onRetry, onSkip, idPrefix =
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipWhy, setSkipWhy] = useState("");
   const name = capability?.label ?? step.step_id;
+  const { retry, skip } = actions;
+  if (!retry && !skip) return null;
   return (
     <div className="dw-step-decide" data-testid={`${idPrefix}-decide`}>
-      <button type="button" className="cap-btn primary" onClick={onRetry} disabled={!!busy}
-              data-testid={`${idPrefix}-retry`}>
-        {busy === "Retry" ? "Queueing…" : `Try ${name} again`}
-      </button>
-      <Explain label="What retrying this step does">
-        Runs this step only; everything before it stays done.
-      </Explain>
-      {canSkip(step, capability) ? (
+      {retry ? (
+        <>
+          <button type="button" className="cap-btn primary" onClick={onRetry}
+                  disabled={!!busy || !retry.enabled} title={retry.reason ?? undefined}
+                  data-testid={`${idPrefix}-retry`}>
+            {busy === "Retry" ? "Queueing…" : retry.label}
+          </button>
+          <Explain label="What retrying this step does">
+            {retry.enabled ? "Runs this step only; everything before it stays done."
+              : `Not available: ${retry.reason}.`}
+          </Explain>
+        </>
+      ) : null}
+      {skip ? (
         <button type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
-                disabled={!!busy || skipOpen} data-testid={`${idPrefix}-skip`}>
-          {busy === "Skip" ? "Skipping…" : "Skip and proceed"}
+                disabled={!!busy || skipOpen || !skip.enabled} title={skip.reason ?? undefined}
+                data-testid={`${idPrefix}-skip`}>
+          {busy === "Skip" ? "Skipping…" : skip.label}
         </button>
       ) : null}
-      {canSkip(step, capability) ? (
+      {skip ? (
         <Explain label="What skipping this step does">
-          Marks it skipped with your reason and carries on. Steps that use what it would
-          have produced are told it was skipped — never handed a made-up value.
+          {skip.enabled
+            ? "Marks it skipped with your reason and carries on. Steps that use what it would "
+              + "have produced are told it was skipped — never handed a made-up value."
+            : `Not available: ${skip.reason}.`}
         </Explain>
       ) : null}
-      {canSkip(step, capability) && skipOpen ? (
+      {skip?.enabled && skipOpen ? (
         <form className="dw-skip-why" data-testid={`${idPrefix}-skip-form`}
               onSubmit={(e) => {
                 e.preventDefault();
@@ -3510,9 +3551,12 @@ function FailedStepActions({ step, capability, busy, onRetry, onSkip, idPrefix =
 }
 
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
+                     actions,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      previewStarting, busy }: {
   projectId: string;
+  /** This step's Try again / Skip, from the run's server-decided `actions`. */
+  actions: { retry?: RunAction; skip?: RunAction };
   /** Where this step sits in the run, so the card can carry the rail's number. */
   stepIndex?: number;
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
@@ -4019,12 +4063,12 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       </div>
 
       {/* Try again / Skip and proceed — see FailedStepActions for why both sit together. */}
-      {["failed", "deadlettered", "cancelled"].includes(step.status) ? (
-        // KEYED BY THE STEP, so a reason half-typed for one step is not still open, pre-filled,
-        // when the operator clicks a different failed step in the rail.
-        <FailedStepActions key={step.step_id} step={step} capability={capability} busy={busy}
-                           onRetry={onRetry} onSkip={onSkip} />
-      ) : null}
+      {/* WHICH OF THE TWO, IF EITHER, IS THE SERVER'S CALL — `actions` is this step's slice of
+          the run's list, and FailedStepActions renders nothing when it is empty.
+          KEYED BY THE STEP, so a reason half-typed for one step is not still open, pre-filled,
+          when the operator clicks a different failed step in the rail. */}
+      <FailedStepActions key={step.step_id} step={step} capability={capability} busy={busy}
+                         actions={actions} onRetry={onRetry} onSkip={onSkip} />
 
       {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the
           operator leave the screen that told them it was waiting. */}

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
@@ -508,8 +509,10 @@ describe("managing runs, not just watching them", () => {
   });
 
   it("can start the whole workflow again", () => {
-    expect(DW2).toContain('data-testid="dw-rerun"');
-    expect(DW2).toContain("Run this workflow again");
+    expect(DW2).toContain('testId: "dw-rerun"');
+    // The label is the engine's, sent with the run as one of its `actions`.
+    expect(readFileSync("../../engine/boss_engine/services/workflow_run_actions.py", "utf8"))
+      .toContain('_action("rerun", "Run this workflow again")');
   });
 
   it("lets the release decision say WHERE it ships", () => {

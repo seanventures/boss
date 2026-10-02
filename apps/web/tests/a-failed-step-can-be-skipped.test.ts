@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { canSkip, type RunStep } from "../app/delivery-workflows-ui";
+import { readFileSync } from "node:fs";
+
+import { stepActions, type RunAction } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -14,26 +16,35 @@ import { codeOnly } from "./_helpers/source";
  */
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
 const ROUTE = codeOnly("app/api/delivery-workflows/route.ts");
+/** WHETHER Skip is offered is the engine's decision now (workflow_run_actions.py), sent with the
+ *  run as one of its `actions`. The console's `canSkip` was a copy that ignored the run: it
+ *  offered Skip on a CANCELLED run's failed step, which `skip_failed_step` refuses. The full
+ *  table is engine/tests/test_a_runs_actions_come_from_its_state.py. */
+const ENGINE = readFileSync("../../engine/boss_engine/services/workflow_run_actions.py", "utf8");
 
-function step(status: string, kind = "capability"): RunStep {
-  return { step_id: "research", kind, status, capability: "research" } as unknown as RunStep;
-}
+const sent = (key: RunAction["key"], step_id: string): RunAction =>
+  ({ key, step_id, label: key, enabled: true, reason: null });
 
 describe("Skip and proceed", () => {
   it("is offered on a step whose work failed or was dead-lettered", () => {
-    expect(canSkip(step("failed"), { is_gate: false })).toBe(true);
-    expect(canSkip(step("deadlettered"), { is_gate: false })).toBe(true);
+    expect(ENGINE).toContain('SKIPPABLE_STEP_STATES = frozenset({"failed", "deadlettered"})');
+    expect(ENGINE).toContain('if step_status in SKIPPABLE_STEP_STATES and not _is_gate(step):');
   });
 
   it("is never offered on an approval gate — a refused gate is somebody's no", () => {
-    expect(canSkip(step("failed"), { is_gate: true })).toBe(false);
-    expect(canSkip(step("failed", "decision"))).toBe(false);
+    const at = ENGINE.indexOf("def _is_gate(");
+    const block = ENGINE.slice(at, at + 600);
+    expect(block).toContain('== "decision"');
+    expect(block).toContain(".is_gate");
   });
 
-  it("is not offered on a live, finished or cancelled step", () => {
-    for (const status of ["ready", "running", "waiting", "succeeded", "skipped", "cancelled"]) {
-      expect(canSkip(step(status), { is_gate: false })).toBe(false);
-    }
+  it("the console shows exactly the step's Skip it was sent, and nothing for other steps", () => {
+    const run = { actions: [sent("retry_step", "research"), sent("skip_step", "research"),
+                            sent("retry_step", "panel")] };
+    expect(stepActions(run, "research").skip?.key).toBe("skip_step");
+    expect(stepActions(run, "panel").skip).toBeUndefined();
+    expect(stepActions(run, "panel").retry?.key).toBe("retry_step");
+    expect(stepActions({ actions: [] }, "research")).toEqual({ retry: undefined, skip: undefined });
   });
 
   it("sits beside Try again, in the same failed-step block", () => {
@@ -45,9 +56,9 @@ describe("Skip and proceed", () => {
     const skip = body.indexOf("data-testid={`${idPrefix}-skip`}");
     expect(retry).toBeGreaterThan(-1);
     expect(skip).toBeGreaterThan(retry);
-    expect(skip - retry).toBeLessThan(800);
-    expect(body).toContain("Skip and proceed");
-    expect(body.slice(retry, skip)).toContain("canSkip(step, capability)");
+    expect(skip - retry).toBeLessThan(900);
+    expect(ENGINE).toContain('"Skip and proceed"');
+    expect(body).toContain("{skip ? (");
     // Rendered on the failed step's own detail, keyed so a half-typed reason never follows the
     // operator to a different step.
     expect(UI).toContain("<FailedStepActions key={step.step_id} step={step}");

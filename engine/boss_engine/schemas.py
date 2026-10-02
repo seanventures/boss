@@ -3465,6 +3465,9 @@ class WorkflowRunDetail(WorkflowRunSummary):
     migrations: list[dict[str, Any]] = Field(default_factory=list)
     compensations: list[dict[str, Any]] = Field(default_factory=list)
     timeline: list[dict[str, Any]] = Field(default_factory=list)
+    #: What an operator may do to this run, decided from its state by
+    #: services/workflow_run_actions.run_actions — the same list the console renders.
+    actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkflowRunListResponse(BaseModel):
