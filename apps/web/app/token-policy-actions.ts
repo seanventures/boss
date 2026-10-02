@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { API_URL, authHeaders, resolveProjectId } from "../lib/client";
 import { apiWrite } from "../lib/api-write";
 
@@ -39,6 +40,9 @@ export async function setStageTokenCapAction(
         error: `The cap was not saved: the API answered ${response.status}${text ? ` (${text})` : ""}. Nothing changed; check the value and save again.`,
       };
     }
+    // The policy card beside this form lists the per-stage caps; without a revalidate it kept
+    // showing the old cap next to "Saved: ... capped at N" until the next navigation.
+    revalidatePath("/");
     return { ok: true, stage, cap: Math.trunc(cap) };
   } catch (error) {
     return {

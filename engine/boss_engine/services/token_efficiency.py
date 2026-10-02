@@ -507,6 +507,12 @@ def upsert_policies(
             "token_budget_policies is not applied on this runtime; cannot store policies."
         )
 
+    # A save is a MERGE: only the keys the caller sent change; an absent key keeps the stored
+    # value, or the default when the stage has no stored row yet. The Govern "Save cap" form
+    # sends only {stage, max_total_tokens_per_call}; while this was a replace, saving a cap on
+    # "*" nulled the $50/day and 5M tokens/day defaults (a stored row takes the place of the
+    # defaults in list_policies), so build_consumption silently stopped raising budget-pressure
+    # alerts (review of milestone/console-b, 2026-10-02). An explicit null still clears a field.
     now = now_utc()
     for idx, raw in enumerate(items):
         if not isinstance(raw, Mapping):
@@ -514,21 +520,46 @@ def upsert_policies(
         stage = str(raw.get("stage") or PROJECT_DEFAULT_STAGE).strip() or PROJECT_DEFAULT_STAGE
         if len(stage) > 64:
             raise ValueError(f"policies[{idx}].stage too long")
-        preferred = raw.get("preferred_model_class")
-        if preferred is not None:
-            preferred = str(preferred).strip().lower() or None
-            if preferred not in (None, "low_cost", "strong"):
-                raise ValueError(
-                    f"policies[{idx}].preferred_model_class must be low_cost|strong|null"
-                )
-        alert = raw.get("alert_at_pct")
-        if alert is None:
-            alert = 0.80
-        alert_f = float(alert)
+
+        existing = connection.execute(
+            text(
+                """
+                SELECT id, project_id, stage, max_prompt_tokens, max_completion_tokens,
+                       max_total_tokens_per_call, max_tokens_per_day,
+                       max_cost_usd_micros_per_day, alert_at_pct, preferred_model_class,
+                       enabled, version, updated_at, created_at
+                FROM token_budget_policies
+                WHERE project_id=:p AND stage=:s
+                """
+            ),
+            {"p": pid, "s": stage},
+        ).mappings().first()
+        base = _row_from_db(existing) if existing else _default_policy_row(pid, stage)
+
+        if "preferred_model_class" in raw:
+            preferred = raw.get("preferred_model_class")
+            if preferred is not None:
+                preferred = str(preferred).strip().lower() or None
+                if preferred not in (None, "low_cost", "strong"):
+                    raise ValueError(
+                        f"policies[{idx}].preferred_model_class must be low_cost|strong|null"
+                    )
+        else:
+            preferred = base.get("preferred_model_class")
+
+        if raw.get("alert_at_pct") is not None:
+            alert_f = float(raw["alert_at_pct"])
+        elif "alert_at_pct" in raw:
+            alert_f = 0.80
+        else:
+            alert_f = float(base.get("alert_at_pct") or 0.80)
         if not 0.0 < alert_f <= 1.0:
             raise ValueError(f"policies[{idx}].alert_at_pct must be in (0, 1]")
 
         def _opt_int(key: str) -> Optional[int]:
+            if key not in raw:
+                kept = base.get(key)
+                return int(kept) if kept is not None else None
             v = raw.get(key)
             if v is None:
                 return None
@@ -537,14 +568,18 @@ def upsert_policies(
                 raise ValueError(f"policies[{idx}].{key} must be >= 0")
             return iv
 
-        enabled = bool(raw["enabled"]) if "enabled" in raw else True
-        existing = connection.execute(
-            text(
-                "SELECT id, version FROM token_budget_policies "
-                "WHERE project_id=:p AND stage=:s"
-            ),
-            {"p": pid, "s": stage},
-        ).mappings().first()
+        enabled = bool(raw["enabled"]) if "enabled" in raw else bool(base.get("enabled", True))
+        values = {
+            "mpt": _opt_int("max_prompt_tokens"),
+            "mct": _opt_int("max_completion_tokens"),
+            "mtt": _opt_int("max_total_tokens_per_call"),
+            "mtd": _opt_int("max_tokens_per_day"),
+            "mcd": _opt_int("max_cost_usd_micros_per_day"),
+            "alert": alert_f,
+            "pmc": preferred,
+            "en": enabled,
+            "now": now,
+        }
 
         if existing:
             connection.execute(
@@ -564,18 +599,7 @@ def upsert_policies(
                     WHERE id = :id
                     """
                 ),
-                {
-                    "id": existing["id"],
-                    "mpt": _opt_int("max_prompt_tokens"),
-                    "mct": _opt_int("max_completion_tokens"),
-                    "mtt": _opt_int("max_total_tokens_per_call"),
-                    "mtd": _opt_int("max_tokens_per_day"),
-                    "mcd": _opt_int("max_cost_usd_micros_per_day"),
-                    "alert": alert_f,
-                    "pmc": preferred,
-                    "en": enabled,
-                    "now": now,
-                },
+                {"id": existing["id"], **values},
             )
         else:
             connection.execute(
@@ -591,20 +615,7 @@ def upsert_policies(
                       :en, 1, :now, :now)
                     """
                 ),
-                {
-                    "id": make_id("tpol"),
-                    "p": pid,
-                    "s": stage,
-                    "mpt": _opt_int("max_prompt_tokens"),
-                    "mct": _opt_int("max_completion_tokens"),
-                    "mtt": _opt_int("max_total_tokens_per_call"),
-                    "mtd": _opt_int("max_tokens_per_day"),
-                    "mcd": _opt_int("max_cost_usd_micros_per_day"),
-                    "alert": alert_f,
-                    "pmc": preferred,
-                    "en": enabled,
-                    "now": now,
-                },
+                {"id": make_id("tpol"), "p": pid, "s": stage, **values},
             )
 
     return list_policies(connection, pid)
@@ -873,8 +884,8 @@ def build_consumption(
                         f"Used {score['total_tokens']:,} tokens in {hours}h "
                         f"({token_util:.0%} of scaled daily cap {token_cap:,})."
                     ),
-                    "action": "Lower per-stage max_total_tokens_per_call, enable caching, "
-                              "or raise the daily token cap deliberately.",
+                    "action": "Lower the busiest stage's per-call cap (Save cap in Govern), "
+                              "enable caching, or raise the daily token cap deliberately.",
                 }
             )
     if have_usage and cost_cap and cost_cap > 0:
@@ -888,8 +899,8 @@ def build_consumption(
                         f"Spent ${score['cost_usd_micros']/1e6:.2f} in {hours}h "
                         f"({cost_util:.0%} of scaled daily cost cap)."
                     ),
-                    "action": "Route planning stages to low_cost, cut failed-call burn, "
-                              "or adjust max_cost_usd_micros_per_day.",
+                    "action": "Route planning stages to the low-cost model class, cut failed-call "
+                              "burn, or raise the project's daily cost cap deliberately.",
                 }
             )
 
