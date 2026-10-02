@@ -1046,6 +1046,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             feed={agentStudioFeed}
             roles={roles.items}
             skills={skills.items}
+            actor={activeActorId}
           />
           <details className="studio-duty-details">
             <summary>On-duty automations</summary>
@@ -5116,7 +5117,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>What each role has done</h3>
             </div>
           </div>
-          <WorkforceArea workforce={workforceData} skills={skills.items} />
+          <WorkforceArea workforce={workforceData} skills={skills.items} actor={activeActorId} />
         </section>
         ) : null}
 

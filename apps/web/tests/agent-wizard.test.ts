@@ -8,6 +8,7 @@ import {
   parseWizardLines,
   slugifyAgentKey,
   validateAgentWizardDraft,
+  NEW_ROLE,
 } from "../lib/agent-wizard";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -56,47 +57,103 @@ describe("Agent Studio creation wizard", () => {
     expect(patterned.artifactType).toBe("review_report");
   });
 
+  // REWRITTEN: this test asserted `actor: "vp_agents"` and a free-text `requested_integrations`
+  // list. Both were the defect — the literal actor 403'd on every authed install (a 'ceo' key may
+  // not act as 'vp_agents'), and the integrations field was text nothing read. The submission
+  // now carries the signed-in actor everywhere and GRANTS the chosen skills and MCP servers.
   it("compiles the form into canonical definition and immutable version payloads", () => {
     const draft = {
       ...applyAgentWizardPattern(
-        createInitialAgentWizardDraft("software_engineer"),
+        createInitialAgentWizardDraft("software_engineer", "executive_console"),
         "builder",
       ),
       name: "Backend Builder",
       agentKey: "backend-builder",
-      executionMode: "live_model" as const,
       selectionMode: "pinned" as const,
       pinnedModel: "openai/gpt-current",
       preferredCapabilitiesText: "code, reasoning",
-      requestedSkills: ["github.create_pr_sandbox", "model.generate_code"],
-      requestedIntegrationsText: "github\nplane",
+      requestedSkills: ["model.generate_code", "github.create_pr_sandbox"],
+      mcpServers: [{ serverId: "mcp_1", name: "mattermost", tools: "post, read_channel" }],
     };
 
-    const payload = buildAgentWizardSubmission("boss-dogfood", draft);
+    const payload = buildAgentWizardSubmission("boss-dogfood", draft, "executive_console");
 
+    expect(payload.actor).toBe("executive_console");
     expect(payload.definition).toMatchObject({
       project_id: "boss-dogfood",
       agent_key: "backend_builder",
       name: "Backend Builder",
-      actor: "vp_agents",
+      owner: "executive_console",
+      actor: "executive_console",
     });
     expect(payload.version).toMatchObject({
       project_id: "boss-dogfood",
       role_key: "software_engineer",
       model_policy: {
-        execution_mode: "live_model",
+        execution_mode: "deterministic_brief",
         selection_mode: "pinned",
         pinned_model: "openai/gpt-current",
         preferred_capabilities: ["code", "reasoning"],
       },
       requested_skills: ["github.create_pr_sandbox", "model.generate_code"],
-      requested_integrations: ["github", "plane"],
+      requested_integrations: ["mattermost"],
       scopes: { project: "current", data_boundary: "internal" },
       provenance: { source: "agent_studio_wizard", pattern: "builder" },
+      actor: "executive_console",
     });
     expect(payload.version.output_contract).toMatchObject({
       artifact_type: "implementation_plan",
     });
+    // An EXISTING agent is given what the profile uses that it does not hold — the grant.
+    expect(payload.agent).toEqual({
+      roleKey: "software_engineer",
+      grant: {
+        project_id: "boss-dogfood",
+        actor: "executive_console",
+        grant_skills: ["github.create_pr_sandbox", "model.generate_code"],
+        grant_mcp_servers: [{ server_id: "mcp_1", tools: ["post", "read_channel"] }],
+      },
+    });
+  });
+
+  it("a new agent is CREATED holding what was ticked, never registered bare", () => {
+    // The wizard registered a role with the skills written into spec.allowed_skills, which the
+    // runtime never reads, so the agent it made held nothing and was refused by every step.
+    const draft = {
+      ...createInitialAgentWizardDraft(NEW_ROLE, "ceo"),
+      name: "Release Auditor",
+      agentKey: "release_auditor",
+      description: "Checks every release against the change log.",
+      requestedSkills: ["model.generate_text"],
+      mcpServers: [{ serverId: "mcp_9", name: "github", tools: "" }],
+    };
+    const payload = buildAgentWizardSubmission("p", draft, "ceo");
+    expect(payload.agent).toEqual({
+      roleKey: "release_auditor",
+      create: {
+        project_id: "p",
+        actor: "ceo",
+        role_key: "release_auditor",
+        name: "Release Auditor",
+        purpose: "Checks every release against the change log.",
+        skills: ["model.generate_text"],
+        mcp_servers: [{ server_id: "mcp_9", tools: [] }],
+      },
+    });
+    expect(payload.version.role_key).toBe("release_auditor");
+  });
+
+  it("live-model Studio runs are refused before publish, with what to do instead", () => {
+    // Every Studio run of a live_model version is blocked in this release, so offering it
+    // produced an agent whose every run failed.
+    const issues = validateAgentWizardDraft({
+      ...createInitialAgentWizardDraft("software_engineer", "ceo"),
+      executionMode: "live_model" as const,
+      preferredCapabilitiesText: "reasoning",
+    });
+    const runtime = issues.filter((i) => i.field === "runtime").map((i) => i.message).join(" ");
+    expect(runtime).toContain("not available in this release");
+    expect(runtime).toContain("Deterministic brief");
   });
 
   it("blocks incomplete and unbounded blueprints before server creation", () => {

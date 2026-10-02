@@ -6,6 +6,7 @@ import type { RoleFeedItem } from "../lib/roles";
 import type { SkillFeedItem } from "../lib/skills";
 import { AgentCreationWizard } from "./agent-creation-wizard";
 import { AgentDetail } from "./agent-detail-ui";
+import { AgentQuickCreate } from "./agent-quick-create";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
@@ -102,7 +103,11 @@ function openAgentDefinition(roleKey: string): void {
 }
 
 export function WorkforceArea(
-  { workforce, skills = [] }: { workforce: Workforce; skills?: SkillFeedItem[] },
+  { workforce, skills = [], actor }: {
+    workforce: Workforce; skills?: SkillFeedItem[];
+    /** The signed-in actor every agent write is made as — never a literal. */
+    actor: string;
+  },
 ) {
   const [filter, setFilter] = useState<"all" | "working" | "worked">("all");
   const [search, setSearch] = useState("");
@@ -119,13 +124,14 @@ export function WorkforceArea(
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
-  // MAKE ONE. The page listed 26 agents and offered no way to add a 27th — the only creation
-  // wizard in BOSS lives in Agent Studio and writes `agent_definitions`, which this roster does
-  // not read. Same wizard, now registering the role too, so what it makes appears here.
-  const [creating, setCreating] = useState(false);
+  // MAKE ONE. The page listed 26 agents and offered no way to add a 27th. "quick" is the
+  // one-screen create (name, purpose, skills, MCP servers, reports-to) that makes the agent and
+  // its grants in one request; "studio" is Agent Studio's full wizard, for prompts, rules and a
+  // model policy, which now also grants what it asks for.
+  const [creating, setCreating] = useState<"" | "quick" | "studio">("");
   const [roleOptions, setRoleOptions] = useState<RoleFeedItem[]>([]);
   useEffect(() => {
-    if (!creating) return;
+    if (creating !== "studio") return;
     let alive = true;
     (async () => {
       try {
@@ -159,14 +165,17 @@ export function WorkforceArea(
       window.history.replaceState(null, "", url.toString());
     } catch { /* non-browser */ }
   }, []);
+  // DELETED HERE, GONE HERE. The roster is server data refreshed on an interval; without this a
+  // just-deleted agent stays on screen and opening it says it does not exist.
+  const [deleted, setDeleted] = useState<Set<string>>(new Set());
   const agents = useMemo(() => {
-    const list = workforce.agents ?? [];
+    const list = (workforce.agents ?? []).filter((a) => !deleted.has(a.id));
     const scoped = filter === "working"
       ? list.filter((a) => a.status === "WORKING" || a.status === "STUCK")
       : filter === "worked" ? list.filter((a) => volumeOf(a) > 0) : list;
     const query = search.trim().toLowerCase();
     return query ? scoped.filter((a) => `${a.name} ${a.role} ${a.task}`.toLowerCase().includes(query)) : scoped;
-  }, [workforce.agents, filter, search]);
+  }, [workforce.agents, filter, search, deleted]);
 
   const counts = workforce.counts ?? { WORKING: 0, STUCK: 0, IDLE: 0, total: 0 };
   const unregisteredCount = (workforce.agents ?? []).filter((agent) => !agent.registered).length;
@@ -186,8 +195,9 @@ export function WorkforceArea(
   // The detail view, over the roster. Rendered here rather than as a route because the console
   // mounts every area at once and a route would be a second place agents can be listed.
   if (openRole) {
-    return <AgentDetail projectId={workforce.project_id} roleKey={openRole}
-                        onClose={closeAgent} />;
+    return <AgentDetail projectId={workforce.project_id} roleKey={openRole} actor={actor}
+                        onClose={closeAgent}
+                        onDeleted={(key) => setDeleted((d) => new Set(d).add(key))} />;
   }
   return (
     <div className="roster">
@@ -212,7 +222,7 @@ export function WorkforceArea(
               27th — the only wizard in BOSS is in Agent Studio, and it writes
               `agent_definitions`, which this roster does not read. */}
           <button type="button" className="cap-btn roster-new" data-testid="wf-new-agent"
-                  onClick={() => setCreating(true)}>Create agent</button>
+                  onClick={() => setCreating("quick")}>Create agent</button>
         </span>
       </div>
       <div className="roster-guide">
@@ -225,12 +235,18 @@ export function WorkforceArea(
              placeholder="Find an agent role" value={search}
              onChange={(event) => setSearch(event.target.value)} />
 
-      {creating ? (
+      {creating === "quick" ? (
+        <AgentQuickCreate projectId={workforce.project_id} actor={actor}
+                          onClose={() => setCreating("")}
+                          onOpenStudio={() => setCreating("studio")}
+                          onCreated={(roleKey) => { setCreating(""); openAgent(roleKey); }} />
+      ) : null}
+      {creating === "studio" ? (
         // SAME WIZARD, SO IT NEEDS THE SAME SKILLS. This passed `[]`, so the commission
         // dialog opened from the Agents page always said "No installed skills are available
         // to request" — the identical dialog opened from Agent Studio offered them.
-        <AgentCreationWizard projectId={workforce.project_id} roles={roleOptions} skills={skills}
-                             onClose={() => setCreating(false)} />
+        <AgentCreationWizard projectId={workforce.project_id} actor={actor} roles={roleOptions}
+                             skills={skills} onClose={() => setCreating("")} />
       ) : null}
 
       {/* Governance gap, said once and at the top: an agent running work without a registered

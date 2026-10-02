@@ -1480,7 +1480,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         </div>
         <BuilderView
           capabilities={capabilities} blocks={blocks} riskFloor={riskFloor}
-          installed={installed} projectId={projectId}
+          installed={installed} projectId={projectId} actor={actor}
           customSteps={customSteps} bindable={bindable}
           justMade={justMade} onDismissJustMade={() => setJustMade(null)}
           onManageSteps={() => setTab("steps")}
@@ -5212,7 +5212,7 @@ function StepsView({
   );
 }
 
-function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
+function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, actor, busy,
                       customSteps, bindable, onManageSteps, stepRoles, holdings, onGranted,
                       justMade, onDismissJustMade,
                       target, setTarget, onSave, onCreate }: {
@@ -5221,6 +5221,8 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   riskFloor: number;
   installed: Installed[];
   projectId: string;
+  /** The signed-in actor; the grant offered on a step row is made as them. */
+  actor: string;
   customSteps: CustomStep[];
   bindable: Bindable;
   /** Take the operator to where steps are authored. The palette places them; it does not
@@ -6202,7 +6204,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       </span>
                     ) : null
                   ) : (
-                    <CaptainCanRunIt projectId={projectId} step={step} mine={mine}
+                    <CaptainCanRunIt projectId={projectId} actor={actor} step={step} mine={mine}
                                      holdings={holdings} onGranted={onGranted} />
                   )}
                   <select className="input dw-draft-approval" value={step.approval}
@@ -6355,8 +6357,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
  * Silent when there is nothing to say — a row cluttered with green ticks teaches people to stop
  * reading it.
  */
-export function CaptainCanRunIt({ projectId, step, mine, holdings, onGranted }: {
+export function CaptainCanRunIt({ projectId, actor, step, mine, holdings, onGranted }: {
   projectId: string;
+  /** The signed-in actor the grant is made as (it was the literal 'executive_console'). */
+  actor: string;
   step: Draft;
   mine?: CustomStep;
   holdings: Record<string, string[]>;
@@ -6386,7 +6390,7 @@ export function CaptainCanRunIt({ projectId, step, mine, holdings, onGranted }: 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "assign", project_id: projectId, role_key: captain,
-                               skill_id: skillId, actor: "executive_console" }),
+                               skill_id: skillId, actor }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) { setFailed(String(body?.error ?? `HTTP ${r.status}`)); return; }
