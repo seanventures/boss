@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import shlex
 
 import pytest
 
@@ -146,7 +147,7 @@ def test_the_container_preview_runs_a_package_module_the_same_way(tmp_path):
 def test_the_resolved_command_actually_serves(tmp_path):
     """Resolution being right is worthless if the command it builds cannot start the app."""
     root = _lead_triage(tmp_path)
-    record = ps.prove_app_serves(root, BUILT, read=_files(root, BUILT).get, timeout=20)
+    record = ps.prove_app_serves(root, BUILT, timeout=20)
     assert record["ok"] and record["proven"], record
     assert record["command"] == "python3 -m lead_triage_core.server"
 
@@ -250,7 +251,7 @@ def test_a_declared_command_that_cannot_start_fails_with_the_apps_own_error(tmp_
     root = _lead_triage(tmp_path, **{
         "boss.preview.command": "python3 lead_triage_core/approvals.py\n"})
     built = BUILT + ["boss.preview.command"]
-    record = ps.prove_app_serves(root, built, read=_files(root, built).get, timeout=20)
+    record = ps.prove_app_serves(root, built, timeout=20)
     assert record["ok"] is False
     assert record["source"] == "declared"
     assert "ImportError" in record["error"]
@@ -260,7 +261,7 @@ def test_a_declared_command_that_cannot_start_fails_with_the_apps_own_error(tmp_
 
 def test_a_service_build_that_declares_nothing_runnable_fails_the_check(tmp_path):
     root = _write(tmp_path, {"inbox_core/rules.py": "def score(x):\n    return x\n"})
-    record = ps.prove_app_serves(root, ["inbox_core/rules.py"], serves_http=True, timeout=5)
+    record = ps.prove_app_serves(root, ["inbox_core/rules.py"], known_service=True, timeout=5)
     assert record["ok"] is False
     assert "boss.preview.command" in record["error"]
 
@@ -291,7 +292,7 @@ def test_the_pipeline_gates_on_the_proof_and_records_it():
     assert "prove_app_serves(" in body
     assert 'gates["app_serves"] = bool(app_serves_record.get("ok"))' in body
     assert '"app_serves": app_serves_record' in body
-    assert "'app_serves' failed: BOSS ran" in body
+    assert "'app_serves' failed: " in body and "_app_serves_sentence(app_serves_record)" in body
     assert "app_serves" in gov._ALL_GATE_NAMES
 
 
@@ -303,8 +304,7 @@ def test_a_build_with_a_working_declaration_passes_the_check(tmp_path):
     root = _lead_triage(tmp_path, **{
         "boss.preview.command": "python3 -m lead_triage_core.server\n"})
     built = BUILT + ["boss.preview.command"]
-    record = ps.prove_app_serves(root, built, read=_files(root, built).get,
-                                 serves_http=True, timeout=20)
+    record = ps.prove_app_serves(root, built, known_service=True, timeout=20)
     assert record["ok"] is True and record["proven"] is True, record
     assert record["source"] == "declared"
     assert isinstance(record["port"], int)
@@ -316,7 +316,7 @@ def test_the_proof_runs_in_a_copy_so_nothing_it_writes_reaches_the_pull_request(
         "boss.preview.command": "touch data.db && python3 -m lead_triage_core.server\n"})
     before = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
     built = BUILT + ["boss.preview.command"]
-    assert ps.prove_app_serves(root, built, read=_files(root, built).get, timeout=20)["ok"]
+    assert ps.prove_app_serves(root, built, timeout=20)["ok"]
     assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) == before
 
 
@@ -324,7 +324,7 @@ def test_a_library_that_serves_nothing_is_left_to_its_tests(tmp_path):
     root = _write(tmp_path, {"scoring/__init__.py": "", "scoring/rank.py": "def r():\n    pass\n",
                              "tests/test_rank.py": "import unittest\n"})
     record = ps.prove_app_serves(root, ["scoring/rank.py", "tests/test_rank.py"],
-                                 read=lambda _p: "", timeout=5)
+                                 timeout=5)
     assert record["ok"] is True and record["proven"] is False
     assert record["source"] == "library"
 
@@ -340,7 +340,7 @@ def test_a_cli_main_with_a_main_block_is_left_to_its_tests(tmp_path):
                         "    main()\n",
              "tests/test_main.py": "import unittest\n"}
     root = _write(tmp_path, files)
-    record = ps.prove_app_serves(root, list(files), read=files.get, serves_http=False, timeout=5)
+    record = ps.prove_app_serves(root, list(files), timeout=5)
     assert record["ok"] is True and record["proven"] is False, record
     assert record["source"] == "library"
     assert record["command"] is None
@@ -350,7 +350,7 @@ def test_a_node_cli_with_a_start_script_is_left_to_its_tests(tmp_path):
     files = {"package.json": json.dumps({"name": "tool", "scripts": {"start": "node cli.js"}}),
              "cli.js": "console.log(process.argv.slice(2).join(' '))\n"}
     root = _write(tmp_path, files)
-    record = ps.prove_app_serves(root, list(files), read=files.get, serves_http=False, timeout=5)
+    record = ps.prove_app_serves(root, list(files), timeout=5)
     assert record["ok"] is True and record["source"] == "library", record
 
 
@@ -358,15 +358,14 @@ def test_a_long_running_worker_that_is_not_a_service_is_not_required_to_serve(tm
     files = {"serve_queue.py": "import time\n\nif __name__ == '__main__':\n"
                                "    while True:\n        time.sleep(1)\n"}
     root = _write(tmp_path, files)
-    record = ps.prove_app_serves(root, list(files), read=files.get, serves_http=False, timeout=5)
+    record = ps.prove_app_serves(root, list(files), timeout=5)
     assert record["ok"] is True and record["source"] == "library", record
 
 
 def test_a_build_not_flagged_as_a_service_that_writes_a_server_is_still_proven(tmp_path):
     """The relaxation is for things that are not servers; a server the build wrote still runs."""
     root = _lead_triage(tmp_path)
-    record = ps.prove_app_serves(root, BUILT, read=_files(root, BUILT).get,
-                                 serves_http=False, timeout=20)
+    record = ps.prove_app_serves(root, BUILT, timeout=20)
     assert record["ok"] and record["proven"] and record["source"] == "derived", record
 
 
@@ -377,7 +376,7 @@ def test_a_docs_only_follow_up_in_a_multi_app_repo_is_not_failed_for_the_repos_s
                              "index.html": "<html></html>", "a/README.md": "# a\n",
                              "a/tests/test_x.py": "import unittest\n"})
     for changed in (["a/README.md"], ["a/README.md", "a/tests/test_x.py"]):
-        record = ps.prove_app_serves(root, changed, serves_http=True, timeout=5)
+        record = ps.prove_app_serves(root, changed, known_service=True, timeout=5)
         assert record["ok"] is True and record["source"] == "no_runnable_change", record
 
 
@@ -397,7 +396,7 @@ def test_a_non_final_decomposition_slice_skips_the_serve_proof():
         {"decomposition_index": 3, "decomposition_total": 3}) is None
     assert gov.app_serves_check_skip_reason({}) is None
     body = inspect.getsource(gov.run_governed_code_task)
-    assert "_serve_skip = app_serves_check_skip_reason(fctx)" in body
+    assert "_serve_skip = app_serves_check_skip_reason(" in body
 
 
 # --------------------------------------------------------------------------------------- #
@@ -408,7 +407,7 @@ def test_an_app_that_exits_is_reported_as_exiting_with_its_code_not_as_a_timeout
     root = _lead_triage(tmp_path, **{
         "boss.preview.command": "python3 lead_triage_core/approvals.py\n"})
     built = BUILT + ["boss.preview.command"]
-    record = ps.prove_app_serves(root, built, read=_files(root, built).get, timeout=20)
+    record = ps.prove_app_serves(root, built, timeout=20)
     assert record["ok"] is False
     assert record["exit_code"] not in (None, 0)
     assert record["error"].startswith("the app exited (code ")
@@ -425,19 +424,19 @@ def test_a_blocked_run_carries_the_apps_error_and_an_honest_rescue_reason():
     error, reason = gov.blocked_gate_messages("qg_1", ["app_serves"], record)
     assert "python3 lead_triage_core/approvals.py" in error
     assert "ImportError" in error
-    assert "never_block" not in reason and "did not start" in reason
+    assert "never_block" not in reason and "does not serve" in reason
     plain_error, plain_reason = gov.blocked_gate_messages("qg_1", ["review_code"], record)
     assert "ImportError" not in plain_error
     assert plain_reason == "quality gate blocked and never_block is disabled"
     assert "blocked_gate_messages(" in inspect.getsource(gov.run_governed_code_task)
 
 
-def test_a_proof_on_the_host_for_a_docker_runtime_build_is_not_blamed_on_the_code():
-    failed = {"ok": False, "harness": False, "error": "ModuleNotFoundError: No module named 'flask'"}
-    marked = gov.app_serves_inconclusive_on_runtime(failed, "docker")
-    assert gov.classify_gate_faults(failing=["app_serves"],
-                                    evidence={"app_serves": marked}) == {"app_serves": "HARNESS"}
-    assert gov.app_serves_inconclusive_on_runtime(failed, "subprocess") is failed
+def test_a_docker_runtime_build_is_not_proven_on_the_host():
+    """f16b5d4 ran the proof on the host and marked a failure inconclusive afterwards — which
+    still started agent-written code on the host the docker runtime exists to keep it off."""
+    reason = gov.app_serves_check_skip_reason({}, command_runtime="docker")
+    assert reason and reason.startswith("inconclusive")
+    assert gov.app_serves_check_skip_reason({}, command_runtime="subprocess") is None
 
 
 def test_a_config_module_named_like_an_app_does_not_beat_the_server_beside_it(tmp_path):
@@ -449,3 +448,280 @@ def test_a_config_module_named_like_an_app_does_not_beat_the_server_beside_it(tm
                                     "approve = str\n"),
     })
     assert ps.resolve_app_entry(root, ["app_settings.py", "server.py"]) == ("py", "server.py")
+
+
+# --------------------------------------------------------------------------------------- #
+# Second review of f16b5d4. Each test below fails on f16b5d4.
+# --------------------------------------------------------------------------------------- #
+
+# A root program the old fallback would run instead of the declared app: it exits at once.
+STRAY_MAIN = "import sys\n\nif __name__ == '__main__':\n    sys.exit('not the app')\n"
+
+# The lineage of a declared app: the run that built it wrote the declaration and the server.
+DECLARED_LINEAGE = BUILT + ["boss.preview.command"]
+
+
+def _declared_app(tmp_path):
+    return _lead_triage(tmp_path, **{
+        "boss.preview.command": "python3 -m lead_triage_core.server\n",
+        "main.py": STRAY_MAIN})
+
+
+def test_a_follow_up_whose_diff_lacks_the_declaration_is_proved_with_the_declared_command(
+        tmp_path):
+    """BLOCKER. f16b5d4 gave the proof only this run's diff, so a follow-up/retry/feedback build
+    (or a final decomposition slice) of a declared app never saw the boss.preview.command an
+    earlier run wrote. It fell back to heuristics and proved `python3 main.py`, which failed,
+    while the preview — reading the lineage — would have run the declared command."""
+    root = _declared_app(tmp_path)
+    follow_up = ["lead_triage_core/store.py"]
+    record = ps.prove_app_serves(root, follow_up, lineage=DECLARED_LINEAGE, timeout=20)
+    assert record["ok"] and record["proven"], record
+    assert record["source"] == "declared"
+    assert record["command"] == "python3 -m lead_triage_core.server"
+
+
+def test_the_proof_and_the_preview_run_the_same_command_for_a_lineage(tmp_path):
+    """One function answers "what runs this lineage's app"; the preview and the proof both ask
+    it with the lineage's files, so they cannot diverge again."""
+    root = _declared_app(tmp_path)
+    plan = ps.how_app_runs(root, ["lead_triage_core/store.py"] + DECLARED_LINEAGE)
+    assert plan.source == "declared"
+    assert ps._detect_command(root, DECLARED_LINEAGE) == plan.command
+    assert "how_app_runs(" in inspect.getsource(ps._detect_command)
+    assert "how_app_runs(" in inspect.getsource(ps.prove_app_serves)
+    body = inspect.getsource(gov.run_governed_code_task)
+    assert "lineage = lineage_impl_files(engine, run)" in body
+    assert "lineage=lineage" in body
+
+
+# A CLI that builds a server only under its `serve` subcommand, dispatched through argparse.
+CLI_DISPATCHED = '''\
+import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def serve(args):
+    ThreadingHTTPServer(("0.0.0.0", args.port), BaseHTTPRequestHandler).serve_forever()
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="leads")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("serve")
+    s.add_argument("--port", type=int, default=8000)
+    s.set_defaults(func=serve)
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+# The same CLI, but main() calls the server function by name behind an if.
+CLI_BRANCHED = '''\
+import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def serve(port):
+    ThreadingHTTPServer(("0.0.0.0", port), BaseHTTPRequestHandler).serve_forever()
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="leads")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("serve")
+    sub.add_parser("export")
+    args = parser.parse_args()
+    if args.cmd == "serve":
+        serve(8000)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def test_a_cli_follow_up_flagged_as_a_web_build_is_not_held_to_serving(tmp_path):
+    """MAJOR. tools/builtin.py and intent_router set web_app_build on EVERY build-on-existing /
+    extend, CLIs included, and f16b5d4 read that flag as "this is a service": a CLI follow-up
+    whose entry prints and exits was launched, did not answer HTTP, and was blocked."""
+    files = {"main.py": "def main():\n    print('3 leads')\n\n\nif __name__ == '__main__':\n"
+                        "    main()\n"}
+    root = _write(tmp_path, files)
+    extend_fctx = {"root_run_id": "crun_root", "web_app_build": True}
+    assert gov.serve_proof_known_service({}, extend_fctx) is False
+    record = ps.prove_app_serves(root, list(files), lineage=["main.py", "tests/test_main.py"],
+                                 known_service=gov.serve_proof_known_service({}, extend_fctx),
+                                 timeout=5)
+    assert record["ok"] is True and record["source"] == "library", record
+
+
+def test_a_library_follow_up_flagged_as_a_web_build_is_not_held_to_serving(tmp_path):
+    """The same flag on a library: nothing to run, and f16b5d4 failed it for 'declaring no
+    way to run it'."""
+    files = {"scoring/__init__.py": "", "scoring/rank.py": "def rank(x):\n    return x\n"}
+    root = _write(tmp_path, files)
+    extend_fctx = {"root_run_id": "crun_root", "web_app_build": True}
+    record = ps.prove_app_serves(root, ["scoring/rank.py"], lineage=list(files),
+                                 known_service=gov.serve_proof_known_service({}, extend_fctx),
+                                 timeout=5)
+    assert record["ok"] is True and record["source"] == "library", record
+    body = inspect.getsource(gov.run_governed_code_task)
+    assert "known_service=serve_proof_known_service(spec, fctx)" in body
+
+
+def test_a_named_full_stack_app_is_still_known_to_be_a_service():
+    assert gov.serve_proof_known_service({"app_root": "inbox"}, {}) is True
+
+
+def test_a_cli_whose_server_hides_behind_a_dispatched_subcommand_is_not_a_service(tmp_path):
+    """MINOR. f16b5d4 counted a server constructed ANYWHERE in the file, ran the CLI bare,
+    argparse exited 2, and the build was blocked."""
+    assert not ps.python_source_serves(CLI_DISPATCHED)
+    files = {"main.py": CLI_DISPATCHED}
+    root = _write(tmp_path, files)
+    record = ps.prove_app_serves(root, list(files), timeout=10)
+    assert record["ok"] is True and record["source"] == "library", record
+
+
+def test_a_cli_that_exits_with_its_usage_line_is_not_a_failed_service(tmp_path):
+    """When the server IS reachable by name (behind an `if args.cmd == ...`), the static rule
+    cannot tell; the run can. A non-declared command that exits printing `usage:` is a CLI."""
+    assert ps.python_source_serves(CLI_BRANCHED)
+    files = {"main.py": CLI_BRANCHED}
+    root = _write(tmp_path, files)
+    record = ps.prove_app_serves(root, list(files), timeout=10)
+    assert record["ok"] is True and record["source"] == "library", record
+    assert record["exit_code"] == 2
+
+
+def test_a_declared_command_that_prints_usage_is_still_a_failure(tmp_path):
+    """The build SAID this command serves; printing usage does not excuse it."""
+    root = _write(tmp_path, {"main.py": CLI_BRANCHED, "boss.preview.command": "python3 main.py\n"})
+    record = ps.prove_app_serves(root, ["main.py", "boss.preview.command"], timeout=10)
+    assert record["ok"] is False and record["source"] == "declared", record
+
+
+@pytest.mark.parametrize("source", [
+    "from http.server import ThreadingHTTPServer\n\n\ndef main():\n"
+    "    ThreadingHTTPServer(('', 0), None).serve_forever()\n\n\n"
+    "if __name__ == '__main__':\n    main()\n",
+    "from flask import Flask\n\n\ndef create_app():\n    return Flask(__name__)\n\n\n"
+    "app = create_app()\n",
+    "from flask import Flask\napp = Flask(__name__)\n",
+])
+def test_a_server_reached_from_what_runs_still_serves(source):
+    assert ps.python_source_serves(source)
+
+
+def test_the_proof_runs_the_app_without_the_workers_credentials(tmp_path, monkeypatch):
+    """MINOR (security). launch_app used {**os.environ}: the proof ran agent-written code with
+    the worker's DATABASE_URL and tokens — the exposure behind the 2026-09-02 table wipe."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    env = ps.app_environment(tmp_path, 4321)
+    assert "DATABASE_URL" not in env and "GITHUB_TOKEN" not in env
+    assert env["PORT"] == "4321" and env["HOST"] == "0.0.0.0" and "PATH" in env
+    root = _lead_triage(tmp_path / "app", **{"boss.preview.command": (
+        'test -z "$DATABASE_URL" && test -z "$GITHUB_TOKEN" && '
+        'python3 -m lead_triage_core.server\n')})
+    record = ps.prove_app_serves(root, BUILT + ["boss.preview.command"], timeout=20)
+    assert record["ok"] and record["proven"], record
+
+
+def test_the_proof_is_not_run_on_the_host_for_a_micro_vm_build():
+    """MINOR. A micro-VM build's deps live in the guest; the proof would run its code on the
+    control-plane host and fail on a missing module that is not the code's fault."""
+    reason = gov.app_serves_check_skip_reason({}, use_microvm=True)
+    assert reason and reason.startswith("inconclusive")
+    body = inspect.getsource(gov.run_governed_code_task)
+    assert "use_microvm=use_microvm)" in body
+
+
+def test_a_failure_with_no_command_never_claims_boss_ran_one():
+    """MINOR. f16b5d4 said "BOSS ran `(no run command found)` — " with nothing after it."""
+    record = {"ok": False, "command": None, "error": None, "source": "none"}
+    sentence = ps.app_serves_failure_sentence(record)
+    assert "BOSS ran" not in sentence and "(no run command found)" not in sentence
+    assert not sentence.rstrip().endswith(("—", "— ", ":"))
+    error, _reason = gov.blocked_gate_messages("qg_1", ["app_serves"], record)
+    assert "BOSS ran" not in error and not error.rstrip().endswith("—")
+
+
+def test_a_failure_names_where_its_command_came_from():
+    declared = ps.app_serves_failure_sentence(
+        {"command": "python3 -m x.server", "source": "declared", "error": "boom"})
+    resolved = ps.app_serves_failure_sentence(
+        {"command": "python3 main.py", "source": "resolved", "error": "boom"})
+    assert "declared" in declared and "`python3 -m x.server`" in declared
+    assert "resolver" in resolved
+
+
+def test_an_app_that_started_but_never_answered_is_told_apart_from_one_that_exited(tmp_path):
+    root = _write(tmp_path, {"boss.preview.command": "sleep 30\n", "app.py": "x = 1\n"})
+    record = ps.prove_app_serves(root, ["boss.preview.command", "app.py"], timeout=2)
+    assert record["ok"] is False and "exit_code" not in record, record
+    assert record["error"].startswith(
+        "the app started and kept running but did not answer HTTP"), record
+
+
+# --- The deploy runs what the build proved (MAJOR, latent) ------------------------------ #
+
+def _git_repo(root, branch="boss/code/crun_x"):
+    import subprocess
+    for args in (["init", "-q", "-b", branch], ["add", "-A"],
+                 ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "app"]):
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+    return branch
+
+
+def _build_dist(tmp_path, monkeypatch, repo, changed):
+    from types import SimpleNamespace
+
+    from boss_engine.services import deploy_service as ds
+    from boss_engine.services import repo_host
+
+    branch = _git_repo(repo)
+    monkeypatch.setattr(repo_host, "clone_url_for",
+                        lambda *_a, **_k: "file://" + str(repo))
+    return ds._build_dist(SimpleNamespace(target_repo_host="github"), "o", "r", branch,
+                          changed=changed)
+
+
+def _serves(directory, shell_command):
+    log = str(directory / ".deploy-check.log")
+    proc, port_hint = ps.launch_app(directory, ["sh", "-c", shell_command], log)
+    try:
+        return ps._discover_working_port(log, port_hint, timeout=20, proc=proc) is not None
+    finally:
+        ps._kill(proc.pid)
+
+
+def test_the_deploy_runs_a_package_module_server_the_way_the_preview_does(tmp_path, monkeypatch):
+    """deploy_service ran a resolved Python entry as `python {entry}`: a package-module server
+    dies there on the relative-import ImportError the preview was fixed for, the health gate
+    sees nothing, and the deploy rolls back."""
+    from boss_engine.services import deploy_service as ds
+
+    repo = _lead_triage(tmp_path / "repo")
+    payload, mode, entry, _sha = _build_dist(tmp_path, monkeypatch, repo, BUILT)
+    assert (mode, entry) == ("py", "python3 -m lead_triage_core.server")
+    assert f"sh -c {shlex.quote(entry)}" in ds._docker_run_cmd("a", 80, "/srv/a", mode, entry)
+    assert _serves(payload / "dist", entry)
+
+
+def test_the_deploy_runs_the_builds_declared_command(tmp_path, monkeypatch):
+    repo = _declared_app(tmp_path / "repo")
+    payload, mode, entry, _sha = _build_dist(tmp_path, monkeypatch, repo, DECLARED_LINEAGE)
+    assert (mode, entry) == ("py", "python3 -m lead_triage_core.server")
+    assert _serves(payload / "dist", entry)
+
+
+def test_the_container_preview_runs_the_builds_declared_command(tmp_path):
+    root = _declared_app(tmp_path)
+    ps._generate_dockerfile(root, DECLARED_LINEAGE)
+    assert 'CMD ["sh", "-lc", "python3 -m lead_triage_core.server"]' in (
+        root / "Dockerfile").read_text()

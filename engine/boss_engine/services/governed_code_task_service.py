@@ -439,7 +439,8 @@ _ADVISORY_HARD_FLOOR = ("code_written", "app_serves")
 _NEVER_SHIP_PAST = frozenset({"app_serves"})
 
 
-def app_serves_check_skip_reason(fctx: dict) -> Optional[str]:
+def app_serves_check_skip_reason(fctx: dict, *, command_runtime: str = "subprocess",
+                                 use_microvm: bool = False) -> Optional[str]:
     """Why the app_serves gate does not apply to this run, or None when it does.
 
     A NON-FINAL DECOMPOSITION SLICE is not the app yet. Slice 1 of a decomposed build may be
@@ -448,28 +449,47 @@ def app_serves_check_skip_reason(fctx: dict) -> Optional[str]:
     PR the gate went straight to block — the chain stopped at slice 1 unless a convergence
     round talked the agent into writing a server its slice was not about. The FINAL slice
     carries the whole lineage and is held to serving in full.
+
+    WHERE THE BUILD RAN IS NOT WHERE THE PROOF WOULD RUN. With BOSS_SANDBOX_COMMAND_RUNTIME=
+    docker the suite and its dependency installs run in the command container; on a micro-VM
+    substrate the whole build runs in the guest. The proof launches on the control-plane
+    host. A Flask build whose Flask exists only in the container or the VM "failed" there with
+    ModuleNotFoundError — a fact about where BOSS ran it — and, worse, running it at all put
+    agent-written code on the host that the docker runtime and the VM exist to keep it off
+    (second review of f16b5d4). f16b5d4 ran it and then marked a failure inconclusive; that
+    still executed the code. The check is now not run there, and the record says why.
     """
     didx, dtot = (fctx or {}).get("decomposition_index"), (fctx or {}).get("decomposition_total")
     if isinstance(didx, int) and isinstance(dtot, int) and dtot > 1 and didx < dtot:
         return f"decomposition slice {didx}/{dtot}: the final slice proves the app serves"
+    if use_microvm:
+        return ("inconclusive: the build ran in a micro-VM, and BOSS does not start "
+                "agent-written code on the control-plane host to check it")
+    if str(command_runtime or "").lower() == "docker":
+        return ("inconclusive: the build's commands run in the docker command runtime, and "
+                "BOSS does not start agent-written code on the host to check it")
     return None
 
 
-def app_serves_inconclusive_on_runtime(record: dict, command_runtime: str) -> dict:
-    """Mark a failed serve proof as a HARNESS fault when it ran somewhere the tests did not.
+def serve_proof_known_service(spec: Optional[dict], fctx: Optional[dict]) -> bool:
+    """Is this run KNOWN to build a service before the serve proof looks at its files?
 
-    With BOSS_SANDBOX_COMMAND_RUNTIME=docker the suite and its dependency installs run in the
-    command container, while the proof launches on the control-plane host's python3/npm. A
-    Flask build whose Flask exists only in the container would "fail" with ModuleNotFoundError
-    — a fact about where BOSS ran it, not about the code — and the coder would be sent to fix it.
+    Only when it builds a named full-stack app (official_app_id: a scaffolded or benchmark app
+    directory). NOT `web_app_build`: tools/builtin.py and intent_router set it on every
+    build-on-existing/extend — CLIs and libraries included — so f16b5d4, which read it as "this
+    serves HTTP", launched a CLI follow-up, saw it exit, and blocked it with a gate nothing may
+    ship past (second review of f16b5d4). Everything else is decided by evidence in
+    prove_app_serves: a lineage declaration, or an entry that starts a server when run.
     """
-    if (str(command_runtime or "").lower() == "docker" and record.get("ok") is False
-            and not record.get("harness")):
-        return {**record, "harness": True,
-                "harness_reason": "the proof ran on the host, the build's tests in the "
-                                  "docker command runtime; its failure is not evidence "
-                                  "about the code"}
-    return record
+    return bool(verification_target.official_app_id(spec or {}, fctx or {}))
+
+
+def _app_serves_sentence(record: Optional[dict]) -> str:
+    """The serve proof's failure in ONE wording for every place it is shown (blocked error,
+    convergence finding, repair prompt) — see preview_service.app_serves_failure_sentence."""
+    from .preview_service import app_serves_failure_sentence
+
+    return app_serves_failure_sentence(record)
 
 
 def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict]
@@ -479,18 +499,17 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
     The error used to name the failing gates only — "failing gates: ['app_serves']" — so an
     operator looking at a blocked build had to dig the app's ImportError out of the evidence
     and the event log. And the rescue reason always said "never_block is disabled", which was
-    false whenever app_serves forced the block with never_block on. When the app did not start,
-    say so, with what BOSS ran and what the app said.
+    false whenever app_serves forced the block with never_block on. When the app does not
+    serve, say so in app_serves_failure_sentence's words: what ran, where that command came
+    from, and whether it exited or never answered.
     """
     error = (f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
              "A human can waive these + open the PR via /override.")
     reason = "quality gate blocked and never_block is disabled"
     if "app_serves" in (failing or []):
-        rec = app_serves_record or {}
-        command = rec.get("command") or "(no run command found)"
-        app_error = str(rec.get("error") or "")[:500]
-        error += f" The app did not start: BOSS ran `{command}` — {app_error}"
-        reason = f"the app did not start (`{command}`), so the build is not done"
+        sentence = _app_serves_sentence(app_serves_record)
+        error += f" The app does not serve HTTP. {sentence[:700]}"
+        reason = "the app does not serve HTTP, so the build is not done"
     return error, reason
 
 
@@ -3701,19 +3720,30 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # failing a declaration, what the preview would start) and requires an HTTP answer.
         # A failure is a WORK gate with the app's own error, fed back to the implementer.
         def _check_app_serves(files: dict) -> dict:
-            from .preview_service import prove_app_serves
+            from .preview_service import lineage_impl_files, prove_app_serves
 
             with _transaction(engine) as c:
                 _phase(c, "serve_check")
-            record = prove_app_serves(
-                root, list(files.keys()), read=files.get,
-                serves_http=bool(fctx.get("web_app_build") or _app_id),
-                overlay=dict(files) if use_microvm else None,
-                timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds", 180)
-                              or 180),
-            )
-            record = app_serves_inconclusive_on_runtime(
-                record, getattr(settings, "sandbox_command_runtime", "subprocess"))
+            # THE LINEAGE, NOT THIS DIFF ALONE. A follow-up of a declared app whose diff does
+            # not contain the boss.preview.command proved `python3 main.py` instead of the
+            # declared command the preview runs (second review of f16b5d4). The proof is given
+            # the same file list the preview uses (lineage_impl_files) plus this diff.
+            try:
+                lineage = lineage_impl_files(engine, run)
+            except Exception as exc:  # noqa: BLE001 — a fact about BOSS, not about the code
+                record = {"ok": False, "harness": True, "command": None, "source": "none",
+                          "error": f"could not read this app's lineage to check it: "
+                                   f"{type(exc).__name__}: {exc}"[:600]}
+            else:
+                # Service or not is EVIDENCE (a declaration, an entry that starts a server)
+                # or a named full-stack app — never `web_app_build`, which every
+                # build-on-existing/extend carries, CLIs and libraries included.
+                record = prove_app_serves(
+                    root, list(files.keys()), lineage=lineage,
+                    known_service=serve_proof_known_service(spec, fctx),
+                    timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds",
+                                          180) or 180),
+                )
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.app_serve_checked", "boss",
                            "code_task_run", run_id,
@@ -3722,7 +3752,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return record
 
         app_serves_record: dict = {"skipped": "the tests did not pass, so there is no app to start"}
-        _serve_skip = app_serves_check_skip_reason(fctx)
+        _serve_skip = app_serves_check_skip_reason(
+            fctx, command_runtime=getattr(settings, "sandbox_command_runtime", "subprocess"),
+            use_microvm=use_microvm)
         if _serve_skip:
             app_serves_record = {"skipped": _serve_skip}
         elif tests_passed:
@@ -4014,10 +4046,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         # The app's OWN error, not "preview timed out": this is what lets the
                         # implementer fix an ImportError instead of guessing at a port.
                         finding_bits.append(
-                            "THE APP DOES NOT START. BOSS ran "
-                            f"`{app_serves_record.get('command') or '(no command found)'}` "
-                            "with PORT set and nothing answered HTTP:\n"
-                            + str(app_serves_record.get("error") or "")[:2500]
+                            "THE APP DOES NOT SERVE HTTP. "
+                            + _app_serves_sentence(app_serves_record)[:2600]
                             + "\nFix the app (or its boss.preview.command) so that command "
                             "serves HTTP on $PORT.")
                     with _transaction(engine) as c:
@@ -4359,9 +4389,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               "mutation to the logic is caught."
                               # The app's own startup error, so the repair fixes THAT rather
                               # than rediscovering it (crun_3e370c11's ImportError).
-                              + (" 'app_serves' failed: BOSS ran "
-                                 f"`{app_serves_record.get('command')}` and nothing served "
-                                 f"HTTP — {str(app_serves_record.get('error') or '')[:1500]}"
+                              + (" 'app_serves' failed: "
+                                 + _app_serves_sentence(app_serves_record)[:1600]
                                  if "app_serves" in failing else "")))
                 with _transaction(engine) as c:
                     # Fenced: a stale execution must not be able to declare a repair round.

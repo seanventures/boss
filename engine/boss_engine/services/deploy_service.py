@@ -365,6 +365,10 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
                     entry: str = "") -> str:
     """Start the app container, tolerating the port not being free *yet*.
 
+    `entry` is the shell command that runs the app from /app (mode "py", and mode "node" when
+    the build declared one), as preview_service.how_app_runs answered it — never a bare file to
+    hand to `python`. See _build_dist for why.
+
     `docker rm -f` returns before the daemon has finished tearing the endpoint down, so a
     `run` issued immediately after can fail with "driver failed programming external
     connectivity" even though nothing actually holds the port — a retry a second later
@@ -392,7 +396,7 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
                f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e NODE_ENV=production "
                f"-e NPM_CONFIG_UPDATE_NOTIFIER=false "
                f"node:22-bookworm-slim sh -lc "
-               f"{shlex.quote('npm ci --omit=dev --no-audit --no-fund 2>/dev/null || npm install --omit=dev --no-audit --no-fund; npm start')}")
+               f"{shlex.quote('npm ci --omit=dev --no-audit --no-fund 2>/dev/null || npm install --omit=dev --no-audit --no-fund; ' + (entry or 'npm start'))}")
     elif mode == "py":
         # Mounted read-WRITE: the app keeps a SQLite file beside its source, and a read-only
         # mount turns every write into a 500 that a "/" health check would never see.
@@ -407,7 +411,7 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
                f"{_OWNERSHIP_LABELS.format(app=app_q)} "
                f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
                f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e PYTHONDONTWRITEBYTECODE=1 "
-               f"python:3.12-slim python {shlex.quote(entry)}")
+               f"python:3.12-slim sh -c {shlex.quote(entry)}")
     else:
         run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
                f"{_OWNERSHIP_LABELS.format(app=app_q)} "
@@ -503,7 +507,10 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     transfer, and `sha` is the commit ACTUALLY checked out:
 
       mode "static" — dist/ is a servable file tree, run under nginx.
-      mode "py"     — dist/ is the app source, run under python; `entry` is the server script.
+      mode "py"     — dist/ is the app source, run under python; `entry` is the shell command
+                      that starts it from /app.
+      mode "node"   — dist/ is a Node app; `entry` is its declared run command, or "" for
+                      `npm start`.
 
     One payload name for both modes keeps staging, rollback and cleanup single-implementation;
     only the container command varies.
@@ -597,7 +604,10 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
                        timeout=900, check=True)
         if not (work / "dist").is_dir():
             raise RuntimeError("build script ran but did not produce ./dist")
-        if not has_start:
+        root_declared = _declared_run(work, changed)
+        if root_declared is not None and (root_declared.declared_in or ".") != ".":
+            root_declared = None
+        if not has_start and root_declared is None:
             return (work, "static", "", sha)
         # Built, and it has a server to run. Ship the whole app directory — its package.json is
         # the run contract — laid out under the same `dist` name every mode uses, so staging,
@@ -607,7 +617,7 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
                         ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__",
                                                       ".npm", "data", ".e2e-data"))
         shutil.rmtree(work, ignore_errors=True)
-        return (payload, "node", "", sha)
+        return (payload, "node", root_declared.declared_command if root_declared else "", sha)
 
     # No build step: the servable tree IS the source, and WHICH tree is the question the preview
     # resolver already answers. The previous code said it used that answer and then implemented
@@ -615,11 +625,19 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     # In a repo holding several apps that deploys someone else's: a stock-app target went live
     # serving SUDOKU, and the health check passed, because a 200 from the wrong app is still a
     # 200. Health cannot catch identity; only picking correctly can.
-    from .preview_service import AmbiguousAppError, resolve_app_entry
+    #
+    # AND HOW TO RUN IT is the question how_app_runs answers for the preview and the build's
+    # serve proof. This ran a resolved Python entry as `python {entry}` and ignored the build's
+    # boss.preview.command, so a package-module server (lead_triage_core/server.py, with
+    # relative imports) died here on the same "attempted relative import with no known parent
+    # package" the preview had been fixed for, the health gate saw nothing and the deploy rolled
+    # back (second review of f16b5d4). One function, so a command proven at build time is the
+    # command deployed.
+    from .preview_service import AmbiguousAppError, how_app_runs
 
     static_dir = None
     try:
-        kind, value = resolve_app_entry(work, changed)
+        plan = how_app_runs(work, changed)
     except AmbiguousAppError as exc:
         # Fail closed, exactly as the preview does. Deploying the wrong app to a real host is
         # worse than deploying nothing, and worse here than in preview: it is publicly served.
@@ -653,6 +671,19 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
             f"cannot tell which app to deploy from {where} — candidates: {exc}. "
             "Have the task build a single app, or set boss.preview.command.") from exc
 
+    if plan is not None and plan.source == "declared":
+        rel = plan.declared_in or "."
+        app_root = work if rel == "." else work / rel
+        if (app_root / "package.json").is_file():
+            # A Node app with a declared command: shipped like any node app, run as declared.
+            return _node_payload(work, app_root, sha, plan.declared_command or "")
+        payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
+        shutil.copytree(work, payload / "dist",
+                        ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__"))
+        shutil.rmtree(work, ignore_errors=True)
+        return (payload, "py", plan.shell(), sha)
+
+    kind, value = plan.entry if plan is not None and plan.entry else ("", "")
     if kind == "py":
         # A server, not a file tree. The stock app serves its own UI *and* its /api/* routes
         # from one process, so shipping only web-stock/ to nginx would render a UI in which
@@ -668,23 +699,12 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
         # fell back to the branch NAME, so a py-mode deployment recorded
         # "boss/code/crun_..." as its build — the same dishonesty in this field that the
         # commit-ref fix removed, reintroduced by copying the payload out of the clone.
-        return (payload, "py", value, sha)
+        # The command how_app_runs built for it: `python3 -m pkg.server` from above its package
+        # for a package module, `python3 serve.py` for a script — never `python {file}`.
+        return (payload, "py", plan.shell(), sha)
 
     if kind == "node":
-        # Ship the app's own directory (its package.json is the run contract), built if it has
-        # a build step, so `npm start` finds `dist/` where the server expects it.
-        app_root = work if value in (".", "") else work / value
-        if (app_root / "package.json").is_file():
-            subprocess.run(["sh", "-lc",
-                            "npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund"],
-                           cwd=app_root, check=False, timeout=900)
-            subprocess.run(["sh", "-lc", "npm run build --if-present"],
-                           cwd=app_root, check=False, timeout=900)
-        payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
-        shutil.copytree(app_root, payload / "dist",
-                        ignore=shutil.ignore_patterns(".git", "__pycache__", "data", ".e2e-data"))
-        shutil.rmtree(work, ignore_errors=True)
-        return (payload, "node", "", sha)
+        return _node_payload(work, work if value in (".", "") else work / value, sha, "")
     if kind == "static":
         static_dir = work / value
     elif (work / "dist").is_dir():
@@ -698,6 +718,36 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     dist = work / "dist"
     shutil.copytree(static_dir, dist)
     return (work, "static", "", sha)
+
+
+def _declared_run(work: Path, changed: Optional[list[str]]):
+    """The build's declared run command (how_app_runs' first answer), or None. Never raises:
+    an ambiguous repository is the resolver's question, asked again where it is handled."""
+    from .preview_service import AmbiguousAppError, how_app_runs
+
+    try:
+        plan = how_app_runs(work, changed)
+    except AmbiguousAppError:
+        return None
+    return plan if plan is not None and plan.source == "declared" else None
+
+
+def _node_payload(work: Path, app_root: Path, sha: Optional[str], command: str
+                  ) -> tuple[Path, str, str, Optional[str]]:
+    """Ship a Node app's own directory (its package.json is the run contract), built if it has
+    a build step, so `npm start` — or the build's declared command — finds `dist/` where the
+    server expects it."""
+    if (app_root / "package.json").is_file():
+        subprocess.run(["sh", "-lc",
+                        "npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund"],
+                       cwd=app_root, check=False, timeout=900)
+        subprocess.run(["sh", "-lc", "npm run build --if-present"],
+                       cwd=app_root, check=False, timeout=900)
+    payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
+    shutil.copytree(app_root, payload / "dist",
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "data", ".e2e-data"))
+    shutil.rmtree(work, ignore_errors=True)
+    return (payload, "node", command, sha)
 
 
 def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
