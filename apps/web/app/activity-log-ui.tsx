@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState, useTransition } from "react";
 
 import { formatDateTime } from "../lib/datetime";
 import { fetchActivityFacets, fetchActivityLog } from "../lib/activity-log-client";
-import type { ActivityFacets } from "../lib/activity-log";
+import { activityPagesByCursor, facetChipLabel, type ActivityFacets } from "../lib/activity-log";
 
 /**
  * Local types matching GET /v1/activity.
@@ -286,6 +286,7 @@ export function ActivityLog({
 
   const serverSort = API_SORTS.has(sort) ? sort : undefined;
   const serverOrder = API_SORTS.has(sort) ? order : undefined;
+  const pagesByCursor = activityPagesByCursor(serverSort, serverOrder);
 
   const allSourcesOn = enabledSources.size === ALL_SOURCES.length;
   const noSourcesOn = enabledSources.size === 0;
@@ -399,12 +400,8 @@ export function ActivityLog({
    *  as a fact about the log, so it comes from the log (GET /v1/activity/facets). Until the
    *  counts arrive, or when they cannot be read, a chip shows "…" or "?" — never a zero that
    *  was not counted. */
-  const chipCount = (counts: Record<string, number> | undefined, key: string): string => {
-    if (facets === null) return "…";
-    const n = counts?.[key];
-    if (typeof n !== "number") return "?";
-    return `${n}${counts === facets.levels && !facets.levelsExact ? "+" : ""}`;
-  };
+  const chipCount = (kind: "levels" | "sources", key: string): string =>
+    facetChipLabel(facets, kind, key);
   /** Verbose rows hidden on THIS page — a fact about the page, and labelled as one. */
   const pageVerbose = useMemo(
     () => (feed.items ?? []).filter((item) => item.level === "verbose").length,
@@ -574,7 +571,7 @@ export function ActivityLog({
             data-testid={`activity-level-${value}`}
           >
             {value.toUpperCase()}
-            <span className="alog-level-n">{chipCount(facets?.levels, value)}</span>
+            <span className="alog-level-n">{chipCount("levels", value)}</span>
           </button>
         ))}
         {/* Says plainly that rows are being hidden. A viewer that quietly drops most of what it
@@ -639,7 +636,7 @@ export function ActivityLog({
               data-testid={`activity-source-${choice.value}`}
             >
               {choice.label}
-              <span className="alog-source-n">{chipCount(facets?.sources, choice.value)}</span>
+              <span className="alog-source-n">{chipCount("sources", choice.value)}</span>
             </button>
           );
         })}
@@ -933,7 +930,23 @@ export function ActivityLog({
               {loadingOlder ? "Loading older rows…" : "Load older"}
             </button>
           ) : items.length > 0 && !pending ? (
-            <p className="detail" data-testid="activity-end-of-log">That is the oldest row for these filters.</p>
+            // THE END OF THE LOG IS ONLY KNOWN NEWEST-FIRST. The API pages by cursor only when
+            // sorted by time, newest first, and sends no cursor for any other order. This line
+            // used to say "That is the oldest row" whenever the cursor was absent, so sorting
+            // 33k rows by kind showed 200 and claimed there were no more (review of
+            // milestone/console-b, 2026-10-02).
+            pagesByCursor || (typeof feed.total === "number" && items.length >= feed.total) ? (
+              <p className="detail" data-testid="activity-end-of-log">That is the oldest row for these filters.</p>
+            ) : (
+              <p className="detail" data-testid="activity-paging-newest-first">
+                These are the first {items.length} rows in this order. Older rows load only when
+                the log is sorted by time, newest first.{" "}
+                <button type="button" className="cap-btn" onClick={() => { setSort("created_at"); setOrder("desc"); }}
+                        data-testid="activity-sort-newest-first">
+                  Sort newest first
+                </button>
+              </p>
+            )
           ) : null}
           {olderError ? <p className="error-banner" role="alert">{olderError}</p> : null}
         </div>
