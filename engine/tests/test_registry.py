@@ -169,6 +169,9 @@ _EXPECTED_TOOLS: set[str] = {
     # Authoring the unit of doing, so an operator can get a skill by describing one in the
     # conversation rather than filling in a form about behaviour kinds and digest pinning.
     "draft_skill",
+    # Giving an agent a skill or an MCP server by asking — the act the Agents page exists for.
+    "assign_skill_to_agent",
+    "assign_mcp_to_agent",
     "list_capabilities",
     "list_skills",
     "start_workflow",
@@ -192,11 +195,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 107, (
+    assert len(reg.names()) == 109, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 61
-    assert len(write) == 46
+    assert len(write) == 48
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -411,6 +414,10 @@ _SAFE_WRITES = [
     # workflow places that step.
     "draft_skill",
     "draft_workflow",
+    # A GRANT IS A ROW. Giving an agent a skill or an MCP server adds one; taking it back (the
+    # same tool, remove=true) deletes it and records the removal. Nothing starts or spends.
+    "assign_skill_to_agent",
+    "assign_mcp_to_agent",
     # Read-only by default and one at a time per project. The FIXING variant is not a separate
     # tool but a separate permission: it returns requires_confirmation, so only an operator's
     # click gets a writable shell on a host.

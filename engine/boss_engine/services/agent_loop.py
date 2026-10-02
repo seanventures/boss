@@ -212,6 +212,24 @@ def _mcp_skill_spec(
     }
 
 
+def _granted_mcp_servers(
+    connection: Connection, project_id: str, step: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The MCP servers a bounded agent run may use: what its agent holds, as pinned at start."""
+    from .agents import held_mcp_servers
+
+    role = str(step.get("role_key") or "").strip()
+    if not role:
+        return []
+    servers = held_mcp_servers(connection, project_id, role)
+    pinned = step.get("mcp_server_ids")
+    if isinstance(pinned, list):
+        # Pinned at the moment the step started. A grant revoked mid-run stops being offered
+        # on resume; one added mid-run is not picked up by a run already under way.
+        servers = [s for s in servers if str(s["id"]) in {str(i) for i in pinned}]
+    return servers
+
+
 def _invoke_mcp_skill(
     connection: Connection,
     settings: Settings,
@@ -1832,8 +1850,11 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # a video editor could read the control plane's database, and "the skills you gave it" would
     # stop being a true description of its reach.
     #
-    # MCP servers go the same way: a connector is authority over somebody's account, and it is
-    # granted by giving the agent a skill that runs through it, not by being registered.
+    # MCP SERVERS GO THE SAME WAY: a connector is authority over somebody's account, so being
+    # REGISTERED in the project grants nothing. A bounded run is offered exactly the servers its
+    # agent HOLDS (role_mcp_servers), pinned at step start, and only the granted tool names when
+    # the grant lists any. Before that table existed a bounded run got no MCP tool at all, so an
+    # agent could not be given "post to our Mattermost" short of authoring a skill per tool.
     bounded = isinstance(finalize_ctx.get("agent_step"), dict)
     schemas = [] if bounded else _native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
     occupied = {
@@ -1841,7 +1862,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         for schema in schemas
     }
     mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
-    for server in ([] if bounded
+    for server in (_granted_mcp_servers(connection, project_id, finalize_ctx["agent_step"])
+                   if bounded
                    else list_mcp_servers(connection, project_id, enabled_only=True)):
         try:
             server_tools = mcp.list_tools(server["url"])
@@ -1856,8 +1878,11 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 {"server": server["name"], "error": str(exc)},
             )
             continue
+        allow = set(server.get("granted_tools") or [])
         for t in server_tools:
             tool_name = str(t.get("name") or "tool")
+            if allow and tool_name not in allow:
+                continue
             ns = _unique_tool_name(
                 "mcp_" + _slug(server["name"]) + "_" + _slug(tool_name),
                 occupied,

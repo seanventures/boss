@@ -87,6 +87,10 @@ def clean_tables(engine):
         # Missing tables in partial Community schemas are skipped.
         for tbl in [
             "api_idempotency_keys",
+            # The one agent model's grant and the seed's memory of operator removals: a removal
+            # recorded by one test must not stop the next test's seed from granting.
+            "role_mcp_servers",
+            "seed_exclusions",
             "metatron_watch_ticks",
             "metatron_memories",
             "metatron_goals",

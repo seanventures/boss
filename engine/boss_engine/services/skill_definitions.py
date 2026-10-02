@@ -7,9 +7,9 @@ Behaviour lived in a Python executor registered inside BOSS, so every capability
 wanted was a pull request against the product. That is the wrong boundary for the thing most
 worth customising: the operator knows their house rules, their tooling and their accounts.
 
-A skill authored here is attachable at both ends that already existed —
-`agent_versions.requested_skills` for an agent, `workflow_custom_steps.skill_id` for a step —
-so nothing downstream had to be invented to make one reusable.
+A skill authored here is attachable at both ends: `role_skills` for an agent (the grant the
+runtime checks — see services/agents.py for the one agent model) and
+`workflow_custom_steps.skill_id` for a step.
 
 THE THREE BEHAVIOURS, AND WHY THERE ARE EXACTLY THREE
 -----------------------------------------------------
@@ -459,6 +459,12 @@ def assign_skill_to_role(
         {"id": make_id("rsk"), "p": project_id, "r": role, "k": skill,
          "src": source, "by": actor},
     ).mappings().first()
+    # GIVEN BACK BY HAND, so a seed exclusion from an earlier removal no longer applies: the
+    # newer decision wins. (sync_role_skills never reaches here for an excluded grant.)
+    from . import seed_exclusions
+
+    seed_exclusions.lift(connection, project_id, "role_skill",
+                         seed_exclusions.role_skill_subject(role, skill))
     emit_event(connection, project_id, "skill.assigned_to_agent", actor, "role_skill",
                str(row["id"]), {"role_key": role, "skill_id": skill, "source": source})
     return {"role_key": role, "skill_id": skill, "source": source, "assigned": True}
@@ -487,6 +493,13 @@ def sync_role_skills(
     A skill a role names but the project does not have is REPORTED, not silently skipped. It is
     usually the real problem: the bundle it lives in was never enabled here.
     """
+    # WHAT AN OPERATOR TOOK OFF AN AGENT STAYS OFF. This sync runs on every install and
+    # upgrade; it re-granted every unassigned skill its role spec names, so a removal lasted
+    # until the next deploy (boss-1: 48 assignment events for 16 grants).
+    from . import seed_exclusions
+
+    removed = seed_exclusions.excluded(connection, project_id, "role_skill")
+    kept_off: list[dict[str, str]] = []
     roles = connection.execute(
         text("""SELECT DISTINCT ON (role_key) role_key, spec FROM roles
                 WHERE project_id = :p ORDER BY role_key, created_at DESC, id DESC"""),
@@ -504,6 +517,9 @@ def sync_role_skills(
             # expanding it here would hand an agent whatever happens to match it next week.
             if not skill_id or "*" in skill_id:
                 continue
+            if seed_exclusions.role_skill_subject(row["role_key"], skill_id) in removed:
+                kept_off.append({"role_key": row["role_key"], "skill_id": skill_id})
+                continue
             try:
                 assign_skill_to_role(
                     connection, project_id=project_id, actor=actor,
@@ -513,7 +529,8 @@ def sync_role_skills(
                 missing.append({"role_key": row["role_key"], "skill_id": skill_id,
                                 "reason": str(error)})
     return {"assigned": assigned, "assigned_count": len(assigned),
-            "unavailable": missing, "unavailable_count": len(missing)}
+            "unavailable": missing, "unavailable_count": len(missing),
+            "kept_off_by_operator": kept_off}
 
 
 def unassign_skill_from_role(
@@ -533,6 +550,12 @@ def unassign_skill_from_role(
     ).first()
     if not removed:
         raise SkillDefinitionError(f"{role} does not hold {skill_id!r}.")
+    # A REMOVAL THE NEXT SEED MUST NOT UNDO. See services/seed_exclusions.py.
+    from . import seed_exclusions
+
+    seed_exclusions.exclude(connection, project_id, "role_skill",
+                            seed_exclusions.role_skill_subject(role, skill_id), actor=actor,
+                            reason="taken off the agent")
     emit_event(connection, project_id, "skill.unassigned_from_agent", actor, "role_skill",
                str(removed[0]), {"role_key": role, "skill_id": skill_id})
     return {"role_key": role, "skill_id": skill_id, "assigned": False}

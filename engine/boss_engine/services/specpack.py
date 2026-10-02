@@ -369,6 +369,20 @@ class SpecPackService:
     ) -> dict[str, Any]:
         display_name = role_spec.get("display_name", role_key.replace("_", " ").title())
         autonomy_level = int(((role_spec.get("autonomy") or {}).get("level")) or 0)
+        # THE SEED IS ADDITIVE ONLY. An agent an operator deleted is not reinstalled, and one an
+        # operator edited keeps its edits: this ran on every install and upgrade and rewrote any
+        # bundled role whose spec differed from the pack's YAML — which is every edited one.
+        # "present" because, from the pack's side, nothing needed doing.
+        from . import seed_exclusions
+
+        if seed_exclusions.is_excluded(connection, project_id, "role", role_key):
+            return {"role_key": role_key, "display_name": display_name,
+                    "autonomy_level": autonomy_level, "status": "present",
+                    "kept_as_operator_left_it": "deleted",
+                    "source_module_id": source_module_id,
+                    "source_module_version": source_module_version}
+        operator_edited = seed_exclusions.is_excluded(
+            connection, project_id, "role_spec", role_key)
         existing_role = connection.execute(
             text(
                 """
@@ -420,6 +434,8 @@ class SpecPackService:
                 },
             )
             status = "installed"
+        elif operator_edited:
+            pass
         else:
             spec_changed = (
                 existing_role["display_name"] != display_name
@@ -684,8 +700,9 @@ class SpecPackService:
 
     def register_role(
         self, connection: Connection, project_id: str, role_key: str, *,
-        display_name: Optional[str] = None, autonomy_level: int = 0,
+        display_name: Optional[str] = None, autonomy_level: Optional[int] = None,
         reports_to: Optional[str] = None, spec: Optional[dict] = None,
+        reports_to_given: bool = True,
     ) -> dict[str, Any]:
         """Put a role on the books, or update the one already there.
 
@@ -700,6 +717,11 @@ class SpecPackService:
         Idempotent on (project_id, role_key): registering twice updates rather than duplicating,
         because the caller is usually a console button pressed by someone who cannot see whether
         it worked the first time.
+
+        AN UPDATE CHANGES ONLY WHAT IT WAS GIVEN. `autonomy_level=None` keeps the current level
+        and `reports_to_given=False` keeps the current manager. Both used to be written
+        unconditionally, so re-registering a role to fix its display name demoted it to
+        autonomy 0 and detached it from the org chart.
         """
         key = (role_key or "").strip()
         if not key:
@@ -721,14 +743,16 @@ class SpecPackService:
                     """
                     UPDATE roles
                        SET display_name    = COALESCE(:name, display_name),
-                           autonomy_level  = :autonomy,
-                           reports_to      = :reports_to,
+                           autonomy_level  = COALESCE(:autonomy, autonomy_level),
+                           reports_to      = CASE WHEN :given THEN :reports_to
+                                                  ELSE reports_to END,
                            spec            = COALESCE(CAST(:spec AS JSONB), spec)
                      WHERE project_id = :p AND role_key = :k
                     """
                 ),
                 {"p": project_id, "k": key, "name": display_name,
-                 "autonomy": int(autonomy_level), "reports_to": reports_to,
+                 "autonomy": None if autonomy_level is None else int(autonomy_level),
+                 "given": bool(reports_to_given), "reports_to": reports_to,
                  "spec": json.dumps(spec) if spec is not None else None},
             )
         else:
@@ -743,7 +767,7 @@ class SpecPackService:
                 ),
                 {"id": f"role_{uuid4().hex[:20]}", "p": project_id, "k": key,
                  "name": display_name or key.replace("_", " ").title(),
-                 "autonomy": int(autonomy_level), "reports_to": reports_to,
+                 "autonomy": int(autonomy_level or 0), "reports_to": reports_to,
                  "spec": json.dumps(spec or {})},
             )
         return self.get_role_for_project(connection, project_id, key)

@@ -415,6 +415,11 @@ class CapabilityBundleService:
             for name, value in overrides.items()
         ):
             raise CapabilityBundleError("MCP tool risk overrides must be integers 0-3")
+        # AN IMPORT IS AN OPERATOR'S DECISION, so a deletion recorded for this name earlier no
+        # longer applies — otherwise ensure_mcp_server would refuse the import as a resurrection.
+        from .seed_exclusions import lift
+
+        lift(connection, project_id, "mcp_server", str(payload["name"]))
         server = ensure_mcp_server(
             connection,
             project_id,
