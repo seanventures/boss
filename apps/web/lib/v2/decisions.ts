@@ -22,6 +22,12 @@ export type V2Decision = {
   default_action: string | null;
   if_ignored: string;
   created_at: string | null;
+  /** The engine's contract, the same the Approvals inbox draws from (decision_actions). A
+   *  refusal is a notice, not a question; allowed_actions are the answers that work. Absent
+   *  from an older API. */
+  kind?: string;
+  allowed_actions?: Array<{ action: string; label: string }>;
+  guidance?: { what_happened?: string; what_to_do?: string } | null;
 };
 
 export type DecisionQueue = {

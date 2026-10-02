@@ -5,7 +5,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createDecisionDigestAction } from "./actions";
 import { identityKey } from "./app-identity";
 import { ClientRelativeTime } from "./client-relative-time";
-import { DecisionResolveForm } from "./client-forms";
+import { ActionForm, DecisionResolveForm } from "./client-forms";
+import { AreaLink } from "./area-link";
+import { isAreaId } from "../lib/area-ids";
+import { displayTitle } from "../lib/directive-subject";
 import { SubmitButton } from "./submit-button";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import {
@@ -13,6 +16,9 @@ import {
   DECISION_INBOX_EMPTY_HOWTO,
   DECISION_INBOX_EMPTY_TITLE,
   filterDecisionInbox,
+  decisionAttention,
+  isAnswerableDecision,
+  offeredActions,
   parseDecisionInboxFilter,
   type DecisionFeed,
   type DecisionFeedItem,
@@ -268,6 +274,9 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     case "execute_agent_tool": return "Approving runs the deferred agent tool now.";
     case "resume_agent_run": return "Approving resumes the paused agent run.";
     case "role.autonomy_change": return "Approving applies the role autonomy change.";
+    // A workflow's own decision step: the runner reads the answer like any gate's. The default
+    // below said "no automated follow-on" above a button that releases the step.
+    case "resume_workflow": return "Approving releases the step and the workflow continues from it.";
     case "github.community.dispatch_plan": return "Approving dispatches the community plan into tasks.";
     case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
     case "self_improvement.begin_canary":
@@ -401,6 +410,10 @@ export function DecisionInbox({
     () => filterDecisionInbox(feed.items, "resolved").length,
     [feed.items],
   );
+  const expiredCount = useMemo(
+    () => filterDecisionInbox(feed.items, "expired").length,
+    [feed.items],
+  );
 
   const applyFilter = (next: DecisionInboxFilter) => {
     setFilter(next);
@@ -425,9 +438,10 @@ export function DecisionInbox({
           </h2>
         </div>
         <p className="status-meta">
-          Default view is the actionable queue (pending and delegated). Resolved
-          history is one click away. Cards expire to a safe default when their
-          deadline passes.
+          Needs action is what is waiting on you now, the same count the Command
+          Center shows. A card that passes its deadline expires to its default;
+          one whose default is to hold applied nothing and is kept under Expired,
+          where it can still be answered.
         </p>
       </div>
 
@@ -447,6 +461,17 @@ export function DecisionInbox({
         >
           Needs action
           <span className="dq-filter-count">{actionableCount}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "expired"}
+          className={`dq-filter-btn${filter === "expired" ? " active" : ""}`}
+          data-testid="decision-filter-expired"
+          onClick={() => applyFilter("expired")}
+        >
+          Expired, still answerable
+          <span className="dq-filter-count">{expiredCount}</span>
         </button>
         <button
           type="button"
@@ -499,6 +524,7 @@ export function DecisionInbox({
               roles={roles}
               projectId={projectId}
               actorId={actorId}
+              orgId={orgId}
             />
           ))}
         </div>
@@ -512,7 +538,7 @@ export function DecisionInbox({
               Creates a durable digest artifact. Optional channel creates an
               outbox draft only; sending still requires a budgeted queue action.
             </p>
-            <form action={createDecisionDigestAction} className="decision-actions">
+            <ActionForm action={createDecisionDigestAction} className="decision-actions">
               <input type="hidden" name="project_id" value={projectId} />
               <input type="hidden" name="actor" value={actorId} />
               <label className="field">
@@ -537,7 +563,7 @@ export function DecisionInbox({
               <SubmitButton className="button secondary" type="submit">
                 Create digest
               </SubmitButton>
-            </form>
+            </ActionForm>
           </div>
         </details>
       ) : null}
@@ -552,6 +578,21 @@ export function DecisionInboxEmpty({
   filter: DecisionInboxFilter;
   orgId?: string;
 }) {
+  if (filter === "expired") {
+    return (
+      <article
+        className="decision-card empty"
+        data-empty-state="no-expired"
+        data-testid="decision-inbox-empty"
+      >
+        <h3>No expired decisions to answer</h3>
+        <p className="detail">
+          A decision whose deadline passes with a default of hold applies nothing and
+          waits here, so you can still answer it if it still matters.
+        </p>
+      </article>
+    );
+  }
   if (filter === "resolved") {
     return (
       <article
@@ -590,12 +631,10 @@ export function DecisionInboxEmpty({
             type="button"
             className="linkish"
             onClick={() => {
-              writeFilterToLocation("all", orgId);
-              window.dispatchEvent(
-                new CustomEvent("boss:navigate", {
-                  detail: { area: "decisions", params: { decision_filter: "all" } },
-                }),
-              );
+              // RESOLVED, as the button says — it opened "all". And a popstate, which the inbox
+              // reads, rather than a boss:navigate carrying an object the shell ignores.
+              writeFilterToLocation("resolved", orgId);
+              window.dispatchEvent(new PopStateEvent("popstate"));
             }}
           >
             View resolved history
@@ -612,6 +651,7 @@ function DecisionInboxRow({
   roles,
   projectId,
   actorId,
+  orgId,
   highlighted = false,
 }: {
   /** Sent here by a workflow gate that named this decision. */
@@ -621,13 +661,21 @@ function DecisionInboxRow({
   roles: RoleFeedItem[];
   projectId: string;
   actorId: string;
+  orgId?: string;
 }) {
+  // A notice, not a question: BOSS refused to spend and the step has already failed. Its fix
+  // is elsewhere (Govern, Repo and model), and the engine offers only Dismiss.
+  const refusal = decision.kind === "refusal";
+  const guidance = decision.guidance ?? null;
   const estimatedCost =
     typeof decision.costSummary.estimated_usd_micros === "number"
       ? decision.costSummary.estimated_usd_micros
       : undefined;
-  const isPending =
-    decision.status === "pending" || decision.status === "delegated";
+  // Answerable, not only pending: see isAnswerableDecision. A PR parked in a dead-end
+  // "Request changes" is answerable again, and so is an expired hold decision; the card
+  // draws their buttons.
+  const isPending = isAnswerableDecision(decision);
+  const expired = decisionAttention(decision) === "expired";
   const isApproved = decision.status === "approved";
   // Who actually decided this. A gate set to auto-approve resolves these without a person,
   // but the card said "approved" with no author, so the queue read as though someone had sat
@@ -678,13 +726,34 @@ function DecisionInboxRow({
         <div className="dq-orb" aria-hidden>{roleInitials(who)}</div>
         <div className="dq-main">
           <div className="dq-propose">
-            <span className="dq-who"><b>{who}</b> proposes</span>
-            <span className={`dq-impact ${impact.tone}`}>{impact.label}</span>
+            {refusal ? (
+              <span className="dq-who"><b>BOSS</b> refused to spend</span>
+            ) : (
+              <span className="dq-who"><b>{who}</b> proposes</span>
+            )}
+            <span className={`dq-impact ${impact.tone}`}>{refusal ? "notice" : impact.label}</span>
           </div>
-          <h3 className="dq-title">{decision.question}</h3>
-          <p className="dq-rationale">
-            {why || formatRecommendation(decision)}
-          </p>
+          {/* A refusal's question is internal plumbing ("Model capacity refused typed decision
+              setup:typesafe-key/key-proof-fa84…"); the guidance says it in words. */}
+          <h3 className="dq-title">
+            {refusal && guidance ? guidance.what_happened : decision.question}
+          </h3>
+          {/* An expired card says so before its buttons: "Approve and merge" on a pull request
+              from weeks ago is a different act from the same button on one raised today. */}
+          {expired ? (
+            <p className="dq-rationale" data-testid="decision-expired-note">
+              Expired{" "}
+              <ClientRelativeTime iso={decision.deadlineAt ?? decision.updatedAt} empty=""
+                as="span" />{" "}
+              without an answer, so nothing was applied. Answer it only if it still matters;
+              the work it was about may have moved on.
+            </p>
+          ) : null}
+          {refusal ? null : (
+            <p className="dq-rationale">
+              {why || formatRecommendation(decision)}
+            </p>
+          )}
           {subject ? (
             <details className="decision-plan-details">
               <summary>
@@ -721,8 +790,9 @@ function DecisionInboxRow({
             <span className="dq-ev-label">evidence</span>
             {linkedTask ? (
               <span className="dq-ev">
-                T-{decision.taskId?.slice(-4)} · {linkedTask.title.slice(0, 44)}
-                {linkedTask.title.length > 44 ? "…" : ""}
+                {/* The ask, not a panel's prompt scaffolding (lib/directive-subject.ts). */}
+                T-{decision.taskId?.slice(-4)} · {displayTitle(linkedTask.title, "task").slice(0, 44)}
+                {displayTitle(linkedTask.title, "task").length > 44 ? "…" : ""}
               </span>
             ) : null}
             <span className="dq-ev">risk tier {decision.riskTier}</span>
@@ -738,8 +808,33 @@ function DecisionInboxRow({
               <span className="dq-ev">{formatMicros(estimatedCost)}</span>
             ) : null}
             <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
+            {refusal ? (
+              <span className="dq-ev" title={decision.question}>
+                {decision.question.slice(0, 60)}{decision.question.length > 60 ? "…" : ""}
+              </span>
+            ) : null}
+            {/* On the PENDING card, where it matters: thirty re-raises of one cause is the
+                difference between a blip and an outage. It used to show only once resolved. */}
+            {isPending && occurrences > 1 ? (
+              <span className="cap-badge tone-amber" data-testid="decision-occurrences"
+                    title="The same cause re-raised this while it stayed open">
+                seen {occurrences}×
+              </span>
+            ) : null}
           </div>
-          {isPending ? (
+          {isPending && refusal && guidance ? (
+            <div className="dq-guidance" data-testid="decision-guidance">
+              <p><strong>What to do:</strong> {guidance.what_to_do}</p>
+              {/* The engine names the area as a string; only an area the console has is a link
+                  (console-b: a link to an area that is gone did nothing when clicked). */}
+              {isAreaId(guidance.area) ? (
+                <AreaLink className="button secondary" area={guidance.area} orgId={orgId}>
+                  {guidance.link_label}
+                </AreaLink>
+              ) : null}
+            </div>
+          ) : null}
+          {isPending && !refusal ? (
             <>
               <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
               <DeployDestination recommendation={decision.recommendation}
@@ -750,67 +845,7 @@ function DecisionInboxRow({
       </div>
       <div className="dq-foot">
         {isPending ? (
-          <DecisionResolveForm className="dq-actions">
-            <input type="hidden" name="decision_id" value={decision.id} />
-            <input type="hidden" name="project_id" value={projectId} />
-            <input type="hidden" name="actor" value={actorId} />
-            <SubmitButton
-              className="dq-btn approve"
-              name="action"
-              value="approve"
-              data-testid="decision-approve"
-            >
-              Approve
-            </SubmitButton>
-            <SubmitButton
-              className="dq-btn reject"
-              name="action"
-              value="reject"
-              data-testid="decision-reject"
-            >
-              Reject
-            </SubmitButton>
-            <label className="dq-escalate-field">
-              <span className="sr-only">Escalate {decision.id} to</span>
-              <input
-                aria-label={`Escalate target for ${decision.id}`}
-                className="input dq-escalate-input"
-                name="escalate_to"
-                placeholder="Escalate to role or approver"
-                data-testid="decision-escalate-target"
-              />
-            </label>
-            <SubmitButton
-              className="dq-btn escalate"
-              name="action"
-              value="escalate"
-              data-testid="decision-escalate"
-            >
-              Escalate
-            </SubmitButton>
-            <details className="dq-more">
-              <summary>Note · request changes</summary>
-              <div className="dq-more-body">
-                <textarea
-                  aria-label={`Decision note for ${decision.id}`}
-                  className="textarea decision-note"
-                  name="note"
-                  rows={3}
-                  placeholder="Optional note or required revision request rationale."
-                />
-                <SubmitButton className="dq-btn neutral" name="action" value="revise">
-                  Request changes
-                </SubmitButton>
-              </div>
-            </details>
-            <span className="dq-waited">
-              <ClientRelativeTime
-                iso={decision.createdAt}
-                empty=""
-                as="span"
-              />
-            </span>
-          </DecisionResolveForm>
+          <DecisionActions decision={decision} projectId={projectId} actorId={actorId} />
         ) : (
           <>
             <span
@@ -831,7 +866,7 @@ function DecisionInboxRow({
                 seen {occurrences}×
               </span>
             ) : null}
-            {isApproved ? (
+            {isApproved && offeredActions(decision).some((a) => a.action === "execute") ? (
               <details className="dq-more">
                 <summary>Mark executed</summary>
                 <DecisionResolveForm className="dq-more-body">
@@ -851,7 +886,8 @@ function DecisionInboxRow({
                     name="external_ref"
                     placeholder="External reference (PR URL, commit SHA, ticket)"
                   />
-                  <SubmitButton className="dq-btn approve" name="action" value="execute">
+                  <SubmitButton className="dq-btn approve" name="action" value="execute"
+                                data-testid="decision-execute">
                     Mark executed
                   </SubmitButton>
                 </DecisionResolveForm>
@@ -868,6 +904,96 @@ function DecisionInboxRow({
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * THE BUTTONS THE ENGINE SAYS WORK, AND NO OTHERS.
+ *
+ * Every pending card used to get Approve, Reject, Escalate and Request changes. Escalate posted
+ * an action the server never accepted, so it always failed; Approve on a budget or capacity
+ * refusal recorded an answer nothing reads; Request changes on a workflow gate parked the run
+ * for ever. The engine now decides the list (services/decision_actions.py) and refuses
+ * anything else, so this draws exactly `allowedActions` — the primary ones as buttons, the
+ * ones that need a note or a name behind "More".
+ */
+function DecisionActions({ decision, projectId, actorId }: {
+  decision: DecisionFeedItem; projectId: string; actorId: string;
+}) {
+  const offers = offeredActions(decision).filter((a) => a.action !== "execute");
+  const direct = offers.filter((a) => !a.needs);
+  const revise = offers.find((a) => a.action === "revise");
+  const delegate = offers.find((a) => a.action === "delegate");
+  const runId = typeof decision.recommendation.workflow_run_id === "string"
+    ? decision.recommendation.workflow_run_id : "";
+  const startsWork = decision.recommendation.start_code_task === true
+    || decision.recommendation.tool === "publish_document";
+  const dismiss = direct.find((a) => a.action === "reject")?.label === "Dismiss";
+  return (
+    <DecisionResolveForm className="dq-actions">
+      <input type="hidden" name="decision_id" value={decision.id} />
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="actor" value={actorId} />
+      {runId ? <input type="hidden" name="workflow_run_id" value={runId} /> : null}
+      {startsWork ? <input type="hidden" name="starts_work" value="1" /> : null}
+      {dismiss ? <input type="hidden" name="reject_label" value="Dismiss" /> : null}
+      {direct.map((offer) => (
+        <SubmitButton
+          key={offer.action}
+          className={`dq-btn ${offer.tone === "neutral" ? "neutral" : offer.tone}`}
+          name="action"
+          value={offer.action}
+          title={offer.effect || undefined}
+          data-testid={`decision-${offer.action}`}
+        >
+          {offer.label}
+        </SubmitButton>
+      ))}
+      {revise || delegate ? (
+        <details className="dq-more">
+          <summary>{[revise ? "Request changes" : "", delegate ? "hand to someone else" : ""]
+            .filter(Boolean).join(" · ").replace(/^h/, "H")}</summary>
+          <div className="dq-more-body">
+            {revise ? (
+              <>
+                <textarea
+                  aria-label={`What to change, for ${decision.id}`}
+                  className="textarea decision-note"
+                  name="note"
+                  rows={3}
+                  placeholder="What should change? This is sent back with the decision."
+                />
+                <SubmitButton className="dq-btn neutral" name="action" value="revise"
+                              data-testid="decision-revise" title={revise.effect}>
+                  {revise.label}
+                </SubmitButton>
+              </>
+            ) : null}
+            {delegate ? (
+              <>
+                <label className="dq-escalate-field">
+                  <span className="sr-only">Hand {decision.id} to</span>
+                  <input
+                    aria-label={`Who to hand ${decision.id} to`}
+                    className="input dq-escalate-input"
+                    name="delegate_to"
+                    placeholder="A person or role, e.g. release_manager"
+                    data-testid="decision-delegate-target"
+                  />
+                </label>
+                <SubmitButton className="dq-btn escalate" name="action" value="delegate"
+                              data-testid="decision-delegate" title={delegate.effect}>
+                  {delegate.label}
+                </SubmitButton>
+              </>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
+      <span className="dq-waited">
+        <ClientRelativeTime iso={decision.createdAt} empty="" as="span" />
+      </span>
+    </DecisionResolveForm>
   );
 }
 

@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from . import decision_actions
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .mcp_client import MCPClient
@@ -568,7 +569,9 @@ def _tool_project_status(connection: Connection, project_id: str, settings: Sett
     ).mappings().all()
     return {
         "open_tasks": scalar("SELECT count(*) FROM tasks WHERE project_id=:p AND status='open'"),
-        "pending_decisions": scalar("SELECT count(*) FROM decisions WHERE project_id=:p AND status='pending'"),
+        # Waiting on the operator by the Approvals inbox's rule, not `status='pending'`, which
+        # left out delegated decisions and stuck pull requests (review round 3).
+        "pending_decisions": decision_actions.count_waiting_on_operator(connection, project_id),
         "deadletters": scalar("SELECT count(*) FROM deadletters WHERE project_id=:p AND status='open'"),
         "jobs_succeeded": scalar("SELECT count(*) FROM jobs WHERE project_id=:p AND status='succeeded'"),
         "recent_activity": [{"event": r["event_type"], "count": int(r["n"])} for r in recent],

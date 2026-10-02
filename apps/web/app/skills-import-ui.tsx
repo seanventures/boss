@@ -26,7 +26,12 @@ export function SkillImportForm({
         setError(null);
         startTransition(async () => {
           try {
-            await callAction(importSkillAction)(formData);
+            // A result, not a throw: see lib/action-result.ts.
+            const result = await callAction(importSkillAction)(formData);
+            if (!result.ok) {
+              setError(result.error ?? "Skill import failed.");
+              return;
+            }
             router.refresh();
           } catch (err) {
             setError(err instanceof Error ? err.message : "Skill import failed.");
@@ -93,7 +98,11 @@ export function SkillExportButton({
         startTransition(async () => {
           try {
             const result = await callAction(exportSkillAction)(formData);
-            downloadSkillYaml(result.skillId, result.yaml);
+            if (!result.ok || !result.data) {
+              setError(result.error ?? "Skill export failed.");
+              return;
+            }
+            downloadSkillYaml(String(result.data.skillId), String(result.data.yaml));
           } catch (err) {
             setError(err instanceof Error ? err.message : "Skill export failed.");
           }

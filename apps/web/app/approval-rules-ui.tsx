@@ -43,8 +43,8 @@ export function ApprovalRulesView({
     <div className="ar">
       <p className="cap-intro">
         These are the rules that determine what BOSS must bring to you for approval before it takes a real
-        effect. Anything that clears them runs autonomously; anything that doesn&apos;t becomes a Decision in
-        the inbox below.
+        effect. Anything that clears them runs autonomously; anything that doesn&apos;t becomes a card in
+        the approvals queue above.
       </p>
 
       {/* Autonomy threshold */}
@@ -117,7 +117,7 @@ export function ApprovalRulesView({
         <div className="cap-section-head">
           <h3>For reference — nothing here needs an action</h3>
           <span className="cap-section-sub">
-            The gates BOSS already applies. Budgets are set in the Budget area.
+            The gates BOSS already applies. Budgets are set in Govern.
           </span>
         </div>
       {/* Service gates */}

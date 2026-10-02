@@ -12,9 +12,15 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from boss_engine.services.console_v2 import decision_queue
+from boss_engine.services.console_v2 import decision_queue as _decision_queue
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+
+
+def decision_queue(conn, project_id, **kwargs):
+    # The fixtures' deadlines are relative to NOW, and the queue now drops a gate whose deadline
+    # has passed (it is expired, the rule the inbox uses). Run the queue at the fixtures' clock.
+    return _decision_queue(conn, project_id, now=NOW, **kwargs)
 
 
 class FakeConn:

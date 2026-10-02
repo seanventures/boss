@@ -9,6 +9,7 @@ import {
 import type { CSSProperties, ReactNode } from "react";
 import { createPipelineProfileAction, setPipelineDefaultAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 const inputStyle: CSSProperties = {
   background: "var(--surface-3)", border: "1px solid var(--border)", color: "var(--ink)",
@@ -46,7 +47,7 @@ function CustomProfileForm({ projectId, edition }: { projectId: string; edition:
           (set <code style={{ color: "var(--accent-text)" }}>BOSS_EDITION=enterprise</code>).
         </p>
       ) : (
-        <form action={createPipelineProfileAction} style={{ display: "grid", gap: 14 }}>
+        <ActionForm action={createPipelineProfileAction} style={{ display: "grid", gap: 14 }}>
           <input type="hidden" name="project_id" value={projectId} />
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             <Field label="Name (lowercase, no spaces)"><input name="name" required placeholder="qa-heavy" style={inputStyle} /></Field>
@@ -74,7 +75,7 @@ function CustomProfileForm({ projectId, edition }: { projectId: string; edition:
             Tier floor/cap clamp how much rigor runs (e.g. floor 2 = always at least standard; cap 1 = never
             beyond low). After creating, use “Set default” on its card to make it the project default.
           </p>
-        </form>
+        </ActionForm>
       )}
     </div>
   );
@@ -152,7 +153,7 @@ function ProfileCard({
             DEFAULT
           </span>
         ) : (
-          <form action={setPipelineDefaultAction}>
+          <ActionForm action={setPipelineDefaultAction}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="name" value={p.name} />
             <SubmitButton
@@ -165,7 +166,7 @@ function ProfileCard({
             >
               Set default
             </SubmitButton>
-          </form>
+          </ActionForm>
         )}
       </div>
       <div style={{ color: "var(--muted)", fontSize: 12, margin: "5px 0 9px" }}>{p.label}</div>

@@ -137,7 +137,9 @@ describe("reordering is reachable without a pointer", () => {
 describe("a run says what it is waiting for", () => {
   it("names the approver, not just 'waiting'", () => {
     // "Waiting" alone sends an operator to ask three people who it is waiting on.
-    expect(UI).toContain("waiting on {run.waiting_on}");
+    // REWRITTEN: by name ("Release Manager"), not the raw role key the line used to print.
+    expect(UI).toContain("waiting on {/^[a-z0-9_]+$/.test(run.waiting_on)");
+    expect(UI).toContain("roleLabel(run.waiting_on) : run.waiting_on}");
   });
 
   it("shows what each step produced", () => {

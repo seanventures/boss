@@ -8,6 +8,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
+from . import decision_actions
 from .core import emit_event, make_id
 
 
@@ -32,20 +33,13 @@ class HealthSnapshotService:
                 {"project_id": project_id},
             ).scalar_one()
         )
-        high_risk_pending_decisions = int(
-            connection.execute(
-                text(
-                    """
-                    SELECT COUNT(*)
-                    FROM decisions
-                    WHERE project_id = :project_id
-                      AND status IN ('pending', 'delegated')
-                      AND risk_tier >= 2
-                    """
-                ),
-                {"project_id": project_id},
-            ).scalar_one()
-        )
+        # Waiting on the operator is decision_actions' rule, the one the Approvals inbox and the
+        # Command Center use. Both counts here were their own pending-plus-delegated, which left
+        # out a pull request stuck in a dead-end revision_requested and so disagreed with the
+        # inbox on the dashboard's Awaiting You (review round 3).
+        waiting = decision_actions.waiting_on_operator(connection, project_id)
+        high_risk_pending_decisions = sum(
+            1 for d in waiting if int(d.get("risk_tier") or 0) >= 2)
         latest_event_at = connection.execute(
             text(
                 "SELECT MAX(created_at) FROM events WHERE project_id = :project_id"
@@ -68,9 +62,7 @@ class HealthSnapshotService:
             "open_tasks": int(task_counts.get("open", 0)),
             "completed_tasks": int(task_counts.get("completed", 0)),
             "rolled_back_tasks": int(task_counts.get("rolled_back", 0)),
-            "pending_decisions": int(
-                decision_counts.get("pending", 0) + decision_counts.get("delegated", 0)
-            ),
+            "pending_decisions": len(waiting),
             "approved_decisions": int(decision_counts.get("approved", 0)),
             "high_risk_pending_decisions": high_risk_pending_decisions,
         }
@@ -279,8 +271,8 @@ class HealthSnapshotService:
                     "category": "approvals",
                     "title": "High-risk decisions are waiting on approval",
                     "detail": (
-                        f"{high_risk_pending_decisions} pending or delegated "
-                        "decision(s) have risk tier 2 or higher."
+                        f"{high_risk_pending_decisions} decision(s) of risk tier 2 or "
+                        "higher are waiting on you. Answer them in Approvals."
                     ),
                 }
             )

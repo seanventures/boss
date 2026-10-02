@@ -52,7 +52,9 @@ describe("every area link goes somewhere", () => {
   it("names only areas that are in the nav", () => {
     const nav = navAreas();
     const targets = linkTargets();
-    expect(targets.length, "the scan found too few links to be a real check").toBeGreaterThan(15);
+    // 12 at integration: the console-a stream's Command Center replaced the task-era KPI tiles
+    // and quick-action links with run rows that link to runs, not areas.
+    expect(targets.length, "the scan found too few links to be a real check").toBeGreaterThan(10);
     const dead = targets.filter((t) => !nav.has(t.area)).map((t) => `${t.file}: area=${t.area}`);
     expect(dead, `links to areas the console does not have:\n${dead.join("\n")}`).toEqual([]);
   });

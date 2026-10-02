@@ -8,43 +8,46 @@ import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-clie
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
+import { act, apiFetch } from "../lib/server-action";
+import { missingInput, type ActionResult } from "../lib/action-result";
 
-export async function setPipelineDefaultAction(formData: FormData): Promise<void> {
+export async function setPipelineDefaultAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const name = String(formData.get("name") ?? "").trim();
-  if (!name) return;
-  await apiWrite(`${API_URL}/v1/pipeline-profiles/default`, {
+  if (!name) return missingInput("name");
+  await apiFetch(`${API_URL}/v1/pipeline-profiles/default`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, name, actor: getActor(formData) }),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function runCanariesAction(formData: FormData): Promise<void> {
+export async function runCanariesAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
-  await apiWrite(`${API_URL}/v1/canaries/run`, {
+  await apiFetch(`${API_URL}/v1/canaries/run`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function scanAnomaliesAction(formData: FormData): Promise<void> {
+export async function scanAnomaliesAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
-  await apiWrite(`${API_URL}/v1/anomalies/scan`, {
+  await apiFetch(`${API_URL}/v1/anomalies/scan`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, auto_lite: true }),
   });
   revalidatePath("/");
-}
+}); }
 
 // ---- Phase 2: self-improvement runtime, evals, autonomy, router, skills ----
 
 async function postJson(path: string, body: Record<string, unknown>): Promise<void> {
-  await apiWrite(`${API_URL}${path}`, {
+  // A refusal throws (apiFetch), so act() reports it instead of calling it success.
+  await apiFetch(`${API_URL}${path}`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
@@ -52,42 +55,43 @@ async function postJson(path: string, body: Record<string, unknown>): Promise<vo
   revalidatePath("/");
 }
 
-export async function runEvalsAction(formData: FormData): Promise<void> {
+export async function runEvalsAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await postJson(`/v1/evals/run`, { project_id: getProjectId(formData), actor: getActor(formData) });
-}
+}); }
 
-export async function evaluateAutonomyAction(formData: FormData): Promise<void> {
+export async function evaluateAutonomyAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const roleKey = String(formData.get("role_key") ?? "").trim();
-  if (!roleKey) return;
+  if (!roleKey) return missingInput("roleKey");
   await postJson(`/v1/roles/${encodeURIComponent(roleKey)}/autonomy/evaluate`, {
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
-}
+}); }
 
-export async function pollProviderHealthAction(formData: FormData): Promise<void> {
+export async function pollProviderHealthAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await postJson(`/v1/provider-health/poll`, { project_id: getProjectId(formData), actor: getActor(formData) });
-}
+}); }
 
-export async function recordRouterRationaleAction(formData: FormData): Promise<void> {
+export async function recordRouterRationaleAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await postJson(`/v1/router/rationale`, { project_id: getProjectId(formData), actor: getActor(formData) });
-}
+}); }
 
-export async function invokeSkillAction(formData: FormData): Promise<void> {
+export async function invokeSkillAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const skillId = String(formData.get("skill_id") ?? "").trim();
   const caller = String(formData.get("caller") ?? "").trim();
-  if (!skillId || !caller) return;
+  if (!skillId || !caller) return missingInput("skillId", "caller");
   await postJson(`/v1/skills/${encodeURIComponent(skillId)}/invoke`, {
     project_id: getProjectId(formData),
     caller,
     inputs: {},
     mock: true,
   });
-}
+}); }
 
 // ---- Phase 3: result-returning actions (useActionState) for compute/preview endpoints ----
 
-export type ActionResult = { ok: boolean; data?: Record<string, unknown>; error?: string };
+// The one result shape every form action returns. See lib/action-result.ts.
+export type { ActionResult } from "../lib/action-result";
 
 async function postJsonReturn(path: string, body: Record<string, unknown>): Promise<ActionResult> {
   try {
@@ -402,22 +406,22 @@ export async function slackDigestAction(_prev: ActionResult | null, formData: Fo
 
 // ---- Phase 4: chaos, finops reconciler, SOC2 ----
 
-export async function runChaosAction(formData: FormData): Promise<void> {
+export async function runChaosAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const scenario = String(formData.get("scenario") ?? "").trim();
-  if (!scenario) return;
+  if (!scenario) return missingInput("scenario");
   await postJson(`/v1/chaos/run`, {
     project_id: getProjectId(formData),
     scenario,
     actor: "system",
   });
-}
+}); }
 
-export async function reconcileCommitmentsAction(formData: FormData): Promise<void> {
+export async function reconcileCommitmentsAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await postJson(`/v1/finops/reconcile-commitments`, {
     project_id: getProjectId(formData),
     actor: "system",
   });
-}
+}); }
 
 export async function requestInitiativeBudgetAction(
   _prev: ActionResult | null,
@@ -436,33 +440,33 @@ export async function requestInitiativeBudgetAction(
   return res;
 }
 
-export async function dispatchPlanAction(formData: FormData): Promise<void> {
+export async function dispatchPlanAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const planId = String(formData.get("plan_id") ?? "").trim();
-  if (!planId) return;
-  await apiWrite(`${API_URL}/v1/plans/${encodeURIComponent(planId)}/dispatch`, {
+  if (!planId) return missingInput("planId");
+  await apiFetch(`${API_URL}/v1/plans/${encodeURIComponent(planId)}/dispatch`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function setBudgetIntensityAction(formData: FormData): Promise<void> {
+export async function setBudgetIntensityAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const intensity = Number(formData.get("intensity") ?? 50);
-  await apiWrite(`${API_URL}/v1/budget/set_intensity`, {
+  await apiFetch(`${API_URL}/v1/budget/set_intensity`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function createPipelineProfileAction(formData: FormData): Promise<void> {
+export async function createPipelineProfileAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const name = String(formData.get("name") ?? "").trim().toLowerCase();
-  if (!name) return;
+  if (!name) return missingInput("name");
   const tierFloor = Number(formData.get("tier_floor") ?? 0);
   const tierCap = Number(formData.get("tier_cap") ?? 3);
   const defaultModel = String(formData.get("default_model") ?? "low_cost");
@@ -473,7 +477,7 @@ export async function createPipelineProfileAction(formData: FormData): Promise<v
     model.review_code = "strong";
     model.security_check = "strong";
   }
-  await apiWrite(`${API_URL}/v1/pipeline-profiles`, {
+  await apiFetch(`${API_URL}/v1/pipeline-profiles`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -487,7 +491,7 @@ export async function createPipelineProfileAction(formData: FormData): Promise<v
     }),
   });
   revalidatePath("/");
-}
+}); }
 
 function getProjectId(formData: FormData): string {
   const value = formData.get("project_id");
@@ -648,68 +652,87 @@ function parseProviderCredentialRefs(formData: FormData): Record<string, string>
   return refs;
 }
 
-export async function resolveDecisionAction(formData: FormData): Promise<void> {
+export async function resolveDecisionAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const decisionId = formData.get("decision_id");
   const action = formData.get("action");
   const note = formData.get("note");
   const delegateTo = formData.get("delegate_to");
   const externalRef = formData.get("external_ref");
 
-  if (typeof decisionId != "string" || !decisionId) {
-    throw new Error("decision_id is required");
+  if (typeof decisionId != "string" || !decisionId) return missingInput("decisionId");
+  if (!isDecisionAction(action)) {
+    return {
+      ok: false,
+      error: `“${String(action)}” is not something a decision can do. Reload the page — the `
+        + "buttons on it are the ones that work.",
+    };
   }
-  if (
-    action !== "approve" &&
-    action !== "reject" &&
-    action !== "revise" &&
-    action !== "delegate" &&
-    action !== "execute"
-  ) {
-    throw new Error("Unsupported decision action");
+  const target = typeof delegateTo === "string" && delegateTo.trim() ? delegateTo.trim() : "";
+  if (action === "delegate" && !target) return missingInput("whoToHandItTo");
+  const said = typeof note === "string" && note.trim() ? note.trim() : "";
+  if ((action === "revise" || action === "execute") && !said
+      && !(action === "execute" && typeof externalRef === "string" && externalRef.trim())) {
+    return missingInput("note");
   }
 
   const payload = {
     actor: getActor(formData),
-    note:
-      typeof note === "string" && note.trim()
-        ? note.trim()
-        : "Resolved from the BOSS executive console shell.",
-    delegate_to:
-      typeof delegateTo === "string" && delegateTo.trim()
-        ? delegateTo.trim()
-        : undefined,
+    note: said || "Resolved from the BOSS console.",
+    delegate_to: target || undefined,
     external_ref:
       typeof externalRef === "string" && externalRef.trim()
         ? externalRef.trim()
         : undefined,
   };
-  try {
-    if (action === "approve") {
-      await client.approveDecision(decisionId, payload);
-    } else if (action === "reject") {
-      await client.rejectDecision(decisionId, payload);
-    } else if (action === "revise") {
-      await client.reviseDecision(decisionId, payload);
-    } else if (action === "delegate") {
-      await client.delegateDecision(decisionId, payload);
-    } else {
-      await client.executeDecision(decisionId, payload);
-    }
-  } catch (e) {
-    // Don't crash the whole page on an API error — surface it and move on.
-    console.error("decision action failed", e);
+  // NO CATCH HERE. This used to swallow every API error into console.error and then report
+  // "Decision recorded" — a refused Approve read as success. act() turns the refusal into
+  // the sentence the API wrote (the engine's decision_actions says what to do instead).
+  if (action === "approve") {
+    await client.approveDecision(decisionId, payload);
+  } else if (action === "reject") {
+    await client.rejectDecision(decisionId, payload);
+  } else if (action === "revise") {
+    await client.reviseDecision(decisionId, payload);
+  } else if (action === "delegate") {
+    await client.delegateDecision(decisionId, payload);
+  } else {
+    await client.executeDecision(decisionId, payload);
   }
   revalidatePath("/");
-  // APPROVING A PRD IS WHEN THE PROJECT BEGINS. The build starts on a background thread, so
-  // there is no run id to carry yet — but the Workflow page polls, and a run that appears a few
-  // seconds later sorts to the top because it is live. Only for `approve`: rejecting a spec
-  // starts nothing, and sending someone to watch an empty pipeline would be a lie.
-  if (action === "approve") {
-    redirect(workflowHref(null, orgFromReferer((await headers()).get("referer"))));
+
+  // STAY ON APPROVALS, AND SAY WHERE THE WORK WENT. Every approval used to redirect to
+  // Workflow — a PR review, a budget notice, all of them, and without the run id — so
+  // approving three cards was three round trips back. A gate on a run links to THAT run; an
+  // approval that starts a project links to Workflow, where it appears once it starts.
+  const runId = String(formData.get("workflow_run_id") ?? "").trim();
+  const startsWork = String(formData.get("starts_work") ?? "") === "1";
+  const org = orgFromReferer((await headers()).get("referer"));
+  const done: Record<DecisionAction, string> = {
+    approve: "Approved.",
+    reject: String(formData.get("reject_label") ?? "") === "Dismiss" ? "Dismissed." : "Rejected.",
+    revise: "Sent back with your note.",
+    delegate: `Handed to ${target}.`,
+    execute: "Marked as executed.",
+  };
+  if (action === "approve" && (runId || startsWork)) {
+    return {
+      ok: true,
+      message: runId ? "Approved — the run carries on from this step."
+        : "Approved — the project starts in a few seconds.",
+      href: workflowHref(runId || null, org),
+      hrefLabel: runId ? "Watch the run" : "Watch it in Workflow",
+    };
   }
+  return { ok: true, message: done[action] };
+}); }
+
+const DECISION_ACTIONS = ["approve", "reject", "revise", "delegate", "execute"] as const;
+type DecisionAction = (typeof DECISION_ACTIONS)[number];
+function isDecisionAction(value: unknown): value is DecisionAction {
+  return typeof value === "string" && (DECISION_ACTIONS as readonly string[]).includes(value);
 }
 
-export async function submitCommandAction(formData: FormData): Promise<void> {
+export async function submitCommandAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const text = String(formData.get("command") ?? "").trim();
 
@@ -718,7 +741,7 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
   const m = text.match(/\b(?:operational\s+)?intensity\b[^0-9]*(\d{1,3})/i);
   if (m) {
     const intensity = Math.max(0, Math.min(100, Number(m[1])));
-    await apiWrite(`${API_URL}/v1/budget/set_intensity`, {
+    await apiFetch(`${API_URL}/v1/budget/set_intensity`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
@@ -735,9 +758,9 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
   );
   await client.proposeCommand(payload);
   revalidatePath("/");
-}
+}); }
 
-export async function createKpiAction(formData: FormData): Promise<void> {
+export async function createKpiAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const targetValue = parseNumber(formData.get("target_value"), 0);
   if (targetValue <= 0) {
     throw new Error("target_value must be greater than zero");
@@ -758,19 +781,19 @@ export async function createKpiAction(formData: FormData): Promise<void> {
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function refreshHealthSnapshotAction(formData: FormData): Promise<void> {
+export async function refreshHealthSnapshotAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await client.refreshHealthSnapshot({
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function createBreakGlassGrantAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const targetMemberId = formData.get("target_member_id");
   const reason = formData.get("reason");
   const ttlMinutes = Number(formData.get("ttl_minutes") ?? 60);
@@ -790,11 +813,11 @@ export async function createBreakGlassGrantAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function revokeBreakGlassGrantAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const grantId = formData.get("grant_id");
   const reason = formData.get("reason");
   if (typeof grantId !== "string" || !grantId.trim()) {
@@ -808,9 +831,9 @@ export async function revokeBreakGlassGrantAction(
     reason: reason.trim(),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function upsertOrgMemberAction(formData: FormData): Promise<void> {
+export async function upsertOrgMemberAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const orgId = formData.get("org_id");
   const memberId = formData.get("member_id");
   const displayName = formData.get("display_name");
@@ -834,9 +857,9 @@ export async function upsertOrgMemberAction(formData: FormData): Promise<void> {
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function installPackAction(formData: FormData): Promise<void> {
+export async function installPackAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const packId = formData.get("pack_id");
   if (typeof packId !== "string" || !packId) {
     throw new Error("pack_id is required");
@@ -847,9 +870,9 @@ export async function installPackAction(formData: FormData): Promise<void> {
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function importPackAction(formData: FormData): Promise<void> {
+export async function importPackAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const yamlContent = await readPackYaml(formData);
   try {
     await client.importPack({
@@ -861,7 +884,7 @@ export async function importPackAction(formData: FormData): Promise<void> {
     throw packYamlApiError(error, "Pack import failed.");
   }
   revalidatePath("/");
-}
+}); }
 
 export async function exportPackYaml(projectId: string, packId: string): Promise<string> {
   try {
@@ -875,18 +898,14 @@ export async function exportPackYaml(projectId: string, packId: string): Promise
   }
 }
 
-export async function exportPackAction(
-  formData: FormData,
-): Promise<{ yaml: string; packId: string }> {
+export async function exportPackAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const packId = formData.get("pack_id");
-  if (typeof packId !== "string" || !packId.trim()) {
-    throw new Error("pack_id is required");
-  }
+  if (typeof packId !== "string" || !packId.trim()) return missingInput("packId");
   const yaml = await exportPackYaml(getProjectId(formData), packId.trim());
-  return { yaml, packId: packId.trim() };
-}
+  return { ok: true, data: { yaml, packId: packId.trim() } };
+}); }
 
-export async function importSkillAction(formData: FormData): Promise<void> {
+export async function importSkillAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const yamlContent = await readSkillYaml(formData);
   try {
     await client.importSkill({
@@ -899,7 +918,7 @@ export async function importSkillAction(formData: FormData): Promise<void> {
     throw packYamlApiError(error, "Skill import failed.");
   }
   revalidatePath("/");
-}
+}); }
 
 export async function exportSkillYaml(
   projectId: string,
@@ -917,20 +936,16 @@ export async function exportSkillYaml(
   }
 }
 
-export async function exportSkillAction(
-  formData: FormData,
-): Promise<{ yaml: string; skillId: string }> {
+export async function exportSkillAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const skillId = formData.get("skill_id");
-  if (typeof skillId !== "string" || !skillId.trim()) {
-    throw new Error("skill_id is required");
-  }
+  if (typeof skillId !== "string" || !skillId.trim()) return missingInput("skillId");
   const yaml = await exportSkillYaml(
     getProjectId(formData),
     skillId.trim(),
     getActor(formData),
   );
-  return { yaml, skillId: skillId.trim() };
-}
+  return { ok: true, data: { yaml, skillId: skillId.trim() } };
+}); }
 
 async function readPackYaml(formData: FormData): Promise<string> {
   const pasted = formData.get("yaml");
@@ -986,7 +1001,7 @@ function extractBossDetail(body: unknown): string | undefined {
   return undefined;
 }
 
-export async function installAgentModuleAction(formData: FormData): Promise<void> {
+export async function installAgentModuleAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const moduleId = formData.get("module_id");
   if (typeof moduleId !== "string" || !moduleId) {
     throw new Error("module_id is required");
@@ -997,11 +1012,11 @@ export async function installAgentModuleAction(formData: FormData): Promise<void
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function uninstallAgentModuleAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const moduleId = formData.get("module_id");
   if (typeof moduleId !== "string" || !moduleId) {
     throw new Error("module_id is required");
@@ -1012,11 +1027,11 @@ export async function uninstallAgentModuleAction(
     reason: getOptionalString(formData, "reason"),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function rollbackAgentModuleAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const moduleId = formData.get("module_id");
   if (typeof moduleId !== "string" || !moduleId) {
     throw new Error("module_id is required");
@@ -1027,11 +1042,11 @@ export async function rollbackAgentModuleAction(
     reason: getOptionalString(formData, "reason"),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function upsertEnterpriseIdentityProviderAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const providerKey = formData.get("provider_key");
   const providerType = formData.get("provider_type");
   const displayName = formData.get("display_name");
@@ -1069,11 +1084,11 @@ export async function upsertEnterpriseIdentityProviderAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function upsertEnterpriseIdentityRolloutPolicyAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const providerType = formData.get("provider_type");
   const runtimeMode = formData.get("runtime_mode");
   if (typeof providerType !== "string" || !providerType.trim()) {
@@ -1098,11 +1113,11 @@ export async function upsertEnterpriseIdentityRolloutPolicyAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function upsertEnterpriseScimGroupAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const displayName = formData.get("display_name");
   if (typeof displayName !== "string" || !displayName.trim()) {
     throw new Error("display_name is required");
@@ -1121,11 +1136,11 @@ export async function upsertEnterpriseScimGroupAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function upsertEnterpriseScimUserAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const userName = formData.get("user_name");
   const displayName = formData.get("display_name");
   if (typeof userName !== "string" || !userName.trim()) {
@@ -1150,11 +1165,11 @@ export async function upsertEnterpriseScimUserAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function connectEntitlementSourceAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const sourceId = formData.get("source_id");
   const connectionRef = formData.get("connection_ref");
   if (typeof sourceId !== "string" || !sourceId.trim()) {
@@ -1179,11 +1194,11 @@ export async function connectEntitlementSourceAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function uploadModelCredentialAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const sourceId = formData.get("source_id");
   const value = formData.get("credential_value");
   const backend = getOptionalString(formData, "backend") ?? "platform_secret_store";
@@ -1203,11 +1218,11 @@ export async function uploadModelCredentialAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function createEntitlementConnectionSessionAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const sourceId = formData.get("source_id");
   if (typeof sourceId !== "string" || !sourceId.trim()) {
     throw new Error("source_id is required");
@@ -1223,11 +1238,11 @@ export async function createEntitlementConnectionSessionAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function completeEntitlementConnectionSessionAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const sessionId = formData.get("session_id");
   const connectionRef = formData.get("connection_ref");
   if (typeof sessionId !== "string" || !sessionId.trim()) {
@@ -1251,11 +1266,11 @@ export async function completeEntitlementConnectionSessionAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function disconnectEntitlementSourceAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const sourceId = formData.get("source_id");
   if (typeof sourceId !== "string" || !sourceId.trim()) {
     throw new Error("source_id is required");
@@ -1266,28 +1281,28 @@ export async function disconnectEntitlementSourceAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function createReplayBundleAction(formData: FormData): Promise<void> {
+export async function createReplayBundleAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await client.createReplayBundle({
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function createOpsDigestAction(formData: FormData): Promise<void> {
+export async function createOpsDigestAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await client.createOpsDigest({
     project_id: getProjectId(formData),
     actor: getActor(formData),
     limit: parseInteger(formData.get("limit"), 25),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function createDeadletterIncidentAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const deadletterId = formData.get("deadletter_id");
   if (typeof deadletterId !== "string" || !deadletterId.trim()) {
     throw new Error("deadletter_id is required");
@@ -1304,11 +1319,11 @@ export async function createDeadletterIncidentAction(
     summary: getOptionalString(formData, "summary"),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function requeueDeadletterJobAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const deadletterId = formData.get("deadletter_id");
   if (typeof deadletterId !== "string" || !deadletterId.trim()) {
     throw new Error("deadletter_id is required");
@@ -1331,27 +1346,27 @@ export async function requeueDeadletterJobAction(
     throw new Error("remediation_action must be retry, requeue, escalate, or hold");
   }
   revalidatePath("/");
-}
+}); }
 
 export async function createDeadletterRemediationAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   return requeueDeadletterJobAction(formData);
-}
+}); }
 
 export async function createComplianceEvidenceBundleAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   await client.createComplianceEvidenceBundle({
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function upsertCommsChannelPolicyAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const provider = formData.get("provider");
   const deliveryMode = formData.get("delivery_mode");
   if (typeof provider !== "string" || !provider.trim()) {
@@ -1380,9 +1395,9 @@ export async function upsertCommsChannelPolicyAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function submitOutboxDraftAction(formData: FormData): Promise<void> {
+export async function submitOutboxDraftAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const channel = formData.get("channel");
   const subject = formData.get("subject");
   const body = formData.get("body");
@@ -1404,9 +1419,9 @@ export async function submitOutboxDraftAction(formData: FormData): Promise<void>
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function queueOutboxMessageAction(formData: FormData): Promise<void> {
+export async function queueOutboxMessageAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const messageId = formData.get("message_id");
   const urgency = formData.get("urgency");
   if (typeof messageId !== "string" || !messageId) {
@@ -1435,9 +1450,9 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
         : "normal",
   });
   revalidatePath("/");
-}
+}); }
 
-export async function dryRunOutboxMessageAction(formData: FormData): Promise<void> {
+export async function dryRunOutboxMessageAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const messageId = formData.get("message_id");
   if (typeof messageId !== "string" || !messageId) {
     throw new Error("message_id is required");
@@ -1449,11 +1464,11 @@ export async function dryRunOutboxMessageAction(formData: FormData): Promise<voi
     dedupe_key: `outbox-dry-run-${messageId}-${await pressToken()}`,
   });
   revalidatePath("/");
-}
+}); }
 
 export async function createDecisionDigestAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const channel = formData.get("channel");
   const maxItems = Number(formData.get("max_items") ?? 20);
   await client.createDecisionDigest({
@@ -1469,13 +1484,13 @@ export async function createDecisionDigestAction(
     dedupe_key: `decision-digest-${await pressToken()}`,
   });
   revalidatePath("/");
-}
+}); }
 
 // ---- Project GitHub control plane ------------------------------------------
 
 export async function createGitHubConnectionAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const label = String(formData.get("connection_label") ?? "").trim();
   const credentialRef = String(formData.get("credential_ref") ?? "").trim();
   const authMethod = String(
@@ -1499,11 +1514,11 @@ export async function createGitHubConnectionAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function easyConnectGitHubAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const label = String(
     formData.get("connection_label") ?? "Project GitHub",
   ).trim();
@@ -1540,11 +1555,11 @@ export async function easyConnectGitHubAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function setGitHubConnectionStateAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const connectionId = String(formData.get("connection_id") ?? "").trim();
   const operation = String(formData.get("operation") ?? "").trim();
   if (!connectionId) {
@@ -1562,11 +1577,11 @@ export async function setGitHubConnectionStateAction(
     throw new Error("operation must be enable or disable");
   }
   revalidatePath("/");
-}
+}); }
 
 export async function createGitHubRepositoryBindingAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const connectionId = String(formData.get("connection_id") ?? "").trim();
   const repository = String(formData.get("repository") ?? "").trim();
   const role = String(formData.get("role") ?? "primary").trim();
@@ -1585,11 +1600,11 @@ export async function createGitHubRepositoryBindingAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function testGitHubConnectionAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const connectionId = String(formData.get("connection_id") ?? "").trim();
   const bindingId = String(
     formData.get("repository_binding_id") ?? "",
@@ -1604,11 +1619,11 @@ export async function testGitHubConnectionAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function createGitHubBranchPolicyAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const bindingId = String(
     formData.get("repository_binding_id") ?? "",
   ).trim();
@@ -1633,11 +1648,11 @@ export async function createGitHubBranchPolicyAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function captureGitHubBranchSnapshotAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const bindingId = String(
     formData.get("repository_binding_id") ?? "",
   ).trim();
@@ -1657,11 +1672,11 @@ export async function captureGitHubBranchSnapshotAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function planGitHubCodeSyncAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const bindingId = String(
     formData.get("repository_binding_id") ?? "",
   ).trim();
@@ -1678,11 +1693,11 @@ export async function planGitHubCodeSyncAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function scheduleGitHubReconciliationAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const bindingId = getOptionalString(formData, "repository_binding_id");
   await client.scheduleGitHubReconciliationPoll({
     project_id: getProjectId(formData),
@@ -1692,11 +1707,11 @@ export async function scheduleGitHubReconciliationAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function repairGitHubReconciliationAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const runId = String(formData.get("reconciliation_run_id") ?? "").trim();
   if (!runId) {
     throw new Error("reconciliation_run_id is required");
@@ -1707,11 +1722,11 @@ export async function repairGitHubReconciliationAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function approveGitHubResolutionPlanAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const planId = String(formData.get("resolution_plan_id") ?? "").trim();
   const summary = String(formData.get("review_summary") ?? "").trim();
   if (!planId || !summary) {
@@ -1727,11 +1742,11 @@ export async function approveGitHubResolutionPlanAction(
     },
   });
   revalidatePath("/");
-}
+}); }
 
 export async function authorizeGitHubMergeAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const authorizationId = String(
     formData.get("merge_authorization_id") ?? "",
   ).trim();
@@ -1749,11 +1764,11 @@ export async function authorizeGitHubMergeAction(
     },
   });
   revalidatePath("/");
-}
+}); }
 
 export async function enqueueGitHubMergeAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const authorizationId = String(
     formData.get("merge_authorization_id") ?? "",
   ).trim();
@@ -1765,7 +1780,7 @@ export async function enqueueGitHubMergeAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 const MIN_EASY_CONNECT_SECRET_LENGTH = 8;
 
@@ -1836,7 +1851,7 @@ export async function easyConnectProviderAction(
 
 export async function createProviderAccountAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const provider = formData.get("provider");
   const accountLabel = formData.get("account_label");
   if (typeof provider !== "string" || !provider.trim()) {
@@ -1873,7 +1888,7 @@ export async function createProviderAccountAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 function getProviderAccountId(formData: FormData): string {
   const providerAccountId = formData.get("provider_account_id");
@@ -1883,7 +1898,7 @@ function getProviderAccountId(formData: FormData): string {
   return providerAccountId.trim();
 }
 
-export async function testProviderAccountAction(formData: FormData): Promise<void> {
+export async function testProviderAccountAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const providerAccountId = getProviderAccountId(formData);
   await client.testProviderAccount(
     providerAccountId,
@@ -1891,11 +1906,11 @@ export async function testProviderAccountAction(formData: FormData): Promise<voi
     getActor(formData),
   );
   revalidatePath("/");
-}
+}); }
 
 export async function updateProviderAccountAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const providerAccountId = getProviderAccountId(formData);
   await client.updateProviderAccount(providerAccountId, {
     project_id: getProjectId(formData),
@@ -1921,31 +1936,31 @@ export async function updateProviderAccountAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function enableProviderAccountAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   await client.enableProviderAccount(getProviderAccountId(formData), {
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function disableProviderAccountAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   await client.disableProviderAccount(getProviderAccountId(formData), {
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function rotateProviderCredentialsAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const credentialRefs = parseProviderCredentialRefs(formData);
   if (Object.keys(credentialRefs).length === 0) {
     throw new Error("At least one replacement SecretRef is required.");
@@ -1958,11 +1973,11 @@ export async function rotateProviderCredentialsAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function revokeProviderAccountAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const accountLabel = getOptionalString(formData, "account_label");
   const confirmation = getOptionalString(formData, "confirmation");
   if (!accountLabel || confirmation !== accountLabel) {
@@ -1973,20 +1988,20 @@ export async function revokeProviderAccountAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function syncProviderResourcesAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   await client.syncExternalResources({
     project_id: getProjectId(formData),
     provider_account_id: getOptionalString(formData, "provider_account_id"),
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function runResourceJanitorAction(formData: FormData): Promise<void> {
+export async function runResourceJanitorAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const maxCandidates = Number(formData.get("max_candidates") ?? 10);
   await client.runResourceJanitor({
     project_id: getProjectId(formData),
@@ -1995,9 +2010,9 @@ export async function runResourceJanitorAction(formData: FormData): Promise<void
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function upsertWorkerPoolAction(formData: FormData): Promise<void> {
+export async function upsertWorkerPoolAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const poolKey = formData.get("pool_key");
   const kind = formData.get("kind");
   if (typeof poolKey !== "string" || !poolKey.trim()) {
@@ -2038,9 +2053,9 @@ export async function upsertWorkerPoolAction(formData: FormData): Promise<void> 
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function runAutoscalerPlanAction(formData: FormData): Promise<void> {
+export async function runAutoscalerPlanAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await client.runAutoscalerPlan({
     project_id: getProjectId(formData),
     worker_pool_id: getOptionalString(formData, "worker_pool_id"),
@@ -2052,9 +2067,9 @@ export async function runAutoscalerPlanAction(formData: FormData): Promise<void>
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function createChangeSetAction(formData: FormData): Promise<void> {
+export async function createChangeSetAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const title = formData.get("title");
   const summary = formData.get("summary");
   if (typeof title !== "string" || !title.trim()) {
@@ -2106,29 +2121,29 @@ export async function createChangeSetAction(formData: FormData): Promise<void> {
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function approveChangeSetAction(formData: FormData): Promise<void> {
+export async function approveChangeSetAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const changeSetId = formData.get("changeset_id");
   if (typeof changeSetId !== "string" || !changeSetId.trim()) {
     throw new Error("changeset_id is required");
   }
   await client.approveChangeSet(changeSetId.trim(), { actor: getActor(formData) });
   revalidatePath("/");
-}
+}); }
 
-export async function applyChangeSetAction(formData: FormData): Promise<void> {
+export async function applyChangeSetAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const changeSetId = formData.get("changeset_id");
   if (typeof changeSetId !== "string" || !changeSetId.trim()) {
     throw new Error("changeset_id is required");
   }
   await client.applyChangeSet(changeSetId.trim(), { actor: getActor(formData) });
   revalidatePath("/");
-}
+}); }
 
 export async function createDeploymentTargetAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const appName = formData.get("app_name");
   const repo = formData.get("repo");
   const environment = formData.get("environment");
@@ -2174,9 +2189,9 @@ export async function createDeploymentTargetAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
-export async function createDeploymentRunAction(formData: FormData): Promise<void> {
+export async function createDeploymentRunAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const deploymentTargetId = formData.get("deployment_target_id");
   if (typeof deploymentTargetId !== "string" || !deploymentTargetId.trim()) {
     throw new Error("deployment_target_id is required");
@@ -2196,11 +2211,11 @@ export async function createDeploymentRunAction(formData: FormData): Promise<voi
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function upsertDeploymentEnvironmentPolicyAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const environment = formData.get("environment");
   const runtimeMode = formData.get("runtime_mode");
   if (typeof environment !== "string" || !environment.trim()) {
@@ -2225,11 +2240,11 @@ export async function upsertDeploymentEnvironmentPolicyAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function runDeploymentHealthCheckAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const deploymentRunId = formData.get("deployment_run_id");
   if (typeof deploymentRunId !== "string" || !deploymentRunId.trim()) {
     throw new Error("deployment_run_id is required");
@@ -2238,11 +2253,11 @@ export async function runDeploymentHealthCheckAction(
     actor: getActor(formData),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function createImprovementProgramAction(
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult> { return act(async () => {
   const name = String(formData.get("name") ?? "").trim();
   const objective = String(formData.get("objective") ?? "").trim();
   const baselineEvaluationId = String(
@@ -2281,7 +2296,7 @@ export async function createImprovementProgramAction(
     );
   }
   revalidatePath("/");
-}
+}); }
 
 // ---- Capabilities: MCP server management ----
 //
@@ -2291,7 +2306,7 @@ export async function createImprovementProgramAction(
 
 // ---- Convene a multi-agent PRD meeting ----
 
-export async function conveneMeetingAction(formData: FormData): Promise<void> {
+export async function conveneMeetingAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const directive = String(formData.get("directive") ?? "").trim();
   const url = String(formData.get("url") ?? "").trim();
@@ -2299,10 +2314,10 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
   const meetingType = String(formData.get("meeting_type") ?? "prd_panel").trim() || "prd_panel";
   const roles = formData.getAll("roles").map((r) => String(r)).filter(Boolean);
   if (!directive) {
-    return;
+    return missingInput("directive");
   }
   if (meetingType === "standup") {
-    await apiWrite(`${API_URL}/v1/meetings/standup`, {
+    await apiFetch(`${API_URL}/v1/meetings/standup`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
@@ -2327,16 +2342,16 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
     constraints: { meeting_type: "prd_panel" },
   });
   revalidatePath("/");
-}
+}); }
 
-export async function runSimulatedMeetingAction(formData: FormData): Promise<void> {
+export async function runSimulatedMeetingAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const meetingId = String(formData.get("meeting_id") ?? "").trim();
   const directive = String(formData.get("directive") ?? "").trim();
   const path = meetingId
     ? `/v1/meetings/${encodeURIComponent(meetingId)}/simulated-run`
     : "/v1/meetings/simulated-run";
-  await apiWrite(`${API_URL}${path}`, {
+  await apiFetch(`${API_URL}${path}`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -2348,7 +2363,7 @@ export async function runSimulatedMeetingAction(formData: FormData): Promise<voi
     }),
   });
   revalidatePath("/");
-}
+}); }
 
 export async function loadMeetingEvidenceAction(
   meetingId: string,
@@ -2390,9 +2405,9 @@ export async function loadMeetingEvidenceAction(
   };
 }
 
-export async function seedAssuranceDemoAction(formData: FormData): Promise<void> {
+export async function seedAssuranceDemoAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
-  await apiWrite(`${API_URL}/v1/assurance/seed-demo`, {
+  await apiFetch(`${API_URL}/v1/assurance/seed-demo`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -2401,7 +2416,7 @@ export async function seedAssuranceDemoAction(formData: FormData): Promise<void>
     }),
   });
   revalidatePath("/");
-}
+}); }
 
 // ---- Start a coding-agent task (clone -> edit -> test -> gated PR) ----
 
@@ -2412,12 +2427,12 @@ function splitLines(value: string): string[] {
     .filter(Boolean);
 }
 
-export async function createCodeTaskAction(formData: FormData): Promise<void> {
+export async function createCodeTaskAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const title = String(formData.get("title") ?? "").trim();
   const instructions = String(formData.get("instructions") ?? "").trim();
   if (!title || !instructions) {
-    return;
+    return missingInput("title", "instructions");
   }
   const created = await client.createCodeTask({
     project_id: projectId,
@@ -2439,7 +2454,7 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
   // thing here and outside any try.
   redirect(workflowHref(created?.workflow_run_id ?? null,
                         orgFromReferer((await headers()).get("referer"))));
-}
+}); }
 
 /**
  * Run an existing task again, as a NEW governed run.
@@ -2992,23 +3007,23 @@ export async function deepenDiscoveryAction(
 
 // ---- Onboard a new organization (admin) ----
 
-export async function onboardOrgAction(formData: FormData): Promise<void> {
+export async function onboardOrgAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) {
-    return;
+    return missingInput("name");
   }
   await client.onboardOrg(name);
   revalidatePath("/");
-}
+}); }
 
 // ---- Manage meeting role-agents (per-org template) ----
 
-export async function upsertMeetingRoleAction(formData: FormData): Promise<void> {
+export async function upsertMeetingRoleAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const title = String(formData.get("title") ?? "").trim();
   const lens = String(formData.get("lens") ?? "").trim();
   if (!title || !lens) {
-    return;
+    return missingInput("title", "lens");
   }
   await client.upsertMeetingRole({
     project_id: projectId,
@@ -3018,28 +3033,28 @@ export async function upsertMeetingRoleAction(formData: FormData): Promise<void>
     is_default: String(formData.get("is_default") ?? "") === "true",
   });
   revalidatePath("/");
-}
+}); }
 
-export async function setMeetingRoleEnabledAction(formData: FormData): Promise<void> {
+export async function setMeetingRoleEnabledAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const roleKey = String(formData.get("role_key") ?? "").trim();
   const enabled = String(formData.get("enabled") ?? "") === "true";
   if (!roleKey) {
-    return;
+    return missingInput("roleKey");
   }
   await client.setMeetingRoleEnabled(roleKey, projectId, enabled);
   revalidatePath("/");
-}
+}); }
 
-export async function deleteMeetingRoleAction(formData: FormData): Promise<void> {
+export async function deleteMeetingRoleAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const roleKey = String(formData.get("role_key") ?? "").trim();
   if (!roleKey) {
-    return;
+    return missingInput("roleKey");
   }
   await client.deleteMeetingRole(roleKey, projectId);
   revalidatePath("/");
-}
+}); }
 
 /**
  * Change an app that already exists.
@@ -3068,16 +3083,16 @@ export async function followUpCodeTaskAction(
   }
 }
 
-export async function retryCodeTaskAction(formData: FormData): Promise<void> {
+export async function retryCodeTaskAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const runId = String(formData.get("run_id") ?? "").trim();
-  if (!runId) return;
+  if (!runId) return missingInput("runId");
   await client.retryCodeTask(
     runId,
     String(formData.get("fix_note") ?? "").trim() || undefined,
     getActor(formData),
   );
   revalidatePath("/");
-}
+}); }
 
 /**
  * Operator-triggered retry. Distinct from the feedback flow, which asks an agent to diagnose
@@ -3529,34 +3544,34 @@ export async function overrideCodeTaskAction(
 
 // ---- AI SRE reliability (RB-11) ----
 
-export async function reliabilityDiagnoseAction(formData: FormData): Promise<void> {
+export async function reliabilityDiagnoseAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const incidentId = String(formData.get("incident_id") ?? "");
-  if (!incidentId) return;
+  if (!incidentId) return missingInput("incidentId");
   await postJson(`/v1/reliability/incidents/${incidentId}/diagnose`, {
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
-}
+}); }
 
-export async function reliabilityFeedbackAction(formData: FormData): Promise<void> {
+export async function reliabilityFeedbackAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const incidentId = String(formData.get("incident_id") ?? "");
   const verdict = String(formData.get("verdict") ?? "");
-  if (!incidentId || !verdict) return;
+  if (!incidentId || !verdict) return missingInput("incidentId", "verdict");
   await postJson(`/v1/reliability/incidents/${incidentId}/feedback`, {
     project_id: getProjectId(formData),
     actor: getActor(formData),
     verdict,
   });
-}
+}); }
 
-export async function reliabilityRemediateAction(formData: FormData): Promise<void> {
+export async function reliabilityRemediateAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const incidentId = String(formData.get("incident_id") ?? "");
-  if (!incidentId) return;
+  if (!incidentId) return missingInput("incidentId");
   await postJson(`/v1/reliability/incidents/${incidentId}/remediate`, {
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
-}
+}); }
 
 export async function createPreviewFixtureAction(
   _prev: { id?: string; error?: string; open_url?: string } | null,

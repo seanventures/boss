@@ -80,6 +80,28 @@ describe("what happens if nobody answers", () => {
   });
 });
 
+describe("the same contract as the Approvals inbox", () => {
+  // Review round 2: the v2 queue carried no decision kind or allowed actions, so a refusal
+  // notice read as a question and a row listed raw options that were not the answers that work.
+  it("names the answers the engine offers, not the raw options", () => {
+    const html = renderToStaticMarkup(<DecisionsScreen queue={queue({ items: [dec({
+      kind: "pull_request", options: ["approve", "reject"],
+      allowed_actions: [{ action: "approve", label: "Approve and merge" },
+                        { action: "reject", label: "Keep blocked" }],
+    })] })} />);
+    expect(html).toContain("Approve and merge · Keep blocked");
+  });
+
+  it("a refusal reads as a notice with what to do", () => {
+    const html = renderToStaticMarkup(<DecisionsScreen queue={queue({ items: [dec({
+      kind: "refusal", allowed_actions: [{ action: "reject", label: "Dismiss" }],
+      guidance: { what_to_do: "Raise the cap in Govern." },
+    })] })} />);
+    expect(html).toContain("notice");
+    expect(html).toContain("Raise the cap in Govern.");
+  });
+});
+
 describe("an empty list must not be reassuring by accident", () => {
   it("an unreachable API says so, and says why that is dangerous here", () => {
     // On this page specifically, a wrongly-empty list is worse than an error: gates can fire

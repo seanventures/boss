@@ -4,6 +4,7 @@ import { formatDateTime } from "../lib/datetime";
 import type { ImprovementProgramItem } from "../lib/self-improvement";
 import { createImprovementProgramAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 const PROMOTE_BADGE =
   "Promote is an enterprise SIM step — Community records trials only.";
@@ -29,7 +30,7 @@ export function ImprovementProgramsPanel({
         proposal needs the Enterprise edition.
       </p>
 
-      <form
+      <ActionForm
         action={createImprovementProgramAction}
         className="composer compact"
         data-testid="improvement-program-create-form"
@@ -76,7 +77,7 @@ export function ImprovementProgramsPanel({
         <SubmitButton className="button secondary" type="submit">
           Create improvement program
         </SubmitButton>
-      </form>
+      </ActionForm>
 
       {!programsApiReachable ? (
         <p className="detail">

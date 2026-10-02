@@ -187,7 +187,7 @@ describe("client action feedback (toasts + revalidate)", async () => {
     fd.set("current_value", "1");
     fd.set("unit", "x");
 
-    await expect(createKpiAction(fd)).resolves.toBeUndefined();
+    await expect(createKpiAction(fd)).resolves.toMatchObject({ ok: true });
     expect(client.createKpi).toHaveBeenCalledTimes(1);
     expect(revalidatePath).toHaveBeenCalledWith("/");
   });
@@ -201,8 +201,14 @@ describe("client action feedback (toasts + revalidate)", async () => {
     fd.set("target_value", "0"); // triggers <=0 validation
     fd.set("current_value", "0");
     fd.set("unit", "x");
+    // REWRITTEN for the ActionResult contract (lib/action-result.ts): a server action now
+    // returns its failure as a sentence instead of throwing one Next would redact.
 
-    await expect(createKpiAction(fd)).rejects.toThrow("target_value must be greater than zero");
+    await expect(createKpiAction(fd)).resolves.toMatchObject({
+
+      ok: false, error: expect.stringContaining("target_value must be greater than zero"),
+
+    });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
@@ -337,9 +343,11 @@ describe("client action feedback (toasts + revalidate)", async () => {
     revoke.set("actor", "ceo");
     revoke.set("account_label", "AWS production");
     revoke.set("confirmation", "wrong");
-    await expect(revokeProviderAccountAction(revoke)).rejects.toThrow(
-      "Type the account label exactly",
-    );
+    // REWRITTEN for the ActionResult contract (lib/action-result.ts): a server action now
+    // returns its failure as a sentence instead of throwing one Next would redact.
+    await expect(revokeProviderAccountAction(revoke)).resolves.toMatchObject({
+      ok: false, error: expect.stringContaining("Type the account label exactly"),
+    });
     revoke.set("confirmation", "AWS production");
     await revokeProviderAccountAction(revoke);
     expect(client.revokeProviderAccount).toHaveBeenCalledWith("pa_aws", {

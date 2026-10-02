@@ -277,19 +277,18 @@ describe("BOSS mission-control design system", () => {
     expect(css).toContain(".provider-drawer");
   });
 
-  it("keeps the Command Center bound to live commands, work, agents, and events", () => {
-    // BOSS-146: the surface must remain a control-plane projection, not a
-    // static showcase. These four sources are deliberately asserted together:
-    // removing any one turns the command center into an attractive, but
-    // misleading, dashboard.
-    expect(page).toContain("submitCommandAction");
-    expect(page).toContain("status.openTasks");
-    expect(page).toContain("ccRoster.filter");
-    expect(page).toContain("events.items.map");
-    expect(page).toContain("<CoordinationPanel");
-    const coordination = readFileSync(resolve(__dirname, "../app/coordination-ui.tsx"), "utf8");
-    expect(coordination).toContain("5_000");
-    expect(coordination).toContain("currentTaskId");
+  it("keeps the Command Center bound to live workflow runs, not a static showcase", () => {
+    // BOSS-146: the surface must remain a control-plane projection, not a static showcase.
+    // REWRITTEN: this asserted the task-era sources (status.openTasks, an orb roster over
+    // tasks.owner_role_id, <CoordinationPanel>). A run started by Build creates no task, so
+    // those never showed it; the Command Center now reads workflow runs. What is protected is
+    // the same: live data on first paint, and a screen that keeps itself current.
+    expect(page).toContain("fetchCommandCenter(activeProjectId");
+    expect(page).toContain("<CommandCenter");
+    const cc = readFileSync(resolve(__dirname, "../app/command-center-ui.tsx"), "utf8");
+    expect(cc).toContain("/v1/console/command-center?project_id=");
+    expect(cc).toContain("POLL_MS");
+    expect(cc).toContain("onChanged(");
   });
 
   it("keeps approvals decision-backed and exposes their complete evidence", () => {

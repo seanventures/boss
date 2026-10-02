@@ -178,6 +178,7 @@ export function WorkforceArea(
   }, [workforce.agents, filter, search, deleted]);
 
   const counts = workforce.counts ?? { WORKING: 0, STUCK: 0, IDLE: 0, total: 0 };
+  const workedCount = (workforce.agents ?? []).filter((a) => volumeOf(a) > 0).length;
   const unregisteredCount = (workforce.agents ?? []).filter((agent) => !agent.registered).length;
   const shownAgents = filter === "all" && !search.trim() && !showAll
     ? agents.slice(0, 8) : agents;
@@ -202,8 +203,10 @@ export function WorkforceArea(
   return (
     <div className="roster">
       <div className="roster-filterbar">
-        <span className="detail">
-          {counts.total} role{counts.total === 1 ? "" : "s"} with recorded work
+        {/* COUNTED, NOT ASSUMED. This said "{total} roles with recorded work" over every
+            registered role, idle ones included — 22 on boss-1, most of which had done nothing. */}
+        <span className="detail" data-testid="wf-roster-count">
+          {counts.total} role{counts.total === 1 ? "" : "s"} · {workedCount} with recorded work
         </span>
         <span className="roster-filters">
           {(["all", "working", "worked"] as const).map((f) => (
@@ -482,6 +485,10 @@ export function OrgChartArea({ chart, projectId, actor }: {
   const displayName = (n: { id: string; name: string; role: string }) => (nameCounts.get(n.name) ?? 0) > 1
     ? `${n.name} (${humanise(n.id) === n.name ? n.id : humanise(n.id)})` : n.name;
   const namesById = new Map((chartNow.nodes ?? []).map((node) => [node.id, displayName(node)]));
+  // A role can only report to a role that is in the plan.
+  const plannedParents = [...new Map([...(chartNow.nodes ?? []), ...availableRoles]
+    .filter((node) => Object.prototype.hasOwnProperty.call(declared, node.id))
+    .map((node) => [node.id, node])).values()];
 
   if (!chartNow.apiReachable) {
     return <p className="detail" role="alert">
@@ -666,16 +673,23 @@ export function OrgChartArea({ chart, projectId, actor }: {
               <div className="org-unassigned-row" key={n.id}
                    data-testid={`org-bench-${n.id}`}>
                 <span>{displayName(n)}</span>
+                {/* Testids say which list the button is in: the same id was reused in the tree,
+                    this bench and the no-handoffs list, so a test could not tell them apart. */}
                 <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
-                        data-testid={`org-work-${n.id}`}>Work</button>
+                        data-testid={`org-bench-work-${n.id}`}>Work</button>
                 <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
-                        data-testid={`org-definition-${n.id}`}>Definition</button>
+                        data-testid={`org-bench-definition-${n.id}`}>Definition</button>
+                {/* ONLY ROLES IN THE PLAN. This listed chartNow.tree, which falls back to the
+                    observed tree when nothing is planned, so a role could be told to report to
+                    somebody the plan did not contain — and then rendered at the top level with
+                    a parent named beside it. */}
                 <select aria-label={`Reports to for ${displayName(n)}`}
                         value={placementTargets[n.id] ?? ""}
                         onChange={(event) => setPlacementTargets((current) =>
-                          ({ ...current, [n.id]: event.target.value }))}>
+                          ({ ...current, [n.id]: event.target.value }))}
+                        data-testid={`org-bench-parent-${n.id}`}>
                   <option value="">Top-level role</option>
-                  {(chartNow.tree ?? []).map((parent) => (
+                  {plannedParents.map((parent) => (
                     <option key={parent.id} value={parent.id}>{displayName(parent)}</option>
                   ))}
                 </select>
@@ -700,9 +714,9 @@ export function OrgChartArea({ chart, projectId, actor }: {
               <div className="org-unassigned-row" key={n.id} data-testid={`org-alone-${n.id}`}>
                 <span>{displayName(n)}</span>
                 <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
-                        data-testid={`org-work-${n.id}`}>Work</button>
+                        data-testid={`org-alone-work-${n.id}`}>Work</button>
                 <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
-                        data-testid={`org-definition-${n.id}`}>Definition</button>
+                        data-testid={`org-alone-definition-${n.id}`}>Definition</button>
               </div>
             ))}
           </div>

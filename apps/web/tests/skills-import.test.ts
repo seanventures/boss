@@ -114,7 +114,7 @@ describe("skill import/export actions", async () => {
     fd.set("actor", "ceo");
     fd.set("yaml", skillBundle);
 
-    await expect(importSkillAction(fd)).resolves.toBeUndefined();
+    await expect(importSkillAction(fd)).resolves.toMatchObject({ ok: true });
     expect(client.importSkill).toHaveBeenCalledWith({
       project_id: "boss-dogfood",
       bundle: skillBundle,
@@ -160,8 +160,14 @@ describe("skill import/export actions", async () => {
     fd.set("project_id", "boss-dogfood");
     fd.set("actor", "ceo");
     fd.set("yaml", "invalid: [ yaml");
+    // REWRITTEN for the ActionResult contract (lib/action-result.ts): a server action now
+    // returns its failure as a sentence instead of throwing one Next would redact.
 
-    await expect(importSkillAction(fd)).rejects.toThrow("bundle must be valid JSON");
+    await expect(importSkillAction(fd)).resolves.toMatchObject({
+
+      ok: false, error: expect.stringContaining("bundle must be valid JSON"),
+
+    });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
@@ -173,10 +179,10 @@ describe("skill import/export actions", async () => {
     fd.set("actor", "ceo");
     fd.set("skill_id", "local.community.skill");
 
-    await expect(exportSkillAction(fd)).resolves.toEqual({
+    await expect(exportSkillAction(fd)).resolves.toMatchObject({ ok: true, data: {
       yaml: skillBundle,
       skillId: "local.community.skill",
-    });
+    } });
     expect(client.exportSkill).toHaveBeenCalledWith(
       "boss-dogfood",
       "local.community.skill",

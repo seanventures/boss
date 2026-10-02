@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from . import decision_actions
 from .core import create_artifact, emit_event, now_utc
 from .health import HealthSnapshotService
 
@@ -201,21 +202,12 @@ class OpsQueueService:
     def _fetch_pending_decisions(
         self, connection: Connection, project_id: str, limit: int
     ) -> list[dict[str, Any]]:
-        rows = connection.execute(
-            text(
-                """
-                SELECT id, task_id, question, status, risk_tier, default_action,
-                       deadline_at, created_at, updated_at
-                FROM decisions
-                WHERE project_id = :project_id
-                  AND status IN ('pending', 'delegated')
-                ORDER BY risk_tier DESC, deadline_at ASC NULLS LAST, created_at DESC
-                LIMIT :limit
-                """
-            ),
-            {"project_id": project_id, "limit": limit},
-        ).mappings().all()
-        return [dict(row) for row in rows]
+        # The decisions waiting on the operator, by the Approvals inbox's rule. This was its own
+        # pending-plus-delegated list, which disagreed with the inbox (review round 3).
+        keys = ("id", "task_id", "question", "status", "risk_tier", "default_action",
+                "deadline_at", "created_at", "updated_at")
+        rows = decision_actions.waiting_on_operator(connection, project_id)[:limit]
+        return [{k: row.get(k) for k in keys} for row in rows]
 
     def _count_by_status(
         self, connection: Connection, table_name: str, project_id: str

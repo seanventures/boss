@@ -29,7 +29,51 @@ export type DecisionFeedItem = {
   externalRef?: string;
   createdAt: string;
   updatedAt: string;
+  /** What a person can do with it, decided by the engine (services/decision_actions.py).
+   *  Absent from an older API, in which case the inbox falls back to approve/reject. */
+  kind?: DecisionKind;
+  allowedActions?: DecisionActionOffer[];
+  guidance?: DecisionGuidance | null;
+  /** Where the card belongs, decided by the engine (decision_actions.attention) with the same
+   *  rule the Command Center counts by. Absent from an older API: see decisionAttention. */
+  attention?: DecisionAttention;
 };
+
+export type DecisionAttention = "needs_action" | "expired" | "resolved";
+
+export type DecisionKind =
+  | "refusal" | "deploy_gate" | "workflow_gate" | "pull_request" | "general";
+
+export type DecisionActionOffer = {
+  action: "approve" | "reject" | "revise" | "delegate" | "execute";
+  label: string;
+  tone: "approve" | "reject" | "neutral";
+  effect: string;
+  /** A field the action cannot go without. */
+  needs?: "note" | "delegate_to" | null;
+};
+
+export type DecisionGuidance = {
+  what_happened: string;
+  what_to_do: string;
+  /** The console area where the cause is fixed. */
+  area: string;
+  link_label: string;
+};
+
+/** The actions to draw. The engine's list when it sent one — older APIs did not. */
+export function offeredActions(item: DecisionFeedItem): DecisionActionOffer[] {
+  if (item.allowedActions) return item.allowedActions;
+  if (item.status === "approved") {
+    return [{ action: "execute", label: "Mark executed", tone: "approve",
+              effect: "Records what was carried out.", needs: "note" }];
+  }
+  if (!isAnswerableDecision(item)) return [];
+  return [
+    { action: "approve", label: "Approve", tone: "approve", effect: "", needs: null },
+    { action: "reject", label: "Reject", tone: "reject", effect: "", needs: null },
+  ];
+}
 
 export type DecisionFeed = {
   projectId: string;
@@ -43,6 +87,7 @@ export const DEFAULT_DECISION_INBOX_FILTER = "needs_action" as const;
 
 export const DECISION_INBOX_FILTERS = [
   "needs_action",
+  "expired",
   "resolved",
   "all",
 ] as const;
@@ -60,14 +105,44 @@ export const DECISION_INBOX_EMPTY_HOWTO = [
   "Agents hitting a governance ceiling (plan, deploy, autonomy)",
 ] as const;
 
-export function isActionableDecision(item: { status: string }): boolean {
-  return item.status === "pending" || item.status === "delegated";
+type AttentionInput = {
+  status: string;
+  attention?: DecisionAttention;
+  allowedActions?: DecisionActionOffer[];
+};
+
+/** Where a card belongs: the engine's answer, the same one the Command Center counts by.
+ *
+ *  Review round 2: this used to be "any card the engine offers an answer on", which put every
+ *  expired hold-default decision under the default Needs action view — 127 of 165 on the live
+ *  project, some offering "Approve and merge" on pull requests from weeks ago — while the
+ *  Command Center counted pending and delegated only. The two disagreed about what was waiting.
+ *  The fallback is for an older API that sends no `attention`. */
+export function decisionAttention(item: AttentionInput): DecisionAttention {
+  if (item.attention) return item.attention;
+  if (item.status === "pending" || item.status === "delegated") return "needs_action";
+  const answerable = (item.allowedActions ?? []).some(
+    (offer) => offer.action === "approve" || offer.action === "reject");
+  if (!answerable || item.status === "approved") return "resolved";
+  return item.status === "expired" ? "expired" : "needs_action";
+}
+
+/** Waiting on the operator now: the default Needs action view, and the Command Center count. */
+export function isActionableDecision(item: AttentionInput): boolean {
+  return decisionAttention(item) === "needs_action";
+}
+
+/** Can still be answered, including an expired hold decision that applied nothing. The card
+ *  draws its buttons for these. */
+export function isAnswerableDecision(item: AttentionInput): boolean {
+  const where = decisionAttention(item);
+  return where === "needs_action" || where === "expired";
 }
 
 export function parseDecisionInboxFilter(
   raw?: string | null,
 ): DecisionInboxFilter {
-  if (raw === "needs_action" || raw === "resolved" || raw === "all") {
+  if (raw === "needs_action" || raw === "expired" || raw === "resolved" || raw === "all") {
     return raw;
   }
   if (raw === "pending" || raw === "actionable") {
@@ -76,17 +151,14 @@ export function parseDecisionInboxFilter(
   return DEFAULT_DECISION_INBOX_FILTER;
 }
 
-export function filterDecisionInbox<T extends { status: string }>(
+export function filterDecisionInbox<T extends AttentionInput>(
   items: T[],
   filter: DecisionInboxFilter = DEFAULT_DECISION_INBOX_FILTER,
 ): T[] {
   if (filter === "all") {
     return items;
   }
-  if (filter === "resolved") {
-    return items.filter((item) => !isActionableDecision(item));
-  }
-  return items.filter(isActionableDecision);
+  return items.filter((item) => decisionAttention(item) === filter);
 }
 
 export function decisionInboxHref(options: {
@@ -131,6 +203,24 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     externalRef: payload.external_ref,
     createdAt: payload.created_at,
     updatedAt: payload.updated_at,
+    ...contractOf(payload),
+  };
+}
+
+/** The engine's action contract, read defensively: the generated client type predates it. */
+function contractOf(payload: ApiDecisionCard): Pick<
+  DecisionFeedItem, "kind" | "allowedActions" | "guidance" | "attention"> {
+  const extra = payload as ApiDecisionCard & {
+    kind?: DecisionKind;
+    allowed_actions?: DecisionActionOffer[];
+    guidance?: DecisionGuidance | null;
+    attention?: DecisionAttention | null;
+  };
+  return {
+    ...(extra.attention ? { attention: extra.attention } : {}),
+    ...(extra.kind ? { kind: extra.kind } : {}),
+    ...(Array.isArray(extra.allowed_actions) ? { allowedActions: extra.allowed_actions } : {}),
+    ...(extra.guidance !== undefined ? { guidance: extra.guidance } : {}),
   };
 }
 

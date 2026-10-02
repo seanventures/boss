@@ -1538,7 +1538,10 @@ export function AskBossHero({
               value={input}
               rows={1}
               disabled={busy}
-              placeholder="Describe what to build or ask a question…"
+              // NOT "or ask a question": ⌘/Ctrl+Enter runs Build, the path that spends budget,
+              // so a box inviting questions turned typed questions into builds. Questions go
+              // through "Talk to BOSS" beside Build.
+              placeholder="Describe what to build — ⌘/Ctrl+Enter builds it. To ask something, use Talk to BOSS."
               onChange={(e) => {
                 setInput(e.target.value);
                 // A brief is many lines; a fixed one-row box hid all but the first.

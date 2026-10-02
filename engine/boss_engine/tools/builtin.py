@@ -1605,6 +1605,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         # FOR ---" and the Meetings screen could not tell them apart.
         title = ms.meeting_subject(directive)
         if objective:
+            # The markers are meeting_service's, so directive_subject() can take them off
+            # again for anything that NAMES the meeting (the task title, the console's cards).
             directive = (
                 f"{ms.PANEL_PURPOSE_MARKER}\n"
                 f"You are the panel inside BOSS's "

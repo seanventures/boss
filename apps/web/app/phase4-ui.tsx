@@ -13,6 +13,7 @@ import {
   requestInitiativeBudgetAction,
 } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 import { callAction } from "../lib/call-action";
 function usd(micros: number): string {
@@ -35,11 +36,11 @@ export function ChaosCard({ projectId, runs }: { projectId: string; runs: ChaosR
       </p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {["lease_reclaim", "deadletter_storm"].map((scenario) => (
-          <form action={runChaosAction} key={scenario}>
+          <ActionForm action={runChaosAction} key={scenario}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="scenario" value={scenario} />
             <SubmitButton className="button secondary" type="submit">Inject {scenario}</SubmitButton>
-          </form>
+          </ActionForm>
         ))}
       </div>
       {runs.length > 0 ? (
@@ -81,10 +82,10 @@ export function FinopsCard({
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <h3 style={{ margin: 0 }}>FinOps — commitments &amp; initiatives</h3>
-        <form action={reconcileCommitmentsAction}>
+        <ActionForm action={reconcileCommitmentsAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <SubmitButton className="button secondary" type="submit">Reconcile commitments</SubmitButton>
-        </form>
+        </ActionForm>
       </div>
       <p className="detail">
         Score each commitment’s utilization vs actual usage (on-track / under / over → review

@@ -20,6 +20,7 @@ import {
 import { formatDateTime } from "../lib/datetime";
 import type { GitHubOperationsFeed } from "../lib/github-operations";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 type GitHubOperationsProps = {
   feed: GitHubOperationsFeed;
@@ -294,17 +295,17 @@ export function GitHubOperations({
         )}
         {canManage && selectedBinding ? (
           <div className="ghx-inline-actions">
-            <form action={testGitHubConnectionAction}>
+            <ActionForm action={testGitHubConnectionAction}>
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <input type="hidden" name="connection_id" value={selectedBinding.connection_id} />
               <input type="hidden" name="repository_binding_id" value={selectedBinding.id} />
               <SubmitButton className="button secondary" type="submit">Test access</SubmitButton>
-            </form>
-            <form action={scheduleGitHubReconciliationAction}>
+            </ActionForm>
+            <ActionForm action={scheduleGitHubReconciliationAction}>
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <input type="hidden" name="repository_binding_id" value={selectedBinding.id} />
               <SubmitButton className="button" type="submit">Reconcile now</SubmitButton>
-            </form>
+            </ActionForm>
           </div>
         ) : null}
       </div>
@@ -325,7 +326,7 @@ export function GitHubOperations({
             </p>
           </div>
           {feed.connections.length === 0 ? (
-            <form action={easyConnectGitHubAction} className="ghx-admin-form ghx-easy-form">
+            <ActionForm action={easyConnectGitHubAction} className="ghx-admin-form ghx-easy-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <label>
                 Connection label
@@ -372,9 +373,9 @@ export function GitHubOperations({
               <SubmitButton className="button" type="submit">
                 Connect GitHub
               </SubmitButton>
-            </form>
+            </ActionForm>
           ) : (
-            <form action={createGitHubRepositoryBindingAction} className="ghx-admin-form ghx-easy-form">
+            <ActionForm action={createGitHubRepositoryBindingAction} className="ghx-admin-form ghx-easy-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <label>
                 Connection
@@ -402,7 +403,7 @@ export function GitHubOperations({
               <SubmitButton className="button" type="submit">
                 Link repository to project
               </SubmitButton>
-            </form>
+            </ActionForm>
           )}
         </div>
       ) : null}
@@ -472,7 +473,7 @@ export function GitHubOperations({
           {canManage && selectedBinding ? (
             <details className="ghx-operation">
               <summary>Compare branches and plan code sync</summary>
-              <form action={captureGitHubBranchSnapshotAction} className="ghx-form-grid">
+              <ActionForm action={captureGitHubBranchSnapshotAction} className="ghx-form-grid">
                 <HiddenScope projectId={feed.projectId} actor={actor} />
                 <input type="hidden" name="repository_binding_id" value={selectedBinding.id} />
                 <label>
@@ -484,9 +485,9 @@ export function GitHubOperations({
                   <input name="target_ref" defaultValue={selectedBinding.default_branch} placeholder="main" required />
                 </label>
                 <SubmitButton className="button secondary" type="submit">Capture immutable snapshot</SubmitButton>
-              </form>
+              </ActionForm>
               {latestSnapshot ? (
-                <form action={planGitHubCodeSyncAction} className="ghx-plan-line">
+                <ActionForm action={planGitHubCodeSyncAction} className="ghx-plan-line">
                   <HiddenScope projectId={feed.projectId} actor={actor} />
                   <input type="hidden" name="repository_binding_id" value={selectedBinding.id} />
                   <input type="hidden" name="snapshot_id" value={latestSnapshot.id} />
@@ -499,7 +500,7 @@ export function GitHubOperations({
                     <input name="resolution_branch" placeholder="ai/codex/resolve-…" />
                   </label>
                   <SubmitButton className="button" type="submit">Plan from snapshot</SubmitButton>
-                </form>
+                </ActionForm>
               ) : null}
             </details>
           ) : null}
@@ -603,12 +604,12 @@ export function GitHubOperations({
                   <Status value={plan?.status ?? conflict.status} />
                   <span>{plan ? `plan v${plan.version}` : "validated plan required"}</span>
                   {canManage && plan?.status === "proposed" ? (
-                    <form action={approveGitHubResolutionPlanAction} className="ghx-review-form">
+                    <ActionForm action={approveGitHubResolutionPlanAction} className="ghx-review-form">
                       <HiddenScope projectId={feed.projectId} actor={actor} />
                       <input type="hidden" name="resolution_plan_id" value={plan.id} />
                       <input name="review_summary" placeholder="Independent review evidence" required />
                       <SubmitButton className="button secondary" type="submit">Approve plan</SubmitButton>
-                    </form>
+                    </ActionForm>
                   ) : (
                     <code>{shortId(plan?.id ?? conflict.id)}</code>
                   )}
@@ -631,18 +632,18 @@ export function GitHubOperations({
                 <Status value={authorization.status} />
                 <span>{authorization.observed_checks.length}/{authorization.required_checks.length} checks · {authorization.observed_reviews.length}/{authorization.required_approvals} reviews</span>
                 {canManage && authorization.status === "pending_approval" ? (
-                  <form action={authorizeGitHubMergeAction} className="ghx-review-form">
+                  <ActionForm action={authorizeGitHubMergeAction} className="ghx-review-form">
                     <HiddenScope projectId={feed.projectId} actor={actor} />
                     <input type="hidden" name="merge_authorization_id" value={authorization.id} />
                     <input name="review_summary" placeholder="Authorization evidence" required />
                     <SubmitButton className="button secondary" type="submit">Authorize</SubmitButton>
-                  </form>
+                  </ActionForm>
                 ) : canManage && authorization.status === "authorized" ? (
-                  <form action={enqueueGitHubMergeAction}>
+                  <ActionForm action={enqueueGitHubMergeAction}>
                     <HiddenScope projectId={feed.projectId} actor={actor} />
                     <input type="hidden" name="merge_authorization_id" value={authorization.id} />
                     <SubmitButton className="button secondary" type="submit">Enqueue merge</SubmitButton>
-                  </form>
+                  </ActionForm>
                 ) : (
                   <code>{shortId(authorization.changeset_id)}</code>
                 )}
@@ -662,11 +663,11 @@ export function GitHubOperations({
                 <Status value={run.status} />
                 <span>{run.attempt_count}/{run.max_attempts} attempts · {run.receipt_ids.length} receipts</span>
                 {canManage && ["failed", "deadlettered"].includes(run.status) ? (
-                  <form action={repairGitHubReconciliationAction}>
+                  <ActionForm action={repairGitHubReconciliationAction}>
                     <HiddenScope projectId={feed.projectId} actor={actor} />
                     <input type="hidden" name="reconciliation_run_id" value={run.id} />
                     <SubmitButton className="button secondary" type="submit">Repair</SubmitButton>
-                  </form>
+                  </ActionForm>
                 ) : <code>{shortId(run.id)}</code>}
               </div>
             ))}
@@ -689,7 +690,7 @@ export function GitHubOperations({
         <details className="ghx-admin" open={feed.connections.length === 0}>
           <summary>Connection, repository, and policy setup</summary>
           <div className="ghx-admin-grid">
-            <form action={easyConnectGitHubAction} className="ghx-admin-form">
+            <ActionForm action={easyConnectGitHubAction} className="ghx-admin-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <h3>Easy connect (env auth)</h3>
               <p className="ghx-muted">
@@ -710,9 +711,9 @@ export function GitHubOperations({
               <input type="hidden" name="role" value="primary" />
               <input type="hidden" name="test_after_link" value="true" />
               <SubmitButton className="button" type="submit">Easy connect</SubmitButton>
-            </form>
+            </ActionForm>
 
-            <form action={createGitHubConnectionAction} className="ghx-admin-form">
+            <ActionForm action={createGitHubConnectionAction} className="ghx-admin-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <h3>Advanced connection</h3>
               <label>Label<input name="connection_label" placeholder="Production GitHub App" required /></label>
@@ -727,9 +728,9 @@ export function GitHubOperations({
               <label>Installation ID<input name="installation_id" placeholder="optional" /></label>
               <label>Required permissions<textarea name="required_permissions" defaultValue={"pull\npush\ntriage"} /></label>
               <SubmitButton className="button" type="submit">Create connection</SubmitButton>
-            </form>
+            </ActionForm>
 
-            <form action={createGitHubRepositoryBindingAction} className="ghx-admin-form">
+            <ActionForm action={createGitHubRepositoryBindingAction} className="ghx-admin-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <h3>Link repository to project</h3>
               <label>Connection
@@ -749,9 +750,9 @@ export function GitHubOperations({
               </label>
               <label>Default branch<input name="default_branch" placeholder="main" /></label>
               <SubmitButton className="button" type="submit">Bind to project</SubmitButton>
-            </form>
+            </ActionForm>
 
-            <form action={createGitHubBranchPolicyAction} className="ghx-admin-form">
+            <ActionForm action={createGitHubBranchPolicyAction} className="ghx-admin-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <h3>Set branch policy</h3>
               <label>Repository
@@ -765,7 +766,7 @@ export function GitHubOperations({
               <label>Required checks<textarea name="required_checks" placeholder={"test\nlint\nbuild"} /></label>
               <label>Required approvals<input name="required_approvals" type="number" min="0" defaultValue="1" /></label>
               <SubmitButton className="button" type="submit">Create immutable policy version</SubmitButton>
-            </form>
+            </ActionForm>
           </div>
 
           {connection ? (
@@ -773,14 +774,14 @@ export function GitHubOperations({
               <span>
                 <b>{connection.connection_label}</b> · credential {connection.credential_configured ? "configured" : "missing"} · {connection.missing_permissions.length} missing permissions
               </span>
-              <form action={setGitHubConnectionStateAction}>
+              <ActionForm action={setGitHubConnectionStateAction}>
                 <HiddenScope projectId={feed.projectId} actor={actor} />
                 <input type="hidden" name="connection_id" value={connection.id} />
                 <input type="hidden" name="operation" value={connection.status === "disabled" ? "enable" : "disable"} />
                 <SubmitButton className="button ghost" type="submit">
                   {connection.status === "disabled" ? "Enable" : "Disable"} connection
                 </SubmitButton>
-              </form>
+              </ActionForm>
             </div>
           ) : null}
         </details>

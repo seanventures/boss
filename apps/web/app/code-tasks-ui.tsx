@@ -66,6 +66,35 @@ import {
 import { SubmitButton } from "./submit-button";
 import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
+import { ActionForm } from "./client-forms";
+import { displayTitle } from "../lib/directive-subject";
+
+/** Whether Retry can do anything: not while it runs, and not on a build that finished clean —
+ *  the same rule as the engine's refuse_finished_retry. */
+export function isRetryable(run: {
+  status?: string | null;
+  finalize_ctx?: Record<string, unknown> | null;
+}): boolean {
+  const status = String(run.status ?? "");
+  if (status === "running" || status === "queued") return false;
+  if (status !== "completed") return true;
+  return failingGatesOf(run.finalize_ctx).length > 0;
+}
+
+/**
+ * The gates a finished build recorded as failing, read the way the engine reads them.
+ *
+ * code_task_service.refuse_finished_retry says `advisory_failing_gates or failing_gates`: an
+ * EMPTY advisory list falls through to failing_gates. This said `??`, which stops at an empty
+ * array, so a build with no advisory failures but real failing gates had its Retry hidden
+ * while the engine would have accepted it.
+ */
+export function failingGatesOf(ctx: Record<string, unknown> | null | undefined): string[] {
+  for (const gates of [ctx?.advisory_failing_gates, ctx?.failing_gates]) {
+    if (Array.isArray(gates) && gates.length > 0) return gates.map(String);
+  }
+  return [];
+}
 
 import { callAction } from "../lib/call-action";
 function RetryControls(
@@ -86,13 +115,25 @@ function RetryControls(
   // after it off the edge. What it says still has to be knowable before the click, so it moves
   // into the tooltip.
   if (compact) {
+    // AND THE ANSWER, HERE TOO. The compact form rendered neither state.error nor state.runId,
+    // so a refused retry and a started one looked identical: nothing happened.
     return (
-      <form action={action} style={{ display: "inline-flex" }} title={explains}>
+      <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center",
+                                     flexWrap: "wrap" }} title={explains}>
         <input type="hidden" name="run_id" value={runId} />
         <SubmitButton className="cap-btn" disabled={pending}>
           <ArrowsClockwise size={15} weight="bold" aria-hidden />
           {pending ? "Retrying…" : "Retry build"}
         </SubmitButton>
+        {state?.runId ? (
+          <span className="cap-badge tone-blue" data-testid="ct-retry-started">
+            attempt {state.attempt ?? "?"} started · {state.runId}
+          </span>
+        ) : null}
+        {state?.error ? (
+          <span className="detail" role="alert" style={{ color: "#f85149" }}
+                data-testid="ct-retry-error">{state.error}</span>
+        ) : null}
       </form>
     );
   }
@@ -1670,7 +1711,7 @@ function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
       + `required to prove them.`;
 
   return (
-    <form action={conveneMeetingAction} className="ct-change-form"
+    <ActionForm action={conveneMeetingAction} className="ct-change-form"
           onClick={(e) => e.stopPropagation()}>
       <input type="hidden" name="project_id" value={projectId} />
       <input type="hidden" name="actor" value={actor} />
@@ -1700,7 +1741,7 @@ function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
             : `Writes a new PRD for ${repo || "this app"}, then builds a replacement — costs a panel and a run.`}
         </span>
       </div>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -2695,8 +2736,10 @@ function attemptKind(run: CodeTaskRun): string {
 }
 
 /** Meeting titles are whole directives; a card shows the lead, not the document. */
-function leadLine(raw: string): string {
-  const text = (raw || "").replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ").trim();
+export function leadLine(raw: string): string {
+  // The ask, not the panel's scaffolding (lib/directive-subject.ts) — cutting at the first
+  // ". " of a wrapped directive gave "--- WHAT THIS PANEL IS FOR --- You are the panel…".
+  const text = displayTitle(raw);
   if (text.length <= 84) return text;
   const stop = text.slice(0, 110).search(/[.:;]\s/);
   if (stop > 20) return text.slice(0, stop);
@@ -3128,11 +3171,13 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                     It was only in "Run it / iterate" further down the page — the same fault
                     the PR link and preview had before they were moved up: the thing you open
                     this page to do, somewhere you have to scroll to find. */}
-                {active.status !== "running" && active.status !== "queued" ? (
+                {/* NOT ON A CLEAN, FINISHED BUILD. "Retry build" showed on completed runs too,
+                    with a tooltip saying it resumes from where it failed, and one click spent a
+                    new governed attempt re-doing finished work. The engine refuses that now
+                    (refuse_finished_retry); the button follows the same rule. */}
+                {isRetryable(active) ? (
                   <RetryControls runId={active.id} compact
-                                 failingGates={(active.finalize_ctx?.advisory_failing_gates
-                                   ?? active.finalize_ctx?.failing_gates
-                                   ?? []) as string[]} />
+                                 failingGates={failingGatesOf(active.finalize_ctx)} />
                 ) : null}
                 {/* WHAT HAPPENED DURING THOSE 40 MINUTES.
                     A build runs for forty to ninety minutes and its longest phase used to be a

@@ -1,0 +1,122 @@
+/* The Command Center (command-center-ui.tsx). Its own file so a redesign of this one screen
+   does not churn globals.css, which every console stream edits. Tokens come from globals. */
+
+.cc2 { display: grid; gap: 18px; margin-top: 14px; }
+
+.cc2-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 720px) { .cc2-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.cc2-kpi {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+}
+.cc2-kpi:hover { border-color: var(--border-strong); }
+.cc2-kpi:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cc2-kpi-n { font-family: var(--display); font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.cc2-kpi-l { color: var(--muted); font-size: 0.82rem; }
+.cc2-kpi.amber { border-left: 2px solid var(--amber); }
+.cc2-kpi.green { border-left: 2px solid var(--green); }
+.cc2-kpi.red { border-left: 2px solid var(--red); }
+
+.cc2-section { display: grid; gap: 8px; }
+.cc2-h { font-size: 1.02rem; margin: 0; color: var(--ink); }
+.cc2-empty { color: var(--muted); margin: 0; font-size: 0.9rem; }
+
+.cc2-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.cc2-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-tint);
+}
+@media (max-width: 720px) {
+  .cc2-row { grid-template-columns: minmax(0, 1fr); }
+}
+.cc2-main { display: grid; gap: 2px; min-width: 0; }
+.cc2-title {
+  color: var(--ink); font-weight: 600; text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+a.cc2-title:hover { text-decoration: underline; }
+.cc2-sub { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.cc2-sub b { color: var(--ink-soft); font-weight: 600; }
+.cc2-todo { color: var(--ink-soft); font-size: 0.85rem; }
+.cc2-error { color: var(--red); font-size: 0.85rem; }
+.cc2-meta { display: grid; justify-items: end; gap: 2px; font-variant-numeric: tabular-nums; }
+.cc2-elapsed { color: var(--ink); font-family: var(--mono); font-size: 0.85rem; }
+.cc2-progress { color: var(--faint); font-size: 0.78rem; }
+.cc2-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+
+.cc2-pill {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  background: var(--accent-soft); color: var(--ink-soft);
+}
+.cc2-pill.amber { background: var(--amber-soft); color: var(--amber); }
+.cc2-pill.red { background: var(--red-soft); color: var(--red); }
+.cc2-pill.green { background: var(--green-soft); color: var(--green); }
+.cc2-pill.blue { background: var(--accent-soft); color: var(--accent-text); }
+.cc2-pill.muted { background: rgba(128, 146, 179, 0.14); color: var(--muted); }
+
+/* The real loading state for an area opened for the first time (ConsoleShell). */
+.area-loading {
+  display: grid; gap: 10px; padding: 28px 4px;
+  color: var(--muted);
+}
+.area-loading-bar {
+  height: 3px; width: 100%; border-radius: 2px; overflow: hidden;
+  background: var(--border);
+  position: relative;
+}
+.area-loading-bar::after {
+  content: ""; position: absolute; inset: 0; width: 40%;
+  background: var(--accent);
+  animation: area-loading-slide 1.2s ease-in-out infinite;
+}
+@keyframes area-loading-slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .area-loading-bar::after { animation: none; width: 100%; opacity: 0.4; } }
+
+/* Approvals: what to do about a refusal, on its card. */
+.dq-guidance {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 8px; padding: 10px 12px;
+  border-left: 2px solid var(--amber);
+  background: var(--amber-soft);
+  border-radius: var(--r-sm);
+}
+.dq-guidance p { margin: 0; flex: 1 1 280px; color: var(--ink-soft); }
+
+/* Agent Studio: the quiet setup check, what Flows holds, and the runs started here. */
+.as-button.ghost { border: 1px solid transparent; background: transparent; color: var(--muted); }
+.as-button.ghost:hover:not(:disabled) { color: var(--ink); border-color: var(--border); }
+.as-flows-scope { margin: 8px 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45; }
+.as-runs { display: grid; gap: 6px; margin-top: 12px; }
+.as-runs ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.as-runs li {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px;
+  align-items: baseline; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 0.85rem;
+}
+.as-runs li i {
+  font-style: normal; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em;
+}
+.as-run-when { color: var(--faint); white-space: nowrap; }
+.as-run-what { color: var(--ink-soft); overflow-wrap: anywhere; }
+.as-runs-empty { color: var(--muted); font-size: 0.85rem; margin: 0; }
+
+/* ActionForm's inline result line. */
+.action-form-done { color: var(--green); font-size: 0.88rem; margin: 6px 0 0; }
+.action-form-done a { color: var(--accent-text); }

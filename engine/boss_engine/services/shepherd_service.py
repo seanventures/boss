@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 from ..config import Settings
 from ..ports import sql
+from . import decision_actions
 from .core import emit_event, make_id
 from .jobs import JOB_PRIORITY_BACKGROUND
 
@@ -513,9 +514,15 @@ def _answerable_decision_clause(table: str) -> str:
     """
     if table not in _TABLES_WITH_DECISIONS:
         return ""
+    # The answerable statuses are decision_actions', the set the Approvals inbox reads. This
+    # was its own ('pending','delegated','expired'), which left out a pull request parked in
+    # revision_requested: the inbox offered "Approve and merge" on it while this sweep could
+    # close the run that approving would have resumed (review round 3). A revision_requested
+    # whose proposer is revising is not abandoned either.
+    statuses = ", ".join(f"'{s}'" for s in decision_actions.ATTENTION_CANDIDATE_STATUSES)
     return (" AND NOT EXISTS (SELECT 1 FROM decisions d "
             "                 WHERE d.id = r.decision_id "
-            "                   AND d.status IN ('pending','delegated','expired')) ")
+            f"                   AND d.status IN ({statuses})) ")
 
 def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                          actor: str = SHEPHERD_ACTOR) -> dict[str, Any]:

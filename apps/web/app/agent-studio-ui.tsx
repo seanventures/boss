@@ -295,6 +295,9 @@ export function AgentStudio({
         return;
       }
       setResult(next);
+      // THE RUN IS SOMEWHERE NOW: say where. The only feedback used to be "Recorded queued
+      // state." with no link and no list, so a run that failed was never seen.
+      if (next.ok && kind === "run") router.refresh();
     });
   };
 
@@ -346,16 +349,17 @@ export function AgentStudio({
               actor,
             );
       setResult(next);
+      if (next.ok && action === "publish") router.refresh();
     });
   };
 
   const createWorkflow = () => {
     const spec = parseWorkflowSpec();
-    if (!spec || !newWorkflowKey.trim() || !newWorkflowName.trim()) {
+    if (!spec || !newWorkflowName.trim()) {
       if (spec) {
         setResult({
           ok: false,
-          message: "Workflow key and name are required.",
+          message: "Give the workflow a name first.",
         });
       }
       return;
@@ -369,7 +373,6 @@ export function AgentStudio({
       }
       const created = await callAction(createStudioWorkflow)(
         feed.projectId,
-        newWorkflowKey.trim(),
         newWorkflowName.trim(),
         newWorkflowDescription.trim(),
         spec,
@@ -377,6 +380,7 @@ export function AgentStudio({
       );
       setResult(created);
       if (created.ok) {
+        router.refresh();
         setNewWorkflowKey("");
         setNewWorkflowName("");
         setNewWorkflowDescription("");
@@ -447,6 +451,7 @@ export function AgentStudio({
               actor={actor}
               roles={roles}
               skills={skills}
+              initialRoleKey={requestedRole || undefined}
               onClose={() => setWizardOpen(false)}
             />,
             document.body,
@@ -465,8 +470,11 @@ export function AgentStudio({
             Define an agent, test it, then run a task. Panels and workflows combine agents.
           </p>
         </div>
-        <button className="as-button secondary" disabled={pending} onClick={runCatalogSmoke}>
-          <Flask /> {pending ? "Running catalog checks…" : `Test all ${feed.agents.length} agent${feed.agents.length === 1 ? "" : "s"}`}
+        {/* A setup check, not the thing this screen is for — so it is a quiet link-button
+            beside the title rather than the header's one action. */}
+        <button className="as-button ghost" disabled={pending} onClick={runCatalogSmoke}
+                title="A quick, free check that every agent's definition compiles and is allowed what it asks for. Runs no model and no tool.">
+          <Flask /> {pending ? "Checking…" : "Check every agent's setup"}
         </button>
       </header>
 
@@ -488,7 +496,7 @@ export function AgentStudio({
                 : mode === "panels"
                   ? filteredPanels.length
                   : filteredWorkflows.length}{" "}
-              objects
+              {mode === "agents" ? "agents" : mode === "panels" ? "panels" : "workflows"}
             </small>
           </div>
           <div className="as-mode-switch" role="tablist">
@@ -625,16 +633,16 @@ export function AgentStudio({
             </button>
           )}
           {mode === "workflows" && (
+            <p className="as-flows-scope" data-testid="as-flows-scope">
+              Your workflows only. BOSS&apos;s own workflows — the coding pipeline, panels,
+              deployment — run BOSS itself and are not editable from the console. To make
+              something like one, start your own in Workflow &gt; Design a workflow, or fork a
+              template from Workflow &gt; Catalogue.
+            </p>
+          )}
+          {mode === "workflows" && (
             <details className="as-new-workflow">
-              <summary><Plus /> New governed workflow</summary>
-              <label>
-                Key
-                <input
-                  value={newWorkflowKey}
-                  onChange={(event) => setNewWorkflowKey(event.target.value)}
-                  placeholder="release_readiness"
-                />
-              </label>
+              <summary><Plus /> New workflow</summary>
               <label>
                 Name
                 <input
@@ -765,12 +773,18 @@ export function AgentStudio({
                   <div className={`as-action-result ${result.ok ? "ok" : "bad"}`} role="status">
                     {result.ok ? <CheckCircle /> : <Warning />}
                     <span>{result.message}</span>
+                    {result.ok && selection.kind === "workflow" && typeof result.item?.id === "string"
+                      && String(result.item.id).startsWith("wfr") ? (
+                      <a href={`?area=delivery_workflows&wfr=${encodeURIComponent(String(result.item.id))}`}
+                         data-testid="as-open-run">Open the run</a>
+                    ) : null}
                   </div>
                 )}
                 {refusal ? (
                   <StartRefusal refusal={refusal} projectId={feed.projectId} busy={pending}
                                 onDismiss={() => setRefusal(null)} />
                 ) : null}
+                <StudioRuns selection={selection} feed={feed} />
               </div>
             </>
           ) : (
@@ -849,8 +863,9 @@ export function AgentStudio({
           <div className="as-proof">
             <ShieldCheck />
             <div>
-              <b>Durable audit</b>
-              <span>Redis cursors accelerate delivery. Postgres owns truth, retry, ACK, and replay.</span>
+              <b>Nothing is lost</b>
+              <span>Every message is recorded before it is delivered, so a retried or replayed
+                delivery reads the same history.</span>
             </div>
           </div>
         </aside>
@@ -862,6 +877,7 @@ export function AgentStudio({
             actor={actor}
             roles={roles}
             skills={skills}
+            initialRoleKey={requestedRole || undefined}
             onClose={() => setWizardOpen(false)}
           />,
           document.body,
@@ -1030,6 +1046,60 @@ function WorkflowTopology({
         <span>{workflow.version_count ?? workflow.versions.length} published version(s)</span>
         <span>policy snapshot captured per run</span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * WHAT HAPPENED TO THE RUNS STARTED HERE.
+ *
+ * Agent and panel runs had no visible result anywhere: the feed carried them, and the screen
+ * used them only for an "Active runs" count. So a run that failed, or produced a brief, was
+ * never seen. This lists the selected agent's or panel's recent runs with their outcome.
+ */
+export function StudioRuns({ selection, feed }: {
+  selection: Selection;
+  feed: AgentStudioFeed;
+}) {
+  if (selection.kind === "workflow") return null;
+  const runs = (selection.kind === "agent"
+    ? feed.agentRuns.filter((run) => run.agent_key === selection.item.agent_key)
+    : feed.panelRuns.filter((run) => run.panel_key === selection.item.panel_key)
+  ).slice(0, 6);
+  return (
+    <div className="as-runs" data-testid="as-runs">
+      <div className="as-command-label">
+        <span>Recent runs</span>
+        <small>{runs.length ? "newest first" : "none yet"}</small>
+      </div>
+      {runs.length === 0 ? (
+        <p className="as-runs-empty">
+          Nothing has run yet. A run you start above appears here with what it produced.
+        </p>
+      ) : (
+        <ul>
+          {runs.map((run) => {
+            const output = run.output ?? {};
+            const summary = typeof output.summary === "string" ? output.summary
+              : typeof output.brief === "string" ? output.brief : "";
+            return (
+              <li key={run.id} data-testid="as-run-row">
+                <i className={tone(run.status)}>{run.status.replaceAll("_", " ")}</i>
+                <span className="as-run-when">
+                  <ClientRelativeTime iso={run.completed_at ?? run.created_at} style="short"
+                                      empty="" />
+                </span>
+                <span className="as-run-what">
+                  {run.blocked_reason ? `Stopped: ${run.blocked_reason}`
+                    : summary ? summary.slice(0, 220)
+                    : run.status === "completed" ? "Finished — no summary was recorded."
+                    : "In progress."}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

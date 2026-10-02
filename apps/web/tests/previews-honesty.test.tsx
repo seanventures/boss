@@ -246,7 +246,15 @@ it("does not drag a paragraph into the button bar with it", () => {
     expect(bar).toContain("<RetryControls runId={active.id} compact");
     // Every state the lower one covered, so removing that one loses nothing — including
     // `completed`, where a retry is how a shipped run clears a remaining ✗.
-    expect(bar).toContain('active.status !== "running" && active.status !== "queued"');
+    // REWRITTEN: the gate was every status but running/queued, which also offered Retry on a
+    // completed run with NO ✗ and spent a governed attempt re-doing finished work. isRetryable
+    // keeps the ✗ case (failing gates recorded) and drops only the clean finished one.
+    expect(bar).toContain("{isRetryable(active) ? (");
+    // REWRITTEN: this pinned `Array.isArray(failing) && failing.length > 0` over
+    // `advisory_failing_gates ?? failing_gates`, which hid Retry when the advisory list was
+    // empty but gates had failed. The rule now reads the gates the way the engine does
+    // (failingGatesOf; parity in factory-offers-retry-only-where-it-helps.test.ts).
+    expect(ui).toContain("return failingGatesOf(run.finalize_ctx).length > 0;");
   });
 
   it("does not then repeat preview and retry further down the same page", () => {

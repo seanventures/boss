@@ -6,6 +6,7 @@ import { formatDateTime, formatTime } from "../lib/datetime";
 import { type PolicyEval, type RunTrace } from "../lib/safety";
 import { scanAnomaliesAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 function decisionTone(d: string): string {
   if (d === "allow") return "#3fb950";
@@ -54,11 +55,11 @@ export function AnomalyScanCard({ projectId, actor }: { projectId: string; actor
         Scan for retry storms and spend spikes. Detected anomalies open an incident Decision and can
         trip auto-lite-mode (lower budget intensity).
       </p>
-      <form action={scanAnomaliesAction}>
+      <ActionForm action={scanAnomaliesAction}>
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
         <SubmitButton className="button secondary" type="submit">Scan for anomalies</SubmitButton>
-      </form>
+      </ActionForm>
     </article>
   );
 }

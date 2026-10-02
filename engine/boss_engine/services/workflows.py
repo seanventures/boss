@@ -648,6 +648,51 @@ def require_namespace(
     return dict(row)
 
 
+def shipped_workflow_keys(workflow_root: Path) -> frozenset[str]:
+    """The keys of the workflows BOSS ships as its own machinery (specpack/workflows/*.yaml)."""
+    keys: set[str] = set()
+    try:
+        paths = sorted(Path(workflow_root).glob("*.yaml"))
+    except OSError:
+        return frozenset()
+    for path in paths:
+        try:
+            source = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            source = None
+        # Same rule as seed_specpack_workflows: the file's `id`, else its name.
+        key = (str(source.get("id") or path.stem) if isinstance(source, dict)
+               else path.stem).strip()
+        if key:
+            keys.add(key)
+    return frozenset(keys)
+
+
+def refuse_operator_edit_of_boss_workflow(definition: dict[str, Any], workflow_root: Path) -> None:
+    """An operator surface may not publish a new version of BOSS's own workflows.
+
+    The generic /v1/workflows/{id}/versions endpoint applied no namespace check, and Agent
+    Studio's Flows tab put every definition — the governed coding pipeline, meeting consensus,
+    the decision inbox, deployment, self-improvement — in a JSON editor with "Publish version".
+    One paste could replace the pipeline that reviews every build. Only the shipped system
+    workflows are protected here: a system-namespace definition somebody created through the
+    same API (tests do) is theirs. BOSS's own seeding calls publish_version directly and is
+    unaffected. None of these is editable from the console.
+    """
+    if str(definition.get("namespace") or SYSTEM_NAMESPACE) != SYSTEM_NAMESPACE:
+        return
+    key = str(definition.get("workflow_key") or "")
+    if key in shipped_workflow_keys(workflow_root):
+        # This used to say "fork it in Workflow > Catalogue". The catalogue lists the product
+        # templates, not BOSS's own workflows, so the advice could not be followed.
+        raise WorkflowNamespaceError(
+            f"'{key}' is one of BOSS's own workflows and is not editable from the console — a "
+            "change to it changes how BOSS itself works. To make something like it, start your "
+            "own workflow in Workflow > Design a workflow, or fork a template from Workflow > "
+            "Catalogue."
+        )
+
+
 def delete_definition(
     connection: Connection, project_id: str, definition_id: str, actor: str
 ) -> dict[str, Any]:
@@ -760,7 +805,14 @@ def create_definition(
     namespace: str = SYSTEM_NAMESPACE,
     is_catalogue: bool = False,
     forked_from_version_id: Optional[str] = None,
+    made_by_boss: bool = False,
 ) -> dict[str, Any]:
+    """Create a workflow definition.
+
+    `made_by_boss` records that BOSS itself made it (its seeding, or the worker), so the
+    startup adoption of operator-made flows (adopt_operator_made_workflows) never moves it to
+    the customer's namespace. It travels on the creation event: see BOSS_MADE_EVENT_FIELD.
+    """
     if namespace not in NAMESPACES:
         raise WorkflowValidationError(
             f"namespace must be one of: {', '.join(sorted(NAMESPACES))}."
@@ -803,7 +855,8 @@ def create_definition(
         actor,
         "workflow_definition",
         definition_id,
-        {"workflow_key": workflow_key, "name": name},
+        {"workflow_key": workflow_key, "name": name, "namespace": namespace,
+         BOSS_MADE_EVENT_FIELD: bool(made_by_boss)},
     )
     return _serialize_definition(row)
 
@@ -954,11 +1007,17 @@ def get_definition(
 
 
 def list_definition_details(
-    connection: Connection, project_id: str, *, include_retired: bool = False
+    connection: Connection, project_id: str, *, include_retired: bool = False,
+    namespace: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """List full definitions without issuing one versions query per definition."""
+    """List full definitions without issuing one versions query per definition.
+
+    `namespace` narrows it to one tier. A customer surface must pass PRODUCT_NAMESPACE: Agent
+    Studio's Flows tab called this without it and offered BOSS's 32 system workflows — the
+    governed coding pipeline among them — in a JSON editor with Publish.
+    """
     definitions = list_definitions(
-        connection, project_id, include_retired=include_retired
+        connection, project_id, include_retired=include_retired, namespace=namespace,
     )
     if not definitions:
         return []
@@ -980,6 +1039,114 @@ def list_definition_details(
     for definition in definitions:
         definition["versions"] = versions_by_definition.get(definition["id"], [])
     return definitions
+
+
+#: Recorded on `workflow.definition_created`: true when BOSS itself made the definition.
+BOSS_MADE_EVENT_FIELD = "made_by_boss"
+#: The actors BOSS seeds its own workflows as (bootstrap, the API's boot seed, internal jobs).
+#: An operator signs in as a member, never as one of these.
+BOSS_ACTORS = frozenset({"bootstrap", "boss", "system"})
+
+
+def adopt_operator_made_workflows(
+    connection: Connection, project_id: str, workflow_root: Path, *, actor: str,
+) -> list[str]:
+    """Move workflows an operator made under the system namespace into the product one.
+
+    Agent Studio's Flows tab used to create flows by posting /v1/workflows, which files a new
+    definition under the SYSTEM namespace. When Flows was narrowed to the product namespace so
+    an operator could no longer open the governed coding pipeline in a JSON editor, every flow
+    made that older way vanished from Studio and from Workflow alike, with nothing to say where
+    it went — and the product save path refused it even if it had been found.
+
+    They are the customer's work, and refuse_operator_edit_of_boss_workflow already treats a
+    system definition whose key BOSS does not ship as theirs. So they are moved to where the
+    customer's work lives. Idempotent: once moved there is nothing left to move. BOSS's own
+    workflows (specpack/workflows) are never touched, and a missing specpack moves nothing,
+    because without it BOSS cannot tell its own workflows from the customer's.
+
+    Returns the keys it moved.
+    """
+    shipped = shipped_workflow_keys(workflow_root)
+    if not shipped:
+        return []
+    rows = connection.execute(
+        text(
+            """
+            SELECT d.id, d.workflow_key, d.created_by,
+                   EXISTS (SELECT 1 FROM events e
+                           WHERE e.project_id = d.project_id
+                             AND e.event_type = 'workflow.definition_created'
+                             AND e.entity_id = d.id
+                             AND e.data ->> :made_by_boss = 'true') AS made_by_boss
+            FROM workflow_definitions d
+            WHERE d.project_id = :p AND COALESCE(d.namespace, 'system') = :system
+              AND COALESCE(d.is_catalogue, false) = false
+            """
+        ),
+        {"p": project_id, "system": SYSTEM_NAMESPACE, "made_by_boss": BOSS_MADE_EVENT_FIELD},
+    ).mappings().all()
+    moved: list[str] = []
+    for row in rows:
+        key = str(row["workflow_key"] or "")
+        if key in shipped:
+            continue
+        # BOSS'S OWN, EVEN WHEN ITS KEY IS NOT SHIPPED (review round 3). Since this runs at
+        # every boot, it would otherwise hand the customer a definition the worker made under
+        # system on purpose, and a workflow an earlier release shipped and a later one removed
+        # from the specpack, as operator-editable flows in Studio. A definition made since this
+        # change says so on its creation event; one seeded before it was made by a BOSS actor.
+        if row["made_by_boss"] or str(row["created_by"] or "") in BOSS_ACTORS:
+            continue
+        connection.execute(
+            text("UPDATE workflow_definitions SET namespace = :product, updated_at = now() "
+                 "WHERE id = :id AND project_id = :p"),
+            {"product": PRODUCT_NAMESPACE, "id": row["id"], "p": project_id},
+        )
+        emit_event(
+            connection, project_id, "workflow.adopted_into_product", actor,
+            "workflow_definition", str(row["id"]),
+            {"workflow_key": key, "from": SYSTEM_NAMESPACE, "to": PRODUCT_NAMESPACE,
+             "why": "made by an operator before Studio was limited to the customer's own "
+                    "workflows; it is not one BOSS ships"},
+        )
+        moved.append(key)
+    return moved
+
+
+def adopt_operator_made_workflows_everywhere(
+    connection: Connection, workflow_root: Path, *, actor: str = "boss",
+) -> dict[str, list[str]]:
+    """Run `adopt_operator_made_workflows` once for every project. Called at API startup.
+
+    It used to run inside GET /v1/agent-studio/catalog (review round 2): a read wrote to the
+    database for any caller, and flows came back in Workflow only after somebody had opened
+    Studio. At startup it runs once per boot, before anyone reads, and is a no-op after the
+    first. POST /v1/workflows no longer files a key BOSS does not ship under the system
+    namespace, so nothing produces new ones; this moves the ones already there.
+    """
+    moved: dict[str, list[str]] = {}
+    for project_id in connection.execute(text("SELECT id FROM projects")).scalars().all():
+        keys = adopt_operator_made_workflows(connection, str(project_id), workflow_root,
+                                             actor=actor)
+        if keys:
+            moved[str(project_id)] = keys
+    return moved
+
+
+def namespace_for_new_definition(workflow_key: str, workflow_root: Path, *,
+                                 boss_itself: bool) -> str:
+    """Where a definition made through the generic POST /v1/workflows belongs.
+
+    The system namespace is BOSS's own machinery. A key BOSS ships, or a definition the worker
+    (BOSS itself) makes, belongs there; anything else an operator makes is the customer's work
+    and belongs in product, where Studio and Workflow list it and the product rules (custom
+    step floor, save path) apply. Filing it under system is how the older Studio's flows
+    vanished from both screens.
+    """
+    if boss_itself or workflow_key.strip() in shipped_workflow_keys(workflow_root):
+        return SYSTEM_NAMESPACE
+    return PRODUCT_NAMESPACE
 
 
 def _hold_new_typed_decision_work(spec: dict[str, Any]) -> None:
@@ -2777,10 +2944,13 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             f"Approve {row['step_id']} in {run.get('workflow_key') or 'this workflow'}")
         guidance = str(template.get("guidance") or "").strip()
         recommendation = {
-            "action": "resume_workflow",
             **(template.get("recommendation") or {}),
             **({"what_to_check": guidance} if guidance else {}),
             **({"review": review} if review else {}),
+            # LAST, so a spec's own recommendation cannot replace it. This card is the step's
+            # gate: approving it must release the step, and the buttons the inbox draws are
+            # decided by this action (decision_actions). It came first, before the spread.
+            "action": "resume_workflow",
         }
         where = ""
         if review.get("view_url"):
@@ -5109,6 +5279,9 @@ def seed_specpack_workflows(
                 name=str(source.get("name") or workflow_key.replace("_", " ").title()),
                 description=source.get("description") or source.get("purpose"),
                 actor=actor,
+                # BOSS's own whoever asked for the seed, so a later release that drops this
+                # file from the specpack does not hand it to the customer at the next boot.
+                made_by_boss=True,
             )
 
         if isinstance(source.get("steps"), list) and source.get("entry_step"):

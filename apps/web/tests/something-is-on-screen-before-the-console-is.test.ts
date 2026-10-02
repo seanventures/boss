@@ -189,7 +189,10 @@ describe("the console's own areas are unaffected", () => {
     // The area gate is now open — see one-area-per-render.test.ts. The soft navigation above
     // still matters (Back must return to the previous tab), but what it waits for is no longer
     // small, and it no longer needs to be: the section is already mounted when the click lands.
-    expect(page).toContain("const shows = (_area: string) => true;");
+    // REWRITTEN when areas went lazy: an area already opened is mounted when the click lands;
+    // one opened for the first time is fetched once behind a loading state (area-loading).
+    expect(page).toContain("const shows = (area: string) => loadedAreas.has(area);");
+    expect(shell).toContain('data-testid="area-loading"');
   });
 
   it("there is exactly one route loading boundary", () => {

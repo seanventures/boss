@@ -129,7 +129,7 @@ export function RunReportPanel(
         setProblem(body?.error || "the report could not be saved");
         return;
       }
-      setPdfHref(`/api/artifacts/${body.artifact_id}/pdf`);
+      setPdfHref(`/v1/artifacts/${encodeURIComponent(String(body.artifact_id))}/pdf`);
     } catch {
       setProblem("the report could not be saved");
     } finally {

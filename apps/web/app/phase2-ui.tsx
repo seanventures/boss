@@ -10,6 +10,7 @@ import {
   invokeSkillAction,
 } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { ActionForm } from "./client-forms";
 
 function tone(s: string): string {
   const x = (s || "").toLowerCase();
@@ -25,11 +26,11 @@ export function EvalHarnessCard({ projectId, actor, run }: { projectId: string; 
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <h3 style={{ margin: 0 }}>Eval harness</h3>
-        <form action={runEvalsAction}>
+        <ActionForm action={runEvalsAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit">Run evals</SubmitButton>
-        </form>
+        </ActionForm>
       </div>
       <p className="detail">
         Regression suites — routing fallback, policy audit round-trip, factory fail-closed gate,
@@ -66,7 +67,7 @@ export function AutonomyEvaluateCard({ projectId, actor }: { projectId: string; 
         Gather a role’s allowed/denied/scope-violation events since its last review and run a
         governance review — auto-proposes an upgrade decision or auto-downgrades on a violation.
       </p>
-      <form action={evaluateAutonomyAction} className="composer compact">
+      <ActionForm action={evaluateAutonomyAction} className="composer compact">
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
         <label className="field">
@@ -74,7 +75,7 @@ export function AutonomyEvaluateCard({ projectId, actor }: { projectId: string; 
           <input name="role_key" className="input" placeholder="metatron" required />
         </label>
         <SubmitButton className="button secondary" type="submit">Evaluate autonomy</SubmitButton>
-      </form>
+      </ActionForm>
     </article>
   );
 }
@@ -105,16 +106,16 @@ export function RouterHealthCard({
         </p>
       ) : null}
       <div style={{ display: "flex", gap: 8 }}>
-        <form action={pollProviderHealthAction}>
+        <ActionForm action={pollProviderHealthAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit">Poll provider health</SubmitButton>
-        </form>
-        <form action={recordRouterRationaleAction}>
+        </ActionForm>
+        <ActionForm action={recordRouterRationaleAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit">Record rationale</SubmitButton>
-        </form>
+        </ActionForm>
       </div>
     </article>
   );
@@ -135,7 +136,7 @@ export function SkillInvokeCard({
         Run a skill through the runtime — per-skill permission + cost + retry enforcement, with mock
         mode (full gauntlet, zero side effects). The API drives mock only.
       </p>
-      <form action={invokeSkillAction} className="composer compact">
+      <ActionForm action={invokeSkillAction} className="composer compact">
         <input type="hidden" name="project_id" value={projectId} />
         <label className="field">
           <span>Skill id</span>
@@ -146,7 +147,7 @@ export function SkillInvokeCard({
           <input name="caller" className="input" placeholder="resource_plane_kernel" required />
         </label>
         <SubmitButton className="button secondary" type="submit">Invoke (mock)</SubmitButton>
-      </form>
+      </ActionForm>
       {invocations.length > 0 ? (
         <div className="feed-list" style={{ marginTop: 8 }}>
           {invocations.slice(0, 6).map((inv) => (

@@ -217,9 +217,18 @@ class TestASectionThatCouldNotBeReadIsNotAnEmptySection:
     def test_the_column_it_got_wrong_is_the_one_the_table_has(self):
         from boss_engine.services import factory_briefing as module
 
+        # REWRITTEN (console review round 3): the briefing no longer writes its own decisions
+        # query; it reads decision_actions.waiting_on_operator, the reader every count of
+        # "waiting on you" shares, which selects every column. So the guard is now that the
+        # briefing reads the column the table has, and that the shared reader names no
+        # column at all that could be wrong.
+        from boss_engine.services import decision_actions
+
         body = inspect.getsource(module)
-        assert "SELECT id, question, status, risk_tier" in body
+        assert "decision_actions.waiting_on_operator" in body
         assert 'row["question"]' in body
+        assert "SELECT * FROM decisions" in inspect.getsource(
+            decision_actions.waiting_on_operator)
 
     def test_the_console_says_which_part_it_could_not_read(self):
         import pathlib

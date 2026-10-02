@@ -11,6 +11,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
+from . import decision_actions
 from .core import create_artifact, emit_event, now_utc
 from .infrastructure import InfrastructureService
 from .intake import CommandIntakeService
@@ -129,23 +130,10 @@ class DecisionService:
         urgent_risk_min: int,
     ) -> dict[str, Any]:
         self.expire_overdue(connection, project_id)
-        rows = connection.execute(
-            text(
-                """
-                SELECT id, task_id, question, status, risk_tier, default_action,
-                       recommendation, cost_summary, deadline_at, created_at
-                FROM decisions
-                WHERE project_id = :project_id
-                  AND status IN ('pending', 'delegated')
-                ORDER BY
-                  risk_tier DESC,
-                  deadline_at ASC NULLS LAST,
-                  created_at ASC
-                LIMIT :limit
-                """
-            ),
-            {"project_id": project_id, "limit": max_items},
-        ).mappings().all()
+        # What the digest lists is what the Approvals inbox calls Needs action
+        # (decision_actions.attention). It was pending and delegated, so a pull request stuck
+        # in a dead-end revision_requested was never in a digest (review round 3).
+        rows = decision_actions.waiting_on_operator(connection, project_id)[:max_items]
         items = [self._digest_item(dict(row)) for row in rows]
         urgent_items = [
             item for item in items if int(item["risk_tier"]) >= urgent_risk_min
@@ -319,6 +307,17 @@ class DecisionService:
                 delegated_to=row.get("delegated_to"),
             )
 
+        # THE BUTTONS THE CONSOLE DRAWS ARE THE ONLY ONES THAT WORK. A budget refusal approved
+        # from the chat agent, or a workflow gate sent back for "changes" the runner never reads,
+        # recorded an answer nothing acted on. See decision_actions for the contract; a policy
+        # approval is exempt because it is not a person choosing a button. After the
+        # member check, so somebody not allowed to decide at all is told that first.
+        if not system_policy:
+            try:
+                decision_actions.require_allowed(row, action)
+            except decision_actions.DecisionActionNotAllowed as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+
         if action in {"approve", "reject", "revise", "delegate"}:
             # A DEADLINE NOBODY MET MUST NOT ALSO DESTROY THE WORK.
             #
@@ -340,8 +339,15 @@ class DecisionService:
             safe_default = str(row.get("default_action") or "hold").lower()
             reopenable = safe_default == "hold"
 
+            # A DEAD-END "REQUEST CHANGES" IS REOPENED TOO. Before decision_actions, every pull
+            # request and general card offered "Request changes", and nothing reads that status
+            # for them: a PR sent back that way could never be approved and merged from BOSS.
+            # Those rows exist on real installs. For a type whose follow-on DOES read the note
+            # (self-improvement, autonomy changes) the status still means what it says.
+            stuck_revision = (current_status == "revision_requested"
+                              and not decision_actions.consumes_revision(row))
             if current_status not in {"pending", "delegated"}:
-                if not (current_status == "expired" and reopenable):
+                if not ((current_status == "expired" and reopenable) or stuck_revision):
                     raise InvalidDecisionTransitionError(
                         f"Decision is already {current_status} and cannot be {action}d."
                     )
@@ -349,17 +355,19 @@ class DecisionService:
                     text(
                         """
                         UPDATE decisions SET status = 'pending', updated_at = :ts
-                        WHERE id = :decision_id AND status = 'expired'
+                        WHERE id = :decision_id AND status = :was
                         """
                     ),
-                    {"decision_id": decision_id, "ts": timestamp},
+                    {"decision_id": decision_id, "ts": timestamp, "was": current_status},
                 )
                 emit_event(
                     connection, row["project_id"], "decision.reopened", actor,
                     "decision", decision_id,
                     {"was": current_status, "default_action": safe_default,
-                     "why": "answered after its deadline; a hold default applied nothing, "
-                            "so there is nothing to reverse"},
+                     "why": ("changes were requested on a decision nothing reads them for, "
+                             "so it is answered again" if stuck_revision else
+                             "answered after its deadline; a hold default applied nothing, "
+                             "so there is nothing to reverse")},
                 )
                 current_status = "pending"
 

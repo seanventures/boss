@@ -18,7 +18,11 @@ def test_observed_view_does_not_clear_planned_assignments_and_changes_are_audite
     assert chart.status_code == 200, chart.text
     body = chart.json()
     assert body["declared"]["qa"]["reports_to"] == "cto"
-    assert [node["id"] for node in body["tree"]] == ["qa"]
+    # REWRITTEN: this asserted a tree of just ["qa"] — qa saved as reporting to a cto the plan
+    # did not contain, so the chart showed qa at the top with "Reports to: cto" beside it. The
+    # parent is placed (at the top) along with the child now, so the plan and the chart agree.
+    assert {node["id"] for node in body["tree"]} == {"cto", "qa"}
+    assert body["declared"]["cto"]["reports_to"] is None
     assert "observed_tree" in body
 
     # Switching the UI to observed only reads this payload; it does not call DELETE.

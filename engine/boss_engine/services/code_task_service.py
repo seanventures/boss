@@ -981,6 +981,32 @@ def _carry_open_comments(fctx_prev: dict) -> list:
             if isinstance(c, dict) and (c.get("status") or "open") == "open"]
 
 
+class RetryRefused(ValueError):
+    """A retry that would spend a governed attempt for nothing. The message says what to do."""
+
+
+def refuse_finished_retry(prev: dict, fix_note: str = "") -> None:
+    """Refuse a blind retry of a build that finished cleanly.
+
+    The Factory offered "Retry build" on every run that was not running, completed ones
+    included, with a tooltip saying it "resumes from where it failed" — and nothing here
+    refused, so one click spent a new governed attempt ($4-15 by this module's own estimate)
+    re-doing finished work. A completed run is still retryable when its gates recorded a
+    failure (an advisory-gate repair), and extend_code_task passes the change it wants as
+    `fix_note`, so both keep working.
+    """
+    if str(prev.get("status") or "") != "completed" or str(fix_note or "").strip():
+        return
+    fctx = prev.get("finalize_ctx") or {}
+    if fctx.get("advisory_failing_gates") or fctx.get("failing_gates"):
+        return
+    raise RetryRefused(
+        "This build already completed and passed its gates, so a retry would spend a new "
+        "governed attempt re-doing finished work. To change the app, use 'Change this app' "
+        "(extend_code_task); to rebuild anyway, retry with a note saying why."
+    )
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -1004,6 +1030,7 @@ def retry_code_task(
     fctx_prev = prev.get("finalize_ctx") or {}
     attempt = int(fctx_prev.get("attempt", 1)) + 1
     root = fctx_prev.get("root_run_id") or run_id
+    refuse_finished_retry(prev, fix_note)
 
     # ---- Failure-loop guardrails (release blocker fix) -----------------------------------
     # An `infra` failure is NOT the task's fault, so re-running the same task on the same
