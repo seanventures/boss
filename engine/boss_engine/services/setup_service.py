@@ -723,7 +723,6 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
     receipt. After the turn: the receipt succeeds or fails and the reservation settles at the
     actual cost or is released. A refused budget makes no call. `prove` is injectable for tests.
     """
-    import math
     import uuid
 
     from .budget import BudgetGovernor
@@ -732,29 +731,30 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
     budget, receipts = BudgetGovernor(settings), ReceiptService()
     prove = prove or (lambda: prove_coding_agent(settings, provider))
 
-    def open_spend(connection):
+    # The reservation and the in-progress receipt commit on their own connection BEFORE the
+    # turn, in this function, so the same function visibly closes the receipt it opened.
+    with engine.begin() as connection:
         burst = int(budget._burst_cap(connection, project_id) or 0)
         amount = min(PROOF_ESTIMATE_USD_MICROS, burst) if burst > 0 else PROOF_ESTIMATE_USD_MICROS
         reserved = budget.reserve(connection, project_id, "model", amount,
                                   f"Connection proof for {provider}", 15, risk_tier=1)
+        refused = None
         if reserved.get("status") != "reserved":
-            return {"refused": reserved.get("message") or "Budget reservation denied."}
-        scope = connection.execute(
-            text("SELECT w.org_id, p.workspace_id FROM projects p "
-                 "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
-            {"p": project_id}).mappings().one()
-        receipt, _ = receipts.create_or_reuse(
-            connection, scope["org_id"], scope["workspace_id"], project_id,
-            f"setup-proof:{provider}:{uuid.uuid4().hex[:16]}", "model.connection_proof",
-            {"project_id": project_id, "provider": provider},
-            {"provider": provider, "actor": actor})
-        return {"reservation_id": reserved["reservation_id"], "receipt_id": receipt["id"],
-                "amount": amount}
-
-    with engine.begin() as connection:
-        spend = open_spend(connection)
-    if spend.get("refused"):
-        return {"ok": False, "error": spend["refused"], "budget_refused": True}
+            refused = reserved.get("message") or "Budget reservation denied."
+        else:
+            scope = connection.execute(
+                text("SELECT w.org_id, p.workspace_id FROM projects p "
+                     "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
+                {"p": project_id}).mappings().one()
+            receipt, _ = receipts.create_or_reuse(
+                connection, scope["org_id"], scope["workspace_id"], project_id,
+                f"setup-proof:{provider}:{uuid.uuid4().hex[:16]}", "model.connection_proof",
+                {"project_id": project_id, "provider": provider},
+                {"provider": provider, "actor": actor})
+            spend = {"reservation_id": reserved["reservation_id"], "receipt_id": receipt["id"],
+                     "amount": amount}
+    if refused is not None:
+        return {"ok": False, "error": refused, "budget_refused": True}
     try:
         proof = prove()
     except Exception as exc:  # noqa: BLE001 — recorded below, then reported

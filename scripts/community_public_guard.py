@@ -92,7 +92,7 @@ def sync_source(commit: PublicCommit) -> str | None:
 
 def imported_shas(private: Path, ref: str, public_repo: str) -> set[str]:
     """Full public shas that the private ref's history says it imported."""
-    raw = git(private, "log", "--format=%B%x1e", f"--grep=Imported-from:", "-i", ref)
+    raw = git(private, "log", "--format=%B%x1e", "--grep=Imported-from:", "-i", ref)
     found = set()
     for body in raw.split("\x1e"):
         for repo, sha in IMPORTED_FROM.findall(body):

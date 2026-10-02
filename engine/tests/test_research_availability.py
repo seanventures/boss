@@ -114,7 +114,10 @@ def test_a_fresh_community_project_without_claude_code_skips_with_a_routing_reco
         c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
                        "VALUES (:i, :w, 'research availability', :s)"),
                   {"i": pid, "w": wid, "s": pid})
-    settings = Settings(boss_edition="community")
+    # Explicit, so a Claude login on the machine running the suite (or another test's
+    # environment) cannot make the research source look connected.
+    settings = Settings(boss_edition="community", anthropic_claude_oauth_enabled=False,
+                        anthropic_claude_oauth_session_ref="")
     with eng.begin() as c:
         result = discovery_service.research_unavailable(c, settings, pid, "ceo")
         assert result is not None
