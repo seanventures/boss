@@ -835,7 +835,12 @@ def connect_coding_agent(
 
         if is_login_rejected(proof.get("error")):
             # Setup shows this subscription as broken until a working credential replaces it.
-            mark_login(connection, project_id, spec.entitlement_source_id, rejected=True)
+            # On ITS OWN connection: the refusal below rolls this request's transaction back,
+            # and with it a mark written there — Setup kept showing the rejected login green.
+            engine = getattr(connection, "engine", None)
+            if engine is not None:
+                with engine.begin() as own:
+                    mark_login(own, project_id, spec.entitlement_source_id, rejected=True)
             said = explain(proof.get("error"), source_id=spec.entitlement_source_id)
             raise SetupError(f"{said['headline']} {said['action']} BOSS checked it with one "
                              "trivial turn, and it is not connected.")
