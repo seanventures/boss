@@ -117,7 +117,7 @@ export function InfraScreen({ view }: { view: InfraView }) {
         <h1 className="v2-screen-title">Infra &amp; Models</h1>
         <p className="v2-screen-sub">
           {verified} of {view.hosts.length} host{view.hosts.length === 1 ? "" : "s"} verified ·{" "}
-          {money(spend)} on models this month
+          {money(spend)} on models since {view.month_start ?? "the start of the month"}
         </p>
       </header>
 
@@ -174,9 +174,16 @@ export function InfraScreen({ view }: { view: InfraView }) {
       )}
 
       <h2 className="v2-ws-h">Models this month</h2>
+      {view.meeting_panels && view.meeting_panels.runs > 0 ? (
+        <p className="v2-row-desc" data-testid="v2-infra-meeting-panels">
+          {view.meeting_panels.runs} meeting panel{view.meeting_panels.runs === 1 ? "" : "s"} this
+          month, {money(view.meeting_panels.spend_usd)} recorded on the meetings themselves.
+        </p>
+      ) : null}
       {view.models.length === 0 ? (
         <p className="v2-empty" data-testid="v2-infra-no-models">
-          No model calls recorded this month.
+          No model calls recorded since {view.month_start ?? "the start of the month"}. Earlier
+          months, and each meeting&apos;s own cost, are in the v1 console.
         </p>
       ) : (
         // A TABLE, because these are four figures per model that only mean anything compared

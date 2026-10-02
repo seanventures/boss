@@ -3,6 +3,8 @@
  * Catalog is API-driven; setup uses dry-run blueprints (no secrets).
  */
 
+import { API_AUTH_TRUTH, CONSOLE_SIGN_IN_TRUTH } from "../lib/sign-in-truth";
+
 import type {
   IdpCatalogItem,
   IdpProjectStatusItem,
@@ -38,10 +40,16 @@ export function IdentityProvidersCatalogView({
   return (
     <article className="stack-card identity-providers-pack">
       <h3>Identity provider packs</h3>
+      {/* WHAT SIGN-IN USES TODAY, before any provider is offered — so a configured provider is
+          not mistaken for one the login page consults. */}
+      <div className="stack-card" data-testid="identity-sign-in-truth" style={{ marginBottom: 12 }}>
+        <strong>How sign-in works today</strong>
+        <p className="detail">{CONSOLE_SIGN_IN_TRUTH}</p>
+        <p className="detail">{API_AUTH_TRUTH}</p>
+      </div>
       <p className="detail">
-        First-class setup blueprints for the top workforce and developer IdPs.
-        Built on OpenID Connect, SAML 2.0, and SCIM 2.0 — BOSS never stores raw
-        IdP secrets in catalog or blueprint responses.
+        Setup notes for common workforce and developer identity providers, over OpenID
+        Connect, SAML 2.0 and SCIM 2.0. Secrets are referenced by name, never shown here.
       </p>
 
       {!feed.apiReachable ? (
@@ -71,12 +79,9 @@ export function IdentityProvidersCatalogView({
                 return (
                   <div className="feed-row" key={idp.id}>
                     <div>
-                      <h4>
-                        {idp.name}{" "}
-                        <span className="detail" style={{ fontWeight: 400 }}>
-                          ★ {idp.stars.toFixed(1)}
-                        </span>
-                      </h4>
+                      {/* No rating: the stars were catalogue data with no source anyone could
+                          check, shown as if they were a measurement. */}
+                      <h4>{idp.name}</h4>
                       <p className="detail">
                         {protocolPills(idp.protocol_support)}
                         <span className="detail"> · {idp.category.replace(/_/g, " ")}</span>
@@ -97,10 +102,10 @@ export function IdentityProvidersCatalogView({
                       )}
                       <p className="detail">
                         <a href={idp.docs_url} target="_blank" rel="noreferrer">
-                          Vendor docs
+                          {idp.name} setup guide ↗
                         </a>
                         {" · "}
-                        <code>GET /v1/identity-providers/{idp.id}</code>
+                        <a href="#identity-provider-form">Record it below</a>
                       </p>
                     </div>
                     <span className={`pill${statusTone(idp.status)}`}>
@@ -113,10 +118,9 @@ export function IdentityProvidersCatalogView({
           )}
 
           <p className="detail" style={{ marginTop: 12 }}>
-            Materialize a dry-run enterprise payload via{" "}
-            <code>POST /v1/identity-providers/&#123;idp_id&#125;/blueprint</code>,
-            store credentials as <code>secret_ref</code>, then upsert through{" "}
-            <code>/v1/enterprise/identity-providers</code>.
+            To record a provider, take the issuer, audience and keys from its setup guide and
+            fill in <a href="#identity-provider-form">Self-hosted identity providers</a> below.
+            Keep the client secret in your secret store and enter only its name as the SecretRef.
           </p>
         </>
       )}
