@@ -40,6 +40,9 @@ class FakeConn:
             rows = self.tables.get("models", [])
         elif "mcp_servers" in low:
             rows = self.tables.get("servers", [])
+        elif "meeting_runs" in low:
+            # Meeting-panel spend for the month (v2 Infra shows it beside the model table).
+            rows = self.tables.get("meeting_panels", [])
         elif "from roles" in low:
             rows = self.tables.get("roles", [])
         else:
@@ -419,3 +422,25 @@ def test_a_failed_deploy_carries_its_reason():
                   "finished_at": None, "failure_reason": "port 3014 already bound"}],
     ), "proj")
     assert "already bound" in out["targets"][0]["last_deploy"]["failure_reason"]
+
+
+def test_infra_says_which_month_it_covers_and_shows_meeting_panel_spend_beside_it():
+    """boss-1, 2026-10-02: v2 read "$0.00 on models this month" beside v1 meeting cards costing
+    about a dollar each — both true (the month had just turned; a panel's cost lives on its run)
+    and, side by side, read as one console lying. The month is stated and the panels' recorded
+    spend is its own line, never added into the per-model sum."""
+    out = infra(FakeConn(meeting_panels=[{
+        "month_start": NOW.replace(day=1), "runs": 4, "micros": 3_870_000,
+    }]), "p")
+    assert out["month_start"] == "2026-08-01"
+    assert out["meeting_panels"] == {"runs": 4, "spend_usd": 3.87}
+    assert out["models"] == []
+
+
+def test_settings_says_what_sign_in_uses_in_v1_words():
+    """v2 said the deployment had only an API key and nothing to configure while v1 offered
+    SAML and SCIM forms; both now give the one statement in apps/web/lib/sign-in-truth.ts."""
+    from boss_engine.services.console_v2_platform import SIGN_IN_TRUTH
+
+    sso = next(u for u in settings(FakeConn(), "p")["unavailable"] if u["id"] == "sso")
+    assert sso["reason"].startswith(SIGN_IN_TRUTH)

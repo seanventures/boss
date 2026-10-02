@@ -288,7 +288,8 @@ def infra(connection, project_id: str) -> dict[str, Any]:
             """
         ),
         {"p": project_id},
-    ).mappings().first() or {}
+    ).mappings().all()
+    month = dict(month[0]) if month else {}
 
     servers = [dict(r) for r in connection.execute(
         sql(
