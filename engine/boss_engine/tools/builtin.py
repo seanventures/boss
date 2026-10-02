@@ -1057,7 +1057,13 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         binding: dict[str, Any]
         if skill_key:
             with ctx.begin() as c:
-                found = catalogue.entry(c, pid, skill_key)
+                # Exact first, then lower-cased: this tool lower-cased every key before it read
+                # the catalogue, and a model writing "Summarise_Notes" for summarise_notes
+                # should still land. Exact first because a shipped id is matched as written.
+                found = (catalogue.entry(c, pid, skill_key)
+                         or catalogue.entry(c, pid, skill_key.lower()))
+                if found is not None:
+                    skill_key = found["skill_id"]
                 if found is None:
                     # NAMING WHAT EXISTS beats "not found": the model picked a skill and the
                     # useful correction is the list it should have picked from.
@@ -1300,15 +1306,16 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "Register an MCP server (JSON-RPC over HTTP) so its tools can be bound to workflow steps "
         "or wrapped as mcp_tool skills. Ask the operator for the URL — one the BOSS API "
         "container can reach (127.0.0.1 inside the container is the container itself) — and a "
-        "name. A server registered here is UNREVIEWED: its tools at tier 2 or above cannot be "
-        "placed in a workflow until a person marks it trusted on the Skills and MCP page.",
+        "name. A server registered here lands SWITCHED OFF and UNREVIEWED, at tier 2 or "
+        "above: nothing calls it, and BOSS does not contact it, until a person reviews it and "
+        "turns it on on the Skills and MCP page. Tell the operator that.",
         _obj({"name": {"type": "string"},
               "url": {"type": "string", "description": "absolute http(s) URL of the endpoint"},
               "description": {"type": "string"},
-              "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3,
-                            "description": "the blanket tier for its tools. Default 2: an "
-                                           "outside account is not tier 0 until a person says "
-                                           "so."},
+              "risk_tier": {"type": "integer", "minimum": 2, "maximum": 3,
+                            "description": "the blanket tier for its tools, 2 or 3. Default "
+                                           "2: an outside account is not tier 0 or 1 until a "
+                                           "person says so."},
               "project_id": {"type": "string"}},
              ["name", "url"]),
         kind="write",
@@ -1318,29 +1325,43 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         registry = services_module("mcp_registry")
         pid = args.get("project_id") or project_id
         tier = args.get("risk_tier")
+        try:
+            # NEVER BELOW 2 FROM A CONVERSATION. A tier is a claim about what the server's tools
+            # can do, and the model making it has not seen the server; a person lowers it after
+            # reviewing it.
+            tier = max(2, int(tier)) if tier not in (None, "") else 2
+        except (TypeError, ValueError):
+            tier = 2
         with ctx.begin() as c:
             try:
                 server = registry.register_mcp_server(
                     c, pid, str(args.get("name") or ""), str(args.get("url") or ""),
-                    risk_tier=2 if tier in (None, "") else tier,
+                    risk_tier=tier,
                     description=str(args.get("description") or "") or None,
                     # NEVER TRUSTED FROM A CONVERSATION. Trust is a person's review of a
                     # server, and is what lets its higher-tier tools be placed at all; a model
                     # that could grant it could talk its way past the floor.
                     provenance={"source": "chat", "trusted": False},
+                    # SWITCHED OFF UNTIL A PERSON LOOKS. Round-1 review: registered enabled and
+                    # probed at once, a prompt-injected "register http://attacker/mcp" put
+                    # attacker-written tool descriptions and callable tools into every chat.
+                    # Off, nothing lists its tools, no agent is offered them, and BOSS sends
+                    # it nothing — not even the probe — until the operator turns it on.
+                    enabled=False,
                     actor=actor)
             except Exception as error:  # noqa: BLE001 — the sentence is the repair
                 return {"ok": False, "error": str(error)[:400]}
-        checked = registry.servers_with_tools(ctx.begin, ctx.settings, pid,
-                                              server_id=server["id"], max_age_seconds=0)
-        now = checked[0] if checked else server
-        return {"status": "registered", "id": now["id"], "name": now["name"],
-                "reachable": now["reachable"],
-                "tools": [t["name"] for t in now["tools"]],
-                **({"status_note": now["status_note"]} if now["status_note"] else {}),
-                "next": "draft_skill with behaviour_kind mcp_tool wraps one of its tools as a "
-                        "skill an agent can be given; draft_custom_step with mcp_server and "
-                        "mcp_tool places one in a workflow."}
+        return {"status": "registered_switched_off", "id": server["id"],
+                "name": server["name"], "enabled": False, "trusted": False,
+                "risk_tier": server["risk_tier"],
+                "tell_the_operator": (
+                    f"I registered '{server['name']}' switched off and unreviewed. Open Skills "
+                    "and MCP, check the server is the one you meant, mark it reviewed if you "
+                    "vouch for it, and turn it on — BOSS checks it can reach it then. Until a "
+                    "person reviews it, every call to one of its tools waits for approval."),
+                "next": "once it is on, draft_skill with behaviour_kind mcp_tool wraps one of "
+                        "its tools as a skill an agent can be given; draft_custom_step with "
+                        "mcp_server and mcp_tool places one in a workflow."}
 
     @reg.tool(
         "start_workflow",

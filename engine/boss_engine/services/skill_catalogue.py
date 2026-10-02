@@ -76,6 +76,21 @@ def _tier(value: Any) -> Optional[int]:
         return None
 
 
+def raised_tier(spec_tier: Any, project_row: Optional[dict[str, Any]]) -> int:
+    """A built-in skill's tier: its SkillSpec's, or the project's recorded tier if HIGHER.
+
+    The one statement of that half of the risk rule. EntitlementBrokerService.list_skills
+    applies it to every spec it returns, so the runtime (SkillRuntimeService, held_skills,
+    resolve_for_task) and the catalogue read the same number; before that only :func:`entries`
+    applied it, and an agent was offered a skill at its raw spec tier while a custom step bound
+    to the same skill needed approval at the raised one (round-1 review).
+    """
+    tier = _tier(spec_tier) or 0
+    config = _loads((project_row or {}).get("config"), {}) or {}
+    recorded = _tier(config.get("risk_tier")) if isinstance(config, dict) else None
+    return tier if recorded is None else max(tier, recorded)
+
+
 def _settings(settings: Any = None) -> Any:
     if settings is not None:
         return settings
@@ -288,11 +303,10 @@ def entries(
         tier = int(spec.get("risk_tier") or 0)
         if not authored:
             # The project's recorded tier counts only when it is HIGHER. A row copied from an
-            # older spec must not lower a tier the spec has since raised.
-            recorded = _tier((_loads((overrides.get(skill_id) or {}).get("config"), {}) or {})
-                             .get("risk_tier"))
-            if recorded is not None:
-                tier = max(tier, recorded)
+            # older spec must not lower a tier the spec has since raised. list_skills has
+            # already folded this into the spec (raised_tier); applied again so an entry can
+            # never be lower than the spec the runtime will load.
+            tier = raised_tier(tier, overrides.get(skill_id))
         usable = bool(policy.get("usable", True)) if authored else True
         out[skill_id] = {
             "skill_id": skill_id,

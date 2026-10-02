@@ -256,8 +256,12 @@ def list_skills(
         # Delete button, so the operator knows before pressing it what deleting would break.
         refs = _references_by_key(connection, project_id)
         for item in items:
-            item["references"] = refs.get(item["skill_key"], {"custom_steps": [], "agents": []})
+            item["references"] = refs.get(item["skill_key"], _no_references())
     return items
+
+
+def _no_references() -> dict[str, list]:
+    return {"custom_steps": [], "agents": [], "workflows": []}
 
 
 def _references_by_key(connection: Connection, project_id: str) -> dict[str, dict[str, list]]:
@@ -267,7 +271,7 @@ def _references_by_key(connection: Connection, project_id: str) -> dict[str, dic
              "WHERE project_id = :p AND binding_kind = 'skill' ORDER BY step_key"),
         {"p": project_id},
     ).mappings().all():
-        refs.setdefault(str(row["skill_id"]), {"custom_steps": [], "agents": []})[
+        refs.setdefault(str(row["skill_id"]), _no_references())[
             "custom_steps"].append({"step_key": row["step_key"], "label": row["label"],
                                     "enabled": bool(row["enabled"])})
     for row in connection.execute(
@@ -275,15 +279,37 @@ def _references_by_key(connection: Connection, project_id: str) -> dict[str, dic
              "ORDER BY role_key"),
         {"p": project_id},
     ).mappings().all():
-        refs.setdefault(str(row["skill_id"]), {"custom_steps": [], "agents": []})[
+        refs.setdefault(str(row["skill_id"]), _no_references())[
             "agents"].append(str(row["role_key"]))
+    # A WORKFLOW THAT BINDS THE SKILL DIRECTLY, with a `kind: skill` step
+    # (workflows._validate_bindings reads binding.skill_id). Round-1 review: the check read
+    # custom steps and agents only, so deleting a skill bound this way passed and the workflow
+    # then failed at its next publish or run. Read from each live workflow's ACTIVE version —
+    # the one a run would start from; a retired definition starts nothing.
+    for row in connection.execute(
+        text("SELECT DISTINCT step->'binding'->>'skill_id' AS skill_id, d.workflow_key, d.name "
+             "FROM workflow_definitions d "
+             "JOIN workflow_versions v ON v.id = d.active_version_id "
+             "CROSS JOIN LATERAL jsonb_array_elements("
+             "  CASE WHEN jsonb_typeof(v.spec->'steps') = 'array' THEN v.spec->'steps' "
+             "  ELSE '[]'::jsonb END) AS step "
+             "WHERE d.project_id = :p AND d.status <> 'retired' AND step->>'kind' = 'skill' "
+             "ORDER BY d.workflow_key"),
+        {"p": project_id},
+    ).mappings().all():
+        if not row["skill_id"]:
+            continue
+        refs.setdefault(str(row["skill_id"]), _no_references())[
+            "workflows"].append({"workflow_key": str(row["workflow_key"]),
+                                 "name": str(row["name"] or row["workflow_key"])})
     return refs
 
 
 def skill_references(connection: Connection, project_id: str, skill_key: str) -> dict[str, list]:
-    """What points at one skill: the custom steps that run it and the agents that hold it."""
+    """What points at one skill: the custom steps that run it, the workflows whose steps bind
+    it directly (`kind: skill`), and the agents that hold it."""
     return _references_by_key(connection, project_id).get(
-        skill_key, {"custom_steps": [], "agents": []})
+        skill_key, _no_references())
 
 
 def get_skill(connection: Connection, project_id: str, skill_key: str) -> Optional[dict[str, Any]]:
@@ -520,6 +546,11 @@ def delete_skill(
         raise SkillInUseError(
             f"{skill_key} is run by these workflow steps: {steps}. Delete or re-point those "
             "steps first — or turn the skill off instead of deleting it.")
+    if refs["workflows"]:
+        flows = ", ".join(w["name"] for w in refs["workflows"][:8])
+        raise SkillInUseError(
+            f"{skill_key} is a step in these workflows: {flows}. Remove it from those "
+            "workflows (or retire them) first — or turn the skill off instead of deleting it.")
     if refs["agents"] and not release_grants:
         raise SkillInUseError(
             f"{skill_key} is held by {', '.join(refs['agents'])}. Deleting it takes it off "

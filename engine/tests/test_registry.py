@@ -415,8 +415,10 @@ _SAFE_WRITES = [
     # workflow places that step.
     "draft_skill",
     "draft_workflow",
-    # Connecting a server is undone by removing it, and it lands UNREVIEWED, so nothing at tier
-    # 2 or above on it becomes placeable until a person marks it trusted.
+    # Connecting a server is undone by removing it, and it lands SWITCHED OFF, UNREVIEWED and at
+    # tier 2 or above: BOSS does not contact it and no agent is offered its tools until a person
+    # turns it on, and even then every call waits for approval until somebody reviews it
+    # (test_skills_and_mcp_from_chat.py). That is why it may stay one-shot.
     "register_mcp_server",
     # Read-only by default and one at a time per project. The FIXING variant is not a separate
     # tool but a separate permission: it returns requires_confirmation, so only an operator's

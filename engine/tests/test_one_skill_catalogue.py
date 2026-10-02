@@ -42,26 +42,76 @@ TEST_DB = os.environ.get(
     os.environ.get("DATABASE_URL", "postgresql+psycopg://boss:boss@localhost:5432/boss_test"),
 )
 
-#: The only modules allowed to read the skill tables, and why each one may.
+#: The only FUNCTIONS allowed to read the skill tables, and why each one may.
+#:
+#: FUNCTIONS, NOT MODULES. Round-1 review of this milestone: the first version exempted all of
+#: skill_registry.py and skill_definitions.py, and resolve_for_task — the agent loop's eager-skill
+#: resolution, a CONSUMER — sat inside skill_registry.py merging list_skills with
+#: list_project_skills by hand, invisible to the scan. Each entry is now `file::qualname`.
 _READERS = {
     # THE catalogue: the merge every consumer reads.
-    "engine/boss_engine/services/skill_catalogue.py": "the catalogue itself",
-    # The spec-pack half of the merge: YAML plus a project's imported SkillSpecs, which is
-    # what SkillRuntimeService loads specs from. skill_catalogue calls it.
-    "engine/boss_engine/services/entitlements.py": "the spec-pack half of the merge",
-    # The stores' own owners, reading their own rows to write them.
-    "engine/boss_engine/services/skill_definitions.py": "owner of skill_definitions",
-    "engine/boss_engine/services/skill_registry.py": "owner of project_skills",
+    "engine/boss_engine/services/skill_catalogue.py::entries": "the catalogue itself",
+    "engine/boss_engine/services/skill_catalogue.py::authored_specs": "the authored half",
+    # The spec-pack half of the merge: YAML plus a project's imported SkillSpecs and its
+    # per-project state, which is what SkillRuntimeService loads specs from.
+    "engine/boss_engine/services/entitlements.py::EntitlementBrokerService.list_skills":
+        "the spec-pack half of the merge",
+    # The stores' own owners, reading their own rows to write or to hand them to a writer.
+    "engine/boss_engine/services/skill_definitions.py::get_skill": "owner: one authored row",
+    "engine/boss_engine/services/skill_definitions.py::list_skills": "owner: the authored page",
+    "engine/boss_engine/services/skill_definitions.py::save_skill": "owner: create vs overwrite",
+    "engine/boss_engine/services/skill_definitions.py::delete_skill": "owner: the delete",
+    "engine/boss_engine/services/skill_registry.py::list_project_skills": "owner: project rows",
+    "engine/boss_engine/services/skill_registry.py::ensure_skill": "owner: upsert",
     # "What points at this server" — a reference check before a delete, not a catalogue read.
-    "engine/boss_engine/services/mcp_registry.py": "reference check before deleting a server",
+    "engine/boss_engine/services/mcp_registry.py::mcp_server_references":
+        "reference check before deleting a server",
+}
+
+#: Functions that call a store owner's READ function, and why that is not a second catalogue.
+#: The scan below finds every call to these owner reads, so a consumer cannot get around the
+#: SQL scan by calling the owner instead (main.py's skill switch and resolve_for_task did).
+_OWNER_READS = ("list_project_skills", "get_skill")
+_OWNER_READ_CALLERS = {
+    # Writers: they read the row they are about to write.
+    "apps/api/app/main.py::_set_project_skill_state": "writes the project_skills row it reads",
+    "engine/boss_engine/services/video_planner.py::seed_house_style": "seeds its own skill",
+    "engine/boss_engine/services/channel_oauth.py::seed_publishing_standards":
+        "seeds its own skill",
+    # Execution of ONE authored skill: the executor needs that skill's config and knowledge,
+    # which is the row itself, not a question about which skills exist or at what tier.
+    "engine/boss_engine/services/video_planner.py::house_style_for": "one skill's knowledge",
+    "engine/boss_engine/services/skill_executors.py::_authored_skill": "one skill's config",
+    "engine/boss_engine/services/skill_executors.py::execute_sandboxed_command":
+        "one skill's config at execution",
+    "engine/boss_engine/services/skill_executors.py::execute_mcp_tool":
+        "one skill's config at execution",
+    "engine/boss_engine/services/skill_executors.py::execute_agent_program":
+        "one skill's config at execution",
 }
 
 _SHIPPING = ("engine/boss_engine", "apps/api/app", "apps/worker")
 _READ = re.compile(r"\b(FROM|JOIN)\s+(project_skills|skill_definitions)\b", re.IGNORECASE)
 
 
-def _skill_table_reads() -> list[tuple[str, int, str]]:
-    found = []
+def _walk(node, stack, rel, reads, calls):
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _walk(child, stack + [child.name], rel, reads, calls)
+            continue
+        where = f"{rel}::{'.'.join(stack) or '<module>'}"
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            for match in _READ.finditer(" ".join(child.value.split())):
+                reads.append((where, child.lineno, match.group(0)))
+        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) \
+                and child.func.id in _OWNER_READS:
+            calls.append((where, child.lineno, child.func.id))
+        _walk(child, stack, rel, reads, calls)
+
+
+def _scan() -> tuple[list[tuple[str, int, str]], list[tuple[str, int, str]]]:
+    reads: list[tuple[str, int, str]] = []
+    calls: list[tuple[str, int, str]] = []
     for top in _SHIPPING:
         for path in sorted((ROOT / top).rglob("*.py")):
             rel = path.relative_to(ROOT).as_posix()
@@ -71,15 +121,17 @@ def _skill_table_reads() -> list[tuple[str, int, str]]:
                 tree = ast.parse(path.read_text(encoding="utf-8"))
             except (SyntaxError, UnicodeDecodeError):
                 continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    for match in _READ.finditer(" ".join(node.value.split())):
-                        found.append((rel, node.lineno, match.group(0)))
-    return found
+            _walk(tree, [], rel, reads, calls)
+    return reads, calls
+
+
+def _skill_table_reads() -> list[tuple[str, int, str]]:
+    return _scan()[0]
 
 
 def test_every_read_of_the_skill_tables_is_the_catalogue_or_a_stores_owner():
-    """Enumerates every SQL read of project_skills/skill_definitions in shipping code.
+    """Enumerates every SQL read of project_skills/skill_definitions in shipping code, by the
+    FUNCTION it is in.
 
     A new consumer that reads one table directly is how this went wrong five times. It must go
     through skill_catalogue instead — or, if it really is a new store owner, be added to
@@ -87,9 +139,22 @@ def test_every_read_of_the_skill_tables_is_the_catalogue_or_a_stores_owner():
     """
     reads = _skill_table_reads()
     assert reads, "the scan found nothing — it is not looking where the code is"
-    strays = [f"{rel}:{line}: {sql}" for rel, line, sql in reads if rel not in _READERS]
+    strays = [f"{where}:{line}: {sql}" for where, line, sql in reads if where not in _READERS]
     assert not strays, (
         "these read a skill table directly instead of through skill_catalogue:\n  "
+        + "\n  ".join(strays))
+
+
+def test_every_call_to_an_owners_read_is_a_writer_or_one_skills_execution():
+    """The other road around the scan: calling the owner's read function instead of writing
+    SQL. resolve_for_task did exactly that and merged the result by hand."""
+    _reads, calls = _scan()
+    assert calls, "the call scan found nothing — it is not looking where the code is"
+    strays = [f"{where}:{line}: {name}()" for where, line, name in calls
+              if where not in _OWNER_READ_CALLERS
+              and where not in _READERS]
+    assert not strays, (
+        "these call a skill store's read directly; read skill_catalogue instead:\n  "
         + "\n  ".join(strays))
 
 
@@ -108,6 +173,12 @@ _CONSUMERS = [
      "from .skill_catalogue import entries"),
     ("boss_engine.services.entitlements", "EntitlementBrokerService.list_skills",
      "from .skill_catalogue import authored_specs"),
+    # Round-1 review: the agent loop's eager-skill resolution merged the stores itself.
+    ("boss_engine.services.skill_registry", "resolve_for_task",
+     "from .skill_catalogue import entries"),
+    # The tier half of the risk rule, applied where the runtime loads its specs.
+    ("boss_engine.services.entitlements", "EntitlementBrokerService.list_skills",
+     "from .skill_catalogue import raised_tier"),
 ]
 
 
@@ -170,7 +241,8 @@ def project(eng):
     with eng.begin() as c:
         for table in ("workflow_custom_steps", "role_skills", "skill_definitions",
                       "project_skills", "skill_invocations", "receipts", "mcp_servers",
-                      "policy_evaluations", "budget_reservations", "events"):
+                      "policy_evaluations", "budget_reservations", "events",
+                      "workflow_versions", "workflow_definitions"):
             try:
                 with c.begin_nested():
                     c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
@@ -435,3 +507,85 @@ def test_the_executor_refuses_a_server_turned_off_since_publishing(eng, project,
         with pytest.raises(SkillExecutorConfigurationError) as error:
             execute_mcp_tool(context, {"_skill_key": "file_ticket"})
     assert "turned off" in str(error.value) and "Skills and MCP" in str(error.value)
+
+
+def test_the_runtime_offers_a_skill_at_the_catalogues_tier(eng, project):
+    """Round-1 review: the catalogue raised a built-in's tier to the project's recorded tier,
+    but held_skills offered the RAW spec tier, and resolve_for_task loaded specs the same way —
+    so model.generate_text recorded at tier 2 needed approval as a custom step and not when an
+    agent called it. Every runtime road is compared with the catalogue's answer here."""
+    from boss_engine.services.entitlements import EntitlementBrokerService
+    from boss_engine.services.skill_registry import resolve_for_task
+
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO project_skills (id, project_id, skill_id, source, config) "
+                       "VALUES (:i, :p, 'model.generate_text', 'tenant', "
+                       "CAST('{\"risk_tier\": 2}' AS JSONB))"),
+                  {"i": f"ps_{uuid.uuid4().hex[:10]}", "p": project})
+        _grant(c, project, "pm", "model.generate_text", source="builtin")
+        item = catalogue.entry(c, project, "model.generate_text", settings=_settings())
+        held = agent_steps.held_skills(c, _settings(), project, "pm")
+        spec = next(s for s in EntitlementBrokerService(_settings()).list_skills(
+            project, connection=c) if s["id"] == "model.generate_text")
+        resolved = resolve_for_task(c, _settings(), project, {"job_kind": ""})
+        risk = custom_steps.resolve_risk(c, project, {"binding_kind": "skill",
+                                                      "skill_id": "model.generate_text"})
+    assert item["risk_tier"] == 2, "the recorded tier was not applied at all"
+    offered = next(s for s in held if s["id"] == "model.generate_text")
+    assert offered["risk_tier"] == item["risk_tier"] == spec["risk_tier"] == risk["risk_tier"]
+    for skill in resolved["eager"] + resolved["on_demand"]:
+        if skill["id"] == "model.generate_text":
+            assert skill["risk_tier"] == item["risk_tier"]
+
+
+def test_a_recorded_tier_never_lowers_a_spec(eng, project):
+    from boss_engine.services.entitlements import EntitlementBrokerService
+
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO project_skills (id, project_id, skill_id, source, config) "
+                       "VALUES (:i, :p, 'publish_youtube', 'tenant', "
+                       "CAST('{\"risk_tier\": 0}' AS JSONB))"),
+                  {"i": f"ps_{uuid.uuid4().hex[:10]}", "p": project})
+        spec = next(s for s in EntitlementBrokerService(_settings()).list_skills(
+            project, connection=c) if s["id"] == "publish_youtube")
+    assert spec["risk_tier"] == 3
+
+
+def _workflow_with_a_skill_step(c, pid, skill_id, *, status="active"):
+    did, vid = f"wfd_{uuid.uuid4().hex[:10]}", f"wfv_{uuid.uuid4().hex[:10]}"
+    c.execute(text("INSERT INTO workflow_definitions (id, project_id, workflow_key, name, "
+                   "status, namespace, created_by) VALUES (:d, :p, 'weekly_digest', "
+                   "'Weekly digest', :st, 'product', 'test')"),
+              {"d": did, "p": pid, "st": status})
+    spec = {"steps": [{"id": "write", "kind": "skill", "binding": {"skill_id": skill_id}}]}
+    c.execute(text("INSERT INTO workflow_versions (id, project_id, workflow_definition_id, "
+                   "version, spec, content_hash, created_by) VALUES (:v, :p, :d, 1, "
+                   "CAST(:s AS JSONB), :h, 'test')"),
+              {"v": vid, "p": pid, "d": did, "s": json.dumps(spec), "h": uuid.uuid4().hex})
+    c.execute(text("UPDATE workflow_definitions SET active_version_id = :v WHERE id = :d"),
+              {"v": vid, "d": did})
+
+
+def test_delete_refuses_while_a_workflow_binds_the_skill_directly(eng, project):
+    """Round-1 review: skill_references read custom steps and agents only, so a workflow whose
+    own `kind: skill` step bound the skill did not count, the delete passed, and the workflow
+    failed at its next publish or run."""
+    with eng.begin() as c:
+        _author(c, project, "summarise_notes")
+        _workflow_with_a_skill_step(c, project, "summarise_notes")
+        refs = sd.skill_references(c, project, "summarise_notes")
+        listed = sd.list_skills(c, project, with_references=True)[0]["references"]
+        with pytest.raises(sd.SkillInUseError) as error:
+            sd.delete_skill(c, project_id=project, actor="test", skill_key="summarise_notes",
+                            release_grants=True)
+    assert refs["workflows"] == [{"workflow_key": "weekly_digest", "name": "Weekly digest"}]
+    assert listed["workflows"] == refs["workflows"]
+    assert "Weekly digest" in str(error.value) and "turn the skill off" in str(error.value)
+
+
+def test_a_retired_workflow_does_not_hold_a_skill(eng, project):
+    with eng.begin() as c:
+        _author(c, project, "summarise_notes")
+        _workflow_with_a_skill_step(c, project, "summarise_notes", status="retired")
+        done = sd.delete_skill(c, project_id=project, actor="test", skill_key="summarise_notes")
+    assert done["deleted"] == "summarise_notes"

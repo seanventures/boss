@@ -5906,15 +5906,17 @@ def toggle_mcp(
 
 
 @app.delete("/v1/mcp/servers/{server_id}", status_code=204)
-def remove_mcp(server_id: str, project_id: str):
-    """Remove a server, refusing (409, naming them) while a custom step or skill calls it."""
+def remove_mcp(server_id: str, project_id: str, release_grants: bool = False):
+    """Remove a server, refusing (409, naming them) while a custom step or skill calls it, or
+    while an agent holds it unless `release_grants` says to take it off those agents too."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         actor = current_api_principal.get() or "executive_console"
         require_project_actor(connection, project_id, actor, "pack_manage")
         try:
-            ok = delete_mcp_server(connection, project_id, server_id, actor=actor)
+            ok = delete_mcp_server(connection, project_id, server_id, actor=actor,
+                                   release_grants=release_grants)
         except McpServerInUse as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         if not ok:
@@ -14927,8 +14929,8 @@ def _set_project_skill_state(
         # A project_skills row here would be a second switch the catalogue does not read.
         raise HTTPException(
             status_code=409,
-            detail=(f"{skill_id} is a skill this project authored. Turn it on or off on the "
-                    "Skills and MCP page (PATCH /v1/skill-definitions/{key})."))
+            detail=(f"{skill_id} is a skill this project authored. Turn it on or off with "
+                    "its own switch on the Skills and MCP page."))
     if skill.get("system") is True and not enabled:
         raise HTTPException(status_code=409, detail="System skills cannot be disabled.")
     rows = list_project_skills(connection, payload.project_id)
