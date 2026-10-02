@@ -27,6 +27,7 @@ import pytest
 from sqlalchemy import text
 
 from boss_engine.services import workflow_capability_runner as runner
+from boss_engine.services import workflow_outcomes as outcomes
 from boss_engine.services import workflows
 from boss_engine.services.workflow_capabilities import CAPABILITIES, CAPABILITY_KEYS
 
@@ -56,8 +57,8 @@ AWAITED = {key: kind for key, (kind, _fields) in runner._AWAIT_KINDS.items()}
 #: be refused, because a skip would turn that no into a yes.
 GATES = {key for key in CAPABILITY_KEYS if CAPABILITIES[key].is_gate}
 
-#: Capabilities that call one tool and finish. Failure is the tool saying so — a returned
-#: `status: failed` or `ok: false`.
+#: Capabilities that call one tool and finish in the call. Failure is whatever that tool
+#: REALLY returns when the work did not happen (`outcomes.FAILURE_SHAPES`), or the tool raising.
 TOOL_BACKED = {
     key for key in CAPABILITY_KEYS
     if CAPABILITIES[key].tool and key not in AWAITED and key not in GATES
@@ -91,6 +92,34 @@ def test_every_capability_has_a_failure_path_under_test():
         f"unclassified: {sorted(set(CAPABILITY_KEYS) - union)}; "
         f"unknown: {sorted(union - set(CAPABILITY_KEYS))}")
     assert sum(len(c) for c in classes) == len(CAPABILITY_KEYS), "a capability is in two classes"
+
+
+def test_every_capability_has_an_outcome_verdict():
+    """Every capability in the catalogue says, in `workflow_outcomes.VERDICTS`, how to tell
+    whether its work happened. There is no default: a smoke test of an app that was down went
+    green because a generic check did not understand `http_probe`'s `{"status": 503}`."""
+    assert set(outcomes.VERDICTS) == set(CAPABILITY_KEYS), (
+        f"no verdict: {sorted(set(CAPABILITY_KEYS) - set(outcomes.VERDICTS))}; "
+        f"verdict for no capability: {sorted(set(outcomes.VERDICTS) - set(CAPABILITY_KEYS))}")
+
+
+def test_every_async_capability_is_awaited():
+    """`is_async` means the runner parks the step and waits. A capability declared async with
+    nothing to wait on goes green on "accepted" — deploy on `planned`, retry_build on `retried`
+    — and its later failure never reaches the step."""
+    unawaited = sorted(k for k, c in CAPABILITIES.items()
+                       if c.is_async and k not in runner._AWAIT_KINDS)
+    assert not unawaited, f"async with no await spec: {unawaited}"
+    for key, (kind, _fields) in runner._AWAIT_KINDS.items():
+        assert kind in runner._AWAIT_TABLES, f"{key} waits on {kind!r}, which has no table"
+        assert outcomes.VERDICTS[key] is outcomes.awaited_work, key
+
+
+def test_every_tool_backed_capability_has_its_real_failure_shapes_recorded():
+    """A capability that calls a tool is driven below with what that tool really returns on
+    failure. `cost_check` is the one whose tool only fails by raising, and says so."""
+    for key in sorted(TOOL_BACKED):
+        assert key in outcomes.FAILURE_SHAPES, f"{key}: how does {CAPABILITIES[key].tool} fail?"
 
 
 def test_no_awaited_failure_is_turned_into_a_success():
@@ -135,12 +164,26 @@ def _insert_awaited(c, project_id: str, table: str, row_id: str, status: str) ->
         {"t": table},
     ).mappings().all()
     values: dict = {"id": row_id, "status": status}
+    # A REQUIRED REFERENCE GETS A REAL PARENT ROW. A deployment run must name a deployment
+    # target that exists; "x" breaks the foreign key. Parents are made the same generic way.
+    parents = dict(c.execute(
+        text("SELECT kcu.column_name, ccu.table_name FROM information_schema.table_constraints tc "
+             "JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = "
+             "tc.constraint_name AND kcu.table_schema = tc.table_schema "
+             "JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = "
+             "tc.constraint_name AND ccu.table_schema = tc.table_schema "
+             "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = :t "
+             "AND tc.table_schema = current_schema()"), {"t": table}).all())
     for col in columns:
         name, kind = col["column_name"], col["data_type"]
         if name in values:
             continue
         if name == "project_id":
             values[name] = project_id
+        elif name in parents:
+            parent_id = f"{name}_{uuid.uuid4().hex[:8]}"
+            _insert_awaited(c, project_id, parents[name], parent_id, "active")
+            values[name] = parent_id
         elif kind in ("jsonb", "json"):
             values[name] = "{}"
         elif kind in ("integer", "bigint", "smallint", "numeric", "double precision", "real"):
@@ -219,11 +262,14 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
             "run_id": awaited_id})
     if key == "preview":
         monkeypatch.setattr(runner, "_running_preview", lambda *a, **k: None)
+    # Deploy's "no preview, no deploy" guard is its own test; here the deployment is under test.
+    monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
     table = runner._AWAIT_TABLES[kind][0]
 
     with eng.begin() as c:
         run = _two_step(c, project, key)
-        runner.tick(c, Ctx(eng), project_id=project)
+        # Two ticks with approval between: a tier-2 step (deploy, redeploy) asks first.
+        _tick_through_retries(eng, c, project, run["id"], times=2)
         parked = _steps(c, run["id"])["s"]
         assert parked["status"] == "waiting", parked
         assert parked["output"]["await"] == {"kind": kind, "id": awaited_id}
@@ -237,23 +283,181 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
         c.execute(text(f"DELETE FROM {table} WHERE id=:i"), {"i": awaited_id})  # noqa: S608
 
 
-@pytest.mark.parametrize("returned", [
-    {"status": "failed", "error": "the tool said no"},
-    {"ok": False, "error": "the tool said no"},
-], ids=["status-failed", "ok-false"])
-@pytest.mark.parametrize("key", sorted(TOOL_BACKED))
-def test_a_tool_that_reports_failure_stops_the_run(eng, project, monkeypatch, key, returned):
-    """deploy, smoke_test, redeploy, retry_build, teardown_preview, cost_check — failure said
-    either way the tools say it. Retried as the step allows, then dead-lettered; never green."""
-    tool = RecordingTool(CAPABILITIES[key].tool, returned)
+@pytest.mark.parametrize("key", ["deploy", "redeploy"])
+def test_a_deploy_is_done_when_its_deployment_is_healthy_not_when_it_is_planned(
+        eng, project, monkeypatch, key):
+    """`deploy_app` answers `planned` and the step went green on it — before anything shipped,
+    and whatever happened to the deployment afterwards never reached the step. It now waits on
+    the deployment run, and completes with where the app went once that run succeeds."""
+    deployment_id = f"deprun_{uuid.uuid4().hex[:8]}"
+    tool = RecordingTool(CAPABILITIES[key].tool,
+                         {"status": "planned", "deployment_run_id": deployment_id,
+                          "next_action": "approve_and_apply_changeset"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([tool]))
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
-
     with eng.begin() as c:
         run = _two_step(c, project, key)
+        _tick_through_retries(eng, c, project, run["id"], times=2)
+        parked = _steps(c, run["id"])
+        assert parked["s"]["status"] == "waiting", "planned is not shipped"
+        assert "after" not in parked or parked["after"]["status"] == "pending"
+        assert parked["s"]["output"]["await"] == {"kind": "deployment", "id": deployment_id}
+
+        _insert_awaited(c, project, "deployment_runs", deployment_id, "succeeded")
+        c.execute(text("UPDATE deployment_targets SET domains='[\"192.0.2.7:3014\"]' "
+                       "WHERE id = (SELECT deployment_target_id FROM deployment_runs "
+                       "WHERE id=:d)"), {"d": deployment_id})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        c.execute(text("DELETE FROM deployment_runs WHERE id=:d"), {"d": deployment_id})
+
+    assert steps["s"]["status"] == "succeeded"
+    assert steps["s"]["output"]["deployment_id"] == deployment_id
+    assert steps["s"]["output"]["deployed_url"] == "http://192.0.2.7:3014"
+    assert steps["after"]["status"] in {"ready", "succeeded"}
+
+
+def test_a_retried_build_waits_on_the_attempt_it_started():
+    """`retry_code_task` nests the new attempt under `result` and says `retried` at the top —
+    which went green the moment the attempt was queued. The step parks on the new attempt."""
+    settled = runner._settle_started_work(
+        CAPABILITIES["retry_build"], "retry_build",
+        {"capability": "retry_build", "tool": "retry_code_task", "status": "retried",
+         "result": {"status": "queued", "run_id": "crun_new", "attempt": 2}})
+    assert settled["status"] == "awaiting"
+    assert settled["await"] == {"kind": "code_task", "id": "crun_new"}
+    assert settled["code_task_run_id"] == "crun_new"
+
+
+def _real_failure_cases():
+    for key, shapes in sorted(outcomes.FAILURE_SHAPES.items()):
+        for index, shape in enumerate(shapes):
+            yield pytest.param(key, shape, id=f"{key}-{index}")
+
+
+class _RaisingTool(RecordingTool):
+    def handler(self, ctx, *, project_id, actor, args):
+        raise RuntimeError(f"{self.name} fell over")
+
+
+def _drive_tool(eng, project, monkeypatch, key, tool, inputs=None):
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([tool]))
+    monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_running_preview", lambda *a, **k: None)
+    with eng.begin() as c:
+        run = _two_step(c, project, key, inputs)
         _tick_through_retries(eng, c, project, run["id"])
         steps = _steps(c, run["id"])
         _assert_stopped(c, run["id"], steps)
+    return steps
+
+
+@pytest.mark.parametrize("key,returned", list(_real_failure_cases()))
+def test_a_tool_that_really_failed_stops_the_run(eng, project, monkeypatch, key, returned):
+    """Each tool-backed capability, driven with what ITS tool returns when the work did not
+    happen — `http_probe`'s 503 and its `status: None` for a refused connection included, which
+    a generic `{"status": "failed"}` check passed as success. Never green; the run stops."""
+    steps = _drive_tool(eng, project, monkeypatch, key,
+                        RecordingTool(CAPABILITIES[key].tool, returned))
+    assert steps["s"]["last_error"], "a failure with no reason"
+
+
+@pytest.mark.parametrize("key", sorted(k for k in CAPABILITY_KEYS if CAPABILITIES[k].tool))
+def test_a_tool_that_raises_stops_the_run(eng, project, monkeypatch, key):
+    """The other way any tool fails. `cost_check`'s only way."""
+    steps = _drive_tool(eng, project, monkeypatch, key,
+                        _RaisingTool(CAPABILITIES[key].tool, {}))
+    assert "fell over" in (steps["s"]["last_error"] or "")
+
+
+@pytest.mark.parametrize("expect,returned,passes", [
+    (None, {"url": "u", "status": 200, "ms": 5}, True),
+    (None, {"url": "u", "status": 204, "ms": 5}, True),
+    (None, {"url": "u", "status": 301, "ms": 5}, False),
+    (None, {"url": "u", "status": 503, "ms": 5}, False),
+    (None, {"url": "u", "status": None, "ms": 5, "error": "refused"}, False),
+    (201, {"url": "u", "status": 201, "ms": 5}, True),
+    (201, {"url": "u", "status": 200, "ms": 5}, False),
+    ("302", {"url": "u", "status": 302, "ms": 5}, True),
+])
+def test_a_smoke_test_passes_only_on_the_status_it_expects(expect, returned, passes):
+    """`expect_status` was declared and read by nothing. Without it any 2xx passes."""
+    verdict = outcomes.judge("smoke_test", returned,
+                             {"url": "u", **({"expect_status": expect} if expect else {})})
+    assert (verdict.outcome == outcomes.SUCCEEDED) is passes, verdict
+    assert verdict.produced["reachable"] is isinstance(returned["status"], int)
+
+
+def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
+    """`FAILURE_SHAPES` is evidence only if the tools really answer that way. Each recorded
+    shape is matched — same keys, same kind of status — against the real tool, called for
+    real: a server that answers 503, a port nothing listens on, Community's refusal, and an
+    unknown preview, build and deployment in this project."""
+    import http.server
+    import socket
+    import threading
+
+    from boss_engine.config import get_settings
+    from boss_engine.tools.builtin import build_default_registry
+
+    class Down(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - the stdlib's name
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b"down")
+
+        def log_message(self, *_a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Down)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    closed = socket.socket()
+    closed.bind(("127.0.0.1", 0))
+    dead_port = closed.getsockname()[1]
+    closed.close()
+
+    tools = {spec.name: spec for spec in build_default_registry().specs()}
+
+    class RealCtx:
+        def __init__(self, edition):
+            self.engine = eng
+            self.settings = get_settings().model_copy(update={"boss_edition": edition})
+
+        def begin(self):
+            return eng.begin()
+
+    def call(tool, args, edition="enterprise"):
+        return tools[tool].handler(RealCtx(edition), project_id=project, actor="test", args=args)
+
+    try:
+        real = {
+            "smoke_test": [
+                call("http_probe", {"url": f"http://127.0.0.1:{server.server_port}/"}),
+                call("http_probe", {"url": f"http://127.0.0.1:{dead_port}/", "timeout_s": 2}),
+                call("http_probe", {"url": "http://127.0.0.1:9/"}, edition="community"),
+            ],
+            "teardown_preview": [call("stop_preview", {"preview_id": "prv_missing"})],
+            "deploy": [call("deploy_app", {"run_id": "crun_missing", "environment": "staging"})],
+            "redeploy": [call("redeploy", {"run_id": "crun_missing"})],
+            "retry_build": [call("retry_code_task", {"run_id": "crun_missing"})],
+            "cost_check": [],
+        }
+    finally:
+        server.shutdown()
+
+    def signature(shape):
+        status = shape.get("status")
+        return (tuple(sorted(shape)), type(status).__name__, shape.get("ok"))
+
+    assert set(real) == set(outcomes.FAILURE_SHAPES)
+    for key, shapes in outcomes.FAILURE_SHAPES.items():
+        produced = {signature(r) for r in real[key]}
+        for shape in shapes:
+            assert signature(shape) in produced, (key, shape, real[key])
+        # And the verdict agrees with itself on the real thing, not only on the recording.
+        for result in real[key]:
+            if result.get("ok") is not False:
+                assert outcomes.judge(key, result, {}).outcome == outcomes.FAILED, (key, result)
 
 
 @pytest.mark.parametrize("key", sorted(INTERNAL))
@@ -531,3 +735,38 @@ def test_a_join_waits_for_an_operator_skip_but_not_for_a_branch_never_taken():
     assert settled({"status": "skipped", "output": {"skipped_by_operator": True}})
     assert not settled({"status": "skipped", "output": {"reason": "path_not_reached"}})
     assert not settled({"status": "failed", "output": {}})
+
+
+# ── 3. Runs recorded before the rule ─────────────────────────────────────────────────────────
+
+def test_research_recorded_as_failed_continued_is_rewritten_as_failed(eng, project, monkeypatch):
+    """boss-1's research step still said `succeeded` in the database after the runner was fixed,
+    so the API, describe_workflow_run, steps_done and the console's "Build on this research"
+    all went on treating research that died as done — and Retry and Skip could never be offered
+    on it. The schema reconcile rewrites those rows to `failed`, keeps their output as evidence,
+    and does nothing the second time."""
+    from pathlib import Path
+
+    from boss_engine.db import split_statements
+
+    schema = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
+    [statement] = [s for s in split_statements(schema.read_text(encoding="utf-8"))
+                   if "failed_continued" in s and "UPDATE workflow_step_runs" in s]
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        run = _two_step(c, project, "notify")
+        c.execute(text(
+            "UPDATE workflow_step_runs SET status='succeeded', output=CAST(:o AS JSONB) "
+            "WHERE workflow_run_id=:r AND step_id='s'"),
+            {"r": run["id"], "o": '{"status": "failed_continued", "note": "research failed '
+                                  'before it finished", "dossier": "half"}'})
+        c.exec_driver_sql(statement)
+        once = _steps(c, run["id"])["s"]
+        c.exec_driver_sql(statement)
+        twice = _steps(c, run["id"])["s"]
+
+    assert once["status"] == "failed"
+    assert once["last_error"] == "research failed before it finished"
+    assert once["output"]["dossier"] == "half", "the evidence was thrown away"
+    assert once["output"]["recorded_as"] == "failed_continued"
+    assert twice == once

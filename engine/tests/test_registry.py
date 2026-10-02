@@ -105,6 +105,8 @@ _EXPECTED_TOOLS: set[str] = {
     # the console's "Try … again" had no tool behind it. A correct diagnosis you cannot act on
     # is still a dead end.
     "retry_workflow_step",
+    # ...and the other answer to a step that stopped its run: go on without it, with a reason.
+    "skip_workflow_step",
     # THE PLAN, BEFORE THE RUN. The builder drew four labels and four dropdowns; what each
     # step does, what it produces, and which agent captains it were all known and none of it
     # was shown. "I want to see the workflow and its definition, what it will do."
@@ -190,11 +192,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 106, (
+    assert len(reg.names()) == 107, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 61
-    assert len(write) == 45
+    assert len(write) == 46
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -424,6 +426,9 @@ _SAFE_WRITES = [
     # Re-queues ONE already-failed step and keeps everything the run produced. It can only
     # move a step out of failed/deadlettered/cancelled, so it cannot start live work twice.
     "retry_workflow_step",
+    # Marks ONE failed step skipped, with the reason and who decided; it starts nothing the run
+    # was not already going to start, and refuses approval gates and live steps.
+    "skip_workflow_step",
     # Memory writes. `remember` cannot bind a rule on its own — a lesson lands `proposed` and
     # inert — and `forget`/`update_ledger` retire or annotate rather than destroy.
     "remember",

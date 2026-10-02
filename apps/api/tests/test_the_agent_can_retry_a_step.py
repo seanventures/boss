@@ -31,7 +31,12 @@ def _seed(engine, project_id, *, status="deadlettered", run_status="deadlettered
         c.execute(text(
             "INSERT INTO workflow_versions (id, project_id, workflow_definition_id, version, "
             "        status, spec, content_hash, created_by) "
-            "VALUES ('wfv_r1', :p, 'wfd_r1', 1, 'published', CAST('{\"steps\":[]}' AS JSONB), "
+            # A REAL SPEC, with the step being retried in it. This was `{"steps": []}`, which no
+            # published version can be; a retry now sets the run moving through the same path
+            # as a skip, and that path reads the run's pinned spec to find the next steps.
+            "VALUES ('wfv_r1', :p, 'wfd_r1', 1, 'published', CAST('{\"entry_step\": "
+            "        \"meeting\", \"steps\": [{\"id\": \"meeting\", \"kind\": \"task\"}]}' "
+            "        AS JSONB), "
             "        'h1', 'ceo') ON CONFLICT (id) DO NOTHING"), {"p": project_id})
         c.execute(text(
             "INSERT INTO workflow_runs (id, project_id, workflow_definition_id, "

@@ -3918,6 +3918,22 @@ CREATE INDEX IF NOT EXISTS idx_workflow_steps_claim
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_run
   ON workflow_step_runs(workflow_run_id, iteration, created_at);
 
+-- A STEP WHOSE WORK FAILED WAS NEVER SUCCEEDED. Until 2026-10-02 the runner recorded research
+-- that died as status 'succeeded' with output.status 'failed_continued' (boss-1: research failed,
+-- the step went green, and the run walked on into a panel, a spec and a build). The runner no
+-- longer does that, but the rows it wrote still say 'succeeded' — so every reader that is not
+-- the console's one masking function (the API, describe_workflow_run, steps_done, the console's
+-- "Build on this research" check) went on treating that dead research as done. Rewritten to what
+-- happened, keeping the output as evidence. Idempotent: a rewritten row no longer matches.
+UPDATE workflow_step_runs
+   SET status = 'failed',
+       last_error = COALESCE(NULLIF(last_error, ''),
+                             output->>'note',
+                             'its work failed; recorded as succeeded by the runner before 2026-10-02'),
+       output = output || jsonb_build_object('status', 'failed',
+                                             'recorded_as', 'failed_continued')
+ WHERE status = 'succeeded' AND output->>'status' = 'failed_continued';
+
 CREATE TABLE IF NOT EXISTS workflow_migrations (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

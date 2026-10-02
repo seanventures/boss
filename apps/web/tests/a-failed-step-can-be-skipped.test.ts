@@ -37,23 +37,30 @@ describe("Skip and proceed", () => {
   });
 
   it("sits beside Try again, in the same failed-step block", () => {
-    const retry = UI.indexOf('data-testid="dw-step-retry"');
-    const skip = UI.indexOf('data-testid="dw-step-skip"');
+    // One component carries both answers, so the step's detail and the run card cannot drift.
+    const at = UI.indexOf("function FailedStepActions(");
+    expect(at).toBeGreaterThan(-1);
+    const body = UI.slice(at, UI.indexOf("\nfunction StepDetail(", at));
+    const retry = body.indexOf("data-testid={`${idPrefix}-retry`}");
+    const skip = body.indexOf("data-testid={`${idPrefix}-skip`}");
     expect(retry).toBeGreaterThan(-1);
     expect(skip).toBeGreaterThan(retry);
     expect(skip - retry).toBeLessThan(800);
-    expect(UI).toContain("Skip and proceed");
-    expect(UI.slice(retry, skip)).toContain("canSkip(step, capability)");
+    expect(body).toContain("Skip and proceed");
+    expect(body.slice(retry, skip)).toContain("canSkip(step, capability)");
+    // Rendered on the failed step's own detail, keyed so a half-typed reason never follows the
+    // operator to a different step.
+    expect(UI).toContain("<FailedStepActions key={step.step_id} step={step}");
   });
 
   it("asks why, inline, and sends nothing without a reason", () => {
     // Inline rather than window.prompt: the console does not use browser prompts.
-    const form = UI.indexOf('data-testid="dw-step-skip-form"');
+    const form = UI.indexOf("data-testid={`${idPrefix}-skip-form`}");
     expect(form).toBeGreaterThan(-1);
     const body = UI.slice(form, form + 1200);
     expect(body).toContain("if (!skipWhy.trim()) return;");
     expect(body).toContain("onSkip(skipWhy.trim());");
-    expect(body).toContain('data-testid="dw-step-skip-reason"');
+    expect(body).toContain("data-testid={`${idPrefix}-skip-reason`}");
     expect(body).toContain("disabled={!!busy || !skipWhy.trim()}");
     expect(UI).not.toContain("window.prompt");
   });

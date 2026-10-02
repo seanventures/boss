@@ -139,7 +139,7 @@ def blocker_status(connection, project_id: str, step: dict) -> Optional[dict[str
 
 
 def recheck_run(connection, *, project_id: str, run_id: str,
-                requeue: bool = True) -> dict[str, Any]:
+                requeue: bool = True, actor: str = "recheck") -> dict[str, Any]:
     """Re-test every stale-capable step on a run, and put back the ones that can now proceed.
 
     The manual refresh the operator asked for, and the operation the first fixing investigation
@@ -165,19 +165,17 @@ def recheck_run(connection, *, project_id: str, run_id: str,
         checked.append(entry)
         if not (status.get("cleared") and requeue):
             continue
-        connection.execute(
-            sql("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
-                "lease_owner=NULL, lease_expires_at=NULL, updated_at=now() WHERE id=:i"),
-            {"i": row["id"]})
-        requeued.append(row["step_id"])
+        # THE ONE RETRY, NOT A COPY OF IT. This carried its own re-queue UPDATE and its own
+        # "revive the run" UPDATE, and recorded no `workflow.step_retried` event — so a step put
+        # back by a re-check left no trace in the run's history, and the run was revived to
+        # `running` regardless of whether it was paused or still stopped at another failed
+        # step. `retry_failed_step` is what the console and the agent use; this uses it too,
+        # attributed to whoever asked for the re-check.
+        from .workflows import retry_failed_step
 
-    if requeued:
-        # A re-queued step under a dead run never runs. The run comes back with it — the same
-        # pairing `retry-step` makes, for the same reason.
-        connection.execute(
-            sql("UPDATE workflow_runs SET status='running', blocked_reason=NULL, error=NULL, "
-                "updated_at=now() WHERE id=:r AND project_id=:p"),
-            {"r": run_id, "p": project_id})
+        retry_failed_step(connection, project_id=project_id, run_id=run_id,
+                          step_id=str(row["step_id"]), actor=actor)
+        requeued.append(row["step_id"])
 
     return {
         "ok": True, "run_id": run_id, "checked": checked, "requeued": requeued,

@@ -120,24 +120,36 @@ class TestIsItStillTrue:
 
 
 class TestPuttingItBack:
-    def test_a_cleared_step_is_re_queued_with_its_attempts_reset(self):
+    """REWRITTEN to the one-retry rule. These asserted recheck_run's own copy of the re-queue
+    UPDATE and of the run revival. That copy recorded no `workflow.step_retried` event and
+    revived the run whatever state it was in; a cleared step is now put back through
+    `workflows.retry_failed_step`, the same retry the console and the agent use."""
+
+    @pytest.fixture()
+    def retried(self, monkeypatch):
+        from boss_engine.services import workflows
+
+        calls = []
+        monkeypatch.setattr(workflows, "retry_failed_step",
+                            lambda connection, **kw: calls.append(kw) or {"status": "ready"})
+        return calls
+
+    def test_a_cleared_step_is_put_back_through_the_one_retry(self, retried):
         rows = _Rows(
             targets=[{"id": "deptgt_1", "app_name": "Lead-Triage Inbox",
                       "environment": "staging", "domains": ["192.0.2.202:3014"]}],
             steps=[DEPLOY_REFUSED])
-        out = recheck_run(rows, project_id="p", run_id="wfr_1")
+        out = recheck_run(rows, project_id="p", run_id="wfr_1", actor="ceo")
         assert out["requeued"] == ["deploy"]
-        written = " ".join(t for t, _ in rows.executed)
-        assert "status='ready', attempt=0, last_error=NULL" in written
+        assert retried == [{"project_id": "p", "run_id": "wfr_1", "step_id": "deploy",
+                            "actor": "ceo"}]
 
-    def test_and_the_run_comes_back_with_it(self):
-        """A re-queued step under a dead run never runs."""
-        rows = _Rows(
-            targets=[{"id": "deptgt_1", "app_name": "Lead-Triage Inbox",
-                      "environment": "staging", "domains": []}],
-            steps=[DEPLOY_REFUSED])
-        recheck_run(rows, project_id="p", run_id="wfr_1")
-        assert any("UPDATE workflow_runs SET status='running'" in t for t, _ in rows.executed)
+    def test_it_keeps_no_copy_of_the_retry(self):
+        """No second re-queue UPDATE and no second run revival: one implementation."""
+        source = inspect.getsource(recheck_run)
+        assert "status='ready'" not in source
+        assert "UPDATE workflow_runs" not in source
+        assert "retry_failed_step(" in source
 
     def test_a_step_whose_reason_still_holds_is_left_alone(self):
         rows = _Rows(targets=[], steps=[DEPLOY_REFUSED])
