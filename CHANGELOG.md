@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v1.0-rc3 - 2026-10-02
+
+Community release candidate. Package version `1.0.0-rc.3`. Not a public GA.
 
 ### Fixed
 
@@ -33,8 +35,8 @@ Community release candidate. Package version `1.0.0-rc.2`. Not a public GA.
 ### Known issues
 
 - Software Factory builds need a GitHub repository connected to the project.
-- The default Build workflow (Standard Product Delivery) stops at its research step in Community; choose Backend Service Setup instead (see the getting started guide).
-- The PRD title shows the panel brief instead of the request.
+- The default Build workflow (Standard Product Delivery) stops at its research step in Community; choose Backend Service Setup instead (see the getting started guide). Fixed in v1.0-rc3.
+- The PRD title shows the panel brief instead of the request. Fixed in v1.0-rc3.
 
 ## v1.0-rc1 - 2026-09-29
 

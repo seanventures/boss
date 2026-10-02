@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc2"><img alt="Release v1.0-rc2" src="https://img.shields.io/badge/release-v1.0--rc2-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc3"><img alt="Release v1.0-rc3" src="https://img.shields.io/badge/release-v1.0--rc3-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -78,9 +78,9 @@ Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to
 Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 
 ```sh
-git clone --branch v1.0-rc2 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc3 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc2 --console-origin https://boss.example.com
+./install.sh --dir "$PWD" --ref v1.0-rc3 --console-origin https://boss.example.com
 ```
 
 The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
@@ -174,7 +174,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** A few capabilities are paused in `v1.0-rc2` while their spend, recovery, and effect safeguards are finished: new Discovery web research, live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Saved dossiers, investigation results, and deployment records stay readable. A preview record is not proof that a deploy succeeded.
+> **About this release candidate.** A few capabilities are paused in `v1.0-rc3` while their spend, recovery, and effect safeguards are finished: new Discovery web research, live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Saved dossiers, investigation results, and deployment records stay readable. A preview record is not proof that a deploy succeeded.
 
 ## Documentation
 

@@ -220,7 +220,7 @@
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "ade4011a796a3bd417590365f8626cb770862bf9b027fe77e23157ecf98bd83f"
+    "sha256": "d2d218c0fc0bbd356191ab1470118d472e0a7a1c2d1c48eb3cdc4eebad93cbdc"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
@@ -240,7 +240,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "fe2f847d45b8cc5203a47ec75d11e58235abefd818696c33ddb9b1ef773f58b0"
+    "sha256": "b5dd71caf38b2c18d8e7885178f063ca141a7e991d83c324aed5d44a004094a2"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",

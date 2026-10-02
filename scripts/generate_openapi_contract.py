@@ -309,7 +309,7 @@ def render_private(original: str, existing: dict, mounted: dict) -> str:
         rendered = rendered[:schema_end] + "\n" + block + rendered[schema_end:]
     rendered = rendered.replace(
         "OpenAPI document version aligned to product 0.13.0 (was 0.2.1).",
-        "BOSS Control Plane API for the current 1.0.0-rc.2 product release.",
+        "BOSS Control Plane API for the current 1.0.0-rc.3 product release.",
     )
     rendered = add_missing_private_operation_ids(rendered, mounted)
     rendered = sync_private_operation_inputs(rendered, mounted)
