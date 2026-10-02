@@ -206,4 +206,24 @@ describe("style", () => {
       expect(text, `${item.id} -> ${item.v1Area}`).toContain(`${item.v1Area}:`);
     }
   });
+
+  it("every v2 screen links to the v1 area that is that screen, and shares its label", () => {
+    // boss-1, 2026-10-02: "Workflows" linked to v1 Infra and "Infra & Models" to Observability,
+    // and v1 and v2 named the same screens differently. A different label is allowed only with
+    // a reason written in the parity map.
+    const shell = readFileSync(resolve(__dirname, "../app/ConsoleShell.tsx"), "utf8");
+    const v1Labels = new Map(
+      [...shell.matchAll(/\{ id: "([a-z_-]+)", label: "([^"]+)"/g)].map((m) => [m[1], m[2]]),
+    );
+    const parity = readFileSync(resolve(__dirname, "../../../docs/product/console_v2_parity.yaml"), "utf8");
+    for (const item of V2_NAV) {
+      expect(v1Labels.has(item.v1Area), `${item.id}: ${item.v1Area} is not a v1 area`).toBe(true);
+      const line = parity.split("\n").find((l) => l.trim().startsWith(`${item.id}: {v1Area: ${item.v1Area}`));
+      expect(line, `${item.id} is missing from v2_nav in the parity map`).toBeTruthy();
+      if (item.label !== v1Labels.get(item.v1Area)) {
+        expect(line, `${item.id} is labelled "${item.label}" but v1 says "${v1Labels.get(item.v1Area)}"`)
+          .toContain("label_differs_because");
+      }
+    }
+  });
 });

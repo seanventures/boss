@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../../lib/client";
+import { apiErrorText } from "../../../../lib/api-error";
 
 /** One agent's detail. The roster card had nowhere to go; this is what is behind it now. */
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ role: string }>
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
       return NextResponse.json(
-        { error: (parsed as { detail?: string })?.detail || `API returned ${r.status}` },
+        { error: apiErrorText(parsed, r.status) },
         { status: r.status });
     }
     return NextResponse.json(parsed);

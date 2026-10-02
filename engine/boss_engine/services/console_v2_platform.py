@@ -271,6 +271,26 @@ def infra(connection, project_id: str) -> dict[str, Any]:
         {"p": project_id},
     ).mappings().all()]
 
+    # MEETING PANELS, said beside the model table. boss-1, 2026-10-02: v2 read "$0.00 on models
+    # this month / No model calls recorded this month" while v1's meeting cards showed $0.87-$1.02
+    # each. Both were true — the month had just turned, and a panel's cost is recorded on the
+    # meeting run — but side by side they read as one console lying. So the month's start is
+    # stated, and the panels' own recorded spend is shown as its own line, never added to the
+    # per-model sum (it may overlap it).
+    month = connection.execute(
+        sql(
+            """
+            SELECT date_trunc('month', now()) AS month_start,
+                   count(*) AS runs,
+                   COALESCE(sum((usage->>'cost_usd_micros')::bigint), 0) AS micros
+            FROM meeting_runs
+            WHERE project_id = :p AND created_at > date_trunc('month', now())
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all()
+    month = dict(month[0]) if month else {}
+
     # Through the server model (mcp_registry), like every other MCP screen, so this view says
     # what the others say about a server — including whether it answered at the last check.
     from .mcp_registry import list_mcp_servers
@@ -355,11 +375,27 @@ def infra(connection, project_id: str) -> dict[str, Any]:
             }
             for s in servers
         ],
+        "month_start": (month["month_start"].date().isoformat()
+                        if month.get("month_start") is not None else None),
+        "meeting_panels": {
+            "runs": int(month.get("runs") or 0),
+            "spend_usd": round(int(month.get("micros") or 0) / 1_000_000, 2),
+        },
         # Absent, with the reason — not invented. See the docstring.
         "load_recorded": False,
         "load_note": "BOSS records host verification, not utilisation. There is no load to show.",
     }
 
+
+#: WHAT SIGN-IN USES, word for word what the v1 Identity area says (apps/web/lib/sign-in-truth.ts;
+#: a web test fails if they drift). This used to say the deployment had only an API key and
+#: nothing identity-related to configure, while v1 offered SAML and SCIM forms — two consoles,
+#: two answers (console walk, 2026-10-02).
+SIGN_IN_TRUTH = (
+    "Console sign-in is the one password the installer generated. Identity providers recorded "
+    "here are kept as configuration, and SCIM can sync members into BOSS, but the console's "
+    "sign-in page does not use them yet."
+)
 
 #: Settings the artifact offers that this deployment genuinely does not have. Each is reported
 #: as absent WITH a reason: an empty SSO form implies SSO is configurable here and merely
@@ -368,7 +404,7 @@ UNAVAILABLE_SETTINGS = (
     {
         "id": "sso",
         "label": "SSO & identity",
-        "reason": "This deployment authenticates with an API key. There is no SAML or SCIM to configure.",
+        "reason": SIGN_IN_TRUTH + " Record providers in the v1 console under Identity.",
     },
     {
         "id": "members",

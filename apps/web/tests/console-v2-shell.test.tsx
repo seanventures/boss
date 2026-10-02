@@ -92,10 +92,14 @@ describe("the v2 shell", () => {
     ]);
   });
 
-  it("labels them as the artifact does", () => {
+  it("labels them as v1 labels the same screens", () => {
+    // REWRITTEN: this pinned the artifact's labels ("Workforce", "Org Chart", "Decisions",
+    // "Workflows"), which named the same screens differently from v1 (console walk on boss-1,
+    // 2026-10-02). Labels now match v1 unless docs/product/console_v2_parity.yaml says why —
+    // see console-v2-surface.test.ts.
     for (const label of [
-      "Projects", "Hive", "Workforce", "Org Chart", "Decisions",
-      "Workflows", "Receipts", "Infra & Models", "Settings",
+      "Projects", "Hive", "Agent work", "Team structure", "Approvals",
+      "Workflow", "Receipts", "Infra & Models", "Settings",
     ]) {
       expect(shell).toContain(`label: "${label}"`);
     }

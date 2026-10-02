@@ -65,8 +65,12 @@ describe("the control", () => {
 
   it("re-fetches when it changes", () => {
     // A filter left out of the effect's dependencies moves but never queries.
-    const deps = UI.slice(UI.indexOf("}, [projectId, debouncedSearch"));
-    expect(deps.slice(0, 200)).toContain("serviceFilter");
+    // The list query is one memo now (so "Load older" sends the same filters); the filter has
+    // to be in the memo's deps, and the memo in the fetch effect's.
+    const memo = UI.slice(UI.indexOf("const listQuery = useMemo"));
+    const deps = memo.slice(memo.indexOf("}), ["), memo.indexOf("]);") + 3);
+    expect(deps).toContain("serviceFilter");
+    expect(UI).toContain("}, [projectId, listQuery, noSourcesOn]);");
   });
 });
 

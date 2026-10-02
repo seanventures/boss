@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * The app card's deployment actions, off the Server-Action path.
@@ -88,7 +89,7 @@ export async function POST(req: Request) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: data?.detail ?? data?.error ?? `HTTP ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(data, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(data);

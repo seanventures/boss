@@ -2030,52 +2030,10 @@ tr[data-expanded] { background: var(--surface-2); }
 .bx-content[data-active] .frame > section {
   display: none;
 }
-/* NOTE FOR THE NEXT AREA ADDED: this list is the visibility mechanism. CSS cannot match one
-   attribute against another, so every area needs its own line here — a new section renders into
-   the DOM and stays display:none until it does, which looks exactly like a screen that fetched
-   nothing. */
-.bx-content[data-active="workforce"] .frame > section:is([data-area="workforce"], :has([data-area="workforce"])),
-.bx-content[data-active="org_chart"] .frame > section:is([data-area="org_chart"], :has([data-area="org_chart"])),
-.bx-content[data-active="agent"] .frame > section:is([data-area="agent"], :has([data-area="agent"])),
-.bx-content[data-active="metatron"] .frame > section:is([data-area="metatron"], :has([data-area="metatron"])),
-.bx-content[data-active="dashboard"] .frame > section:is([data-area="dashboard"], :has([data-area="dashboard"])),
-.bx-content[data-active="overview"] .frame > section:is([data-area="overview"], :has([data-area="overview"])),
-.bx-content[data-active="decisions"] .frame > section:is([data-area="decisions"], :has([data-area="decisions"])),
-.bx-content[data-active="work"] .frame > section:is([data-area="work"], :has([data-area="work"])),
-.bx-content[data-active="activity"] .frame > section:is([data-area="activity"], :has([data-area="activity"])),
-/* Adding an area needs THREE things, and this is the one that is easy to forget: the AreaId
-   union, the nav list, and a line here. Without it the section renders into the DOM and CSS
-   hides it, so the page looks empty and nothing in the console says why. */
-.bx-content[data-active="delivery_workflows"] .frame > section:is([data-area="delivery_workflows"], :has([data-area="delivery_workflows"])),
-.bx-content[data-active="portfolio"] .frame > section:is([data-area="portfolio"], :has([data-area="portfolio"])),
-.bx-content[data-active="meetings"] .frame > section:is([data-area="meetings"], :has([data-area="meetings"])),
-.bx-content[data-active="processes"] .frame > section:is([data-area="processes"], :has([data-area="processes"])),
-.bx-content[data-active="code_tasks"] .frame > section:is([data-area="code_tasks"], :has([data-area="code_tasks"])),
-.bx-content[data-active="shepherd"] .frame > section:is([data-area="shepherd"], :has([data-area="shepherd"])),
-.bx-content[data-active="delivery"] .frame > section:is([data-area="delivery"], :has([data-area="delivery"])),
-.bx-content[data-active="monitoring"] .frame > section:is([data-area="monitoring"], :has([data-area="monitoring"])),
-.bx-content[data-active="reliability"] .frame > section:is([data-area="reliability"], :has([data-area="reliability"])),
-.bx-content[data-active="foundations"] .frame > section:is([data-area="foundations"], :has([data-area="foundations"])),
-.bx-content[data-active="components"] .frame > section:is([data-area="components"], :has([data-area="components"])),
-.bx-content[data-active="discovery"] .frame > section:is([data-area="discovery"], :has([data-area="discovery"])),
-.bx-content[data-active="skills"] .frame > section:is([data-area="skills"], :has([data-area="skills"])),
-.bx-content[data-active="setup"] .frame > section:is([data-area="setup"], :has([data-area="setup"])),
-.bx-content[data-active="budget"] .frame > section:is([data-area="budget"], :has([data-area="budget"])),
-.bx-content[data-active="pipeline"] .frame > section:is([data-area="pipeline"], :has([data-area="pipeline"])),
-.bx-content[data-active="comms"] .frame > section:is([data-area="comms"], :has([data-area="comms"])),
-.bx-content[data-active="github"] .frame > section:is([data-area="github"], :has([data-area="github"])),
-.bx-content[data-active="infra"] .frame > section:is([data-area="infra"], :has([data-area="infra"])),
-.bx-content[data-active="ops"] .frame > section:is([data-area="ops"], :has([data-area="ops"])),
-.bx-content[data-active="assurance"] .frame > section:is([data-area="assurance"], :has([data-area="assurance"])),
-.bx-content[data-active="org"] .frame > section:is([data-area="org"], :has([data-area="org"])),
-.bx-content[data-active="reports"] .frame > section:is([data-area="reports"], :has([data-area="reports"])),
-.bx-content[data-active="capabilities"] .frame > section:is([data-area="capabilities"], :has([data-area="capabilities"])),
-.bx-content[data-active="studio"] .frame > section:is([data-area="studio"], :has([data-area="studio"])),
-.bx-content[data-active="sandboxes"] .frame > section:is([data-area="sandboxes"], :has([data-area="sandboxes"])),
-.bx-content[data-active="enterprise"] .frame > section:is([data-area="enterprise"], :has([data-area="enterprise"])) {
-  display: grid;
-  animation: bx-fade 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
+/* WHICH SECTION IS SHOWN is generated from the AREAS list in ConsoleShell.tsx
+   (lib/area-visibility.ts). It used to be a hand-written selector per area here, and it drifted
+   three times: Workflow, Activity log, then AI SRE shipped as blank screens. Do not add
+   per-area `[data-active="..."]` visibility rules to this file. */
 
 @keyframes bx-fade {
   from { opacity: 0; transform: translateY(8px); }

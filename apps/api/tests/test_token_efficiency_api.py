@@ -343,3 +343,57 @@ def test_unconfigured_policies_http_are_defaults_not_invented(client):
     assert cbody["cost_usd_micros"] == 0
     assert cbody["series"] == []
     assert cbody["alerts"] == []
+
+
+def test_saving_one_cap_keeps_every_other_limit_on_the_stage(client):
+    """The Govern "Save cap" form sends only {stage, max_total_tokens_per_call}. While the policy
+    write was a replace, saving a cap on '*' wiped the $50/day and 5M tokens/day defaults and the
+    budget-pressure alerts stopped (review of milestone/console-b, 2026-10-02). A save is a merge:
+    on '*' and on a stage that only had defaults, every limit the payload did not name is kept."""
+    pid = f"proj_te_merge_{uuid4().hex[:10]}"
+    before = {
+        p["stage"]: p
+        for p in client.get(
+            "/v1/token-efficiency/policies", params={"project_id": pid}
+        ).json()["policies"]
+    }
+    kept_fields = (
+        "max_prompt_tokens",
+        "max_completion_tokens",
+        "max_tokens_per_day",
+        "max_cost_usd_micros_per_day",
+        "alert_at_pct",
+        "preferred_model_class",
+        "enabled",
+    )
+    for stage in ("*", "spec"):
+        assert before[stage]["source"] == "default"
+        put = client.put(
+            "/v1/token-efficiency/policies",
+            json={
+                "project_id": pid,
+                "policies": [{"stage": stage, "max_total_tokens_per_call": 20_000}],
+            },
+        )
+        assert put.status_code == 200, put.text
+        after = next(p for p in put.json()["policies"] if p["stage"] == stage)
+        assert after["source"] == "stored"
+        assert after["max_total_tokens_per_call"] == 20_000
+        for field in kept_fields:
+            assert after[field] == before[stage][field], (stage, field)
+
+    listed = client.get("/v1/token-efficiency/policies", params={"project_id": pid}).json()
+    star = next(p for p in listed["policies"] if p["stage"] == "*")
+    assert star["max_tokens_per_day"] == 5_000_000
+    assert star["max_cost_usd_micros_per_day"] == 50_000_000
+
+    # A second save on a stored row merges too, and an explicit null still clears a field.
+    put = client.put(
+        "/v1/token-efficiency/policies",
+        json={"project_id": pid, "policies": [{"stage": "*", "max_prompt_tokens": None}]},
+    )
+    assert put.status_code == 200, put.text
+    star = next(p for p in put.json()["policies"] if p["stage"] == "*")
+    assert star["max_prompt_tokens"] is None
+    assert star["max_total_tokens_per_call"] == 20_000
+    assert star["max_cost_usd_micros_per_day"] == 50_000_000

@@ -37,6 +37,15 @@ from typing import Any, Optional
 
 from sqlalchemy import text as sql
 
+
+def _meeting_title(title, directive=None) -> str:
+    """meeting_service.meeting_title, imported on first use: that module pulls in the model
+    adapters, and this one is read on every console page."""
+    from .meeting_service import meeting_title
+
+    return meeting_title(title, directive)
+
+
 #: Step states that mean the agent is mid-task right now.
 _STEP_RUNNING = ("running", "in_progress", "started")
 #: A step that failed, or one that has been open far too long.
@@ -501,7 +510,7 @@ def _live_work(connection, project_id: str) -> dict[str, dict]:
     for row in connection.execute(
         sql(
             """
-            SELECT id, phase, directive, role_keys
+            SELECT id, phase, title, directive, role_keys
             FROM meeting_runs
             WHERE project_id = :p AND status = 'running'
             ORDER BY updated_at DESC
@@ -519,7 +528,7 @@ def _live_work(connection, project_id: str) -> dict[str, dict]:
             out.setdefault(key, {
                 "phase": f"panel · {str(row.get('phase') or 'in session')}",
                 "run_id": row["id"],
-                "title": str(row.get("directive") or "")[:80],
+                "title": _meeting_title(row.get("title"), row.get("directive"))[:80],
             })
 
     # RESEARCH IS AN AGENT WORKING TOO, and this one has no role recorded anywhere: discovery
@@ -937,7 +946,7 @@ def agent_detail(connection, project_id: str, role_key: str, *,
     # show an empty history, which is the same blindness the workforce screen had.
     panels = [dict(r) for r in connection.execute(
         sql("""
-            SELECT id, directive, status, phase, updated_at
+            SELECT id, title, directive, status, phase, updated_at
             FROM meeting_runs
             WHERE project_id = :p AND role_keys ? :r
             ORDER BY updated_at DESC LIMIT 20
@@ -976,7 +985,7 @@ def agent_detail(connection, project_id: str, role_key: str, *,
         },
         "owns_stages": stages,
         "apps": apps,
-        "panels": [{"id": p["id"], "subject": str(p["directive"] or "")[:120],
+        "panels": [{"id": p["id"], "subject": _meeting_title(p.get("title"), p.get("directive"))[:120],
                     "status": p["status"], "phase": p["phase"],
                     "at": p["updated_at"].isoformat() if p["updated_at"] else None}
                    for p in panels],

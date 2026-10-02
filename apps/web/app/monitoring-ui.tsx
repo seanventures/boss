@@ -155,7 +155,7 @@ export function MonitoringArea({ health, observability, hostTargetId }: {
             project.
           </p>
           <p className="detail" style={{ marginTop: 0 }}>
-            Start in the CI/CD area: onboard an app (host + credential + environment),
+            Start in Infra: onboard an app (host + credential + environment),
             deploy it, then return here to deploy the monitoring stack onto that host.
           </p>
         </section>

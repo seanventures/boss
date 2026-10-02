@@ -55,11 +55,18 @@ describe("levels make the default view readable", () => {
 
   it("says how many rows it is hiding", () => {
     // A viewer that quietly drops most of what it loaded reads as one that found nothing.
-    expect(UI).toContain("hidden)`");
+    // The count is of THIS page's hidden rows, and now says so.
+    expect(UI).toContain("hidden on this page)`");
   });
 
-  it("puts a count on every level chip, including zero", () => {
-    expect(UI).toContain("levelCounts[value] ?? 0");
+  it("puts the LOG's count on every level and stream chip, never a page count", () => {
+    // REWRITTEN: this pinned `levelCounts[value] ?? 0`, a count of the 200 rows on the page
+    // that read as a total — boss-1 showed ERROR 0 and Deadletters 0 beside 14 dead-letters in
+    // Operations. The chips now read the server-side facets, and show "…" / "?" rather than a
+    // zero nobody counted.
+    expect(UI).toContain('chipCount("levels", value)');
+    expect(UI).toContain('chipCount("sources", choice.value)');
+    expect(UI).not.toMatch(/Counts\[[a-z.]+\] \?\? 0/);
   });
 
   it("shows the level as a WORD, not only a colour", () => {

@@ -7,6 +7,7 @@ import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome, ModelAttention }
 
 import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
 import { SubmitButton } from "./submit-button";
+import { AreaLink } from "./area-link";
 
 import { callAction } from "../lib/call-action";
 const PHASE_LABEL: Record<string, string> = {
@@ -108,7 +109,8 @@ function useLiveRefresh(active: boolean, intervalMs = 4000) {
 }
 
 // --------------------------------------------------------------------------- //
-function StartDiscovery({ projectId, researchAvailable }: {
+function StartDiscovery({ projectId, orgId, researchAvailable }: {
+  orgId?: string;
   projectId: string;
   researchAvailable: boolean;
 }) {
@@ -128,16 +130,25 @@ function StartDiscovery({ projectId, researchAvailable }: {
     <form action={action} className="panel" style={{ display: "grid", gap: 8, padding: 16 }}>
       <input type="hidden" name="project_id" value={projectId} />
       <div className="eyebrow">Research a signal</div>
+      {/* RESEARCH IS A WORKFLOW STEP NOW. This form invited a standalone discovery as the main
+          act of the screen ("Run discovery", with an emoji no other control uses), while the
+          nav itself moved Discovery off the rail because a dossier nobody's run links to is
+          unreachable later. The form stays — it still works — and says which way is usual. */}
+      <p className="detail" style={{ margin: 0 }} data-testid="discovery-usual-way">
+        Research usually runs as the first step of a workflow, so its dossier feeds the PRD
+        panel and stays linked to the run. <AreaLink area="delivery_workflows" orgId={orgId}>Start a
+        workflow</AreaLink> for that; use this form to research a signal on its own.
+      </p>
       <textarea name="seed" required rows={3} placeholder="The idea / problem / signal to research — e.g. 'AI scribe for veterinary clinics' or a YC co-founder's idea"
         style={{ width: "100%", padding: 8, fontFamily: "inherit" }} />
       <input name="context" placeholder="Operator context (optional) — ICP, market, constraints"
         style={{ width: "100%", padding: 8 }} />
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <SubmitButton className="cap-btn primary" disabled={pending}>
-          {pending ? "Starting research…" : "🔎 Run discovery"}
+          {pending ? "Starting research…" : "Research it on its own"}
         </SubmitButton>
         {state?.runId ? <span className="detail" style={{ color: "#3fb950" }}>Started {state.runId} — researching…</span> : null}
-        {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
+        {state?.error ? <span className="detail" style={{ color: "#f85149" }}>Research did not start: {state.error}</span> : null}
       </div>
     </form>
   );
@@ -184,7 +195,7 @@ export function DiscoveriesHome({
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <StartDiscovery projectId={projectId} researchAvailable={researchAvailable} />
+      <StartDiscovery projectId={projectId} orgId={orgId} researchAvailable={researchAvailable} />
       {missing ? (
         <div className="detail" data-testid="discovery-not-in-feed">
           Research run <code>{missing}</code> is not in this project&rsquo;s recent runs — showing

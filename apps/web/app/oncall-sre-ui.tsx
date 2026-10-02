@@ -224,8 +224,8 @@ export function OncallSreHome({ status }: { status: OncallSreStatus }) {
       <article className="stack-card">
         <h3 style={{ margin: 0 }}>Active pages</h3>
         <p className="detail">
-          Open and acked pages. Ack/resolve via{" "}
-          <code>/v1/oncall-sre/incidents/&#123;id&#125;/ack|resolve</code>.
+          Open and acknowledged pages. Acknowledging or resolving a page is recorded against
+          its incident; ask the on-call agent from the incident to do either.
         </p>
         {pages.length === 0 ? (
           <p className="detail">No open or acked pages.</p>

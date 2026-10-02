@@ -169,10 +169,15 @@ export function ObservabilitySuitePanel({ feed }: { feed: ObservabilitySuiteFeed
               ))}
             </div>
           </div>
+        ) : status?.gaps?.some((gap) => gap.id === "empty_observability") ? (
+          // SAID ONCE. The gap banner above already says there are no sources and no stack;
+          // repeating it here made three near-identical "not deployed" lines on one screen.
+          null
         ) : (
           <p className="detail" style={{ marginTop: 12 }}>
-            No telemetry sources registered yet. Deploy the BOSS stack from Monitoring, or connect
-            Prometheus/Loki/Grafana under reliability sources.
+            No telemetry sources registered yet. Deploy the BOSS monitoring stack from Infra
+            (Deploy monitoring stack, beside the deployment targets); it registers Prometheus,
+            Loki and Grafana here when it comes up.
           </p>
         )}
       </section>
@@ -204,9 +209,9 @@ export function ObservabilitySuitePanel({ feed }: { feed: ObservabilitySuiteFeed
               <div style={{ fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.4 }}>
                 {c.purpose}
               </div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-                {c.stars_note}
-              </div>
+              {/* No GitHub-star counts: popularity figures from a catalogue nobody refreshes,
+                  shown on an operations screen as if they were a measurement (console walk,
+                  2026-10-02). The purpose above says what the component is for. */}
               {c.deployed_by_boss_stack ? (
                 <div style={{ fontSize: 11, color: "#3fb950", marginTop: 6, fontWeight: 600 }}>
                   Covered by BOSS stack deploy

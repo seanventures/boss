@@ -67,7 +67,10 @@ describe("a discussion is a new conversation with nobody in particular", () => {
   });
 
   it("and the header says what the panel is for", () => {
-    expect(SHELL).toContain('"Talking to BOSS"');
+    // Moved, not dropped: the head now comes from dockSpeaker (lib/dock-subject.ts), the one
+    // definition of who is answering, and the shell passes the discussing flag to it.
+    expect(codeOnly("lib/dock-subject.ts")).toContain('"Talking to BOSS"');
+    expect(SHELL).toContain("discussing: dockDiscussing }).heading");
   });
 
   it("a stale role in the URL cannot leak into it either", () => {

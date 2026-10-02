@@ -252,7 +252,10 @@ describe("Monitoring empty-state honesty (BOSS-344)", () => {
     );
     expect(markup).toContain('data-empty-state="monitoring-unconfigured"');
     expect(markup).toContain("Monitoring is not set up yet");
-    expect(markup).toContain("CI/CD");
+    // The area is called Infra now; "Start in the CI/CD area" named a screen that no longer
+    // exists by that name (console walk, 2026-10-02).
+    expect(markup).toContain("Start in Infra");
+    expect(markup).not.toContain("CI/CD");
     // Nested fleet chrome must not leak through the combined empty.
     expect(markup).not.toContain("● not_deployed");
     expect(markup).not.toContain("Deploy monitoring stack");

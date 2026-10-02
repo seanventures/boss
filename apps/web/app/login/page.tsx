@@ -3,7 +3,7 @@ import { CopyCommand } from "./copy-command";
 
 export const dynamic = "force-dynamic";
 
-type Props = { searchParams: Promise<{ next?: string; error?: string }> };
+type Props = { searchParams: Promise<{ next?: string; error?: string; slowed?: string }> };
 
 const SHOW_ON_SERVER = "python3 scripts/install/console_password.py show";
 // -t: the script prints only to a real terminal, and ssh running a command allocates none.
@@ -12,6 +12,8 @@ const SHOW_OVER_SSH = `ssh -t user@your-server 'cd ~/boss && ${SHOW_ON_SERVER}'`
 export default async function ConsoleLogin({ searchParams }: Props) {
   const params = await searchParams;
   const failed = params.error === "invalid";
+  // Set by the sign-in route when this attempt waited behind the wrong-password backoff.
+  const slowed = failed && params.slowed === "1";
   return (
     <main className="login-page">
       <div className="login-card">
@@ -24,6 +26,13 @@ export default async function ConsoleLogin({ searchParams }: Props) {
             <input id="console-password" name="password" type="password" required autoFocus
               autoComplete="current-password" className="input" />
             {failed ? <p role="alert" className="login-error">Incorrect password.</p> : null}
+            {slowed ? (
+              <p role="alert" className="login-error" data-testid="login-slowed">
+                Many wrong passwords were tried recently, so each sign-in now waits a few seconds
+                before it is checked. The right password still signs you in; the password below
+                is unchanged.
+              </p>
+            ) : null}
             <button type="submit" className="cap-btn primary login-submit">Sign in</button>
 
             {/* WHERE THE PASSWORD LIVES, ON THE PAGE THAT ASKS FOR IT — folded away until wanted,

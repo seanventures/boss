@@ -60,6 +60,8 @@ export type ActivityLogQuery = {
   order?: string;
   limit?: number;
   offset?: number;
+  /** `next_cursor` from the previous page: the rows strictly older than it. */
+  cursor?: string;
 };
 
 export type ActivityLogItem = {
@@ -98,7 +100,62 @@ export type ActivityLog = {
   total?: number;
   limit?: number;
   offset?: number;
+  /** Present when there is an older page; pass it back as `cursor` to load it. */
+  nextCursor?: string;
 };
+
+/** How many rows the LOG holds per level and per stream (GET /v1/activity/facets) — counted
+ *  against the log, not the page. */
+export type ActivityFacets = {
+  levels: Record<string, number>;
+  sources: Record<string, number>;
+  levelsExact: boolean;
+  /** False when a stream count is a floor (a scoped view counts at most the scan cap per stream). */
+  sourcesExact: boolean;
+  note?: string;
+};
+
+export function mapActivityFacets(payload: unknown): ActivityFacets | null {
+  if (!isPlainObject(payload)) return null;
+  const counts = (value: unknown): Record<string, number> => {
+    const out: Record<string, number> = {};
+    if (isPlainObject(value)) {
+      for (const [key, n] of Object.entries(value)) {
+        const parsed = asFiniteNumber(n);
+        if (parsed !== undefined) out[key] = parsed;
+      }
+    }
+    return out;
+  };
+  return {
+    levels: counts(payload.levels),
+    sources: counts(payload.sources),
+    levelsExact: payload.levels_exact !== false,
+    sourcesExact: payload.sources_exact !== false,
+    note: typeof payload.note === "string" ? payload.note : undefined,
+  };
+}
+
+/** What a level or stream chip shows. A chip is read as a fact about the log, so it is "…"
+ *  until the counts arrive, "?" when one could not be read — never a zero that was not counted —
+ *  and carries a "+" when the count is a floor. Stream counts under a run/agent/service scope are
+ *  counted from at most the facet scan cap per stream (sources_exact=false); they were shown as
+ *  exact while only the level chips knew about floors (review of milestone/console-b). */
+export function facetChipLabel(
+  facets: ActivityFacets | null, kind: "levels" | "sources", key: string,
+): string {
+  if (facets === null) return "…";
+  const n = facets[kind]?.[key];
+  if (typeof n !== "number") return "?";
+  const exact = kind === "levels" ? facets.levelsExact : facets.sourcesExact;
+  return `${n}${exact ? "" : "+"}`;
+}
+
+/** The API sends a next-page cursor only for time, newest first (its order when none is sent);
+ *  any other server order is one page, so its last row is not the oldest row. */
+export function activityPagesByCursor(sort?: string, order?: string): boolean {
+  return (sort ?? "created_at") === "created_at" && (order ?? "desc") === "desc";
+}
 
 const STATUS_SET = new Set<string>(ACTIVITY_LOG_STATUSES);
 const SORT_SET = new Set<string>(ACTIVITY_LOG_SORTS);
@@ -148,6 +205,7 @@ export function activityLogSearchParams(
   if (typeof query.offset === "number" && Number.isFinite(query.offset)) {
     params.set("offset", String(Math.max(0, Math.trunc(query.offset))));
   }
+  setIfPresent(params, "cursor", query.cursor);
   return params;
 }
 
@@ -170,6 +228,8 @@ export function mapActivityLog(
     total: asFiniteNumber(payload.total),
     limit: asFiniteNumber(payload.limit),
     offset: asFiniteNumber(payload.offset),
+    nextCursor:
+      typeof payload.next_cursor === "string" && payload.next_cursor ? payload.next_cursor : undefined,
   };
 }
 

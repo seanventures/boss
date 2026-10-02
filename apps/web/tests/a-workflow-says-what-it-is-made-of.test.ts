@@ -101,6 +101,9 @@ describe("a custom step can be changed", () => {
     const helper = readFileSync("lib/start-refusal.ts", "utf8");
     expect(helper).toContain("if (flat) return { error: flat };");
     expect(helper).toContain("`API returned ${status}`");
+    // AND IN WORDS: the helper reads the detail through apiErrorText's reader (lib/api-error.ts),
+    // so a validation array is "field: message", never "[object Object]" (console-b stream).
+    expect(readFileSync("lib/start-refusal.ts", "utf8")).toContain('import { detailText } from "./api-error";');
   });
 });
 

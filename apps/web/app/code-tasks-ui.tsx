@@ -1124,7 +1124,7 @@ function SetupDeployment({ run, projectId, actor, onDone }: {
       ) : !ready ? (
         // Naming the missing thing beats an empty picker: "no hosts" reads as a broken form.
         <span className="detail">
-          No verified host yet. Onboard one in CI/CD → Hosts, then this app can be pointed at it.
+          No verified host yet. Onboard one in Infra → Hosts, then this app can be pointed at it.
         </span>
       ) : (
         <form

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * The channels area's reads and writes.
@@ -24,7 +25,7 @@ export async function GET(req: Request) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(data, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(data);
@@ -61,7 +62,7 @@ export async function POST(req: Request) {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` },
+        return NextResponse.json({ error: apiErrorText(data, r.status) },
                                  { status: r.status });
       }
       return NextResponse.json(data);
@@ -82,7 +83,7 @@ export async function POST(req: Request) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(data, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(data);

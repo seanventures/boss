@@ -48,6 +48,9 @@ const KNOWN_AGENT_WRITERS = [
   "app/api/agent/route.ts",
   "app/api/skills/route.ts",
   "app/delivery-workflows-ui.tsx",
+  // The shared MCP panel (skills-mcp stream): removing a server an agent holds releases that
+  // agent's grant through /api/skills, so it is an agent writer too — reviewed at integration.
+  "app/mcp-servers-ui.tsx",
   "app/skills-ui.tsx",
   "app/workforce-ui.tsx",
   "lib/agent-studio.ts",

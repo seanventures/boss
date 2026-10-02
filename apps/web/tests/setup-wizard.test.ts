@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { lastSavedProvider } from "../app/setup-ui";
+import { AREA_IDS } from "../lib/area-ids";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -18,7 +19,7 @@ const EDITION = codeOnly("lib/edition.ts");
 describe("setup is reachable before anything else makes sense", () => {
   it("it is an area, in Settings", () => {
     expect(SHELL).toContain('id: "setup"');
-    expect(SHELL).toContain('| "setup"');
+    expect(AREA_IDS).toContain("setup"); // the id list moved to lib/area-ids.ts
   });
 
   it("and the community edition shows it — that is who it is for", () => {

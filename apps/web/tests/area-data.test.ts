@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { codeOnly } from "./_helpers/source";
+
 vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
   API_URL: "http://localhost:9",
@@ -87,8 +89,25 @@ describe("area-data loaders (BOSS-13)", () => {
     expect(source).toContain("loadBudgetAreaData");
     expect(source).toContain("loadInfraAreaData");
     expect(source).toContain("loadAssuranceAreaData");
-    expect(source).toContain("shouldLoadBudgetArea");
-    expect(source).toContain("shouldLoadInfraArea");
-    expect(source).toContain("shouldLoadAssuranceArea");
+  });
+
+  /**
+   * REWRITTEN: this used to assert that page.tsx called shouldLoadBudgetArea(requestedArea) and
+   * friends — i.e. it pinned the bug. The console renders every area and the rail switches
+   * client-side, so gating a pack on the area the SERVER was asked for meant: land on Skills and
+   * MCP, open Govern, read "FinOps summary unavailable" (boss-1, live). Every pack the page loads
+   * must now be gated by `needs(...)`, the one seam that decides what a render fetches.
+   */
+  it("gates every area pack on needs(), never on the requested area", () => {
+    const source = codeOnly("app/page.tsx");
+    const calls = [...source.matchAll(/load(\w+)AreaData\(\{[^}]*active:\s*(\w+)/g)];
+    expect(calls.length, "found no area-pack loads — the scan is broken").toBeGreaterThanOrEqual(3);
+    for (const [, pack, flag] of calls) {
+      const def = source.match(new RegExp(`const ${flag}\\s*=\\s*([^;]+);`));
+      expect(def, `${pack}: ${flag} is not defined in page.tsx`).not.toBeNull();
+      expect(def![1].trim(), `${pack} pack is gated on ${def![1]}`).toMatch(/^needs\(/);
+      expect(def![1]).not.toContain("requestedArea");
+    }
+    expect(source).not.toMatch(/shouldLoad(Budget|Infra|Assurance)Area\(/);
   });
 });

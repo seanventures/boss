@@ -18,6 +18,7 @@
 import { useEffect, useState } from "react";
 
 import { AreaLink } from "./area-link";
+import { isAreaId } from "../lib/area-ids";
 import { EmailSetup } from "./email-setup-ui";
 
 export type ReadinessNeed = {
@@ -110,7 +111,9 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
               {" "}— needed by {need.needed_by.map((n) => n.label).join(", ")}. {need.detail}.
             </span>
             <span className="dw-ready-fix">
-              {need.area ? (
+              {/* Only an area the console has: the API names it as a string, and a link to an area
+                  that is gone did nothing when clicked (console-b, lib/area-ids.ts). */}
+              {isAreaId(need.area) ? (
                 <AreaLink area={need.area}>{need.fix}</AreaLink>
               ) : need.fix}
             </span>

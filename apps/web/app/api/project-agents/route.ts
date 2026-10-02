@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { writeAwareFetch } from "../../../lib/api-write";
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * Who is on an app.
@@ -50,7 +51,7 @@ async function relay(url: string, init: RequestInit) {
       // The API's own sentence: a refusal here names which agents ARE assigned, and replacing
       // that with "request failed" would throw away the only actionable part.
       return NextResponse.json(
-        { error: (parsed as { detail?: string })?.detail || `API returned ${r.status}` },
+        { error: apiErrorText(parsed, r.status) },
         { status: r.status });
     }
     return NextResponse.json(parsed);

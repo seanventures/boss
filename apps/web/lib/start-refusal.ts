@@ -14,6 +14,8 @@
  * "Start anyway".
  */
 
+import { detailText } from "./api-error";
+
 export type ApiRefusal = {
   /** Always a sentence — safe to render as text. */
   error: string;
@@ -21,17 +23,14 @@ export type ApiRefusal = {
   readiness?: unknown;
 };
 
+/** A detail that is words on its own: a string, or FastAPI's validation array. An object is
+ *  NOT — it may be the readiness checklist, read below. The words come from lib/api-error.ts's
+ *  reader (integration of the templates and console-b streams, which each wrote a parser for
+ *  the same "[object Object]" / crashed-hero incident; there is one reader now). */
 function sentence(value: unknown): string | undefined {
-  if (typeof value === "string") return value.trim() || undefined;
-  if (Array.isArray(value)) {
-    // FastAPI's validation shape: [{loc, msg, type}, …]
-    const parts = value.map((item) =>
-      item && typeof item === "object" && "msg" in item
-        ? String((item as { msg: unknown }).msg)
-        : typeof item === "string" ? item : JSON.stringify(item));
-    return parts.join("; ") || undefined;
-  }
-  return undefined;
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "object" && !Array.isArray(value)) return undefined;
+  return detailText(value) || undefined;
 }
 
 /** The refusal in the API's response body `parsed`, as `{error: string, readiness?}`. */
@@ -42,7 +41,8 @@ export function refusalFrom(status: number, parsed: unknown): ApiRefusal {
   if (flat) return { error: flat };
   if (detail && typeof detail === "object") {
     const d = detail as Record<string, unknown>;
-    const message = sentence(d.message) ?? sentence(d.error) ?? sentence(d.detail);
+    const message = sentence(d.message) ?? sentence(d.error) ?? sentence(d.detail)
+      ?? (detailText(d) || undefined);
     return {
       error: message ?? `API returned ${status}`,
       ...(d.readiness && typeof d.readiness === "object" ? { readiness: d.readiness } : {}),

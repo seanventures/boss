@@ -99,6 +99,26 @@ export function openDockAbout(o: DockOpening): void {
   } catch { /* non-browser */ }
 }
 
+/**
+ * WHO IS ANSWERING, AS THE DOCK HEAD SAYS IT. One definition for "no role": BOSS in general.
+ *
+ * The incident (boss-1 console walk, 2026-10-02): Repo and model's "Ask BOSS about this step"
+ * opens with `role: null` — the contract above says that asks BOSS in general — and the shell
+ * mapped `agent=general` to the Deployment Manager, heading and roleName both. A question about
+ * connecting a repository went to the role whose subject is hosts and rollbacks. A door that
+ * wants the Deployment Manager says so (`role: "Deployment Manager"`); silence never means it.
+ */
+export const NO_ROLE_HEADING = "Ask BOSS";
+
+export function dockSpeaker(state: { role: string; discussing: boolean }): {
+  heading: string;
+  roleName: string | undefined;
+} {
+  if (state.discussing) return { heading: "Talking to BOSS", roleName: undefined };
+  const role = state.role.trim();
+  return role ? { heading: role, roleName: role } : { heading: NO_ROLE_HEADING, roleName: undefined };
+}
+
 /** What the dock is showing, as read back from the URL by the console shell. */
 export type DockState = {
   /** `?agent=` — the subject's ref, or "general". */

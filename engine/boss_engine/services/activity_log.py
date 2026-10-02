@@ -1115,6 +1115,54 @@ def _load_agent_turns(
     return items
 
 
+#: The table each source reads, and the WHERE that scopes it to a project. ONE map, so the
+#: total, the per-stream counts and the loaders cannot disagree about what a source contains.
+#: app_logs was missing from the total: its loader also reads rows with no project (an error
+#: raised before any run was resolved), and the count did not, so "of N" undercounted the log.
+_SOURCE_TABLES: dict[str, tuple[str, str]] = {
+    "event": ("events", "project_id = :project_id"),
+    "process_step": ("agent_process_steps", "project_id = :project_id"),
+    "job": ("jobs", "project_id = :project_id"),
+    "deadletter": ("deadletters", "project_id = :project_id"),
+    "receipt": ("receipts", "project_id = :project_id"),
+    "llm_call": ("llm_calls", "project_id = :project_id"),
+    "agent_turn": ("agent_turns", "project_id = :project_id"),
+    "app_log": ("app_logs", "(project_id = :project_id OR project_id IS NULL)"),
+    "workflow_step": ("workflow_step_runs", "project_id = :project_id"),
+    "deployment": ("deployment_runs", "project_id = :project_id"),
+}
+
+#: Rows per source the level facet classifies. Levels are decided in Python (the classifier
+#: reads the event type and the payload), so they cannot be counted in SQL; past this many rows
+#: in any one stream the level counts are declared a floor rather than presented as totals.
+FACET_SCAN_CAP = 2_000
+
+
+def _count_source(
+    connection: Connection, project_id: str, source: str, *, since: Any, until: Any
+) -> int:
+    table, scope = _SOURCE_TABLES[source]
+    extra, params = _time_clauses(since, until)
+    rows = _fetch_rows(
+        connection,
+        f"SELECT count(*) AS n FROM {table} WHERE {scope}{extra}",
+        {"project_id": project_id, **params},
+    )
+    # A source whose table is absent contributes nothing; _fetch_rows returns [] for it.
+    return sum(int(row.get("n") or 0) for row in rows)
+
+
+def _encode_cursor(item: Mapping[str, Any]) -> str:
+    return f"{_text(item.get('created_at'))}|{_text(item.get('id'))}"
+
+
+def _decode_cursor(cursor: str) -> tuple[str, str]:
+    stamp, sep, row_id = cursor.partition("|")
+    if not sep or not stamp.strip():
+        raise ValueError("cursor must be the next_cursor value from a previous page.")
+    return stamp.strip(), row_id.strip()
+
+
 def _count_all(connection: Connection, project_id: str, *, since: Any, until: Any) -> int:
     """Total activity rows for the project, across every source.
 
@@ -1123,21 +1171,12 @@ def _count_all(connection: Connection, project_id: str, *, since: Any, until: An
     name -- the same mistake as the console's "Verified today: 100", which was reporting its
     own fetch limit as a fact about the world.
     """
-    extra, params = _time_clauses(since, until)
-    total = 0
     # Every source the loaders read, or the count and the list disagree — and a total that is
     # smaller than the rows on screen is worse than no total.
-    for table in ("events", "agent_process_steps", "jobs", "deadletters", "receipts",
-                  "llm_calls", "agent_turns", "workflow_step_runs", "deployment_runs"):
-        rows = _fetch_rows(
-            connection,
-            f"SELECT count(*) AS n FROM {table} WHERE project_id = :project_id{extra}",
-            {"project_id": project_id, **params},
-        )
-        # A source whose table is absent contributes nothing; _fetch_rows returns [] for it.
-        for row in rows:
-            total += int(row.get("n") or 0)
-    return total
+    return sum(
+        _count_source(connection, project_id, source, since=since, until=until)
+        for source in SOURCES
+    )
 
 
 _SOURCE_LOADERS = (
@@ -1180,6 +1219,72 @@ class ActivityLogService:
         return self.query(connection, project_id, **kwargs)
 
     @staticmethod
+    def facets(
+        connection: Connection,
+        project_id: str,
+        *,
+        since: Any = None,
+        until: Any = None,
+        run_id: Optional[str] = None,
+        workflow_run_id: Optional[str] = None,
+        agent: Optional[str] = None,
+        service: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """How many rows the log holds per LEVEL and per STREAM — server-side, not per page.
+
+        The incident (boss-1 console, 2026-10-02): the level and stream chips counted the 200
+        rows the page had fetched and read as totals — ERROR 0, Deadletters 0, Jobs 0 — while
+        Operations reported 14 failed jobs and 14 dead-letters. A chip is read as a fact about
+        the log, so it is counted against the log.
+
+        Stream counts are exact SQL counts when no scope narrows them. Level counts need the
+        classifier, so each stream is classified up to FACET_SCAN_CAP rows and the result says
+        whether that covered everything (`levels_exact`) rather than presenting a floor as a
+        total. The level and stream filters themselves are NOT applied: a chip shows how many
+        rows switching it on would show.
+        """
+        project = _text(project_id)
+        if not project:
+            raise ValueError("project_id is required.")
+        scoped = any(_text(v) for v in (run_id, workflow_run_id, agent, service))
+        levels = {name: 0 for name in LEVELS}
+        sources: dict[str, int] = {}
+        capped_sources: list[str] = []
+        for source_name in SOURCES:
+            loaded = _LOADERS_BY_SOURCE[source_name](
+                connection, project, since=since, until=until, cap=FACET_SCAN_CAP, q=None)
+            if len(loaded) >= FACET_SCAN_CAP:
+                capped_sources.append(source_name)
+            if _text(run_id):
+                loaded = [i for i in loaded if i["run_id"] == _text(run_id)]
+            if _text(workflow_run_id):
+                loaded = [i for i in loaded if i["workflow_run_id"] == _text(workflow_run_id)]
+            if _text(agent):
+                loaded = [i for i in loaded if i["agent"] == _text(agent)]
+            if _text(service):
+                loaded = [i for i in loaded if i["service"] == _text(service)]
+            for item in loaded:
+                levels[item["level"]] = levels.get(item["level"], 0) + 1
+            sources[source_name] = (
+                len(loaded) if scoped
+                else _count_source(connection, project, source_name, since=since, until=until)
+            )
+        exact = not capped_sources
+        return {
+            "project_id": project,
+            "levels": levels,
+            "sources": sources,
+            "levels_exact": exact,
+            "sources_exact": (not scoped) or exact,
+            **({} if exact else {
+                "note": (
+                    f"Levels counted over the newest {FACET_SCAN_CAP} rows of "
+                    f"{', '.join(capped_sources)}; older rows are not in these counts."
+                ),
+            }),
+        }
+
+    @staticmethod
     def query(
         connection: Connection,
         project_id: str,
@@ -1201,10 +1306,26 @@ class ActivityLogService:
         order: Optional[str] = "desc",
         limit: Optional[int] = DEFAULT_LIMIT,
         offset: Optional[int] = 0,
+        cursor: Optional[str] = None,
     ) -> dict[str, Any]:
         project = _text(project_id)
         if not project:
             raise ValueError("project_id is required.")
+        # PAGING BY CURSOR. The console fetched the newest 200 rows and had no way past them,
+        # so anything older was unreachable without guessing a filter. A cursor is the last
+        # row's (created_at, id); the next page is everything strictly older. Offsets would
+        # shift under a log that is being written while you read it.
+        cursor_key: Optional[tuple[str, str]] = None
+        requested_until = until
+        if _text(cursor):
+            if (_text(sort) or "created_at") != "created_at" or (_text(order) or "desc") != "desc":
+                raise ValueError("cursor paging reads newest-first: sort=created_at, order=desc.")
+            if _text(offset) not in ("", "0"):
+                raise ValueError("use cursor or offset, not both.")
+            cursor_key = _decode_cursor(_text(cursor))
+            # Older than the cursor, at the SQL level too: each source then loads its rows just
+            # before the cursor rather than its newest ones.
+            until = cursor_key[0] if until is None or _text(until) > cursor_key[0] else until
         parsed_limit = _normalize_limit(limit)
         parsed_offset = _normalize_offset(offset)
         parsed_sort = _normalize_sort(sort)
@@ -1258,6 +1379,10 @@ class ActivityLogService:
             and parsed_order == "desc"
         )
         cap = (parsed_offset + parsed_limit) if exact else FILTERED_SCAN_CAP
+        if cursor_key is not None and exact:
+            # Rows that share the cursor's timestamp are filtered out below, so leave room for
+            # them, plus one row to learn whether there is another page.
+            cap = parsed_limit + 50
 
         items: list[dict[str, Any]] = []
         source_counts: list[int] = []
@@ -1272,6 +1397,11 @@ class ActivityLogService:
         # A source that returned exactly its cap probably had more to give.
         capped = not exact and any(count >= cap for count in source_counts)
 
+        if cursor_key is not None:
+            items = [
+                item for item in items
+                if (_text(item.get("created_at")), _text(item.get("id"))) < cursor_key
+            ]
         if needle:
             # SQL narrowed; this confirms. See `_matches_q`: the index makes the search fast,
             # this keeps it meaning what an operator thinks it means, and neither step alone is
@@ -1329,11 +1459,24 @@ class ActivityLogService:
         # as a floor where it cannot. Reporting a bounded length as a total would tell an
         # operator there are 50 events when there are 33,646.
         if exact:
-            total = _count_all(connection, project, since=since, until=until)
+            # The whole log's size, not "older than the cursor": the line reads "N of TOTAL".
+            total = _count_all(connection, project, since=since, until=requested_until)
             total_is_exact = True
         else:
             total = len(items)
             total_is_exact = not capped
+
+        # THERE IS AN OLDER PAGE when this one is full and something was left behind it: more
+        # rows already loaded, or a source that stopped at its cap.
+        more = len(items) > parsed_offset + parsed_limit or any(
+            count >= cap for count in source_counts
+        )
+        next_cursor = (
+            _encode_cursor(page[-1])
+            if page and len(page) == parsed_limit and more
+            and parsed_sort == "created_at" and parsed_order == "desc"
+            else None
+        )
 
         return {
             "items": page,
@@ -1341,6 +1484,7 @@ class ActivityLogService:
             "total_is_exact": total_is_exact,
             "limit": parsed_limit,
             "offset": parsed_offset,
+            "next_cursor": next_cursor,
             **(
                 {}
                 if total_is_exact

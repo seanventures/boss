@@ -1,5 +1,10 @@
 "use client";
 
+import { useActionState } from "react";
+
+import { callAction } from "../lib/call-action";
+import { setStageTokenCapAction, type TokenCapResult } from "./token-policy-actions";
+import { SubmitButton } from "./submit-button";
 import type {
   TokenConsumption,
   TokenPoliciesFeed,
@@ -217,6 +222,9 @@ export function TokenConsumptionCard({ consumption }: { consumption: TokenConsum
 export function TokenPoliciesCard({ feed }: { feed: TokenPoliciesFeed }) {
   const project = feed.policies.find((p) => p.stage === "*");
   const stages = feed.policies.filter((p) => p.stage !== "*").slice(0, 10);
+  const [capResult, setCap] = useActionState<TokenCapResult | null, FormData>(
+    callAction(setStageTokenCapAction), null,
+  );
   return (
     <article className="stack-card">
       <h3 style={{ margin: 0 }}>Token budget policies</h3>
@@ -269,6 +277,34 @@ export function TokenPoliciesCard({ feed }: { feed: TokenPoliciesFeed }) {
               ))}
             </div>
           ) : null}
+          {/* THE CONTROL THE RECOMMENDATIONS POINT AT. They said "raise the cap via PUT
+              /v1/token-efficiency/policies"; this is that, as a form. */}
+          <form action={setCap} className="composer compact" data-testid="token-cap-form"
+                style={{ marginTop: 10 }}>
+            <input type="hidden" name="project_id" value={feed.projectId} />
+            <label className="field">
+              <span>Stage</span>
+              <select className="input" name="stage" required defaultValue="">
+                <option value="" disabled>Choose a stage…</option>
+                {[...new Set(["*", ...feed.policies.map((p) => p.stage)])].map((stage) => (
+                  <option key={stage} value={stage}>{stage === "*" ? "project default (*)" : stage}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Max tokens per call</span>
+              <input className="input" name="max_total_tokens_per_call" type="number" min={1000}
+                     step={1000} required placeholder="e.g. 48000" />
+            </label>
+            <SubmitButton type="submit" className="cap-btn">Save cap</SubmitButton>
+            {capResult?.ok ? (
+              <p className="detail" role="status">
+                Saved: {capResult.stage} capped at {capResult.cap.toLocaleString("en-US")} tokens per call.
+              </p>
+            ) : capResult ? (
+              <p className="error-banner" role="alert">{capResult.error}</p>
+            ) : null}
+          </form>
         </>
       )}
     </article>
@@ -367,7 +403,7 @@ export function TokenEfficiencyPanel({
           <h2>Consumption control, scorecards, and packing tips.</h2>
         </div>
         <p className="status-meta">
-          Source: `/v1/token-efficiency/*` over llm_calls — no external model calls.
+          Computed from BOSS&apos;s own record of model calls — reading this makes no model call.
         </p>
       </div>
       <div

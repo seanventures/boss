@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /** What this project knows, and the rules waiting to be allowed to bind.
  *
@@ -70,7 +71,7 @@ export async function POST(req: Request) {
     const payload = await r.json().catch(() => ({}));
     if (!r.ok) {
       return NextResponse.json(
-        { error: payload?.detail ?? `API returned ${r.status}` }, { status: r.status });
+        { error: apiErrorText(payload, r.status) }, { status: r.status });
     }
     return NextResponse.json(payload);
   } catch (e) {

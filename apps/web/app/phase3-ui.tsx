@@ -1,5 +1,6 @@
 "use client";
 
+import { meetingCardTitle } from "../lib/meeting-title";
 import { useActionState } from "react";
 import { type AckState } from "../lib/comms-ack";
 import { type WipStatus } from "../lib/factory";
@@ -133,14 +134,20 @@ export function MeetingConsensusCard({
   const [tallyState, tallyAction, tallyPending] = useActionState(callAction(tallyVotesAction), null);
   const [sweepState, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction), null);
   const bound = Boolean(meetingId);
-  return (
-    <article className="stack-card" data-testid="meeting-consensus-card">
-      <h3 style={{ margin: 0 }}>Meeting consensus</h3>
+  // AN OPERATOR FORM, NOT A FIXTURE. On boss-1 this card sat on the Meetings screen with votes
+  // prefilled 2 / 1 / 0, "requires meeting_id" copy and an "mtg_… or mrun_…" placeholder — a
+  // debug harness. The counts start empty (a vote nobody cast must not be one press away), the
+  // copy says what the tally does, and the stall sweep is folded under Maintenance.
+  const body = (
+    <>
       {bound ? (
-        <p className="detail">Tally a panel vote for meeting <code>{meetingId}</code> under quorum/threshold rules.</p>
+        <p className="detail">
+          Record how this panel voted. BOSS applies the quorum and approval threshold and says
+          whether the panel reached consensus.
+        </p>
       ) : (
         <p className="detail" data-testid="meeting-consensus-requires-id">
-          requires meeting_id — open a meeting or pick one below to bind this tally to a real run.
+          Pick the meeting this vote belongs to, then record how its panel voted.
         </p>
       )}
       <form action={tallyAction} className="composer compact">
@@ -154,38 +161,52 @@ export function MeetingConsensusCard({
               <select name="meeting_id" className="input" required defaultValue="">
                 <option value="" disabled>Select a meeting…</option>
                 {meetings.map((item) => (
-                  <option key={item.id} value={item.id}>{item.title.slice(0, 80)}</option>
+                  <option key={item.id} value={item.id}>{meetingCardTitle(item.title).slice(0, 80)}</option>
                 ))}
               </select>
             ) : (
-              <input
-                name="meeting_id"
-                className="input"
-                placeholder="mtg_… or mrun_…"
-                required
-              />
+              <span className="detail">No meetings yet. Convene one with New meeting first.</span>
             )}
           </label>
         )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <label className="field" style={{ flex: 1 }}><span>Approve</span><input name="approve" className="input" type="number" min={0} defaultValue={2} /></label>
-          <label className="field" style={{ flex: 1 }}><span>Reject</span><input name="reject" className="input" type="number" min={0} defaultValue={1} /></label>
-          <label className="field" style={{ flex: 1 }}><span>Abstain</span><input name="abstain" className="input" type="number" min={0} defaultValue={0} /></label>
+          <label className="field" style={{ flex: 1 }}><span>Approve</span><input name="approve" className="input" type="number" min={0} required /></label>
+          <label className="field" style={{ flex: 1 }}><span>Reject</span><input name="reject" className="input" type="number" min={0} required /></label>
+          <label className="field" style={{ flex: 1 }}><span>Abstain</span><input name="abstain" className="input" type="number" min={0} required /></label>
           <label className="field" style={{ flex: 1 }}><span>Eligible</span><input name="eligible" className="input" type="number" min={0} placeholder="auto" /></label>
           <label className="field" style={{ flex: 1 }}><span>Quorum</span><input name="quorum" className="input" type="number" min={1} placeholder="auto" /></label>
         </div>
-        <SubmitButton className="button secondary" type="submit" disabled={tallyPending}>
-          {tallyPending ? "Tallying…" : "Tally vote"}
+        <SubmitButton className="button secondary" type="submit"
+                      disabled={tallyPending || (!bound && !(meetings && meetings.length > 0))}>
+          {tallyPending ? "Tallying…" : "Record the vote"}
         </SubmitButton>
       </form>
       <Result state={tallyState} />
-      <form action={sweepAction} style={{ marginTop: 10 }}>
-        <input type="hidden" name="actor" value={actor} />
-        <SubmitButton className="button secondary" type="submit" disabled={sweepPending}>
-          {sweepPending ? "Sweeping…" : "Sweep stalled meeting runs"}
-        </SubmitButton>
-      </form>
-      <Result state={sweepState} />
+      <details style={{ marginTop: 10 }}>
+        <summary className="detail">Maintenance</summary>
+        <p className="detail">
+          A panel that stopped advancing (its worker died mid-round) stays &ldquo;running&rdquo;
+          until it is swept. Sweeping marks those runs failed so they can be convened again.
+        </p>
+        <form action={sweepAction}>
+          <input type="hidden" name="actor" value={actor} />
+          <SubmitButton className="button secondary" type="submit" disabled={sweepPending}>
+            {sweepPending ? "Sweeping…" : "Sweep stalled meeting runs"}
+          </SubmitButton>
+        </form>
+        <Result state={sweepState} />
+      </details>
+    </>
+  );
+  return (
+    <article className="stack-card" data-testid="meeting-consensus-card">
+      <h3 style={{ margin: 0 }}>Meeting consensus</h3>
+      {bound ? body : (
+        <details>
+          <summary className="detail">Record a panel vote for a meeting</summary>
+          {body}
+        </details>
+      )}
     </article>
   );
 }

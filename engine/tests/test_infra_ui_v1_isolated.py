@@ -60,13 +60,17 @@ def test_firecracker_claims_stay_frozen_by_default():
 
 
 def test_area_id_union_still_includes_hidden_community_areas():
+    # The area ids moved out of a type union in ConsoleShell into apps/web/lib/area-ids.ts (a
+    # value and a type) so every link target can be checked (review of milestone/console-b).
     shell = (ROOT / "apps/web/app/ConsoleShell.tsx").read_text(encoding="utf-8")
-    start = shell.index("type AreaId =")
-    end = shell.index("type AreaDef")
-    union = shell[start:end]
+    ids = (ROOT / "apps/web/lib/area-ids.ts").read_text(encoding="utf-8")
+    union = ids[ids.index("export const AREA_IDS = ["):ids.index("] as const;")]
     hidden = (
         "infra",
-        "metatron",
+        # "metatron" was dropped from this list (2026-10-02): the area was removed from AREAS
+        # when the BOSS Agent absorbed it, and the visibility rule is now generated from AREAS,
+        # so an AreaId with no AREAS entry is a blank screen
+        # (apps/web/tests/every-area-is-actually-visible.test.ts forbids it).
         "studio",
         "sandboxes",
         "github",

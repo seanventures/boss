@@ -1,4 +1,5 @@
 
+import { consoleAuthConfig } from "../lib/console-session";
 import {
   applyChangeSetAction,
   approveChangeSetAction,
@@ -72,9 +73,9 @@ import {
   loadAssuranceAreaData,
   loadBudgetAreaData,
   loadInfraAreaData,
-  shouldLoadAssuranceArea,
-  shouldLoadBudgetArea,
-  shouldLoadInfraArea,
+  ASSURANCE_AREA_IDS,
+  BUDGET_AREA_IDS,
+  INFRA_AREA_IDS,
 } from "../lib/area-data";
 import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
@@ -619,9 +620,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // been red ever since. Substituted BY POSITION into the fan-out below rather than lifted out
   // of it: that array has 79 entries destructured positionally, and re-ordering it would
   // silently swap two feeds — a far worse failure than the one being fixed.
-  const budgetActive = shouldLoadBudgetArea(requestedArea);
-  const infraActive = shouldLoadInfraArea(requestedArea);
-  const assuranceActive = shouldLoadAssuranceArea(requestedArea);
+  // THE PACKS FOLLOW `needs`, NOT THE AREA THE SERVER WAS ASKED FOR.
+  //
+  // They were gated on `?area=` while every area renders and the rail switches client-side, so
+  // the area you LANDED on decided what Govern and System Configuration could show for the whole
+  // session. Seen live on boss-1: land on Skills and MCP, open Govern, "FinOps summary
+  // unavailable"; land on Govern, open System Configuration, "MCP registry unavailable." while
+  // Skills listed three servers. Data that was simply not requested rendered as a failure.
+  // `needs` is the one seam that decides what a render fetches, so the packs ask it too.
+  const budgetActive = needs(...BUDGET_AREA_IDS);
+  const infraActive = needs(...INFRA_AREA_IDS);
+  const assuranceActive = needs(...ASSURANCE_AREA_IDS);
   // ALWAYS FETCHED, deliberately.
   //
   // The sidebar switches area with history.pushState and NO server round-trip, so whichever
@@ -954,6 +963,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       org={{ id: activeOrgId, name: activeOrgName }}
       editionId={editionId}
       initialArea={requestedArea}
+      // Sign out only means something when the console has a password; without one the button
+      // led to a sign-in page that could only say authentication is not configured.
+      signOutAvailable={consoleAuthConfig() !== null}
     >
       <div className="frame">
         {/* ONE AGENT SURFACE.
@@ -1074,7 +1086,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Built / building / planned / blocked — release board and plans.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/release-planning/*` for project {activeProjectId}.
+              From BOSS&apos;s release board and plans for project {activeProjectId}.
             </p>
           </div>
           <ReleasePlanningPanel
@@ -1268,7 +1280,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <AreaLink className="ov-action" area="discovery" orgId={activeOrgId}>View saved research</AreaLink>
             <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a panel</AreaLink>
             <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a project</AreaLink>
-            <AreaLink className="ov-action" area="apps" orgId={activeOrgId}>See your apps</AreaLink>
+            <AreaLink className="ov-action" area="delivery" orgId={activeOrgId}>See your deployed apps</AreaLink>
             <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
             <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
           </div>
@@ -1289,9 +1301,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <span className="eyebrow">Metatron</span>
                 <h2>Scoped status query</h2>
               </div>
-              <AreaLink className="ov-action" area="metatron" orgId={activeOrgId}>
-                Open captain
-              </AreaLink>
             </div>
             {/* The composer that stood here asked for a question plus two optional ids and
                 posted to a read-only endpoint. Ask BOSS, at the top of this page, answers the
@@ -1444,8 +1453,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Organization-wide actors with scoped project authorization.</h2>
             </div>
             <p className="status-meta">
-              PRD 9.2 identity and access: delegated actors are explicit,
-              permissioned, and audited through `/v1/org-members`.
+              Delegated actors are explicit, scoped to the projects they may act on,
+              and every change to them is recorded in the audit log.
             </p>
           </div>
 
@@ -1746,7 +1755,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Live spend, forecast, and cap pressure.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/budget/status` for project {activeProjectId}.
+              From the budget ledger for project {activeProjectId}: reservations, actual spend and the cap.
             </p>
           </div>
 
@@ -2998,7 +3007,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Receipt-backed droplets with TTL and janitor visibility.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/infra/resources` for project {activeProjectId}.
+              From BOSS&apos;s resource ledger for project {activeProjectId} — every row has a receipt.
             </p>
           </div>
 
@@ -3885,10 +3894,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="eyebrow">Identity providers</span>
               <CommunityIncludedBadge label="SSO · Community" />
             </div>
-            <h2>Workforce and developer IdP packs — OIDC, SAML, SCIM blueprints.</h2>
+            <h2>Identity providers BOSS can record — and what sign-in uses today.</h2>
             <p className="status-meta">
-              Catalog and dry-run setup for project {activeProjectId}. Secrets stay out of
-              the catalog responses. Self-hosted SSO is included in Community.
+              Provider records for project {activeProjectId}. Secrets are referenced by name,
+              never shown. Included in Community.
             </p>
           </div>
           <IdentityProvidersCatalogView
@@ -3965,6 +3974,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   <form
                     action={upsertEnterpriseIdentityProviderAction}
                     className="composer"
+                    id="identity-provider-form"
                   >
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
@@ -4969,6 +4979,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <span className="add">+{st.additions ?? 0}</span>{" "}
                             <span className="del">−{st.deletions ?? 0}</span>
                           </>
+                        ) : st.files_changed != null ? (
+                          // Not "—" beside "Files changed · 53": the files are known, the
+                          // line counts are what was not recorded (console walk, 2026-10-02).
+                          `${st.files_changed} files`
                         ) : (
                           "—"
                         )}
@@ -5004,7 +5018,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     {paths.length > 0 ? (
                       paths.slice(0, 14).map((p, i) => <code key={i}>{p}</code>)
                     ) : (
-                      <code>{st.summary ?? "No file manifest recorded"}</code>
+                      <code>
+                        {st.summary
+                          ?? (st.files_changed
+                            ? `${st.files_changed} files changed; this run did not record their paths — the pull request lists them.`
+                            : "No file list recorded for this run.")}
+                      </code>
                     )}
                     {codeTask.pull_request_url ? (
                       <a href={codeTask.pull_request_url} target="_blank" rel="noreferrer">
@@ -5147,10 +5166,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("delivery") ? (
-        <section className="panel-stack" data-area="delivery" aria-label="CI/CD">
+        <section className="panel-stack" data-area="delivery" aria-label="Infra">
           <div className="section-head">
             <div>
-              <span className="eyebrow">CI/CD</span>
+              <span className="eyebrow">Infra</span>
               <h2>
                 {deliveryPipeline && !deliveryPipeline.error && !deliveryPipeline.configured
                   ? "No deployment targets yet — register an app destination."
@@ -5171,7 +5190,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Generate and validate CI config for GitHub Actions and peers.</h2>
             </div>
             <p className="status-meta">
-              Source: `/v1/cicd/*` for project {activeProjectId}.
+              Generated and validated here; nothing is pushed to your repository until you copy it.
             </p>
           </div>
           <CICDPipelinesPanel
@@ -5193,7 +5212,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="eyebrow">Observability</span>
               <h2>
                 {(!deploymentHealth?.targets?.length && !observability?.deployed)
-                  ? "Not configured — health and dashboards appear after CI/CD onboarding."
+                  ? "Not configured — health and dashboards appear after an app is onboarded in Infra."
                   : "Health of what BOSS has deployed, and the dashboards behind it."}
               </h2>
             </div>
@@ -5311,7 +5330,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Capability ledger — category, status, and the remaining gap. Missing stays missing.</h2>
             </div>
             <p className="status-meta">
-              Source: GET /v1/ai-sre/capabilities. Not public GA.
+              A coverage ledger kept by BOSS. Not public GA.
             </p>
           </div>
           <AiSreHome feed={aiSreFeed} />
