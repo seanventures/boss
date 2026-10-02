@@ -20,6 +20,7 @@ with whatever model the engine is configured for.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import decimal
 import re
@@ -174,6 +175,65 @@ def _report_from_trace(trace: list[dict]) -> str:
                      + (f" — {detail}" if detail else ""))
     if len(trace) > 12:
         lines.append(f"- …and {len(trace) - 12} further tool call(s).")
+    return "\n".join(lines)
+
+
+@contextlib.contextmanager
+def _no_deadline():
+    yield
+
+
+def _findings_from_trace(trace: list[dict]) -> tuple[list[str], Optional[dict]]:
+    """The findings the tools themselves wrote down, and the first fix one of them named.
+
+    diagnose_run (and the tools built like it) return `findings` and a `resolution` with real
+    arguments — the diagnosis and the fix are already in the trace, whether or not the model
+    got round to writing them up.
+    """
+    found: list[str] = []
+    fix: Optional[dict] = None
+    for step in trace:
+        result = step.get("result") or {}
+        if not isinstance(result, dict):
+            continue
+        for line in (result.get("findings") or [])[:6]:
+            if str(line) not in found:
+                found.append(str(line))
+        resolution = result.get("resolution")
+        if fix is None and isinstance(resolution, dict) and resolution.get("tool"):
+            fix = resolution
+    return found, fix
+
+
+def _out_of_time_report(trace: list[dict], seconds: int, fix: Optional[dict],
+                        found: list[str]) -> str:
+    """The answer when the TURN's time ran out before the model wrote one (call_deadline.py).
+
+    THE OWNER'S COMPLAINT, 2026-10-02: a turn ran to the console's 240 s line and ended in
+    "Still working". What BOSS had found by then was in the trace and was thrown away with the
+    turn. Now the turn ends inside its time and says three things: what was found, what was
+    checked, and the one thing to do next.
+    """
+    lines = [f"I ran out of this turn's time ({seconds}s) before the model finished writing "
+             "an answer, so here is what the checks themselves established."]
+    if found:
+        lines += ["", "What I found:"] + [f"- {line}" for line in found[:8]]
+    checked = [f"- {step.get('tool')}" + (
+        "" if (step.get("result") or {}).get("ok", True) is not False else " (failed)")
+        for step in trace[:12] if step.get("tool") != "propose_action"]
+    if checked:
+        lines += ["", "What I checked:"] + checked
+    lines.append("")
+    if fix:
+        lines.append(f"Next: {fix.get('label') or fix.get('tool')} — {fix.get('why') or ''}"
+                     .rstrip(" —") + ". It is the button below; nothing runs until you press "
+                     "it.")
+    elif trace:
+        lines.append("Next: ask me to continue from these findings — the checks above are "
+                     "done and will not be repeated.")
+    else:
+        lines.append("Next: ask again in a sentence that names the run or app (for example "
+                     "its crun_ id), so the first check can go straight to it.")
     return "\n".join(lines)
 
 
@@ -358,13 +418,15 @@ class EngineAgent:
         #: call, its proposals run here without another model call, its text is the answer.
         offer_schemas = [sc for sc in schemas if sc["function"]["name"] == "propose_action"]
         offer_spent = False
+        #: The turn's deadline cut a model call off: the next round-trip is the answer.
+        out_of_time = False
 
         for i in range(max_steps):
             steps = i + 1
             # THE TURN'S BUDGET OUTRANKS THIS PASS'S STEP LIMIT. In the incident each pass was
             # within its own limit and the turn ran 276 seconds; the turn is what the operator
             # waits on, so the turn is what is counted.
-            out_of_turn = budget is not None and budget.must_answer_now()
+            out_of_turn = out_of_time or (budget is not None and budget.must_answer_now())
             last = i >= answer_step or out_of_turn
             # The forced answer, with the button allowed in the same call — never a call of its
             # own (see `offer_schemas`).
@@ -373,7 +435,9 @@ class EngineAgent:
                 messages.append({
                     "role": "user",
                     "content": (
-                        ("This turn's budget is spent (" + budget.describe() + "). "
+                        ("This turn's budget is spent ("
+                         + (budget.describe() if budget is not None else "its time is up")
+                         + "). "
                          if out_of_turn else "You are out of tool budget for this turn. ")
                         + "Do not apologise and do not "
                         "ask to continue. Answer from what you have already established:\n"
@@ -426,14 +490,43 @@ class EngineAgent:
             # twice. The model call is the thing that 529'd; that is what gets another try.
             from .transient import _with_transient_retry
 
+            from ..services.call_deadline import TurnDeadlineExceeded, until
+
             if budget is not None:
                 budget.spend_call()
-            msg, _usage = _with_transient_retry(
-                lambda: self._adapter_obj().create_chat_completion(
-                    messages, tools=(offer_schemas if closing_offer
-                                     else None if last else schemas)
-                )
-            )
+            try:
+                # NO CALL OUTLIVES THE TURN (services/call_deadline.py). The budget used to be
+                # consulted only BETWEEN calls, so one call that started at 170 s of a 180 s
+                # turn ran on the CLI's own 240 s timeout — and was then retried and handed to
+                # the fallback brain. A tool round-trip must end by the turn's time; the answer
+                # gets the answer window after it, and not a second more.
+                with until(budget.deadline(answering=last)) if budget is not None \
+                        else _no_deadline():
+                    msg, _usage = _with_transient_retry(
+                        lambda: self._adapter_obj().create_chat_completion(
+                            messages, tools=(offer_schemas if closing_offer
+                                             else None if last else schemas)
+                        )
+                    )
+            except TurnDeadlineExceeded:
+                if not last:
+                    # Cut off while still investigating: answer now from what is in hand.
+                    out_of_time = True
+                    continue
+                # Cut off while answering: the trace still holds the findings and the fix.
+                found, fix = _findings_from_trace(trace)
+                if fix and not any(step.get("tool") == "propose_action" for step in trace):
+                    offer = {"tool": fix["tool"], "args": fix.get("args") or {},
+                             "label": fix.get("label") or fix["tool"],
+                             "why": fix.get("why") or ""}
+                    trace.append({"tool": "propose_action", "args": offer,
+                                  "result": self._run_tool(
+                                      "propose_action", offer, project_id=project_id,
+                                      actor=actor, allow_writes=allow_writes,
+                                      pending=pending)})
+                final_text = _out_of_time_report(
+                    trace, int(budget.elapsed) if budget is not None else 0, fix, found)
+                break
             messages.append(msg["raw"])
             if closing_offer:
                 # THE ANSWER AND ITS BUTTON, FROM ONE CALL. Only propose_action runs; whatever

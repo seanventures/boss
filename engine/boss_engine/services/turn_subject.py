@@ -136,6 +136,30 @@ def parse_subject(raw: Any) -> Optional[SubjectRef]:
     return None
 
 
+#: An id the operator TYPED. Only the kinds whose ids are unmistakable in prose.
+_TYPED_ID = re.compile(r"\b((?:crun|wfr|prev|deprun|dec)_[a-z0-9]{6,})\b", re.IGNORECASE)
+
+
+def subject_named_in(question: str) -> Optional[SubjectRef]:
+    """The one piece of work a free-typed question names by id, or None.
+
+    THE OWNER'S COMPLAINT, 2026-10-02: "it takes so long to find the issue and come up with the
+    recommendation to fix". Asked "why did crun_… fail?" in the general chat, the model spent its
+    first round-trips finding the run it had just been handed, then reading it, and only then
+    answering — each round-trip a minute or more on a CLI brain — while an "Ask about this" door
+    opened the same question with the run's whole record already in the prompt and answered in
+    one. Same question, same evidence; only the door differed. An id in the question is the same
+    typed reference the door sends, so it gets the same first call.
+
+    Exactly one distinct id, or nothing: two ids is a comparison, and picking one would answer
+    about the wrong thing.
+    """
+    found = {m.group(1).lower() for m in _TYPED_ID.finditer(question or "")}
+    if len(found) != 1:
+        return None
+    return parse_subject(found.pop())
+
+
 @dataclass
 class SubjectEvidence:
     """The record of one thing, as BOSS holds it — what the model reads before anything else."""

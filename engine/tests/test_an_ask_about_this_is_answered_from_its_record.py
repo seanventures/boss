@@ -784,3 +784,27 @@ def test_a_deployment_links_the_build_that_shipped_it(db):
     assert any("crun_99aa88bb77cc66dd55ee" in line for line in ev.linked)
     assert strays_from_subject("Build crun_99aa88bb77cc66dd55ee changed the port to 3021, so "
                                "the health check misses it.", ev, "Why is it down?") == ""
+
+
+def test_a_question_that_names_its_run_opens_with_that_runs_record(db, monkeypatch):
+    """The owner, 2026-10-02: "it takes so long to find the issue". Asked in the GENERAL chat
+    about a run by id, the model spent its first round-trips finding and reading the run the
+    question had already named; the "Ask about this" door answered the same question in one
+    call because it sent the record first. An id in the question is that door."""
+    agent = _Scripted(ANSWER)
+    router, _ = _router(monkeypatch, agent)
+    _ask(router, db, external_ref=None, role=None,
+         question="Why did wfr_9c78b289633348c68246 fail, and what is the fix?")
+    system = agent.calls[0]["system"]
+    assert system.startswith("SUBJECT OF THIS TURN: workflow run wfr_9c78b289633348c68246")
+    assert "attempted relative import" in system[:system.index("You are BOSS")]
+    assert agent.calls[0]["focus"] == "workflow run wfr_9c78b289633348c68246"
+
+
+def test_an_id_this_project_does_not_have_leaves_the_question_general(db, monkeypatch):
+    """Keep what worked: a made-up or foreign id is not turned into "no record of …"."""
+    agent = _Scripted(ANSWER)
+    router, _ = _router(monkeypatch, agent)
+    _ask(router, db, external_ref=None, role=None,
+         question="Why did crun_ffffffffffff fail?")
+    assert not agent.calls[0]["system"].startswith("SUBJECT OF THIS TURN")

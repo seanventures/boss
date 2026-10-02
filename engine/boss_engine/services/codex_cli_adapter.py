@@ -78,7 +78,11 @@ class CodexCliAdapter(CliChatBrain):
         return str(directory)
 
     def _invoke(self, prompt: str) -> dict:
-        timeout = int(getattr(self.settings, "codex_cli_timeout", 240) or 240)
+        own_timeout = int(getattr(self.settings, "codex_cli_timeout", 240) or 240)
+        # NO CALL OUTLIVES ITS TURN (call_deadline.py).
+        from .call_deadline import TurnDeadlineExceeded, bounded_timeout, deadline_cut
+
+        timeout = bounded_timeout(own_timeout)
         # The final message goes to a file rather than being dug out of stdout, which under
         # --json is an event stream rather than an answer.
         handle, last_message = tempfile.mkstemp(prefix="codex-final-", suffix=".txt")
@@ -114,7 +118,11 @@ class CodexCliAdapter(CliChatBrain):
                 "`codex` is on PATH."
             ) from exc
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"codex CLI timed out after {timeout}s") from exc
+            if deadline_cut(timeout, own_timeout):
+                raise TurnDeadlineExceeded(
+                    f"the turn's time ran out while the model was still working "
+                    f"({int(timeout)}s for this call)") from exc
+            raise RuntimeError(f"codex CLI timed out after {int(timeout)}s") from exc
         finally:
             result = ""
             try:

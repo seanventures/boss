@@ -32,6 +32,11 @@ class TurnBudget:
     #: Seconds held back for the answer step itself: starting another tool round-trip with less
     #: than this left is how a turn overruns.
     answer_reserve: float = 20.0
+    #: Seconds the ANSWER call may run past `seconds`. A tool round-trip must end by
+    #: `seconds`; the answer that follows gets this window and no more, so a turn ends by
+    #: `seconds + answer_seconds` whatever the model does — inside the console's 240 s stall
+    #: line (tests/test_a_turn_ends_before_the_console_gives_up.py holds the two together).
+    answer_seconds: float = 40.0
     #: The longest gap seen between two model calls in this turn — one round-trip, tools
     #: included. See `_time_needed`.
     longest_round_trip: float = 0.0
@@ -77,6 +82,16 @@ class TurnBudget:
     def spent(self) -> bool:
         """Nothing left for another pass — a re-ask must not start."""
         return self.calls_left <= 1 or self.elapsed >= self.seconds - self._time_needed()
+
+    def deadline(self, *, answering: bool) -> float:
+        """When the next model call must have returned, on time.monotonic()'s clock.
+
+        What services/call_deadline.py hands every adapter, so the budget is enforced DURING a
+        call and not only between calls (the owner, 2026-10-02: "it really times out after
+        spending 240s there").
+        """
+        left = self.seconds + (self.answer_seconds if answering else 0.0) - self.elapsed
+        return time.monotonic() + left
 
     def steps_for(self, requested: int) -> int:
         """A pass's step limit, cut to what the turn has left."""

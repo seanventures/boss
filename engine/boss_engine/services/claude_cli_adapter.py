@@ -373,7 +373,12 @@ class ClaudeCliAdapter(CliChatBrain):
     _NO_BUILTIN_TOOLS = ("--tools", "")
 
     def _invoke(self, prompt: str) -> dict:
-        timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
+        own_timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
+        # NO CALL OUTLIVES ITS TURN (call_deadline.py): the CLI's own 240 s is a ceiling, and
+        # inside a chat turn the turn's remaining time is the real one.
+        from .call_deadline import TurnDeadlineExceeded, bounded_timeout, deadline_cut
+
+        timeout = bounded_timeout(own_timeout)
         # A LONG CONVERSATION IS NOT AN ARGUMENT. Linux caps a single argv entry at
         # MAX_ARG_STRLEN (128 KiB), and this prompt is the whole conversation plus ~48 tool
         # schemas — so a thread that had been going a while died with
@@ -422,7 +427,11 @@ class ClaudeCliAdapter(CliChatBrain):
                 "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
             ) from exc
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"claude CLI timed out after {timeout}s") from exc
+            if deadline_cut(timeout, own_timeout):
+                raise TurnDeadlineExceeded(
+                    f"the turn's time ran out while the model was still working "
+                    f"({int(timeout)}s for this call)") from exc
+            raise RuntimeError(f"claude CLI timed out after {int(timeout)}s") from exc
         if proc.returncode != 0:
             raise RuntimeError(
                 f"claude CLI exited {proc.returncode}: {(proc.stderr or proc.stdout or '')[:300]}"
@@ -522,6 +531,12 @@ class FallingBackAdapter:
         self.last_backend = ""
 
     def _unavailable(self, exc: BaseException) -> bool:
+        from .call_deadline import TurnDeadlineExceeded
+
+        # THE TURN RAN OUT, NOT THE BACKEND. Asking the fallback brain the same question from
+        # the start would only spend more of a person's wait (call_deadline.py).
+        if isinstance(exc, TurnDeadlineExceeded):
+            return False
         blob = f"{type(exc).__name__}: {exc}".lower()
         return any(marker in blob for marker in self._UNAVAILABLE)
 
