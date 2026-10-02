@@ -27,7 +27,7 @@ from .turn_subject import (
 from .discovery_service import start_discovery
 from .intake import CommandIntakeService
 from .jobs import JobLeaseService
-from .meeting_service import start_meeting_run
+from .meeting_service import meeting_subject, start_meeting_run
 from .members import (
     MemberDirectoryService,
     ProjectMemberNotFoundError,
@@ -2791,7 +2791,7 @@ class IntentRouter:
             task = self.intake.create_task(
                 connection,
                 project_id=project_id,
-                title=f"PRD meeting: {directive[:90]}",
+                title=f"PRD meeting: {meeting_subject(directive)}",
                 description=directive,
                 dedupe_key=stable_dedupe_key("agent-prd", project_id, directive),
                 priority="p1",

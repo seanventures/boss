@@ -290,7 +290,7 @@ export function DeploymentHealth({ health, dashboards, footer, watch }: {
         <div className="ct-block-title">Deployment health</div>
         <p className="empty-state" style={{ padding: "18px 0" }}>
           Nothing is registered to monitor. Health samples appear after you onboard a
-          deployment target in CI/CD and ship an app to it.
+          deployment target in Infra and ship an app to it.
         </p>
       </section>
     );

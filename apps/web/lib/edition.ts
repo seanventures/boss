@@ -72,7 +72,6 @@ const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
 // here is still present for Enterprise and Cloud — and still reachable by ?area= for everyone.
 //
 // Not listed, deliberately:
-//   activity  — 47,921 events, ~75% a single internal audit-export event. Not empty, unreadable.
 //   reliability — incidents: 0 rows.
 //   reports/Evidence — drift_reports: 0 rows.
 //   work ("Jobs") — NOT empty: 5 open tasks, 196 jobs, 4,287 receipts. Hidden because the
@@ -106,8 +105,8 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // The path from an idea to shipped software. Without these the console lists the places
   // work ENDS UP -- approvals, jobs, reports -- and none of the places it starts, so an
   // operator can watch BOSS work but cannot see how to set it going. Discovery and Meetings
-  // are the two ways in besides a direct code task; Apps is where the result lives; CI/CD and
-  // Monitoring are how it reaches production and whether it is alive.
+  // are the two ways in besides a direct code task; Apps is where the result lives; Infra and
+  // Observability are how it reaches production and whether it is alive.
   //
   // Task Shepherd is deliberately NOT here. Its automatic retries and repairs are worth having
   // on by default and not worth a nav entry: a self-hosted operator wants to know a run
@@ -115,7 +114,7 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // deep link.
   "discovery",
   "meetings",
-  "delivery",   // labelled "CI/CD" in the nav — the id and the label differ
+  "delivery",   // labelled "Infra" in the nav — the id and the label differ
   "monitoring",
 
   // How work moves through the factory. A self-hosted operator who cannot choose or see the
@@ -137,13 +136,14 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
  */
 export function communityNavCopy(areaId: string): { label?: string; sub?: string; badge?: string } {
   if (areaId === "enterprise") {
-    // "Identity", not "SSO": SSO names one protocol, and this area configures who can sign in
-    // at all — OIDC, SAML and SCIM provisioning. The badge stays "SSO" because that is the
+    // "Identity", not "SSO": SSO names one protocol. The subtitle says what sign-in uses TODAY:
+    // it promised "who can sign in" while the login page never consulted a provider (console
+    // walk, 2026-10-02 — lib/sign-in-truth.ts). The badge stays "SSO" because that is the
     // thing Community is being told it INCLUDES, and it is the word somebody scanning for it
     // would look for.
     return {
       label: "Identity",
-      sub: "Who can sign in — OIDC, SAML, SCIM, and IdP packs",
+      sub: "Identity providers and member sync — console sign-in is the installer password",
       badge: "SSO",
     };
   }

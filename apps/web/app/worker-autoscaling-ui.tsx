@@ -75,8 +75,8 @@ export function WorkerAutoscalingPanel({
               <h4>Pools (desired vs actual)</h4>
               {feed.pools.length === 0 ? (
                 <p className="detail">
-                  No autoscaling policies yet.{" "}
-                  <code className="mono">PUT /v1/worker-autoscaling/policies</code>
+                  No autoscaling policies yet. Worker pools scale only once a policy sets their
+                  minimum and maximum; until then each pool keeps the workers it started with.
                 </p>
               ) : (
                 <table className="data-table">

@@ -387,6 +387,142 @@ def _ask_panel(adapter, personas: list[dict], make_prompt) -> tuple[dict, int, O
 # persists it, so it survives a crash/restart and resumes from the last phase.
 # Each phase enqueues the next `meeting.step` job atomically with its own save.
 # ============================================================================
+#: The markers a workflow puts around the panel's prompt. Defined HERE, beside the function that
+#: reads them back out, so the writer (request_meeting in tools/builtin.py) and the reader
+#: cannot describe two different shapes.
+PANEL_PURPOSE_MARKER = "--- WHAT THIS PANEL IS FOR ---"
+PANEL_ASK_MARKER = "--- WHAT YOU ARE BEING ASKED ABOUT ---"
+PANEL_RESEARCH_MARKER = "--- RESEARCH ALREADY DONE FOR THIS ---"
+
+_TITLE_PREFIX = "PRD meeting:"
+_TITLE_MAX = 120
+
+
+def meeting_subject(text_value: Optional[str]) -> str:
+    """What a meeting is ABOUT, in one line — never the framing a workflow wrapped around it.
+
+    The incident (boss-1, 2026-10-02): request_meeting prepends "--- WHAT THIS PANEL IS FOR ---
+    You are the panel inside BOSS's ... workflow" to the directive, the directive became the
+    title, and every workflow-convened meeting read "PRD meeting: --- WHAT THIS PANEL IS FOR ---"
+    — four identical cards and four identical consensus options. New runs carry a real title
+    (meeting_runs.title); this reads the subject back out of older rows and of any directive.
+    """
+    value = str(text_value or "").strip()
+    if value.startswith(_TITLE_PREFIX):
+        value = value[len(_TITLE_PREFIX):].strip()
+    if PANEL_ASK_MARKER in value:
+        value = value.split(PANEL_ASK_MARKER, 1)[1]
+    elif value.startswith(PANEL_PURPOSE_MARKER):
+        # A title cut before the ask: all that survived is the framing. Name the workflow it
+        # came from, which is the one distinguishing fact left in it.
+        rest = value[len(PANEL_PURPOSE_MARKER):]
+        # The name is one token followed by whitespace; a token the cut ran into is not used.
+        found = re.search(r"inside BOSS's\s+(\S+)\s", rest)
+        value = f"panel for the {found.group(1)} workflow" if found else "workflow panel"
+    if PANEL_RESEARCH_MARKER in value:
+        value = value.split(PANEL_RESEARCH_MARKER, 1)[0]
+    line = " ".join(value.split())
+    if len(line) > _TITLE_MAX:
+        line = line[: _TITLE_MAX - 1].rstrip() + "…"
+    return line or "Untitled meeting"
+
+
+def display_title(raw: Optional[str]) -> str:
+    """A stored meeting title as the console shows it: a PRD meeting keeps its "PRD meeting:"
+    prefix, and whatever follows is the subject, never the framing (see meeting_subject)."""
+    value = str(raw or "").strip()
+    if value.startswith(_TITLE_PREFIX):
+        return f"{_TITLE_PREFIX} {meeting_subject(value)}"
+    return meeting_subject(value)
+
+
+def meeting_title(title: Optional[str], directive: Optional[str] = None) -> str:
+    """THE title of a meeting or meeting run, for every reader that shows one to a person or an
+    agent: the stored title cleaned by display_title, or the directive's subject when the row
+    has no title (rows written before meeting_runs.title existed).
+
+    One function because the fix for framed titles reached only some readers: the chat tool
+    list_meetings still returned the raw directive and v2 sessions cleaned meetings.title with
+    the product-name cleaner, so older rows still read "PRD meeting: --- WHAT THIS PANEL IS FOR
+    ---" (review of milestone/console-b, 2026-10-02). test_every_meeting_title_reader enumerates
+    the readers.
+    """
+    if str(title or "").strip():
+        return display_title(title)
+    return meeting_subject(directive)
+
+
+#: Where a meeting's PRD stands, in the operator's words. ONE table, read by the Meetings cards
+#: and anything else that labels a meeting, so two screens cannot describe the same PRD two ways.
+PRD_STATE_LABELS: dict[str, str] = {
+    "running": "panel in session",
+    "failed": "panel failed",
+    "no_prd": "no PRD drafted",
+    "awaiting_approval": "awaiting approval",
+    "revision_requested": "revision requested",
+    "approved": "PRD approved",
+    "published": "PRD published",
+    "rejected": "PRD rejected",
+    # decisions.expire_stale_decisions sets 'expired'; it is not still awaiting anyone.
+    "expired": "approval expired",
+    "pr_open": "PRD in a pull request",
+}
+
+#: Every status decisions.py writes, mapped explicitly. The fall-through to "awaiting approval"
+#: labelled an EXPIRED decision as still awaiting approval (review of milestone/console-b,
+#: 2026-10-02); test_every_decision_status_has_a_prd_state keeps this table complete.
+DECISION_TO_PRD_STATE: dict[str, str] = {
+    "created": "awaiting_approval",
+    "pending": "awaiting_approval",
+    "delegated": "awaiting_approval",
+    "approved": "approved",
+    "executed": "published",
+    "completed": "published",
+    "rejected": "rejected",
+    "revision_requested": "revision_requested",
+    "revise": "revision_requested",
+    "expired": "expired",
+}
+
+_PRD_DECISION_QUESTION = "Approve publishing the PRD the team drafted"
+
+
+def prd_state_of(connection: Connection, *, run_status: Optional[str], decision_id: Optional[str],
+                 task_id: Optional[str], pull_request_url: Optional[str] = None) -> dict:
+    """Where this meeting's PRD stands, from the DECISION that gates it — not from whether a pull
+    request URL happens to be recorded.
+
+    The incident (boss-1, 2026-10-02): every card without a PR URL said "awaiting approval",
+    including meetings whose PRD fed projects shown as SHIPPED 100%. The PRD's state lives on the
+    publish decision; a PR is one possible ending of it, not the only evidence it was approved.
+    """
+    def _out(state: str) -> dict:
+        return {"prd_state": state, "prd_label": PRD_STATE_LABELS[state]}
+
+    status = (run_status or "").lower()
+    if status == "running":
+        return _out("running")
+    if status == "failed":
+        return _out("failed")
+    if pull_request_url:
+        return _out("pr_open")
+    row = None
+    if decision_id:
+        row = connection.execute(
+            text("SELECT status FROM decisions WHERE id = :d"), {"d": decision_id},
+        ).mappings().first()
+    elif task_id:
+        row = connection.execute(
+            text("SELECT status FROM decisions WHERE task_id = :t AND question = :q "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"t": task_id, "q": _PRD_DECISION_QUESTION},
+        ).mappings().first()
+    if row is None:
+        return _out("no_prd")
+    decision = str(row["status"] or "").lower()
+    return _out(DECISION_TO_PRD_STATE.get(decision, "awaiting_approval"))
+
+
 def _row_to_run(r) -> dict:
     def _j(v):
         if isinstance(v, str):
@@ -401,13 +537,16 @@ def _row_to_run(r) -> dict:
         "role_keys": _j(r["role_keys"]) or [], "constraints": _j(r["constraints"]) or {},
         "state": _j(r["state"]) or {}, "usage": _j(r["usage"]) or {}, "finalize_ctx": _j(r["finalize_ctx"]) or {},
         "meeting_id": r["meeting_id"], "minutes_artifact_id": r["minutes_artifact_id"], "decision_id": r["decision_id"],
+        # The run's own title when it has one; the directive's subject for rows written before
+        # the column existed. Never the raw directive — see meeting_subject.
+        "title": meeting_title(r.get("title") if hasattr(r, "get") else None, r["directive"]),
     }
 
 
 def load_meeting_run(connection: Connection, run_id: str) -> Optional[dict]:
     r = connection.execute(
         text("SELECT id, project_id, task_id, status, phase, directive, url, role_keys, constraints, "
-             "state, usage, finalize_ctx, meeting_id, minutes_artifact_id, decision_id "
+             "state, usage, finalize_ctx, meeting_id, minutes_artifact_id, decision_id, title "
              "FROM meeting_runs WHERE id = :id"),
         {"id": run_id},
     ).mappings().first()
@@ -576,8 +715,10 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
     }
 
 
-def start_meeting_run(connection, *, project_id, task_id, directive, url, constraints, role_keys, finalize_ctx) -> str:
+def start_meeting_run(connection, *, project_id, task_id, directive, url, constraints, role_keys,
+                      finalize_ctx, title: Optional[str] = None) -> str:
     run_id = make_id("mrun")
+    title = meeting_subject(title or directive)
     personas = resolve_roles(role_keys, load_role_map(connection, project_id))
     constraints = dict(constraints or {})
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
@@ -585,11 +726,11 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     connection.execute(
         text("""
             INSERT INTO meeting_runs (id, project_id, task_id, status, phase, directive, url,
-                                      role_keys, constraints, finalize_ctx)
+                                      role_keys, constraints, finalize_ctx, title)
             VALUES (:id, :p, :t, 'running', 'research', :d, :url,
-                    CAST(:rk AS JSONB), CAST(:c AS JSONB), CAST(:fc AS JSONB))
+                    CAST(:rk AS JSONB), CAST(:c AS JSONB), CAST(:fc AS JSONB), :title)
         """),
-        {"id": run_id, "p": project_id, "t": task_id, "d": directive, "url": url,
+        {"id": run_id, "p": project_id, "t": task_id, "d": directive, "url": url, "title": title,
          "rk": json.dumps([p["key"] for p in personas]),
          "c": json.dumps(constraints or {}), "fc": json.dumps(finalize_ctx or {})},
     )
@@ -602,7 +743,7 @@ def convene_prd_meeting_core(
     connection, *, settings: Settings, budget, intake, jobs,
     project_id: str, directive: str, url: str = "",
     constraints: Optional[dict] = None, role_keys: Optional[list] = None,
-    task_id: Optional[str] = None,
+    task_id: Optional[str] = None, title: Optional[str] = None,
 ) -> dict:
     """Shared core for convening a durable multi-agent PRD meeting: create the
     task (if needed), reserve budget, start the run, enqueue the first step.
@@ -611,6 +752,9 @@ def convene_prd_meeting_core(
     constraints = dict(constraints or {})
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
+    # WHAT THE MEETING IS CALLED is not its prompt. A caller that wrapped the directive in
+    # framing passes the bare ask as `title`; anyone else gets the directive's subject.
+    title = meeting_subject(title or directive)
 
     # Refuse to convene a meeting that is ALREADY being held.
     #
@@ -658,7 +802,7 @@ def convene_prd_meeting_core(
             task = intake.create_task(
                 connection,
                 project_id=project_id,
-                title=f"PRD meeting: {directive[:90]}",
+                title=f"PRD meeting: {title}",
                 description=directive,
                 dedupe_key=dedupe_key,
                 priority="p1",
@@ -683,6 +827,7 @@ def convene_prd_meeting_core(
         directive=directive, url=url, constraints=constraints,
         role_keys=role_keys or [],
         finalize_ctx={"reservation_id": reservation_id, "meeting_fingerprint": fingerprint},
+        title=title,
     )
     job = jobs.create_job(
         connection, project_id=project_id, task_id=task_id,
@@ -871,14 +1016,14 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
         text("""INSERT INTO meetings (id, project_id, title, purpose, status, participants,
                                       minutes_artifact_id, completed_at, created_by)
                 VALUES (:id, :p, :title, :purpose, 'completed', CAST(:parts AS JSONB), :min, now(), 'boss')"""),
-        {"id": meeting_id, "p": project_id, "title": f"PRD meeting: {run['directive'][:80]}",
+        {"id": meeting_id, "p": project_id, "title": f"PRD meeting: {run['title']}",
          "purpose": "Cross-functional PRD review and drafting",
          "parts": json.dumps([p["title"] for p in personas] + [FACILITATOR_TITLE]), "min": minutes_artifact_id},
     )
     decision_id = create_blocking_decision(connection, project_id, task_id,
-        "Approve publishing the PRD the team drafted",
+        _PRD_DECISION_QUESTION,
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
-         "args": {"title": "PRD: " + run["directive"][:80].rstrip(), "markdown": state.get("prd_markdown") or "",
+         "args": {"title": "PRD: " + run["title"], "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id}, {}, "meeting_prd_ready_to_publish", risk_tier=2)
 
@@ -1457,7 +1602,7 @@ def run_simulated_meeting(
 
     if meeting is None:
         title_prefix = TYPED_TITLE_PREFIX.get(meeting_type, "Simulated meeting")
-        title = f"{title_prefix}: {resolved_directive[:80]}"
+        title = f"{title_prefix}: {meeting_subject(resolved_directive)}"
         purpose = TYPED_PURPOSE.get(
             meeting_type, "No-spend simulated multi-agent panel fixture"
         )

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * Everything the chat dock READS, off the Server Action path.
@@ -31,7 +32,7 @@ async function upstream(path: string) {
     });
     if (!r.ok) {
       let detail = "";
-      try { detail = String((await r.json())?.detail ?? ""); } catch { /* not JSON */ }
+      try { detail = apiErrorText(await r.json(), r.status); } catch { /* not JSON */ }
       return NextResponse.json({ error: detail || `API returned ${r.status}` },
                                { status: r.status });
     }
@@ -164,7 +165,7 @@ export async function POST(req: Request) {
     );
     if (!r.ok) {
       let detail = "";
-      try { detail = String((await r.json())?.detail ?? ""); } catch { /* not JSON */ }
+      try { detail = apiErrorText(await r.json(), r.status); } catch { /* not JSON */ }
       return NextResponse.json({ error: detail || `API returned ${r.status}` },
                                { status: r.status });
     }

@@ -91,6 +91,11 @@ export type InfraView = {
   targets: V2Target[];
   models: V2Model[];
   integrations: V2Integration[];
+  /** The first day of the month the model figures cover (YYYY-MM-DD). */
+  month_start?: string | null;
+  /** Meeting panels this month and the spend recorded on them — shown on its own line, never
+   *  added to the per-model sum. */
+  meeting_panels?: { runs: number; spend_usd: number };
   load_recorded: boolean;
   load_note: string;
   apiReachable: boolean;

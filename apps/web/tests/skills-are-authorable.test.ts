@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { areaVisibilityCss } from "../lib/area-visibility";
+import { AREA_IDS } from "../lib/area-ids";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -20,13 +22,17 @@ describe("the area exists in all the places an area has to exist", () => {
   it("the union, the nav, the page, the CSS rule and the edition", () => {
     // Adding an area needs five things and the invisible one is the CSS. A test has caught
     // that twice now.
-    expect(SHELL).toContain('| "skills"');
+    expect(AREA_IDS).toContain("skills"); // the id list moved to lib/area-ids.ts
     // The label names both things the area holds: skills you author, and the MCP servers
     // they reach. Asserted on the ID and the label separately, so a copy change does not
     // read as the area having vanished.
     expect(SHELL).toContain('{ id: "skills", label: "Skills and MCP"');
     expect(PAGE).toContain('data-area="skills"');
-    expect(CSS).toContain('.bx-content[data-active="skills"]');
+    // The visibility rule is GENERATED from AREAS now (lib/area-visibility.ts) — the hand list
+    // in globals.css drifted and left AI SRE blank — so the check is on the generated rule.
+    expect(areaVisibilityCss(["skills"])).toContain('.bx-content[data-active="skills"]');
+    expect(SHELL).toContain("areaVisibilityCss(AREAS.map((a) => a.id))");
+    expect(CSS).not.toContain('.bx-content[data-active="skills"] .frame > section:is');
     expect(EDITION).toContain('"skills"');
   });
 });

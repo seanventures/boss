@@ -20,6 +20,7 @@ import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { ReadinessPanel, StartRefusal, WIZARD_COLLECTS, asReadiness, unaccepted,
          useWorkflowReadiness, type PendingRefusal, type Readiness } from "./workflow-readiness-ui";
 import { AreaLink } from "./area-link";
+import { isAreaId } from "../lib/area-ids";
 import { RunReportPanel } from "./run-report-ui";
 import { HelpTip } from "./help-tip";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
@@ -4886,7 +4887,7 @@ function YoursView({ projectId, installed, schedules, busy, onStart, onEditMine,
                             <span key={m.key}>
                               {i ? "; " : ""}<b>{m.label}</b>
                               {m.fix ? (
-                                <> — {m.area ? <AreaLink area={m.area}>{m.fix}</AreaLink>
+                                <> — {isAreaId(m.area) ? <AreaLink area={m.area}>{m.fix}</AreaLink>
                                               : m.fix}</>
                               ) : null}
                             </span>

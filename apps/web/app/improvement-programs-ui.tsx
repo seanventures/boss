@@ -25,9 +25,8 @@ export function ImprovementProgramsPanel({
     <>
       <h3>Improvement programs</h3>
       <p className="detail">
-        Community-class trial ledger at{" "}
-        <code className="mono">/v1/improvement-programs</code>. Promote into SIM
-        proposals only when the enterprise surface is mounted.
+        A ledger of improvement trials kept by BOSS. Promoting one into a self-improvement
+        proposal needs the Enterprise edition.
       </p>
 
       <form

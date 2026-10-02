@@ -4,9 +4,13 @@ export function QaScorecardIsland({ feed }: { feed: QaScorecardFeed }) {
   return (
     <article className="stack-card" data-testid="qa-scorecard">
       <h3>Official QA scorecard</h3>
+      {/* WHAT THESE APPS ARE. The rows are BOSS's own benchmark apps (BugBox, HookWatch...),
+          and on a customer's Evidence screen they read as unrelated projects that had
+          appeared in their factory (console walk, 2026-10-02). */}
       <p className="detail">
-        Honesty only. Missing UI/UX stays not scored. This island never invents
-        a pass.
+        BOSS&apos;s own benchmark apps — the fixed test apps BOSS is measured on, not your
+        projects. A UI or UX score that was not measured stays &ldquo;not scored&rdquo;; nothing
+        here is ever marked passed without evidence.
       </p>
       {!feed.apiReachable ? (
         <p className="detail">{feed.blockedReason ?? "QA catalog unavailable."}</p>
@@ -20,7 +24,7 @@ export function QaScorecardIsland({ feed }: { feed: QaScorecardFeed }) {
                 <h4>{app.name}</h4>
                 <p className="detail">
                   {app.reportMissing
-                    ? "official /report missing"
+                    ? "No official report recorded yet"
                     : app.honest === false
                       ? "honesty failed"
                       : app.passed
@@ -28,16 +32,16 @@ export function QaScorecardIsland({ feed }: { feed: QaScorecardFeed }) {
                         : "not a certified pass"}
                 </p>
                 <p className="detail">
-                  scored {app.scored.length ? app.scored.join(", ") : "none"}
+                  Scored: {app.scored.length ? app.scored.map(readable).join(", ") : "nothing yet"}
                   {" · "}
-                  ui {app.ui ?? "not_scored"}
+                  UI: {readable(app.ui ?? "not_scored")}
                   {" · "}
-                  ux {app.ux ?? "not_scored"}
+                  UX: {readable(app.ux ?? "not_scored")}
                 </p>
                 {app.invented.length > 0 ? (
                   <p className="detail">invented scores present — do not trust this card</p>
                 ) : (
-                  <p className="detail">invented_scores empty</p>
+                  <p className="detail">No invented scores</p>
                 )}
                 {app.builtRunId ? (
                   <p className="detail">
@@ -52,4 +56,9 @@ export function QaScorecardIsland({ feed }: { feed: QaScorecardFeed }) {
       )}
     </article>
   );
+}
+
+/** A recorded token ("not_scored") in words ("not scored"). Raw field values read as a bug. */
+function readable(value: string): string {
+  return String(value).replace(/_/g, " ");
 }

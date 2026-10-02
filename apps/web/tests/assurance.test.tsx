@@ -66,8 +66,12 @@ describe("Assurance Center", () => {
     );
     expect(html).toContain("No cases recorded yet.");
     expect(html).toContain("measured contract");
-    expect(html).toContain("POST /v1/assurance/metrics");
-    expect(html).toContain("docs/api/ASSURANCE_GOVERNANCE.md");
+    // REWRITTEN: this pinned "Add one via POST /v1/assurance/metrics" and a docs path — an
+    // instruction to call the API, which no operator in a browser can follow (console walk,
+    // 2026-10-02; see no-screen-tells-an-operator-to-call-the-api.test.ts). The screen now
+    // points at the seed control below and the assurance guide.
+    expect(html).toContain("Seed a measured contract below");
+    expect(html).not.toContain("/v1/");
     expect(html).toContain("Seed one demo metric + case");
     expect(html).toContain("seeded: true");
     expect(html).toContain("not production health");

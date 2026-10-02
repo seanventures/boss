@@ -142,7 +142,6 @@ describe("datetime helpers are hydration-safe", () => {
       "code-tasks-ui.tsx",
       "client-forms.tsx",
       "actions.ts",
-      "api/debug-api/route.ts",
       // This server-only route uses deadlines to bound upstream lookups; it renders no UI.
       "api/run-deployments/route.ts",
       "page.tsx",

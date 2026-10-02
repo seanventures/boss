@@ -5,7 +5,7 @@ import { isInConsoleLink } from "./console-href";
 import { onChanged } from "./changed";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
-import { dockChatKey } from "../lib/dock-subject";
+import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 
 import React, {
@@ -63,45 +63,10 @@ import {
   shouldShowPaidNavBadge,
 } from "../lib/edition";
 import { EditionChip } from "./edition-ui";
+import { areaVisibilityCss } from "../lib/area-visibility";
+import type { AreaId } from "../lib/area-ids";
 
-type AreaId =
-  | "workforce"
-  | "org_chart"
-  | "agent"
-  | "metatron"
-  | "dashboard"
-  | "overview"
-  | "decisions"
-  | "work"
-  | "activity"
-  | "delivery_workflows"
-  | "portfolio"
-  | "discovery"
-  | "meetings"
-  | "processes"
-  | "code_tasks"
-  | "shepherd"
-  | "delivery"
-  | "monitoring"
-  | "reliability"
-  | "ai-sre"
-  | "reports"
-  | "budget"
-  | "pipeline"
-  | "comms"
-  | "github"
-  | "infra"
-  | "capabilities"
-  | "studio"
-  | "sandboxes"
-  | "foundations"
-  | "components"
-  | "ops"
-  | "assurance"
-  | "org"
-  | "skills"
-  | "setup"
-  | "enterprise";
+export type { AreaId };
 
 type AreaDef = {
   id: AreaId;
@@ -255,11 +220,15 @@ const AREAS: AreaDef[] = [
     // second in the sidebar, under Command Center, ahead of everything an operator actually
     // does — and called "SSO", which names one protocol rather than the thing it configures.
     label: "Identity",
-    sub: "Who can sign in — OIDC, SAML, SCIM · IdP packs · Community / Cloud / Enterprise",
+    sub: "Identity providers and member sync — console sign-in is the installer password",
     group: "Settings",
     icon: ICONS.enterprise,
   },
 ];
+
+/** The CSS that reveals the active area, generated from AREAS so a navigable area can never be
+ *  a hidden one (lib/area-visibility.ts says how AI SRE shipped blank). */
+const AREA_VISIBILITY_CSS = areaVisibilityCss(AREAS.map((a) => a.id));
 
 const GROUP_ORDER: AreaDef["group"][] = ["Platform", "Run", "Settings"];
 
@@ -308,6 +277,9 @@ export type ConsoleShellProps = {
   /** From GET /v1/edition (or BOSS_EDITION). Defaults to community honesty. */
   editionId?: string;
   initialArea?: string;
+  /** True when console sign-in is configured (BOSS_CONSOLE_PASSWORD set); Sign out is shown only
+   *  then. Read on the server, where the password lives. */
+  signOutAvailable?: boolean;
   children: ReactNode;
 };
 
@@ -317,6 +289,7 @@ export default function ConsoleShell({
   org,
   editionId,
   initialArea,
+  signOutAvailable = false,
   children,
 }: ConsoleShellProps) {
   const resolvedEdition = normalizeEditionId(editionId);
@@ -651,7 +624,7 @@ export default function ConsoleShell({
   // threads by external_ref, so each app gets its own thread and its own history; asking about
   // BugBox cannot surface ApproveIt's answers.
   // `?agent=` normally carries a RUN id. This sentinel opens the same dock for a
-  // conversation that is not about a run — asking the Deployment Manager about a host.
+  // conversation that is not about a record — BOSS in general, or a role a door names.
   // Kept as one constant so the shell and the panel cannot drift on the spelling.
   const DOCK_GENERAL = "general";
   const [dockedRun, setDockedRun] = useState<string | null>(null);
@@ -1124,6 +1097,14 @@ export default function ConsoleShell({
                 {status.budgetState || "unknown"}</strong></div>
               <div><span>Operator</span><strong><UserCircle size={15} aria-hidden /> {scope.actor}</strong></div>
               <div><span>Console</span><ConsoleToggle current="v1" orgId={org?.id} /></div>
+              {/* SIGN OUT. /api/auth/logout existed and nothing called it, so the only way to
+                  end a console session on a shared machine was to clear the browser's cookies.
+                  Shown only when sign-in is configured: there is no session to end otherwise. */}
+              {signOutAvailable ? (
+                <form action="/api/auth/logout" method="post" data-testid="bx-sign-out">
+                  <button type="submit" className="cap-btn">Sign out</button>
+                </form>
+              ) : null}
             </div>
           </details>
         </header>
@@ -1185,6 +1166,7 @@ export default function ConsoleShell({
         {/* The area being left stays on screen while the next one is fetched, so without this
             a slow area looks like a dead click on the old screen. A hairline across the top is
             the smallest honest signal that the press was taken and work is in flight. */}
+        <style data-testid="bx-area-visibility" dangerouslySetInnerHTML={{ __html: AREA_VISIBILITY_CSS }} />
         <main className="bx-content" data-active={active} aria-label={activeDef.label}
               data-dock={dockedRun ? "open" : undefined}
               style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
@@ -1199,15 +1181,12 @@ export default function ConsoleShell({
                  role="separator" aria-orientation="vertical"
                  aria-label="Resize the panel" title="Drag to resize" />
             <div className="bx-dock-head">
-              {/* A CONVERSATION THAT IS NOT ABOUT A RUN. `?agent=` has always carried a run id,
-                  and the head rendered it as a code. Opening the dock to ask the Deployment
-                  Manager about a HOST has no run to name, so the sentinel gets the role's name
-                  instead of a meaningless token. */}
+              {/* WHO IS ANSWERING. One meaning for "no role": BOSS in general (dockSpeaker in
+                  lib/dock-subject.ts). This head used to call the no-subject, no-role dock the
+                  Deployment Manager, so Repo and model's "Ask BOSS about this step" went to the
+                  role whose subject is hosts and rollbacks. */}
               <span className="eyebrow" data-testid="bx-dock-who">
-                {dockDiscussing
-                  ? "Talking to BOSS"
-                  : dockRole || (dockedRun === DOCK_GENERAL
-                                 ? "Deployment Manager" : "Ask BOSS")}
+                {dockSpeaker({ role: dockRole, discussing: dockDiscussing }).heading}
               </span>
               {dockDiscussing
                 ? <span className="detail">
@@ -1216,7 +1195,7 @@ export default function ConsoleShell({
                 : dockRole
                 ? <span className="detail">answering from this role&rsquo;s own work here</span>
                 : dockedRun === DOCK_GENERAL
-                  ? <span className="detail">hosts, releases, rollback readiness</span>
+                  ? <span className="detail">BOSS in general &mdash; across the whole factory</span>
                   : <code className="detail">{dockedRun}</code>}
               {/* Icon, not a labelled button. The head is a tight strip already holding the
                   title and the run id, and a text "Close" competed with both while doing the
@@ -1236,17 +1215,14 @@ export default function ConsoleShell({
                          initialMessage={dockAsk || undefined}
                          // NOBODY IN PARTICULAR, WHEN DISCUSSING AN IDEA.
                          //
-                         // The general dock defaults to the Deployment Manager — reasonable
-                         // when the dock is for operating the factory, and wrong here. It made
+                         // The general dock used to default to the Deployment Manager. It made
                          // "Discuss it" open under "Continuing with the Deployment Manager",
                          // resuming that role's week-old thread about probe latencies with the
                          // new idea typed into it. The heading was the visible half; the real
                          // damage is that the thread's history goes into the model's context.
                          roleName={dockDiscussing
                            ? undefined
-                           : (dockRole
-                              || (dockedRun === DOCK_GENERAL
-                                  ? "the Deployment Manager" : undefined))}
+                           : dockSpeaker({ role: dockRole, discussing: false }).roleName}
                          // `dockFresh` in the key so starting a discussion remounts with no
                          // thread and no history, rather than the component unpicking its own
                          // state — a reset that has to remember every field misses one.

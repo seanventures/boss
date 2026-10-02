@@ -72,8 +72,8 @@ export function AiSreHome({ feed }: { feed: AiSreFeed }) {
         </p>
         {!feed.apiReachable || !ledger ? (
           <p className="detail">
-            API unreachable — the ledger will populate once{" "}
-            <code>GET /v1/ai-sre/capabilities</code> responds.
+            The BOSS API did not answer for the AI SRE ledger. Reload the page; if it stays
+            empty, check that the API is running in Repo and model.
           </p>
         ) : (
           <>

@@ -1339,7 +1339,8 @@ START_FAILURE_ADVICE: dict[str, str] = {
     "command_missing": "Add boss.preview.command or retry with an explicit command.",
     "port_timeout": ("Inspect startup logs, ensure HOST/PORT are honored, or retry in Docker "
                      "mode."),
-    "boot_crash": "Inspect startup logs and retry in Docker mode.",
+    "boot_crash": ("The app crashed while starting — read the error in its log (an import or "
+                   "syntax error is a code fix, not a port), fix it, then preview again."),
 }
 
 #: The checker's own wrapper sentences around a failure, as they appear in a step's error.
@@ -1351,7 +1352,22 @@ CHECKER_LABELS: tuple[str, ...] = (
 )
 
 
-def _classify_start_failure(message: str) -> tuple[str, str]:
+#: What a CRASH looks like in an app's own output, as opposed to an app that is slow to bind.
+#: Lower-case; matched against the failure message, which carries the log's error lines.
+CRASH_MARKERS: tuple[str, ...] = (
+    "traceback (most recent call last)",
+    "importerror",
+    "modulenotfounderror",
+    "syntaxerror",
+    "cannot find module",
+    "err_module_not_found",
+    "the app exited",
+    "segmentation fault",
+    "panic:",
+)
+
+
+def _classify_start_failure(message: str, *, exited: Optional[bool] = None) -> tuple[str, str]:
     lowered = message.lower()
     # AN APP THAT IS LISTENING DID NOT TIME OUT. Checked before the generic "port" rule below,
     # which matches the word in this message too and labelled it port_timeout — telling the
@@ -1361,6 +1377,14 @@ def _classify_start_failure(message: str) -> tuple[str, str]:
         kind = "no_page_at_root"
     elif "clone" in lowered:
         kind = "clone_failed"
+    # A CRASH IS A CRASH, whatever wrapper sentence it arrives in. boss-1, 2026-10-02: a
+    # Preview step died on an ImportError at import time; the message said "app did not serve
+    # HTTP within timeout … ImportError …", the "did not serve" rule below won, and the row was
+    # labelled port_timeout with "ensure HOST/PORT are honored" — sending the operator, and the
+    # agent asked about it, after a port that was never the problem. A process that exited, or
+    # a log that shows a traceback, is checked BEFORE the timeout rule.
+    elif exited or any(marker in lowered for marker in CRASH_MARKERS):
+        kind = "boot_crash"
     elif "detect" in lowered or "command" in lowered:
         kind = "command_missing"
     elif "did not serve" in lowered or "port" in lowered:
@@ -1866,15 +1890,18 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
     log_path = str(workdir / "_preview.log")
 
-    def _fail(msg: str) -> dict:
-        failure_kind, suggested_action = _classify_start_failure(msg)
+    def _fail(msg: str, *, command: Optional[str] = None, exited: Optional[bool] = None) -> dict:
+        # THE LAUNCH COMMAND IS PART OF THE RECORD. app_previews.command was empty on every
+        # failed row, so "it crashed" could not be followed by "running WHAT" — the one fact
+        # needed to reproduce it by hand.
+        failure_kind, suggested_action = _classify_start_failure(msg, exited=exited)
         with begin(engine) as c:
             c.execute(text(
-                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,substrate,build_substrate,"
-                "status,error,failure_kind,log_path,expires_at) "
-                "VALUES (:id,:p,:r,:repo,:b,:sub,:build,'failed',:e,:fk,:lg,now())"),
+                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,substrate,"
+                "build_substrate,status,error,failure_kind,log_path,expires_at) "
+                "VALUES (:id,:p,:r,:repo,:b,:cmd,:sub,:build,'failed',:e,:fk,:lg,now())"),
                 {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}",
-                 "b": branch, "sub": ExecutionSubstrate.PREVIEW_HOST.value,
+                 "b": branch, "cmd": command, "sub": ExecutionSubstrate.PREVIEW_HOST.value,
                  "build": build_substrate, "e": msg[:500], "fk": failure_kind,
                  "lg": log_path})
             # A FAILURE NOBODY IS TOLD ABOUT.
@@ -1890,7 +1917,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                  "failure_kind": failure_kind, "suggested_action": suggested_action,
                  "error": msg[:500], "log_path": log_path},
             )
-        return {"id": preview_id, "status": "failed", "error": msg,
+        return {"id": preview_id, "status": "failed", "error": msg, "command": command,
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
     local_ws = None if (run.get("pull_request_url") or "") else find_local_run_workspace(run_id)
@@ -1980,13 +2007,19 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # Web builds do `npm install` + `vite build` before the static server binds — well past the
     # default 20s window — so give discovery generous headroom (it returns as soon as the port
     # answers, so this never slows the fast case).
-    port = _discover_working_port(log_path, port_hint, timeout=180.0)
+    # Given the process, discovery stops the moment it exits — an app that died on an
+    # ImportError never binds, and waiting out three minutes only delayed the real error.
+    port = _discover_working_port(log_path, port_hint, timeout=180.0, proc=proc)
     if port is None:
         # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
         # difference between "never bound" and "bound and served the wrong thing" is gone.
-        why = _serve_failure(log_path, port_hint)
+        exit_code = proc.poll()
+        why = (
+            f"the app exited (code {exit_code}) before serving HTTP: " + _why_it_failed(log_path)
+            if exit_code is not None else _serve_failure(log_path, port_hint)
+        )
         _kill(proc.pid)
-        return _fail(why)
+        return _fail(why, command=" ".join(command), exited=exit_code is not None)
 
     url = f"http://127.0.0.1:{port}"
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
@@ -2122,15 +2155,15 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
     workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
 
-    def _fail(msg: str) -> dict:
+    def _fail(msg: str, *, command: Optional[str] = None) -> dict:
         failure_kind, suggested_action = _classify_start_failure(msg)
         with begin(engine) as c:
             c.execute(text(
-                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,mode,substrate,"
+                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,mode,substrate,"
                 "build_substrate,status,error,failure_kind,expires_at) "
-                "VALUES (:id,:p,:r,:repo,:b,'docker',:sub,:build,'failed',:e,:fk,now())"),
+                "VALUES (:id,:p,:r,:repo,:b,:cmd,'docker',:sub,:build,'failed',:e,:fk,now())"),
                 {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}",
-                 "b": branch, "sub": ExecutionSubstrate.PREVIEW_DOCKER.value,
+                 "b": branch, "cmd": command, "sub": ExecutionSubstrate.PREVIEW_DOCKER.value,
                  "build": build_substrate, "e": msg[:500], "fk": failure_kind})
             # Same reason as the host path: a failure that emits nothing cannot appear in a log
             # that is a projection of events.
@@ -2168,12 +2201,12 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         return _fail(f"docker build failed: {(build.stderr or build.stdout or '')[-400:]}")
 
     host_port = _free_port()
-    run_cmd = subprocess.run(
-        ["docker", "run", "-d", "--name", tag, "-p", f"{host_port}:{container_port}",
-         "-e", f"PORT={container_port}", "-e", "HOST=0.0.0.0", tag],
-        capture_output=True, text=True, timeout=60)
+    docker_argv = ["docker", "run", "-d", "--name", tag, "-p", f"{host_port}:{container_port}",
+                   "-e", f"PORT={container_port}", "-e", "HOST=0.0.0.0", tag]
+    docker_command = " ".join(docker_argv)
+    run_cmd = subprocess.run(docker_argv, capture_output=True, text=True, timeout=60)
     if run_cmd.returncode != 0:
-        return _fail(f"docker run failed: {(run_cmd.stderr or '')[-300:]}")
+        return _fail(f"docker run failed: {(run_cmd.stderr or '')[-300:]}", command=docker_command)
     container_id = run_cmd.stdout.strip()[:12]
 
     url = f"http://127.0.0.1:{host_port}"
@@ -2186,16 +2219,16 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     if not ok:
         logs = subprocess.run(["docker", "logs", "--tail", "20", tag], capture_output=True, text=True).stdout
         subprocess.run(["docker", "rm", "-f", tag], capture_output=True)
-        return _fail(f"container did not serve HTTP. logs: {logs[-300:]}")
+        return _fail(f"container did not serve HTTP. logs: {logs[-300:]}", command=docker_command)
 
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
         c.execute(text(
-            "INSERT INTO app_previews (id,project_id,run_id,repo,branch,mode,container_id,port,url,"
-            "substrate,build_substrate,status,expires_at) "
-            "VALUES (:id,:p,:r,:repo,:b,'docker',:cid,:port,:url,:sub,:build,'running',:exp)"),
+            "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,mode,container_id,"
+            "port,url,substrate,build_substrate,status,expires_at) "
+            "VALUES (:id,:p,:r,:repo,:b,:cmd,'docker',:cid,:port,:url,:sub,:build,'running',:exp)"),
             {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}", "b": branch,
-             "cid": container_id, "port": host_port, "url": url,
+             "cmd": docker_command, "cid": container_id, "port": host_port, "url": url,
              "sub": ExecutionSubstrate.PREVIEW_DOCKER.value, "build": build_substrate,
              "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
@@ -2915,8 +2948,11 @@ def start_preview_async(engine, settings: Settings, run_id: str, *,
                     status = res.get("status") or "failed"
                     error = (res.get("error") or "")[:500] or None
                     c.execute(text(
-                        "UPDATE app_previews SET status=:st, error=:e WHERE id=:id"),
-                        {"st": status, "e": error, "id": preview_id})
+                        "UPDATE app_previews SET status=:st, error=:e, "
+                        "command=COALESCE(:cmd, command), "
+                        "failure_kind=COALESCE(:fk, failure_kind) WHERE id=:id"),
+                        {"st": status, "e": error, "id": preview_id,
+                         "cmd": res.get("command"), "fk": res.get("failure_kind")})
                     # A FAILURE THAT IS RETURNED IS STILL A FAILURE.
                     #
                     # The exception path below emits app_preview.failed; this one — the

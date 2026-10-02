@@ -252,6 +252,20 @@ def test_the_title_is_cleaned_like_everywhere_else():
     assert out["sessions"][0]["title"] == "Shorty"
 
 
+def test_a_framed_meeting_title_reads_as_its_subject_in_v2():
+    """Review of milestone/console-b (2026-10-02): v2 sessions cleaned meetings.title with the
+    product-name cleaner only, so an older workflow-convened meeting was still named by the
+    panel framing there while the v1 Meetings cards showed its subject."""
+    from boss_engine.services import meeting_service as ms
+
+    stored = ("PRD meeting: " + ms.PANEL_PURPOSE_MARKER
+              + "\nYou are the panel inside BOSS's weekly-newsletter workflow. That wo")
+    out = panel_sessions(FakeConn([meeting("m1", title=stored)]), "p")
+    title = out["sessions"][0]["title"]
+    assert title == "PRD meeting: panel for the weekly-newsletter workflow"
+    assert "---" not in title
+
+
 # --------------------------------------------------------------------------- #
 # What was actually said
 #

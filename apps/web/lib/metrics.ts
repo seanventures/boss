@@ -1,4 +1,5 @@
 import { API_URL, authHeaders } from "./client";
+import { toAreaId, type AreaId } from "./area-ids";
 import { boardStatus, taskBoardColumn } from "./roster";
 import type { TaskFeedItem } from "./tasks";
 
@@ -72,7 +73,7 @@ export type InFlightItem = {
   title: string;
   status: string;
   stage: string;
-  area: string;
+  area: AreaId;
   createdAt: string | null;
   active: boolean;
   owner?: string;
@@ -112,7 +113,8 @@ export async function fetchInFlightFeed(projectId: string, limit = 6): Promise<{
       title: String(i.title ?? ""),
       status: String(i.status ?? ""),
       stage: String(i.stage ?? ""),
-      area: String(i.area ?? "code_tasks"),
+      // An id the console has no area for would be a link that does nothing.
+      area: toAreaId(i.area, "code_tasks"),
       createdAt: (i.created_at as string) ?? null,
       active: Boolean(i.active),
     })), apiReachable: true };

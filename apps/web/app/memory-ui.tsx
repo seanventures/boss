@@ -59,9 +59,16 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
       const params = new URLSearchParams({ project_id: projectId, actor });
       const r = await fetch(`/api/memory?${params}`, { cache: "no-store" });
       const body = (await r.json()) as Payload;
-      if (r.ok) { setData(body); setError(null); } else { setError(body?.error ?? "failed"); }
+      // SAY WHAT FAILED AND WHAT TO DO. This read "failed" — a word with no subject and no
+      // next step (console walk, 2026-10-02).
+      if (r.ok) { setData(body); setError(null); }
+      else {
+        setError(`Could not load what BOSS remembers: ${body?.error ?? `HTTP ${r.status}`}. `
+                 + "Reload the page; if it stays like this, check the API in Repo and model.");
+      }
     } catch (e) {
-      setError(String((e as Error)?.message ?? e));
+      setError(`Could not load what BOSS remembers: ${String((e as Error)?.message ?? e)}. `
+               + "Reload the page; if it stays like this, check the API in Repo and model.");
     }
   }, [projectId, actor]);
 
@@ -70,6 +77,11 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
   const act = useCallback(async (
     memory: Memory, action: "review" | "forget", decision?: "active" | "rejected",
   ) => {
+    // Retiring a rule changes what every later session is told, and there is no undo here.
+    if (action === "forget" && typeof window !== "undefined"
+        && !window.confirm(`Retire this memory? Agents stop being told: "${memory.body.slice(0, 120)}"`)) {
+      return;
+    }
     setBusy(memory.id);
     try {
       const r = await apiWrite("/api/memory", {
@@ -80,8 +92,11 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
         }),
       });
       const body = await r.json().catch(() => ({}));
-      if (!r.ok) setError(body?.error ?? `failed (${r.status})`);
-      else setError(null);
+      if (!r.ok) {
+        const verb = action === "forget" ? "retire" : decision === "rejected" ? "reject" : "accept";
+        setError(`Could not ${verb} "${memory.body.slice(0, 80)}": ${body?.error ?? `HTTP ${r.status}`}. `
+                 + "Nothing changed — press it again.");
+      } else setError(null);
       // RELOAD RATHER THAN PATCH LOCAL STATE. Accepting a rule changes what every later
       // session is told; showing a stale list after that is how an operator ends up unsure
       // whether the thing they just pressed took effect.
