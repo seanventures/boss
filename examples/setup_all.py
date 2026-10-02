@@ -25,7 +25,7 @@ HERE = Path(__file__).resolve().parent
 #: trouble has already installed the ones that were going to work.
 EXAMPLES = [
     ("video-workflow", "edit a video and publish it", "Google Drive + YouTube, for the "
-     "first and last step"),
+     "first and last step; the video agents are added from the media pack if missing"),
     ("trend-to-content", "a trend becomes a script, or an honest no", "email"),
     ("sales-signal", "a company name becomes a researched approach", "email"),
     ("weekly-newsletter", "research, written up, in your inbox", "email"),
@@ -94,6 +94,9 @@ def main() -> None:
 
     installed: list[str] = []
     failed: list[tuple[str, str, str]] = []
+    #: Installed, and BOSS says they cannot run here yet — with what is missing. Reported apart
+    #: from failures: the workflow is there and Start will show the same list until it is fixed.
+    not_ready: list[tuple[str, list[str]]] = []
 
     for name, what, needs in chosen:
         print(f"  ── {name} — {what}")
@@ -115,6 +118,7 @@ def main() -> None:
         child_env["BOSS_API_KEY"] = args.key
         result = subprocess.run(command, capture_output=True, text=True, env=child_env)
         if result.returncode == 0:
+            missing: list[str] = []
             for line in result.stdout.splitlines():
                 stripped = line.strip()
                 # The lines worth seeing from a run of five: what was published, and which
@@ -123,9 +127,16 @@ def main() -> None:
                                         "every ", "next run",
                                         # A dry run says what it WOULD do, and a dry run that
                                         # printed nothing per example answered no question.
-                                        "would ")):
+                                        "would ",
+                                        # What will not work yet, and that it was checked.
+                                        "not ready yet:", "fix:", "ready to run",
+                                        "added (from")) or " added (from the " in stripped:
                     print(f"       {stripped}")
+                if stripped.startswith("not ready yet:"):
+                    missing.append(stripped[len("not ready yet:"):].strip())
             installed.append(name)
+            if missing:
+                not_ready.append((name, missing))
         else:
             # The example's OWN message, not "it failed". "this project has no active work
             # tracker configured" is the whole of what somebody needs to fix it.
@@ -140,6 +151,16 @@ def main() -> None:
     print(f"  {len(installed)} {outcome}" + (f", {len(failed)} skipped" if failed else ""))
     if installed and not args.dry_run:
         print("  Delivery → Yours, in the console.")
+    if not_ready:
+        # INSTALLED IS NOT THE SAME AS RUNNABLE. The email examples installed cleanly on an
+        # install with no mail server and failed at their last, approved step; this is the
+        # list of what has to exist first, said at install time.
+        print("\n  Installed, but will not run here yet:")
+        for name, missing in not_ready:
+            print(f"    {name}")
+            for item in missing:
+                print(f"      needs {item}")
+        print("  Start shows the same list, with the fix, until each is in place.")
     if failed:
         # THE ACTUAL REASON LEADS. Listing prerequisites alone implied the prerequisite was the
         # problem — but a wrong --actor skips all five, and "needs email" is then a confident
