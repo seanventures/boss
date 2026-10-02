@@ -2750,6 +2750,22 @@ class IntentRouter:
             self._require(connection, project_id, actor, "task_create")
             seed = str(arguments.get("seed") or "").strip()
             title = str(arguments.get("title") or seed[:120] or "Discovery")
+            from .discovery_service import _research_runs_as_a_job
+
+            if _research_runs_as_a_job(self.settings):
+                # GOVERNED PER STAGE. The discovery job reserves, leases and receipts each
+                # research stage itself; a run-wide reservation here would never be settled.
+                run_id = start_discovery(
+                    project_id=project_id, title=title, seed=seed,
+                    context="Started by the orchestration agent.",
+                    settings=self.settings, actor=actor,
+                )
+                return RouterTurn(
+                    reply=f"Started evidence discovery for “{title}”.",
+                    actions=[{"kind": "discovery_started", "run_id": run_id,
+                              "href": f"/?area=discovery&run={run_id}"}],
+                    tool_calls=[{"name": name, "arguments": arguments}],
+                )
             reservation_amount = self.settings.plan_budget_usd_micros * 4
             reservation = self.budget.reserve(
                 connection,

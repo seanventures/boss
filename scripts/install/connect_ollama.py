@@ -16,13 +16,6 @@ With --default-if-no-hosted: when no hosted or public model is connected (no pro
 .env, no recorded subscription or API-key connection), Ollama becomes the model for every role
 (implementer, reviewer, hard problems, routine work) through PUT /v1/settings. A role the
 operator already chose is left alone. With a hosted model connected, Ollama is only added.
-
-Switching the local model (`boss connect ollama --local-model NAME`) moves the roles BOSS
-itself gave the previous local model. BOSS records which roles it set in
-`.env.boss-local-roles` beside the install's .env (role names and the model only, never a
-credential). An install from before that record existed is read by comparison instead: a role
-that is native with exactly the previously connected Ollama model was set by BOSS. A role the
-operator chose by hand is never overwritten.
 """
 from __future__ import annotations
 
@@ -104,61 +97,7 @@ def record(line: str) -> None:
             stream.write(line + "\n")
 
 
-def roles_file(env_file: Path) -> Path:
-    """Where BOSS records the roles it gave the local model, beside the install's .env."""
-    return env_file.with_name(".env.boss-local-roles")
-
-
-def read_assigned(env_file: Path) -> dict | None:
-    """The roles BOSS set to its local default, or None when nothing was recorded."""
-    try:
-        body = json.loads(roles_file(env_file).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(body, dict) or not isinstance(body.get("lanes"), list):
-        return None
-    return {"model": str(body.get("model") or ""),
-            "lanes": [lane for lane in body["lanes"] if lane in ROLE_ENGINES]}
-
-
-def write_assigned(env_file: Path, model: str, lanes: list[str]) -> None:
-    """Record the roles BOSS set, atomically, mode 0600. An empty list removes the record."""
-    path = roles_file(env_file)
-    if not lanes:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        return
-    if not path.parent.is_dir():
-        return
-    temporary = path.with_name(f"{path.name}.writing.{os.getpid()}")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump({"model": model, "lanes": sorted(set(lanes))}, stream)
-        stream.write("\n")
-    os.replace(temporary, path)
-
-
-def boss_assigned(engine_knob: dict, model_knob: dict, engine_key: str,
-                  assigned: dict | None, previous: list[str]) -> bool:
-    """Did BOSS itself give this role the local model it still has?
-
-    The role must still be native with a model BOSS set. With a record, the role must be in it
-    and still hold the model recorded for it; without one (an install from before the record),
-    the model must be the Ollama model that was connected before this change.
-    """
-    if engine_knob.get("value") != "native":
-        return False
-    current = model_knob.get("value")
-    if assigned is not None:
-        return engine_key in assigned["lanes"] and bool(current) \
-            and current == assigned["model"]
-    return bool(current) and current in previous
-
-
-def make_default(api_url: str, api_key: str, env_file: Path, model: str,
-                 previous: list[str] | None = None) -> str:
+def make_default(api_url: str, api_key: str, env_file: Path, model: str) -> str:
     hosted = hosted_connected(api_url, api_key, env_file)
     record(f"hosted={'unknown' if hosted is None else 'yes' if hosted else 'no'}")
     if hosted is None:
@@ -171,59 +110,25 @@ def make_default(api_url: str, api_key: str, env_file: Path, model: str,
     knobs = role_settings(api_url, api_key)
     if knobs is None:
         raise ConnectError("BOSS did not return the project's role settings")
-    assigned = read_assigned(env_file)
-    # Re-running with the model that is already connected: roles on it are BOSS's as before.
-    reconnect = model in (previous or [])
-    previous = [name for name in (previous or []) if name and name != model]
-    changed = moved = 0
-    owned: list[str] = []
-    kept: list[str] = []
+    changed = 0
     for engine_key in ROLE_ENGINES:
         model_key = engine_key.replace("_engine", "_model")
         engine_knob, model_knob = knobs.get(engine_key) or {}, knobs.get(model_key) or {}
-        current = model_knob.get("value")
-        if engine_knob.get("value") == "native" and current == model \
-                and model_knob.get("source") == "project":
-            # Already on this model. Still BOSS's only if BOSS put it there: in the record
-            # under this same model, or, with no record, because this model is the one that
-            # was already connected. A role on the NEW model before BOSS moved anything was
-            # chosen by the operator, and stays theirs when the local model changes again.
-            if (engine_key in assigned["lanes"] and assigned["model"] == model) \
-                    if assigned is not None else reconnect:
-                owned.append(engine_key)
-            else:
-                kept.append(engine_key)
+        if engine_knob.get("source") == "project" and engine_knob.get("value") != "native":
+            continue  # the operator chose another engine for this role
+        if model_knob.get("source") == "project" and model_knob.get("value") not in ("", model):
             continue
-        ours = boss_assigned(engine_knob, model_knob, engine_key, assigned, previous)
-        if not ours:
-            if engine_knob.get("source") == "project" and engine_knob.get("value") != "native":
-                kept.append(engine_key)
-                continue  # the operator chose another engine for this role
-            if model_knob.get("source") == "project" and current not in ("", model):
-                kept.append(engine_key)
-                continue  # the operator chose another model for this role
         for key, value in ((engine_key, "native"), (model_key, model)):
             _request(f"{api_url}/v1/settings/{key}", api_key,
                      {"project_id": PROJECT, "actor": "ceo", "value": value}, method="PUT")
-        owned.append(engine_key)
         changed += 1
-        moved += int(ours)
-    write_assigned(env_file, model, owned)
-    record(f"ollama_roles_moved={moved}")
-    if changed and moved:
-        print(f"  The {moved} role(s) BOSS had given the previous local model now use Ollama "
-              f"{model}" + (f"; {len(kept)} role(s) you chose were left alone" if kept else ""))
-    elif changed:
+    if changed:
         print(f"  No hosted model is connected, so Ollama {model} is now the default for every "
-              "role (implementer, reviewer, hard problems, routine work)"
-              + (f" except the {len(kept)} you chose" if kept else ""))
-    elif owned:
-        print(f"  Every role BOSS set already uses Ollama {model}"
-              + (f"; {len(kept)} role(s) you chose were left alone" if kept else ""))
+              "role (implementer, reviewer, hard problems, routine work)")
     else:
         print("  No hosted model is connected; every role already has a model you chose, "
               "so none was changed")
-    return "yes" if (changed or owned) else "no"
+    return "yes" if changed else "no"
 
 
 def release_default(api_url: str, api_key: str, env_file: Path) -> int:
@@ -251,8 +156,6 @@ def release_default(api_url: str, api_key: str, env_file: Path) -> int:
                      {"project_id": PROJECT, "actor": "ceo", "value": ""}, method="PUT")
             released += 1
     if released:
-        # The roles went back to their defaults, so BOSS no longer holds any of them.
-        write_assigned(env_file, local_model, [])
         print(f"  A hosted model is connected, so the {released} role(s) that used Ollama "
               f"{local_model} went back to their defaults. Ollama stays connected.")
     return 0
@@ -298,8 +201,6 @@ def main() -> int:
             "this install already has an \"Anything OpenAI-compatible\" connection to "
             "another address. Nothing was changed. To use Ollama instead, replace that "
             "connection in Mission Control (Settings, Repo and model).")
-    # The Ollama model connected before this run, so roles BOSS gave it can follow a switch.
-    previous = list(current["models"]) if current is not None else []
     if current is not None and model in current["models"]:
         print(f"  Ollama is already connected ({model} at {base_url}); nothing changed")
     else:
@@ -313,7 +214,7 @@ def main() -> int:
               "(unverified until a governed job uses it; no model was called)")
     record(f"ollama_model={model}")
     if args.default_if_no_hosted:
-        record(f"ollama_default={make_default(api_url, api_key, args.env_file or Path('/nonexistent'), model, previous)}")
+        record(f"ollama_default={make_default(api_url, api_key, args.env_file or Path('/nonexistent'), model)}")
     return 0
 
 

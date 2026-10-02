@@ -11,7 +11,7 @@ exits 0 and writes nothing. ``record_community_local_place`` is safe to call
 again once the project exists. A second call keeps the same default row.
 
 When this script is run directly and ``BOSS_PLACE_AGENT_STATE`` is unset, it
-invokes ``scripts/install/node_agent.sh --local`` itself. A missing script is
+invokes ``bash scripts/install/node_agent.sh --local`` itself. A missing script is
 ``absent`` and the local place is not marked ready. A script that is present
 is ``installed`` only when that command exits 0. This does not open a socket,
 an SSH session, or a provider API.
@@ -54,7 +54,7 @@ def _redact(message: str, database_url: str) -> str:
 def local_agent_state(script: Path | None = None) -> str:
     """Return ``installed`` only when the hardware agent program exits 0.
 
-    The program is ``sh scripts/install/node_agent.sh --local``. A missing
+    The program is ``bash scripts/install/node_agent.sh --local``. A missing
     script is ``absent`` and must not mark the local place ready. A present
     script is ``installed`` only when that command exits 0.
     """
@@ -62,7 +62,9 @@ def local_agent_state(script: Path | None = None) -> str:
     if not path.is_file():
         return "absent"
     completed = subprocess.run(
-        ["sh", str(path), "--local"],
+        # bash, not sh: node_agent.sh is a bash program (`set -euo pipefail`), and sh is dash on
+        # Ubuntu and Debian — the same failure install.sh had.
+        ["bash", str(path), "--local"],
         check=False,
         capture_output=True,
         text=True,

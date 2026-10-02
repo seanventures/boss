@@ -83,11 +83,18 @@ def test_one_stray_tool_attempt_does_not_end_the_turn():
 
 
 def test_the_model_still_gets_no_tools_of_its_own():
-    """The turn budget is headroom, NOT permission. BOSS controls all data access."""
+    """The turn budget is headroom, NOT permission. BOSS controls all data access.
+
+    By the CLI's own switch, `--tools ""` (all built-in tools disabled), never by a list of tool
+    names: a named deny list went stale both ways — Claude Code dropped MultiEdit and a deny
+    rule naming an unknown tool made every meeting step exit 1, while new tools the list never
+    named stayed available.
+    """
     cmd = _build_cmd()
-    blocked = cmd[cmd.index("--disallowedTools") + 1]
-    for tool in ("Bash", "Read", "Write", "Edit", "WebFetch", "Task"):
-        assert tool in blocked, f"{tool} is no longer denied"
+    assert cmd[cmd.index("--tools") + 1] == "", "every built-in tool must be disabled"
+    assert "--disallowedTools" not in cmd, "a named deny list goes stale as the CLI changes"
+    prompt_at = cmd.index("-p") + 1
+    assert cmd.index("--tools") > prompt_at, "the variadic --tools must not swallow the prompt"
 
 
 def _build_cmd() -> list[str]:

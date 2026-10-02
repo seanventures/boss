@@ -28,7 +28,7 @@ class FakeControlPlaneClient:
         self.calls.append(("poll", worker_id, tuple(capabilities), lease_ttl_seconds))
         return self.leased_job
 
-    def heartbeat(self, worker_id, job_id, lease_token, lease_ttl_seconds):
+    def heartbeat(self, worker_id, job_id, lease_token, lease_ttl_seconds, handing_back=False):
         self.calls.append(
             ("heartbeat", worker_id, job_id, lease_token, lease_ttl_seconds)
         )

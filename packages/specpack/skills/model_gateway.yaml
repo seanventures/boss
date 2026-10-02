@@ -60,6 +60,65 @@ skills:
     retry:
       max_attempts: 2
       backoff: exponential
+  # TYPED DECISIONS (BOSS-451). The governed spend path for a workflow's typed_decision step
+  # and for the TypeSafe key proof leases model capacity under this skill. It was named by
+  # typed_decision_spend.SKILL_ID and defined nowhere, so the gateway raised "Skill
+  # 'typed_decision' not found" on the first real call — every unit test used a gateway double.
+  - id: typed_decision
+    kind: model
+    risk_tier: 1
+    mock_mode: false
+    description: Answer one multiple-choice workflow decision, or prove a decision-model key, through a reserved, leased and receipted model call.
+    data_boundary: internal
+    input_schema:
+      question: string
+      options: object
+      context: string
+    output_schema:
+      answer: string?
+      confidence: number?
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: model
+    permissions:
+      allowed_callers: [worker, control_plane]
+      required_permissions: [model_invoke]
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+    retry:
+      max_attempts: 1
+      backoff: none
+  # DISCOVERY RESEARCH. Each stage of a Community discovery (sweep, synthesize, vet, shape,
+  # and a deep run's scouts) leases model capacity under this skill, inside the worker's lease
+  # of its discovery.run job, with its own reservation and receipt (discovery_spend.py).
+  - id: discovery.research
+    kind: model
+    risk_tier: 1
+    mock_mode: false
+    description: One web-research stage of a Discovery run, reserved, leased and receipted on its own.
+    data_boundary: internal
+    input_schema:
+      stage: string
+      prompt: string
+    output_schema:
+      summary: string
+      receipt_id: string
+    cost:
+      estimator: token_estimate
+      category: model
+    permissions:
+      allowed_callers: [worker, control_plane]
+      required_permissions: [model_invoke]
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+    retry:
+      max_attempts: 1
+      backoff: none
   - id: model.generate_code
     kind: model
     risk_tier: 1

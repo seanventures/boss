@@ -69,6 +69,30 @@ providers:
         supported_models: [claude-sonnet, claude-opus]
         task_strengths: [coding, reasoning, review]
         limit_shape: {max_concurrent: 128}
+  # TYPESAFE JEV — DECISIONS ONLY. Answers a workflow's multiple-choice typed_decision steps on
+  # the operator's own TypeSafe key, billed to their TypeSafe account. It cannot write code, so
+  # `decisions_only` keeps the router from ever offering it for anything but typed_decision.
+  # Its own source, so a decision's capacity lease is booked against the provider that answers
+  # it — not against the Claude subscription, which refused it as pooled capacity (BOSS-451).
+  - id: typesafe
+    allowed: true
+    description: TypeSafe Jev typed decisions on the operator's own API key.
+    source_records:
+      - source_id: typesafe_jev
+        source_kind: official_api
+        entitlement_kind: usage_based_api
+        auth_method: api_key
+        connection_status: not_connected
+        connection_ref: TYPESAFE_API_KEY
+        connection_metadata:
+          decisions_only: true
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, internal_batch]
+        multi_tenant_allowed: false
+        supported_models: [jev]
+        task_strengths: [classify]
+        limit_shape: {max_concurrent: 16}
+        policy_notes:
+          - Billed to the operator's TypeSafe account; each decision is reserved and receipted.
   - id: google
     allowed: true
     description: Real Google access through Gemini CLI, Code Assist, and approved APIs.
@@ -246,6 +270,12 @@ models:
     provider: anthropic
     tier: mid
     strengths: [coding, reasoning, review]
+    cost_class: token_metered
+    enabled: true
+  - id: typesafe:jev
+    provider: typesafe
+    tier: cheap
+    strengths: [classify]
     cost_class: token_metered
     enabled: true
   - id: google:gemini-pro
