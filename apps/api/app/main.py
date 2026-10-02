@@ -24029,6 +24029,9 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         try:
             run = workflow_runtime.start_run(
                 connection, project_id=project_id, actor=actor, input_data=run_input,
+                # IDEMPOTENT WHEN THE CALLER SAYS SO: the same dedupe_key returns the run it
+                # already started. The console sends one per intent ("replace run X"), so a
+                # second press of Stop-and-run-again cannot start a second workflow.
                 dedupe_key=str(payload.get("dedupe_key") or "")
                            or f"delivery:{work_class or workflow_key}:{uuid4().hex[:12]}",
                 workflow_version_id=version_id,

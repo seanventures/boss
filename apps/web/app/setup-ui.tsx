@@ -650,7 +650,8 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
             An API key, anything that speaks the OpenAI API, or a subscription you already pay
             for. {probeAvailable
               ? "BOSS spends one token proving it works before saving it."
-              : "Community saves the key without a live test and marks it unverified."}
+              : "Community saves an API key without a live test and marks it unverified; a "
+                + "subscription is connected only after it answers one test turn."}
           </p>
         </div>
       </div>
@@ -777,8 +778,9 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
             <li>
               {provider === "claude_code"
                 ? <>Press <b>Store and connect</b> for a pasted setup token, or use{" "}
-                    <code>--connect-claude-local</code> after the CLI login. Neither step
-                    calls a model.</>
+                    <code>--connect-claude-local</code> after the CLI login. BOSS then sends it
+                    one trivial test turn — budgeted and receipted — and connects it only if it
+                    answers; if the login is rejected it says so here.</>
                 : detected.credential_kind === "token"
                 // "It never asks you for a credential" is true of the file route and false
                 // here, where the box below is asking for exactly one.

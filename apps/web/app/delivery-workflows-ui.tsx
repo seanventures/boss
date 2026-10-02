@@ -830,7 +830,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.clearInterval(timer);
   }, [previewStarting, load]);
 
+  // ONE ACTION AT A TIME, CHECKED SYNCHRONOUSLY. `busy` disables the buttons only after React
+  // re-renders, so a quick second click still fired: "Stop and run again" pressed twice
+  // started two workflows. A ref is set before the first await, so the second click sees it.
+  const inFlight = useRef(false);
   const act = useCallback(async (label: string, action: string, payload: Record<string, unknown>) => {
+    if (inFlight.current) return { ok: false, error: "already running" } as Awaited<ReturnType<typeof post>>;
+    inFlight.current = true;
     setBusy(label);
     setNotice(null);
     try {
@@ -848,6 +854,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       return result;
     } finally {
       // In a finally so a throw cannot leave the console stuck showing "Advancing…" forever.
+      inFlight.current = false;
       setBusy(null);
     }
   }, [projectId, actor, load]);
@@ -1005,6 +1012,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           }}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
+            // One fresh run per press; a retried or doubled request returns the same run.
+            dedupe_key: `again:${run.id}:${crypto.randomUUID()}`,
           })}
           // STOP, THEN START — in that order and as ONE press.
           //
@@ -1023,6 +1032,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             if (!stopped?.ok) return;
             await act("Re-run", "start", {
               workflow_key: run.workflow_key, input: inputForRerun(run.input),
+              // A RUN IS REPLACED ONCE. However often this is pressed for run X, the server
+              // returns the same replacement — the second press no longer starts a second one.
+              dedupe_key: `replace:${run.id}`,
             });
           }}
           // BUILD ON WHAT THIS ALREADY FOUND. The server resolves the dossier from the run and
