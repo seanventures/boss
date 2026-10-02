@@ -182,6 +182,8 @@ def test_a_stuck_run_diagnosis_returns_within_budget_with_its_recommendation(mon
     and a budget. The turn ends within its seconds plus its answer window, and the operator gets
     what diagnose_run found, what was checked, and the fix as a button."""
     monkeypatch.setattr(call_deadline, "MIN_CALL_SECONDS", 0.2)
+    # Scaled to the test's 1.5 s turn, as MIN_CALL_SECONDS is: 3 s is for a real 180 s turn.
+    monkeypatch.setattr(call_deadline, "MIN_TOOL_SECONDS", 0.2)
     adapter = _ThinksForever()
     ran: list[str] = []
     # The reserve scaled to the test's seconds, as 20 s is to a real turn's 180.
@@ -212,3 +214,97 @@ def test_a_stuck_run_diagnosis_returns_within_budget_with_its_recommendation(mon
 ])
 def test_an_id_in_the_question_is_the_subject(question, ref):
     assert subject_named_in(question) == ref
+
+
+# ------------------------------------------------------------------------------------------- #
+# The tools inside a turn are bounded too.                                                    #
+# ------------------------------------------------------------------------------------------- #
+class _AsksForOneTool:
+    """Asks for one tool, then answers at once — so only the tool can make the turn slow."""
+
+    def __init__(self, tool="http_probe", on_first=None):
+        self.calls = 0
+        self.tool = tool
+        self.on_first = on_first
+
+    def create_chat_completion(self, messages, tools=None, **kw):
+        self.calls += 1
+        if self.calls == 1:
+            if self.on_first is not None:
+                self.on_first()
+            return ({"raw": {"role": "assistant", "content": ""}, "content": "",
+                     "tool_calls": [{"id": "c1", "name": self.tool,
+                                     "arguments": json.dumps({"url": "http://slow"})}]}, {})
+        return ({"raw": {"role": "assistant", "content": "It is down."},
+                 "content": "It is down."}, {})
+
+
+def test_a_slow_tool_waits_no_longer_than_the_turn(monkeypatch):
+    """Review of the 240 s fix: only MODEL calls were bounded, so a slow host or URL inside a
+    turn (inspect_host, http_probe, query_db) still carried it past the console's stall line.
+    A tool that waits on its own timeout now waits only for the turn's tool time."""
+    monkeypatch.setattr(call_deadline, "MIN_CALL_SECONDS", 0.2)
+    monkeypatch.setattr(call_deadline, "MIN_TOOL_SECONDS", 0.2)
+    waited: list[float] = []
+
+    def slow_tool(name, args, **kw):
+        # What the real tools do: ask for their own timeout through the turn.
+        seconds = call_deadline.tool_timeout(30)
+        waited.append(seconds)
+        time.sleep(seconds)
+        return {"ok": False, "error": "timed out"}
+
+    agent = _agent(_AsksForOneTool(), [])
+    agent._run_tool = slow_tool
+    budget = TurnBudget(seconds=1.5, answer_seconds=1.0, answer_reserve=0.1, model_calls=16)
+    started = time.monotonic()
+    turn = agent.chat(project_id="p", message="is it up?", max_steps=14, budget=budget)
+    took = time.monotonic() - started
+    assert waited and waited[0] <= budget.seconds, f"the tool was given {waited}s"
+    assert took <= budget.seconds + budget.answer_seconds + 0.5, f"the turn ran {took:.1f}s"
+    assert "It is down." in turn.reply
+
+
+def test_a_tool_is_not_started_once_the_turns_tool_time_is_spent(monkeypatch):
+    """A tool asked for after the turn's tool time is gone is recorded as not run, and the next
+    call is the answer — it does not start a wait the console will not see the end of."""
+    monkeypatch.setattr(call_deadline, "MIN_CALL_SECONDS", 0.0)
+    now = [0.0]
+    budget = TurnBudget(seconds=10.0, answer_seconds=5.0, answer_reserve=0.1, model_calls=16,
+                        clock=lambda: now[0])
+    ran: list[str] = []
+    adapter = _AsksForOneTool(on_first=lambda: now.__setitem__(0, 9.99))
+    turn = _agent(adapter, ran).chat(project_id="p", message="is it up?", max_steps=14,
+                                     budget=budget)
+    assert ran == [], "a tool started with no time left in the turn"
+    skipped = [s for s in turn.trace if s["tool"] == "http_probe"]
+    assert skipped and skipped[0]["result"]["not_run"] is True
+    assert "next thing to do" in skipped[0]["result"]["error"]
+    assert adapter.calls == 2 and "It is down." in turn.reply
+
+
+def test_outside_a_turn_a_tool_keeps_its_own_timeout_and_a_query_is_bounded_inside_one():
+    from boss_engine.tools.builtin import _bound_statement
+
+    assert call_deadline.tool_timeout(45) == 45
+
+    class _Conn:
+        dialect = type("D", (), {"name": "postgresql"})()
+
+        def __init__(self):
+            self.sql: list[str] = []
+
+        def execute(self, statement, *a, **kw):
+            self.sql.append(str(statement))
+
+    outside = _Conn()
+    _bound_statement(outside)
+    assert outside.sql == [], "a query outside a turn was given a turn's timeout"
+    inside = _Conn()
+    with until(time.monotonic() + 4.0):
+        _bound_statement(inside)
+        with until(time.monotonic() + 1.0):
+            with pytest.raises(TurnDeadlineExceeded):
+                call_deadline.tool_timeout(30)
+    assert len(inside.sql) == 1 and "statement_timeout" in inside.sql[0]
+    assert 3000 <= int(inside.sql[0].rsplit("=", 1)[1]) <= 4000
