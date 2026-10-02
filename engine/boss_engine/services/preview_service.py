@@ -975,9 +975,12 @@ def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional
     before — never saw the declaration, fell back to heuristics, proved `python3 main.py`, and
     failed; the preview would have run the declared uvicorn command and worked (second review
     of f16b5d4). And the deploy ran `python {entry}`, ignoring both. Three runners, three
-    answers. Now the preview, the proof, the container preview and the deploy all call this with
-    the lineage's files, so "it served when the build checked" is a claim about the command
-    that is later run.
+    answers. Now the preview, the proof and the container preview all call this with the
+    lineage's files, so "it served when the build checked" is a claim about the command the
+    preview later runs. The deploy deliberately does NOT: a declaration is a preview and
+    build-proof contract, and production keeps its own commands (npm start; python3 -m for a
+    package module) — running a declared preview command in a production container broke
+    apps that needed devDependencies (fourth review).
 
     Raises AmbiguousAppError rather than guessing (see _detect_command's history).
     """
@@ -1630,7 +1633,7 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
 
     `changed` is THIS run's diff; `lineage` is every file the app's earlier runs wrote
     (lineage_impl_files). WHAT IS STARTED is decided by how_app_runs over both — the function
-    the preview, the container preview and the deploy also call — in a copy of the tree with
+    the preview and the container preview also call — in a copy of the tree with
     the boss.preview.app this build is about to record laid in, so the proof sees exactly what
     the preview will. Given only the diff, a follow-up of a declared app never saw the
     declaration and proved a different command than the preview runs (second review of
@@ -1997,7 +2000,8 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
     # an N-Queens build (PR #62). Both paths must make the SAME choice, not merely consult the
     # same list.
     #
-    # And the same ANSWER as the host preview, the serve proof and the deploy: how_app_runs.
+    # And the same ANSWER as the host preview and the serve proof: how_app_runs. (Not the
+    # deploy, which keeps its production commands.)
     # This path read resolve_app_entry alone, so a build's declared run command — the one the
     # build proved serves — was ignored here exactly as the deploy ignored it.
     plan = how_app_runs(workdir, changed)
