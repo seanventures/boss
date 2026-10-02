@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * Everything the delivery-workflow screen reads and does, in one place.
@@ -122,8 +123,7 @@ async function proxyPost(path: string, payload: unknown) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(parsed, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(parsed);
@@ -140,8 +140,7 @@ async function proxyDelete(path: string) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(parsed, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(parsed);
@@ -222,8 +221,7 @@ export async function POST(req: Request) {
       // The API's own message, forwarded verbatim. These are the sentences the builder shows
       // beside a step — "step 'd' is risk tier 2 and always requires a person" is the whole
       // point, and replacing it with "request failed" would waste it.
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(parsed, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(parsed);
@@ -268,8 +266,7 @@ export async function PATCH(req: Request) {
     if (!r.ok) {
       // Forwarded verbatim, like every other message from the API here: "choose the skill this
       // step runs" is the sentence the form shows, and "request failed" would waste it.
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(parsed, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(parsed);
@@ -318,8 +315,7 @@ export async function DELETE(req: Request) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+      return NextResponse.json({ error: apiErrorText(parsed, r.status) },
                                { status: r.status });
     }
     return NextResponse.json(parsed);

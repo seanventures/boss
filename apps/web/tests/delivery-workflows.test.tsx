@@ -52,7 +52,9 @@ describe("nothing is invented", () => {
   it("forwards the engine's own validation message", () => {
     // "step 'd' is risk tier 2 and always requires a person" is the whole value of the
     // validation; replacing it with "request failed" throws it away.
-    expect(ROUTE).toContain("const detail = (parsed as { detail?: string })?.detail;");
+    // Through apiErrorText now, which keeps the sentence verbatim (and reads a validation
+    // array as words rather than "[object Object]"); see every-api-error-reads-as-words.
+    expect(ROUTE).toContain("apiErrorText(parsed, r.status)");
     expect(UI).toContain("result.error");
   });
 });

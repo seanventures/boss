@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { apiErrorText } from "../../../lib/api-error";
 
 /**
  * Convene the PRD panel without re-rendering the console.
@@ -53,7 +54,7 @@ export async function POST(req: Request) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: data?.detail ?? `HTTP ${r.status}` }, { status: r.status });
+      return NextResponse.json({ error: apiErrorText(data, r.status) }, { status: r.status });
     }
     return NextResponse.json(data);
   } catch (e) {
