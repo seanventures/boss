@@ -679,8 +679,9 @@ class _FakeBoss:
                 if self.path == "/v1/setup/coding-agents/connect":
                     outer.sources.append({"source_id": outer.SUBSCRIPTION_SOURCES[body["provider"]],
                                           "connection_status": "connected"})
+                    # BOSS proves a connection with one governed test turn before recording it.
                     return self._reply(201, {"connected": True, "entitlement_recorded": True,
-                                             "proof": {"skipped": True}})
+                                             "proof": {"ok": True, "replied": "BOSS_OK"}})
                 if self.path == "/v1/setup/model":
                     outer.sources = [item for item in outer.sources
                                      if item.get("source_id") != "setup-custom"]

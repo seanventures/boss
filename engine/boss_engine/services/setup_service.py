@@ -148,7 +148,18 @@ _LIVE_MODEL_PROBE_DENIAL = (
 
 
 def coding_agent_live_proof_available(settings: Settings) -> bool:
-    """Only editions with a governed CLI proof path may spend a live model turn."""
+    """Every edition proves a coding agent with one live turn before calling it connected.
+
+    Community used to skip the proof because the turn was not reserved or receipted — so a
+    wrong Claude credential (on boss-1, something other than the setup token had been pasted)
+    was "connected" and surfaced hours later as "401 Invalid bearer token" inside a workflow.
+    Community now runs the proof through `governed_proof`: budget reserved and receipt opened,
+    both committed, before the turn; settled at its actual cost after.
+    """
+    return True
+
+
+def _edition_is_paid(settings: Settings) -> bool:
     edition = str(getattr(settings, "boss_edition", "community") or "community")
     return edition.strip().lower() in _PAID_EDITIONS
 
@@ -521,6 +532,28 @@ class SecretFallbackNotAccepted(SetupError):
         self.backend = backend
 
 
+def engine_login_states(connection, project_id: str) -> dict[str, str]:
+    """{engine: "rejected"} for each coding agent whose last model call had its login rejected.
+
+    A subscription whose stored credential Claude rejects stayed green "Connected" in Setup
+    while every discovery stage failed with 401. Governed calls now record the outcome on the
+    model source (model_failures.mark_login); this reads it back for the engines that use them.
+    """
+    from .cli_harness import BUILTIN_CLI_HARNESSES
+
+    by_source = {spec.entitlement_source_id: name for name, spec in BUILTIN_CLI_HARNESSES.items()
+                 if spec.entitlement_source_id}
+    if not by_source:
+        return {}
+    rows = connection.execute(
+        text("SELECT source_id, observed_capacity->>'credential_state' AS state "
+             "FROM entitlement_sources WHERE project_id = :p AND source_id = ANY(:ids)"),
+        {"p": project_id, "ids": list(by_source)},
+    ).mappings().all()
+    return {by_source[row["source_id"]]: row["state"] for row in rows
+            if row["state"] == "rejected"}
+
+
 def store_coding_agent_credential(
     connection, settings: Settings, project_id: str, provider: str, credential: str, *,
     actor: str = "ceo", accept_database_fallback: bool = False,
@@ -624,6 +657,10 @@ def store_coding_agent_credential(
         emit_event(connection, project_id, "secret.fallback_accepted", actor,
                    "secret_ref", stored["secret_ref_id"],
                    {"backend": backend, "key": key, "provider": provider})
+    # A new credential replaces whatever was rejected; Setup stops showing it as broken.
+    from .model_failures import clear_login_state
+
+    clear_login_state(connection, project_id, spec.entitlement_source_id)
     return {"ok": True, "provider": provider, "key": key,
             "backend": stored["backend"], "ref_key": stored["ref_key"],
             "fingerprint": stored["fingerprint"], "raw_secret_stored": False,
@@ -673,6 +710,71 @@ def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> 
     }
 
 
+#: The most a connection proof may reserve; one trivial turn costs a fraction of this.
+PROOF_ESTIMATE_USD_MICROS = 50_000
+
+
+def governed_proof(engine, settings: Settings, project_id: str, provider: str, actor: str,
+                   prove=None) -> dict[str, Any]:
+    """`prove_coding_agent`, spent only after its reservation and receipt commit.
+
+    A proof is one real model turn. On its own committed connection, before the turn: a budget
+    reservation (never above the per-minute cap, so it can be granted) and an in-progress
+    receipt. After the turn: the receipt succeeds or fails and the reservation settles at the
+    actual cost or is released. A refused budget makes no call. `prove` is injectable for tests.
+    """
+    import math
+    import uuid
+
+    from .budget import BudgetGovernor
+    from .receipts import ReceiptService
+
+    budget, receipts = BudgetGovernor(settings), ReceiptService()
+    prove = prove or (lambda: prove_coding_agent(settings, provider))
+
+    def open_spend(connection):
+        burst = int(budget._burst_cap(connection, project_id) or 0)
+        amount = min(PROOF_ESTIMATE_USD_MICROS, burst) if burst > 0 else PROOF_ESTIMATE_USD_MICROS
+        reserved = budget.reserve(connection, project_id, "model", amount,
+                                  f"Connection proof for {provider}", 15, risk_tier=1)
+        if reserved.get("status") != "reserved":
+            return {"refused": reserved.get("message") or "Budget reservation denied."}
+        scope = connection.execute(
+            text("SELECT w.org_id, p.workspace_id FROM projects p "
+                 "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
+            {"p": project_id}).mappings().one()
+        receipt, _ = receipts.create_or_reuse(
+            connection, scope["org_id"], scope["workspace_id"], project_id,
+            f"setup-proof:{provider}:{uuid.uuid4().hex[:16]}", "model.connection_proof",
+            {"project_id": project_id, "provider": provider},
+            {"provider": provider, "actor": actor})
+        return {"reservation_id": reserved["reservation_id"], "receipt_id": receipt["id"],
+                "amount": amount}
+
+    with engine.begin() as connection:
+        spend = open_spend(connection)
+    if spend.get("refused"):
+        return {"ok": False, "error": spend["refused"], "budget_refused": True}
+    try:
+        proof = prove()
+    except Exception as exc:  # noqa: BLE001 — recorded below, then reported
+        proof = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    with engine.begin() as connection:
+        if proof.get("ok"):
+            receipts.mark_succeeded(connection, spend["receipt_id"], f"{provider}:proof",
+                                    {"replied": str(proof.get("replied") or "")[:120]})
+            budget.settle(connection, project_id, spend["reservation_id"], spend["receipt_id"],
+                          "model", provider, spend["amount"],
+                          int(proof.get("cost_usd_micros") or 0))
+        else:
+            receipts.mark_failed(connection, spend["receipt_id"],
+                                 {"message": str(proof.get("error") or "")[:500]})
+            budget.release(connection, project_id, spend["reservation_id"],
+                           "Connection proof did not complete a turn.")
+    proof["receipt_id"] = spend["receipt_id"]
+    return proof
+
+
 def connect_coding_agent(
     connection: Connection, settings: Settings, project_id: str, provider: str, *,
     actor: str = "ceo", prove: bool = True,
@@ -688,13 +790,6 @@ def connect_coding_agent(
     different next steps, and both are more useful than a stored setting that fails at build
     time an hour later.
     """
-    if prove and not coding_agent_live_proof_available(settings):
-        raise SetupError(
-            "Live coding-agent proof is paused in Community until its model turn has a "
-            "budget reservation, worker lease, and cost receipt. Use prove=false to record "
-            "a CLI that permits an unverified connection; the first governed job will "
-            "verify it."
-        )
     from .cli_harness import GenericCliCodeAgent, detect, load_specs
 
     spec = load_specs(settings).get(provider)
@@ -726,8 +821,28 @@ def connect_coding_agent(
                 f"({restored.get('reason') or 'no stored credential for this install'})")
         found = detect(spec)
 
-    proof = {"ok": True, "skipped": True} if not prove else prove_coding_agent(settings, provider)
+    if not prove:
+        proof = {"ok": True, "skipped": True}
+    elif _edition_is_paid(settings):
+        proof = prove_coding_agent(settings, provider)
+    else:
+        engine = getattr(connection, "engine", None)
+        if engine is None:
+            raise SetupError("the connection proof needs its own database connection.")
+        proof = governed_proof(engine, settings, project_id, provider, actor)
     if not proof.get("ok"):
+        from .model_failures import explain, is_login_rejected, mark_login
+
+        if is_login_rejected(proof.get("error")):
+            # Setup shows this subscription as broken until a working credential replaces it.
+            mark_login(connection, project_id, spec.entitlement_source_id, rejected=True)
+            said = explain(proof.get("error"), source_id=spec.entitlement_source_id)
+            raise SetupError(f"{said['headline']} {said['action']} BOSS checked it with one "
+                             "trivial turn, and it is not connected.")
+        if proof.get("budget_refused"):
+            raise SetupError(f"BOSS could not check the {provider} connection: the budget "
+                             f"refused its one test turn ({proof.get('error')}). Try again "
+                             "in a minute.")
         raise SetupError(
             f"the {provider} CLI is signed in but could not complete a turn: "
             f"{proof.get('error')}. Signed in is not the same as working — check the "

@@ -30,3 +30,6 @@ tmp/
 .DS_Store
 .idea/
 .vscode/
+
+# The installed release record (written by the installer; not a local change)
+.boss-release
