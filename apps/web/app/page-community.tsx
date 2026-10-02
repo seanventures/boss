@@ -1087,7 +1087,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("overview") ? (
         <section data-area="overview" aria-label="Ask BOSS">
           <AskBossHero projectId={activeProjectId} actor={activeActorId}
-            orgId={activeOrgId} researchAvailable={false} />
+            orgId={activeOrgId} deploymentAvailable={false} />
         </section>
         ) : null}
 
@@ -5358,7 +5358,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             discoveries={discoveryFeed.items}
             apiReachable={discoveryFeed.apiReachable}
             initialDiscoveryId={requestedDiscovery}
-            researchAvailable={false}
           />
         </section>
         ) : null}

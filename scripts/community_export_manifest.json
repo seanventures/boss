@@ -68,7 +68,8 @@
     "docs/product/TRACEABILITY.community.md",
     "README.community.md",
     "CONTRIBUTING.community.md",
-    "Makefile.community"
+    "Makefile.community",
+    ".gitignore.community"
   ],
   "exclude": [
     "apps/account_connect/",
@@ -204,7 +205,7 @@
   "test_conftest_export_rewrite": {
     "source": "apps/api/tests/conftest-community.py",
     "destination": "apps/api/tests/conftest.py",
-    "sha256": "0a5f862c88c27a4cda7122a110aebefca6e40ceba9455a241caa5168699624cc"
+    "sha256": "56693f05a9fc65ea07fc810007e8ee12927b3c7635c4be71896ce63a02054182"
   },
   "package_export_rewrite": {
     "path": "packages/api-client/package.json",
@@ -215,12 +216,12 @@
   "page_export_rewrite": {
     "source": "apps/web/app/page-community.tsx",
     "destination": "apps/web/app/page.tsx",
-    "sha256": "04a394cf61c39740c569b20a50b912edf9becdab25558dcba7691cc39c9aff60"
+    "sha256": "67eaa3b1e9acdfbf54589e2ea58ef47e08a9568f5e81469cc6bddb79ed6f0623"
   },
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "d2d218c0fc0bbd356191ab1470118d472e0a7a1c2d1c48eb3cdc4eebad93cbdc"
+    "sha256": "d446e624864cb653e75c24cce12412a015feaa40e44f58035d8f5c7ac88e6503"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
@@ -230,7 +231,12 @@
   "makefile_export_rewrite": {
     "source": "Makefile.community",
     "destination": "Makefile",
-    "sha256": "d4bcebe859b649439944333829ff59aa15f2e5cfd1f90fe4ea1b810298a6cecb"
+    "sha256": "3fc38bd50aae1f926fb250b9d2e59660577687a7747747933b58ad17191fae5b"
+  },
+  "gitignore_export_rewrite": {
+    "source": ".gitignore.community",
+    "destination": ".gitignore",
+    "sha256": "7eb2047a15a578dc3bdcdfb4c4da6ed3df843418de011c46b0c77dcafdf316f6"
   },
   "schema_export_rewrite": {
     "source": "db/schema.community.sql",
@@ -240,7 +246,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "b5dd71caf38b2c18d8e7885178f063ca141a7e991d83c324aed5d44a004094a2"
+    "sha256": "61194c804f9160b53694c9d6445ce85a73bedf19a5b4e13dcbbb63163c1b7337"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
@@ -275,8 +281,8 @@
   ],
   "main_export_rewrite": {
     "path": "apps/api/app/main.py",
-    "source_sha256": "60035463248d270279739889539bf8f89e3e26f2dddd80d0bf11468a46fd5544",
-    "output_sha256": "e654425e65e60d208142c71162f72e423305885789d303d56154560b146521ba"
+    "source_sha256": "f612f6d2cdc83aeb8d032a1e4cccb64fc5515f4e6c4a8ab1fce4b2b658502371",
+    "output_sha256": "f6fb7d3db178d7a4283b66e348a2e229eff5c1a341f05995e4db5f134dabea77"
   },
   "reviewed_notice_sha256": {
     "THIRD-PARTY-NOTICES.md": "a9722d7d3c861b02eddae4ead71beaf7a1ff88b7d9fbe31c0374d3d23aeb9191",

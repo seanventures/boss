@@ -120,7 +120,7 @@ The engine registry has 106 tools: 61 read and 45 write. Examples:
 
 | Tool or area | Community behavior |
 |---|---|
-| `create_discovery` | Stays in the registry for compatibility, but Community refuses new Discovery research until its model calls use durable job leases, budget reservations, and reconciled receipts. The API's Discovery start and deepen routes return 503 for authorized callers while this release gate is open. |
+| `create_discovery` | Queues a governed `discovery.run` job: a worker leases it, and each research stage is budget-reserved, leased on the Claude Code subscription, and receipted. Without a usable Claude Code subscription the job's first stage is refused and the discovery fails with that reason; nothing is spent. |
 | Source tools and pull request reads | Accept a run ID from the session project or an active repository binding in that project. |
 | `read_logs` | Returns only project-tagged captured logs. |
 | Arbitrary URL probes | Unavailable until destinations can be verified against a project network policy. |
@@ -189,11 +189,11 @@ How the bridge constrains each call:
 
 ## Operation coverage
 
-The operation inventory is generated from each edition's mounted `app.openapi()` and keyed by **method plus path**, because FastAPI's automatic operation IDs are duplicated on a few multi-method routes. Run `python scripts/audit_mcp_api_parity.py --check` to verify [`mcp-api-capability-matrix.json`](mcp-api-capability-matrix.json). At this revision it accounts for all **993 Community** and **1,034 Enterprise** operations:
+The operation inventory is generated from each edition's mounted `app.openapi()` and keyed by **method plus path**, because FastAPI's automatic operation IDs are duplicated on a few multi-method routes. Run `python scripts/audit_mcp_api_parity.py --check` to verify [`mcp-api-capability-matrix.json`](mcp-api-capability-matrix.json). At this revision it accounts for all **994 Community** and **1,035 Enterprise** operations:
 
 | Mounted edition | API policy eligible | Human confirmation required | Held for route safety work | Excluded from MCP |
 |---|---:|---:|---:|---:|
-| Community | 860 | 64 | 2 | 67 |
+| Community | 860 | 64 | 2 | 68 |
 | Paid-only additions | 39 | 0 | 2 | 0 |
 
 The public Community export can verify its mounted subset with `python scripts/audit_mcp_api_parity.py --check-community`.
@@ -258,7 +258,7 @@ The 2 held Community actions and two paid-only actions return `operator_only_una
 
 ### Excluded
 
-The 67 excluded Community routes are:
+The 68 excluded Community routes are:
 
 - internal worker and lease protocols
 - webhook and identity callbacks
@@ -273,11 +273,11 @@ Customer secret-management routes remain available through API permission checks
 
 | Community operations | Count |
 |---|---:|
-| JSON request body with named top-level fields in the mounted OpenAPI schema | **537** |
-| No JSON body | 456 |
-| Of the 537, Pydantic field handling | **453** |
-| Of the 537, pass-through fields that preserve existing handler coercion and status codes | **84** |
+| JSON request body with named top-level fields in the mounted OpenAPI schema | **533** |
+| No JSON body | 450 |
+| Of the 533, Pydantic field handling | **454** |
+| Of the 533, pass-through fields that preserve existing handler coercion and status codes | **79** |
 
-No Community JSON body remains loose at the top level. The 84 pass-through bodies help MCP clients construct requests, but their field types are not enforced by Pydantic, and some nested payloads remain intentionally flexible.
+No Community JSON body remains loose at the top level. The 79 pass-through bodies help MCP clients construct requests, but their field types are not enforced by Pydantic, and some nested payloads remain intentionally flexible.
 
 The matrix's `request_body_type_enforcement` field makes this distinction explicit. Its legacy `runtime_validated_input_schema` field describes the mounted field schema and does not guarantee field-type enforcement. The API handler and its policy checks remain authoritative.

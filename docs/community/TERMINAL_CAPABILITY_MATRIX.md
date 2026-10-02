@@ -9,12 +9,12 @@ This page maps the HTTP controls the Metatron terminal can reach, measured again
 
 | Contract | Total operations | `/v1/` operations | Addressable by `/op` | Outside `/op` |
 |---|---:|---:|---:|---|
-| Community (static snapshot) | **993** | **980** | **980** | **13** health, SAML, and SCIM protocol routes |
-| Enterprise (static snapshot) | **1,034** | **1,021** | **1,019** | 13 non-`/v1/` routes, plus 2 inbound webhook receivers |
+| Community (static snapshot) | **994** | **981** | **981** | **13** health, SAML, and SCIM protocol routes |
+| Enterprise (static snapshot) | **1,035** | **1,022** | **1,020** | 13 non-`/v1/` routes, plus 2 inbound webhook receivers |
 
 - In this repository, the Community contract is `api/openapi.yaml`. The Enterprise source keeps the same Community snapshot at `api/openapi.community.yaml` and its own contract at `api/openapi.yaml`.
 - Every Community `/v1/` operator operation has a unique stable operation ID and a JSON/path/query shape addressable by `/op`. The 13 protocol routes remain outside the authenticated `/v1/` operator command.
-- The two unaddressable Enterprise `/v1/` routes are inbound webhook receivers that require request-signature headers; they are not operator actions. All 1,034 static Enterprise operations have a unique `operationId`.
+- The two unaddressable Enterprise `/v1/` routes are inbound webhook receivers that require request-signature headers; they are not operator actions. All 1,035 static Enterprise operations have a unique `operationId`.
 - The terminal's stable method-and-path alias remains available even if a live server uses a different runtime ID.
 
 ## How the terminal maps operations
@@ -44,7 +44,7 @@ The terminal fetches `/v1/meta/api-catalog` and `/openapi.json` from the same AP
 | Core | 57 | Tasks, decisions, budget status, receipts and events |
 | Work | 57 | Workflow definitions, mappings, roadmap and portfolio work |
 | Models | 31 | Model gateway, entitlements and route decisions |
-| Knowledge | 28 | Artifacts, learning and search |
+| Knowledge | 29 | Artifacts, learning and search |
 | Delivery CI/CD | 23 | Pipeline and release controls |
 | Cloud | 20 | Edition status and configured cloud connections |
 | Meta | 19 | Capability catalog and API coverage |
@@ -55,7 +55,7 @@ The terminal fetches `/v1/meta/api-catalog` and `/openapi.json` from the same AP
 | Setup | 9 | Bootstrap and first-run setup |
 | Hardware | 7 | Local machine, connected places, and the hardware agent |
 | Identity | 5 | Identity provider catalog and configuration |
-| **Total** | **980** | All mounted `/v1/` operations are searchable by method/path/summary |
+| **Total** | **981** | All mounted `/v1/` operations are searchable by method/path/summary |
 
 The table classifies the static Community contract using the API catalog taxonomy. No Community snapshot operation falls into the catalog's “Other” domain. Live domain counts may differ by image and edition; `/ops` and `/coverage --json` read the running API.
 
@@ -96,7 +96,7 @@ For decisions, the API owns reviewer identity, role and risk checks, any require
 
 ## Verification and limits
 
-- `scripts/tests/test_metatron_tui.py` checks all 993 Community snapshot operations and verifies that every `/v1/` operation has a unique, addressable terminal alias. It also covers project discovery and selection, paged operation search, typed-body project defaults, parameter validation, duplicate FastAPI IDs, server-authenticated requests, and catalog-only route reporting.
+- `scripts/tests/test_metatron_tui.py` checks all 994 Community snapshot operations and verifies that every `/v1/` operation has a unique, addressable terminal alias. It also covers project discovery and selection, paged operation search, typed-body project defaults, parameter validation, duplicate FastAPI IDs, server-authenticated requests, and catalog-only route reporting.
 - `/coverage --json` (one-shot mode) enumerates every route from the *running* API's OpenAPI and catalog with `source`, `terminal_invokable`, `raw_api_invokable`, and `edition_policy_access`. The last field stays `unverified_server_enforced` until an actual authorized call is made.
 - A mounted route can still return an edition, role, budget, rollout, or approval denial. The TUI does not infer effective entitlements from OpenAPI.
 - Addressability through the API, TUI, and MCP is separate from proving every workflow on a clean installation. Live operator acceptance and any API behavior gaps are tracked as separate release evidence.

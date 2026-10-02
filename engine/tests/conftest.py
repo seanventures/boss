@@ -51,3 +51,24 @@ def entitlement_tables():
     one file is a helper that breaks the full run.
     """
     return create_entitlement_tables
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cli_model_catalog(monkeypatch):
+    """Never ask a real coding CLI for its model catalog during a test.
+
+    The product asks each CLI which models the signed-in account has, so on a machine with a
+    signed-in Codex or Claude every picker test would see that account instead of the list it
+    asserts on. This stands in for "what the CLI reported" — test data, not a product list.
+    A test about the readers themselves undoes it (`monkeypatch.undo()`).
+    """
+    from boss_engine.services import cli_harness
+
+    reported = {"claude_code": ("opus", "sonnet", "fable", "haiku"),
+                "codex": ("gpt-5.2-codex", "o3")}
+    monkeypatch.setattr(cli_harness, "_read_model_catalog",
+                        lambda spec: reported.get(spec.name, ()), raising=False)
+    monkeypatch.setattr(cli_harness, "_catalog_cache", {}, raising=False)

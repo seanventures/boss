@@ -135,7 +135,7 @@
 
   <section class="section section-flush" aria-label="BOSS in numbers">
     <div class="wrap numbers">
-      <div class="number"><b data-count="api">993</b><span>mounted API operations, all mapped for the terminal and MCP</span></div>
+      <div class="number"><b data-count="api">994</b><span>mounted API operations, all mapped for the terminal and MCP</span></div>
       <div class="number"><b>106</b><span>typed engine tools over MCP: 61 read, 45 write</span></div>
       <div class="number"><b>34</b><span>agent definitions and 3 panels seeded on first run</span></div>
       <div class="number"><b>5</b><span>example workflows built only from the public API</span></div>
@@ -243,7 +243,8 @@ api_write_operation({
           <li class="ok">PR and review packets on GitHub</li>
           <li class="ok">Browser and automated test evidence</li>
           <li class="part">Sandbox execution (local subprocess)</li>
-          <li class="part">Discovery research and live debugging (paused)</li>
+          <li class="part">Discovery research (governed job, needs Claude Code)</li>
+          <li class="part">Live debugging (paused)</li>
         </ul></div>
         <div class="feature-group"><h3>GitHub</h3><ul>
           <li class="ok">Project connection and repo binding</li>
@@ -449,7 +450,7 @@ export BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'</pre>
       <div>
         <div class="terminal">
           <div class="terminal-bar">
-            <span>Install v1.0-rc3</span>
+            <span>Install v1.0-rc4</span>
             <button class="copy" type="button" data-copy>Copy</button>
           </div>
 <pre data-copy-source>curl -fsSL https://boss.sean.network/install.sh | bash</pre>

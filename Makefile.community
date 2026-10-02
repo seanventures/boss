@@ -53,5 +53,8 @@ stop: .env docker-ready
 	$(COMPOSE) --profile web stop
 
 .env:
-	@printf '%s\n' 'BOSS is not installed in this checkout. Run ./install.sh --dir "$$PWD" first.' >&2
+	@printf '%s\n' 'BOSS is not installed in this checkout (no .env here).' \
+	  'If BOSS runs on a server, run this there, in its install directory:' \
+	  '  ssh -t user@your-server "cd ~/boss && make metatron"' \
+	  'To install BOSS on this machine instead: ./install.sh --dir "$$PWD"' >&2
 	@exit 1

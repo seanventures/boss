@@ -1,6 +1,6 @@
 # Features
 
-Everything in BOSS Community as of `v1.0-rc3`, grouped by area. Cloud and Enterprise capabilities are marked so the open-core boundary is explicit; the full v1 scope is tracked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md).
+Everything in BOSS Community as of `v1.0-rc4`, grouped by area. Cloud and Enterprise capabilities are marked so the open-core boundary is explicit; the full v1 scope is tracked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md).
 
 **Legend:** ✅ Stable · ◐ Preview: works today, still being hardened · ○ Planned · ✦ Cloud / Enterprise only
 
@@ -26,7 +26,7 @@ Everything in BOSS Community as of `v1.0-rc3`, grouped by area. Cloud and Enterp
 |---|---|
 | HTTP control-plane API (OpenAPI) | ✅ |
 | CLI | ✅ |
-| MCP server for agent clients | ◐ All 993 mounted Community operations are mapped: 860 use API policy, 64 need separate exact-request human confirmation, 2 remain held for route safety work, and 67 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
+| MCP server for agent clients | ◐ All 994 mounted Community operations are mapped: 860 use API policy, 64 need separate exact-request human confirmation, 2 remain held for route safety work, and 68 protocol/internal routes are excluded. See [MCP coverage](MCP.md). |
 | Self-hosted Mission Control console | ✅ |
 | API-first clients (`packages/api-client`) | ✅ |
 
@@ -68,7 +68,7 @@ Community installs and runs without Plane, an ops token, or a private registry. 
 | Spec / architecture / implement / test phases | ✅ |
 | Sandbox execution plane | ◐ Local subprocess is the Community coding path. Firecracker/microVM claims are **frozen** (`BOSS_MICROVM_CLAIMS_FROZEN=true`). The in-repo Go S1 sandbox is a fail-closed scaffold: not live, not GA. Retained sandbox inspection requires project access; hold and delete controls stay disabled until their budget, approval, rollback, and receipt paths are complete. |
 | Evidence-backed completion | ✅ |
-| Discovery web research | ◐ Saved dossiers are readable. New and deeper research is paused until leased model jobs and spend reconciliation are complete. A workflow's research step is recorded as skipped, with the reason, and the run continues to the panel. |
+| Discovery web research | ◐ Runs as a governed worker job: each research stage is budget-reserved, leased and receipted, and a retry replays stages already paid for instead of calling them again. Uses the Claude Code subscription; a local model cannot do web research. A workflow's research step runs it when that subscription can be used, and otherwise is recorded as skipped with the reason and a `workflow.research_skipped` event, and the run goes on to the panel. |
 | Live debugging investigations | ◐ Past results remain readable. New Claude CLI investigations and legacy queued execution are paused until leased, budgeted model calls and governed host/database effects are complete. |
 | Factory quality pass after green verify | ◐ One improve pass when UI/UX evidence is thin. Frozen tests stay frozen, and a failed pass restores the last green implementation. Unknown JTBD / `a11y_violations` stay `not_scored`. Stays partial. |
 | PR / review packets (with GitHub) | ✅ |

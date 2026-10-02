@@ -14,6 +14,7 @@ otherwise have to learn from the source.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path as pathlib_Path
 import urllib.error
 import urllib.request
@@ -86,16 +87,17 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     # A KEY THAT IS NOT FOR BUILDING. Jev answers multiple-choice decisions and cannot write
     # code, so it must never become the model a build runs on — but this list is where an
     # operator looks for "where do I paste a key", and leaving it out sent them hunting. Listed
-    # with its own kind. Key proof stays paused. A workflow decision spends only
-    # through the committed reservation, lease, and receipt path.
+    # with its own kind. Its key proof and every decision spend only through the committed
+    # reservation, lease, and receipt path (BOSS-451).
     "typesafe": {
         "label": "TypeSafe Jev — workflow decisions only",
         "api": "typesafe",
         "kind": "decision",
         "key_url": "https://console.typesafe.ai/keys",
         "note": "Answers the multiple-choice decisions in workflows, billed to your own TypeSafe "
-                "account. Key proof is still paused by BOSS-451. A workflow decision spends "
-                "only through a committed reservation, lease, and receipt. It does not write code.",
+                "account. BOSS checks the key with one tiny decision before saving it; that "
+                "check, like every decision, is reserved against the budget and receipted. "
+                "It does not write code.",
     },
     # SUBSCRIPTIONS ARE NOT KEYS, and BOSS already refuses to pretend otherwise: a subscription
     # source whose kind is an official CLI must be authenticated through a connection session
@@ -146,7 +148,18 @@ _LIVE_MODEL_PROBE_DENIAL = (
 
 
 def coding_agent_live_proof_available(settings: Settings) -> bool:
-    """Only editions with a governed CLI proof path may spend a live model turn."""
+    """Every edition proves a coding agent with one live turn before calling it connected.
+
+    Community used to skip the proof because the turn was not reserved or receipted — so a
+    wrong Claude credential (on boss-1, something other than the setup token had been pasted)
+    was "connected" and surfaced hours later as "401 Invalid bearer token" inside a workflow.
+    Community now runs the proof through `governed_proof`: budget reserved and receipt opened,
+    both committed, before the turn; settled at its actual cost after.
+    """
+    return True
+
+
+def _edition_is_paid(settings: Settings) -> bool:
     edition = str(getattr(settings, "boss_edition", "community") or "community")
     return edition.strip().lower() in _PAID_EDITIONS
 
@@ -519,6 +532,28 @@ class SecretFallbackNotAccepted(SetupError):
         self.backend = backend
 
 
+def engine_login_states(connection, project_id: str) -> dict[str, str]:
+    """{engine: "rejected"} for each coding agent whose last model call had its login rejected.
+
+    A subscription whose stored credential Claude rejects stayed green "Connected" in Setup
+    while every discovery stage failed with 401. Governed calls now record the outcome on the
+    model source (model_failures.mark_login); this reads it back for the engines that use them.
+    """
+    from .cli_harness import BUILTIN_CLI_HARNESSES
+
+    by_source = {spec.entitlement_source_id: name for name, spec in BUILTIN_CLI_HARNESSES.items()
+                 if spec.entitlement_source_id}
+    if not by_source:
+        return {}
+    rows = connection.execute(
+        text("SELECT source_id, observed_capacity->>'credential_state' AS state "
+             "FROM entitlement_sources WHERE project_id = :p AND source_id = ANY(:ids)"),
+        {"p": project_id, "ids": list(by_source)},
+    ).mappings().all()
+    return {by_source[row["source_id"]]: row["state"] for row in rows
+            if row["state"] == "rejected"}
+
+
 def store_coding_agent_credential(
     connection, settings: Settings, project_id: str, provider: str, credential: str, *,
     actor: str = "ceo", accept_database_fallback: bool = False,
@@ -537,7 +572,9 @@ def store_coding_agent_credential(
     """
     from .cli_harness import SUBSCRIPTION_SECRET_SCOPE, load_specs
     from .core import emit_event
-    from .secret_backends import SecretUnavailable, backend_for, default_secret_backend
+    from .secret_backends import (
+        database_key_is_external, default_secret_backend, operator_chosen_backend,
+    )
     from .secrets_service import put_secret
 
     spec = load_specs(settings).get(provider)
@@ -552,6 +589,13 @@ def store_coding_agent_credential(
     credential = (credential or "").strip()
     if not credential:
         raise SetupError("credential is required.")
+    if spec.token_format and not re.match(spec.token_format, credential):
+        # Never echo it, its length or any part of it: a wrong paste is often a password.
+        raise SetupError(
+            f"that is not a {provider} token — `claude setup-token` prints a long value that "
+            "starts with sk-ant-. Copy that whole value and paste it again. Nothing was stored."
+            if provider == "claude_code" else
+            f"that is not a {provider} token. Nothing was stored.")
     if spec.auth_file_name.endswith(".json"):
         try:
             json.loads(credential)
@@ -559,27 +603,31 @@ def store_coding_agent_credential(
             # Malformed is all that is safe to say; the text is a live credential.
             raise SetupError(f"the {provider} credential is not valid JSON.") from None
 
-    # A Claude setup token is an operator-supplied session. It stays in the local
-    # secret store. Postgres would put it in the next backup dump, so there is no
-    # database fallback for this provider.
-    if provider == "claude_code":
-        try:
-            backend_for("local_vault", settings)
-        except SecretUnavailable as exc:
-            raise SetupError(
-                "Claude setup-token import stores only in the local secret store, "
-                "and that store is not available on this install. The token was not "
-                f"stored. {exc}"
-            ) from None
-        backend = "local_vault"
-    else:
-        backend = default_secret_backend(settings)
+    # A Claude setup token is a long-lived credential for a whole subscription, so it never sits
+    # in Postgres in a form a database backup could use. That was enforced as "local_vault
+    # only" — a store no installer configures — and later as "never the database", which made
+    # an install that CHOSE the database unable to connect Claude at all.
+    #
+    # What a backup can use is the deciding fact. The database store encrypts every value; the
+    # question is where its key is. With BOSS_KMS_MASTER_KEY in .env (the installer writes one),
+    # Postgres holds only ciphertext and a dump is not a key compromise, so the token may go
+    # there. With the key provisioned INSIDE Postgres, a dump carries both — refused.
+    backend = default_secret_backend(settings)
+    if provider == "claude_code" and backend == "database" and not database_key_is_external():
+        raise SetupError(
+            "Claude setup-token import needs the database store's key to live outside the "
+            "database (BOSS_KMS_MASTER_KEY in .env), and on this install it does not, so a "
+            "database backup would carry a usable token. Re-run the installer — it writes the "
+            "key — or install with --secret-store infisical. The token was not stored.")
     # ASK BEFORE FALLING BACK TO POSTGRES. `default_secret_backend` takes the best store the
     # installation has and quietly drops to `database` when it has none — which is right for
     # not blocking a first run, and wrong as a silent default for a live subscription
     # credential. The operator gets told once, in the words of this module's own comment: the
     # database is not a good place for a token.
-    if provider != "claude_code" and backend == "database" and not accept_database_fallback:
+    # Asked only when BOSS FELL BACK to the database. An operator who chose "database" at the
+    # installer's prompt has already answered this question.
+    if (provider != "claude_code" and backend == "database" and not accept_database_fallback
+            and operator_chosen_backend() != "database"):
         raise SecretFallbackNotAccepted(
             backend,
             "this installation has no secret store configured, so the credential would go "
@@ -609,6 +657,10 @@ def store_coding_agent_credential(
         emit_event(connection, project_id, "secret.fallback_accepted", actor,
                    "secret_ref", stored["secret_ref_id"],
                    {"backend": backend, "key": key, "provider": provider})
+    # A new credential replaces whatever was rejected; Setup stops showing it as broken.
+    from .model_failures import clear_login_state
+
+    clear_login_state(connection, project_id, spec.entitlement_source_id)
     return {"ok": True, "provider": provider, "key": key,
             "backend": stored["backend"], "ref_key": stored["ref_key"],
             "fingerprint": stored["fingerprint"], "raw_secret_stored": False,
@@ -658,6 +710,71 @@ def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> 
     }
 
 
+#: The most a connection proof may reserve; one trivial turn costs a fraction of this.
+PROOF_ESTIMATE_USD_MICROS = 50_000
+
+
+def governed_proof(engine, settings: Settings, project_id: str, provider: str, actor: str,
+                   prove=None) -> dict[str, Any]:
+    """`prove_coding_agent`, spent only after its reservation and receipt commit.
+
+    A proof is one real model turn. On its own committed connection, before the turn: a budget
+    reservation (never above the per-minute cap, so it can be granted) and an in-progress
+    receipt. After the turn: the receipt succeeds or fails and the reservation settles at the
+    actual cost or is released. A refused budget makes no call. `prove` is injectable for tests.
+    """
+    import uuid
+
+    from .budget import BudgetGovernor
+    from .receipts import ReceiptService
+
+    budget, receipts = BudgetGovernor(settings), ReceiptService()
+    prove = prove or (lambda: prove_coding_agent(settings, provider))
+
+    # The reservation and the in-progress receipt commit on their own connection BEFORE the
+    # turn, in this function, so the same function visibly closes the receipt it opened.
+    with engine.begin() as connection:
+        burst = int(budget._burst_cap(connection, project_id) or 0)
+        amount = min(PROOF_ESTIMATE_USD_MICROS, burst) if burst > 0 else PROOF_ESTIMATE_USD_MICROS
+        reserved = budget.reserve(connection, project_id, "model", amount,
+                                  f"Connection proof for {provider}", 15, risk_tier=1)
+        refused = None
+        if reserved.get("status") != "reserved":
+            refused = reserved.get("message") or "Budget reservation denied."
+        else:
+            scope = connection.execute(
+                text("SELECT w.org_id, p.workspace_id FROM projects p "
+                     "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
+                {"p": project_id}).mappings().one()
+            receipt, _ = receipts.create_or_reuse(
+                connection, scope["org_id"], scope["workspace_id"], project_id,
+                f"setup-proof:{provider}:{uuid.uuid4().hex[:16]}", "model.connection_proof",
+                {"project_id": project_id, "provider": provider},
+                {"provider": provider, "actor": actor})
+            spend = {"reservation_id": reserved["reservation_id"], "receipt_id": receipt["id"],
+                     "amount": amount}
+    if refused is not None:
+        return {"ok": False, "error": refused, "budget_refused": True}
+    try:
+        proof = prove()
+    except Exception as exc:  # noqa: BLE001 — recorded below, then reported
+        proof = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    with engine.begin() as connection:
+        if proof.get("ok"):
+            receipts.mark_succeeded(connection, spend["receipt_id"], f"{provider}:proof",
+                                    {"replied": str(proof.get("replied") or "")[:120]})
+            budget.settle(connection, project_id, spend["reservation_id"], spend["receipt_id"],
+                          "model", provider, spend["amount"],
+                          int(proof.get("cost_usd_micros") or 0))
+        else:
+            receipts.mark_failed(connection, spend["receipt_id"],
+                                 {"message": str(proof.get("error") or "")[:500]})
+            budget.release(connection, project_id, spend["reservation_id"],
+                           "Connection proof did not complete a turn.")
+    proof["receipt_id"] = spend["receipt_id"]
+    return proof
+
+
 def connect_coding_agent(
     connection: Connection, settings: Settings, project_id: str, provider: str, *,
     actor: str = "ceo", prove: bool = True,
@@ -673,13 +790,6 @@ def connect_coding_agent(
     different next steps, and both are more useful than a stored setting that fails at build
     time an hour later.
     """
-    if prove and not coding_agent_live_proof_available(settings):
-        raise SetupError(
-            "Live coding-agent proof is paused in Community until its model turn has a "
-            "budget reservation, worker lease, and cost receipt. Use prove=false to record "
-            "a CLI that permits an unverified connection; the first governed job will "
-            "verify it."
-        )
     from .cli_harness import GenericCliCodeAgent, detect, load_specs
 
     spec = load_specs(settings).get(provider)
@@ -711,8 +821,33 @@ def connect_coding_agent(
                 f"({restored.get('reason') or 'no stored credential for this install'})")
         found = detect(spec)
 
-    proof = {"ok": True, "skipped": True} if not prove else prove_coding_agent(settings, provider)
+    if not prove:
+        proof = {"ok": True, "skipped": True}
+    elif _edition_is_paid(settings):
+        proof = prove_coding_agent(settings, provider)
+    else:
+        engine = getattr(connection, "engine", None)
+        if engine is None:
+            raise SetupError("the connection proof needs its own database connection.")
+        proof = governed_proof(engine, settings, project_id, provider, actor)
     if not proof.get("ok"):
+        from .model_failures import explain, is_login_rejected, mark_login
+
+        if is_login_rejected(proof.get("error")):
+            # Setup shows this subscription as broken until a working credential replaces it.
+            # On ITS OWN connection: the refusal below rolls this request's transaction back,
+            # and with it a mark written there — Setup kept showing the rejected login green.
+            engine = getattr(connection, "engine", None)
+            if engine is not None:
+                with engine.begin() as own:
+                    mark_login(own, project_id, spec.entitlement_source_id, rejected=True)
+            said = explain(proof.get("error"), source_id=spec.entitlement_source_id)
+            raise SetupError(f"{said['headline']} {said['action']} BOSS checked it with one "
+                             "trivial turn, and it is not connected.")
+        if proof.get("budget_refused"):
+            raise SetupError(f"BOSS could not check the {provider} connection: the budget "
+                             f"refused its one test turn ({proof.get('error')}). Try again "
+                             "in a minute.")
         raise SetupError(
             f"the {provider} CLI is signed in but could not complete a turn: "
             f"{proof.get('error')}. Signed in is not the same as working — check the "
@@ -720,7 +855,7 @@ def connect_coding_agent(
 
     record: dict[str, Any] = {"connected": True, "entitlement_recorded": False}
     if spec.entitlement_source_id:
-        from .entitlements import EntitlementBrokerService
+        from .entitlements import WORKSPACE_OPERATOR_ID, EntitlementBrokerService
 
         payload = {
             "project_id": project_id,
@@ -728,8 +863,12 @@ def connect_coding_agent(
             "source_id": spec.entitlement_source_id,
             "source_kind": "official_cli",
             "entitlement_kind": "subscription",
-            "owner_type": "operator",
-            "owner_id": actor,
+            # THE WORKSPACE OPERATOR'S, whoever pressed Connect — the same owner the seed gives
+            # every subscription. Stamping the requesting principal made it personally owned by
+            # the console's own identity ("executive_console") on boss-1, and every discovery
+            # and decision a member ("ceo") started was refused as pooling it.
+            "owner_type": "workspace_operator",
+            "owner_id": WORKSPACE_OPERATOR_ID,
             # A subscription seat is the operator's own. Saying so is what stops it being
             # handed to multi-tenant work it is not licensed for.
             "multi_tenant_allowed": False,
@@ -1135,6 +1274,8 @@ def setup_status(connection: Connection, settings: Settings, project_id: str) ->
 
 # --- The decision model --------------------------------------------------------------------- #
 DECISION_KEY_NAME = "TYPESAFE_API_KEY"
+#: TypeSafe's own model source (packages/specpack/models/providers.yaml).
+TYPESAFE_SOURCE_ID = "typesafe_jev"
 
 
 class DecisionModelGovernanceHold(SetupError):
@@ -1144,37 +1285,181 @@ class DecisionModelGovernanceHold(SetupError):
 def decision_model_status(connection, settings: Settings, project_id: str) -> dict[str, Any]:
     """Which backend decides on this project, and whether the Jev key it would need is held.
 
-    Only the fact of a key, never the key: this answer goes to a browser.
+    Only the fact of a key, never the key: this answer goes to a browser. Decisions run on the
+    governed path (BOSS-451): each provider attempt commits a budget reservation, a lease and
+    a receipt before the call, so execution is available whenever a model is.
     """
     from . import project_settings
-    from .typed_decisions import GOVERNANCE_HOLD, _typesafe_key
+    from .typed_decisions import _typesafe_key, typesafe_decides
 
     effective = project_settings.applied(connection, project_id, settings)
-    backend = (effective.decision_backend or "claude").strip().lower()
+    backend = (effective.decision_backend or "typesafe").strip().lower()
     has_key = bool(_typesafe_key(effective))
+    deciding = "typesafe" if typesafe_decides(effective) else "claude"
     return {
         "backend": backend,
         "claude_model": effective.decision_model or "",
         "typesafe_key": has_key,
         "typesafe_model": effective.typesafe_model,
-        "effective_backend": "paused",
-        "configured_backend": ("typesafe" if backend == "typesafe" and has_key else "claude"),
-        "execution_available": False,
-        "hold_reason": GOVERNANCE_HOLD,
-        # Key proof stays paused. This does not describe a workflow attempt, which
-        # spends only after its reservation, lease, and receipt commit.
+        "effective_backend": deciding,
+        "configured_backend": deciding,
+        "execution_available": True,
+        "hold_reason": "",
         "worker_fallback": "the install's API model",
         "key_url": "https://console.typesafe.ai",
     }
+
+
+#: The one decision a key proof asks. Tiny on purpose: a few hundred input tokens.
+_KEY_PROOF_BINDING = {"typed_decision": {
+    "question": "Is this a connection check?",
+    "options": {"yes": "It is.", "no": "It is not."},
+}}
 
 
 def store_decision_key(
     connection, settings: Settings, project_id: str, api_key: str, *,
     actor: str = "setup", accept_database_fallback: bool = False,
 ) -> dict[str, Any]:
-    """Refuse live key proof until it has committed spend and receipt evidence."""
+    """Prove a TypeSafe key with one governed decision, store it, and switch decisions to Jev.
+
+    BOSS-451 step 5. The proof is a billed provider call, so it goes through the same path as
+    a workflow decision: a budget reservation, a job and model lease, and an in-progress receipt
+    commit on their own connections BEFORE TypeSafe is called, and the receipt is settled with
+    the actual cost after. A failed key write or a crash after the call can no longer erase the
+    evidence that the call was made — which is what the proof inside this request's transaction
+    used to do.
+
+    Where the key will be stored is settled FIRST, so nobody pays for a proof of a key that is
+    then refused for having nowhere to go.
+    """
+    import uuid
+
+    from . import project_settings
+    from .cli_harness import SUBSCRIPTION_SECRET_SCOPE
+    from .core import emit_event
+    from .secret_backends import default_secret_backend, operator_chosen_backend
+    from .secrets_service import put_secret
+    from .typed_decision_spend import (
+        TypedDecisionReconciliationRequired,
+        TypedDecisionSpend,
+        TypedDecisionSpendError,
+    )
     from .typed_decisions import GOVERNANCE_HOLD
 
-    if not (api_key or "").strip():
+    api_key = (api_key or "").strip()
+    if not api_key:
         raise SetupError("paste the API key from console.typesafe.ai.")
-    raise DecisionModelGovernanceHold(GOVERNANCE_HOLD)
+
+    backend = default_secret_backend(settings)
+    if (backend == "database" and not accept_database_fallback
+            and operator_chosen_backend() != "database"):
+        raise SecretFallbackNotAccepted(
+            backend,
+            "this installation has no secret store configured, so the key would go into BOSS's "
+            "Postgres database. That works and survives restarts, but anyone with the database "
+            "has the key. Set up a secret store, or re-send with accept_database_fallback=true "
+            "to store it there deliberately.")
+
+    engine = getattr(connection, "engine", None)
+    if engine is None:
+        # No way to commit the reservation and receipt apart from this request: no call.
+        raise DecisionModelGovernanceHold(GOVERNANCE_HOLD)
+
+    from .entitlements import EntitlementBrokerService
+    from .model_gateway import ModelGatewayService
+
+    gateway = ModelGatewayService(settings)
+
+    def keep(conn, name: str) -> dict[str, Any]:
+        """Store the key under `name` and make it the TypeSafe source's credential."""
+        stored = put_secret(
+            conn, settings, project_id=project_id, name=name, value=api_key,
+            secret_kind="api_token", backend=backend,
+            scope_id=SUBSCRIPTION_SECRET_SCOPE, actor=actor,
+        )
+        conn.execute(text("UPDATE secret_refs SET provider = 'typesafe' WHERE id = :id"),
+                     {"id": stored["secret_ref_id"]})
+        gateway.bind_credential_secret_ref(conn, project_id, TYPESAFE_SOURCE_ID,
+                                           stored["secret_ref_id"], actor=actor)
+        return stored
+
+    # THE KEY IS HELD AS A CANDIDATE WHILE IT IS PROVED. The proof's capacity lease is booked
+    # against TypeSafe's own source, and the gateway will only lease a paid source that has a
+    # credential bound — so the candidate is bound, on its own committed connection, for the
+    # length of the proof. A key that fails is revoked and the source goes back to exactly
+    # what it held before: a bad paste never replaces a working key.
+    with engine.begin() as held:
+        # An install upgraded from before TypeSafe had a source gets it here.
+        EntitlementBrokerService(settings).seed_default_sources(held, project_id, actor=actor)
+        previous = held.execute(text(
+            "SELECT credential_secret_ref_id, connection_ref, connection_status, status, "
+            "runtime_supported, observed_capacity FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = :s"),
+            {"p": project_id, "s": TYPESAFE_SOURCE_ID}).mappings().first()
+        candidate = keep(held, f"{DECISION_KEY_NAME}_CANDIDATE")
+
+    def forget_candidate() -> None:
+        with engine.begin() as held:
+            held.execute(text(
+                "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), "
+                "revoked_by = :a WHERE id = :id"),
+                {"a": actor, "id": candidate["secret_ref_id"]})
+            if previous is not None:
+                held.execute(text(
+                    "UPDATE entitlement_sources SET credential_secret_ref_id = :ref, "
+                    "connection_ref = :cref, connection_status = :cs, status = :st, "
+                    "runtime_supported = :rs, observed_capacity = CAST(:oc AS JSONB), "
+                    "updated_at = now() WHERE project_id = :p AND source_id = :s"),
+                    {"ref": previous["credential_secret_ref_id"],
+                     "cref": previous["connection_ref"], "cs": previous["connection_status"],
+                     "st": previous["status"], "rs": previous["runtime_supported"],
+                     "oc": json.dumps(previous["observed_capacity"] or {}),
+                     "p": project_id, "s": TYPESAFE_SOURCE_ID})
+
+    proving = settings.model_copy(update={
+        "decision_backend": "typesafe", "typesafe_api_key": api_key,
+        # The proof is of THIS key. A Claude second opinion would prove nothing about it.
+        "decision_fallback_below": 0.0,
+    })
+    spend = TypedDecisionSpend.for_runner(
+        proving, engine=engine, project_id=project_id, run_id="setup:typesafe-key",
+        step_id=f"key-proof-{uuid.uuid4().hex[:12]}", attempt=1, actor=actor,
+        worker_id=f"setup:{actor}"[:120],
+    )
+    try:
+        proof = spend.execute(proving, _KEY_PROOF_BINDING,
+                              "BOSS is checking that this key works.", fallback=False)
+    except TypedDecisionReconciliationRequired:
+        forget_candidate()
+        raise SetupError(
+            "TypeSafe did not answer in time. BOSS kept a record of the attempt so it can be "
+            "reconciled rather than charged twice; try again in a minute.") from None
+    except TypedDecisionSpendError as exc:
+        forget_candidate()
+        message = str(exc)
+        if " 401" in message:
+            raise SetupError("TypeSafe rejected that key — check it was copied whole.") from None
+        if "fund" in message.lower() or " 402" in message:
+            raise SetupError("the key is valid but the TypeSafe account has no credit. Add "
+                             "funds at console.typesafe.ai and try again.") from None
+        raise SetupError(f"could not check that key: {message[:200]}") from None
+    except BaseException:
+        forget_candidate()
+        raise
+
+    stored = keep(connection, DECISION_KEY_NAME)
+    connection.execute(text(
+        "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), revoked_by = :a "
+        "WHERE id = :id"), {"a": actor, "id": candidate["secret_ref_id"]})
+    project_settings.set_one(connection, project_id, "decision_backend", "typesafe", actor=actor)
+    emit_event(connection, project_id, "setup.decision_model_connected", actor,
+               "secret_ref", stored["secret_ref_id"],
+               {"backend": backend, "model": proof.get("model"),
+                "latency_ms": proof.get("latency_ms"), "receipt_id": proof.get("receipt_id")})
+    return {"ok": True, "backend": "typesafe", "model": proof.get("model"),
+            "latency_ms": proof.get("latency_ms"), "store": stored["backend"],
+            "fingerprint": stored["fingerprint"], "raw_secret_stored": False,
+            "receipt_id": proof.get("receipt_id"),
+            "cost_usd_micros": proof.get("cost_usd_micros"),
+            "fallback_accepted": backend == "database"}

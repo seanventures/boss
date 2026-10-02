@@ -476,6 +476,21 @@ def validate_manifest(manifest: dict) -> None:
             raise ValueError("makefile export source must be included")
         if makefile_rewrite["destination"] not in manifest["requires_split"]:
             raise ValueError("makefile export destination must be withheld for split")
+    gitignore_rewrite = manifest.get("gitignore_export_rewrite")
+    if gitignore_rewrite is not None:
+        if not isinstance(gitignore_rewrite, dict) or (
+            gitignore_rewrite.get("source") != ".gitignore.community"
+            or gitignore_rewrite.get("destination") != ".gitignore"
+        ):
+            raise ValueError("gitignore export rewrite requires the reviewed Community paths")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(gitignore_rewrite.get("sha256", ""))):
+            raise ValueError("gitignore export rewrite needs reviewed source sha256")
+        if not matching_rule(gitignore_rewrite["source"], manifest["include"]):
+            raise ValueError("gitignore export source must be included")
+        if matching_rule(gitignore_rewrite["destination"], manifest["include"]):
+            # The private ignore file names private build inputs; only the reviewed
+            # Community file is published under this name.
+            raise ValueError("private .gitignore must not be included")
     schema_rewrite = manifest.get("schema_export_rewrite")
     if schema_rewrite is not None:
         if not isinstance(schema_rewrite, dict) or (
@@ -1012,6 +1027,20 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
                 if not (blocker["kind"] == "requires-community-split" and blocker.get("path") == destination)
             ]
             makefile_rewrite_applied = True
+    gitignore_rewrite = manifest.get("gitignore_export_rewrite")
+    gitignore_rewrite_applied = False
+    if gitignore_rewrite:
+        source = gitignore_rewrite["source"]
+        destination = gitignore_rewrite["destination"]
+        if source not in selected:
+            blockers.append({"kind": "gitignore-export-community-source-withheld", "path": source})
+        elif destination in selected:
+            blockers.append({"kind": "gitignore-export-private-source-selected", "path": destination})
+        elif hashlib.sha256(selected[source]).hexdigest() != gitignore_rewrite["sha256"]:
+            blockers.append({"kind": "gitignore-export-source-changed", "path": source})
+        else:
+            selected[destination] = selected.pop(source)
+            gitignore_rewrite_applied = True
     schema_rewrite = manifest.get("schema_export_rewrite")
     schema_rewrite_applied = False
     if schema_rewrite:
@@ -1157,6 +1186,7 @@ def analyze(repo: Path, sha: str, manifest: dict) -> tuple[dict, dict[str, bytes
         "readme_export_rewrite_applied": readme_rewrite_applied,
         "contributing_export_rewrite_applied": contributing_rewrite_applied,
         "makefile_export_rewrite_applied": makefile_rewrite_applied,
+        "gitignore_export_rewrite_applied": gitignore_rewrite_applied,
         "main_export_rewrite_applied": main_rewrite_applied,
         "schema_export_rewrite_applied": schema_rewrite_applied,
         "openapi_export_rewrite_applied": openapi_rewrite_applied,

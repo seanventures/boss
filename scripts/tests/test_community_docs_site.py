@@ -69,5 +69,5 @@ def test_landing_page_links_resolve_and_count_is_redacted_on_export() -> None:
     import community_private_host as private_host
 
     public = private_host.redact_private_host("docs/landing/index.html", page.encode()).decode()
-    assert '<b data-count="api">982</b>' in public
-    assert "993" not in public
+    assert '<b data-count="api">983</b>' in public
+    assert "994" not in public

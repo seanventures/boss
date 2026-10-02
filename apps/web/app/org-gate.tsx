@@ -37,25 +37,43 @@ export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string
   );
 }
 
+/**
+ * A FULL PAGE LOAD INTO THE CONSOLE, NOT A CLIENT TRANSITION.
+ *
+ * `router.push` keeps the picker on screen until the whole console has rendered client-side —
+ * the URL does not even change until then — so pressing Enter looked like nothing happening for
+ * a long time, then the console appeared. Measured on a fresh install: a full load of
+ * /?org=org_boss is ~1.5s with the console's loading screen from the first moment; the
+ * transition from the picker had not finished after 55s in a background tab. A hard navigation
+ * streams the page and shows loading.tsx immediately.
+ */
+function openOrg(orgId: string, replace = false) {
+  const url = `/?org=${encodeURIComponent(orgId)}`;
+  if (replace) window.location.replace(url);
+  else window.location.assign(url);
+}
+
 export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
-  const router = useRouter();
   const params = useSearchParams();
   const [showOnboard, setShowOnboard] = useState(orgs.length === 0);
+  const [opening, setOpening] = useState<string | null>(null);
 
   // Returning users skip the picker (unless they explicitly chose to switch).
   useEffect(() => {
     if (params.get("pick") === "1") return;
     const stored = typeof window !== "undefined" ? window.localStorage.getItem(ORG_KEY) : null;
     if (stored && orgs.some((o) => o.org_id === stored)) {
-      router.replace(`/?org=${encodeURIComponent(stored)}`);
+      setOpening(stored);
+      openOrg(stored, true);
     }
-  }, [orgs, params, router]);
+  }, [orgs, params]);
 
   const enter = (orgId: string) => {
     try {
       window.localStorage.setItem(ORG_KEY, orgId);
     } catch {}
-    router.push(`/?org=${encodeURIComponent(orgId)}`);
+    setOpening(orgId);
+    openOrg(orgId);
   };
 
   return (
@@ -74,7 +92,8 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
 
         <div className="org-gate-grid">
           {orgs.map((o) => (
-            <button key={o.org_id} type="button" className="org-card" onClick={() => enter(o.org_id)}>
+            <button key={o.org_id} type="button" className="org-card" onClick={() => enter(o.org_id)}
+                    disabled={opening !== null} aria-busy={opening === o.org_id}>
               <span className="org-card-mark">{o.org_name.slice(0, 2).toUpperCase()}</span>
               <span className="org-card-body">
                 <span className="org-card-name">{o.org_name}</span>
@@ -83,7 +102,7 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
                 </span>
                 <span className="org-card-proj mono">{o.project_slug}</span>
               </span>
-              <span className="org-card-go">Enter →</span>
+              <span className="org-card-go">{opening === o.org_id ? "Opening…" : "Enter →"}</span>
             </button>
           ))}
           <button type="button" className="org-card org-card-add" onClick={() => setShowOnboard((v) => !v)}>

@@ -19,3 +19,7 @@ The `Docs site` workflow in `.github/workflows/pages.yml` only verifies the buil
 ## Installer pin
 
 The commit-pinned GitHub command in the installer guide names one release commit. Update that pin when a new release is cut.
+
+## Changes pushed to `main`
+
+A release replaces the repository's tree with an export from the BOSS source. Commits pushed to `main` between releases are imported into that source first, with their authors kept, and the release refuses to run while any are missing. Each release commit names its source with a `Private-source:` trailer.

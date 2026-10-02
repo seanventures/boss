@@ -143,7 +143,7 @@ KNOBS: dict[str, dict[str, Any]] = {
         "label": "Model for chat and meetings",
         "help": "Which model answers in the console, agent chat and panels. Empty means the "
                 "engine's own default.",
-        "kind": "choice", "choices": "claude_models",
+        "kind": "choice", "choices": "models_for_harness:claude_code",
     },
     # AND THE MODEL THAT TALKS. Separate from the four above because it is a separate
     # question: an operator who connected a subscription for BUILDS was told "OPENAI_API_KEY
@@ -157,21 +157,22 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "the API key from this install's environment when one is set.",
         "kind": "choice", "choices": "chat_engines",
     },
-    # Saved preference for typed decisions. Live workflow decisions are held by
-    # BOSS-451 until every model call has committed budget and receipt evidence.
+    # WHO ANSWERS THE MULTIPLE-CHOICE QUESTIONS — a workflow's typed_decision step. "typesafe"
+    # needs the project's own Jev key (Setup -> Model); without one, Claude decides. Every
+    # attempt is reserved, leased and receipted before the call (BOSS-451).
     "decision_backend": {
         "attr": "decision_backend",
         "label": "Decision model",
-        "help": "Saved preference for workflow choice decisions. A live decision spends "
-                "only after a budget reservation, model lease, and receipt commit (BOSS-451).",
+        "help": "Who answers multiple-choice decisions in workflows. claude uses the connected "
+                "subscription; typesafe uses TypeSafe's Jev on your own key and asks Claude "
+                "again when Jev is unsure. Each call is budgeted and receipted.",
         "kind": "choice", "choices": ("claude", "typesafe"),
     },
     "decision_model": {
         "attr": "decision_model",
         "label": "Claude model for decisions",
-        "help": "Saved Claude model for decisions. The call still waits for a committed "
-                "reservation, lease, and receipt (BOSS-451).",
-        "kind": "choice", "choices": "claude_models",
+        "help": "Which Claude model decides, and gives the second opinion when Jev is unsure.",
+        "kind": "choice", "choices": "models_for_harness:claude_code",
     },
 }
 
@@ -192,19 +193,6 @@ MODEL_FOR_ENGINE = {
 #: else to the OpenAI adapter, so "openrouter" in this box would silently mean "OpenAI".
 CHAT_ENGINES = ("claude_code", "codex", "native")
 
-#: Model aliases the Claude CLI resolves to its current release, verified against the binary
-#: rather than written from memory: `claude --help` documents "an alias for the latest model
-#: (e.g. 'fable', 'opus', or 'sonnet')", and each was confirmed through BOSS's own adapter —
-#: opus -> claude-opus-5, sonnet -> claude-sonnet-5, fable -> claude-fable-5-1,
-#: haiku -> claude-haiku-4-5-20251001.
-#:
-#: Aliases, deliberately, not pinned ids. A pinned id is a decision that rots: it keeps a
-#: project on last quarter's model until somebody notices, and the noticing is the part that
-#: never happens. "" means the engine's own default, which is what every install had before
-#: this knob existed.
-CLAUDE_MODELS = ("", "opus", "sonnet", "fable", "haiku")
-
-
 def _harness_names() -> list[str]:
     try:
         from .cli_harness import BUILTIN_CLI_HARNESSES
@@ -215,40 +203,33 @@ def _harness_names() -> list[str]:
 
 
 def _models_of(harness: str) -> tuple[str, ...]:
+    """The models this harness's CLI reports for the signed-in account. Never a written list:
+    `fable` was offered for Claude after the account's CLI had stopped listing it, and
+    gpt-5.2-codex/o3 for Codex while the account had gpt-6-*."""
     try:
-        from .cli_harness import BUILTIN_CLI_HARNESSES
+        from .cli_harness import offered_models
 
-        spec = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
-        return tuple(spec.models) if spec else ()
+        return offered_models(harness)
     except Exception:  # noqa: BLE001
         return ()
 
 
 def model_choice_is_open(spec: dict[str, Any], harness: str) -> bool:
-    """Whether this model knob accepts a name outside its offered list.
+    """Whether this model knob accepts a name outside its offered list. Every model knob does.
 
-    True for a harness that does not enumerate. `codex --model` takes any name OpenAI offers,
-    and a closed list would reject a model that works the week after it ships — so the list is
-    shown as a suggestion and free text is kept. Claude's four aliases ARE the complete set,
-    because BOSS resolves them itself and a name outside it has nothing to resolve to.
+    Every CLI BOSS drives takes a full model name as well as what its catalog lists, and a
+    model ships before any list here could know about it. The offered list is what the CLI
+    reported; typing another name is still allowed.
     """
-    if not str(spec.get("choices") or "").startswith(
-            ("models_for:", "models_for_harness:")):
-        return False
-    try:
-        from .cli_harness import BUILTIN_CLI_HARNESSES
-
-        spec = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
-        return not (spec and spec.models_exhaustive)
-    except Exception:  # noqa: BLE001
-        return True
+    return str(spec.get("choices") or "").startswith(("models_for:", "models_for_harness:"))
 
 
 def model_is_compatible_with_harness(model: Any, harness: str) -> bool:
-    """Keep a known model for its harness; open harnesses also accept new model names.
+    """Keep a model on the harness that can run it, decided by what the CLIs report.
 
-    Claude aliases are specific to Claude Code. An open harness may accept a new name that
-    BOSS has not catalogued yet, but it must not inherit one of those known Claude aliases.
+    A name this harness's CLI lists is fine. A name ANOTHER harness's CLI lists and this one
+    does not (`opus` on codex) is refused — that pairing fails inside a build looking like a
+    bad model. Anything neither lists is a name the operator typed, and is allowed through.
     """
     name = str(model or "").strip().lower()
     if not name:
@@ -256,22 +237,19 @@ def model_is_compatible_with_harness(model: Any, harness: str) -> bool:
     try:
         from .cli_harness import BUILTIN_CLI_HARNESSES
 
-        active = BUILTIN_CLI_HARNESSES.get(str(harness or "").lower())
-        if active is not None and name in active.models:
-            return True
-        if active is not None and active.models_exhaustive:
-            return False
-        if active is None:
+        harness = str(harness or "").lower()
+        if harness in BUILTIN_CLI_HARNESSES:
+            if name in {m.lower() for m in _models_of(harness)}:
+                return True
+        else:
             # Native/provider harnesses are in the coding registry rather than the CLI model
             # registry. Their model ids are open text, but the harness itself must exist.
             from .harness_registry import get_harness
 
             get_harness(harness)
-        closed_names = {
-            known for candidate in BUILTIN_CLI_HARNESSES.values()
-            if candidate.models_exhaustive for known in candidate.models
-        }
-        return name not in closed_names
+        elsewhere = {m.lower() for other in _harness_names() if other != harness
+                     for m in _models_of(other)}
+        return name not in elsewhere
     except Exception:  # noqa: BLE001 — an unknown pairing must not reach a model call
         logger.exception("Could not verify model and harness compatibility")
         return False
@@ -302,8 +280,6 @@ def _allowed_choices(spec: dict[str, Any]) -> list[str]:
     """
     if spec.get("choices") == "chat_engines":
         return list(CHAT_ENGINES)
-    if spec.get("choices") == "claude_models":
-        return list(CLAUDE_MODELS)
     # MODELS, AS THE ACCEPT BOUND. Which harness this lane runs is a per-project question and
     # this function has no project — that split is the one the file already draws, so the
     # narrowing happens in `offered_choices` and what is ACCEPTED here is every harness's
@@ -390,22 +366,22 @@ def coerce(key: str, value: Any) -> Any:
     if spec["kind"] == "choice":
         name = str(value or "").strip().lower()
         allowed = _allowed_choices(spec)
-        # A MODEL KNOB WHOSE HARNESS DOES NOT ENUMERATE ACCEPTS ANYTHING. `codex --model` takes
-        # any name OpenAI offers, so validating against a list BOSS wrote would reject a model
-        # that works the week after it ships — and the operator would read "BOSS cannot drive
-        # that" about a model their CLI runs fine.
-        if str(spec.get("choices") or "").startswith(
-                ("models_for:", "models_for_harness:")):
+        # A MODEL KNOB ACCEPTS ANY NAME its harness's CLI could run. Validating against a list
+        # would reject a model that works the week after it ships — and the operator would read
+        # "BOSS cannot drive that" about a model their CLI runs fine. The one refusal is a name
+        # another CLI reports and this one does not: `opus` saved for codex fails in a build.
+        choice = str(spec.get("choices") or "")
+        if choice.startswith(("models_for:", "models_for_harness:")):
             if not name:
                 return ""
-            for harness in _harness_names():
-                if name in _models_of(harness):
-                    return name
-            if any(model_choice_is_open(spec, harness) for harness in _harness_names()):
-                return name
-            raise ValueError(
-                f"{spec['label']}: '{name}' is not a model any connected harness offers. "
-                f"Available: {', '.join(x for x in allowed if x)}.")
+            if choice.startswith("models_for_harness:"):
+                harness = choice.split(":", 1)[1]
+                if not model_is_compatible_with_harness(name, harness):
+                    offered = ", ".join(_models_of(harness)) or "its default"
+                    raise ValueError(
+                        f"{spec['label']}: '{name}' is a model for another harness, not "
+                        f"{harness}. {harness} offers: {offered}.")
+            return name
         if allowed and name not in allowed:
             # Name what IS available. "Invalid value" sends somebody to the source to find out
             # what the valid ones are, and the answer changes as harnesses are registered.

@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc3"><img alt="Release v1.0-rc3" src="https://img.shields.io/badge/release-v1.0--rc3-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc4"><img alt="Release v1.0-rc4" src="https://img.shields.io/badge/release-v1.0--rc4-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -78,14 +78,42 @@ Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to
 Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 
 ```sh
-git clone --branch v1.0-rc3 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc4 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc3 --console-origin https://boss.example.com
+./install.sh --dir "$PWD" --ref v1.0-rc4 --console-origin https://boss.example.com
 ```
 
 The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
 
-**3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you:
+**Deploying from your own machine instead?** Both commands above run on the server, and the server downloads BOSS from GitHub. If the server can't reach GitHub, or you're working from a private copy of the repository, deploy from a checkout on your own machine instead: `remote.sh` copies it to the server over SSH, runs the installer there, and backs up before every update. The server never needs GitHub access.
+
+```sh
+git clone https://github.com/seanventures/boss.git
+cd boss
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 install --yes -- --console-origin https://boss.example.com
+```
+
+Everything after `--` goes to the installer on the server, so `--console-origin` is the same address as step 2. Clone `main` and let `--ref` pick the release: `remote.sh` runs from your checkout and ships only the commit `--ref` names, and the copy in the `v1.0-rc1` tree takes `--dir '~/boss'` literally, installing into a folder named `~`.
+
+Later, update or check that install from the same checkout:
+
+```sh
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 update --with-console
+scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
+scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
+```
+
+Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line. Storing a Claude token needs a build newer than `v1.0-rc1`; install with `--ref main` until the next release:
+
+```sh
+claude setup-token        # then paste the token it prints at the next command's hidden prompt
+read -rs T && printf %s "$T" | scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider claude_code; unset T
+scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider codex < ~/.codex/auth.json
+```
+
+`--host` is anything `ssh` accepts, including an alias from `~/.ssh/config` (use one for a non-standard SSH port), and `--key PATH` picks a private key. `--dir` defaults to `/opt/boss`, which needs root; `~/boss` keeps it where the commands above install. Add `--secret-store infisical` to `install` for the bundled secret store. The [installer guide](scripts/install/README.md#remote-archive-installs) covers recovery and uninstall.
+
+**3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you. On Ubuntu or Debian, `sudo apt install -y caddy`, replace the contents of `/etc/caddy/Caddyfile` with this block, then `sudo systemctl reload caddy`:
 
 ```caddy
 boss.example.com {
@@ -97,7 +125,7 @@ boss.example.com {
 }
 ```
 
-On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once.
+On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
 **4. Sign in** at your address, such as `https://boss.example.com`, with the password from `boss password`.
 
@@ -174,7 +202,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** A few capabilities are paused in `v1.0-rc3` while their spend, recovery, and effect safeguards are finished: new Discovery web research, live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Saved dossiers, investigation results, and deployment records stay readable. A preview record is not proof that a deploy succeeded.
+> **About this release candidate.** A few capabilities are paused in `v1.0-rc4` while their spend, recovery, and effect safeguards are finished: live debugging investigations, and BOSS-initiated SSH workload planning and deployment. Investigation results and deployment records stay readable. Discovery web research runs as a governed job, and needs a connected Claude Code subscription. A preview record is not proof that a deploy succeeded.
 
 ## Documentation
 

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BOSS Control Plane API
-  version: 1.0.0-rc.3
-  description: BOSS Control Plane API for the current 1.0.0-rc.3 product release.
+  version: 1.0.0-rc.4
+  description: BOSS Control Plane API for the current 1.0.0-rc.4 product release.
 security:
 - BossBearerAuth: []
 - BossApiKeyAuth: []
@@ -29558,6 +29558,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
 
+  /v1/discoveries/{run_id}/execute:
+    post:
+      summary: Execute Discovery Endpoint
+      description: 'The worker hands a leased `discovery.run` job here: the research agent (the Claude CLI)
+
+        lives in this container. Each stage spends under the job''s lease, with its own
+
+        reservation and receipt; stages already paid for replay. Fenced by the lease token.'
+      operationId: post_v1_discoveries_run_id_execute_6ac80599
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiscoveryExecuteBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+
 components:
   securitySchemes:
     BossBearerAuth:
@@ -54272,6 +54307,10 @@ components:
           minimum: 5.0
           title: Lease Ttl Seconds
           default: 60
+        handing_back:
+          type: boolean
+          title: Handing Back
+          default: false
       type: object
       required:
       - worker_id
@@ -64225,6 +64264,30 @@ components:
       - default_place_id
       - place
       title: ResolveResponse
+
+    DiscoveryExecuteBody:
+      properties:
+        job_id:
+          type: string
+          minLength: 1
+          title: Job Id
+        worker_id:
+          type: string
+          minLength: 1
+          title: Worker Id
+        lease_token:
+          type: string
+          minLength: 1
+          title: Lease Token
+      type: object
+      required:
+      - job_id
+      - worker_id
+      - lease_token
+      title: DiscoveryExecuteBody
+      description: 'The worker''s lease of a discovery.run job. All three are required: every research stage
+
+        spends only under this lease, so a call without one must not reach the pipeline.'
 
 tags:
 - name: Tasks

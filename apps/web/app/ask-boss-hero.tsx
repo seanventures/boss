@@ -1013,11 +1013,15 @@ export function AskBossHero({
   actor,
   orgId,
   researchAvailable = true,
+  deploymentAvailable = true,
 }: {
   projectId: string;
   actor: string;
   orgId?: string;
   researchAvailable?: boolean;
+  //: Separate from research: Community researches as a governed job, but SSH host deployment
+  //: stays paused there, and the sheet must not promise a deploy it will not do.
+  deploymentAvailable?: boolean;
 }) {
   const [input, setInput] = useState("");
   const [reply, setReply] = useState("");
@@ -1913,7 +1917,7 @@ export function AskBossHero({
                     <li>Convene a panel of roles to argue the shape of it</li>
                     <li>Write a PRD — <strong>you approve it</strong> before any code</li>
                     <li>Build, review and test it, then open a pull request</li>
-                    {researchAvailable ? <li>Deploy it when you approve the release</li>
+                    {deploymentAvailable ? <li>Deploy it when you approve the release</li>
                       : <li>Review the release; SSH host deployment is paused in Community</li>}
                   </ol>
                 </section>

@@ -9,15 +9,16 @@ The moat, applied to research: every finding is cited, the thesis is adversarial
 fail-closed evidence gate decides "pursue" vs "needs more research". See
 docs/product/BOSS_DISCOVERY_PIPELINE_DESIGN.md.
 
-D1 scope: web-only signals. Community research is paused until this pipeline uses
-durable leased jobs and reconciled model spend; saved dossiers remain readable.
+D1 scope: web-only signals. In Community a discovery is a durable `discovery.run` job that a
+worker leases, and every research stage is reserved, leased, receipted and settled on its own
+(discovery_spend.py); a retry replays stages it already paid for instead of calling them again.
 """
 from __future__ import annotations
 
 import json
 import threading
 import traceback
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text
 
@@ -27,28 +28,90 @@ from .code_agent import make_code_agent
 from .core import create_blocking_decision, emit_event, make_id
 
 PHASES = ["queued", "signal_sweep", "synthesize", "vet", "shape", "gate", "done"]
+#: Recorded on a run that was running on the old in-process thread when Community restarted.
 COMMUNITY_DISCOVERY_BLOCK_REASON = (
-    "Discovery research is unavailable in Community until model calls have durable "
-    "leases, budget reservations, and reconciled receipts."
+    "This research was running in-process when BOSS restarted, before Discovery ran as a "
+    "governed job; its model spend must be reconciled before it is retried."
 )
 
 
-class DiscoveryExecutionBlocked(ValueError):
-    """Community must not launch unleased research that can spend without a reservation."""
+def _research_runs_as_a_job(settings: Settings) -> bool:
+    """Community runs Discovery as a governed worker job. Other editions keep the legacy
+    in-process path until they are qualified separately (DISCOVERY_COMMUNITY_GA_BLOCKER.md)."""
+    return str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}
 
 
-def community_research_paused(settings: Settings) -> bool:
-    """True where Discovery research must not start: the Community editions."""
-    return str(getattr(settings, "boss_edition", "") or "").strip().lower() in {
-        "community", "oss", "local"}
+#: The one reason a workflow's research step stands aside instead of commissioning research.
+RESEARCH_SOURCE_UNAVAILABLE = "research_source_unavailable"
 
 
-_community_research_paused = community_research_paused
+def research_unavailable(connection, settings: Settings, project_id: str,
+                         actor: str = "boss") -> Optional[dict]:
+    """None when governed research can run for this project; otherwise why it cannot.
+
+    In Community a discovery is a `discovery.run` job whose every stage is a model lease on the
+    Claude Code subscription (discovery_spend.RESEARCH_SOURCE_ID: the research agent is the
+    Claude CLI, which does the web search). This asks the model router the exact question the
+    job's first stage will ask — same skill, job kind, workload class, data boundary, pinned to
+    that source — so a workflow skips research exactly when the job would be refused model
+    capacity, and never merely because of the edition. A local model cannot stand in: it has
+    no web search. The preview is itself recorded (a routing log and a routing.selected or
+    routing.denied event), so the reason the step names can be traced.
+
+    Budget is not prejudged here. A reservation refused at run time is the job's to record:
+    it raises a decision, the discovery fails, and the workflow carries on to the panel with a
+    research step that says it failed.
+
+    Other editions keep the legacy in-process path and are never skipped by this check.
+    """
+    if not _research_runs_as_a_job(settings):
+        return None
+    from .discovery_spend import JOB_KIND, RESEARCH_SOURCE_ID, SKILL_ID
+    from .entitlements import EntitlementBrokerService
+
+    def preview() -> dict:
+        return EntitlementBrokerService(settings).simulate_model_route_decision(
+            connection, project_id, skill_id=SKILL_ID, task_kind=JOB_KIND,
+            workload_class="owner_sandbox", risk_tier=1,
+            preferred_capabilities=["research"], data_boundary="internal",
+            actor=actor, only_source_id=RESEARCH_SOURCE_ID,
+        )
+
+    # A SAVEPOINT, so a check that errors cannot abort the workflow's own transaction and
+    # take the step's record of the error down with it.
+    begin_nested = getattr(connection, "begin_nested", None)
+    if begin_nested is None:
+        decision = preview()
+    else:
+        with begin_nested():
+            decision = preview()
+    if decision.get("selected_source_id") and (decision.get("policy_result") or {}).get("allowed"):
+        return None
+    rejected = [row for row in decision.get("rejected_sources") or []
+                if isinstance(row, dict) and row.get("source_id") == RESEARCH_SOURCE_ID]
+    status = str((rejected[0].get("reason") if rejected else None) or "not_declared")
+    said = _RESEARCH_SOURCE_STATUS_WORDS.get(status, status.replace("_", " "))
+    return {
+        "reason": RESEARCH_SOURCE_UNAVAILABLE,
+        "source_id": RESEARCH_SOURCE_ID,
+        "source_status": status,
+        "route_decision_log_id": decision.get("id"),
+        "detail": (
+            "Research runs on the Claude Code subscription (the Claude CLI does the web "
+            f"search), and it cannot be used here: {said}. Connect Claude Code in Setup and "
+            "Build researches first; a local model cannot do web research."
+        ),
+    }
 
 
-def require_discovery_runtime(settings: Settings) -> None:
-    if _community_research_paused(settings):
-        raise DiscoveryExecutionBlocked(COMMUNITY_DISCOVERY_BLOCK_REASON)
+#: The router's reasons, as the step's note says them. The raw reason stays in the event.
+_RESEARCH_SOURCE_STATUS_WORDS = {
+    "declared": "it is not connected",
+    "not_connected": "it is not connected",
+    "not_declared": "this install does not declare it",
+    "runtime_unavailable": "the Claude CLI is not available to this install",
+    "login_rejected": "its login was rejected",
+}
 
 
 class DiscoveryResearchUnavailable(RuntimeError):
@@ -86,24 +149,19 @@ def _record_stage(dossier: dict, stage: str, result: dict, *, parsed: dict) -> N
 # --------------------------------------------------------------------------- #
 def start_discovery(*, project_id: str, title: str, seed: str, context: str,
                     settings: Settings, deep: bool = False, parent_run_id: Optional[str] = None,
-                    governance: Optional[dict] = None) -> str:
-    """Create the durable run row and kick off the pipeline in a background thread.
+                    governance: Optional[dict] = None, actor: str = "ceo") -> str:
+    """Create the durable run row and start the pipeline.
 
     deep=True runs a multi-source parallel scout sweep (competitor/pain/demand/timing) for a richer,
     more cited dossier — the deeper second pass for a promising idea.
 
-    Community research stays blocked until the caller has already reserved budget
-    and written a receipt. A direct start, with no governance, still raises.
+    In Community the run is a durable `discovery.run` job: a worker leases it and every
+    research stage spends only through its own reservation, lease and receipt. Nothing runs
+    on a thread in this process, so a restart cannot orphan it or replay a paid call.
     """
-    governed = bool(
-        governance
-        and governance.get("reservation_id")
-        and governance.get("receipt_id")
-    )
-    if not governed:
-        require_discovery_runtime(settings)
     run_id = make_id("drun")
     engine = get_engine()
+    as_job = _research_runs_as_a_job(settings)
     init_state = {"deep": deep}
     if governance:
         init_state["governance"] = governance
@@ -118,14 +176,161 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
             {"id": run_id, "p": project_id, "t": title[:300], "s": seed, "ctx": context or "",
              "st": json.dumps(init_state)},
         )
+        if as_job:
+            from .discovery_spend import AGENT_ID, JOB_KIND
+            from .jobs import enqueue_job
+
+            job = enqueue_job(
+                c, project_id, JOB_KIND,
+                {"discovery_run_id": run_id, "agent_id": AGENT_ID, "actor": actor},
+                priority=40, max_attempts=3, dedupe_key=f"discovery:{run_id}",
+                workload_class="owner_sandbox", data_boundary="internal",
+            )
+            c.execute(
+                text("UPDATE discovery_runs SET state = state || CAST(:j AS JSONB) "
+                     "WHERE id = :id"),
+                {"id": run_id, "j": json.dumps({"job_id": job["id"]})},
+            )
         emit_event(c, project_id, "discovery.started", "boss", "discovery_run", run_id,
-                   {"title": title[:300], "deep": deep})
-    threading.Thread(
-        target=_run_discovery,
-        args=(run_id, project_id, seed, context, settings, deep, governance),
-        daemon=True,
-    ).start()
+                   {"title": title[:300], "deep": deep, "governed_job": as_job})
+    if not as_job:
+        threading.Thread(
+            target=_run_discovery,
+            args=(run_id, project_id, seed, context, settings, deep, governance),
+            daemon=True,
+        ).start()
     return run_id
+
+
+def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worker_id: str,
+                          lease_token: str) -> dict:
+    """Run (or resume) one discovery under the worker's lease of its `discovery.run` job.
+
+    Stages already paid for replay from their receipts. Returns {"status", "retry"}: a stage
+    that failed outright is retryable on the job's next attempt; a refused budget, a research
+    reply with no evidence, or a call that needs reconciliation is not — retrying would either
+    spend again for the same result or risk paying twice.
+    """
+    from . import discovery_spend
+    from .discovery_spend import (
+        DiscoveryReconciliationRequired,
+        DiscoverySpendRefused,
+        DiscoveryStageSpend,
+    )
+
+    engine = get_engine()
+    with begin(engine) as c:
+        row = c.execute(
+            text("SELECT d.project_id, d.seed, d.context, d.state, d.status, "
+                 "j.attempt, j.max_attempts, j.payload FROM discovery_runs d "
+                 "JOIN jobs j ON j.id = :job WHERE d.id = :id"),
+            {"id": run_id, "job": job_id},
+        ).mappings().first()
+    if row is None:
+        return {"status": "failed", "retry": False, "error": f"no discovery run {run_id}"}
+    state = row["state"] if isinstance(row["state"], dict) else {}
+    if row["status"] == "failed" and state.get("failed_by_job"):
+        # A REQUEUED DEADLETTER resumes the run it failed: the job, not the research, stopped
+        # it, and the stages it already paid for replay from their receipts.
+        with begin(engine) as c:
+            c.execute(text(
+                "UPDATE discovery_runs SET status = 'running', error = NULL, "
+                "state = (state - 'failed_by_job' - 'job_error') || jsonb_build_object('job_id', CAST(:j AS text)), "
+                "updated_at = now() WHERE id = :id AND status = 'failed'"),
+                {"id": run_id, "j": job_id})
+            emit_event(c, row["project_id"], "discovery.resumed", worker_id, "discovery_run",
+                       run_id, {"reason": "its deadlettered job was requeued", "job_id": job_id})
+        state = {k: v for k, v in state.items() if k not in ("failed_by_job", "job_error")}
+        state["job_id"] = job_id
+    elif row["status"] != "running":
+        return {"status": row["status"], "retry": False}
+    payload = row["payload"] if isinstance(row["payload"], dict) else {}
+    spend = DiscoveryStageSpend.for_engine(
+        settings, engine, project_id=row["project_id"], run_id=run_id, job_id=job_id,
+        worker_id=worker_id, job_lease_token=lease_token,
+        actor=str(payload.get("actor") or "ceo"),
+    )
+    agent = make_code_agent(settings, engine="claude_code")
+    if not hasattr(agent, "run_research"):
+        raise RuntimeError("Discovery requires the claude_code engine (web research).")
+
+    def research(stage: str, prompt: str) -> dict:
+        return spend.run(stage, lambda: agent.run_research(prompt),
+                         source_id=discovery_spend.RESEARCH_SOURCE_ID)
+
+    last_attempt = int(row["attempt"] or 1) >= int(row["max_attempts"] or 1)
+    try:
+        _run_discovery(run_id, row["project_id"], row["seed"] or "", row["context"] or "",
+                       settings, bool(state.get("deep")), None, research=research,
+                       sequential=True, raise_errors=True)
+    except DiscoverySpendRefused as refused:
+        waits = int(state.get("budget_waits") or 0)
+        if refused.transient and waits < MAX_BUDGET_WAITS:
+            # THE PER-MINUTE CAP CLEARS BY ITSELF, and waiting for it is not a failed attempt —
+            # retrying the job spent one of its three attempts per wait, so a run needing more
+            # than three waits failed. Queue a fresh job a minute out instead; it replays every
+            # stage already paid for and carries on.
+            _defer_run(engine, row["project_id"], run_id, payload, waits + 1, str(refused))
+            return {"status": "deferred", "retry": False, "error": str(refused)[:1000]}
+        _fail_run(engine, row["project_id"], run_id, refused)
+        return {"status": "failed", "retry": False, "error": str(refused)[:1000]}
+    except (DiscoveryReconciliationRequired, DiscoveryResearchUnavailable) as settled:
+        _fail_run(engine, row["project_id"], run_id, settled)
+        return {"status": "failed", "retry": False, "error": str(settled)[:1000]}
+    except Exception as error:  # noqa: BLE001 — a stage failed outright; retry if attempts remain
+        from .model_failures import explain, is_login_rejected
+
+        if is_login_rejected(error):
+            # A REJECTED LOGIN DOES NOT FIX ITSELF. Retrying spent three attempts saying the
+            # same 401 while the run showed "queued"; stop now and say what to do.
+            said = explain(error, source_id=discovery_spend.RESEARCH_SOURCE_ID)
+            _fail_run(engine, row["project_id"], run_id,
+                      RuntimeError(f"{said['headline']} {said['action']}"))
+            return {"status": "failed", "retry": False, "error": said["headline"]}
+        if last_attempt:
+            _fail_run(engine, row["project_id"], run_id, error)
+            return {"status": "failed", "retry": False, "error": str(error)[:1000]}
+        with begin(engine) as c:
+            c.execute(text("UPDATE discovery_runs SET error = :e, updated_at = now() "
+                           "WHERE id = :id"), {"e": f"retrying: {error}"[:1000], "id": run_id})
+        return {"status": "failed", "retry": True, "error": str(error)[:1000]}
+    return {"status": "completed", "retry": False}
+
+
+#: How many times one run may wait out the per-minute budget cap before it is failed.
+MAX_BUDGET_WAITS = 30
+BUDGET_WAIT_SECONDS = 65
+
+
+def _defer_run(engine, project_id: str, run_id: str, payload: dict, waits: int,
+               reason: str) -> None:
+    from .discovery_spend import JOB_KIND
+    from .jobs import enqueue_job
+
+    with begin(engine) as c:
+        job = enqueue_job(
+            c, project_id, JOB_KIND, dict(payload), priority=40, max_attempts=3,
+            run_after_seconds=BUDGET_WAIT_SECONDS, dedupe_key=f"discovery:{run_id}:wait:{waits}",
+            workload_class="owner_sandbox", data_boundary="internal",
+        )
+        c.execute(
+            text("UPDATE discovery_runs SET state = state || CAST(:s AS JSONB), error = :e, "
+                 "updated_at = now() WHERE id = :id"),
+            {"id": run_id, "e": f"waiting for the per-minute budget: {reason}"[:1000],
+             "s": json.dumps({"job_id": job["id"], "budget_waits": waits})},
+        )
+        emit_event(c, project_id, "discovery.waiting_for_budget", "boss", "discovery_run",
+                   run_id, {"job_id": job["id"], "waits": waits,
+                            "retry_in_seconds": BUDGET_WAIT_SECONDS})
+
+
+def _fail_run(engine, project_id: str, run_id: str, error: BaseException) -> None:
+    with begin(engine) as c:
+        c.execute(text("UPDATE discovery_runs SET status = 'failed', error = :e, "
+                       "updated_at = now() WHERE id = :id AND status = 'running'"),
+                  {"e": f"{error}"[:1000], "id": run_id})
+        emit_event(c, project_id, "discovery.failed", "boss", "discovery_run", run_id,
+                   {"error": f"{error}"[:500], "kind": type(error).__name__})
 
 
 def resume_interrupted(settings: Settings) -> dict:
@@ -142,7 +347,10 @@ def resume_interrupted(settings: Settings) -> dict:
     replaying model calls. Other editions retain the earlier restart behavior.
     """
     engine = get_engine()
-    if _community_research_paused(settings):
+    if _research_runs_as_a_job(settings):
+        # A job-owned run is the job system's to resume: the worker's lease is reclaimed and
+        # the run replays the stages it already paid for. Only a run left over from the old
+        # in-process thread is failed here for reconciliation.
         blocked: list[str] = []
         with begin(engine) as c:
             rows = c.execute(
@@ -150,6 +358,9 @@ def resume_interrupted(settings: Settings) -> dict:
                      "WHERE status = 'running' ORDER BY created_at FOR UPDATE SKIP LOCKED")
             ).mappings().all()
             for row in rows:
+                state = row["state"] if isinstance(row["state"], dict) else {}
+                if state.get("job_id"):
+                    continue
                 changed = c.execute(
                     text("UPDATE discovery_runs SET status = 'failed', error = :reason, "
                          "updated_at = now() WHERE id = :id AND status = 'running'"),
@@ -206,9 +417,12 @@ def resume_interrupted(settings: Settings) -> dict:
 
 def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
     rows = connection.execute(
-        text("""SELECT id, project_id, status, phase, title, seed, context, state, usage, error,
-                       created_at, updated_at
-                FROM discovery_runs WHERE project_id=:p ORDER BY created_at DESC LIMIT :n"""),
+        text("""SELECT d.id, d.project_id, d.status, d.phase, d.title, d.seed, d.context, d.state,
+                       d.usage, d.error, d.created_at, d.updated_at, j.status AS job_status,
+                       j.last_error AS job_error, j.lease_owner AS job_lease_owner,
+                       j.run_after AS job_run_after, (now() - j.created_at) AS job_age
+                FROM discovery_runs d LEFT JOIN jobs j ON j.id = d.state->>'job_id'
+                WHERE d.project_id=:p ORDER BY d.created_at DESC LIMIT :n"""),
         {"p": project_id, "n": limit},
     ).mappings().all()
     return [_row_to_dict(r) for r in rows]
@@ -216,8 +430,12 @@ def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[di
 
 def load_discovery_run(connection, run_id: str) -> Optional[dict]:
     r = connection.execute(
-        text("""SELECT id, project_id, status, phase, title, seed, context, state, usage, error,
-                       created_at, updated_at FROM discovery_runs WHERE id=:id"""),
+        text("""SELECT d.id, d.project_id, d.status, d.phase, d.title, d.seed, d.context, d.state,
+                       d.usage, d.error, d.created_at, d.updated_at, j.status AS job_status,
+                       j.last_error AS job_error, j.lease_owner AS job_lease_owner,
+                       j.run_after AS job_run_after, (now() - j.created_at) AS job_age
+                FROM discovery_runs d LEFT JOIN jobs j ON j.id = d.state->>'job_id'
+                WHERE d.id=:id"""),
         {"id": run_id},
     ).mappings().first()
     return _row_to_dict(r) if r else None
@@ -260,7 +478,72 @@ def _row_to_dict(r) -> dict:
         "state": state, "usage": usage, "error": r["error"],
         "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        "attention": _attention(r, state),
     }
+
+
+#: A queued job nobody has picked up for this long means no worker is taking work.
+_UNCLAIMED_AFTER_SECONDS = 180
+
+
+def _attention(r, state: dict) -> Optional[dict]:
+    """Why this run is not moving, in words an operator can act on — or None if it is fine.
+
+    Discovery used to say "queued" through a refused worker (409), a budget cap and a rejected
+    Claude login: each reason was in a job's last_error, an event or this row's error, and none
+    was where the operator looked. This reads the run AND its job, because some failures (the
+    worker refused, the job deadlettered) never reach this row at all.
+    """
+    from .discovery_spend import RESEARCH_SOURCE_ID
+    from .model_failures import explain
+
+    keys = r.keys() if hasattr(r, "keys") else ()
+    status, error = r["status"], r["error"] or ""
+    job_status = r["job_status"] if "job_status" in keys else None
+    job_error = r["job_error"] if "job_error" in keys else None
+    if isinstance(job_error, str):
+        try:
+            job_error = json.loads(job_error)
+        except ValueError:
+            pass
+    job_text = (job_error.get("message") if isinstance(job_error, dict) else job_error) or ""
+    if status == "completed":
+        return None
+    if status == "cancelled":
+        # The task shepherd closes a run that no job can advance, keeping its last error: the
+        # reason it stopped is that error, not the cancellation.
+        said = explain(error, source_id=RESEARCH_SOURCE_ID)
+        return {**said, "state": "stopped",
+                "headline": "Stopped — nothing could advance it. " + said["headline"]}
+    if status == "failed":
+        if state.get("failed_by_job"):
+            # The job, not the research, stopped it: explain the job's own error.
+            said = explain(state.get("job_error") or error, source_id=RESEARCH_SOURCE_ID)
+            return {**said, "state": "stopped",
+                    "headline": "Its worker job stopped. " + said["headline"]}
+        return {**explain(error, source_id=RESEARCH_SOURCE_ID), "state": "stopped"}
+    if status != "running":
+        return None
+    if state.get("job_id") and job_status in ("deadlettered", "failed", "cancelled"):
+        said = explain(job_text or f"the job is {job_status}", source_id=RESEARCH_SOURCE_ID)
+        return {**said, "state": "stopped",
+                "headline": f"Not running — its worker job stopped ({job_status}). "
+                            + said["headline"]}
+    if error.startswith("waiting for the per-minute budget"):
+        return {**explain("burst cap"), "state": "waiting"}
+    if error.startswith("retrying:"):
+        said = explain(error, source_id=RESEARCH_SOURCE_ID)
+        return {**said, "state": "retrying",
+                "headline": "Retrying after a failed attempt. " + said["headline"]}
+    age = r["job_age"] if "job_age" in keys else None
+    if (job_status == "queued" and not (r["job_lease_owner"] if "job_lease_owner" in keys else None)
+            and age is not None and age.total_seconds() > _UNCLAIMED_AFTER_SECONDS):
+        return {"kind": "no_worker", "state": "waiting",
+                "headline": "Queued, but no worker has picked it up for a few minutes.",
+                "action": "Check that the worker service is running (boss doctor, or "
+                          "`docker compose ps` on the server).",
+                "href": None, "retry": True}
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -293,15 +576,25 @@ def _still_working(run_id: str, engine, stop: threading.Event) -> None:
 
 def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                    settings: Settings, deep: bool = False,
-                   governance: Optional[dict] = None) -> None:
+                   governance: Optional[dict] = None, *,
+                   research: Optional[Callable[[str, str], dict]] = None,
+                   sequential: bool = False, raise_errors: bool = False) -> None:
+    """The pipeline. `research(stage, prompt)` makes each model call: the governed job passes
+    one that reserves, leases and receipts each stage (and replays a stage already paid for);
+    the legacy path calls the agent directly. `raise_errors` hands a failure to the job, which
+    decides between a retry and a failed run, instead of recording it here."""
     engine = get_engine()
     _hb_stop = threading.Event()
     threading.Thread(target=_still_working, args=(run_id, engine, _hb_stop),
                      name=f"drun-hb-{run_id}", daemon=True).start()
     try:
-        agent = make_code_agent(settings, engine="claude_code")
-        if not hasattr(agent, "run_research"):
-            raise RuntimeError("Discovery requires the claude_code engine (web research).")
+        if research is None:
+            agent = make_code_agent(settings, engine="claude_code")
+            if not hasattr(agent, "run_research"):
+                raise RuntimeError("Discovery requires the claude_code engine (web research).")
+
+            def research(stage: str, prompt: str) -> dict:  # noqa: F811 — the legacy path
+                return agent.run_research(prompt)
         dossier: dict = {"deep": deep}
         if governance:
             dossier["governance"] = governance
@@ -311,12 +604,13 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         # P1 — Signal sweep (web research). Deep mode fans out to parallel focused scouts.
         _phase(engine, run_id, "signal_sweep")
         if deep:
-            brief, findings, sweep_cost, model = _deep_sweep(agent, seed, context)
+            brief, findings, sweep_cost, model = _deep_sweep(research, seed, context,
+                                                             sequential=sequential)
             dossier["research_brief"] = brief
             dossier["signal_findings"] = findings
             cost += sweep_cost
         else:
-            r = agent.run_research(_sweep_prompt(seed, context))
+            r = research("signal_sweep", _sweep_prompt(seed, context))
             cost += r["cost_usd_micros"]
             model = r.get("model")
             sweep = _extract_json(r["summary"])
@@ -356,7 +650,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
         # P2 — Synthesize
         _phase(engine, run_id, "synthesize")
-        r = agent.run_research(_synth_prompt(seed, context, dossier["signal_findings"]))
+        r = research("synthesize", _synth_prompt(seed, context, dossier["signal_findings"]))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["market_analysis"] = parsed.get("analysis", {})
@@ -365,7 +659,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
         # P3 — Adversarial vetting (web research for disconfirming evidence)
         _phase(engine, run_id, "vet")
-        r = agent.run_research(_vet_prompt(seed, dossier))
+        r = research("vet", _vet_prompt(seed, dossier))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["critique"] = parsed.get("critique", {})
@@ -374,7 +668,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
         # P4 — Shape outcomes
         _phase(engine, run_id, "shape")
-        r = agent.run_research(_shape_prompt(seed, context, dossier))
+        r = research("shape", _shape_prompt(seed, context, dossier))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["candidate_outcomes"] = parsed.get("outcomes", [])
@@ -388,7 +682,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         with begin(engine) as c:
             c.execute(
                 text("""UPDATE discovery_runs SET status='completed', phase='done',
-                        state=CAST(:s AS JSONB),
+                        state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
                         usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint),
                                                  'model', CAST(:m AS text)),
                         updated_at=now() WHERE id=:id"""),
@@ -418,6 +712,8 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                     int(cost),
                 )
     except Exception as exc:  # noqa: BLE001 — record the failure durably, never crash the thread
+        if raise_errors:
+            raise
         detail = f"{exc}"[:1000]
         try:
             with begin(engine) as c:
@@ -455,9 +751,11 @@ def _phase(engine, run_id: str, phase: str) -> None:
 
 
 def _save(engine, run_id: str, dossier: dict, cost: int, model: Optional[str]) -> None:
+    # The dossier REPLACES the state but the job that owns the run is kept: dropping it made a
+    # governed run look like an orphan of the old in-process path to startup recovery.
     with begin(engine) as c:
         c.execute(
-            text("""UPDATE discovery_runs SET state=CAST(:s AS JSONB),
+            text("""UPDATE discovery_runs SET state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
                     usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint),
                                              'model', CAST(:m AS text)),
                     updated_at=now() WHERE id=:id"""),
@@ -585,22 +883,28 @@ def _scout_prompt(angle: str, focus: str, seed: str, context: str) -> str:
     )
 
 
-def _deep_sweep(agent, seed: str, context: str):
-    """Run the focused scouts in parallel and merge their cited findings — the deeper pass."""
+def _deep_sweep(research, seed: str, context: str, *, sequential: bool = False):
+    """Run the focused scouts and merge their cited findings — the deeper pass.
+
+    In parallel on the legacy path. One at a time when governed: each scout is its own leased
+    stage, and a subscription source holds one model lease at a time.
+    """
     from concurrent.futures import ThreadPoolExecutor
 
     def run_scout(item):
         angle, focus = item
         try:
-            r = agent.run_research(_scout_prompt(angle, focus, seed, context))
+            r = research(f"scout_{angle}", _scout_prompt(angle, focus, seed, context))
             return r, _extract_json(r["summary"]).get("findings", [])
         except Exception:  # noqa: BLE001 — a dead scout shouldn't sink the sweep
+            if sequential:
+                raise   # governed: the job decides retry vs reconcile, never a silent zero
             return {"cost_usd_micros": 0, "model": None}, []
 
     findings: list = []
     cost = 0
     model = None
-    with ThreadPoolExecutor(max_workers=len(_SCOUTS)) as pool:
+    with ThreadPoolExecutor(max_workers=1 if sequential else len(_SCOUTS)) as pool:
         for r, fs in pool.map(run_scout, _SCOUTS.items()):
             cost += r.get("cost_usd_micros", 0)
             model = model or r.get("model")

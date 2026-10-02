@@ -829,6 +829,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             context=(args.get("context") or "").strip(),
             settings=ctx.settings,
             deep=bool(args.get("deep")),
+            actor=actor,
         )
         return {"status": "running", "run_id": run_id, "project_id": pid}
 
@@ -2476,16 +2477,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         reversibility="safe",
     )
     def connect_coding_agent(ctx, *, project_id, actor, args):
-        from ..services.setup_service import (
-            SetupError, coding_agent_live_proof_available,
-            connect_coding_agent as _connect,
-        )
+        from ..services.setup_service import SetupError, connect_coding_agent as _connect
 
+        # Proved by default; in Community the one test turn is reserved and receipted
+        # (setup_service.governed_proof).
         prove = args.get("prove") is not False
-        if prove and not coding_agent_live_proof_available(ctx.settings):
-            return {"ok": False, "error": "Community live CLI proof is paused until its "
-                    "model turn has a budget reservation, worker lease, and cost receipt. "
-                    "Use prove=false for CLIs that permit an unverified connection."}
 
         with ctx.begin() as c:
             try:

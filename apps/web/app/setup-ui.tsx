@@ -533,7 +533,7 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
 
   const chosen = providers.find((p) => p.provider === provider);
   const subscription = chosen?.kind === "subscription";
-  // TypeSafe stays visible where people look for model keys; BOSS-451 holds its key proof.
+  // TypeSafe is listed where people look for model keys, but its key is for decisions only.
   const decisionKey = chosen?.kind === "decision";
 
   // ASK THE MACHINE, DO NOT ASK THE OPERATOR. A subscription is an OAuth session the CLI
@@ -650,7 +650,8 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
             An API key, anything that speaks the OpenAI API, or a subscription you already pay
             for. {probeAvailable
               ? "BOSS spends one token proving it works before saving it."
-              : "Community saves the key without a live test and marks it unverified."}
+              : "Community saves an API key without a live test and marks it unverified; a "
+                + "subscription is connected only after it answers one test turn."}
           </p>
         </div>
       </div>
@@ -677,11 +678,7 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
           </select>
         </label>
         {decisionKey ? (
-          <p className="detail" data-testid="setup-decision-key-hold">
-            TypeSafe Jev key setup is paused while BOSS adds budget and receipt tracking for
-            its live key proof. Your existing key is retained; new keys cannot be checked or
-            saved yet.
-          </p>
+          <DecisionKeyForm projectId={projectId} actor={actor} />
         ) : subscription ? null : (
           <>
             <label className="setup-field">
@@ -781,8 +778,9 @@ function ModelStep({ projectId, actor, providers, saved, probeAvailable, onDone 
             <li>
               {provider === "claude_code"
                 ? <>Press <b>Store and connect</b> for a pasted setup token, or use{" "}
-                    <code>--connect-claude-local</code> after the CLI login. Neither step
-                    calls a model.</>
+                    <code>--connect-claude-local</code> after the CLI login. BOSS then sends it
+                    one trivial test turn — budgeted and receipted — and connects it only if it
+                    answers; if the login is rejected it says so here.</>
                 : detected.credential_kind === "token"
                 // "It never asks you for a credential" is true of the file route and false
                 // here, where the box below is asking for exactly one.
@@ -915,6 +913,7 @@ function ConnectedModels(
 ) {
   const [roles, setRoles] = useState<Array<{ key: string; label: string; value: string }>>([]);
   const [connected, setConnected] = useState<string[]>([]);
+  const [loginStates, setLoginStates] = useState<Record<string, string>>({});
   const [jev, setJev] = useState<DecisionStatus | null>(null);
 
   useEffect(() => {
@@ -934,6 +933,7 @@ function ConnectedModels(
         if (!r.ok || !alive) return;
         const body = await r.json();
         setConnected((body.connected_engines ?? []) as string[]);
+        setLoginStates((body.engine_login_states ?? {}) as Record<string, string>);
         setRoles(((body.knobs ?? []) as Array<{ key: string; label: string; kind: string;
                                                 value: unknown }>)
           .filter((k) => k.kind === "choice")
@@ -957,6 +957,8 @@ function ConnectedModels(
       at: from?.saved_at ? from.saved_at.slice(0, 10) : "",
       // The jobs it holds right now. Empty is a real answer and says so below.
       jobs: roles.filter((r) => r.value === engine).map((r) => r.label),
+      // The provider rejected this login on its last call: it is connected and unusable.
+      rejected: loginStates[engine] === "rejected",
     };
   });
   if (jev?.typesafe_key) {
@@ -967,6 +969,7 @@ function ConnectedModels(
       verified: jev.execution_available,
       at: "",
       jobs: jev.effective_backend === "typesafe" ? ["Workflow decisions"] : ["Paused"],
+      rejected: false,
     });
   }
   if (!rows.length) return null;
@@ -991,13 +994,20 @@ function ConnectedModels(
             <tr key={row.engine}>
               <th scope="row">
                 <span className="setup-dot" aria-hidden
-                      style={row.kind === "saved key · paused" || (row.kind === "API key" && !row.verified)
+                      style={row.rejected ? { background: "var(--red, #F85149)" }
+                        : row.kind === "saved key · paused" || (row.kind === "API key" && !row.verified)
                         ? { background: "var(--amber)" } : undefined} />
                 {row.label}
               </th>
               <td className="setup-models-kind">
-                {row.kind}{row.kind === "API key" && !row.verified ? " · unverified" : ""}
-                {row.at ? ` · ${row.at}` : ""}
+                {row.rejected ? (
+                  <span className="setup-bad" data-testid={`setup-login-rejected-${row.engine}`}>
+                    login rejected — reconnect it below
+                  </span>
+                ) : <>
+                  {row.kind}{row.kind === "API key" && !row.verified ? " · unverified" : ""}
+                  {row.at ? ` · ${row.at}` : ""}
+                </>}
               </td>
               <td className="setup-models-jobs" data-empty={row.jobs.length ? undefined : "true"}>
                 {row.jobs.length ? row.jobs.join(" · ") : "no role yet"}
@@ -1050,11 +1060,86 @@ function RoleModels({ projectId, actor }: { projectId: string; actor: string }) 
 type DecisionStatus = {
   backend: string; effective_backend: string; configured_backend: string;
   claude_model: string; typesafe_key: boolean; typesafe_model: string;
-  execution_available: boolean; hold_reason: string;
+  execution_available: boolean; hold_reason: string; key_url: string;
 };
 
 /**
- * Read-only status while typed decision model calls are held by BOSS-451.
+ * Paste a TypeSafe key. BOSS checks it with one tiny decision before saving it — a billed call,
+ * so it is reserved against the budget and receipted like every other decision (BOSS-451).
+ */
+function DecisionKeyForm({ projectId, actor }: { projectId: string; actor: string }) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [acceptFallback, setAcceptFallback] = useState(false);
+  const [saved, setSaved] = useState<boolean | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await fetch(
+          `/api/setup?view=decision-model&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (r.ok) setSaved(((await r.json()) as DecisionStatus).typesafe_key);
+      } catch { setSaved(null); }
+    })();
+  }, [projectId, result]);
+
+  const save = useCallback(async () => {
+    if (busy || !key.trim()) return;
+    setBusy(true); setResult(null);
+    const r = await call<Record<string, unknown>>({
+      step: "decision-key",
+      payload: { project_id: projectId, actor, api_key: key.trim(),
+                 accept_database_fallback: acceptFallback },
+    });
+    setBusy(false);
+    if (!r.ok && r.decision?.error === "secret_store_fallback_not_accepted") {
+      setAcceptFallback(true);
+      setResult({ ok: false, text: `${r.error} Press Save again to store it in the database `
+                                   + `deliberately.` });
+      return;
+    }
+    if (r.ok) setKey("");   // gone from the form the moment BOSS holds it
+    setResult(r.ok
+      ? { ok: true, text: `Connected. Jev answered a test decision in `
+                          + `${String(r.data?.latency_ms ?? "?")} ms. Workflow decisions on this `
+                          + `project now go to Jev, and to Claude when Jev is unsure.` }
+      : { ok: false, text: r.error ?? "could not save the key" });
+  }, [busy, key, acceptFallback, projectId, actor]);
+
+  return (
+    <>
+      <label className="setup-field">
+        <span>TypeSafe API key{saved ? " — one is already saved; pasting replaces it" : ""}</span>
+        <input type="password" value={key} autoComplete="off" spellCheck={false}
+               data-testid="setup-decision-key" placeholder="ts_…"
+               onChange={(e) => setKey(e.target.value)} />
+      </label>
+      <p className="detail">
+        Keys live at <a href="https://console.typesafe.ai/keys" target="_blank"
+        rel="noreferrer">console.typesafe.ai</a>. BOSS checks the key with one tiny decision
+        before saving it; that check is budgeted and receipted like any other decision.
+      </p>
+      <button type="button" className="cap-btn primary" disabled={busy || !key.trim()}
+              data-testid="setup-decision-key-submit" onClick={() => void save()}>
+        {busy ? "Checking…" : "Check and save key"}
+      </button>
+      {result ? (
+        <p className={result.ok ? "setup-ok" : "setup-bad"} data-testid="setup-decision-result">
+          {result.text}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Who answers the multiple-choice questions — a workflow's typed_decision step picking a branch.
+ *
+ * Claude by default, on the subscription already connected above. TypeSafe's Jev is OPTIONAL
+ * and billed to the operator's own TypeSafe account, so it is offered, never assumed: the card
+ * says which one is actually deciding, because "typesafe" chosen with no key still means Claude.
  */
 function DecisionModel({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState<DecisionStatus | null>(null);
@@ -1069,24 +1154,26 @@ function DecisionModel({ projectId }: { projectId: string }) {
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
 
-  const configured = status?.configured_backend === "typesafe"
+  const deciding = status?.effective_backend === "typesafe"
     ? `TypeSafe Jev (${status.typesafe_model}), with Claude as the second opinion`
-    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} where installed, or the configured API model on the worker`;
+    : `Claude${status?.claude_model ? ` (${status.claude_model})` : ""} on your subscription`;
 
   return (
     <article className="stack-card" data-testid="setup-decision-model">
       <div className="section-head">
         <div>
-          <h2 className="eyebrow">TypeSafe Jev decision model (paused)</h2>
-          <p className="detail" data-testid="decision-model-hold">
-            Automatic choice steps in workflows are paused while BOSS adds budget, lease,
-            and receipt tracking for every model call. Existing steps stop with a recorded
-            reason. Use a human decision step for now.
+          <h2 className="eyebrow">Decision model</h2>
+          <p className="detail" data-testid="decision-model-status">
+            Answers the multiple-choice questions in workflows — which branch to take, which
+            team gets a ticket. Now deciding: <strong>{status ? deciding : "…"}</strong>.
+            {status?.backend === "typesafe" && !status.typesafe_key
+              ? " TypeSafe is selected but no key is saved, so Claude is deciding." : ""}
           </p>
           <p className="detail">
-            Saved model preference: <strong>{status ? configured : "…"}</strong>.
-            {status?.typesafe_key ? " Your existing TypeSafe key is retained." : ""}
-            {" "}No model test or key change is available while this hold is active.
+            Optional: TypeSafe&apos;s Jev answers in well under a second for a fraction of a
+            cent, billed to your own TypeSafe account. Choose <em>TypeSafe Jev</em> as the
+            Provider above to add its key. Every decision call is reserved against the budget
+            and receipted before it is made.
           </p>
         </div>
       </div>
