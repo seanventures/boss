@@ -12,21 +12,27 @@ import { describe, expect, it } from "vitest";
 const UI = readFileSync(new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
 const ROUTE = readFileSync(
   new URL("../app/api/delivery-workflows/route.ts", import.meta.url), "utf8");
+// WHEN it is offered is the engine's call (workflow_run_actions.py), held to `delete_run`'s own
+// rule. The console's copy of it offered Remove on a `blocked` run, which delete_run refuses.
+const ENGINE = readFileSync(
+  new URL("../../../engine/boss_engine/services/workflow_run_actions.py", import.meta.url), "utf8");
 
 describe("removing a run", () => {
   it("is offered on a run that is over", () => {
-    expect(UI).toContain('data-testid="dw-delete-run"');
-    expect(UI).toContain("Remove this run");
+    expect(UI).toContain('testId: "dw-delete-run"');
+    expect(ENGINE).toContain('_action("remove", "Remove this run")');
   });
 
   it("is NOT offered while the run is still going", () => {
-    // The control lives in the `else` of the active check, beside "Run this workflow again".
-    const active = UI.indexOf("ACTIVE_RUN_STATES.has(run.status) ? (");
-    const rerun = UI.indexOf('data-testid="dw-rerun"');
-    const remove = UI.indexOf('data-testid="dw-delete-run"');
-    expect(active).toBeGreaterThan(-1);
+    // Decided by the engine beside "Run this workflow again", on a FINISHED run only — the
+    // states `delete_run` accepts. A test there holds FINISHED_RUN_STATES equal to them.
+    const finished = ENGINE.indexOf("    if finished:\n");
+    const rerun = ENGINE.indexOf('_action("rerun"', finished);
+    const remove = ENGINE.indexOf('_action("remove", "Remove this run")', finished);
+    expect(finished).toBeGreaterThan(-1);
+    expect(rerun).toBeGreaterThan(finished);
     expect(remove).toBeGreaterThan(rerun);
-    expect(rerun).toBeGreaterThan(active);
+    expect(remove - finished).toBeLessThan(200);
   });
 
   it("asks first, because it cannot be undone", () => {

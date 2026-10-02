@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
@@ -14,11 +16,16 @@ import { codeOnly } from "./_helpers/source";
  */
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
 const ROUTE = codeOnly("app/api/delivery-workflows/route.ts");
+// The label and WHEN it is offered are the engine's (workflow_run_actions.py) since a
+// cancelled run whose research failed was offered "Build on this research" by a console rule.
+const ENGINE = readFileSync("../../engine/boss_engine/services/workflow_run_actions.py", "utf8");
 
 describe("stopping a run", () => {
   it("is a button on a live run", () => {
-    expect(UI).toContain('data-testid="dw-stop"');
-    expect(UI).toContain("Stop this run");
+    expect(UI).toContain('testId: "dw-stop"');
+    expect(ENGINE).toContain('_action("stop", "Stop this run")');
+    // Live means every status the engine's cancel_run will stop — `blocked` included.
+    expect(ENGINE).toMatch(/if active:\n\s+actions\.append\(_action\("stop"/);
   });
 
   it("reaches the cancel endpoint, addressed to the run", () => {
@@ -42,8 +49,8 @@ describe("stopping a run", () => {
 
 describe("stop and run again", () => {
   it("is one press", () => {
-    expect(UI).toContain('data-testid="dw-stop-and-rerun"');
-    expect(UI).toContain("Stop and run again");
+    expect(UI).toContain('testId: "dw-stop-and-rerun"');
+    expect(ENGINE).toContain('_action("stop_and_rerun", "Stop and run again")');
   });
 
   it("stops BEFORE it starts", () => {

@@ -131,13 +131,14 @@ describe("re-running does not duplicate a live workflow", () => {
     // refusing was the wrong way to keep it: the button was disabled, its explanation said
     // "cancel this run first", and no cancel existed anywhere. Three runs piled up. It now
     // stops and starts, in that order, and does not start at all if the stop failed.
-    expect(SOURCE).toContain("ACTIVE_RUN_STATES");
-    expect(SOURCE).toContain('data-testid="dw-stop-and-rerun"');
+    // Offered on a live run by the engine's rule (workflow_run_actions.py), rendered here.
+    expect(SOURCE).toContain("stop_and_rerun: onStopAndRerun");
+    expect(SOURCE).toContain('testId: "dw-stop-and-rerun"');
     expect(SOURCE).toContain("if (!stopped?.ok) return;");
   });
 
   it("and stopping is available on its own", () => {
-    expect(SOURCE).toContain('data-testid="dw-stop"');
+    expect(SOURCE).toContain('testId: "dw-stop"');
   });
 
   it("points at the control that actually retries", () => {
@@ -145,7 +146,7 @@ describe("re-running does not duplicate a live workflow", () => {
   });
 
   it("still allows a re-run once the run has stopped", () => {
-    expect(SOURCE).toContain('data-testid="dw-rerun"');
+    expect(SOURCE).toContain('testId: "dw-rerun"');
   });
 });
 

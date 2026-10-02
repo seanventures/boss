@@ -1839,6 +1839,10 @@ def get_run(connection: Connection, project_id: str, run_id: str) -> dict[str, A
             ],
         }
     )
+    # WHAT AN OPERATOR MAY DO TO IT, decided here and nowhere else — see workflow_run_actions.
+    from .workflow_run_actions import attach_actions
+
+    attach_actions(connection, project_id, [result])
     return result
 
 

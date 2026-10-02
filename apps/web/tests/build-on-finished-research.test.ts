@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
@@ -10,38 +12,45 @@ import { codeOnly } from "./_helpers/source";
  * over. The runtime could already adopt an existing dossier; nothing could ask it to.
  */
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
+/** Where the "is there research to build on" rule lives now — once, for the button AND for the
+ *  start endpoint's `from_run`. Its console copy offered the button on a cancelled run whose
+ *  research had failed. engine/tests/test_a_runs_actions_come_from_its_state.py is its table. */
+const ENGINE = readFileSync("../../engine/boss_engine/services/workflow_run_actions.py", "utf8");
 
 describe("a finished run can be built on", () => {
   it("offers it, and says what it will and will not cost", () => {
-    expect(UI).toContain('data-testid="dw-build-on-this"');
+    expect(UI).toContain('testId: "dw-build-on-this"');
     // The sentence moved onto the dot beside the button rather than a permanent line under it;
     // what matters is that the operator can still read it before pressing, not where it sits.
     expect(UI).toContain("run again, and it does not cost anything a second time");
-    const at = UI.indexOf('data-testid="dw-build-on-this"');
-    expect(UI.slice(at, at + 900)).toContain("<Explain");
+    const at = UI.indexOf('testId: "dw-build-on-this"');
+    expect(UI.slice(at, at + 900)).toContain("explain:");
   });
 
-  it("only on a run that actually produced a dossier", () => {
+  it("only on a run whose research SUCCEEDED and left a dossier with findings", () => {
     // Offered on a run with no research, it would start an ordinary delivery run while telling
-    // the operator they had skipped the expensive step.
-    expect(UI).toContain("const researched = run.steps.some(");
-    expect(UI).toContain("&& researched ?");
+    // the operator they had skipped the expensive step. Offered on research that FAILED — a
+    // pre-2026-10-02 step recorded `succeeded` with output `failed_continued` — it promised a
+    // dossier that did not exist. The rule checks the step's own verdict and the dossier.
+    expect(ENGINE).toContain('FAILED_OUTPUT_STATUSES = frozenset({"failed", "failed_continued"');
+    expect(ENGINE).toContain('if status != "completed":');
+    expect(ENGINE).toContain('if not facts.get("has_findings"):');
+    // And the console no longer has a rule of its own.
+    expect(UI).not.toContain("const researched");
   });
 
   it("and it looks at what the step PRODUCED, not what it is called", () => {
     // `kind` on a capability step is the literal string "capability" — "research" is the step's
-    // id — so keying on the name rendered nothing on a run whose dossier was right there. And a
-    // customer can rename their steps; a discovery id in the output is the contract.
-    const at = UI.indexOf("const researched = run.steps.some(");
-    const block = UI.slice(at, at + 500);
-    expect(block).toContain('typeof produced.discovery_id === "string"');
-    expect(block).toContain('awaited?.kind === "discovery"');
-    expect(block).not.toContain('step.kind !== "research"');
+    // id — and a customer can rename their steps; a discovery id in the output is the contract.
+    const at = ENGINE.indexOf("def _discovery_of(");
+    const block = ENGINE.slice(at, at + 600);
+    expect(block).toContain('produced.get("discovery_id")');
+    expect(block).toContain('awaited.get("kind") == "discovery"');
   });
 
   it("and not while the run is still going", () => {
-    const at = UI.indexOf('data-testid="dw-build-on-this"');
-    expect(UI.slice(at - 400, at)).toContain("!ACTIVE_RUN_STATES.has(run.status)");
+    const at = ENGINE.indexOf('_action("build_on_research"');
+    expect(ENGINE.slice(at - 300, at)).toContain("if finished:");
   });
 
   it("names the source instead of claiming the work already happened", () => {

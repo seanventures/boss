@@ -154,41 +154,49 @@ describe("an explanation sits on the thing it explains", () => {
 
   it("and it is labelled, so it is not a bare 'i' to a screen reader", () => {
     expect(UI).toContain('label="How setting a target works"');
-    expect(UI).toContain('label="What stopping does"');
-    expect(UI).toContain('label="What restarting does"');
-    expect(UI).toContain('label="What removing does"');
+    // The run-level actions carry theirs in the view table the action row renders from.
+    expect(UI).toContain('explainLabel: "What stopping does"');
+    expect(UI).toContain('explainLabel: "What restarting does"');
+    expect(UI).toContain('explainLabel: "What removing does"');
   });
 });
 
 describe("the footer is a row of actions, not a column of essays", () => {
   it("each button carries its own explanation", () => {
+    // REWRITTEN for server-decided actions (a cancelled run whose research failed offered
+    // "Build on this research"): the row no longer hand-writes six buttons; it renders the
+    // run's `actions`, one `dw-run-action` per action, each with its `Explain` beside it.
+    // Six keys, each with its own explanation in the view table — re-check, stop,
+    // stop-and-run-again, run again, remove, build-on-this-research.
+    const at = UI.indexOf("export function RunActionsBar(");
+    const bar = UI.slice(at, UI.indexOf("\n}\n", at));
     expect(UI).toContain('data-testid="dw-run-actions"');
-    // Six since a finished run became removable: re-check, stop, stop-and-run-again, run
-    // again, build-on-this-research, and remove.
-    const actions = UI.split('className="dw-run-action"').length - 1;
-    expect(actions).toBe(6);
-    // THE POINT OF THE COUNT IS THAT EACH ONE EXPLAINS ITSELF, not the number. A new action
-    // that arrives without an `Explain` beside it is the thing this is guarding against.
-    expect(UI.split("<Explain label=").length - 1).toBeGreaterThanOrEqual(actions);
+    expect(bar.split('className="dw-run-action"').length - 1).toBe(1);
+    expect(bar).toContain("<Explain label={view.explainLabel}>");
+    const table = UI.slice(UI.indexOf("const RUN_ACTION_VIEW"), at);
+    expect((table.match(/\n    explainLabel: "/g) ?? []).length
+      + (table.match(/, explainLabel: "/g) ?? []).length).toBe(6);
   });
 
   it("and none of them is followed by a permanent paragraph", () => {
-    const at = UI.indexOf('data-testid="dw-run-actions"');
-    const block = UI.slice(at, UI.indexOf("</div>", UI.indexOf("dw-build-on-this")));
-    expect(block).not.toContain('<span className="detail">');
+    const at = UI.indexOf("export function RunActionsBar(");
+    const bar = UI.slice(at, UI.indexOf("\n}\n", at));
+    expect(bar).not.toContain('<span className="detail">');
   });
 
   it("there is no dead button left to explain", () => {
     // There used to be one — Run again, disabled mid-flight, explaining that you should
     // "cancel this run first" for a control that did not exist. The explanation was good and
-    // the button was the problem: it now stops the run and starts a new one.
+    // the button was the problem: it now stops the run and starts a new one. A button the
+    // server sends DISABLED now says why, on itself and in its dot.
     expect(UI).not.toContain('data-testid="dw-rerun-blocked"');
-    const at = UI.indexOf('data-testid="dw-stop-and-rerun"');
-    expect(UI.slice(at, at + 900)).toContain("<Explain");
+    const at = UI.indexOf('testId: "dw-stop-and-rerun"');
+    expect(UI.slice(at, at + 900)).toContain("explain:");
+    expect(UI).toContain("`Not available: ${action.reason}.`");
   });
 
   it("and the destructive one says what it destroys", () => {
-    const at = UI.indexOf('data-testid="dw-stop"');
+    const at = UI.indexOf('testId: "dw-stop"');
     expect(UI.slice(at, at + 700)).toContain("Stops the work, not just the record");
   });
 
