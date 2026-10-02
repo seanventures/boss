@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { API_KEY, API_URL } from "../lib/client";
 import type { AgentWizardSubmission } from "../lib/agent-wizard";
-import { apiWrite } from "../lib/api-write";
+import { apiWrite, pressToken } from "../lib/api-write";
 
 export type StudioActionResult = {
   ok: boolean;
@@ -258,7 +258,7 @@ export async function runStudioAgent(
     project_id: projectId,
     actor: "vp_agents",
     input: { objective, evidence_refs: ["agent-studio:operator-input"] },
-    dedupe_key: `studio-ui:${versionId}:${crypto.randomUUID()}`,
+    dedupe_key: `studio-ui:${versionId}:${await pressToken()}`,
   });
 }
 
@@ -272,7 +272,7 @@ export async function runStudioPanel(
     actor: "vp_agents",
     input: { objective, evidence_refs: ["agent-studio:operator-input"] },
     context: { initiated_from: "agent_studio_ui" },
-    dedupe_key: `studio-panel-ui:${versionId}:${crypto.randomUUID()}`,
+    dedupe_key: `studio-panel-ui:${versionId}:${await pressToken()}`,
   });
 }
 
@@ -346,7 +346,7 @@ export async function runStudioWorkflow(
     workflow_version_id: versionId,
     input: { objective, evidence_refs: ["agent-studio:operator-input"] },
     policy_snapshot: { initiated_from: "agent_studio_ui" },
-    dedupe_key: `studio-workflow-ui:${versionId}:${crypto.randomUUID()}`,
+    dedupe_key: `studio-workflow-ui:${versionId}:${await pressToken()}`,
     actor: "ceo",
   });
 }

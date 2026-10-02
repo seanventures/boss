@@ -1032,10 +1032,20 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         throw error;
       }), []);
 
-  const act = useCallback((label: string, action: string, payload: Record<string, unknown>) =>
+  // `dedupeFromPress`: a start that must be a NEW run per press, and the same run for its
+  // duplicates, gets `dedupe_key: <prefix>:<press key>` — minted from the press INSIDE it, so
+  // it is not part of what the press is recognised by. Re-run put a fresh randomUUID into its
+  // payload, the payload is the press's fingerprint, and so a double click did not join the
+  // first click: it was refused and toasted "the previous Re-run is still in progress", against
+  // the rule that a double click sends once and says nothing (review of 6ca9119).
+  const act = useCallback((label: string, action: string, payload: Record<string, unknown>,
+                           dedupeFromPress?: string) =>
     pressOn(label, [action, payload], async (key) => {
       setNotice(null);
-      const result = await post(action, { project_id: projectId, actor, ...payload }, key);
+      const result = await post(action, {
+        project_id: projectId, actor, ...payload,
+        ...(dedupeFromPress ? { dedupe_key: `${dedupeFromPress}:${key}` } : {}),
+      }, key);
       // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
       // always requires a person" is the whole value of the validation.
       setNotice(result.ok ? `${label} — done.` : `${label} — ${result.error}`);
@@ -1203,8 +1213,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
             // One fresh run per press; a retried or doubled request returns the same run.
-            dedupe_key: `again:${run.id}:${crypto.randomUUID()}`,
-          })}
+          }, `again:${run.id}`)}
           // STOP, THEN START — in that order and as ONE press.
           //
           // "Run this workflow again does not stop the current run and start from the

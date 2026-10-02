@@ -58,6 +58,13 @@ export type WriteOptions = {
   key?: string;
 };
 
+/** What the operator is told when the API is still running the same press and this copy has
+ *  stopped waiting for it — never the API's raw `idempotency_key_in_progress: …`. */
+export function inProgressSentence(label: string): string {
+  return `${label || "This request"} is still in progress — it was not sent again; `
+    + "the result will appear when it finishes.";
+}
+
 /** The one sentence a refused press is told with, everywhere in the console. */
 export function refusalSentence(attempted: string, running: string): string {
   const what = attempted === running ? `the previous ${running}` : running;
@@ -180,13 +187,14 @@ export async function apiWrite(
       // Copies are cut BEFORE the first caller can read the body; with no joiner nothing is
       // copied, so a streamed reply is never buffered a second time.
       share: (response) => response.clone(),
-    }, (key) => sendKeyed(url, has ? init : { ...init, headers: withKey(init.headers, key) }));
+    }, (key) => sendKeyed(url, has ? init : { ...init, headers: withKey(init.headers, key) },
+                          options.press?.label));
   }
-  if (has) return sendKeyed(url, init);
+  if (has) return sendKeyed(url, init, options.press?.label);
   const intent = options.key ?? (await serverIntent());
   if (!intent) return fetch(url, init);
   const key = await deriveKey(intent, init.method, url, init.body);
-  return sendKeyed(url, { ...init, headers: withKey(init.headers, key) });
+  return sendKeyed(url, { ...init, headers: withKey(init.headers, key) }, options.press?.label);
 }
 
 /** How long a duplicate waits for the original press's answer before giving up and showing the
@@ -194,19 +202,27 @@ export async function apiWrite(
 export const IN_PROGRESS_WAIT_MS = 5 * 60_000;
 
 /** Send a keyed write; while the API says the same key is still running, wait and ask again. */
-async function sendKeyed(url: string, init: WriteInit): Promise<Response> {
+async function sendKeyed(url: string, init: WriteInit, label?: string): Promise<Response> {
   const started = Date.now();
   let delay = 250;
   for (;;) {
     const response = await fetch(url, init);
-    if (response.status !== 409 || Date.now() - started > IN_PROGRESS_WAIT_MS
-        || typeof init.body === "object" && init.body !== null) {
-      // An opaque body (a stream, a FormData upload) cannot be sent a second time.
-      return response;
-    }
+    if (response.status !== 409) return response;
     const detail = await response.clone().json().then(
       (body: { detail?: unknown }) => String(body?.detail ?? ""), () => "");
     if (!detail.startsWith("idempotency_key_in_progress")) return response;
+    // GIVING UP IS SAID IN THE OPERATOR'S WORDS. An opaque body (a stream, a FormData upload)
+    // cannot be sent a second time, and a handler running longer than the wait outlasts it;
+    // either way the operator used to read the API's raw "idempotency_key_in_progress: the
+    // first request with this key is still running…" (review of 6ca9119). Same status, same
+    // shape, a sentence that says what happened and what to expect.
+    if (Date.now() - started > IN_PROGRESS_WAIT_MS
+        || (typeof init.body === "object" && init.body !== null)) {
+      return new Response(
+        JSON.stringify({ detail: inProgressSentence(label ?? ""),
+                         code: "idempotency_key_in_progress" }),
+        { status: 409, headers: { "Content-Type": "application/json" } });
+    }
     await new Promise((resolve) => setTimeout(resolve, delay));
     delay = Math.min(delay * 2, 2000);
   }
@@ -249,6 +265,25 @@ async function serverIntent(): Promise<string | undefined> {
   } catch {
     return undefined; // outside a request (a background render): no press to derive from
   }
+}
+
+/**
+ * A value unique to THIS PRESS and the same in every copy of it — for a server action that
+ * needs a fresh id or dedupe key in what it sends.
+ *
+ * WHY. The server's key is derived from the press AND the request body (`deriveKey`), so a
+ * repeated press repeats its keys — unless the body itself changes between copies. Thirteen
+ * server actions put `Date.now()` or `crypto.randomUUID()` in their bodies (an outbox dry run's
+ * dedupe_key, a decision digest's, a work item's subject id, the mission-control writes), so the
+ * two copies of one double-submitted SubmitButton press got two keys and acted twice — and the
+ * API's own dedupe_key, random too, caught nothing (review of 6ca9119). Built from the press,
+ * the value is fresh for every new press and identical for its duplicates. With no press to
+ * derive from (a background render), it is a fresh id, exactly as before.
+ * `tests/a-repeated-press-repeats-its-body.test.ts` refuses the old sources in every
+ * 'use server' module.
+ */
+export async function pressToken(): Promise<string> {
+  return (await serverIntent()) ?? newIntentKey();
 }
 
 /** `<intent>.<32 hex>`: stable for the same call under the same press, distinct across calls. */

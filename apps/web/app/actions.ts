@@ -7,7 +7,7 @@ import { orgFromReferer, workflowHref } from "./actions-href";
 import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
-import { apiWrite } from "../lib/api-write";
+import { apiWrite, pressToken } from "../lib/api-write";
 
 export async function setPipelineDefaultAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
@@ -1394,7 +1394,7 @@ export async function submitOutboxDraftAction(formData: FormData): Promise<void>
     throw new Error("body is required");
   }
 
-  const dedupeKey = `outbox-${Date.now()}`;
+  const dedupeKey = `outbox-${await pressToken()}`;
   await client.createOutboxMessage({
     project_id: getProjectId(formData),
     channel: channel.trim(),
@@ -1427,7 +1427,7 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
   await client.queueOutboxDelivery(messageId, {
     project_id: projectId,
     reservation_id: reservation.reservation_id,
-    dedupe_key: `outbox-queue-${messageId}-${Date.now()}`,
+    dedupe_key: `outbox-queue-${messageId}-${await pressToken()}`,
     actor: getActor(formData),
     urgency:
       urgency === "low" || urgency === "normal" || urgency === "urgent"
@@ -1446,7 +1446,7 @@ export async function dryRunOutboxMessageAction(formData: FormData): Promise<voi
   await client.dryRunOutboxMessage(messageId, {
     project_id: getProjectId(formData),
     actor: getActor(formData),
-    dedupe_key: `outbox-dry-run-${messageId}-${Date.now()}`,
+    dedupe_key: `outbox-dry-run-${messageId}-${await pressToken()}`,
   });
   revalidatePath("/");
 }
@@ -1466,7 +1466,7 @@ export async function createDecisionDigestAction(
     max_items: Number.isFinite(maxItems) ? maxItems : 20,
     low_risk_max: 1,
     urgent_risk_min: 2,
-    dedupe_key: `decision-digest-${Date.now()}`,
+    dedupe_key: `decision-digest-${await pressToken()}`,
   });
   revalidatePath("/");
 }
@@ -1600,7 +1600,7 @@ export async function testGitHubConnectionAction(
   await client.testGitHubConnection(connectionId, {
     project_id: getProjectId(formData),
     repository_binding_id: bindingId,
-    dedupe_key: `mission-control-test-${connectionId}-${bindingId}-${Date.now()}`,
+    dedupe_key: `mission-control-test-${connectionId}-${bindingId}-${await pressToken()}`,
     actor: getActor(formData),
   });
   revalidatePath("/");
@@ -1653,7 +1653,7 @@ export async function captureGitHubBranchSnapshotAction(
     repository_binding_id: bindingId,
     source_ref: sourceRef,
     target_ref: targetRef,
-    dedupe_key: `mission-control-snapshot-${bindingId}-${sourceRef}-${targetRef}-${Date.now()}`,
+    dedupe_key: `mission-control-snapshot-${bindingId}-${sourceRef}-${targetRef}-${await pressToken()}`,
     actor: getActor(formData),
   });
   revalidatePath("/");
@@ -1674,7 +1674,7 @@ export async function planGitHubCodeSyncAction(
     repository_binding_id: bindingId,
     snapshot_id: snapshotId,
     resolution_branch: getOptionalString(formData, "resolution_branch"),
-    dedupe_key: `mission-control-sync-${bindingId}-${snapshotId}-${Date.now()}`,
+    dedupe_key: `mission-control-sync-${bindingId}-${snapshotId}-${await pressToken()}`,
     actor: getActor(formData),
   });
   revalidatePath("/");
@@ -1688,7 +1688,7 @@ export async function scheduleGitHubReconciliationAction(
     project_id: getProjectId(formData),
     repository_binding_id: bindingId,
     refs: parseLines(formData.get("refs")),
-    dedupe_key: `mission-control-reconcile-${bindingId ?? "all"}-${Date.now()}`,
+    dedupe_key: `mission-control-reconcile-${bindingId ?? "all"}-${await pressToken()}`,
     actor: getActor(formData),
   });
   revalidatePath("/");
@@ -1703,7 +1703,7 @@ export async function repairGitHubReconciliationAction(
   }
   await client.repairGitHubReconciliationRun(runId, {
     project_id: getProjectId(formData),
-    dedupe_key: `mission-control-repair-${runId}-${Date.now()}`,
+    dedupe_key: `mission-control-repair-${runId}-${await pressToken()}`,
     actor: getActor(formData),
   });
   revalidatePath("/");

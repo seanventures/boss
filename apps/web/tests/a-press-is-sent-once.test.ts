@@ -160,6 +160,52 @@ describe("a duplicate waits for the original's answer instead of showing an erro
     }
   });
 
+  const RAW = "idempotency_key_in_progress: the first request with this key is still running";
+
+  it("an upload it cannot resend is told in the operator's words, not the API's", async () => {
+    // Review of 6ca9119: a FormData/stream body returned the API's raw in-progress 409 at once.
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      Response.json({ detail: RAW }, { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const form = new FormData();
+    form.set("file", "x");
+    const response = await apiWrite("http://api/v1/uploads", {
+      method: "POST", headers: { [IDEMPOTENCY_HEADER]: "k" }, body: form },
+      { press: { scope: "u", label: "Upload" } });
+    expect(response.status).toBe(409);
+    const detail = (await response.json()).detail as string;
+    expect(detail).toBe("Upload is still in progress — it was not sent again; "
+      + "the result will appear when it finishes.");
+    expect(detail).not.toContain("idempotency_key");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("and so is a press that outlasts the wait", async () => {
+    // A handler running longer than IN_PROGRESS_WAIT_MS reliably hit the raw path.
+    const realNow = Date.now;
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => {
+        now += 6 * 60_000;
+        return Response.json({ detail: RAW }, { status: 409 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const sent = apiWrite("http://api/v1/agent/turn", {
+        method: "POST", headers: { [IDEMPOTENCY_HEADER]: "k" }, body: "{}" });
+      await vi.runAllTimersAsync();
+      const response = await sent;
+      expect(response.status).toBe(409);
+      expect((await response.json()).detail).toMatch(
+        /^This request is still in progress — it was not sent again; the result will appear/);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      Date.now = realNow;
+    }
+  });
+
   it("passes any other 409 straight back — a conflict about the request is the caller's to show", async () => {
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
       Response.json({ detail: "a run is already live for this project" }, { status: 409 }));
