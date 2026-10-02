@@ -3247,6 +3247,9 @@ CREATE TABLE IF NOT EXISTS meeting_runs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_runs_project ON meeting_runs(project_id, status, updated_at DESC);
+-- What the meeting is called, kept apart from the directive: workflow framing prepended to the
+-- directive became every meeting's title on boss-1 ('PRD meeting: --- WHAT THIS PANEL IS FOR ---').
+ALTER TABLE meeting_runs ADD COLUMN IF NOT EXISTS title TEXT;
 
 -- Durable coding-agent task: clone -> edit -> build/test -> open PR (gated).
 -- Unlike meeting_runs (pure-data phases), a code task's working tree is

@@ -1588,6 +1588,10 @@ export type Meeting = {
   prd_markdown?: string | null;
   pull_request_url?: string | null;
   pull_request_number?: number | null;
+  /** Where the meeting's PRD stands, from the decision that gates it (meeting_service.prd_state_of). */
+  prd_state?: string | null;
+  /** The same, in the operator's words. Rendered as given; the console does not re-derive it. */
+  prd_label?: string | null;
 };
 
 export type MeetingsResponse = {

@@ -1370,21 +1370,26 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         # afterwards that none of this will be built has already written a build plan.
         objective = (args.get("objective") or "").strip()
         workflow_name = (args.get("workflow_name") or "").strip()
+        # THE MEETING'S NAME IS THE ASK, taken before any framing is wrapped around it. The
+        # framing below is for the panel's prompt; when it became the title too, every
+        # workflow-convened meeting on boss-1 was called "PRD meeting: --- WHAT THIS PANEL IS
+        # FOR ---" and the Meetings screen could not tell them apart.
+        title = ms.meeting_subject(directive)
         if objective:
             directive = (
-                f"--- WHAT THIS PANEL IS FOR ---\n"
+                f"{ms.PANEL_PURPOSE_MARKER}\n"
                 f"You are the panel inside BOSS's "
                 f"{workflow_name or 'delivery'} workflow. That workflow's objective:\n\n"
                 f"{objective}\n\n"
                 f"Write for THAT outcome. A PRD that suits a different workflow is the wrong "
                 f"document however good it is.\n"
-                f"--- WHAT YOU ARE BEING ASKED ABOUT ---\n\n{directive}"
+                f"{ms.PANEL_ASK_MARKER}\n\n{directive}"
             )
         research = (args.get("research") or "").strip()
         if research:
             directive = (
                 f"{directive}\n\n"
-                f"--- RESEARCH ALREADY DONE FOR THIS ---\n"
+                f"{ms.PANEL_RESEARCH_MARKER}\n"
                 f"BOSS researched this before convening you. Argue from it: agree, disagree, "
                 f"or say what it missed — do not re-derive it from scratch.\n\n{research}"
             )
@@ -1399,6 +1404,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 directive=directive,
                 url=(args.get("url") or "").strip(),
                 task_id=args.get("task_id"),
+                title=title,
             )
         return {"status": "running", "meeting": _json_safe(result), "project_id": pid}
 

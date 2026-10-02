@@ -6,6 +6,7 @@ import Link from "next/link";
 import { formatDateTimeShort } from "../lib/datetime";
 import type { Meeting, MeetingRole } from "../lib/meeting-rooms";
 import { Markdown } from "./markdown";
+import { meetingCardTitle } from "../lib/meeting-title";
 import { pushUrlParam, readUrlParam } from "./url-nav";
 import {
   conveneMeetingAction,
@@ -513,6 +514,7 @@ function cleanTitle(raw: string): string {
   return (raw || "").replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ").trim();
 }
 
+
 function leadTitle(raw: string): string {
   const text = cleanTitle(raw);
   if (text.length <= 96) return text;
@@ -624,7 +626,7 @@ export function MeetingsHome({
                 </span>
                 <span className="mr-meeting-date">{fmtDate(m.completed_at ?? m.created_at)}</span>
               </div>
-              <span className="mr-meeting-title">{m.title.replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ")}</span>
+              <span className="mr-meeting-title">{meetingCardTitle(m.title)}</span>
               <div className="mr-meeting-avatars">
                 {(m.participants ?? []).map((p) => <Avatar key={p} role={p} />)}
               </div>
@@ -634,7 +636,11 @@ export function MeetingsHome({
                 ) : m.pull_request_url ? (
                   <span className="mr-meeting-pill accent">PR #{m.pull_request_number}</span>
                 ) : (
-                  <span className="mr-meeting-pill">awaiting approval</span>
+                  // FROM THE PRD'S DECISION, not from "has a PR URL": every card without one said
+                  // "awaiting approval" on boss-1, including meetings whose PRD fed shipped projects.
+                  <span className="mr-meeting-pill" data-testid="mr-meeting-prd-state">
+                    {m.prd_label ?? "PRD state unknown"}
+                  </span>
                 )}
                 <span className="mr-meeting-pill">{fmtCost(m.cost_usd_micros)}</span>
                 {fmtDuration(m.created_at, m.completed_at) ? (
