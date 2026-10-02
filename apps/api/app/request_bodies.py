@@ -148,6 +148,10 @@ class WorkflowStartBody(ProjectBody):
     from_discovery: str | None = None
     dedupe_key: str | None = None
     sample: bool | None = None
+    #: Readiness keys the operator was shown missing and chose to start without — "I will add
+    #: the deployment host before the release". Anything missing that is not named still
+    #: refuses (see workflow_readiness.refuse_unless_ready).
+    start_anyway: list[str] | None = None
 
 
 class WorkflowScheduleBody(ProjectBody):
