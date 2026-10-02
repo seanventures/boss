@@ -429,6 +429,22 @@ def display_title(raw: Optional[str]) -> str:
     return meeting_subject(value)
 
 
+def meeting_title(title: Optional[str], directive: Optional[str] = None) -> str:
+    """THE title of a meeting or meeting run, for every reader that shows one to a person or an
+    agent: the stored title cleaned by display_title, or the directive's subject when the row
+    has no title (rows written before meeting_runs.title existed).
+
+    One function because the fix for framed titles reached only some readers: the chat tool
+    list_meetings still returned the raw directive and v2 sessions cleaned meetings.title with
+    the product-name cleaner, so older rows still read "PRD meeting: --- WHAT THIS PANEL IS FOR
+    ---" (review of milestone/console-b, 2026-10-02). test_every_meeting_title_reader enumerates
+    the readers.
+    """
+    if str(title or "").strip():
+        return display_title(title)
+    return meeting_subject(directive)
+
+
 #: Where a meeting's PRD stands, in the operator's words. ONE table, read by the Meetings cards
 #: and anything else that labels a meeting, so two screens cannot describe the same PRD two ways.
 PRD_STATE_LABELS: dict[str, str] = {
@@ -440,7 +456,25 @@ PRD_STATE_LABELS: dict[str, str] = {
     "approved": "PRD approved",
     "published": "PRD published",
     "rejected": "PRD rejected",
+    # decisions.expire_stale_decisions sets 'expired'; it is not still awaiting anyone.
+    "expired": "approval expired",
     "pr_open": "PRD in a pull request",
+}
+
+#: Every status decisions.py writes, mapped explicitly. The fall-through to "awaiting approval"
+#: labelled an EXPIRED decision as still awaiting approval (review of milestone/console-b,
+#: 2026-10-02); test_every_decision_status_has_a_prd_state keeps this table complete.
+DECISION_TO_PRD_STATE: dict[str, str] = {
+    "created": "awaiting_approval",
+    "pending": "awaiting_approval",
+    "delegated": "awaiting_approval",
+    "approved": "approved",
+    "executed": "published",
+    "completed": "published",
+    "rejected": "rejected",
+    "revision_requested": "revision_requested",
+    "revise": "revision_requested",
+    "expired": "expired",
 }
 
 _PRD_DECISION_QUESTION = "Approve publishing the PRD the team drafted"
@@ -479,15 +513,7 @@ def prd_state_of(connection: Connection, *, run_status: Optional[str], decision_
     if row is None:
         return _out("no_prd")
     decision = str(row["status"] or "").lower()
-    if decision in {"executed", "completed"}:
-        return _out("published")
-    if decision == "approved":
-        return _out("approved")
-    if decision == "rejected":
-        return _out("rejected")
-    if decision in {"revision_requested", "revise"}:
-        return _out("revision_requested")
-    return _out("awaiting_approval")
+    return _out(DECISION_TO_PRD_STATE.get(decision, "awaiting_approval"))
 
 
 def _row_to_run(r) -> dict:
@@ -506,7 +532,7 @@ def _row_to_run(r) -> dict:
         "meeting_id": r["meeting_id"], "minutes_artifact_id": r["minutes_artifact_id"], "decision_id": r["decision_id"],
         # The run's own title when it has one; the directive's subject for rows written before
         # the column existed. Never the raw directive — see meeting_subject.
-        "title": (r.get("title") if hasattr(r, "get") else None) or meeting_subject(r["directive"]),
+        "title": meeting_title(r.get("title") if hasattr(r, "get") else None, r["directive"]),
     }
 
 

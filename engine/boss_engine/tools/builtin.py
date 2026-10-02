@@ -265,12 +265,20 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         with ctx.begin() as c:
             rows = c.execute(
                 _text(
-                    "SELECT id,status,phase,directive,created_at FROM meeting_runs "
+                    "SELECT id,status,phase,title,directive,created_at FROM meeting_runs "
                     "WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"
                 ),
                 {"p": pid, "l": limit},
             ).mappings().all()
-        return {"count": len(rows), "meetings": [_json_safe(dict(r)) for r in rows]}
+        from ..services.meeting_service import meeting_title
+
+        # The title first, so an agent reading the list sees what each meeting is ABOUT; the
+        # directive stays for the full brief.
+        meetings = [
+            {**_json_safe(dict(r)), "title": meeting_title(r["title"], r["directive"])}
+            for r in rows
+        ]
+        return {"count": len(rows), "meetings": meetings}
 
     @reg.tool(
         "list_previews",
@@ -3186,7 +3194,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                           "FROM decisions WHERE id=:d AND project_id=:p"),
                     {"d": row["decision_id"], "p": project_id},
                 ).mappings().first()
-        return {"meeting": _json_safe(dict(row)),
+        from ..services.meeting_service import meeting_title
+
+        meeting = _json_safe(dict(row))
+        meeting["title"] = meeting_title(row.get("title"), row.get("directive"))
+        return {"meeting": meeting,
                 "decision": _json_safe(dict(dec)) if dec else None}
 
 
@@ -5263,10 +5275,12 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
             if not titles:
                 titles = [wanted]
             rows = c.execute(
-                _text("SELECT id, directive, state, created_at FROM meeting_runs "
+                _text("SELECT id, title, directive, state, created_at FROM meeting_runs "
                       "WHERE project_id = :p AND state != '{}'::jsonb "
                       "ORDER BY created_at DESC LIMIT 200"),
                 {"p": pid}).mappings().all()
+
+        from ..services.meeting_service import meeting_title
 
         seen = []
         for row in rows:
@@ -5281,7 +5295,7 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                         continue
                     seen.append({
                         "meeting_run_id": row["id"],
-                        "brief": str(row["directive"] or "")[:160],
+                        "brief": meeting_title(row["title"], row["directive"])[:160],
                         "round": round_name,
                         "when": row["created_at"].isoformat() if row["created_at"] else None,
                         # Enough to be specific, not so much that a dozen of them flood the
