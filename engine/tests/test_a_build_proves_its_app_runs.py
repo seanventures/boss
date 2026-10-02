@@ -327,3 +327,125 @@ def test_a_library_that_serves_nothing_is_left_to_its_tests(tmp_path):
                                  read=lambda _p: "", timeout=5)
     assert record["ok"] is True and record["proven"] is False
     assert record["source"] == "library"
+
+
+# --------------------------------------------------------------------------------------- #
+# Review of cf8c2d4: the proof holds SERVICES to serving, and only services.
+# --------------------------------------------------------------------------------------- #
+
+def test_a_cli_main_with_a_main_block_is_left_to_its_tests(tmp_path):
+    """cf8c2d4 launched a non-service build's main.py, saw "hello" and an exit, and failed
+    app_serves — a gate nothing may ship past — so a CLI build that used to complete blocked."""
+    files = {"main.py": "def main():\n    print('hello')\n\n\nif __name__ == '__main__':\n"
+                        "    main()\n",
+             "tests/test_main.py": "import unittest\n"}
+    root = _write(tmp_path, files)
+    record = ps.prove_app_serves(root, list(files), read=files.get, serves_http=False, timeout=5)
+    assert record["ok"] is True and record["proven"] is False, record
+    assert record["source"] == "library"
+    assert record["command"] is None
+
+
+def test_a_node_cli_with_a_start_script_is_left_to_its_tests(tmp_path):
+    files = {"package.json": json.dumps({"name": "tool", "scripts": {"start": "node cli.js"}}),
+             "cli.js": "console.log(process.argv.slice(2).join(' '))\n"}
+    root = _write(tmp_path, files)
+    record = ps.prove_app_serves(root, list(files), read=files.get, serves_http=False, timeout=5)
+    assert record["ok"] is True and record["source"] == "library", record
+
+
+def test_a_long_running_worker_that_is_not_a_service_is_not_required_to_serve(tmp_path):
+    files = {"serve_queue.py": "import time\n\nif __name__ == '__main__':\n"
+                               "    while True:\n        time.sleep(1)\n"}
+    root = _write(tmp_path, files)
+    record = ps.prove_app_serves(root, list(files), read=files.get, serves_http=False, timeout=5)
+    assert record["ok"] is True and record["source"] == "library", record
+
+
+def test_a_build_not_flagged_as_a_service_that_writes_a_server_is_still_proven(tmp_path):
+    """The relaxation is for things that are not servers; a server the build wrote still runs."""
+    root = _lead_triage(tmp_path)
+    record = ps.prove_app_serves(root, BUILT, read=_files(root, BUILT).get,
+                                 serves_http=False, timeout=20)
+    assert record["ok"] and record["proven"] and record["source"] == "derived", record
+
+
+def test_a_docs_only_follow_up_in_a_multi_app_repo_is_not_failed_for_the_repos_shape(tmp_path):
+    """Changing a README in a repo holding a/server.py, b/server.py and index.html used to fail
+    as 'ambiguous': the build was failed for what the repository contains, not what it did."""
+    root = _write(tmp_path, {"a/server.py": SERVER, "b/server.py": SERVER,
+                             "index.html": "<html></html>", "a/README.md": "# a\n",
+                             "a/tests/test_x.py": "import unittest\n"})
+    for changed in (["a/README.md"], ["a/README.md", "a/tests/test_x.py"]):
+        record = ps.prove_app_serves(root, changed, serves_http=True, timeout=5)
+        assert record["ok"] is True and record["source"] == "no_runnable_change", record
+
+
+def test_a_service_change_to_runnable_source_is_still_held_to_serving(tmp_path):
+    assert ps.touches_runnable_source(["inbox/models.py"])
+    assert ps.touches_runnable_source(["web/index.html"])
+    assert not ps.touches_runnable_source(["README.md", "docs/x.py", "tests/test_a.py",
+                                           "web/src/app.test.ts"])
+
+
+def test_a_non_final_decomposition_slice_skips_the_serve_proof():
+    """Slice 1 of a decomposed build may be the data model alone; a non-final slice never
+    opens a PR, so a failing app_serves went straight to block and stopped the chain."""
+    assert gov.app_serves_check_skip_reason(
+        {"decomposition_index": 1, "decomposition_total": 3})
+    assert gov.app_serves_check_skip_reason(
+        {"decomposition_index": 3, "decomposition_total": 3}) is None
+    assert gov.app_serves_check_skip_reason({}) is None
+    body = inspect.getsource(gov.run_governed_code_task)
+    assert "_serve_skip = app_serves_check_skip_reason(fctx)" in body
+
+
+# --------------------------------------------------------------------------------------- #
+# Review of cf8c2d4: the operator sees the app's error where they look.
+# --------------------------------------------------------------------------------------- #
+
+def test_an_app_that_exits_is_reported_as_exiting_with_its_code_not_as_a_timeout(tmp_path):
+    root = _lead_triage(tmp_path, **{
+        "boss.preview.command": "python3 lead_triage_core/approvals.py\n"})
+    built = BUILT + ["boss.preview.command"]
+    record = ps.prove_app_serves(root, built, read=_files(root, built).get, timeout=20)
+    assert record["ok"] is False
+    assert record["exit_code"] not in (None, 0)
+    assert record["error"].startswith("the app exited (code ")
+    assert "within timeout" not in record["error"]
+    assert "ImportError" in record["error"]
+
+
+def test_a_blocked_run_carries_the_apps_error_and_an_honest_rescue_reason():
+    """The blocked run's error said only "failing gates: ['app_serves']", and the partial-PR
+    reason claimed never_block was disabled when app_serves had forced the block."""
+    record = {"ok": False, "command": "python3 lead_triage_core/approvals.py",
+              "error": "the app exited (code 1) before serving HTTP: error: ImportError: "
+                       "attempted relative import with no known parent package"}
+    error, reason = gov.blocked_gate_messages("qg_1", ["app_serves"], record)
+    assert "python3 lead_triage_core/approvals.py" in error
+    assert "ImportError" in error
+    assert "never_block" not in reason and "did not start" in reason
+    plain_error, plain_reason = gov.blocked_gate_messages("qg_1", ["review_code"], record)
+    assert "ImportError" not in plain_error
+    assert plain_reason == "quality gate blocked and never_block is disabled"
+    assert "blocked_gate_messages(" in inspect.getsource(gov.run_governed_code_task)
+
+
+def test_a_proof_on_the_host_for_a_docker_runtime_build_is_not_blamed_on_the_code():
+    failed = {"ok": False, "harness": False, "error": "ModuleNotFoundError: No module named 'flask'"}
+    marked = gov.app_serves_inconclusive_on_runtime(failed, "docker")
+    assert gov.classify_gate_faults(failing=["app_serves"],
+                                    evidence={"app_serves": marked}) == {"app_serves": "HARNESS"}
+    assert gov.app_serves_inconclusive_on_runtime(failed, "subprocess") is failed
+
+
+def test_a_config_module_named_like_an_app_does_not_beat_the_server_beside_it(tmp_path):
+    """python_source_is_program counts any top-level call, so app_settings.py running
+    load_dotenv() qualified — and won rule 1 by coming first in the changed list."""
+    root = _write(tmp_path, {
+        "app_settings.py": "from dotenv import load_dotenv\n\nload_dotenv()\nDEBUG = False\n",
+        "server.py": SERVER.replace("from .approvals import approve\n",
+                                    "approve = str\n"),
+    })
+    assert ps.resolve_app_entry(root, ["app_settings.py", "server.py"]) == ("py", "server.py")
