@@ -599,41 +599,41 @@ def test_private_host_redaction_rewrites_published_operation_counts() -> None:
         "docs/community/FEATURES.md",
         (export.ROOT / "docs/community/FEATURES.md").read_bytes(),
     ).decode()
-    assert "All 982 mounted" in features
+    assert "All 983 mounted" in features
     assert "851 use API policy" in features
     assert "none remain held" in features
-    assert "993" not in features
+    assert "994" not in features
     assert "2 remain held" not in features
-    assert "993" in (export.ROOT / "docs/community/FEATURES.md").read_text()
+    assert "994" in (export.ROOT / "docs/community/FEATURES.md").read_text()
 
     manual = export._private_host.redact_private_host(
         "docs/community/MCP.md",
         (export.ROOT / "docs/community/MCP.md").read_bytes(),
     ).decode()
-    assert "**982 Community**" in manual
-    assert "**1,034 Enterprise**" in manual
-    assert "| Community | 851 | 64 | 0 | 67 |" in manual
+    assert "**983 Community**" in manual
+    assert "**1,035 Enterprise**" in manual
+    assert "| Community | 851 | 64 | 0 | 68 |" in manual
     assert "| Paid-only additions | 39 | 0 | 2 | 0 |" in manual
 
     surfaces = export._private_host.redact_private_host(
         "docs/community/CONTROL_SURFACES.md",
         (export.ROOT / "docs/community/CONTROL_SURFACES.md").read_bytes(),
     ).decode()
-    assert "all 982" in surfaces
-    assert "969 `/v1/`" in surfaces
+    assert "all 983" in surfaces
+    assert "970 `/v1/`" in surfaces
     assert "851 are eligible" in surfaces
-    assert "993" not in surfaces
+    assert "994" not in surfaces
 
     matrix = export._private_host.redact_private_host(
         "docs/community/TERMINAL_CAPABILITY_MATRIX.md",
         (export.ROOT / "docs/community/TERMINAL_CAPABILITY_MATRIX.md").read_bytes(),
     ).decode()
     assert "| Goldeneye |" not in matrix
-    assert "**982**" in matrix
-    assert "**969**" in matrix
-    assert "all 982" in matrix
-    assert "**1,034**" in matrix
-    assert "993" not in matrix
+    assert "**983**" in matrix
+    assert "**970**" in matrix
+    assert "all 983" in matrix
+    assert "**1,035**" in matrix
+    assert "994" not in matrix
 
 
 def test_private_host_redaction_keeps_community_main_valid() -> None:

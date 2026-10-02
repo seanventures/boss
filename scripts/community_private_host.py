@@ -24,22 +24,22 @@ class PrivateHostLeak(Exception):
 # The private files stay on the larger contract; only the export changes.
 DOCUMENTED_OPERATION_COUNTS = {
     "docs/community/TERMINAL_CAPABILITY_MATRIX.md": (
-        ("**993**", "**982**"),
-        ("**980**", "**969**"),
-        ("all 993", "all 982"),
+        ("**994**", "**983**"),
+        ("**981**", "**970**"),
+        ("all 994", "all 983"),
     ),
     "docs/community/MCP.md": (
         ("**994 Community**", "**983 Community**"),
         ("| Community | 860 | 64 | 2 | 68 |", "| Community | 851 | 64 | 0 | 68 |"),
     ),
     "docs/community/CONTROL_SURFACES.md": (
-        ("all 993", "all 982"),
-        ("980 `/v1/`", "969 `/v1/`"),
+        ("all 994", "all 983"),
+        ("981 `/v1/`", "970 `/v1/`"),
         ("860 are eligible", "851 are eligible"),
         ("2 remain held", "none remain held"),
     ),
     "docs/landing/index.html": (
-        ('<b data-count="api">993</b>', '<b data-count="api">982</b>'),
+        ('<b data-count="api">994</b>', '<b data-count="api">983</b>'),
     ),
     "docs/community/FEATURES.md": (
         ("All 994 mounted", "All 983 mounted"),
@@ -257,14 +257,14 @@ def _strip_python(path: str, text: str) -> str:
     if path == "engine/boss_engine/services/console_v2.py":
         text = text.replace("|goldeneye profile check", "")
     if path == "scripts/tests/test_metatron_tui.py":
-        text = text.replace("len(records) == 993", "len(records) == 982")
-        text = text.replace('== {"openapi": 993, "operator": 980}', '== {"openapi": 982, "operator": 969}')
-        text = text.replace('assert "993" in features', 'assert "982" in features')
+        text = text.replace("len(records) == 994", "len(records) == 983")
+        text = text.replace('== {"openapi": 994, "operator": 981}', '== {"openapi": 983, "operator": 970}')
+        text = text.replace('assert "994" in features', 'assert "983" in features')
         text = text.replace(
-            'assert "993" in terminal and "980" in terminal',
-            'assert "982" in terminal and "969" in terminal',
+            'assert "994" in terminal and "981" in terminal',
+            'assert "983" in terminal and "970" in terminal',
         )
-        text = text.replace("len(operator_records) == 980", "len(operator_records) == 969")
+        text = text.replace("len(operator_records) == 981", "len(operator_records) == 970")
     if path == "scripts/tests/test_mcp_api_parity.py":
         text = _delete_span(
             text,
