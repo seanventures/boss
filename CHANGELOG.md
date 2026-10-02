@@ -1,15 +1,36 @@
 # Changelog
 
-## v1.0-rc3 - 2026-10-02
+## v1.0-rc4 - 2026-10-02
 
-Community release candidate. Package version `1.0.0-rc.3`. Not a public GA.
+Community release candidate. Package version `1.0.0-rc.4`. Not a public GA. Replaces the withdrawn `v1.0-rc3` name: it combines that candidate's fixes with the work Paramaguru Gnanaguru contributed to the public repository after `v1.0-rc2`.
+
+### Added
+
+- Discovery research runs in Community as a governed worker job: a `discovery.run` job that a worker leases, where every research stage is budget-reserved, leased on the Claude Code subscription, and receipted, and a retry replays stages already paid for instead of calling them again. A discovery says why it is not moving, including one the shepherd cancelled. (Paramaguru Gnanaguru)
+- Connecting a Codex, Claude Code, or Grok Build subscription proves it with one governed test turn (reserved and receipted) before calling it connected; a rejected login shows as broken in Setup. (Paramaguru Gnanaguru)
+- TypeSafe Jev is its own model source and the default decider, with Claude as the fallback; a TypeSafe key is proved through the governed spend path before it is kept. (Paramaguru Gnanaguru)
+- Model pickers ask the CLI that runs them: the Codex picker offers the signed-in account's models, and no model is hard-coded. (Paramaguru Gnanaguru)
+- `remote.sh` deploys from your own machine: it resolves `--dir '~/…'` on the host, and the follow-up commands it prints carry `--dir`. A `.gitignore` keeps an in-place install's secrets out of the checkout. (Paramaguru Gnanaguru)
+
+### Changed
+
+- **Build**'s research step runs governed Discovery research when the Claude Code subscription can be used. Only when it cannot (not connected, its login rejected, or the Claude CLI unavailable — the same model route the research job would be refused) is the step recorded as skipped, with the router's reason and a `workflow.research_skipped` event, and the run goes on to the panel and the PRD. A local model cannot do web research. This replaces rc3's "research is paused in Community" skip.
+- The Ask BOSS sheet keeps saying that SSH host deployment is paused in Community, separately from research.
 
 ### Fixed
 
-- **Build** runs in Community. Standard Product Delivery, the workflow Build starts, no longer deadletters at its research step: Discovery research stays paused in Community, and the step is recorded as skipped ("Skipped: research is paused in Community") with a `workflow.research_skipped` event, then the run goes on to the panel and the PRD.
+- **Build** runs in Community: Standard Product Delivery no longer deadletters at its research step.
 - The PRD, its meeting, and its task are titled with your request instead of the panel brief ("PRD: --- WHAT THIS PANEL IS FOR --- ...").
 - `boss connect ollama --local-model NAME` moves the roles BOSS gave the previous local model, not just chat. Roles you chose by hand are left alone. BOSS records the roles it set in `.env.boss-local-roles`.
 - The New Project form no longer promises a "platform default" repository that does not exist. It says a build needs a connected GitHub repository and links to **Settings → Repo and model → Repository**. `/v1/setup/status` and the build's missing-repository error name the same screen instead of `BOSS_TARGET_GITHUB_OWNER`/`_REPO`, which the Community Compose file does not pass to its containers.
+- The worker's discovery route was held by route safety (409), so every Community discovery sat queued; every API route the worker calls is now tested as reachable by the worker. Discovery's first stage could not get budget on a default install, and governed discovery and decisions were refused the workspace operator's own subscription. (Paramaguru Gnanaguru)
+- Every meeting step failed because the Claude CLI rejected a deny rule for a tool it no longer has. A Claude credential that is not a setup token is refused when pasted. A refused connection no longer rolls back its own "login rejected" mark, and Community no longer locks its own work out of the subscription it connected. (Paramaguru Gnanaguru)
+- Pressing Stop-and-run-again twice started two workflows; a deploy no longer uses up a running job's attempts. (Paramaguru Gnanaguru)
+- Installer and console: the node agent runs with bash on Ubuntu and Debian; a Claude setup token is stored in the install's secret store and an Infisical-stored token counts as connected; rerunning the installer keeps the subscriptions it connected; the database secret store keeps its key in `.env`; an upgrade no longer stops silently when `.env` predates `BOSS_KMS_MASTER_KEY`; the installer ends on the console address, org, and sign-in; the sign-in page says where the console password lives; entering an organization is a full page load; `boss` says "wrong machine" when BOSS is not installed here. (Paramaguru Gnanaguru)
+
+### Release process
+
+- `scripts/community_public_guard.py` refuses a public sync while public `main` has commits that are not imported into the private source, so an export can no longer silently drop public-only work. See [the export tool guide](docs/operations/COMMUNITY_EXPORT_TOOL.md).
 
 ## v1.0-rc2 - 2026-10-01
 
@@ -35,8 +56,8 @@ Community release candidate. Package version `1.0.0-rc.2`. Not a public GA.
 ### Known issues
 
 - Software Factory builds need a GitHub repository connected to the project.
-- The default Build workflow (Standard Product Delivery) stops at its research step in Community; choose Backend Service Setup instead (see the getting started guide). Fixed in v1.0-rc3.
-- The PRD title shows the panel brief instead of the request. Fixed in v1.0-rc3.
+- The default Build workflow (Standard Product Delivery) stops at its research step in Community; choose Backend Service Setup instead (see the getting started guide). Fixed in v1.0-rc4.
+- The PRD title shows the panel brief instead of the request. Fixed in v1.0-rc4.
 
 ## v1.0-rc1 - 2026-09-29
 

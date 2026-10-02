@@ -216,12 +216,12 @@
   "page_export_rewrite": {
     "source": "apps/web/app/page-community.tsx",
     "destination": "apps/web/app/page.tsx",
-    "sha256": "4ac2ce8dd4f4bf693457607eeadc48ae330cfad2a0b92015d9360c2cc25ce5cb"
+    "sha256": "67eaa3b1e9acdfbf54589e2ea58ef47e08a9568f5e81469cc6bddb79ed6f0623"
   },
   "readme_export_rewrite": {
     "source": "README.community.md",
     "destination": "README.md",
-    "sha256": "d7220fb67702e3c4839ba12fd20d53500bd4ffe3619bced3fb5d8d2a420f735b"
+    "sha256": "d446e624864cb653e75c24cce12412a015feaa40e44f58035d8f5c7ac88e6503"
   },
   "contributing_export_rewrite": {
     "source": "CONTRIBUTING.community.md",
@@ -246,7 +246,7 @@
   "openapi_export_rewrite": {
     "source": "api/openapi.community.yaml",
     "destination": "api/openapi.yaml",
-    "sha256": "b5dd71caf38b2c18d8e7885178f063ca141a7e991d83c324aed5d44a004094a2"
+    "sha256": "61194c804f9160b53694c9d6445ce85a73bedf19a5b4e13dcbbb63163c1b7337"
   },
   "traceability_export_rewrite": {
     "source": "docs/product/TRACEABILITY.community.md",
