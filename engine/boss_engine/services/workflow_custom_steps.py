@@ -645,9 +645,11 @@ def execute(
     That made every skill callable by anyone who could draw a step, and it is the opposite of
     the rule the rest of BOSS runs on: an agent HOLDS a skill (role_skills), and that grant is
     what the permission gate cashes. The runner now calls as `workflow_runner` only where the
-    binding's own policy already lists it (every MCP tool does), and is otherwise refused with
-    "give <skill> to an agent" — except in a version published before that rule, which keeps
-    the grant it was published with (`_spec_granting_the_runner`, `legacy_workflow_runner`).
+    binding's own policy already lists it and it reaches no MCP server, and is otherwise refused
+    with "give <skill> to an agent" — except in a version published before that rule, which
+    keeps the grant it was published with (`_spec_granting_the_runner`, `legacy_workflow_runner`).
+    An MCP tool is never run as the workflow in a current version: its server is granted to an
+    agent, never to a step (review of milestone/integration; agents.SERVERLESS_MCP_GRANTS).
     """
     if ran_as is None:
         from .step_agents import StepAgentError, resolve
@@ -701,6 +703,13 @@ def execute(
     # itself only where the binding's own policy names it — see the docstring.
     caller = str(ran_as.get("agent") or RUNNER_CALLER)
     on_record = actor if caller == RUNNER_CALLER else caller
+    # THE ONE ROAD on which the workflow may reach an MCP server nobody holds: a version
+    # published under the old rules (agents.SERVERLESS_MCP_GRANTS). Anything else — including a
+    # current version whose step nobody holds — is gated on the caller holding the server.
+    legacy = ran_as.get("how") == "legacy_workflow_runner"
+    # "" rather than None, so agent_loop's own default never applies to a step, even one whose
+    # agent happens to be called `agent_loop`.
+    mcp_reach = "legacy_workflow_runner" if legacy else ""
 
     # What the gate decision has to be about: this run, this step. The MCP effect checks it
     # (mcp_registry.approval_stands), so another step's approval cannot release this one.
@@ -719,8 +728,13 @@ def execute(
             # with; `step_agents.resolve` says so on the run (`legacy_workflow_runner`).
             skill_spec=(_spec_granting_the_runner(connection, settings, project_id,
                                                   str(row["skill_id"]))
-                        if ran_as.get("how") == "legacy_workflow_runner" else None),
+                        if legacy else None),
             approved_by=approved_by, approval_about=approval_about,
+            # The legacy road is named only where it matters — a skill that calls an MCP
+            # server; every other skill's legacy grant is its widened spec, as before.
+            **({"mcp_reach": mcp_reach}
+               if legacy and _skill_server(connection, project_id, str(row["skill_id"]))
+               else {}),
         )
         if str(result.get("status")) == "denied":
             # The runtime denies rather than raises, so a denial would otherwise be recorded as
@@ -759,7 +773,7 @@ def execute(
         dict(server), {"name": row["mcp_tool_name"]}, inputs,
         run_id=run_id, step=step_index, actor=on_record,
         caller=caller, approved_by=approved_by,
-        approval_about=approval_about,
+        approval_about=approval_about, mcp_reach=mcp_reach,
     )
     if str(result.get("status")) in ("denied", "failed"):
         raise CustomStepError(
@@ -780,6 +794,12 @@ def execute(
         "ran_as": {**ran_as, "skills_offered": [], "skills_used": [],
                    "mcp_offered": [f"{server['name']} · {row['mcp_tool_name']}"]},
     }
+
+
+def _skill_server(connection: Connection, project_id: str, skill_id: str) -> str:
+    from .step_agents import _skill_server as read
+
+    return read(connection, project_id, skill_id)
 
 
 def _spec_granting_the_runner(

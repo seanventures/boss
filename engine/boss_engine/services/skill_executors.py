@@ -54,6 +54,10 @@ class SkillExecutorContext:
     #: Set by SkillRuntimeService.invoke. skill.mcp_tool reads it: the caller must hold the
     #: server the skill calls (agents.mcp_reach_gap).
     caller: Optional[str] = None
+    #: THE NAMED ROAD on which this invocation may reach an MCP server its caller does not hold
+    #: (agents.SERVERLESS_MCP_GRANTS), or None — the rule. Set only by the code that IS that
+    #: road: the legacy custom-step runner and the agent loop's own offered tools.
+    mcp_reach: Optional[str] = None
 
     @property
     def github(self) -> Any:
@@ -811,10 +815,10 @@ def execute_mcp_tool(
     # already asks; this is the backstop where the effect happens, so a road that reaches the
     # executor some other way still cannot use a server through a skill. No caller on the
     # context means nobody vouched for one, which is a refusal, not a pass.
-    from .agents import SERVERLESS_MCP_CALLERS, mcp_grant_gap
+    from .agents import mcp_grant_gap, serverless_mcp_allowed
 
     caller = str(context.caller or "").strip()
-    if caller not in SERVERLESS_MCP_CALLERS:
+    if not serverless_mcp_allowed(caller, context.mcp_reach):
         gap = (mcp_grant_gap(context.connection, context.project_id, caller,
                              server_id=str(server["id"]), tool=tool_name, skill_key=skill_key)
                if caller else {"message": (
