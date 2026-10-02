@@ -1277,7 +1277,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <AreaLink className="ov-action" area="discovery" orgId={activeOrgId}>View saved research</AreaLink>
             <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a panel</AreaLink>
             <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a project</AreaLink>
-            <AreaLink className="ov-action" area="apps" orgId={activeOrgId}>See your apps</AreaLink>
+            <AreaLink className="ov-action" area="delivery" orgId={activeOrgId}>See your deployed apps</AreaLink>
             <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
             <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
           </div>
@@ -1298,9 +1298,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <span className="eyebrow">Metatron</span>
                 <h2>Scoped status query</h2>
               </div>
-              <AreaLink className="ov-action" area="metatron" orgId={activeOrgId}>
-                Open captain
-              </AreaLink>
             </div>
             {/* The composer that stood here asked for a question plus two optional ids and
                 posted to a read-only endpoint. Ask BOSS, at the top of this page, answers the

@@ -11,6 +11,12 @@ import React from "react";
  * where the operator was. This boundary keeps the console's chrome-free page honest: it says a
  * request failed, gives the reason when there is one (and the error id the server logged when
  * production hides the message), and offers the three ways forward.
+ *
+ * IT DOES NOT KNOW WHAT FAILED, so it does not claim to. The first version was headed "That
+ * action did not go through" and promised "Nothing you had typed was sent twice". This boundary
+ * also catches a render or a data fetch failing with no action taken, and nothing here can know
+ * whether a pressed button reached the API before the error, so both lines could be untrue
+ * (review of milestone/console-b, 2026-10-02). It says what it knows and how to check the rest.
  */
 export default function ConsoleError({
   error,
@@ -25,10 +31,10 @@ export default function ConsoleError({
   return (
     <main className="org-gate" data-testid="console-error">
       <div className="org-gate-inner">
-        <h1 className="org-gate-title">That action did not go through</h1>
+        <h1 className="org-gate-title">This page hit an error</h1>
         <p className="org-gate-sub">
           {hidden
-            ? "A request this page made to the BOSS API failed, and the server did not say why here."
+            ? "Loading this page or a request it made to the BOSS API failed, and the server did not say why here."
             : message}
         </p>
         {error?.digest ? (
@@ -38,8 +44,9 @@ export default function ConsoleError({
           </p>
         ) : null}
         <p className="org-gate-sub">
-          Nothing you had typed was sent twice. Try it again; if it fails the same way, check that
-          the BOSS API is running (Repo and model shows its status), then retry.
+          If you had just pressed a button, it may or may not have reached BOSS: look at the area
+          you were in before pressing it again. Otherwise try again; if it fails the same way,
+          check that the BOSS API is running (Repo and model shows its status), then retry.
         </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" className="cap-btn primary" onClick={() => reset()}>

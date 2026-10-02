@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { AREA_IDS } from "../lib/area-ids";
 import { areaVisibilityCss } from "../lib/area-visibility";
 import { codeOnly, cssOnly } from "./_helpers/source";
 
@@ -29,11 +30,10 @@ function navAreas(): string[] {
   return [...SHELL.matchAll(new RegExp(`\\{\\s*id: "(${ID})",\\s*label:`, "g"))].map((m) => m[1]);
 }
 
-/** Every member of the AreaId union. */
+/** Every AreaId. The ids moved out of a type union in ConsoleShell into lib/area-ids.ts (a value
+ *  and a type) so link targets can be checked; this reads the same list from there. */
 function unionAreas(): string[] {
-  const body = SHELL.match(/type AreaId =([\s\S]*?);/);
-  if (!body) return [];
-  return [...body[1].matchAll(new RegExp(`"(${ID})"`, "g"))].map((m) => m[1]);
+  return [...AREA_IDS];
 }
 
 /** Every area that actually renders a section in the page. */
