@@ -265,7 +265,11 @@ function observedGates(step: RunStep, runAppName = ""): string | null {
   return gates.length ? gates.join(" · ") : null;
 }
 
-/** A step whose work FAILED and whose run carried on regardless. */
+/** A step whose work FAILED and whose run carried on regardless.
+ *
+ *  HISTORY ONLY. The runner no longer does this — a failed step now stops its run until the
+ *  operator retries or skips it (see `canSkip`). Runs recorded before that change still carry
+ *  `failed_continued` outputs, and they must keep reading as failed rather than as green. */
 function failedButContinued(step: RunStep): boolean {
   return (step.output as { status?: string } | undefined)?.status === "failed_continued";
 }
@@ -275,6 +279,14 @@ function failedButContinued(step: RunStep): boolean {
 function skipReason(step: RunStep): string {
   const out = (step.output ?? {}) as { note?: unknown; reason?: unknown };
   return String(out.note ?? out.reason ?? "").slice(0, 220);
+}
+
+/** Whether "Skip and proceed" is offered: a step whose work failed, and never an approval gate
+ *  or a cancelled step. Mirrors `workflows.skip_failed_step`, which refuses the same cases. */
+export function canSkip(step: RunStep, capability?: { is_gate?: boolean }): boolean {
+  if (!["failed", "deadlettered"].includes(step.status)) return false;
+  if (step.kind === "decision") return false;
+  return !capability?.is_gate;
 }
 
 function notApplicable(step: RunStep): boolean {
@@ -968,6 +980,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           }}
           onRetryStep={(runId, stepId) =>
             act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
+          // SKIP AND PROCEED. A failed step stops the run; going on without it is a decision,
+          // so the step asks why (inline, beside the button) and the reason is kept on the step
+          // and in the run's history.
+          onSkipStep={(runId, stepId, reason) =>
+            act("Skip", "skip_step", { run_id: runId, step_id: stepId, reason })}
           onSetTarget={(runId, targetId) =>
             act("Set target", "set_input", { run_id: runId, values: { target_id: targetId } })}
           onPrepareTarget={(runId, hostId) =>
@@ -2211,8 +2228,8 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 };
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
-                   onRetryStep, onRerun, onStop, onDelete, onStopAndRerun, onBuildOnThis,
-                   onRecheck,
+                   onRetryStep, onSkipStep, onRerun, onStop, onDelete, onStopAndRerun,
+                   onBuildOnThis, onRecheck,
                    onSetTarget, onPrepareTarget,
                    onRunPreview,
                    onBound, projectId, actor, roles,
@@ -2229,6 +2246,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   busy: string | null;
   capabilities: Capability[];
   onRetryStep: (runId: string, stepId: string) => void;
+  /** Go on without a failed step, for the reason the operator gave. */
+  onSkipStep: (runId: string, stepId: string, reason: string) => void;
   onRerun: (run: Run) => void;
   /** Stop a live run: cancels the work it started, not only its bookkeeping. */
   onStop: (run: Run) => void;
@@ -2375,6 +2394,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
             {open ? (
               <StepPath run={run} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
+                        onSkipStep={(stepId, reason) => onSkipStep(run.id, stepId, reason)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
                         onStop={() => onStop(run)}
                         onDelete={() => onDelete(run)}
@@ -2495,7 +2515,8 @@ export function decidedButNotMoved(step: RunStep): string {
  * opens everything known about that step below it — duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
-function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onStop, onDelete,
+function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, onRerun, onStop,
+                   onDelete,
                    onStopAndRerun, onBuildOnThis, onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
@@ -2505,6 +2526,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
   roles: Array<{ role_key: string; display_name?: string | null }>;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
+  onSkipStep: (stepId: string, reason: string) => void;
   /** Stop a live run — the work it started, not only its bookkeeping. */
   onStop: () => void;
   onDelete: () => void;
@@ -2707,6 +2729,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           hosts={hosts}
           runInput={run.input ?? {}}
           onRetry={() => onRetryStep(current.step_id)}
+          onSkip={(reason) => onSkipStep(current.step_id, reason)}
           onSetTarget={(targetId) => onSetTarget(targetId)}
           onPrepareTarget={onPrepareTarget}
           buildRunId={buildRunId}
@@ -3321,7 +3344,7 @@ function useLearned(topic: string): [boolean, () => void] {
   return [learned, mark];
 }
 
-function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry,
+function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      previewStarting, busy }: {
   projectId: string;
@@ -3330,6 +3353,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
   runInput: Record<string, unknown>;
   onRetry: () => void; onSetTarget: (targetId: string) => void;
+  /** Skip this failed step and let the run proceed. Never offered on an approval gate. */
+  onSkip: (reason: string) => void;
   onPrepareTarget: (hostId: string) => void;
   /** The code task this run built — what a preview is started FOR. */
   buildRunId: string | null;
@@ -3341,6 +3366,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   busy: string | null;
 }) {
   const phase = phaseOf(step);
+  // The reason box for "Skip and proceed" — open only after the operator asks to skip, so the
+  // decision is two deliberate acts: choose to skip, then say why.
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipWhy, setSkipWhy] = useState("");
   // HAS ANYONE SHIPPED FROM THIS PROJECT? — not "has this browser".
   //
   // Keying only on localStorage was wrong in the one case that matters: an operator who has
@@ -3830,7 +3859,13 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
 
       {/* BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that
           did not exist, a service that was down — had no way back: the run sat stopped and the
-          only recourse was to start the whole workflow again and repeat everything before it. */}
+          only recourse was to start the whole workflow again and repeat everything before it.
+
+          OR GO ON WITHOUT IT. A failed step stops its run — every kind of step, since research
+          that died was shown green and the run walked on into a panel and a build (boss-1,
+          2026-10-02). Whether the run proceeds without it is the operator's call, so both
+          choices sit together. Skip is not offered on an approval: a refused gate is somebody's
+          "no", and skipping it would turn that into a yes. */}
       {["failed", "deadlettered", "cancelled"].includes(step.status) ? (
         <div className="dw-step-decide">
           <button type="button" className="cap-btn primary" onClick={onRetry} disabled={!!busy}
@@ -3840,6 +3875,42 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           <Explain label="What retrying this step does">
             Runs this step only; everything before it stays done.
           </Explain>
+          {canSkip(step, capability) ? (
+            <button type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
+                    disabled={!!busy || skipOpen} data-testid="dw-step-skip">
+              {busy === "Skip" ? "Skipping…" : "Skip and proceed"}
+            </button>
+          ) : null}
+          {canSkip(step, capability) ? (
+            <Explain label="What skipping this step does">
+              Marks it skipped with your reason and carries on. Steps that use what it would
+              have produced are told it was skipped — never handed a made-up value.
+            </Explain>
+          ) : null}
+          {canSkip(step, capability) && skipOpen ? (
+            <form className="dw-skip-why" data-testid="dw-step-skip-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!skipWhy.trim()) return;
+                    onSkip(skipWhy.trim());
+                    setSkipOpen(false);
+                    setSkipWhy("");
+                  }}>
+              <label>
+                Why go on without {capability?.label ?? step.step_id}?{" "}
+                <input type="text" value={skipWhy} autoFocus required
+                       data-testid="dw-step-skip-reason"
+                       placeholder="kept on the run's record"
+                       onChange={(e) => setSkipWhy(e.target.value)} />
+              </label>
+              <button type="submit" className="cap-btn primary"
+                      disabled={!!busy || !skipWhy.trim()} data-testid="dw-step-skip-confirm">
+                Skip it
+              </button>
+              <button type="button" className="linklike"
+                      onClick={() => { setSkipOpen(false); setSkipWhy(""); }}>Cancel</button>
+            </form>
+          ) : null}
         </div>
       ) : null}
 

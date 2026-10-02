@@ -4357,8 +4357,6 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         A correct diagnosis with no way to act on it is still a dead end. The console has had
         this button the whole time; this is the same operation, reachable by the agent.
         """
-        from ..services.core import emit_event
-
         pid = args.get("project_id") or project_id
         run_id = str(args.get("run_id") or "").strip()
         step_id = str(args.get("step_id") or "").strip()
@@ -4383,25 +4381,17 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                         "steps_on_this_run": [
                             {"step_id": s["step_id"], "status": s["status"]}
                             for s in available]}
-            if row["status"] not in ("failed", "deadlettered", "cancelled"):
-                # Re-queueing a live step would run it twice.
-                return {"ok": False,
-                        "error": (f"'{step_id}' is {row['status']}, so there is nothing to "
-                                  "retry.")}
-            c.execute(
-                _text("UPDATE workflow_step_runs SET status='ready', attempt=0, "
-                      "       last_error=NULL, lease_owner=NULL, lease_expires_at=NULL, "
-                      "       updated_at=now() WHERE id=:id"),
-                {"id": row["id"]})
-            # The RUN has to come back too, or a re-queued step sits ready under a dead run.
-            c.execute(
-                _text("UPDATE workflow_runs SET status='running', blocked_reason=NULL, "
-                      "       error=NULL, updated_at=now() WHERE id=:r AND project_id=:p"),
-                {"r": run_id, "p": pid})
-            emit_event(c, pid, "workflow.step_retried", actor, "workflow_run", run_id,
-                       {"step_id": step_id, "was": row["status"]})
+            # ONE IMPLEMENTATION with the console's "Try … again" — see
+            # `workflows.retry_failed_step`. This copy and the API's had drifted: only this one
+            # recorded an event.
+            from ..services import workflows as _workflows
+            try:
+                done = _workflows.retry_failed_step(
+                    c, project_id=pid, run_id=run_id, step_id=step_id, actor=actor)
+            except _workflows.WorkflowConflictError as error:
+                return {"ok": False, "error": str(error)}
         return {"ok": True, "run_id": run_id, "step_id": step_id, "status": "ready",
-                "was": row["status"],
+                "was": done["was"],
                 "note": ("Re-queued. The worker picks it up on its next sweep; everything the "
                          "run already produced is kept. Check back with "
                          "describe_workflow_run.")}
