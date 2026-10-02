@@ -72,9 +72,9 @@ import {
   loadAssuranceAreaData,
   loadBudgetAreaData,
   loadInfraAreaData,
-  shouldLoadAssuranceArea,
-  shouldLoadBudgetArea,
-  shouldLoadInfraArea,
+  ASSURANCE_AREA_IDS,
+  BUDGET_AREA_IDS,
+  INFRA_AREA_IDS,
 } from "../lib/area-data";
 import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
@@ -617,9 +617,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // been red ever since. Substituted BY POSITION into the fan-out below rather than lifted out
   // of it: that array has 79 entries destructured positionally, and re-ordering it would
   // silently swap two feeds — a far worse failure than the one being fixed.
-  const budgetActive = shouldLoadBudgetArea(requestedArea);
-  const infraActive = shouldLoadInfraArea(requestedArea);
-  const assuranceActive = shouldLoadAssuranceArea(requestedArea);
+  // THE PACKS FOLLOW `needs`, NOT THE AREA THE SERVER WAS ASKED FOR.
+  //
+  // They were gated on `?area=` while every area renders and the rail switches client-side, so
+  // the area you LANDED on decided what Govern and System Configuration could show for the whole
+  // session. Seen live on boss-1: land on Skills and MCP, open Govern, "FinOps summary
+  // unavailable"; land on Govern, open System Configuration, "MCP registry unavailable." while
+  // Skills listed three servers. Data that was simply not requested rendered as a failure.
+  // `needs` is the one seam that decides what a render fetches, so the packs ask it too.
+  const budgetActive = needs(...BUDGET_AREA_IDS);
+  const infraActive = needs(...INFRA_AREA_IDS);
+  const assuranceActive = needs(...ASSURANCE_AREA_IDS);
   // ALWAYS FETCHED, deliberately.
   //
   // The sidebar switches area with history.pushState and NO server round-trip, so whichever

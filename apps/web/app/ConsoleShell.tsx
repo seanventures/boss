@@ -63,12 +63,12 @@ import {
   shouldShowPaidNavBadge,
 } from "../lib/edition";
 import { EditionChip } from "./edition-ui";
+import { areaVisibilityCss } from "../lib/area-visibility";
 
 type AreaId =
   | "workforce"
   | "org_chart"
   | "agent"
-  | "metatron"
   | "dashboard"
   | "overview"
   | "decisions"
@@ -260,6 +260,10 @@ const AREAS: AreaDef[] = [
     icon: ICONS.enterprise,
   },
 ];
+
+/** The CSS that reveals the active area, generated from AREAS so a navigable area can never be
+ *  a hidden one (lib/area-visibility.ts says how AI SRE shipped blank). */
+const AREA_VISIBILITY_CSS = areaVisibilityCss(AREAS.map((a) => a.id));
 
 const GROUP_ORDER: AreaDef["group"][] = ["Platform", "Run", "Settings"];
 
@@ -1185,6 +1189,7 @@ export default function ConsoleShell({
         {/* The area being left stays on screen while the next one is fetched, so without this
             a slow area looks like a dead click on the old screen. A hairline across the top is
             the smallest honest signal that the press was taken and work is in flight. */}
+        <style data-testid="bx-area-visibility" dangerouslySetInnerHTML={{ __html: AREA_VISIBILITY_CSS }} />
         <main className="bx-content" data-active={active} aria-label={activeDef.label}
               data-dock={dockedRun ? "open" : undefined}
               style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
