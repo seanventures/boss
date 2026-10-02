@@ -1114,21 +1114,20 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
             # working Express + SQLite backend and previewed as "Error: HTTP 404" because
             # nothing was running it.
             #
-            # The build still uses --base=./ rather than the app's own build script. Assets
-            # must be RELATIVE to resolve under the /v1/previews/<id>/web prefix; an absolute
-            # /assets/... path resolves against the API origin and 404s, and the injected
-            # <base href> cannot rescue it.
+            # How it is BUILT is node_build_step's one decision: the app's own build, with
+            # base=./ added for a Vite entry it has found (absolute /assets/... 404 under the
+            # /v1/previews/<id>/web prefix, and the injected <base href> cannot rescue them).
+            build = node_build_step(workdir, payload)
             if scripts.get("start"):
                 return [
                     "sh", "-lc",
                     "npm install --no-audit --no-fund --loglevel=error && "
-                    "npx vite build --base=./ && "
-                    "npm start",
+                    f"{build}npm start",
                 ]
             return [
                 "sh", "-lc",
                 "npm install --no-audit --no-fund --loglevel=error && "
-                "npx vite build --base=./ && "
+                f"{build}"
                 'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory dist',
             ]
         script = "dev" if scripts.get("dev") else "start" if scripts.get("start") else None
@@ -1174,6 +1173,41 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
     return command_for_entry(workdir, kind, value)
 
 
+_VITE_CONFIG_NAMES = ("vite.config.ts", "vite.config.js", "vite.config.mts", "vite.config.mjs")
+
+
+def node_build_step(app_root: Path, manifest: dict) -> str:
+    """The shell fragment that BUILDS a Node app for preview: "" or a command ending in `&& `.
+
+    THE APP'S OWN BUILD IS THE ONLY BUILD. Both Node paths used to replace it with BOSS's guess,
+    `npx vite build --base=./` at the app root, whenever `vite` was a dependency.
+    docs-freshness-board (boss-sandbox PR #219) keeps its frontend in web/ and builds with
+    `tsc -p server/... && vite build --config web/vite.config.ts`; the guess ran vite where there
+    is no index.html ("Could not resolve entry module", 10ms) and skipped the server compile
+    `npm start` needs. Adding a rebuild AFTER the app's build is the same mistake smaller: it
+    empties the outDir the app's build just wrote (tsc output, prerendered pages).
+
+    BOSS adds only what the preview proxy needs — RELATIVE asset URLs, because absolute
+    /assets/... 404 under the /v1/previews/<id>/web/ prefix — and only where it is the app's own
+    command that receives it: a vite app whose build script ENDS in `vite build` gets
+    `npm run build -- --base=./` (npm appends the flag to that last command). A vite app with no
+    build script at all, and its index.html at the root, gets `npx vite build --base=./`.
+    Anything else is built exactly as the app builds itself.
+    """
+    scripts = manifest.get("scripts") or {}
+    deps = {**(manifest.get("dependencies") or {}), **(manifest.get("devDependencies") or {})}
+    uses_vite = "vite" in deps or any((app_root / name).is_file() for name in _VITE_CONFIG_NAMES)
+    build_script = str(scripts.get("build") or "").strip()
+    if build_script:
+        last = re.split(r"&&|\|\||;", build_script)[-1]
+        if uses_vite and re.search(r"(^|\s)vite\s+build\b", last):
+            return "npm run build -- --base=./ && "
+        return "npm run build && "
+    if uses_vite and (app_root / "index.html").is_file():
+        return "npx vite build --base=./ && "
+    return ""
+
+
 def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str]]:
     """The command that runs ONE resolved app entry. The only place an entry becomes a command.
 
@@ -1191,22 +1225,11 @@ def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str
         # fell through to the static branch and was published without its backend.
         app_dir = "" if value in (".", "") else f"cd {shlex.quote(value)} && "
         app_root = workdir if value in (".", "") else workdir / value
-        vite_start = False
         try:
-            payload = json.loads((app_root / "package.json").read_text())
-            scripts = payload.get("scripts") or {}
-            deps = {**(payload.get("dependencies") or {}), **(payload.get("devDependencies") or {})}
-            is_vite = (
-                "vite" in deps
-                or (app_root / "vite.config.ts").exists()
-                or (app_root / "vite.config.js").exists()
-            )
-            vite_start = bool(is_vite and scripts.get("start"))
+            manifest = json.loads((app_root / "package.json").read_text())
         except (OSError, json.JSONDecodeError):
-            vite_start = False
-        # Same relative-base Vite build as the root path: absolute /assets 404 under the
-        # /v1/previews/<id>/web/ proxy prefix.
-        build = "npx vite build --base=./ && " if vite_start else "npm run build --if-present && "
+            manifest = {}
+        build = node_build_step(app_root, manifest if isinstance(manifest, dict) else {})
         return [
             "sh", "-lc",
             f"{app_dir}npm install --no-audit --no-fund --loglevel=error && "
