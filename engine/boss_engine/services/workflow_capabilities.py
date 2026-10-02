@@ -542,7 +542,8 @@ def validate_captain(step: Mapping[str, Any],
                      roster: Optional[Iterable[str]] = None) -> list[str]:
     """Whether a step's named captain is somebody this workforce has.
 
-    `roster` is the PROJECT's agents (every roles row). REGISTERED_ROLES alone is the bundled
+    `roster` is everything the PROJECT's steps may name (workflows.project_roster: its agents
+    plus the bundled roles it has not deleted). REGISTERED_ROLES alone is the bundled
     workforce, so an agent an operator made with POST /v1/agents — whose quick-create screen
     says it can be put on a step — was refused here as "not a role this workforce has". Every
     caller with the project in hand passes its roster (workflows.project_roster); one without a
@@ -551,7 +552,12 @@ def validate_captain(step: Mapping[str, Any],
     named = str(step.get("captain") or "").strip().lower()
     if not named:
         return []
-    known = REGISTERED_ROLES | {str(r).strip().lower() for r in (roster or ())}
+    # THE ROSTER IS THE WHOLE ANSWER WHEN THERE IS ONE. It already holds the bundled roles the
+    # project has not deleted (workflows.project_roster); unioning REGISTERED_ROLES back in here
+    # let a step name a bundled agent the operator had deleted (review of milestone/agents,
+    # round 2), and the refusal that says what to do never fired.
+    known = (REGISTERED_ROLES if roster is None
+             else {str(r).strip().lower() for r in roster} | HUMAN_ROLES)
     if named in known:
         return []
     others = sorted(known - HUMAN_ROLES)

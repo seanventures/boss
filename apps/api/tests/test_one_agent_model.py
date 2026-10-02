@@ -610,3 +610,193 @@ def test_a_non_human_caller_is_held_on_every_agent_write(client, engine, monkeyp
         r = client.request(method, path, json=body, headers=headers)
         assert r.status_code == 409, f"{method} {path}: {r.status_code} {r.text}"
         assert r.json()["detail"] == "mcp_confirmation_required", (method, path)
+
+
+# --------------------------------------------------------------------------- #
+# Review of milestone/agents, round 2: the version that runs, not the newest one
+# --------------------------------------------------------------------------- #
+def _audit_spec(captain: str) -> dict:
+    return {"entry_step": "audit", "steps": [{
+        "id": "audit", "label": "Audit the release", "kind": "capability", "captain": captain,
+        "binding": {"agent_work": True, "inputs": {"instructions": "check the release"}}}]}
+
+
+def _publish(client, definition: str, captain: str) -> dict:
+    r = client.post(f"/v1/workflows/{definition}/versions", json={
+        "project_id": PROJECT, "actor": "ceo", "spec": _audit_spec(captain)})
+    assert r.status_code in (200, 201), r.text
+    return r.json()
+
+
+def _definition(client) -> str:
+    r = client.post("/v1/workflows", json={
+        "project_id": PROJECT, "workflow_key": _key("wf"), "name": "Ship it", "actor": "ceo"})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _delete(client, key: str, **params):
+    return client.delete(f"/v1/agents/{key}",
+                         params={"project_id": PROJECT, "actor": "ceo", **params})
+
+
+def _role_count(engine, key: str) -> int:
+    with engine.connect() as c:
+        return c.execute(text("SELECT count(*) FROM roles WHERE project_id=:p AND role_key=:k"),
+                         {"p": PROJECT, "k": key}).scalar()
+
+
+def test_an_agent_named_only_in_the_reactivated_older_version_cannot_be_deleted(client, engine):
+    """THE PROBE (review round 2): v1 names K, v2 names qa, re-saving v1's spec makes v1 active
+    again (duplicate: true). The guard read only the newest version, v2, so DELETE K answered
+    200 and tombstoned K, and the next run of v1 was refused with "not a role this workforce
+    has" — for good, and with no warning at delete time."""
+    key = _key()
+    assert _create(client, role_key=key).status_code == 201
+    definition = _definition(client)
+    v1 = _publish(client, definition, key)
+    _publish(client, definition, "qa")
+    again = _publish(client, definition, key)
+    assert again["duplicate"] and again["id"] == v1["id"]
+    assert client.get(f"/v1/workflows/{definition}",
+                      params={"project_id": PROJECT}).json()["active_version_id"] == v1["id"]
+
+    r = _delete(client, key)
+    assert r.status_code == 409, r.text
+    assert "v1, the version it runs" in r.json()["detail"]
+    assert "another agent" in r.json()["detail"], "the refusal must say what to do"
+    # Retiring older versions is no way past the version that runs.
+    assert _delete(client, key, retire_older_versions="true").status_code == 409
+    assert _role_count(engine, key) == 1
+
+    started = client.post("/v1/workflow-runs", json={
+        "project_id": PROJECT, "actor": "ceo", "workflow_version_id": v1["id"],
+        "dedupe_key": _key("run"), "input": {}})
+    assert "not a role this workforce has" not in started.text
+
+
+def test_the_active_version_is_guarded_under_a_newer_unactivated_publish(client, engine):
+    """publish_version(activate=False) leaves the active version where it was; the newest one
+    (which the old guard read) need not name the agent the active one runs."""
+    from boss_engine.services import workflows
+
+    key = _key()
+    assert _create(client, role_key=key).status_code == 201
+    definition = _definition(client)
+    _publish(client, definition, key)
+    with engine.begin() as c:
+        workflows.publish_version(c, project_id=PROJECT, definition_id=definition,
+                                  spec=_audit_spec("qa"), actor="ceo", activate=False)
+    r = _delete(client, key)
+    assert r.status_code == 409 and "the version it runs" in r.json()["detail"], r.text
+
+
+def test_an_older_version_alone_blocks_until_the_delete_retires_it(client, engine):
+    """Every startable version is guarded, so an agent once named in v1 of a workflow now at v2
+    would otherwise be impossible to delete. The refusal names the way through; taking it
+    retires exactly that version, keeps its history, and a start on it then says why not."""
+    key = _key()
+    assert _create(client, role_key=key).status_code == 201
+    definition = _definition(client)
+    v1 = _publish(client, definition, key)
+    v2 = _publish(client, definition, "qa")
+
+    r = _delete(client, key)
+    assert r.status_code == 409, r.text
+    assert "older version still startable by id" in r.json()["detail"]
+    assert "retire those versions" in r.json()["detail"], "the refusal must say what to do"
+    named = client.get(f"/v1/console/v2/agents/{key}",
+                       params={"project_id": PROJECT}).json()["named_on_steps"]
+    assert [(n["version"], n["because"], n["retirable"]) for n in named] == [(1, "older", True)]
+
+    gone = _delete(client, key, retire_older_versions="true")
+    assert gone.status_code == 200, gone.text
+    assert gone.json()["workflow_versions_retired"] == [v1["id"]]
+    assert _role_count(engine, key) == 0
+    with engine.connect() as c:
+        statuses = dict(c.execute(text(
+            "SELECT id, status FROM workflow_versions WHERE workflow_definition_id=:d"),
+            {"d": definition}).all())
+    assert statuses == {v1["id"]: "retired", v2["id"]: "published"}
+
+    refused = client.post("/v1/workflow-runs", json={
+        "project_id": PROJECT, "actor": "ceo", "workflow_version_id": v1["id"],
+        "dedupe_key": _key("run"), "input": {}})
+    assert refused.status_code in (409, 422), refused.text
+    assert "was retired" in refused.text and "current version" in refused.text
+    # Re-saving v1 is checked against the roster first, so it cannot bring back a step naming
+    # an agent that is gone — and the refusal says what to do.
+    again = client.post(f"/v1/workflows/{definition}/versions", json={
+        "project_id": PROJECT, "actor": "ceo", "spec": _audit_spec(key)})
+    assert again.status_code in (400, 409, 422) and "Agents page" in again.text, again.text
+
+
+def test_a_retired_version_whose_agent_is_back_is_published_again_on_resave(client, engine):
+    """Re-saving a retired version's content, once what it names exists again, must leave the
+    workflow on a version a run can start — not active-but-retired."""
+    key = _key()
+    assert _create(client, role_key=key).status_code == 201
+    definition = _definition(client)
+    v1 = _publish(client, definition, key)
+    _publish(client, definition, "qa")
+    assert _delete(client, key, retire_older_versions="true").status_code == 200
+    assert _create(client, role_key=key).status_code == 201
+
+    again = _publish(client, definition, key)
+    assert again["id"] == v1["id"] and again["status"] == "published"
+    detail = client.get(f"/v1/workflows/{definition}", params={"project_id": PROJECT}).json()
+    assert detail["active_version_id"] == v1["id"]
+
+
+@pytest.mark.parametrize("pointer, said", [("mapping", "mapped"), ("subworkflow", "subworkflow")])
+def test_an_older_version_that_work_still_starts_is_never_retired(client, engine, pointer, said):
+    """A mapping or a parent workflow's subworkflow step starts that exact version; retiring it
+    would break them, so the delete stays refused whatever the caller asks."""
+    from boss_engine.services import workflows
+
+    key = _key()
+    assert _create(client, role_key=key).status_code == 201
+    definition = _definition(client)
+    v1 = _publish(client, definition, key)
+    _publish(client, definition, "qa")
+    with engine.begin() as c:
+        if pointer == "mapping":
+            workflows.create_mapping(c, project_id=PROJECT, workflow_version_id=v1["id"],
+                                     selector_kind="work_class", selector_value=_key("cls"),
+                                     scope_type="project", scope_id=PROJECT, priority=100,
+                                     actor="ceo")
+        else:
+            parent = workflows.create_definition(c, project_id=PROJECT, workflow_key=_key("wf"),
+                                                 name="Parent", description="", actor="ceo")
+            workflows.publish_version(c, project_id=PROJECT, definition_id=parent["id"],
+                                      actor="ceo", spec={"entry_step": "child", "steps": [{
+                                          "id": "child", "kind": "subworkflow",
+                                          "binding": {"workflow_version_id": v1["id"]}}]})
+    r = _delete(client, key, retire_older_versions="true")
+    assert r.status_code == 409, r.text
+    assert said in r.json()["detail"]
+    with engine.connect() as c:
+        assert c.execute(text("SELECT status FROM workflow_versions WHERE id=:v"),
+                         {"v": v1["id"]}).scalar() == "published"
+
+
+def test_a_deleted_bundled_agent_is_refused_as_a_captain_at_publish(client, engine):
+    """Review round 2 (minor): validate_captain unioned the bundled roles back in, so after
+    DELETE /v1/agents/<bundled> a workflow could still be published naming it, and the gap
+    only showed at start or minutes into a run."""
+    victim = None
+    for candidate in ("design_critic", "resource_janitor", "model_spend_analyst"):
+        if _delete(client, candidate).status_code == 200:
+            victim = candidate
+            break
+    if victim is None:
+        pytest.skip("every candidate bundled agent is named or has history on this fixture")
+    definition = _definition(client)
+    r = client.post(f"/v1/workflows/{definition}/versions", json={
+        "project_id": PROJECT, "actor": "ceo", "spec": _audit_spec(victim)})
+    assert r.status_code in (400, 409, 422), r.text
+    assert "Agents page" in r.text, "the refusal must say what to do"
+    offered = client.get("/v1/delivery-workflows/capabilities",
+                         params={"project_id": PROJECT}).json()["roles"]
+    assert victim not in offered, "the builder must not offer a captain publish refuses"
+    assert "qa" in offered and "human" in offered

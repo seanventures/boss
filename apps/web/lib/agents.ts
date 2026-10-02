@@ -111,8 +111,12 @@ export function updateAgent(projectId: string, actor: string, roleKey: string, c
     { scope: `agent-${roleKey}`, label: "Save agent" });
 }
 
-export function deleteAgent(projectId: string, actor: string, roleKey: string) {
-  return send(`/v1/agents/${enc(roleKey)}?project_id=${enc(projectId)}&actor=${enc(actor)}`,
+/** `retireOlderVersions`: also retire the older workflow versions that are all that still
+ *  name it — the delete page says so before it is pressed (AgentDelete). */
+export function deleteAgent(projectId: string, actor: string, roleKey: string,
+                            opts: { retireOlderVersions?: boolean } = {}) {
+  const retire = opts.retireOlderVersions ? "&retire_older_versions=true" : "";
+  return send(`/v1/agents/${enc(roleKey)}?project_id=${enc(projectId)}&actor=${enc(actor)}${retire}`,
     "DELETE", null, { scope: `agent-${roleKey}`, label: "Delete agent" });
 }
 

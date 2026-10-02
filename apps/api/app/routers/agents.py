@@ -153,13 +153,17 @@ def build_agents_router(
                 _fail(error)
 
     @router.delete("/v1/agents/{role_key}")
-    def delete_agent(role_key: str, project_id: str,
-                     actor: Optional[str] = None) -> dict[str, Any]:
+    def delete_agent(role_key: str, project_id: str, actor: Optional[str] = None,
+                     retire_older_versions: bool = False) -> dict[str, Any]:
+        """`retire_older_versions=true`: an agent named only in older workflow versions that
+        nothing starts by default is deleted and those versions retired with it (see
+        agents.delete_agent). Without it, the 409 says that is the way through."""
         with begin(engine) as connection:
             who = require_write_actor(connection, project_id, actor, "role_review")
             require_write_actor(connection, project_id, who, "workflow_manage")
             try:
-                return agents.delete_agent(connection, project_id, role_key, actor=who)
+                return agents.delete_agent(connection, project_id, role_key, actor=who,
+                                           retire_older_versions=retire_older_versions)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 

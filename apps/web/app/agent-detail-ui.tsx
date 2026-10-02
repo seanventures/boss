@@ -65,7 +65,17 @@ type McpPanel = { role_key: string; holds: McpHeld[]; available: McpAvailable[] 
 type NamedOn = {
   workflow_key: string; workflow: string; version: number; step_id: string; step: string;
   how: string; because: string;
+  /** Only an OLDER version nothing starts by default: deleting may retire it (agents.py). */
+  retirable?: boolean;
 };
+
+/** Which version names the agent, the way the API's refusal says it. */
+export function whereNamed(n: NamedOn): string {
+  if (n.because === "live run") return "a run in flight";
+  if (n.because === "active") return `v${n.version}, the version it runs`;
+  if (n.because === "older") return `v${n.version}, an older version still startable by id`;
+  return `v${n.version}, ${n.because}`;
+}
 type Detail = {
   role_key: string; name: string; registered: boolean;
   autonomy_level: number | null; trust_score: number | null; successful_runs: number | null;
@@ -726,6 +736,13 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
  * Refused by the API while a workflow step names it, because deleting the agent under a step
  * turns a working workflow into one that fails at that step minutes into a run. The steps are
  * listed here first so the refusal is never a surprise.
+ *
+ * A step in an OLDER version (published, startable by id, but not what anything starts by
+ * default) does not block: the page says those versions are retired with the agent, and the
+ * delete asks for exactly that. Review of milestone/agents, round 2 — the guard used to read
+ * only the newest version, so the version that actually ran was not protected; reading every
+ * startable version without this way through would make an agent once named in v1 of a
+ * workflow now at v5 impossible to delete.
  */
 export function AgentDelete({ projectId, actor, detail, onDeleted }: {
   projectId: string; actor: string; detail: Detail; onDeleted: () => void;
@@ -734,11 +751,14 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState("");
   const named = detail.named_on_steps ?? [];
+  const blocking = named.filter((n) => !n.retirable);
+  const older = named.filter((n) => n.retirable);
   const profiles = (detail.studio_profiles ?? []).filter((p) => p.status !== "retired");
 
   const remove = async () => {
     setBusy(true); setFailed("");
-    const r = await deleteAgent(projectId, actor, detail.role_key);
+    const r = await deleteAgent(projectId, actor, detail.role_key,
+                                { retireOlderVersions: older.length > 0 });
     setBusy(false);
     if (!r.ok) { setFailed(r.error); setConfirming(false); return; }
     onDeleted();
@@ -747,18 +767,20 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
   return (
     <section className="ct-block ad-danger" data-testid="agent-delete">
       <div className="ct-block-title">Delete this agent</div>
-      {named.length ? (
+      {blocking.length ? (
         <>
           <p className="detail" data-testid="agent-delete-blocked">
-            It cannot be deleted while {named.length} workflow step{named.length === 1 ? " names" : "s name"} it.
-            Give {named.length === 1 ? "that step" : "those steps"} to another agent (or leave
-            them for BOSS to pick), save the workflow, then come back.
+            It cannot be deleted while {blocking.length} workflow step{blocking.length === 1 ? " names" : "s name"} it.
+            Give {blocking.length === 1 ? "that step" : "those steps"} to another agent (or leave
+            them for BOSS to pick), save the workflow
+            {blocking.some((n) => n.because === "live run") ? ", let the run in flight finish" : ""},
+            then come back.
           </p>
           <ul className="ad-list" data-testid="agent-named-on">
-            {named.map((n) => (
+            {blocking.map((n) => (
               <li key={`${n.workflow_key}:${n.version}:${n.step_id}`}>
                 {n.workflow} · <code>{n.step}</code>
-                <span className="detail"> · {n.how}{n.because === "live run" ? " · a run in flight" : ` · v${n.version}`}</span>
+                <span className="detail"> · {n.how} · {whereNamed(n)}</span>
               </li>
             ))}
           </ul>
@@ -770,6 +792,14 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
             : ""}, and anyone reporting to it moves up to {detail.reports_to
             ? <code>{detail.reports_to}</code> : "the top of the team"}. An upgrade will not bring
           it back.
+          {older.length ? (
+            <span data-testid="agent-delete-retires">
+              {" "}Only older workflow versions still name it — nothing starts them by default —
+              so deleting also retires {older.length === 1 ? "that version" : "those versions"}{" "}
+              ({Array.from(new Set(older.map((n) => `${n.workflow} v${n.version}`))).join(", ")}):
+              their history is kept, but no run can start from them.
+            </span>
+          ) : null}
         </p>
       )}
       {failed ? <p className="ad-bad" role="alert" data-testid="agent-delete-failed">{failed}</p> : null}
@@ -784,7 +814,7 @@ export function AgentDelete({ projectId, actor, detail, onDeleted }: {
                     onClick={() => setConfirming(false)}>Keep it</button>
           </>
         ) : (
-          <button type="button" className="linklike" disabled={named.length > 0}
+          <button type="button" className="linklike" disabled={blocking.length > 0}
                   data-testid="agent-delete-open" onClick={() => setConfirming(true)}>
             Delete {detail.name}
           </button>
