@@ -47,17 +47,27 @@ function planPath(project: string, key: string): string {
     + `?project_id=${encodeURIComponent(project)}`;
 }
 
+/** `view=readiness&key=…` — what this workflow needs from this project, each item checked,
+ *  with the fix. The same answer Start gives when it refuses, asked before pressing it. */
+function readinessPath(project: string, key: string, input: string | null): string {
+  return `/v1/delivery-workflows/${encodeURIComponent(key)}/readiness`
+    + `?project_id=${encodeURIComponent(project)}`
+    + (input ? `&input=${encodeURIComponent(input)}` : "");
+}
+
 export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const view = params.get("view") ?? "runs";
   const project = params.get("project_id")?.trim() ?? "";
-  if (view === "spec" || view === "plan") {
+  if (view === "spec" || view === "plan" || view === "readiness") {
     const key = params.get("key")?.trim() ?? "";
     if (!project || !key) {
       return NextResponse.json({ error: `${view} needs project_id and key` }, { status: 400 });
     }
     try {
-      const path = view === "plan" ? planPath(project, key) : specPath(project, key);
+      const path = view === "plan" ? planPath(project, key)
+        : view === "readiness" ? readinessPath(project, key, params.get("input"))
+        : specPath(project, key);
       const r = await fetch(`${API_URL}${path}`, {
         headers: authHeaders({}), cache: "no-store",
       });
@@ -122,9 +132,20 @@ async function proxyPost(path: string, payload: unknown) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      const detail = (parsed as { detail?: unknown })?.detail;
+      // A REFUSAL CAN CARRY A CHECKLIST. Start answers 409 with {message, readiness} when the
+      // project lacks what the workflow needs; forwarding the object as `error` would render
+      // "[object Object]" where the operator needed the list of what is missing.
+      if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+        const d = detail as { message?: unknown; readiness?: unknown };
+        return NextResponse.json(
+          { error: String(d.message ?? `API returned ${r.status}`),
+            ...(d.readiness ? { readiness: d.readiness } : {}) },
+          { status: r.status });
+      }
+      return NextResponse.json(
+        { error: (typeof detail === "string" && detail) || `API returned ${r.status}` },
+        { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {

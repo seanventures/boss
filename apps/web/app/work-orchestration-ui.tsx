@@ -276,7 +276,12 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <div className={provider.is_default ? "is-default" : ""} key={provider.id}>
                 <Ticket size={15} />
                 <span>{provider.display_name}</span>
-                <small>
+                {/* CONNECTED OR NOT, SAID ON THE ROW. All five trackers are seeded as `active`
+                    with empty configurations, so a list that said "default" and "available" read
+                    as five working trackers while none could create a ticket — and
+                    meeting-to-tickets failed at its approved last step (boss-1, 2026-10-02). */}
+                <small data-testid={`work-tracker-state-${provider.provider_key}`}>
+                  {provider.connected ? "connected" : "not connected"} ·{" "}
                   {provider.is_default ? "default" : "available"} ·{" "}
                   {provider.binding_count} bound
                 </small>
