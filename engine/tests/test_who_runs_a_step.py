@@ -260,6 +260,14 @@ def _mcp_server(c, project_id, name):
     return sid
 
 
+def _grant_mcp(c, project_id, role_key, server_id):
+    """The agents stream's grant: the agent HOLDS the server (role_mcp_servers)."""
+    c.execute(
+        text("INSERT INTO role_mcp_servers (id, project_id, role_key, mcp_server_id) "
+             "VALUES (:i, :p, :r, :s) ON CONFLICT DO NOTHING"),
+        {"i": f"rm_{uuid.uuid4().hex[:10]}", "p": project_id, "r": role_key, "s": server_id})
+
+
 def _publish(c, project_id, key, steps):
     definition = workflows.create_definition(
         c, project_id=project_id, workflow_key=key, name=key, description=None,
@@ -360,12 +368,15 @@ def test_an_agent_step_scoped_to_skills_offers_only_those(eng, project, loop):
 
 def test_an_agent_step_with_an_mcp_server_reaches_that_server_and_no_other(eng, project, loop):
     """R3 for MCP: a bounded agent run had no MCP at all. A step naming a server reaches it —
-    only it — through the loop's usual risk check."""
+    only it — through the loop's usual risk check.
+
+    REWRITTEN AT INTEGRATION: the step NARROWS what its agent holds (role_mcp_servers, the
+    agents stream's grant), so the agent holds both servers here and the step names one."""
     with eng.begin() as c:
         (skill,) = _catalogue(c, project, 1)
         _agent(c, project, "researcher", skill)
-        _mcp_server(c, project, "wiki")
-        _mcp_server(c, project, "billing")
+        _grant_mcp(c, project, "researcher", _mcp_server(c, project, "wiki"))
+        _grant_mcp(c, project, "researcher", _mcp_server(c, project, "billing"))
         version = _publish(c, project, "mcp", [_agent_step(mcp=["wiki"])])
         run = _start_and_tick(c, eng, project, version)
         row = _step(c, run["id"], "work")
@@ -374,6 +385,20 @@ def test_an_agent_step_with_an_mcp_server_reaches_that_server_and_no_other(eng, 
     assert row["output"]["ran_as"]["mcp_offered"] == ["wiki"]
     mcp_tools = [t for t in loop.tools if t.startswith("mcp_")]
     assert mcp_tools == ["mcp_wiki_lookup"]
+
+
+def test_a_step_naming_a_server_its_agent_does_not_hold_is_refused_at_publish(eng, project):
+    """THE INTEGRATION RULE: a step is never a way to hand an agent a connector. Before, a step
+    could name any registered server and the bounded run reached it, whoever held it."""
+    with eng.begin() as c:
+        (skill,) = _catalogue(c, project, 1)
+        _agent(c, project, "researcher", skill)
+        _mcp_server(c, project, "billing")
+        with pytest.raises(workflows.WorkflowBindingBlockedError) as error:
+            _publish(c, project, "unheld", [{**_agent_step(mcp=["billing"]),
+                                             "captain": "researcher"}])
+    assert "which researcher does not hold" in str(error.value)
+    assert "Agents page" in str(error.value)
 
 
 def test_a_scoped_skill_the_named_agent_lacks_is_refused_at_publish(eng, project):
@@ -394,7 +419,7 @@ def test_an_agent_the_project_made_can_be_named_on_a_custom_step(eng, project, m
     seen = {}
 
     def fake_invoke(connection, settings, project_id, skill_id, caller, args, *, actor,
-                    skill_spec=None):
+                    skill_spec=None, approved_by=None, approval_about=None):
         seen.update(caller=caller, actor=actor, spec=skill_spec)
         return {"status": "succeeded", "result": {"ok": True}}
 

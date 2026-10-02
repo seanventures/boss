@@ -621,6 +621,14 @@ def _audit_spec(captain: str) -> dict:
         "binding": {"agent_work": True, "inputs": {"instructions": "check the release"}}}]}
 
 
+def _able(client, key: str):
+    """An agent that HOLDS a skill. The steps stream refuses, at publish, an agent step given to
+    an agent holding nothing ("a step naming an agent that holds nothing is refused here"), so
+    the agent these delete-guard tests put on a step must be able to do something (integration
+    of the agents and steps streams; what is tested — the guard — is unchanged)."""
+    return _create(client, role_key=key, skills=_builtin_skills(client, 1))
+
+
 def _publish(client, definition: str, captain: str) -> dict:
     r = client.post(f"/v1/workflows/{definition}/versions", json={
         "project_id": PROJECT, "actor": "ceo", "spec": _audit_spec(captain)})
@@ -652,7 +660,7 @@ def test_an_agent_named_only_in_the_reactivated_older_version_cannot_be_deleted(
     200 and tombstoned K, and the next run of v1 was refused with "not a role this workforce
     has" — for good, and with no warning at delete time."""
     key = _key()
-    assert _create(client, role_key=key).status_code == 201
+    assert _able(client, key).status_code == 201
     definition = _definition(client)
     v1 = _publish(client, definition, key)
     _publish(client, definition, "qa")
@@ -681,7 +689,7 @@ def test_the_active_version_is_guarded_under_a_newer_unactivated_publish(client,
     from boss_engine.services import workflows
 
     key = _key()
-    assert _create(client, role_key=key).status_code == 201
+    assert _able(client, key).status_code == 201
     definition = _definition(client)
     _publish(client, definition, key)
     with engine.begin() as c:
@@ -696,7 +704,7 @@ def test_an_older_version_alone_blocks_until_the_delete_retires_it(client, engin
     would otherwise be impossible to delete. The refusal names the way through; taking it
     retires exactly that version, keeps its history, and a start on it then says why not."""
     key = _key()
-    assert _create(client, role_key=key).status_code == 201
+    assert _able(client, key).status_code == 201
     definition = _definition(client)
     v1 = _publish(client, definition, key)
     v2 = _publish(client, definition, "qa")
@@ -735,12 +743,12 @@ def test_a_retired_version_whose_agent_is_back_is_published_again_on_resave(clie
     """Re-saving a retired version's content, once what it names exists again, must leave the
     workflow on a version a run can start — not active-but-retired."""
     key = _key()
-    assert _create(client, role_key=key).status_code == 201
+    assert _able(client, key).status_code == 201
     definition = _definition(client)
     v1 = _publish(client, definition, key)
     _publish(client, definition, "qa")
     assert _delete(client, key, retire_older_versions="true").status_code == 200
-    assert _create(client, role_key=key).status_code == 201
+    assert _able(client, key).status_code == 201
 
     again = _publish(client, definition, key)
     assert again["id"] == v1["id"] and again["status"] == "published"
@@ -761,7 +769,7 @@ def test_an_older_version_that_work_still_starts_is_never_retired(client, engine
     from boss_engine.services import workflows
 
     key = _key()
-    assert _create(client, role_key=key).status_code == 201
+    assert _able(client, key).status_code == 201
     definition = _definition(client)
     v1 = _publish(client, definition, key)
     v2 = _publish(client, definition, "qa")
@@ -834,7 +842,7 @@ def test_a_run_stopped_at_a_failed_step_holds_its_version(client, engine):
     older version retired under the run, and Try again carried the run on to a later step
     naming the agent, which failed with "not a role this workforce has"."""
     key = _key()
-    assert _create(client, role_key=key).status_code == 201
+    assert _able(client, key).status_code == 201
     definition = _definition(client)
     v1 = _publish(client, definition, key)
     _publish(client, definition, "qa")

@@ -122,7 +122,8 @@ export function AgentStepScope({
         {skills.length
           ? `limited to ${skills.length} skill${skills.length === 1 ? "" : "s"}`
           : "may use every skill its agent holds"}
-        {mcp.length ? ` · reaches ${mcp.join(", ")}` : " · no MCP servers"}
+        {mcp.length ? ` · reaches only ${mcp.join(", ")}`
+          : " · may use every MCP server its agent holds"}
       </span>
       {available.length ? (
         <span className="dw-agent-scope-list" role="group" aria-label={`Skills for ${stepId}`}>

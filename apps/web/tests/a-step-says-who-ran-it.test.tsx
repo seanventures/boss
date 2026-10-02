@@ -13,6 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  AgentStepScope,
   HOW_CHOSEN, NOT_AN_AGENT, RanAs, StepAgentPicker, stalePick, stepAgentChip,
 } from "../app/step-agents-ui";
 import { codeOnly } from "./_helpers/source";
@@ -95,7 +96,7 @@ describe("the step-agent picker offers the project's agents", () => {
     // Integration: the roles are the project's roster (workflows.project_roster — its agents
     // plus the bundled roles it has not deleted), the same list publish accepts, so the picker
     // never offers what publish refuses nor hides what it accepts. No constant fallback.
-    expect(api).toContain('"roles": sorted(roster) if roster else [step_agents.HUMAN]');
+    expect(api).toContain('"roles": ([r for r in sorted(roster) if r != step_agents.HUMAN] + [step_agents.HUMAN]');
     expect(api).toContain('"agents": [{"role_key": a["role_key"]');
     expect(api).not.toContain('"roles": sorted(REGISTERED_ROLES)');
     expect(api).not.toContain("roster or REGISTERED_ROLES");
@@ -141,5 +142,25 @@ describe("the chip beside a run step never contradicts who ran it", () => {
     const view = codeOnly("app/delivery-workflows-ui.tsx");
     expect(view).toContain("stepAgentChip(step.captain, step.output, capability?.captain)");
     expect(view).not.toContain('"answers for this step"');
+  });
+});
+
+describe("a step's MCP list narrows what its agent holds, and never grants", () => {
+  // INTEGRATION of the agents stream (role_mcp_servers is THE grant the runtime reads) with the
+  // steps stream (a step may name MCP servers): the runtime offers held ∩ named, so the builder
+  // offers only servers an agent holds, and an empty list means the agent's own servers — it
+  // said "no MCP servers", which stopped being true when agents could hold servers.
+  it("says what an empty list means", () => {
+    const html = renderToStaticMarkup(
+      <AgentStepScope stepId="s" skills={[]} mcp={[]} available={[]}
+                      servers={[{ id: "m1", name: "mattermost" }]} onChange={() => undefined} />);
+    expect(html).toContain("may use every MCP server its agent holds");
+    expect(html).not.toContain("no MCP servers");
+  });
+
+  it("offers only the servers an agent holds", () => {
+    const ui = codeOnly("app/delivery-workflows-ui.tsx");
+    expect(ui).toContain("? (mcpHoldings[step.captain] ?? [])");
+    expect(ui).toContain(": Object.values(mcpHoldings).flat()).includes(s.name)");
   });
 });

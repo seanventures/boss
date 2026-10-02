@@ -760,6 +760,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
    *  agent directory, because THIS list is the one the publish-time captain check validates
    *  against — offering a role that would then be refused is worse than offering none. */
   const [stepRoles, setStepRoles] = useState<string[]>([]);
+  /** `role_key` → the MCP servers that agent HOLDS (role_mcp_servers), from the capabilities
+   *  payload. A step's MCP list narrows what its agent holds and never grants (integration of
+   *  the agents and steps streams), so the scope offers only these. */
+  const [mcpHoldings, setMcpHoldings] = useState<Record<string, string[]>>({});
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [customSteps, setCustomSteps] = useState<CustomStep[]>([]);
@@ -949,6 +953,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setBlocks((caps as { blocks?: Block[] }).blocks ?? []);
     setRiskFloor((caps as { manual_approval_risk_floor: number }).manual_approval_risk_floor ?? 2);
     setStepRoles((caps as { roles?: string[] }).roles ?? []);
+    setMcpHoldings(Object.fromEntries(
+      ((caps as { agents?: Array<{ role_key: string; mcp?: string[] }> }).agents ?? [])
+        .map((a) => [a.role_key, a.mcp ?? []])));
     setCatalogue((cat as { items: CatalogueEntry[] }).items ?? []);
     setInstalled((inst as { items: Installed[] }).items ?? []);
     setRuns((live as { runs: Run[] }).runs ?? []);
@@ -1596,7 +1603,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           justMade={justMade} onDismissJustMade={() => setJustMade(null)}
           onManageSteps={() => setTab("steps")}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
-          stepRoles={stepRoles} holdings={holdings} onGranted={loadHoldings}
+          stepRoles={stepRoles} holdings={holdings} mcpHoldings={mcpHoldings}
+          onGranted={loadHoldings}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
           onCreate={async (name, spec, fromKey) => {
             // TWO CALLS, AND THE ORDER MATTERS.
@@ -5504,7 +5512,8 @@ function StepsView({
 }
 
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, actor, busy,
-                      customSteps, bindable, onManageSteps, stepRoles, holdings, onGranted,
+                      customSteps, bindable, onManageSteps, stepRoles, holdings, mcpHoldings,
+                      onGranted,
                       justMade, onDismissJustMade,
                       target, setTarget, onSave, onCreate }: {
   capabilities: Capability[];
@@ -5524,6 +5533,8 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
   /** `role_key` → the skills that agent HOLDS, so the row can say whether the agent named on a
    *  step is actually permitted to run it — and offer the grant instead of failing mid-run. */
   holdings: Record<string, string[]>;
+  /** `role_key` → the MCP servers that agent holds; see DeliveryWorkflows. */
+  mcpHoldings: Record<string, string[]>;
   onGranted: () => void;
   /** The workflow created a moment ago, so the builder can confirm it rather than looking
    *  identical to the state before the click. */
@@ -6390,7 +6401,14 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, ac
                       available={step.captain
                         ? (holdings[step.captain] ?? [])
                         : [...new Set(Object.values(holdings).flat())].sort()}
-                      servers={bindable.mcp_servers.map((s) => ({ id: s.id, name: s.name }))}
+                      // Only servers an agent HOLDS: the named agent's, or — when BOSS picks —
+                      // any agent's (it then picks among the holders). A step never grants one.
+                      servers={bindable.mcp_servers
+                        .filter((s) => (step.captain
+                          ? (mcpHoldings[step.captain] ?? [])
+                          : Object.values(mcpHoldings).flat()).includes(s.name)
+                          || (step.mcp ?? []).includes(s.name))
+                        .map((s) => ({ id: s.id, name: s.name }))}
                       onChange={(scope) => setDraft((c) => c.map((st, i) => (i === index
                         ? { ...st, skills: scope.skills, mcp: scope.mcp } : st)))} />
                   ) : null}

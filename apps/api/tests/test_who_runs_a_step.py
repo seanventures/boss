@@ -54,11 +54,20 @@ def _agent_step(**extra) -> dict:
             **extra}
 
 
-def test_the_builder_is_offered_this_projects_agents_and_a_person(client):
+def test_the_builder_is_offered_this_projects_agents_and_a_person(client, engine):
     payload = client.get("/v1/delivery-workflows/capabilities",
                          params={"project_id": PROJECT}).json()
     assert payload["roles"][-1] == "human"
-    assert sorted(payload["roles"][:-1]) == [r for r in _roles(client) if r != "human"]
+    # REWRITTEN AT INTEGRATION: the offer is exactly what publish accepts — the project's
+    # roster (workflows.project_roster, the agents stream: its agents plus the bundled roles it
+    # has not deleted) — so the builder never offers a name publish refuses, nor hides one it
+    # accepts. Every agent the project made is in it.
+    from boss_engine.services.workflows import project_roster
+
+    with engine.begin() as c:
+        roster = project_roster(c, PROJECT)
+    assert payload["roles"][:-1] == sorted(r for r in roster if r != "human")
+    assert set(_roles(client)) - {"human"} <= set(payload["roles"])
     # Each with what it holds, so the picker can say "3 skills" and the scope can be offered.
     assert {"role_key", "name", "holds"} <= set(payload["agents"][0])
     # The constant's phantom roles are not offered unless this project has them.
@@ -137,7 +146,10 @@ def test_a_step_left_to_boss_runs_as_the_agent_holding_its_skills_and_the_run_sa
 
     started = client.post("/v1/delivery-workflows/start", json={
         "project_id": PROJECT, "actor": "ceo", "workflow_key": workflow_key,
-        "input": {"instructions": "list what is there"}})
+        "input": {"instructions": "list what is there"},
+        # The model is scripted here (make_chat_adapter above); the project has none connected,
+        # so the templates stream's start check is told to go ahead without one.
+        "start_anyway": ["model"]})
     assert started.status_code == 200, started.text
     ticked = client.post("/v1/delivery-workflows/run-capabilities",
                          json={"project_id": PROJECT})
@@ -246,8 +258,10 @@ def test_a_workflow_published_before_the_agent_rules_still_starts_and_runs(
 
     seen: dict = {}
 
+    # approved_by/approval_about: the skills-mcp stream's approval travels with every custom
+    # step's call (workflow_custom_steps.execute), so the stand-in takes them too.
     def fake_invoke(connection, settings, project_id, skill_id, caller, args, *, actor,
-                    skill_spec=None):
+                    skill_spec=None, approved_by=None, approval_about=None):
         seen.update(caller=caller, actor=actor, spec=skill_spec)
         return {"status": "succeeded", "result": {"ok": True}}
 
@@ -258,7 +272,10 @@ def test_a_workflow_published_before_the_agent_rules_still_starts_and_runs(
     workflow_key = next(w["workflow_key"] for w in listed["items"] if w["id"] == definition_id)
 
     started = client.post("/v1/delivery-workflows/start", json={
-        "project_id": PROJECT, "actor": "ceo", "workflow_key": workflow_key, "input": {}})
+        "project_id": PROJECT, "actor": "ceo", "workflow_key": workflow_key, "input": {},
+        # Nothing here calls a model (the skill is a stand-in); the templates stream's start
+        # check is told to go ahead without one connected.
+        "start_anyway": ["model"]})
     assert started.status_code == 200, started.text
     run_id = started.json().get("run", started.json()).get("id")
     row = _tick_through_the_gate(client, engine, run_id, "do")
