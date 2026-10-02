@@ -182,6 +182,17 @@ class WorkflowRetryStepBody(ProjectBody):
     step_id: str | None = None
 
 
+class WorkflowSkipStepBody(ProjectBody):
+    model_config = ConfigDict(
+        json_schema_extra={"required": ["project_id", "step_id", "reason"]}
+    )
+
+    step_id: str | None = None
+    # Required, because "why did this run go on without research?" must be answerable from the
+    # run's record rather than from somebody's memory.
+    reason: str | None = None
+
+
 class WorkflowRecheckBody(ProjectBody):
     model_config = ConfigDict(json_schema_extra={"required": ["project_id"]})
 

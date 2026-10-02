@@ -684,6 +684,7 @@ from .request_bodies import (
     WorkflowForkBody,
     WorkflowRecheckBody,
     WorkflowRetryStepBody,
+    WorkflowSkipStepBody,
     WorkflowRunInputBody,
     WorkflowSaveBody,
     WorkflowScheduleBody,
@@ -23414,31 +23415,48 @@ def retry_delivery_step(run_id: str, payload: WorkflowRetryStepBody) -> dict:
     with begin(engine) as connection:
         actor = _delivery_workflow_actor(payload)
         require_project_actor(connection, project_id, actor, "workflow_execute")
-        row = connection.execute(
-            text("SELECT id, status FROM workflow_step_runs "
-                 "WHERE workflow_run_id=:r AND project_id=:p AND step_id=:s "
-                 "ORDER BY created_at DESC LIMIT 1"),
-            {"r": run_id, "p": project_id, "s": step_id},
-        ).mappings().first()
-        if not row:
-            raise HTTPException(status_code=404, detail="step not found on this run")
-        if row["status"] not in ("failed", "deadlettered", "cancelled"):
-            # Re-queueing a step that is running would run it twice.
-            raise HTTPException(
-                status_code=409,
-                detail=f"'{step_id}' is {row['status']}, so there is nothing to retry.")
-        connection.execute(
-            text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
-                 "lease_owner=NULL, lease_expires_at=NULL, updated_at=now() WHERE id=:id"),
-            {"id": row["id"]},
-        )
-        # The RUN has to come back too, or a re-queued step sits ready under a dead run.
-        connection.execute(
-            text("UPDATE workflow_runs SET status='running', blocked_reason=NULL, error=NULL, "
-                 "updated_at=now() WHERE id=:r AND project_id=:p"),
-            {"r": run_id, "p": project_id},
-        )
-    return {"run_id": run_id, "step_id": step_id, "status": "ready"}
+        # The same operation the agent's `retry_workflow_step` performs — one implementation,
+        # so a retry pressed here is recorded in the run's history like one the agent made.
+        try:
+            return workflow_runtime.retry_failed_step(
+                connection, project_id=project_id, run_id=run_id, step_id=step_id,
+                actor=actor)
+        except workflow_runtime.WorkflowNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except workflow_runtime.WorkflowConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/v1/delivery-workflows/runs/{run_id}/skip-step")
+def skip_delivery_step(run_id: str, payload: WorkflowSkipStepBody) -> dict:
+    """Skip a failed step and let the run proceed — the operator's decision, recorded.
+
+    A failed step stops its run; that is the rule for every kind of step since research that
+    died was recorded as succeeded and the workflow walked on into a panel, an auto-approved
+    spec and a build (boss-1, 2026-10-02). Stopping is only half of it: the operator then needs
+    to choose between trying the step again (retry-step) and going on without it (this). The
+    reason is required and kept, with who skipped it, on the step and in the run's events.
+
+    An approval gate cannot be skipped: its "failure" is a person saying no.
+    """
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    step_id = str(payload.get("step_id") or "").strip()
+    if not project_id or not step_id:
+        raise HTTPException(status_code=400, detail="project_id and step_id are required")
+    with begin(engine) as connection:
+        actor = _delivery_workflow_actor(payload)
+        require_project_actor(connection, project_id, actor, "workflow_execute")
+        try:
+            return workflow_runtime.skip_failed_step(
+                connection, project_id=project_id, run_id=run_id, step_id=step_id,
+                actor=actor, reason=str(payload.get("reason") or ""))
+        except workflow_runtime.WorkflowNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except workflow_runtime.WorkflowValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except workflow_runtime.WorkflowConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/recheck")

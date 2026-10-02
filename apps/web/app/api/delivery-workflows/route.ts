@@ -157,6 +157,9 @@ const SCHEDULE_ACTIONS: Record<string, (id: string) => string> = {
 
 const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   retry_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/retry-step`,
+  // The other way past a failed step: go on without it. A failed step STOPS its run, for every
+  // kind of step, so the operator decides — retry it, or skip it with a recorded reason.
+  skip_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/skip-step`,
   // Re-test what stopped this run and put back whatever can now proceed. Addressed to the RUN,
   // not to a step: an operator arriving at a stalled workflow is asking "is this still true?"
   // of the whole thing, and does not know which step to point at.

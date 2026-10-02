@@ -2149,7 +2149,7 @@ def _maybe_activate(
     dependency_rows = connection.execute(
         text(
             """
-            SELECT step_id, status FROM workflow_step_runs
+            SELECT step_id, status, output FROM workflow_step_runs
             WHERE workflow_run_id=:run_id AND iteration=:iteration
               AND step_id IN :step_ids
             """
@@ -2160,12 +2160,12 @@ def _maybe_activate(
             "step_ids": tuple(template["wait_for"]),
         },
     ).mappings().all()
-    statuses = {row["step_id"]: row["status"] for row in dependency_rows}
+    settled = {row["step_id"] for row in dependency_rows if _settled_for_downstream(row)}
     policy = template.get("success_policy", "all")
     ready = (
-        all(statuses.get(item) == "succeeded" for item in template["wait_for"])
+        all(item in settled for item in template["wait_for"])
         if policy == "all"
-        else any(statuses.get(item) == "succeeded" for item in template["wait_for"])
+        else any(item in settled for item in template["wait_for"])
     )
     if ready:
         _activate_step(connection, run_id, step_id, iteration)
@@ -2841,22 +2841,33 @@ def force_fail_waiting_step(
     project_id: str,
     step_run_id: str,
     error: str,
+    output: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Fail a parked step because the work it was waiting for failed.
 
     Not retried: the retry belongs to the thing that failed, not to the act of waiting for it.
     Re-running this step would start a SECOND build rather than reconsider the first.
+
+    THE RUN STOPS HERE AND WAITS FOR A PERSON. What the work reached before it died is MERGED
+    onto the failed step's own output, so the operator deciding between "Try again" and "Skip
+    and proceed" can see it — but it never enters the run context, which reads only steps that
+    succeeded. That distinction is the whole of the boss-1 incident (2026-10-02): research died,
+    the runner recorded it succeeded as `failed_continued`, and its half-written dossier walked
+    on into a panel, an auto-approved spec and a build that nobody had decided should happen.
     """
     row = connection.execute(
         text(
             """
             UPDATE workflow_step_runs
-            SET status='failed', last_error=:error, completed_at=clock_timestamp(), updated_at=now()
+            SET status='failed', last_error=:error, completed_at=clock_timestamp(),
+                output = COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB),
+                updated_at=now()
             WHERE id=:id AND project_id=:project_id AND status='waiting'
             RETURNING *
             """
         ),
-        {"id": step_run_id, "project_id": project_id, "error": error[:500]},
+        {"id": step_run_id, "project_id": project_id, "error": error[:500],
+         "output": json.dumps(output or {})},
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Waiting workflow step not found.")
@@ -2865,7 +2876,213 @@ def force_fail_waiting_step(
              "WHERE id=:id"),
         {"id": row["workflow_run_id"], "error": error[:500]},
     )
+    _emit_step_event(
+        connection, _run_row(connection, row["workflow_run_id"]),
+        "workflow.step_failed", row, {"error": error[:500], "awaited": True},
+    )
+    _refresh_frontier(connection, row["workflow_run_id"])
     return _serialize_step(row)
+
+
+#: The step states an operator can act on with "Try again" or "Skip and proceed". A step in any
+#: of these has had its verdict; one in any other state is still live, and acting on it would
+#: run the work twice or abandon it mid-flight.
+OPERATOR_RECOVERABLE_STEP_STATES = ("failed", "deadlettered", "cancelled")
+
+#: Skipping is narrower than retrying. A CANCELLED step belongs to a run somebody stopped; skipping
+#: it would quietly restart work the operator asked to end. Retry reopens it deliberately.
+SKIPPABLE_STEP_STATES = ("failed", "deadlettered")
+
+
+def _settled_for_downstream(row: Any) -> bool:
+    """May the steps after this one run?
+
+    Succeeded, or skipped BY AN OPERATOR who decided the run should go on without it. A step
+    skipped because its branch was never taken (`path_not_reached`) is not a decision anybody
+    made about this step, so it does not release a join.
+    """
+    if row["status"] == "succeeded":
+        return True
+    if row["status"] != "skipped":
+        return False
+    output = _json(row["output"], {})
+    return bool(isinstance(output, dict) and output.get("skipped_by_operator"))
+
+
+def _latest_step_row(
+    connection: Connection, project_id: str, run_id: str, step_id: str
+) -> Any:
+    return connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id AND project_id=:project_id AND step_id=:step_id
+            ORDER BY created_at DESC, iteration DESC LIMIT 1
+            FOR UPDATE
+            """
+        ),
+        {"run_id": run_id, "project_id": project_id, "step_id": step_id},
+    ).mappings().first()
+
+
+def retry_failed_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    run_id: str,
+    step_id: str,
+    actor: str,
+) -> dict[str, Any]:
+    """Put ONE failed, dead-lettered or cancelled step back in the queue.
+
+    ONE IMPLEMENTATION. The console's "Try … again" (POST .../retry-step) and the agent's
+    `retry_workflow_step` tool each carried their own copy of this UPDATE, and only the tool's
+    recorded an event — so a retry pressed in the console left no trace in the run's history.
+    Both now call this.
+
+    Everything the run already produced is kept; only this step runs again. The run comes back
+    to `running` too, or a re-queued step would sit ready under a dead run.
+    """
+    row = _latest_step_row(connection, project_id, run_id, step_id)
+    if not row:
+        raise WorkflowNotFoundError(f"no step '{step_id}' on run {run_id}")
+    if row["status"] not in OPERATOR_RECOVERABLE_STEP_STATES:
+        # Re-queueing a step that is running would run it twice.
+        raise WorkflowConflictError(
+            f"'{step_id}' is {row['status']}, so there is nothing to retry.")
+    connection.execute(
+        text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
+             "lease_owner=NULL, lease_expires_at=NULL, run_after=now(), updated_at=now() "
+             "WHERE id=:id"),
+        {"id": row["id"]},
+    )
+    connection.execute(
+        text("UPDATE workflow_runs SET status='running', blocked_reason=NULL, error=NULL, "
+             "updated_at=now() WHERE id=:r AND project_id=:p"),
+        {"r": run_id, "p": project_id},
+    )
+    emit_event(connection, project_id, "workflow.step_retried", actor, "workflow_run", run_id,
+               {"step_id": step_id, "was": row["status"],
+                "workflow_step_run_id": row["id"]})
+    _refresh_frontier(connection, run_id)
+    return {"run_id": run_id, "step_id": step_id, "status": "ready", "was": row["status"]}
+
+
+def _is_gate_step(template: dict[str, Any]) -> bool:
+    if template.get("kind") == "decision":
+        return True
+    binding = template.get("binding") or {}
+    key = str(binding.get("capability") or "")
+    if not key:
+        return False
+    from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
+
+    return key in CAPABILITY_KEYS and bool(get_capability(key).is_gate)
+
+
+def skip_failed_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    run_id: str,
+    step_id: str,
+    actor: str,
+    reason: str,
+) -> dict[str, Any]:
+    """"Skip and proceed": the operator decides the run goes on without this step.
+
+    THE OTHER HALF OF "A FAILED STEP STOPS THE RUN". Once a failure is terminal for its step —
+    which it now is for every capability, after research that died was recorded as succeeded
+    and the workflow walked on into a panel, an auto-approved spec and a build (boss-1,
+    2026-10-02) — the operator needs exactly two ways forward: try the step again, or go on
+    without it. The product owner's words: "if a step fails it should stop, that's the
+    expectation; there should be a button to skip and proceed."
+
+    What a skip is, precisely:
+
+    * The step becomes `skipped`, never `succeeded`. Its output keeps whatever the failed
+      attempt recorded and gains `skipped_by_operator`, the reason, who skipped it and what it
+      was before — so the history still says it failed, and says who chose to go on.
+    * Nothing it produced reaches the run context. Downstream steps that bind to it receive an
+      explicit "skipped" marker (see the runner's `_resolve_inputs`): an optional input is left
+      out and named as skipped on the consuming step; a required one stops THAT step with a
+      sentence naming the skip, which is again the operator's call.
+    * The next steps are activated exactly as a success would activate them.
+
+    Refused for an approval gate. A gate that "failed" is a person who said no, and skipping it
+    would turn their no into a yes. Refused without a reason, because "why did this run go on
+    without research?" has to be answerable from the record, not from memory.
+    """
+    reason = str(reason or "").strip()
+    if not reason:
+        raise WorkflowValidationError(
+            "say why this step is being skipped — the run's record keeps the reason.")
+    run = _run_row(connection, run_id, lock=True)
+    if run is None or run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    row = _latest_step_row(connection, project_id, run_id, step_id)
+    if not row:
+        raise WorkflowNotFoundError(f"no step '{step_id}' on run {run_id}")
+    existing = _json(row["output"], {})
+    if row["status"] == "skipped" and isinstance(existing, dict) \
+            and existing.get("skipped_by_operator"):
+        # Pressed twice. The first press already decided; report it rather than refuse it.
+        return {"run_id": run_id, "step_id": step_id, "status": "skipped",
+                "already": True, "reason": existing.get("skip_reason")}
+    if row["status"] not in SKIPPABLE_STEP_STATES:
+        raise WorkflowConflictError(
+            f"'{step_id}' is {row['status']}. Only a step that failed can be skipped — "
+            f"a live step is still working, and a finished one has nothing to skip.")
+    if run["status"] in {"cancelled", "completed", "compensating", "compensated"}:
+        raise WorkflowConflictError(
+            f"this run is {run['status']}, so there is nothing to proceed to.")
+    spec = _run_spec(connection, run_id)
+    template = _step_map(spec).get(step_id) or {}
+    if _is_gate_step(template):
+        raise WorkflowConflictError(
+            f"'{step_id}' is an approval. It did not fail — somebody answered no — and "
+            f"skipping it would turn that answer into a yes. Reopen it with Try again instead.")
+
+    marker = {
+        "status": "skipped",
+        "skipped_by_operator": True,
+        "skip_reason": reason[:500],
+        "skipped_by": actor,
+        "skipped_from": row["status"],
+        "failure": row["last_error"],
+        "note": f"skipped by {actor}: {reason[:300]}",
+    }
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='skipped', lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                completed_at=clock_timestamp(),
+                output = COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB),
+                updated_at=now()
+            WHERE id=:id
+            RETURNING *
+            """
+        ),
+        {"id": row["id"], "output": json.dumps(marker)},
+    ).mappings().one()
+    connection.execute(
+        text("UPDATE workflow_runs SET status='running', blocked_reason=NULL, error=NULL, "
+             "updated_at=now() WHERE id=:r AND project_id=:p"),
+        {"r": run_id, "p": project_id},
+    )
+    # The operator's act, attributed to the operator — not to whoever started the run.
+    emit_event(
+        connection, project_id, "workflow.step_skipped", actor, "workflow_run", run_id,
+        {"workflow_step_run_id": updated["id"], "step_id": step_id,
+         "step_kind": updated["step_kind"], "iteration": int(updated["iteration"]),
+         "reason": reason[:500], "by_operator": True, "was": row["status"],
+         "failure": row["last_error"]},
+    )
+    _after_success(connection, run_id, step_id, int(updated["iteration"]))
+    return {"run_id": run_id, "step_id": step_id, "status": "skipped",
+            "was": row["status"], "reason": reason[:500],
+            "run_status": _run_row(connection, run_id)["status"]}
 
 
 def repoint_waiting_step(

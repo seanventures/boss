@@ -47,6 +47,8 @@ def test_delivery_workflow_controls_reject_foreign_project(client, engine, monke
             ("POST", "/v1/delivery-workflows/save", {"definition_id": "private", "spec": {}}),
             ("DELETE", "/v1/delivery-workflows/private", None),
             ("POST", "/v1/delivery-workflows/runs/private/retry-step", {"step_id": "build"}),
+            ("POST", "/v1/delivery-workflows/runs/private/skip-step",
+             {"step_id": "build", "reason": "go on"}),
             ("POST", "/v1/delivery-workflows/runs/private/recheck", {}),
             ("POST", "/v1/delivery-workflows/runs/private/deploy-target", {"host_id": "private"}),
             ("POST", "/v1/delivery-workflows/runs/private/input", {"values": {"title": "changed"}}),

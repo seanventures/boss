@@ -63,6 +63,12 @@ class SettledCapabilityError(CapabilityExecutionError):
     """
 
 
+#: Where `_resolve_inputs` records the explicit marker for each optional input whose source step
+#: was skipped. Kept on the step's CONTEXT, not among its inputs, so no tool ever receives it as
+#: an argument; `execute_step` writes it onto the step's output as `skipped_inputs`.
+SKIPPED_INPUTS = "skipped_inputs"
+
+
 def _resolve_inputs(
     inputs: dict[str, Any], context: dict[str, Any],
     optional: frozenset[str] = frozenset(),
@@ -109,6 +115,34 @@ def _resolve_inputs(
                     continue
             step_id = str(value["from_step"])
             field = str(value.get("field") or "")
+            skipped = (context.get("skipped") or {}).get(step_id)
+            if skipped is not None:
+                # THE STEP THIS READS FROM WAS SKIPPED, AND THAT IS WHAT THIS STEP IS TOLD.
+                #
+                # Not a value, and not a silence that looks like one. An operator pressed
+                # "Skip and proceed" on a failed step (see `workflows.skip_failed_step`), so it
+                # produced nothing — and whatever it half-produced before failing is not
+                # evidence anybody vouched for. Before this existed, research that died had its
+                # partial dossier forwarded to the panel as though it were the research
+                # (boss-1, 2026-10-02).
+                #
+                # Optional: left out of the inputs, and named in `skipped_inputs` on this step's
+                # output so the record says the panel argued without research and why.
+                # Required: this step cannot do its work, and it says exactly why — which stops
+                # the run here for the operator to decide again, rather than inventing input.
+                if name in optional:
+                    marker = {"skipped": True, "from_step": step_id, "field": field or None,
+                              "reason": skipped.get("reason"),
+                              "skipped_by": skipped.get("skipped_by")}
+                    context.setdefault(SKIPPED_INPUTS, {})[name] = marker
+                    continue
+                raise CapabilityExecutionError(
+                    f"step '{step_id}' was skipped"
+                    + (f" by {skipped.get('skipped_by')}" if skipped.get("skipped_by") else "")
+                    + (f" ({skipped.get('reason')})" if skipped.get("reason") else "")
+                    + f", so it produced no '{field or step_id}', which this step needs. "
+                      f"Retry '{step_id}', or skip this step too."
+                )
             produced = (context.get("steps") or {}).get(step_id) or {}
             if field:
                 if field not in produced and name in optional:
@@ -148,6 +182,21 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
         output = row["output"]
         if isinstance(output, dict):
             steps[row["step_id"]] = output
+    # WHAT WAS SKIPPED, AND WHY — kept apart from what was produced. A skipped step's output
+    # still holds whatever its failed attempt recorded; putting it in `steps` would hand that to
+    # the next step as though it were a result. `_resolve_inputs` turns a binding to one of
+    # these into an explicit marker instead.
+    skipped: dict[str, Any] = {}
+    for row in connection.execute(
+        text("SELECT step_id, output FROM workflow_step_runs "
+             "WHERE workflow_run_id = :run_id AND status = 'skipped'"),
+        {"run_id": run_id},
+    ).mappings():
+        output = row["output"] if isinstance(row["output"], dict) else {}
+        skipped[row["step_id"]] = {
+            "reason": output.get("skip_reason") or output.get("reason"),
+            "skipped_by": output.get("skipped_by"),
+        }
     # WHAT THIS RUN IS FOR, not just what it was asked to do.
     #
     # A step knew its own inputs and nothing about the workflow it was part of, so every panel
@@ -171,6 +220,7 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
     # sending the same message twice.
     return {
         "steps": steps,
+        "skipped": skipped,
         "input": run_input if isinstance(run_input, dict) else {},
         "run_id": run_id,
         "step_index": len(rows),
@@ -324,8 +374,11 @@ def _fill_optional_from_run_input(
     if not isinstance(run_input, dict) or not run_input:
         return inputs
     filled = dict(inputs)
+    # A binding whose source was SKIPPED stays empty. Back-filling it from a same-named run input
+    # would replace the explicit "skipped" marker with a value the workflow never bound.
+    skipped = context.get(SKIPPED_INPUTS) or {}
     for name in getattr(capability, "optional_inputs", ()) or ():
-        if name in filled:
+        if name in filled or name in skipped:
             continue
         value = run_input.get(name)
         if value not in (None, "", [], {}):
@@ -817,8 +870,8 @@ def _write_the_run_report(
     run parked on a deploy approval would never reach it. It reads what has happened SO FAR;
     steps after it are listed as pending, which is part of the answer rather than a gap.
 
-    Never fails the run. A report is a description of the work, and a description that cannot
-    be written is not a reason to stop work that already succeeded.
+    A report that cannot be written FAILS the step, like any other work that did not happen.
+    Whether the run goes on without it is the operator's decision (Skip and proceed).
     """
     from ..config import get_settings
     from .core import create_artifact
@@ -826,13 +879,13 @@ def _write_the_run_report(
 
     run_id = str(context.get("run_id") or "")
     if not run_id:
-        return {"capability": "report", "status": "recorded",
-                "note": "no run to report on."}
+        raise CapabilityExecutionError("there is no run to report on, so no report was written.")
 
     report = assemble_workflow(connection, project_id, run_id)
     if not report.get("ok"):
-        return {"capability": "report", "status": "recorded",
-                "note": str(report.get("error") or "nothing to report yet.")}
+        raise CapabilityExecutionError(
+            "the run report could not be assembled: "
+            + str(report.get("error") or "the run's history was unreadable."))
 
     markdown = workflow_markdown(report)
     title = f"Run report — {report.get('workflow') or run_id}"
@@ -1204,7 +1257,30 @@ def execute_step(
 
     Raises CapabilityExecutionError with a sentence an operator can act on — the step records
     it, and "step failed" with no reason is the thing this exists to avoid.
+
+    Every kind of step goes through here, so this is where the skipped-input markers that
+    `_resolve_inputs` recorded are written onto the output: whichever branch ran, the record of
+    this step says which of its inputs were missing because an operator skipped their source.
     """
+    context = dict(context)
+    context.pop(SKIPPED_INPUTS, None)
+    output = _execute_step(connection, ctx, project_id=project_id, actor=actor,
+                           step=step, context=context)
+    skipped = context.get(SKIPPED_INPUTS)
+    if skipped and isinstance(output, dict):
+        output = {**output, SKIPPED_INPUTS: skipped}
+    return output
+
+
+def _execute_step(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    actor: str,
+    step: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
     binding = step.get("binding") or {}
 
     # A STEP THAT SAYS WHAT IT WANTS AND LETS AN AGENT WORK OUT HOW.
@@ -1406,14 +1482,15 @@ def execute_step(
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
         # run has already recorded and leaves a document behind.
         if key == "report":
-            try:
-                return _write_the_run_report(connection, project_id, context)
-            except Exception as error:  # noqa: BLE001
-                # A report is a description of the work. One that cannot be written is not a
-                # reason to fail a build that succeeded.
-                log.warning("run report not written for %s: %s", context.get("run_id"), error)
-                return {"capability": "report", "status": "recorded",
-                        "note": f"the report could not be assembled: {error}"}
+            # A REPORT THAT WAS NOT WRITTEN IS A STEP THAT FAILED.
+            #
+            # This caught every exception and returned `status: recorded`, so the step went
+            # green with no report behind it — the same shape as research recorded succeeded
+            # after it died (boss-1, 2026-10-02). The reasoning was that a missing report is no
+            # reason to stop a build that succeeded; that is a fair call, and it is the
+            # OPERATOR'S call, made with "Skip and proceed", not one the runner makes by
+            # pretending the report exists.
+            return _write_the_run_report(connection, project_id, context)
         # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
         # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
         # "recorded from the work it accompanies" left three of the nine steps saying nothing
@@ -1935,7 +2012,8 @@ def resume_awaited(
     is watching a code task. Runs every tick, before claiming new work, so a build that
     finished a moment ago releases the next step in the same pass rather than a tick later.
 
-    A step whose work FAILED fails the step, with the underlying status in the message. Silently
+    A step whose work FAILED fails the step, with the underlying status in the message, and the
+    run stops there until an operator retries or skips it. No kind of work is exempt. Silently
     succeeding would let a workflow report a shipped product on top of a build that did not.
     """
     parked = connection.execute(
@@ -2020,37 +2098,6 @@ def resume_awaited(
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "succeeded", "awaited": kind})
-        elif status in bad_states and kind == "discovery":
-            # RESEARCH THAT DID NOT FINISH FAILED — AND THE PROJECT CARRIES ON.
-            #
-            # Two facts, and the step has to hold both. It FAILED: saying "not run" about work
-            # that ran and died hides a thing worth fixing, and this one has been failing for
-            # reasons of its own. But it must not sink the run — research is enrichment, the
-            # binding into `meeting` is optional, and a cancelled discovery took a whole build
-            # down with it before a line of code was written (wfr_9782313e30cf4826a0).
-            #
-            # AND WHATEVER IT FOUND STILL GOES TO THE PANEL. A run that dies partway has
-            # usually written its brief and some findings already; throwing those away wastes
-            # the search that was actually done and sends the panel in with nothing. Partial
-            # evidence argued over beats no evidence.
-            partial = _terminal_evidence(connection, kind, awaited_id)
-            salvaged = str(partial.get("dossier") or "")
-            workflows.force_complete_waiting_step(
-                connection, project_id=project_id, step_run_id=step["id"],
-                output={**output, **partial,
-                        "status": "failed_continued",
-                        "awaited_status": status,
-                        "note": (
-                            f"research {status} before it finished"
-                            + (" — the panel gets what it had reached by then."
-                               if salvaged else
-                               " and had produced nothing, so the panel argues from the "
-                               "directive alone.")
-                        )},
-            )
-            done.append({"run_id": run_id, "step_id": step["step_id"],
-                         "outcome": "failed_continued", "awaited": kind,
-                         "awaited_status": status, "salvaged": bool(salvaged)})
         elif status in bad_states:
             # A RETRY IS THE SAME STEP, NOT A NEW ONE.
             #
@@ -2088,15 +2135,48 @@ def resume_awaited(
             # one or two tables away and this line used to discard it, leaving the operator
             # with a sentence that only restates the failure.
             why = _why_it_ended(connection, table, awaited_id)
+            # FAILED IS TERMINAL FOR THE STEP, FOR EVERY KIND OF WORK — RESEARCH INCLUDED.
+            #
+            # Research used to be the exception: a discovery that died was force-COMPLETED with
+            # status `failed_continued`, on the reasoning that research is only enrichment. On
+            # boss-1 (2026-10-02) that is exactly what happened — research failed, the step went
+            # green, and the workflow walked on to a panel, an auto-approved spec and a build,
+            # none of which anybody had decided should go ahead without the research. Whether a
+            # run carries on without a step is the OPERATOR'S decision ("Skip and proceed",
+            # `workflows.skip_failed_step`), never the runner's.
+            #
+            # What the work reached before it died is kept on the failed step, where the
+            # operator weighing retry against skip can read it. It does not travel downstream:
+            # the run context reads succeeded steps only.
             workflows.force_fail_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
                 error=(f"the {kind} it started finished as '{status}' — {why}"
                        if why else f"the {kind} it started finished as '{status}'"),
+                output={"status": "failed", "awaited_status": status,
+                        "reached_before_failing": _evidence_quietly(
+                            connection, kind, awaited_id)},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "failed", "awaited": kind, "awaited_status": status,
                          "because": why})
     return done
+
+
+def _evidence_quietly(connection: Connection, kind: str, awaited_id: str) -> dict[str, Any]:
+    """`_terminal_evidence` inside a savepoint, for a step that is being FAILED.
+
+    Reading what a dead run left behind is a courtesy to the operator; it must never be the
+    thing that aborts the transaction recording the failure itself.
+    """
+    point = connection.begin_nested()
+    try:
+        evidence = _terminal_evidence(connection, kind, awaited_id)
+    except Exception as error:  # noqa: BLE001
+        point.rollback()
+        log.warning("cannot read what %s %s reached: %s", kind, awaited_id, error)
+        return {}
+    point.commit()
+    return evidence
 
 
 def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
@@ -2125,18 +2205,28 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
     tautology about missing jobs — one further hop into the job that actually failed.
     """
     reason = ""
+    # EACH READ IN ITS OWN SAVEPOINT. `agent_runs` has no `error` column, and on Postgres a
+    # failed statement poisons the whole transaction: the `except` below swallowed the Python
+    # error, the very next statement — the one failing the step — then died on
+    # InFailedSqlTransaction, and the tick logged "skipped run (non-fatal)". So an agent step
+    # whose approved run was denied stayed `waiting` for ever, never stopping its run. Found by
+    # the every-await-kind test in test_a_failed_step_stops_the_run.py.
+    point = connection.begin_nested()
     try:
         row = connection.execute(
             text(f"SELECT error FROM {table} WHERE id = :id"),  # noqa: S608 - fixed set
             {"id": awaited_id},
         ).mappings().first()
         reason = str((row or {}).get("error") or "").strip()
+        point.commit()
     except Exception:  # noqa: BLE001 — a table without an `error` column is not fatal
+        point.rollback()
         reason = ""
 
     # "No job remains" describes the SWEEP, not the failure. The job it is talking about
     # recorded why it died before it was swept.
     if not reason or "no job remains" in reason:
+        point = connection.begin_nested()
         try:
             job = connection.execute(
                 text("SELECT last_error FROM jobs "
@@ -2156,8 +2246,9 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
                 kind_of = str(raw.get("type") or "").strip()
                 if detail:
                     reason = f"{kind_of}: {detail}" if kind_of else detail
+            point.commit()
         except Exception:  # noqa: BLE001 — the status is still reportable without this
-            pass
+            point.rollback()
     return reason[:400]
 
 

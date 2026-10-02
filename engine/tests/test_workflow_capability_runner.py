@@ -1336,13 +1336,13 @@ def test_a_panel_still_convenes_when_there_was_no_research(eng, project, monkeyp
     assert steps["meeting"]["status"] != "failed", steps["meeting"]["last_error"]
 
 
-def test_research_that_died_reads_as_failed_and_the_run_carries_on(eng, project, monkeypatch):
-    """Two facts the step has to hold at once.
-
-    It FAILED — saying "not run" about work that ran and died hides something worth fixing. And
-    it must not sink the run: research is enrichment, the binding into `meeting` is optional,
-    and a cancelled discovery took a whole build down with it before a line of code was
-    written (wfr_9782313e30cf4826a0)."""
+def test_research_that_died_stops_the_run_at_research(eng, project, monkeypatch):
+    """REWRITTEN to the new rule. This test used to assert the opposite — that dead research
+    was recorded `failed_continued` (a SUCCEEDED step) and the run carried on — and that is
+    exactly what happened on boss-1 (2026-10-02): research failed, the step showed green, and
+    the workflow walked on into a panel, an auto-approved spec and a build. The product
+    owner's rule: "if a step fails it should stop". Going on without research is now an
+    explicit operator choice (Skip and proceed), see test_a_failed_step_stops_the_run.py."""
     discovery = RecordingTool("create_discovery", {"run_id": "drun_doomed"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
 
@@ -1368,16 +1368,19 @@ def test_research_that_died_reads_as_failed_and_the_run_carries_on(eng, project,
                         {"r": run["id"]}).scalar()
         c.execute(text("DELETE FROM discovery_runs WHERE id='drun_doomed'"))
 
-    assert steps["research"]["output"]["status"] == "failed_continued"
-    assert "cancelled" in steps["research"]["output"]["note"]
-    assert row != "failed", "a cancelled research killed the run"
-    assert steps["notify"]["status"] != "pending", "the workflow did not carry on"
+    assert steps["research"]["status"] == "failed"
+    assert "cancelled" in (steps["research"]["last_error"] or "")
+    assert row == "failed", "a run whose research died must stop for the operator"
+    assert steps["notify"]["status"] == "pending", "the workflow walked on past a failure"
 
 
-def test_what_the_research_had_reached_still_goes_to_the_panel(eng, project, monkeypatch):
-    """A run that dies partway has usually written its brief and some findings already.
-    Throwing those away wastes the search that WAS done and sends the panel in with nothing —
-    partial evidence argued over beats no evidence."""
+def test_what_the_research_had_reached_stays_on_the_failed_step_not_in_the_panel(
+        eng, project, monkeypatch):
+    """REWRITTEN to the new rule. This used to assert that a dead run's partial dossier was
+    forwarded to the panel. That is the other half of the boss-1 incident: evidence nobody
+    vouched for travelled downstream as though it were the research. What was reached is now
+    kept on the FAILED step — where the operator choosing between retry and skip can read it —
+    and the panel is not convened at all until somebody decides."""
     discovery = RecordingTool("create_discovery", {"run_id": "drun_partial"})
     meeting = RecordingTool("request_meeting", {"run_id": "mrun_from_partial"})
     monkeypatch.setattr(runner, "_tool_registry",
@@ -1407,16 +1410,19 @@ def test_what_the_research_had_reached_still_goes_to_the_panel(eng, project, mon
         )
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
         c.execute(text("DELETE FROM discovery_runs WHERE id='drun_partial'"))
 
-    assert meeting.calls, "the panel never convened after research died"
-    handed = meeting.calls[0]["args"].get("research") or ""
-    assert "teams check deps monthly" in handed, "what the research HAD found was thrown away"
+    assert not meeting.calls, "the panel convened on research that died"
+    assert steps["research"]["status"] == "failed"
+    reached = steps["research"]["output"]["reached_before_failing"]
+    assert "teams check deps monthly" in str(reached), "what the research HAD found was lost"
 
 
 def test_a_build_that_fails_still_stops_the_run(eng, project, monkeypatch):
-    """Only RESEARCH is tolerated. The build is the work: a run whose build failed has nothing
-    to preview and nothing to deploy, and carrying on would be a lie."""
+    """The build is the work: a run whose build failed has nothing to preview and nothing to
+    deploy, and carrying on would be a lie. (Research is no longer an exception either — see
+    test_research_that_died_stops_the_run_at_research.)"""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
 
     with eng.begin() as c:
