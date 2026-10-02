@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { areaVisibilityCss } from "../lib/area-visibility";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -26,7 +27,11 @@ describe("the area exists in all the places an area has to exist", () => {
     // read as the area having vanished.
     expect(SHELL).toContain('{ id: "skills", label: "Skills and MCP"');
     expect(PAGE).toContain('data-area="skills"');
-    expect(CSS).toContain('.bx-content[data-active="skills"]');
+    // The visibility rule is GENERATED from AREAS now (lib/area-visibility.ts) — the hand list
+    // in globals.css drifted and left AI SRE blank — so the check is on the generated rule.
+    expect(areaVisibilityCss(["skills"])).toContain('.bx-content[data-active="skills"]');
+    expect(SHELL).toContain("areaVisibilityCss(AREAS.map((a) => a.id))");
+    expect(CSS).not.toContain('.bx-content[data-active="skills"] .frame > section:is');
     expect(EDITION).toContain('"skills"');
   });
 });

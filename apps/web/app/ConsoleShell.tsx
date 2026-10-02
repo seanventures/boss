@@ -1128,6 +1128,11 @@ export default function ConsoleShell({
                 {status.budgetState || "unknown"}</strong></div>
               <div><span>Operator</span><strong><UserCircle size={15} aria-hidden /> {scope.actor}</strong></div>
               <div><span>Console</span><ConsoleToggle current="v1" orgId={org?.id} /></div>
+              {/* SIGN OUT. /api/auth/logout existed and nothing called it, so the only way to
+                  end a console session on a shared machine was to clear the browser's cookies. */}
+              <form action="/api/auth/logout" method="post" data-testid="bx-sign-out">
+                <button type="submit" className="cap-btn">Sign out</button>
+              </form>
             </div>
           </details>
         </header>

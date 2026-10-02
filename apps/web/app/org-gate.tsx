@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { OrgSummary } from "../lib/orgs";
-import { onboardOrgAction } from "./actions";
+import { onboardOrgFormAction, type OnboardOrgResult } from "./org-gate-actions";
+import { callAction } from "../lib/call-action";
 import { SubmitButton } from "./submit-button";
 
 const ORG_KEY = "boss.org";
@@ -57,6 +58,9 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
   const params = useSearchParams();
   const [showOnboard, setShowOnboard] = useState(orgs.length === 0);
   const [opening, setOpening] = useState<string | null>(null);
+  const [onboarded, onboard] = useActionState<OnboardOrgResult | null, FormData>(
+    callAction(onboardOrgFormAction), null,
+  );
 
   // Returning users skip the picker (unless they explicitly chose to switch).
   useEffect(() => {
@@ -75,6 +79,13 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
     setOpening(orgId);
     openOrg(orgId);
   };
+
+  // DONE MEANS OPENED. A successful onboard left the form open and filled, which read as though
+  // nothing had happened; the new organization is entered straight away instead.
+  useEffect(() => {
+    if (onboarded?.ok) enter(onboarded.orgId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onboarded]);
 
   return (
     <div className="org-gate">
@@ -114,13 +125,20 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
           </button>
         </div>
 
-        {showOnboard ? (
-          <form action={onboardOrgAction} className="org-onboard">
+        {onboarded?.ok ? (
+          <p className="org-onboard-note" role="status" data-testid="org-onboard-done">
+            Created {onboarded.name}. Opening its workspace…
+          </p>
+        ) : showOnboard ? (
+          <form action={onboard} className="org-onboard">
             <label>
               Organization name
               <input name="name" placeholder="e.g. Northwind Robotics" required autoFocus={orgs.length > 0} />
             </label>
             <SubmitButton type="submit" className="cap-btn primary">Onboard organization</SubmitButton>
+            {onboarded && !onboarded.ok ? (
+              <p className="error-banner" role="alert" data-testid="org-onboard-error">{onboarded.error}</p>
+            ) : null}
             <span className="org-onboard-note">
               Creates the org → workspace → project and seeds the common defaults (budget policy, agent
               modules, packs, MCP servers). It then appears above to enter.

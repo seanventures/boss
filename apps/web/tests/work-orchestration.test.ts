@@ -38,7 +38,10 @@ describe("Work Orchestration operator surface", () => {
     expect(css).toContain(".wo-ledger");
     expect(css).toContain(".wo-flow-label");
     expect(css).toContain(".wo-inspector");
-    expect(css).toContain('.bx-content[data-active="portfolio"]');
+    // Visibility is generated from the AREAS list now (lib/area-visibility.ts), not hand-written
+    // in globals.css; every-area-is-actually-visible.test.ts covers portfolio with the rest.
+    expect(readFileSync(resolve(__dirname, "../app/ConsoleShell.tsx"), "utf8"))
+      .toContain('{ id: "portfolio", label:');
     expect(ui).toContain("selected.rationale");
     expect(ui).toContain("effective_score.toFixed(1)");
     expect(ui).toContain("Tracker binding required");
