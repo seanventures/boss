@@ -220,6 +220,7 @@ def _invoke_mcp_skill(
     actor: str,
     caller: str = "agent_loop",
     approved_by: Optional[str] = None,
+    approval_about: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     tool_name = str(tool.get("name") or "tool")
     skill_spec = _mcp_skill_spec(server, tool)
@@ -229,6 +230,7 @@ def _invoke_mcp_skill(
         project_id=project_id,
         actor=actor,
         approved_by=approved_by,
+        approval_about=approval_about,
     )
 
     def execute(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -251,6 +253,7 @@ def _invoke_mcp_skill(
             dedupe_key=f"mcp:{run_id}:{step}:{server['id']}:{tool_name}:{args_digest}",
             tenant_scope=context.tenant_scope(),
             approved_by=approved_by,
+            approval_about=approval_about,
         )
 
     return SkillRuntimeService(settings).invoke(
@@ -1519,6 +1522,7 @@ def _invoke_agent_skill(
     actor: str,
     skill_spec: Optional[dict[str, Any]] = None,
     approved_by: Optional[str] = None,
+    approval_about: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     return SkillRuntimeService(settings).invoke(
         connection,
@@ -1533,6 +1537,7 @@ def _invoke_agent_skill(
             project_id=project_id,
             actor=actor,
             approved_by=approved_by,
+            approval_about=approval_about,
         ),
         skill_spec=skill_spec,
         actor=actor,
@@ -1664,8 +1669,10 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 run_id=run_id,
                 step=int(pending.get("step") or run.get("step") or 0),
                 actor="decision_approval",
-                # Checked approved above; the MCP effect reads it again (needs_person).
+                # Checked approved above; the MCP effect reads it again (needs_person),
+                # and checks it is THIS run's decision (approval_stands).
                 approved_by=decision_id,
+                approval_about={"run_id": run_id},
             )
             emit_event(
                 connection,
@@ -1723,6 +1730,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 actor="decision_approval",
                 skill_spec=still_resolved,
                 approved_by=decision_id,
+                approval_about={"run_id": run_id},
             )
             emit_event(
                 connection,

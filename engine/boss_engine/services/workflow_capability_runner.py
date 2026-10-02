@@ -2539,6 +2539,9 @@ def _gate_subject(
             ),
             "risk_tier": definition["risk_tier"],
             "completes_step": False,
+            # Why only a PERSON may answer this gate — carried to _open_gate, which writes
+            # on_timeout=block into the snapshot so the timeout sweep cannot answer it.
+            "requires_person": definition.get("requires_person"),
         }
 
     key = str(binding.get("capability") or "")
@@ -2585,6 +2588,16 @@ def _open_gate(
     spec_step = step_row.get("_spec") or {}
     subject = step_row["_subject"]
     approval = spec_step.get("approval") or {}
+    # A GATE ONLY A PERSON MAY ANSWER NEVER TIMES OUT INTO AN APPROVAL.
+    #
+    # Round-3 review: a custom step published before the review rule existed could carry
+    # on_timeout=approve with an sla. Its gate is forced manual at run time (requires_person),
+    # but the snapshot kept on_timeout=approve, so the timeout sweep approved the gate BY
+    # POLICY and an unreviewed server's tool ran with nobody asked. The snapshot is what the
+    # sweep reads, so it is corrected here, where the gate opens, whatever the version says.
+    requires_person = str(subject.get("requires_person") or "").strip() or None
+    if requires_person and str(approval.get("on_timeout") or "block").lower() == "approve":
+        approval = {**approval, "on_timeout": "block"}
 
     # ASSIGNMENT, ENFORCED WHERE IT MATTERS: at the gate.
     #
@@ -2698,6 +2711,7 @@ def _open_gate(
                 # Recorded, not recomputed on resume: the answer to "did approving this finish
                 # it?" must not change if the workflow is edited while somebody is deciding.
                 "gate_completes_step": bool(subject["completes_step"]),
+                "requires_person": requires_person,
                 "opened_at": now_utc().isoformat(),
                 "due_at": (
                     (now_utc() + timedelta(hours=float(sla_hours))).isoformat()
@@ -3319,6 +3333,10 @@ def sweep_gate_timeouts(
         snapshot = row["binding_snapshot"] or {}
         approval = snapshot.get("approval") or {}
         action = str(approval.get("on_timeout") or "block").lower()
+        if action == "approve" and snapshot.get("requires_person"):
+            # Belt to _open_gate's braces: a gate opened because only a person may answer it
+            # is never approved by policy, even from a snapshot written before that rule.
+            action = "block"
         try:
             if action == "approve":
                 evidence = [{

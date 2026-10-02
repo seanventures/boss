@@ -217,6 +217,11 @@ class SkillRuntimeService:
                 except Exception:  # noqa: BLE001 — already gone; the message is what matters
                     pass
                 last_error = str(exc)
+                if getattr(exc, "retryable", True) is False:
+                    # A refusal that only a person can lift (mcp_registry.McpServerUnreviewed)
+                    # fails the same way every time. Round-3 review: it was retried under the
+                    # MCP spec's policy and the run recorded an attempt that could not succeed.
+                    break
 
         actual_cost: Optional[int] = None
         cost_receipt_id: Optional[str] = None
