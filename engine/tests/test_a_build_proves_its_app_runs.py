@@ -723,10 +723,45 @@ def test_the_deploy_runs_a_package_module_server_the_way_the_preview_does(tmp_pa
     assert _serves(payload / "dist", entry)
 
 
-def test_the_deploy_runs_the_builds_declared_command(tmp_path, monkeypatch):
-    repo = _declared_app(tmp_path / "repo")
+def test_the_deploy_runs_the_entry_not_the_builds_declared_command(tmp_path, monkeypatch):
+    """A declaration is a preview / build-proof contract, not a production command (fourth
+    review of dc3aeb7): deploy runs the resolved entry the way python_entry_invocation says,
+    whatever the build declared. dc3aeb7 shipped the declared command."""
+    repo = _lead_triage(tmp_path / "repo", **{
+        "boss.preview.command": "LEAD_TRIAGE_DEV=1 python3 -m lead_triage_core.server --reload\n",
+        "main.py": STRAY_MAIN})
     payload, mode, entry, _sha = _build_dist(tmp_path, monkeypatch, repo, DECLARED_LINEAGE)
     assert (mode, entry) == ("py", "python3 -m lead_triage_core.server")
+    assert _serves(payload / "dist", entry)
+
+
+def test_the_deploy_runs_a_plain_script_as_python3_and_it_serves(tmp_path, monkeypatch):
+    from boss_engine.services import deploy_service as ds
+
+    repo = _write(tmp_path / "repo", {"serve.py": (
+        "import os\nfrom http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer\n"
+        "ThreadingHTTPServer(('0.0.0.0', int(os.environ['PORT'])), SimpleHTTPRequestHandler)"
+        ".serve_forever()\n")})
+    payload, mode, entry, _sha = _build_dist(tmp_path, monkeypatch, repo, ["serve.py"])
+    assert (mode, entry) == ("py", "python3 serve.py")
+    assert "python:3.12-slim sh -c 'python3 serve.py'" in ds._docker_run_cmd(
+        "a", 80, "/srv/a", mode, entry)
+    assert _serves(payload / "dist", entry)
+
+
+def test_a_nested_package_module_deploys_from_above_its_package(tmp_path, monkeypatch):
+    """src/ is not a package: the module runs as `-m lead_triage_core.server` from src/."""
+    from boss_engine.services import deploy_service as ds
+
+    root = _lead_triage(tmp_path / "lt")
+    repo = tmp_path / "repo"
+    for rel in BUILT:
+        (repo / "src" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / "src" / rel).write_text((root / rel).read_text())
+    changed = [f"src/{rel}" for rel in BUILT]
+    payload, mode, entry, _sha = _build_dist(tmp_path, monkeypatch, repo, changed)
+    assert (mode, entry) == ("py", "cd src && python3 -m lead_triage_core.server")
+    assert f"sh -c {shlex.quote(entry)}" in ds._docker_run_cmd("a", 80, "/srv/a", mode, entry)
     assert _serves(payload / "dist", entry)
 
 
