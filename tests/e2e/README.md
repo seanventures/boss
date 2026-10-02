@@ -129,11 +129,12 @@ for:
 
 Each requirement names the controls that ARE it (`journeys.REQUIRES`), and a self-test fails
 when no journey labelled with that requirement uses every one, so a smoke check cannot be
-relabelled as proof again. Controls the milestone needs and no screen has yet — giving an agent
-an MCP server, on create (`aw-mcp-${server.mcp_server_id}`) and on its page (`agent-mcp-open`,
-`agent-mcp-select`, `agent-mcp-confirm`, `agent-mcp-held`, `agent-mcp-empty`, `agent-mcp-failed`)
-— are `journeys.PENDING_SELECTORS`: the R2 journeys fail saying so, and the self-test fails the
-day one appears so it moves into `JOURNEY_SELECTORS`. A template id arrives by its fixed start
+relabelled as proof again. Controls the milestone needs and no screen has yet go in
+`journeys.PENDING_SELECTORS`: the journeys fail saying so, and the self-test fails the day one
+appears so it moves into `JOURNEY_SELECTORS`. The agents stream's MCP grant controls
+(`aw-mcp-${server.mcp_server_id}`, `agent-mcp-*`) arrived at integration and moved there; the
+list is empty now. MCP servers are registered through the one shared panel
+(app/mcp-servers-ui.tsx: `mcp-register-open`, `mcp-name`, `mcp-url`, `mcp-save`, `mcp-list`). A template id arrives by its fixed start
 (`aw-mcp-`), whatever the page calls its variable. The requirement check reads each labelled
 journey's code too (with the helpers it calls), so a table row alone cannot make a smoke check
 proof. The
