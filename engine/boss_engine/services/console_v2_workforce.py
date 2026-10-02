@@ -990,5 +990,28 @@ def agent_detail(connection, project_id: str, role_key: str, *,
         # the agent call anything. An operator reading a page full of allowed skills over an
         # empty `role_skills` table sees a capable agent that can do nothing.
         "skills": skill_definitions.role_skill_detail(connection, project_id, role_key),
+        # THE REST OF THE ONE AGENT MODEL (services/agents.py): the MCP servers it holds, the
+        # workflow steps that name it — which is why it may not be deletable — and the Studio
+        # profiles that sit on it. Read here so the detail page needs one request, not four.
+        **_agent_model_extras(connection, project_id, role_key, registered=bool(role)),
         "window_hours": hours,
+    }
+
+
+def _agent_model_extras(connection, project_id: str, role_key: str, *,
+                        registered: bool) -> dict:
+    """MCP holdings, the steps naming the agent, and its Studio profiles — see agent_detail."""
+    from . import agents
+
+    if not registered:
+        return {"mcp": {"role_key": role_key, "holds": [], "available": []},
+                "named_on_steps": [], "studio_profiles": []}
+    return {
+        "mcp": agents.role_mcp_detail(connection, project_id, role_key),
+        "named_on_steps": agents.steps_naming(connection, project_id, role_key),
+        "studio_profiles": [
+            {"id": p["id"], "agent_key": p["agent_key"], "name": p["name"],
+             "status": p["status"]}
+            for p in agents.studio_profiles(connection, project_id, role_key)
+        ],
     }

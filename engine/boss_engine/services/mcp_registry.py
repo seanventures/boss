@@ -121,6 +121,11 @@ def register_mcp_server(
             "tool_risk_overrides": json.dumps(tool_risk_overrides or {}),
         },
     )
+    # REGISTERED BY HAND, so a deletion recorded earlier no longer stands in its way.
+    from . import seed_exclusions
+
+    if actor != "bootstrap":
+        seed_exclusions.lift(connection, project_id, "mcp_server", name)
     emit_event(
         connection,
         project_id,
@@ -159,11 +164,17 @@ def set_mcp_enabled(connection: Connection, project_id: str, server_id: str, ena
 
 def delete_mcp_server(connection: Connection, project_id: str, server_id: str, actor: str = "system") -> bool:
     row = connection.execute(
-        text("DELETE FROM mcp_servers WHERE id = :id AND project_id = :p RETURNING id"),
+        text("DELETE FROM mcp_servers WHERE id = :id AND project_id = :p RETURNING id, name"),
         {"id": server_id, "p": project_id},
     ).mappings().first()
     if row is None:
         return False
+    # A BUILT-IN SERVER AN OPERATOR DELETED IS NOT RE-REGISTERED BY THE NEXT SEED. Built-ins
+    # are ensured by name, so the name is what is remembered.
+    from . import seed_exclusions
+
+    seed_exclusions.exclude(connection, project_id, "mcp_server", str(row["name"]),
+                            actor=actor, reason="deleted")
     emit_event(connection, project_id, "mcp.server_removed", actor, "mcp_server", server_id, {})
     return True
 
@@ -181,9 +192,17 @@ def ensure_mcp_server(
     publisher: Optional[dict[str, Any]] = None,
     provenance: Optional[dict[str, Any]] = None,
     tool_risk_overrides: Optional[dict[str, int]] = None,
-) -> dict:
+) -> Optional[dict]:
     """Idempotently register a server by (project, name) — used by bootstrap so the
-    built-in BOSS MCP servers are always present without duplicating on restart."""
+    built-in BOSS MCP servers are present without duplicating on restart.
+
+    Returns None, and writes nothing, for a server an operator deleted: the seed is additive
+    only and never resurrects what a person removed (services/seed_exclusions.py).
+    """
+    from . import seed_exclusions
+
+    if seed_exclusions.is_excluded(connection, project_id, "mcp_server", name):
+        return None
     _validated_server_identity(name, url, transport)
     risk_tier = _validated_risk(risk_tier)
     data_boundary = normalize_data_boundary(data_boundary)

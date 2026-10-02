@@ -11,7 +11,16 @@ export type StudioActionResult = {
   item?: Record<string, unknown>;
 };
 
-async function post(
+function post(path: string, body: Record<string, unknown>): Promise<StudioActionResult> {
+  return send("POST", path, body);
+}
+
+function patch(path: string, body: Record<string, unknown>): Promise<StudioActionResult> {
+  return send("PATCH", path, body);
+}
+
+async function send(
+  method: "POST" | "PATCH",
   path: string,
   body: Record<string, unknown>,
 ): Promise<StudioActionResult> {
@@ -23,7 +32,7 @@ async function post(
       };
     }
     const response = await apiWrite(`${API_URL}${path}`, {
-      method: "POST",
+      method,
       headers: {
         "Content-Type": "application/json",
         ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
@@ -55,7 +64,7 @@ async function post(
           ok: false,
           message:
             detail ??
-            "Actor lacks role_review authority to install the starter catalog.",
+            "The signed-in member does not have role_review authority to change agents on this project.",
         };
       }
       if (response.status === 422) {
@@ -128,19 +137,48 @@ export async function createStudioAgent(
   submission: AgentWizardSubmission,
   publish: boolean,
 ): Promise<StudioActionResult> {
-  // THE ROLE FIRST, when one is being made. An agent whose role does not exist is an agent the
-  // Agents page cannot list and the assignment model cannot assign — the four-models problem in
-  // its most concrete form. Idempotent on (project_id, role_key), so a retry is safe.
-  if (submission.role) {
-    const role = await post("/v1/roles", submission.role);
-    if (!role.ok) {
-      return { ...role, message: `The agent's role could not be registered: ${role.message}` };
+  const projectId = String(submission.definition.project_id);
+  const actor = submission.actor;
+
+  // THE AGENT AND ITS GRANTS FIRST, as one write. The wizard used to register a role with the
+  // chosen skills written into `spec.allowed_skills` and the profile's `requested_skills` —
+  // two lists the runtime never reads — so the agent it made held nothing. Now a new agent is
+  // created through POST /v1/agents with its skills and MCP servers GRANTED (role_skills,
+  // role_mcp_servers) in the same transaction, and an existing one is given anything it does
+  // not yet hold. That refuses an existing key instead of overwriting it, so naming a new
+  // agent "QA" can no longer replace the bundled qa role.
+  if (submission.agent.create) {
+    const made = await post("/v1/agents", submission.agent.create);
+    if (!made.ok) {
+      return { ...made, message: `The agent could not be created: ${made.message}` };
+    }
+  } else if (submission.agent.grant) {
+    const granted = await patch(
+      `/v1/agents/${encodeURIComponent(submission.agent.roleKey)}`, submission.agent.grant);
+    if (!granted.ok) {
+      return {
+        ...granted,
+        message: `${submission.agent.roleKey} could not be given what this profile uses: ${granted.message}`,
+      };
     }
   }
 
   const definition = await post("/v1/agent-studio/agents", submission.definition);
   if (!definition.ok || typeof definition.item?.id !== "string") {
-    return definition;
+    return {
+      ...definition,
+      // THE WIZARD ADOPTS IT (lib/agent-wizard adoptCreatedAgent), so pressing Create again
+      // retries the profile against this agent instead of 409-ing on "already exists".
+      ...(submission.agent.create ? {
+        item: {
+          agent_created: submission.agent.roleKey,
+          agent_name: String(submission.agent.create.name ?? submission.agent.roleKey),
+        },
+      } : {}),
+      message: submission.agent.create
+        ? `The agent ${submission.agent.roleKey} was created and holds its skills, but its Studio profile was not: ${definition.message}. Fix that and press Create again — the agent is kept and will not be made twice.`
+        : definition.message,
+    };
   }
 
   const definitionId = definition.item.id;
@@ -160,20 +198,20 @@ export async function createStudioAgent(
   const created = {
     definition_id: definitionId,
     version_id: versionId,
+    role_key: submission.agent.roleKey,
     status: "draft",
   };
   if (!publish) {
     return {
       ok: true,
-      message: "Agent definition and immutable draft version created.",
+      message: "Agent created with its grants; its Studio profile is saved as a draft version.",
       item: created,
     };
   }
 
-  const projectId = String(submission.definition.project_id);
   const validation = await post(
     `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/validate`,
-    { project_id: projectId, actor: "vp_agents" },
+    { project_id: projectId, actor },
   );
   if (!validation.ok) {
     return {
@@ -196,7 +234,7 @@ export async function createStudioAgent(
 
   const published = await post(
     `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/publish`,
-    { project_id: projectId, actor: "vp_agents" },
+    { project_id: projectId, actor },
   );
   if (!published.ok) {
     return {
@@ -207,10 +245,11 @@ export async function createStudioAgent(
   }
   return {
     ok: true,
-    message: "Agent compiled, validated, and published as an immutable active version.",
+    message: "Agent created with its grants, and its Studio profile validated and published.",
     item: {
       definition_id: definitionId,
       version_id: versionId,
+      role_key: submission.agent.roleKey,
       status: "published",
       warnings: validation.item?.warnings ?? [],
     },
@@ -220,10 +259,11 @@ export async function createStudioAgent(
 export async function testStudioAgent(
   projectId: string,
   versionId: string,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post(`/v1/agent-studio/agent-versions/${versionId}/tests`, {
     project_id: projectId,
-    actor: "vp_agents",
+    actor,
     scenario: {
       objective: "Compile this AgentVersion and prove its authority and safety envelope.",
     },
@@ -233,19 +273,21 @@ export async function testStudioAgent(
 
 export async function runStudioCatalogSmoke(
   projectId: string,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post("/v1/agent-studio/catalog-smoke", {
     project_id: projectId,
-    actor: "vp_agents",
+    actor,
   });
 }
 
 export async function seedStudioCatalog(
   projectId: string,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post("/v1/agent-studio/catalog/seed", {
     project_id: projectId,
-    actor: "vp_agents",
+    actor,
   });
 }
 
@@ -253,10 +295,11 @@ export async function runStudioAgent(
   projectId: string,
   versionId: string,
   objective: string,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post(`/v1/agent-studio/agent-versions/${versionId}/runs`, {
     project_id: projectId,
-    actor: "vp_agents",
+    actor,
     input: { objective, evidence_refs: ["agent-studio:operator-input"] },
     dedupe_key: `studio-ui:${versionId}:${await pressToken()}`,
   });
@@ -266,10 +309,11 @@ export async function runStudioPanel(
   projectId: string,
   versionId: string,
   objective: string,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post(`/v1/agent-studio/panel-versions/${versionId}/runs`, {
     project_id: projectId,
-    actor: "vp_agents",
+    actor,
     input: { objective, evidence_refs: ["agent-studio:operator-input"] },
     context: { initiated_from: "agent_studio_ui" },
     dedupe_key: `studio-panel-ui:${versionId}:${await pressToken()}`,
@@ -279,10 +323,11 @@ export async function runStudioPanel(
 export async function validateStudioWorkflow(
   projectId: string,
   spec: Record<string, unknown>,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post("/v1/agent-studio/workflows/validate", {
     project_id: projectId,
-    actor: "ceo",
+    actor,
     spec,
   });
 }
@@ -293,13 +338,14 @@ export async function createStudioWorkflow(
   name: string,
   description: string,
   spec: Record<string, unknown>,
+  actor: string,
 ): Promise<StudioActionResult> {
   const definition = await post("/v1/workflows", {
     project_id: projectId,
     workflow_key: workflowKey,
     name,
     description,
-    actor: "ceo",
+    actor,
   });
   if (!definition.ok || !definition.item?.id) return definition;
   const published = await post(
@@ -308,7 +354,7 @@ export async function createStudioWorkflow(
       project_id: projectId,
       spec,
       activate: true,
-      actor: "ceo",
+      actor,
     },
   );
   if (!published.ok) {
@@ -327,12 +373,13 @@ export async function publishStudioWorkflowVersion(
   projectId: string,
   definitionId: string,
   spec: Record<string, unknown>,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post(`/v1/workflows/${encodeURIComponent(definitionId)}/versions`, {
     project_id: projectId,
     spec,
     activate: true,
-    actor: "ceo",
+    actor,
   });
 }
 
@@ -340,6 +387,7 @@ export async function runStudioWorkflow(
   projectId: string,
   versionId: string,
   objective: string,
+  actor: string,
 ): Promise<StudioActionResult> {
   return post("/v1/workflow-runs", {
     project_id: projectId,
@@ -347,6 +395,6 @@ export async function runStudioWorkflow(
     input: { objective, evidence_refs: ["agent-studio:operator-input"] },
     policy_snapshot: { initiated_from: "agent_studio_ui" },
     dedupe_key: `studio-workflow-ui:${versionId}:${await pressToken()}`,
-    actor: "ceo",
+    actor,
   });
 }
