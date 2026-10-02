@@ -4997,7 +4997,7 @@ def start_project_run(
         "directive": directive,
         **{k: v for k, v in extra.items() if not k.startswith(ADOPT_PREFIX)},
     }
-    return start_run(
+    run = start_run(
         connection,
         project_id=project_id,
         actor=actor,
@@ -5011,3 +5011,16 @@ def start_project_run(
         # repository.
         dedupe_key=f"project:{project_id}:{title[:80]}:{directive[:120]}",
     )
+    # CHECKED, NOT REFUSED. The build this run governs is already going, so refusing would only
+    # leave it unwatched — but the run still ends in a deploy, and on a project with no host it
+    # failed there with no warning while the console's door refused the same template. The
+    # run now carries what is missing from its first second (workflow_readiness explains).
+    if run and not run.get("duplicate"):
+        from .workflow_readiness import note_unready_start
+
+        try:
+            note_unready_start(connection, None, project_id, actor, str(run.get("id") or ""),
+                               version_id=str(resolved["version_id"]), input_data=run_input)
+        except Exception:  # noqa: BLE001 — a warning that cannot be computed must not stop a build
+            logger.warning("start_project_run: readiness could not be checked", exc_info=True)
+    return run

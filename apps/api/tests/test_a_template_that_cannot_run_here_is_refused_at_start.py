@@ -109,3 +109,92 @@ def test_every_catalogue_template_offers_a_form_and_its_own_example(client):
         assert item["example"]["directive"], item["key"]
         assert "spec_review" not in item["gates"], item["key"]
         assert {n["key"] for n in item["needs"]} >= {"model"}, item["key"]
+
+
+# ── Running it again, and the doors with nobody at the keyboard ──────────────────────────────
+# Review of the readiness change: a re-run of a run that was started anyway was refused with no
+# way past; Stop and run again stopped the original first and then the start was refused, so the
+# operator had no run at all; schedules and event subscriptions could not start anyway.
+
+def _status(engine, run_id):
+    with engine.begin() as connection:
+        return connection.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
+                                  {"r": run_id}).scalar()
+
+
+def test_a_rerun_repeats_what_was_accepted_for_the_run_it_repeats(client, workflow_key):
+    first = _start(client, workflow_key, start_anyway=[f"channel:{NOWHERE}"])
+    assert first.status_code == 200, first.text
+    again = _start(client, workflow_key, rerun_of=first.json()["run"]["id"])
+    assert again.status_code == 200, again.text
+    assert again.json()["readiness"]["started_anyway"] == [f"channel:{NOWHERE}"]
+
+
+def test_stop_and_run_again_refused_leaves_the_original_running(client, engine, workflow_key):
+    original = _start(client, workflow_key, start_anyway=[f"channel:{NOWHERE}"]).json()["run"]
+    live = _status(engine, original["id"])
+    # Something newly missing that nobody accepted: the replacement is refused BEFORE the stop.
+    refused = client.post("/v1/delivery-workflows/start", json={
+        "project_id": PROJECT, "actor": "ceo", "workflow_key": workflow_key,
+        "input": {"title": "Launch note", "notify_channel": "slack:#elsewhere"},
+        "replaces_run": original["id"], "dedupe_key": f"replace:{original['id']}"})
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["readiness"]["missing"]
+    assert _status(engine, original["id"]) == live != "cancelled"
+    # The same input as before: what was accepted carries over, the original stops, one starts.
+    replaced = client.post("/v1/delivery-workflows/start", json={
+        "project_id": PROJECT, "actor": "ceo", "workflow_key": workflow_key,
+        "input": {"title": "Launch note", "notify_channel": NOWHERE},
+        "replaces_run": original["id"], "dedupe_key": f"replace:{original['id']}"})
+    assert replaced.status_code == 200, replaced.text
+    assert _status(engine, original["id"]) == "cancelled"
+    assert replaced.json()["run"]["id"] != original["id"]
+
+
+def test_the_low_level_run_door_can_be_told_to_start_anyway(client, engine, workflow_key):
+    with engine.begin() as connection:
+        version_id = workflows.running_version(connection, PROJECT, workflow_key)["version_id"]
+    started = client.post("/v1/workflow-runs", json={
+        "project_id": PROJECT, "actor": "ceo", "workflow_version_id": version_id,
+        "input": {"title": "Launch note", "notify_channel": NOWHERE},
+        "dedupe_key": f"t:{uuid4().hex}", "start_anyway": [f"channel:{NOWHERE}"]})
+    assert started.status_code == 201, started.text
+    with engine.begin() as connection:
+        noted = connection.execute(
+            text("SELECT data FROM events WHERE entity_id = :r "
+                 "AND event_type = 'workflow.started_unready'"),
+            {"r": started.json()["id"]}).scalar()
+    assert noted["started_anyway"] == [f"channel:{NOWHERE}"]
+
+
+def test_a_schedule_says_what_its_firing_will_refuse_and_stores_start_anyway(client,
+                                                                             workflow_key):
+    made = client.post("/v1/delivery-workflows/schedules", json={
+        "project_id": PROJECT, "actor": "ceo", "workflow_key": workflow_key,
+        "name": f"weekly {uuid4().hex[:6]}", "cadence": "weekly", "weekday": 0, "hour": 8,
+        "input": {"title": "Launch note", "notify_channel": NOWHERE}})
+    assert made.status_code == 201, made.text
+    assert made.json()["readiness"]["will_refuse"] == [f"channel:{NOWHERE}"]
+    edited = client.post("/v1/delivery-workflows/schedules", json={
+        "project_id": PROJECT, "actor": "ceo", "schedule_id": made.json()["id"],
+        "input": {"title": "Launch note", "notify_channel": NOWHERE},
+        "start_anyway": [f"channel:{NOWHERE}"]})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["start_anyway"] == [f"channel:{NOWHERE}"]
+    assert edited.json()["readiness"]["will_refuse"] == []
+    client.delete(f"/v1/delivery-workflows/schedules/{made.json()['id']}",
+                  params={"project_id": PROJECT, "actor": "ceo"})
+
+
+def test_an_event_subscription_to_a_workflow_can_be_made_and_shows_its_readiness(
+        client, workflow_key):
+    """The `workflow` sink was accepted by the service but not by the HTTP schemas, so a
+    subscription that starts a workflow could not be made or read over the API at all."""
+    made = client.post("/v1/event-subscriptions", json={
+        "project_id": PROJECT, "actor": "ceo", "event_type": f"probe.x{uuid4().hex[:6]}",
+        "sink_kind": "workflow", "sink_ref": workflow_key,
+        "config": {"start_anyway": ["deployment_target"]}})
+    assert made.status_code == 201, made.text
+    assert made.json()["sink_kind"] == "workflow"
+    assert made.json()["readiness"]["applies"] is True
+    assert made.json()["readiness"]["will_refuse"] == []

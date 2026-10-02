@@ -18,6 +18,7 @@
 import { useEffect, useState } from "react";
 
 import { AreaLink } from "./area-link";
+import { EmailSetup } from "./email-setup-ui";
 
 export type ReadinessNeed = {
   key: string;
@@ -80,10 +81,12 @@ export function useWorkflowReadiness(
   return readiness;
 }
 
-export function ReadinessPanel({ readiness, accepted, onAccept }: {
+export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }: {
   readiness: Readiness | null;
   accepted: readonly string[];
   onAccept: (keys: string[]) => void;
+  /** Lets an item that can be fixed in place (email) draw its form. */
+  projectId?: string;
 }) {
   if (!readiness || !readiness.checked?.length) return null;
   const missing = readiness.missing ?? [];
@@ -111,6 +114,11 @@ export function ReadinessPanel({ readiness, accepted, onAccept }: {
                 <AreaLink area={need.area}>{need.fix}</AreaLink>
               ) : need.fix}
             </span>
+            {/* THE FIX WHERE THE PROBLEM IS. Email is the one need a short form settles, so
+                it is drawn right here rather than sending the operator away from Start. */}
+            {need.key === "email" && projectId ? (
+              <EmailSetup projectId={projectId} compact />
+            ) : null}
             {need.after_a_person ? (
               <span className="detail dw-ready-later">
                 The run stops for you before {need.first_step_label}, so this can be added
@@ -131,5 +139,59 @@ export function ReadinessPanel({ readiness, accepted, onAccept }: {
         step that needs {missing.length === 1 ? "it" : "them"}.
       </label>
     </section>
+  );
+}
+
+/** The checklist a refusal carried, if it is one. A proxy hands it over as `unknown`. */
+export function asReadiness(value: unknown): Readiness | null {
+  if (!value || typeof value !== "object") return null;
+  const r = value as Partial<Readiness>;
+  return Array.isArray(r.missing) && Array.isArray(r.checked) ? r as Readiness : null;
+}
+
+/** A start that was refused for what the project lacks, waiting for the operator's answer. */
+export type PendingRefusal = {
+  /** What was being started — "Build", "Re-run" — said in the heading and the button. */
+  label: string;
+  message: string;
+  readiness: Readiness;
+  /** Send the same start again, with the keys the operator accepted. */
+  retry: (startAnyway: string[]) => Promise<unknown> | void;
+};
+
+/**
+ * EVERY DOOR THAT STARTS WORK DRAWS THE SAME REFUSAL.
+ *
+ * The start form had a checklist and "Start anyway"; Build, Re-run, Build on this research,
+ * the run report's Fix and Agent Studio's Run had a sentence at best, and Build crashed (review
+ * of the readiness change). This is the one drawing of "cannot run here yet" for all of them:
+ * the list, each item's fix, and a Start anyway that sends exactly the keys ticked.
+ */
+export function StartRefusal({ refusal, projectId = "", busy = false, onDismiss }: {
+  refusal: PendingRefusal;
+  projectId?: string;
+  busy?: boolean;
+  onDismiss?: () => void;
+}) {
+  const [accepted, setAccepted] = useState<string[]>([]);
+  const open = unaccepted(refusal.readiness, accepted);
+  return (
+    <div className="dw-refusal" data-testid="start-refusal" role="alert">
+      <p className="dw-new-error">{refusal.label} — not started. {refusal.message}</p>
+      <ReadinessPanel readiness={refusal.readiness} accepted={accepted}
+                      onAccept={setAccepted} projectId={projectId} />
+      <div className="dw-refusal-foot">
+        <button type="button" className="cap-btn primary" data-testid="start-refusal-anyway"
+                disabled={busy || open.length > 0}
+                title={open.length ? "Tick Start anyway above to accept what is missing" : ""}
+                onClick={() => void refusal.retry(refusal.readiness.missing.map((m) => m.key))}>
+          {busy ? "Starting…" : `${refusal.label} anyway`}
+        </button>
+        {onDismiss ? (
+          <button type="button" className="linklike" data-testid="start-refusal-dismiss"
+                  onClick={onDismiss}>Not now</button>
+        ) : null}
+      </div>
+    </div>
   );
 }

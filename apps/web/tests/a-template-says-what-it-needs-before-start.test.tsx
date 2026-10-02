@@ -97,7 +97,12 @@ describe("Start is blocked by what is missing, and says start-anyway out loud", 
   });
 
   it("a refused start draws the same checklist instead of [object Object]", () => {
-    expect(ROUTE).toContain("readiness: d.readiness");
+    // REWRITTEN (review of the readiness change): this pinned a hand-written flattening inside
+    // this one route, which is exactly how the other start proxies were left forwarding the
+    // object (Build crashed). Every proxy now uses the shared helper — enforced for all of them
+    // in start-doors-forward-the-checklist.test.ts.
+    expect(ROUTE).toContain("refusalFrom(r.status, parsed)");
+    expect(codeOnly("lib/start-refusal.ts")).toContain("readiness: d.readiness");
     expect(UI).toContain("setRefusal(r.readiness)");
   });
 

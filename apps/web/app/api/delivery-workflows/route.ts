@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { refusalFrom } from "../../../lib/start-refusal";
 
 /**
  * Everything the delivery-workflow screen reads and does, in one place.
@@ -132,20 +133,8 @@ async function proxyPost(path: string, payload: unknown) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: unknown })?.detail;
-      // A REFUSAL CAN CARRY A CHECKLIST. Start answers 409 with {message, readiness} when the
-      // project lacks what the workflow needs; forwarding the object as `error` would render
-      // "[object Object]" where the operator needed the list of what is missing.
-      if (detail && typeof detail === "object" && !Array.isArray(detail)) {
-        const d = detail as { message?: unknown; readiness?: unknown };
-        return NextResponse.json(
-          { error: String(d.message ?? `API returned ${r.status}`),
-            ...(d.readiness ? { readiness: d.readiness } : {}) },
-          { status: r.status });
-      }
-      return NextResponse.json(
-        { error: (typeof detail === "string" && detail) || `API returned ${r.status}` },
-        { status: r.status });
+      // A REFUSAL CAN CARRY A CHECKLIST — flattened by the one shared helper (see it for why).
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -161,9 +150,7 @@ async function proxyDelete(path: string) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -243,9 +230,7 @@ export async function POST(req: Request) {
       // The API's own message, forwarded verbatim. These are the sentences the builder shows
       // beside a step — "step 'd' is risk tier 2 and always requires a person" is the whole
       // point, and replacing it with "request failed" would waste it.
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -289,9 +274,7 @@ export async function PATCH(req: Request) {
     if (!r.ok) {
       // Forwarded verbatim, like every other message from the API here: "choose the skill this
       // step runs" is the sentence the form shows, and "request failed" would waste it.
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -339,9 +322,7 @@ export async function DELETE(req: Request) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      const detail = (parsed as { detail?: string })?.detail;
-      return NextResponse.json({ error: detail || `API returned ${r.status}` },
-                               { status: r.status });
+      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
