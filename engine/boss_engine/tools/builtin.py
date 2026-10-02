@@ -6589,6 +6589,10 @@ def build_default_registry() -> ToolRegistry:
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
+    # Giving an agent a skill or an MCP server: the act the Agents page exists for, by asking.
+    from .agent_tools import register_agent_tools
+
+    register_agent_tools(reg)
     return reg
 
 
@@ -6724,6 +6728,12 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # spends nothing. It is how an operator gets a skill by describing one instead of filling
     # in a form they should not have to understand.
     "draft_skill",
+    # THE OTHER END OF A SKILL: who holds it. Authoring and placing a skill were reachable from
+    # chat and giving one to an agent was not, so "give the editor the trim skill" ended in a
+    # direction to go and press a button. Same kind of act as the three above — it changes what
+    # an agent CAN do, starts nothing and spends nothing — and taking it back is the same tool.
+    "assign_skill_to_agent",
+    "assign_mcp_to_agent",
     # STARTING WORK MEANS STARTING A WORKFLOW.
     #
     # `create_discovery` and `request_meeting` are deliberately NOT here. Research and the PRD

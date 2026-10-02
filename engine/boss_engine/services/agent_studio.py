@@ -186,6 +186,14 @@ class AgentStudioService:
         source: Path,
     ) -> dict[str, Any]:
         agent_key = self._required_text(payload.get("id"), f"{source}: id")
+        # AN AGENT AN OPERATOR DELETED IS NOT BROUGHT BACK BY ITS STUDIO PROFILE. Deleting an
+        # agent retires its profiles; re-seeding them would also reinstall the role below.
+        from .seed_exclusions import is_excluded
+
+        seed_role = str((payload.get("version") or {}).get("role_key") or "").strip()
+        if seed_role and is_excluded(connection, project_id, "role", seed_role):
+            raise ValueError(
+                f"{source.name}: agent {seed_role!r} was deleted by an operator; not re-seeded")
         definition = self._find_agent_by_key(connection, project_id, agent_key)
         if definition is None:
             definition = self.create_agent(
@@ -553,7 +561,17 @@ class AgentStudioService:
             )
 
         if role is not None:
+            # THE GRANT IS THE PERMISSION. The Agents page gives an agent any skill and says
+            # so; this check read only the role spec's `allowed_skills`, so a profile asking for
+            # a skill the agent had just been GIVEN failed publish with "exceeds RoleSpec
+            # permissions" — two screens, two rules, one decision. What the agent holds in
+            # role_skills counts, as well as what its spec names.
             allowed = self._role_allowed_skill_ids(role["spec"] or {}, project_skills)
+            allowed |= set(connection.execute(
+                text("SELECT skill_id FROM role_skills "
+                     "WHERE project_id = :project_id AND role_key = :role_key"),
+                {"project_id": project_id, "role_key": version["role_key"]},
+            ).scalars().all())
             outside_role = sorted(
                 skill
                 for requested in version["requested_skills"]

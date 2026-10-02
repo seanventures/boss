@@ -13874,10 +13874,13 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
             connection, body.project_id, "ceo", "role_review"
         )
         try:
+            # Omitted means unchanged: an update that leaves out autonomy or reports_to keeps
+            # them (it used to reset both). See specpack.register_role.
             role = specpack.register_role(
                 connection, body.project_id, body.role_key,
                 display_name=body.display_name, autonomy_level=body.autonomy_level,
                 reports_to=body.reports_to, spec=body.spec,
+                reports_to_given="reports_to" in body.model_fields_set,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -26642,6 +26645,14 @@ app.include_router(
     )
 )
 mount_platform_routers(app)
+# THE ONE AGENT MODEL: create/read/edit/delete an agent and its MCP grants (routers/agents.py).
+from .routers.agents import build_agents_router
+
+app.include_router(build_agents_router(
+    engine=engine,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)

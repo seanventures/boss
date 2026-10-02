@@ -207,9 +207,13 @@ def test_the_loop_gives_a_bounded_run_no_native_tools():
     source = inspect.getsource(agent_loop._drive_run)
     assert 'bounded = isinstance(finalize_ctx.get("agent_step"), dict)' in source
     assert "schemas = [] if bounded else" in source
-    # And no MCP server either: a connector is authority over somebody's account, granted by
-    # giving the agent a skill that runs through it, not by being registered.
-    assert "[] if bounded" in source.split("list_mcp_servers")[0][-200:]
+    # REWRITTEN. This asserted a bounded run got NO MCP server at all ("granted by giving the
+    # agent a skill that runs through it"), which left no way to give an agent an MCP server.
+    # The rule it protected still holds — being REGISTERED in the project grants nothing — and
+    # is now stated positively: a bounded run is offered exactly the servers its agent holds
+    # (role_mcp_servers), never the project's list.
+    mcp_choice = source.split("list_mcp_servers")[0][-300:]
+    assert "_granted_mcp_servers(" in mcp_choice and "if bounded" in mcp_choice
 
 
 def test_a_bounded_run_resolves_its_skills_from_the_grant():
