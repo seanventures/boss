@@ -3,7 +3,7 @@ import { CopyCommand } from "./copy-command";
 
 export const dynamic = "force-dynamic";
 
-type Props = { searchParams: Promise<{ next?: string; error?: string }> };
+type Props = { searchParams: Promise<{ next?: string; error?: string; slowed?: string }> };
 
 const SHOW_ON_SERVER = "python3 scripts/install/console_password.py show";
 // -t: the script prints only to a real terminal, and ssh running a command allocates none.
@@ -12,7 +12,8 @@ const SHOW_OVER_SSH = `ssh -t user@your-server 'cd ~/boss && ${SHOW_ON_SERVER}'`
 export default async function ConsoleLogin({ searchParams }: Props) {
   const params = await searchParams;
   const failed = params.error === "invalid";
-  const throttled = params.error === "throttled";
+  // Set by the sign-in route when this attempt waited behind the wrong-password backoff.
+  const slowed = failed && params.slowed === "1";
   return (
     <main className="login-page">
       <div className="login-card">
@@ -25,10 +26,11 @@ export default async function ConsoleLogin({ searchParams }: Props) {
             <input id="console-password" name="password" type="password" required autoFocus
               autoComplete="current-password" className="input" />
             {failed ? <p role="alert" className="login-error">Incorrect password.</p> : null}
-            {throttled ? (
-              <p role="alert" className="login-error" data-testid="login-throttled">
-                Too many wrong passwords from this address. Wait five minutes, then sign in
-                again — the password below is unchanged.
+            {slowed ? (
+              <p role="alert" className="login-error" data-testid="login-slowed">
+                Many wrong passwords were tried recently, so each sign-in now waits a few seconds
+                before it is checked. The right password still signs you in; the password below
+                is unchanged.
               </p>
             ) : null}
             <button type="submit" className="cap-btn primary login-submit">Sign in</button>
@@ -37,7 +39,7 @@ export default async function ConsoleLogin({ searchParams }: Props) {
                 and opened by itself after a wrong password, when it is needed most. The installer
                 prints the command once at the end of a long run; this page names the command,
                 never the value. Each command stays on one line and selects in one click. */}
-            <details className="login-help" data-testid="console-password-hint" open={failed || throttled}>
+            <details className="login-help" data-testid="console-password-hint" open={failed}>
               <summary>Where&apos;s my password?</summary>
               <p>
                 The installer generated it and kept it on the server where BOSS is installed.
