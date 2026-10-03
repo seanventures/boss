@@ -221,12 +221,20 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "_unregistered": True,
         })
 
+    # THE ROSTER IS EVERY AGENT A STEP CAN BE GIVEN TO — the picker's own list
+    # (step_agents.agent_keys) — plus the unregistered ones doing work. The Agents page said
+    # "All 5" while the step picker offered 34: it was this work feed, which is right for the
+    # Hive and the chart and wrong for "who are my agents".
+    from .step_agents import agent_keys
+
+    offered = set(agent_keys(connection, project_id))
     agents = []
+    roster = []
     for role in roles:
         key = role["role_key"]
-        # A seeded role is a definition of who may work, not evidence that anyone has.
-        # Keep it in the registry and Agent Studio; this feed describes actual work.
-        if key not in working:
+        # A seeded role is a definition of who may work, not evidence that anyone has: it is
+        # on the roster (as "No work yet") and not in the work feed.
+        if key not in working and key not in offered:
             continue
         step = latest.get(key)
         work = spend.get(key) or {}
@@ -243,7 +251,9 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             status = WORKING
             task = (f"{now_on['phase']} — {now_on['title']}" if now_on.get("title")
                     else now_on["phase"])
-        agents.append({
+        if key not in working:
+            status, task = IDLE, NO_WORK_YET
+        (agents if key in working else roster).append({
             "id": key,
             "name": role.get("display_name") or key,
             "role": _humanise(key),
@@ -324,6 +334,8 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         )
 
     agents.sort(key=_rank)
+    # Busiest first, then the agents with no work yet, by name.
+    roster = agents + sorted(roster, key=_rank)
 
     return {
         "project_id": project_id,
@@ -339,6 +351,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             }
             for h in handoffs
         ],
+        "roster": roster,
         "counts": _counts(agents),
         "unregistered": sorted(a["id"] for a in agents if not a["registered"]),
         # Stated in the payload so a screen cannot quietly render a zero in its place.
@@ -689,6 +702,11 @@ def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
         agg.pop("_models", None)
         agg.pop("stages", None)
     return out
+
+
+#: What a roster card says for an agent with no work on record. Not "No work yet": the record
+#: read is the last SCORE_WINDOW_HOURS, and an agent busy before that has worked.
+NO_WORK_YET = f"No work in {SCORE_WINDOW_HOURS // 24} days"
 
 
 def _status_of(step: Optional[dict]) -> tuple[str, str]:

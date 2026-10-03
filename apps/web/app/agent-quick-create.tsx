@@ -71,8 +71,10 @@ export function profileDraft(input: {
   };
 }
 
-export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans = [] }: {
+export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans = [], initialName = "" }: {
   projectId: string;
+  /** Registering an agent that already does work: its name, so the key it gets is its own. */
+  initialName?: string;
   actor: string;
   onClose: () => void;
   onCreated: (roleKey: string) => void;
@@ -82,7 +84,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   const [tab, setTab] = useState<"blank" | "template">("blank");
   const [grantable, setGrantable] = useState<Grantable | null>(null);
   const [loadFailed, setLoadFailed] = useState("");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [purpose, setPurpose] = useState("");
   const [skills, setSkills] = useState<string[]>([]);
   const [servers, setServers] = useState<Record<string, string>>({});

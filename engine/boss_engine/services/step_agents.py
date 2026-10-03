@@ -210,6 +210,22 @@ def scope_shape_problems(step: dict[str, Any]) -> list[tuple[str, str]]:
 # ── The project's agents ─────────────────────────────────────────────────────────────────────
 
 
+def _agent_rows(connection: Connection, project_id: str) -> list[Any]:
+    """THE LIST OF AGENTS: every `roles` row but the person. The step picker and the Agents
+    roster both read it, so the roster cannot show five agents while the picker offers 34."""
+    rows = connection.execute(
+        text("SELECT role_key, display_name, spec FROM roles WHERE project_id = :p "
+             "ORDER BY role_key"),
+        {"p": project_id},
+    ).mappings().all()
+    return [row for row in rows if str(row["role_key"]) != HUMAN]
+
+
+def agent_keys(connection: Connection, project_id: str) -> list[str]:
+    """The role keys `project_agents` offers, without reading what each holds."""
+    return [str(row["role_key"]) for row in _agent_rows(connection, project_id)]
+
+
 def project_agents(connection: Connection, project_id: str,
                    settings: Any = None) -> list[dict[str, Any]]:
     """Every agent this project has, with what it is for and what it holds.
@@ -225,17 +241,11 @@ def project_agents(connection: Connection, project_id: str,
     """
     from .agent_steps import holdings as read_holdings
 
-    rows = connection.execute(
-        text("SELECT role_key, display_name, spec FROM roles WHERE project_id = :p "
-             "ORDER BY role_key"),
-        {"p": project_id},
-    ).mappings().all()
+    rows = _agent_rows(connection, project_id)
     held = read_holdings(connection, settings, project_id)
     out: list[dict[str, Any]] = []
     for row in rows:
         role = str(row["role_key"])
-        if role == HUMAN:
-            continue
         spec = row["spec"] if isinstance(row["spec"], dict) else {}
         out.append({
             "role_key": role,
