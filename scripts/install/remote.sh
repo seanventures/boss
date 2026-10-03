@@ -352,9 +352,18 @@ cmd_update() {
 
   # PROFILES MUST MATCH WHAT IS RUNNING or compose treats the bundled secret store as unwanted
   # and takes it down mid-update, stranding every secret behind it.
+  #
+  # The console is profiled too (`web`), and only `secrets` used to be carried over: every
+  # --all-services update rebuilt api and worker, reported success, and left boss-1's console on
+  # a week-old image (2026-10-03) — so console fixes were "deployed" and never seen. Each profile
+  # is carried when any of its services is running.
   local profiles=""
   rshq "$REMOTE_DOCKER ps --filter name=boss-community-infisical- -q | grep -q ." \
     && profiles="--profile secrets"
+  rshq "$REMOTE_DOCKER ps --filter name=boss-community-web- -q | grep -q ." \
+    && profiles="$profiles --profile web"
+  local update_started
+  update_started=$(rshq "date -u +%s")
   local compose_build="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file $next_env $profiles"
   local compose="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file .env $profiles"
 
@@ -372,6 +381,15 @@ cmd_update() {
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
     "cd '$DIR' && $compose up -d --no-deps --force-recreate $services" \
     || die "could not recreate containers on $HOST; previous source remains at $DIR.prev"
+  # PROVE IT, rather than trusting the build's exit code: every running BOSS container must have
+  # been created by this update. A service the update skipped is a stale build still serving.
+  if [[ "$ALL_SERVICES" -eq 1 ]]; then
+    local stale
+    stale=$(rshq "$REMOTE_DOCKER ps --filter name=boss-community- --format '{{.Names}}' | while read -r c; do \
+      t=\$($REMOTE_DOCKER inspect -f '{{.Created}}' \"\$c\" | xargs -I{} date -u -d {} +%s); \
+      [ \"\$t\" -lt '$update_started' ] && echo \"\$c\"; done | grep -v infisical || true")
+    [[ -z "$stale" ]] || die "these services were not rebuilt and still run the old build: $stale"
+  fi
   rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this update"
 
   ok "updated $was → $(rshq "cat '$DIR/.boss-shipped-commit'")"
