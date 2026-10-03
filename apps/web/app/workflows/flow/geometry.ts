@@ -11,23 +11,38 @@ export type Density = "comfortable" | "compact";
 
 export const NODE = {
   comfortable: { w: 176, h: 84 },
-  compact: { w: 120, h: 72 },
+  /** Compact fits more steps by geometry, never by smaller text: a narrower node whose title
+   *  runs the full width, with the icon and agent on the line under it. */
+  compact: { w: 100, h: 72 },
 } as const;
 /** A Wait step only shows its duration, so it is drawn narrower. */
 export const WAIT_W = { comfortable: 96, compact: 80 } as const;
 /** The connector between two columns, which also holds the `+` button. */
-export const CONN = { comfortable: 36, compact: 20 } as const;
+export const CONN = { comfortable: 36, compact: 16 } as const;
 export const ROW_GAP = 16;
 export const PAD_X = 12;
 export const PAD_Y = 14;
-/** The Start flag and the End cap. */
-export const FLAG_W = 36;
+/** The Start flag and the End cap (wider in Compact, whose text is larger). */
+export const FLAG_W = { comfortable: 36, compact: 44 } as const;
 /** Extra room after a column that fans out, so `yes`, `no` and `parallel` fit on their edges. */
-export const LABEL_ROOM = 40;
+export const LABEL_ROOM = 48;
 /** Room under the nodes for a loop's back-edge and its badge. */
 export const LOOP_ROOM = 26;
-/** Text stays readable: never shrink below this. */
-export const MIN_SCALE = 0.75;
+
+/**
+ * READABLE TEXT IS A RULE, NOT A HOPE. Fit shrinks the drawing, and with it every word on it, so
+ * the smallest text a density draws times the scale Fit picks must never go under MIN_TEXT_REM.
+ *
+ * MIN_FONT_REM is the smallest font each density sets on the canvas (flow.css; a test reads the
+ * stylesheet and holds it to these numbers). The scale floor follows from it: Comfortable text is
+ * already at the minimum, so a Comfortable lane is never shrunk; Compact text is set larger, so
+ * Compact may shrink until it reaches the minimum and no further.
+ */
+export const MIN_TEXT_REM = 0.75;
+export const MIN_FONT_REM = { comfortable: 0.75, compact: 0.875 } as const;
+export function minScale(density: Density): number {
+  return Math.min(1, MIN_TEXT_REM / MIN_FONT_REM[density]);
+}
 
 export type Box = { x: number; y: number; w: number; h: number };
 export type LaneGeometry = {
@@ -56,6 +71,7 @@ export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["ty
                              density: Density): LaneGeometry {
   const node = NODE[density];
   const conn = CONN[density];
+  const flagW = FLAG_W[density];
   const columns = layout.columns;
   const colW: number[] = Array.from({ length: columns }, () => 0);
   for (const n of layout.nodes) {
@@ -75,13 +91,13 @@ export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["ty
     .map((e) => column.get(e.from)));
   const gapAfter = Array.from({ length: columns }, (_, c) => conn + (labelled.has(c) ? LABEL_ROOM : 0));
   const colX: number[] = [];
-  let x = PAD_X + FLAG_W + conn;
+  let x = PAD_X + flagW + conn;
   for (let c = 0; c < columns; c += 1) {
     colX.push(x);
     x += (colW[c] || node.w) + gapAfter[c];
   }
   const endX = x;
-  const width = endX + FLAG_W + PAD_X;
+  const width = endX + flagW + PAD_X;
 
   const boxes = new Map<string, Box>();
   for (const n of layout.nodes) {
@@ -102,8 +118,8 @@ export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["ty
   const flagH = 28;
   return {
     density, width, height, node, conn, colX, colW, boxes, gapX, midY,
-    start: { x: PAD_X, y: midY - flagH / 2, w: FLAG_W, h: flagH },
-    end: { x: endX, y: midY - flagH / 2, w: FLAG_W, h: flagH },
+    start: { x: PAD_X, y: midY - flagH / 2, w: flagW, h: flagH },
+    end: { x: endX, y: midY - flagH / 2, w: flagW, h: flagH },
   };
 }
 
@@ -116,10 +132,11 @@ export function chooseDensity(layout: FlowLayout, types: Map<string, StepView["t
   return laneGeometry(layout, types, "compact");
 }
 
-/** Fit: shrink to the width available, but never below MIN_SCALE and never above 1. */
-export function fitScale(natural: number, available: number): number {
+/** Fit: shrink to the width available, never above 1 and never below the density's floor, so
+ *  its smallest text stays at MIN_TEXT_REM or more (see minScale). */
+export function fitScale(natural: number, available: number, density: Density): number {
   if (!(available > 0) || natural <= available) return 1;
-  return Math.max(MIN_SCALE, available / natural);
+  return Math.max(minScale(density), available / natural);
 }
 
 /** Whether the lane has to scroll at this scale (and so shows the minimap). */

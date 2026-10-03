@@ -89,7 +89,8 @@
 .wf-lane[data-dragging] .wf-gap { display: none; }
 @media (hover: none) { .wf-gap-add { opacity: 1; } }
 
-/* The insertion caret: accent where a drop is allowed, grey (with its reason) where not. */
+/* The insertion caret: accent where a drop is allowed, grey where not. The reason is the shared
+   tooltip pinned to the caret (tip-layer.tsx), never a label the lane's edge could clip. */
 .wf-drop-caret {
   position: absolute; width: 3px; border-radius: 2px;
   background: var(--accent);
@@ -97,14 +98,6 @@
   pointer-events: none; z-index: 3;
 }
 .wf-drop-caret[data-allowed="false"] { background: var(--faint); box-shadow: none; }
-.wf-drop-caret[data-allowed="false"]::after {
-  content: attr(data-tip);
-  position: absolute; top: -26px; left: 50%; transform: translateX(-50%);
-  padding: 3px 8px; border-radius: var(--r);
-  background: var(--bg); border: 1px solid var(--border);
-  color: var(--muted); font: 600 0.75rem/1.2 var(--sans); white-space: nowrap;
-}
-
 /* ── A node ────────────────────────────────────────────────────────────────── */
 .wf-node {
   position: relative;
@@ -187,21 +180,40 @@
 .wf-node[data-type="wait"] { align-items: center; text-align: center; }
 .wf-node[data-type="wait"] .wf-node-head { flex-direction: column; align-items: center; gap: 4px; }
 
-/* Compact: icon and a two-line title on top; the agent's avatar and the badges (or, on a run,
-   the status) share the bottom line. A grid, so the bottom line is always in the box. */
+/* Compact fits the flow by geometry, never by smaller text (geometry.ts, MIN_FONT_REM). The
+   title runs the full width of a narrower node; the icon, the agent's avatar and only the alerts
+   (approval, unwired, lacks) share the line under it, their counts and names in tooltips. Every
+   word here is 0.875rem, because Fit may scale a Compact lane down to 0.75 / 0.875 of its size
+   and no further, so nothing on it ever reads smaller than 0.75rem. */
 [data-density="compact"] .wf-node {
-  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
-  grid-template-areas: "head head" "agent meta"; column-gap: 6px; row-gap: 4px; padding: 7px 8px;
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas: "title title title" "icon agent meta"; column-gap: 4px; row-gap: 4px; padding: 6px 7px;
 }
-[data-density="compact"] .wf-node-head { grid-area: head; gap: 6px; min-height: 0; overflow: hidden; }
-[data-density="compact"] .wf-node-icon { width: 20px; height: 20px; }
-[data-density="compact"] .wf-node-title { font-size: 0.78rem; line-height: 1.2; }
-[data-density="compact"] .wf-node-agent { grid-area: agent; }
+[data-density="compact"] .wf-node-head { display: contents; }
+[data-density="compact"] .wf-node-icon { grid-area: icon; width: 20px; height: 20px; }
+[data-density="compact"] .wf-node-title { grid-area: title; align-self: start; font-size: 0.875rem; line-height: 1.2; }
+[data-density="compact"] .wf-node-agent { grid-area: agent; font-size: 0.875rem; }
 [data-density="compact"] .wf-node-agent-name { display: none; }
+[data-density="compact"] .wf-node .wf-avatar { width: 20px; height: 20px; }
 [data-density="compact"] .wf-node-badges,
 [data-density="compact"] .wf-node-status { grid-area: meta; min-height: 0; align-self: center; }
-[data-density="compact"] .wf-node-badges { justify-self: end; }
-[data-density="compact"] .wf-node .wf-avatar { width: 18px; height: 18px; }
+[data-density="compact"] .wf-node-badges { justify-self: end; gap: 3px; overflow: hidden; }
+[data-density="compact"] .wf-badge { font-size: 0.875rem; }
+[data-density="compact"] .wf-badge-n,
+[data-density="compact"] .wf-badge[data-kind="inputs"],
+[data-density="compact"] .wf-badge[data-kind="skills"],
+[data-density="compact"] .wf-badge[data-kind="mcp"] { display: none; }
+[data-density="compact"] .wf-node-status { font-size: 0.875rem; }
+/* On a run the status takes the whole bottom line ("needs you" must never be cut). Who ran it is
+   in the run's Agents chip and the step's detail; the outcome glyph (tick, hand, cross) moves
+   from the type icon to the node's corner, so the phase is still never told by colour alone. */
+[data-density="compact"] .wf-node[data-mode="run"] { grid-template-areas: "title title title" "meta meta meta"; }
+[data-density="compact"] .wf-node[data-mode="run"] .wf-node-agent { display: none; }
+[data-density="compact"] .wf-node[data-mode="run"] .wf-node-icon { display: contents; }
+[data-density="compact"] .wf-node[data-mode="run"] .wf-node-icon > svg { display: none; }
+[data-density="compact"] .wf-flag { font-size: 0.875rem; }
+[data-density="compact"] .wf-edge-label { font-size: 14px; }
+[data-density="compact"] .wf-gap-add { width: 18px; height: 18px; }
 
 /* Run mode: the left edge says where the work has got to. */
 .wf-node[data-mode="run"] { border-left-width: 3px; cursor: pointer; }

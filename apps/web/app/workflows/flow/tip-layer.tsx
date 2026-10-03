@@ -22,6 +22,8 @@ let bubble: HTMLDivElement | null = null;
 let target: HTMLElement | null = null;
 let timer: number | null = null;
 let priorDescribedBy: string | null = null;
+/** A tip pinned by code (the refused drop caret), which hover and focus leave alone. */
+let pinned = false;
 
 function tipTarget(node: EventTarget | null): HTMLElement | null {
   if (!(node instanceof Element)) return null;
@@ -30,6 +32,7 @@ function tipTarget(node: EventTarget | null): HTMLElement | null {
 }
 
 function hide() {
+  pinned = false;
   if (timer !== null) { window.clearTimeout(timer); timer = null; }
   if (target) {
     if (priorDescribedBy) target.setAttribute("aria-describedby", priorDescribedBy);
@@ -78,15 +81,18 @@ function show(el: HTMLElement, immediate: boolean) {
 }
 
 const onOver = (e: Event) => {
+  if (pinned) return;
   const el = tipTarget(e.target);
   if (el) show(el, false);
   else if (target) hide();
 };
 const onFocus = (e: Event) => {
+  if (pinned) return;
   const el = tipTarget(e.target);
   if (el) show(el, true);
 };
 const onOut = (e: Event) => {
+  if (pinned) return;
   const next = tipTarget((e as FocusEvent | PointerEvent).relatedTarget ?? null);
   if (next !== target) hide();
 };
@@ -113,6 +119,26 @@ function detach() {
   hide();
   bubble?.remove();
   bubble = null;
+}
+
+/**
+ * Shows `el`'s tip now and keeps it there until `unpinTip`, wherever the pointer goes. For a
+ * target the pointer cannot hover: the drop caret during a drag, which says why a drop is
+ * refused. The bubble is fixed on the page, so the lane's own clipping never hides it. Calling
+ * it again for the same element (the caret moved) re-reads the text and re-places the bubble.
+ */
+export function pinTip(el: HTMLElement): void {
+  if (target !== el) show(el, true);
+  pinned = true;
+  if (bubble && target === el) {
+    bubble.textContent = el.dataset.tip ?? "";
+    place(el);
+  }
+}
+
+/** Takes down a tip `pinTip` showed; a hovered tip is left alone. */
+export function unpinTip(): void {
+  if (pinned) hide();
 }
 
 /** Turns `data-tip` on for as long as the calling component is mounted. */

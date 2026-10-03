@@ -32,7 +32,7 @@ import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow
 import { DefineStepForm } from "./workflows/define-step-form";
 import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
 import { FlowLane } from "./workflows/flow/flow-lane";
-import { runPalette, runSpec } from "./workflows/flow/run-lane";
+import { runLaneSpec, runPalette, useRunDefinition } from "./workflows/flow/run-lane";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -3073,8 +3073,12 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   // wrong box while looking exactly as confident.
   const railRef = useRef<HTMLDivElement | null>(null);
   const detailRef = useRef<HTMLDivElement | null>(null);
-  const laneSpec = useMemo(() => runSpec(steps), [steps]);
-  const lanePalette = useMemo(() => runPalette(capabilities, roles), [capabilities, roles]);
+  // Drawn from the definition version this run ran, as the designer draws it (titles, custom
+  // steps, agents, branches); from the run's own step list only until that has loaded.
+  const definition = useRunDefinition(projectId, run.workflow_key, run.version);
+  const laneSpec = useMemo(() => runLaneSpec(steps, definition.spec), [steps, definition.spec]);
+  const lanePalette = useMemo(() => definition.palette ?? runPalette(capabilities, roles),
+    [definition.palette, capabilities, roles]);
   const laneState = useMemo(() => Object.fromEntries(steps.map((s) => [s.step_id, laneStateOf(s)])), [steps]);
 
   useEffect(() => {
