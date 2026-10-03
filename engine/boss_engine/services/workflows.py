@@ -3566,9 +3566,82 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
         return
 
 
-#: What ends a run's `waiting` step, by kind — exactly the conditions `advance_run` acts on.
-_ANSWERED_DECISION = ("approved", "rejected", "expired")
-_ENDED_CHILD_RUN = ("completed", "failed", "deadlettered", "cancelled")
+#: How a decision step's answer ends its wait: approved releases it, the rest refuse it.
+_DECISION_RELEASES = frozenset({"approved"})
+_DECISION_REFUSES = frozenset({"rejected", "expired"})
+#: How a child run ends a "Run another workflow" step's wait: completed releases it, and ANY
+#: other terminal state blocks the parent. Derived from `TERMINAL_RUN_STATES`, so a run state
+#: added there can never leave a parent waiting on a child that is over.
+_CHILD_RELEASES = frozenset({"completed"})
+_CHILD_BLOCKS = frozenset(TERMINAL_RUN_STATES) - _CHILD_RELEASES
+
+#: What `_wait_outcome` can say about a waiting step.
+WAIT_RELEASE, WAIT_REFUSE, WAIT_BLOCK = "release", "refuse", "block"
+
+
+def _wait_outcome(
+    step_kind: str,
+    *,
+    run_after: Optional[datetime],
+    decision_status: Optional[str],
+    child_status: Optional[str],
+    now: datetime,
+) -> Optional[str]:
+    """THE one rule for when a waiting timer, gate or "Run another workflow" step is over, and
+    how: `WAIT_RELEASE` (the step succeeds), `WAIT_REFUSE` (the gate's step fails and the run is
+    blocked), `WAIT_BLOCK` (the run is blocked) — or None, still waiting.
+
+    `advance_run` acts on it and `a_wait_is_over` (the product tick's question) asks it. They
+    used to hold two copies of these conditions, one in Python and one in SQL, and nothing kept
+    them equal: a kind or state added to one and not the other is a run left `waiting` for ever
+    with no error. Other kinds (loops, capability steps) are not released here.
+    """
+    if step_kind == "timer":
+        return WAIT_RELEASE if run_after is not None and run_after <= now else None
+    if step_kind == "decision":
+        if decision_status in _DECISION_RELEASES:
+            return WAIT_RELEASE
+        if decision_status in _DECISION_REFUSES:
+            return WAIT_REFUSE
+        return None
+    if step_kind == "subworkflow":
+        if child_status in _CHILD_RELEASES:
+            return WAIT_RELEASE
+        if child_status in _CHILD_BLOCKS:
+            return WAIT_BLOCK
+        return None
+    return None
+
+
+def _waiting_steps(connection: Connection, run_id: str) -> list[dict[str, Any]]:
+    """A run's waiting steps, each with what `_wait_outcome` reads: its gate's and child's status."""
+    return [
+        dict(row)
+        for row in connection.execute(
+            text(
+                """
+                SELECT s.*, d.status AS decision_status, c.status AS child_status,
+                       c.output AS child_output
+                FROM workflow_step_runs s
+                LEFT JOIN decisions d ON d.id = s.decision_id
+                LEFT JOIN workflow_runs c ON c.id = s.child_workflow_run_id
+                WHERE s.workflow_run_id = :run_id AND s.status = 'waiting'
+                ORDER BY s.created_at, s.iteration
+                """
+            ),
+            {"run_id": run_id},
+        ).mappings().all()
+    ]
+
+
+def _outcome_of(step: dict[str, Any], now: datetime) -> Optional[str]:
+    return _wait_outcome(
+        str(step["step_kind"]),
+        run_after=step.get("run_after"),
+        decision_status=step.get("decision_status"),
+        child_status=step.get("child_status"),
+        now=now,
+    )
 
 
 def a_wait_is_over(connection: Connection, run_id: str) -> bool:
@@ -3576,25 +3649,12 @@ def a_wait_is_over(connection: Connection, run_id: str) -> bool:
     person has answered, a child run that has ended.
 
     The product tick asks this before calling `advance_run`, which is the only code that
-    releases those three kinds of wait. Kept beside it so the two cannot disagree about what
-    "over" means; capability steps waiting on a gate or on outside work are the runner's own.
+    releases those three kinds of wait. Both read `_wait_outcome`, so they cannot disagree
+    about what "over" means; capability steps waiting on a gate or on outside work are the
+    runner's own.
     """
-    return connection.execute(
-        text(
-            """
-            SELECT 1
-            FROM workflow_step_runs s
-            LEFT JOIN decisions d ON d.id = s.decision_id
-            LEFT JOIN workflow_runs c ON c.id = s.child_workflow_run_id
-            WHERE s.workflow_run_id = :r AND s.status = 'waiting'
-              AND ((s.step_kind = 'timer' AND s.run_after <= now())
-                   OR (s.step_kind = 'decision' AND d.status IN :answered)
-                   OR (s.step_kind = 'subworkflow' AND c.status IN :ended))
-            LIMIT 1
-            """
-        ).bindparams(bindparam("answered", expanding=True), bindparam("ended", expanding=True)),
-        {"r": run_id, "answered": list(_ANSWERED_DECISION), "ended": list(_ENDED_CHILD_RUN)},
-    ).first() is not None
+    now = now_utc()
+    return any(_outcome_of(step, now) is not None for step in _waiting_steps(connection, run_id))
 
 
 def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[str, Any]:
@@ -3603,85 +3663,50 @@ def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[st
         raise WorkflowNotFoundError("Workflow run not found.")
     if run["status"] in TERMINAL_RUN_STATES or run["status"] in {"paused", "compensating"}:
         return get_run(connection, project_id, run_id)
-    waiting = connection.execute(
-        text(
-            """
-            SELECT * FROM workflow_step_runs
-            WHERE workflow_run_id=:run_id AND status='waiting'
-            ORDER BY created_at, iteration
-            """
-        ),
-        {"run_id": run_id},
-    ).mappings().all()
-    spec = _run_spec(connection, run_id)
-    templates = _step_map(spec)
     progressed = False
-    for step in waiting:
-        template = templates[step["step_id"]]
-        if step["step_kind"] == "timer" and step["run_after"] <= now_utc():
-            _succeed_internal(
+    now = now_utc()
+    for step in _waiting_steps(connection, run_id):
+        outcome = _outcome_of(step, now)
+        if outcome is None:
+            # Still waiting. Loop steps resume only when their body completes.
+            continue
+        step_id, iteration = step["step_id"], int(step["iteration"])
+        if outcome == WAIT_RELEASE:
+            if step["step_kind"] == "timer":
+                output: dict[str, Any] = {"woke_at": now_utc().isoformat()}
+            elif step["step_kind"] == "decision":
+                output = {"decision_id": step["decision_id"], "outcome": "approved"}
+            else:
+                output = {
+                    "child_workflow_run_id": step["child_workflow_run_id"],
+                    "output": _json(step["child_output"], {}),
+                }
+            _succeed_internal(connection, run_id, step_id, iteration, output)
+            _after_success(connection, run_id, step_id, iteration)
+        elif outcome == WAIT_REFUSE:
+            # THE STEP HAS TO SAY SO TOO.
+            #
+            # `_block_run` updates `workflow_runs` and nothing else, so a rejected gate left
+            # its step `waiting` — for ever, and with no record of the answer. The operator
+            # pressed Reject, watched the gate go on saying "waiting", and had nothing to
+            # tell them their decision had landed. The run was blocked the whole time.
+            _refuse_step(
+                connection, run_id, step_id, iteration,
+                decision_id=str(step["decision_id"]),
+                outcome=str(step["decision_status"]),
+            )
+            _block_run(
                 connection,
                 run_id,
-                step["step_id"],
-                int(step["iteration"]),
-                {"woke_at": now_utc().isoformat()},
+                f"decision {step['decision_id']} was {step['decision_status']}",
             )
-            _after_success(connection, run_id, step["step_id"], int(step["iteration"]))
-            progressed = True
-        elif step["step_kind"] == "decision" and step.get("decision_id"):
-            decision = connection.execute(
-                text("SELECT status FROM decisions WHERE id=:id"),
-                {"id": step["decision_id"]},
-            ).mappings().first()
-            if decision and decision["status"] == "approved":
-                _succeed_internal(
-                    connection,
-                    run_id,
-                    step["step_id"],
-                    int(step["iteration"]),
-                    {"decision_id": step["decision_id"], "outcome": "approved"},
-                )
-                _after_success(connection, run_id, step["step_id"], int(step["iteration"]))
-                progressed = True
-            elif decision and decision["status"] in {"rejected", "expired"}:
-                # THE STEP HAS TO SAY SO TOO.
-                #
-                # `_block_run` updates `workflow_runs` and nothing else, so a rejected gate left
-                # its step `waiting` — for ever, and with no record of the answer. The operator
-                # pressed Reject, watched the gate go on saying "waiting", and had nothing to
-                # tell them their decision had landed. The run was blocked the whole time.
-                _refuse_step(
-                    connection, run_id, step["step_id"], int(step["iteration"]),
-                    decision_id=str(step["decision_id"]),
-                    outcome=str(decision["status"]),
-                )
-                _block_run(
-                    connection,
-                    run_id,
-                    f"decision {step['decision_id']} was {decision['status']}",
-                )
-                progressed = True
-        elif step["step_kind"] == "subworkflow" and step.get("child_workflow_run_id"):
-            child = _run_row(connection, step["child_workflow_run_id"])
-            if child["status"] == "completed":
-                _succeed_internal(
-                    connection,
-                    run_id,
-                    step["step_id"],
-                    int(step["iteration"]),
-                    {"child_workflow_run_id": child["id"], "output": _json(child["output"], {})},
-                )
-                _after_success(connection, run_id, step["step_id"], int(step["iteration"]))
-                progressed = True
-            elif child["status"] in {"failed", "deadlettered", "cancelled"}:
-                _block_run(
-                    connection,
-                    run_id,
-                    f"subworkflow {child['id']} ended in {child['status']}",
-                )
-                progressed = True
-        # Loop waiting steps resume only when their body completes.
-        _ = template
+        else:
+            _block_run(
+                connection,
+                run_id,
+                f"subworkflow {step['child_workflow_run_id']} ended in {step['child_status']}",
+            )
+        progressed = True
     if progressed:
         connection.execute(
             text(

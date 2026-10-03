@@ -7,6 +7,8 @@ become a paid one, and because a test has to be able to make a step fail on purp
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -158,10 +160,34 @@ START_FORM = {
 }
 
 
+#: The workflow the web editor writes for Agent task → Approval gate → Agent task ("Needs
+#: approval"). Written by apps/web/tests/the-editor-writes-what-the-api-runs.test.ts from the
+#: editor's own serialiser, so a change to what the editor saves is run end to end here.
+EDITOR_BUILT = Path(__file__).resolve().parents[2] / "web/tests/fixtures/editor-built-workflow.json"
+
+
+def editor_built(*, agent: str, skill: str, mcp: str) -> dict:
+    """The editor's workflow with this test's agent, skill and MCP server put in.
+
+    Its Approval gate carries what the palette served for that block when it was dropped, so
+    the fixture is held to `CONTROL_BLOCKS` as well: the editor writes what the API offers."""
+    from boss_engine.services.workflow_capabilities import CONTROL_BLOCKS
+
+    raw = EDITOR_BUILT.read_text()
+    for placeholder, value in (("{agent}", agent), ("{skill}", skill), ("{mcp}", mcp)):
+        raw = raw.replace(json.dumps(placeholder), json.dumps(value))
+    spec = json.loads(raw)
+    served = next(b for b in CONTROL_BLOCKS if b["kind"] == "decision")["defaults"]
+    for gate in (s for s in spec["steps"] if s["kind"] == "decision"):
+        assert {k: gate.get(k) for k in served} == served, (
+            "the editor fixture's gate is not what the palette serves; regenerate it")
+    return spec
+
+
 def agent_step(step_id: str, *, captain: Optional[str] = None, nxt: tuple[str, ...] = (),
                instructions: Any = None, **binding_extra) -> dict:
-    """An "Agent task" as the editor writes it: the task wired from the start form unless a
-    fixed one is given."""
+    """An "Agent task" in the shape `editor_built` pins: the task wired from the start form unless
+    a fixed one is given. For tests about one step's settings, not about the editor."""
     wired = instructions if instructions is not None else {"from_input": "instructions"}
     step: dict[str, Any] = {
         "id": step_id, "kind": "capability", "next": list(nxt), "max_attempts": 1,

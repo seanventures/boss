@@ -3487,8 +3487,8 @@ def tick(
             # alone, and for a product run nothing called it but this tick. It used to ask about
             # timers only (Deprecation / Sunset's grace period never ended), so an Approval gate
             # placed from the editor's palette sat `waiting` after a person approved it, and a
-            # parent never left a child run that had finished. `workflows.a_wait_is_over` is the
-            # one test, next to the code that acts on it.
+            # parent never left a child run that had finished. `workflows.a_wait_is_over` asks
+            # `workflows._wait_outcome`, the same rule `advance_run` acts on.
             phase = "release waits that are over"
             if workflows.a_wait_is_over(connection, run_id):
                 workflows.advance_run(connection, project_id, run_id)
