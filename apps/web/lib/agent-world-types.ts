@@ -58,7 +58,8 @@ export type Passport = {
 };
 export type Chain = {
   acts: Act[]; accountable: string; totals: { steps: number; minutes: number; cost: number };
-  credits: { roleKey: string | null; line: string }[];
+  /** A person's credit (roleKey null) may name them: `person_id` on the wire. */
+  credits: { roleKey: string | null; line: string; personId?: string }[];
 };
 export type LineageGraph = {
   nodes: { id: string; kind: "agent" | "person" | "boss"; roleKey?: string }[];

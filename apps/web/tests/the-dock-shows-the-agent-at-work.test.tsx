@@ -22,6 +22,7 @@ import { wireAct } from "./_helpers/run-acts-fixtures";
 
 const sent: Array<Record<string, string>> = [];
 let release: (() => void) | null = null;
+let threadBeforeTurn = true;
 const CITED = wireAct({ act_id: "act_cited", kind: "step", role_key: "qa", started_at: "2026-10-03T14:02:00Z",
                         label: "Test · Ship it #182", step_id: "test" });
 const ABOUT = wireAct({ act_id: "act_about", kind: "step", role_key: "qa", label: "Build · Ship it #182", step_id: "build" });
@@ -51,10 +52,11 @@ let host: HTMLElement | null = null;
 beforeEach(() => {
   sent.length = 0;
   release = null;
+  threadBeforeTurn = true;
   window.history.replaceState(null, "", "/?dock_act=act_about");
   vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
     const url = new URL(String(input), "http://console.test");
-    if (url.pathname.endsWith("/api/agent-thread")) return Response.json({ thread_id: "athr_1" });
+    if (url.pathname.endsWith("/api/agent-thread")) return Response.json(threadBeforeTurn ? { thread_id: "athr_1" } : {});
     if (url.pathname === "/api/run-acts") {
       const id = url.searchParams.get("act_id");
       return Response.json(id === "act_cited" ? CITED : ABOUT);
@@ -141,6 +143,30 @@ describe("the dock, with the agent in it", () => {
     expect(chip.querySelector(".ag-cite-text")?.textContent).toBe("I ran this · 14:02 ↗");
     await act(async () => (chip.querySelector('[data-testid="ag-act-face"]') as HTMLButtonElement).click());
     expect(document.querySelector('[role="dialog"] [data-testid="ag-act-card"]')?.getAttribute("data-act-id")).toBe("act_cited");
+  });
+
+  it("keeps the cited chip on the first answer of a brand-new conversation", async () => {
+    // No thread before the turn: the reply is what brings the thread id, with its citations.
+    threadBeforeTurn = false;
+    await mount({ initialTaskId: undefined });
+    await act(async () => (host!.querySelector('[data-testid="agent-send"]') as HTMLButtonElement).click());
+    await settle();
+    expect(sent[0].thread_id).toBeUndefined();
+    await act(async () => { release?.(); });
+    await settle(30);
+    const answer = [...host!.querySelectorAll('[data-testid="agent-message-assistant"]')].pop()!;
+    expect(answer.querySelector('[data-testid="ag-cite"]')?.getAttribute("data-act-id")).toBe("act_cited");
+  });
+
+  it("sends no role key it had to guess from a display name", async () => {
+    await mount({ roleName: "QA Lead", roleKey: undefined, actId: undefined });
+    expect(head().querySelector('[data-testid="ag-dock-name"]')?.textContent).toBe("QA Lead");
+    await act(async () => (host!.querySelector('[data-testid="agent-send"]') as HTMLButtonElement).click());
+    await settle();
+    expect(sent[0].role).toBe("QA Lead");
+    expect(sent[0].role_key).toBeUndefined();
+    await act(async () => { release?.(); });
+    await settle();
   });
 
   it("drops the work from the next turn when told it is not about that", async () => {

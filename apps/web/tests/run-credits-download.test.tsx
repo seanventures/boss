@@ -63,6 +63,23 @@ describe("Run Credits", () => {
     expect(el.querySelector('[data-testid="ag-credits-accountable"]')?.textContent?.trim()).toBe("You");
   });
 
+  it("credits a person as You only when it was the viewer, on the dialog, the text and the image alike", () => {
+    // `cto` started and approved this run; `ceo` is looking at it.
+    const theirs = toChain({ ...shipItChain(), accountable: "cto" });
+    const el = render(<CreditsDialog chain={theirs} runId="wfr_1" projectId="p1" viewer="ceo" title="Ship it" onClose={() => {}} />);
+    const person = el.querySelector('[data-testid="ag-credits-cast"] li[data-role-key=""]')!;
+    expect(person.querySelector(".ag-credits-name strong")?.textContent).toBe("A person");
+    expect(person.querySelector(".ag-face")?.getAttribute("data-variant")).toBe("person");
+    expect(creditsText(theirs, "ceo", "Ship it")).toContain("• A person — Approved deploy");
+    expect(creditsText(theirs, "ceo", "Ship it")).not.toMatch(/• You/);
+    expect(creditsCard(theirs, "Ship it").faces.find((f) => !f.roleKey)?.name).toBe("A person");
+    // The credit can name its person outright, and then that decides.
+    const named = toChain({ ...shipItChain(), credits: [{ role_key: null, person_id: "ceo", line: "Approved deploy" }] });
+    expect(creditsText({ ...named, accountable: "cto" }, "ceo", "Ship it")).toContain("• You — Approved deploy");
+    // The viewer's own run still says You.
+    expect(creditsText(CHAIN, "ceo", "Ship it")).toContain("• You — Approved deploy");
+  });
+
   it("downloads a PNG of this run's credits", async () => {
     const created = vi.fn(() => "blob:credits");
     (URL as unknown as { createObjectURL: unknown }).createObjectURL = created;

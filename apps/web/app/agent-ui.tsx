@@ -15,7 +15,7 @@ import { apiWrite } from "../lib/api-write";
 
 import { callAction } from "../lib/call-action";
 // Agent World (S-runs): the agent's face, its live state, and the work it cites.
-import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
+import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
 import { nameOf } from "./agents/run-face";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
@@ -366,14 +366,21 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [busy, startTransition] = useTransition();
   // WHO IS IN THE DOCK, BY KEY, and what they are doing right now. Thinking while a turn is in
   // flight, speaking as its words arrive — from the turn's real state, never on a timer.
+  // `dockAgent` is the key the turn sends (given, or resolved — never guessed from a name);
+  // `dockFace` is only what the dock draws its face and name from.
   const dockAgent = dockRoleKey(roleKeyProp, roleName);
+  const dockFace = dockFaceKey(roleKeyProp, roleName);
   const speech = useDockSpeech(busy);
   const speakChunk = speech.chunk;
   const [aboutAct, setAboutAct] = useState<string | null>(actId ?? null);
-  //: Work an answer cited, by the answer's index in `messages`, when the reply carried it.
-  const [citations, setCitations] = useState<Record<number, string[]>>({});
-  // Citations belong to one conversation's answers.
-  useEffect(() => { setCitations({}); }, [threadId]);
+  // Work an answer cited, by the answer's index in `messages`, when the reply carried it.
+  //
+  // CITATIONS BELONG TO THE THREAD THEY CAME IN. They are kept with that thread's id and shown
+  // only while it is the open one. Clearing them whenever `threadId` changed wiped the first
+  // answer's chips: a new conversation's turn sets the thread id and the citation together.
+  const [citations, setCitations] = useState<{ thread: string | null; byIndex: Record<number, string[]> }>(
+    { thread: null, byIndex: {} });
+  const citedHere = citations.thread === threadId ? citations.byIndex : {};
   const clearAboutAct = useCallback(() => {
     setAboutAct(null);
     try {
@@ -875,7 +882,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           const list = d.messages as Msg[];
           let last = -1;
           list.forEach((m, n) => { if (m.role === "assistant") last = n; });
-          if (last >= 0) setCitations((c) => ({ ...c, [last]: cited }));
+          const thread = typeof d.thread_id === "string" ? d.thread_id : live;
+          if (last >= 0) {
+            setCitations((c) => ({ thread, byIndex: { ...(c.thread === thread ? c.byIndex : {}), [last]: cited } }));
+          }
         }
         if (Array.isArray(d.messages)) {
           const server = d.messages as Msg[];
@@ -1161,8 +1171,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
       {/* MAIN — context header + scoped history + input */}
       <section className="agent-chat-main">
-        {dockAgent || roleName ? (
-          <DockAgentHead roleKey={dockAgent} roleName={roleName} state={speech.state} projectId={projectId}
+        {dockFace ? (
+          <DockAgentHead roleKey={dockFace} roleName={roleName} state={speech.state} projectId={projectId}
                          actId={aboutAct} onClearAct={clearAboutAct} />
         ) : null}
         {sel === GENERAL ? (
@@ -1177,7 +1187,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 the agent re-reads each turn, so operator and agent see one thing. Renders
                 nothing when there is no long-horizon work, which is most conversations. */}
             <LedgerStrip threadId={threadId} />
-            {dockAgent || roleName ? null : <span className="eyebrow">{roleName ?? "BOSS Agent"}</span>}
+            {dockFace ? null : <span className="eyebrow">{roleName ?? "BOSS Agent"}</span>}
             <h2>{threadId
                    ? (roleName
                         ? `Continuing with ${roleName}`
@@ -1254,9 +1264,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}
                      data-testid={`agent-message-${m.role}`}>
-              {m.role === "assistant" && dockAgent ? (
+              {m.role === "assistant" && dockFace ? (
                 <span className="ag-dock-gutter" data-testid="ag-dock-gutter">
-                  <DockGutterFace roleKey={dockAgent} />{nameOf(dockAgent).name}
+                  <DockGutterFace roleKey={dockFace} />{nameOf(dockFace).name}
                 </span>
               ) : (
                 <span>{m.role === "assistant" ? "BOSS" : m.role === "user" ? "You" : "tool"}</span>
@@ -1295,7 +1305,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                       wastes the part that took the effort. When the agent hands back a brief,
                       it is one press to the composer — and still a press, because a chat that
                       quietly starts a build is the opposite of a surface for thinking. */}
-                  <CitedActs ids={[...citedIds((m as { cited_acts?: unknown }).cited_acts), ...(citations[i] ?? [])]}
+                  <CitedActs ids={[...citedIds((m as { cited_acts?: unknown }).cited_acts), ...(citedHere[i] ?? [])]}
                              projectId={projectId} viewer={actor} speaker={dockAgent} />
                   {briefIn(m.content) ? (
                     <div className="agent-brief" data-testid="agent-brief">
@@ -1332,9 +1342,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               air, and reasonably concluded the request had been lost. */}
           {busy || probe || landing ? (
             <article className="agent-message assistant" data-testid="agent-working">
-              {dockAgent ? (
+              {dockFace ? (
                 <span className="ag-dock-gutter">
-                  <DockGutterFace roleKey={dockAgent} state={speech.state} />{nameOf(dockAgent).name}
+                  <DockGutterFace roleKey={dockFace} state={speech.state} />{nameOf(dockFace).name}
                 </span>
               ) : <span>BOSS</span>}
               <p className="detail agent-working" data-slow={elapsed >= AGENT_NORMAL_SECONDS}

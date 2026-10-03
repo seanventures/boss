@@ -10,20 +10,21 @@
 import { Copy, DownloadSimple, Image as ImageIcon, X } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-import type { Chain } from "../../lib/agent-world-types";
-import { costLabel, minutesLabel } from "./chain-model";
+import type { AvatarVariant, Chain } from "../../lib/agent-world-types";
+import { costLabel, creditWho, minutesLabel } from "./chain-model";
 import { AiBadge, nameOf, RunFace } from "./run-face";
 
-export type CreditRow = { roleKey: string | null; name: string; role: string; line: string };
+export type CreditRow = { roleKey: string | null; variant: AvatarVariant; name: string; role: string; line: string };
 
-/** Who made it, in chain order. People are credited too ("You · approved deploy"). */
-export function creditRows(chain: Pick<Chain, "credits" | "acts">, viewer: string): CreditRow[] {
+/** Who made it, in chain order. People are credited too: "You" only when it was the viewer. */
+export function creditRows(chain: Pick<Chain, "credits" | "acts"> & Partial<Pick<Chain, "accountable">>, viewer: string): CreditRow[] {
   const rows = chain.credits.length
     ? chain.credits
     : [...new Set(chain.acts.map((a) => a.roleKey).filter((k): k is string => !!k))].map((roleKey) => ({ roleKey, line: "" }));
   return rows.map((c) => {
-    const n = c.roleKey ? nameOf(c.roleKey) : nameOf(null, viewer ? "you" : "person");
-    return { roleKey: c.roleKey, name: n.name, role: n.role, line: c.line };
+    const who = creditWho(c, chain.accountable ?? "", viewer);
+    const n = nameOf(who.roleKey, who.variant);
+    return { roleKey: c.roleKey, variant: who.variant, name: n.name, role: n.role, line: c.line };
   });
 }
 
@@ -135,7 +136,7 @@ export function CreditsDialog({ chain, runId, projectId, viewer, title, onClose 
           {rows.map((r, i) => (
             <li key={`${r.roleKey ?? "person"}-${i}`} className="ag-credits-row" data-role-key={r.roleKey ?? ""}
                 style={{ ["--ag-i" as string]: i }}>
-              <RunFace roleKey={r.roleKey} variant={r.roleKey ? "agent" : "you"} size={48} state="done" />
+              <RunFace roleKey={r.roleKey} variant={r.variant} size={48} state="done" />
               <span className="ag-credits-who">
                 <span className="ag-credits-name">
                   <strong>{r.name}</strong>
