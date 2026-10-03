@@ -21,6 +21,8 @@ const { FlowLane } = await import("../app/workflows/flow/flow-lane");
 const { MiniLane, MINI_LANE_MAX } = await import("../app/workflows/flow/mini-lane");
 const geometry = await import("../app/workflows/flow/geometry");
 const { layoutFlow } = await import("../lib/workflow-graph");
+const { agentMeta } = await import("../app/agent-chip");
+const { isCut } = await import("../app/workflows/flow/tip-layer");
 
 /** The lane's width in the console at 1440px: the shell's icon rail (84px), the palette as a
  *  rail (48px), the editor's gutters (2 × 16px), the grid gap (12px) and the lane's border
@@ -138,8 +140,9 @@ describe("a node says what it is and who does it", () => {
     const h = render(<FlowLane spec={spec} palette={PALETTE} mode="design" />);
     const agents = nodes(h).map((n) => n.querySelector(".wf-node-agent-name")!.textContent);
     expect(agents).toEqual(["You", "QA Lead", "A person", "You"]);
+    // The tooltip leads with the name, so a node too narrow for it still says who.
     expect(nodes(h)[0].querySelector<HTMLElement>('[data-testid="wf-node-agent"]')!.dataset.tip)
-      .toBe("Built-in step: runs as whoever starts the workflow.");
+      .toBe("You\nBuilt-in step: runs as whoever starts the workflow.");
   });
 
   it("marks a step with a problem and carries the first message as its tooltip", () => {
@@ -328,5 +331,159 @@ describe("the library card rail", () => {
     expect(icons).toHaveLength(MINI_LANE_MAX);
     expect(icons[0].dataset.tip).toBe("Step 0");
     expect(h.querySelector(".wf-mini-more")!.textContent).toBe("+3");
+  });
+});
+
+/* ── The lead's walk-through at 1512 × 801 (about 1340px of content) ──────────────── */
+
+/** The lane at a 1512px window: about 1340px of content, less the palette rail (48px), the grid
+ *  gap (12px) and the lane's border (2px). */
+const LANE_AT_1512 = 1340 - 48 - 12 - 2;
+const allRules = () => cssRules(readFileSync("app/workflows/flow.css", "utf8"))
+  .flatMap(([sel, body]) => sel.split(",").map((one) => [one.trim(), body] as [string, string]));
+
+/** Who runs each kind of step: built-in, a named agent, a gate, an agent task, a scoped one. */
+const MIXED = linear(11, (i) => (i === 1 ? { captain: "qa" }
+  : i === 2 ? { kind: "decision", binding: {}, question: "Ship it?" }
+    : i === 3 ? { binding: { agent_work: true } }
+      : i === 4 ? { binding: { agent_work: true, skills: ["sk_trim"] } } : {}));
+
+describe("a title wraps only between words", () => {
+  it("never breaks a word across lines, and clamps at two lines with an ellipsis", () => {
+    const title = allRules().filter(([sel]) => /\.wf-node-title(?![\w-])/.test(sel));
+    expect(title.length).toBeGreaterThan(0);
+    for (const [sel, body] of title) {
+      // "Productio" / "n launch": anywhere and break-all split a word; nothing here may.
+      expect(body, sel).not.toMatch(/overflow-wrap:\s*(anywhere|break-word)|word-break:\s*break-(all|word)|hyphens:\s*auto/);
+    }
+    const base = title.find(([sel]) => sel === ".wf-node-title")![1];
+    expect(base).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(base).toMatch(/overflow-wrap:\s*normal/);
+    expect(base).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("shows the whole title as a tooltip only when it is cut", () => {
+    const long = "Productionlaunchreadinessreview and sign-off";
+    const h = render(<FlowLane spec={linear(3, (i) => (i === 0 ? { title: long } : {}))} palette={PALETTE} mode="design" />);
+    const title = nodes(h)[0].querySelector<HTMLElement>(".wf-node-title")!;
+    expect(title.textContent).toBe(long);
+    expect(title.dataset.tip).toBe(long);
+    const tip = () => document.querySelector<HTMLElement>(".wf-tip");
+    act(() => { title.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    expect(tip() === null || tip()!.hidden || tip()!.textContent !== long).toBe(true);
+    act(() => { title.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+    Object.defineProperty(title, "scrollWidth", { configurable: true, value: 400 });
+    act(() => { title.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    expect(tip()!.hidden).toBe(false);
+    expect(tip()!.textContent).toBe(long);
+  });
+});
+
+describe("a cut title is found by measuring its text, not only its box", () => {
+  const box = (scroll: number, client: number) => {
+    const el = document.createElement("span");
+    el.className = "wf-node-title";
+    el.textContent = "Productionization";
+    for (const [k, v] of [["scrollWidth", scroll], ["clientWidth", client], ["scrollHeight", 18], ["clientHeight", 18]] as const) {
+      Object.defineProperty(el, k, { configurable: true, value: v });
+    }
+    return el;
+  };
+  const textWide = (width: number) => vi.spyOn(document, "createRange").mockImplementation(() => ({
+    selectNodeContents() {}, getBoundingClientRect: () => ({ width }) as DOMRect,
+  }) as unknown as Range);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("calls one long word cut when the box reports no overflow (a line-clamped flex item)", () => {
+    // Chrome: scrollWidth 118, clientWidth 118 for a visibly cut "Productionizati…".
+    textWide(160);
+    expect(isCut(box(118, 118))).toBe(true);
+  });
+
+  it("does not call text cut when it fits", () => {
+    textWide(90);
+    expect(isCut(box(118, 118))).toBe(false);
+  });
+});
+
+describe("every node says who runs it, at every density and in every mode", () => {
+  const expected = ["You", "QA Lead", "A person", "Auto", "Auto · QA Lead", "You"];
+  for (const mode of ["design", "run"] as const) {
+    for (const [density, width] of [["comfortable", 4000], ["compact", LANE_AT_1512]] as const) {
+      it(`${mode}, ${density}: an avatar and the name, and the name leads the tooltip`, () => {
+        laneWidth = width;
+        const h = render(<FlowLane spec={MIXED} palette={PALETTE} mode={mode} runState={mode === "run" ? {} : undefined} />);
+        expect(h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!.dataset.density).toBe(density);
+        const rows = nodes(h).map((n) => n.querySelector<HTMLElement>('[data-testid="wf-node-agent"]'));
+        expect(rows.every(Boolean)).toBe(true);
+        expect(rows.slice(0, 6).map((r) => r!.querySelector(".wf-node-agent-name")!.textContent)).toEqual(expected);
+        for (const r of rows) {
+          expect(r!.querySelector(".wf-avatar")).not.toBeNull();
+          const name = r!.querySelector(".wf-node-agent-name")!.textContent!;
+          expect(r!.dataset.tip!.split("\n")[0]).toBe(name);
+        }
+        // A named agent is its own face: initials and colour, as on every other screen.
+        const face = agentMeta("qa", "QA Lead");
+        expect(rows[1]!.querySelector(".mr-avatar")!.textContent).toBe(face.initials);
+        expect(rows[1]!.querySelector(".mr-avatar")!.classList.contains(`tone-${face.tone}`)).toBe(true);
+      });
+    }
+  }
+
+  it("never hides the agent or its name in any density or mode", () => {
+    for (const [sel, body] of allRules()) {
+      if (!/\.wf-node-agent(-name)?(?![\w-])|\.wf-avatar(?![\w-])/.test(sel)) continue;
+      expect(body, sel).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+    }
+  });
+});
+
+describe("Compact is three readable rows, and the lane is a region the flow sits in", () => {
+  it("lays a Compact node out as title, agent, then icon and badges", () => {
+    const node = allRules().find(([sel]) => sel === '[data-density="compact"] .wf-node')![1];
+    expect(node).toMatch(/grid-template-areas:\s*"title title"\s*"agent agent"\s*"icon meta"/);
+    const run = allRules().find(([sel]) => sel === '[data-density="compact"] .wf-node[data-mode="run"]')![1];
+    expect(run).toMatch(/"agent agent"/);
+  });
+
+  it("makes Compact nodes tall enough for those rows, rather than the text smaller", () => {
+    // Two title lines at 0.875rem × 1.2, a 20px agent row and a 20px icon row, two 5px gaps,
+    // 7px padding top and bottom and the border.
+    const rows = 2 * 0.875 * 16 * 1.2 + 20 + 20 + 2 * 5 + 2 * 7 + 2;
+    expect(geometry.NODE.compact.h).toBeGreaterThanOrEqual(Math.ceil(rows));
+    // Comfortable: a 2-line title at 0.875rem × 1.25, the agent (20px), the badges (16px).
+    const comfy = 2 * 0.875 * 16 * 1.25 + 20 + 16 + 2 * 5 + 2 * 10 + 2;
+    expect(geometry.NODE.comfortable.h).toBeGreaterThanOrEqual(Math.ceil(comfy));
+  });
+
+  for (const [label, width] of [["1440px", LANE_AT_1440], ["1512px (1340px of content)", LANE_AT_1512]] as const) {
+    it(`fits 11 steps at ${label} with no sideways scroll, every word 0.75rem or more`, () => {
+      laneWidth = width;
+      const h = render(<FlowLane spec={MIXED} palette={PALETTE} mode="design" />);
+      const lane = h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!;
+      const scale = Number(h.querySelector<HTMLElement>(".wf-lane-canvas")!.dataset.scale);
+      expect(lane.dataset.scrolls).toBeUndefined();
+      expect(geometry.MIN_FONT_REM[lane.dataset.density as "compact"] * scale).toBeGreaterThanOrEqual(geometry.MIN_TEXT_REM);
+    });
+  }
+
+  it("gives an empty workflow no region: its lane is the plain Start → End strip", () => {
+    const h = render(<FlowLane spec={linear(0)} palette={PALETTE} mode="design" />);
+    const lane = h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!;
+    expect(lane.dataset.empty).toBe("true");
+    // No rule that gives the lane a height may reach a lane marked empty.
+    for (const [sel, body] of allRules()) {
+      if (!/^\.wf-lane(\[[^\]]*\])*(:not\(\[data-empty\]\))?$/.test(sel) || !/min-height:\s*(?!0)/.test(body)) continue;
+      expect(sel, sel).toMatch(/:not\(\[data-empty\]\)/);
+    }
+    const full = render(<FlowLane spec={linear(3)} palette={PALETTE} mode="design" />);
+    expect(full.querySelector<HTMLElement>('[data-testid="wf-lane"]')!.dataset.empty).toBeUndefined();
+  });
+
+  it("centres the drawing in an editor region with a floor and a ceiling on its height", () => {
+    const region = allRules().find(([sel]) => sel === '.wf-lane[data-mode="design"]:not([data-empty])')![1];
+    expect(region).toMatch(/justify-content:\s*center/);
+    expect(region).toMatch(/min-height:\s*clamp\(/);
+    expect(region).toMatch(/max-height:/);
   });
 });

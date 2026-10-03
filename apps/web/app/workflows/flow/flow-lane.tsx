@@ -13,9 +13,10 @@
  * `minScale`) before it scrolls. When it still has to scroll, it scrolls inside itself only, and
  * a minimap appears beneath it.
  *
- * What covers it does not reflow it: the inspector drawer floats over the lane's right edge
- * (`occludedRight`), so selecting a step never changes the density or the scale. The lane only
- * gains room to scroll the selected step out from under the drawer.
+ * The selected step is always in view. From 1280px the inspector is a column beside the lane, so
+ * the lane simply refits into the width left. Under 1280px the drawer floats over the lane's
+ * right edge (`occludedRight`); the lane then gains room to scroll the selected step out from
+ * under it.
  *
  * In design mode it is also the drop target for drags (`use-lane-drag.ts`) and handles the
  * flow's own keys: arrows move focus along the flow and between siblings, Alt+arrows move the
@@ -342,7 +343,7 @@ export function FlowLane(p: {
   return (
     <div className="wf-lane" ref={rootRef} data-mode={mode} data-density={geometry.density}
          data-linear={linear ? "true" : "false"} data-scrolls={scrolls ? "true" : undefined}
-         data-testid="wf-lane">
+         data-empty={steps.length ? undefined : "true"} data-testid="wf-lane">
       <div className="wf-lane-viewport" ref={viewportRef} id={viewportId}>
         <div className="wf-lane-sizer" style={{ width: sizerW, height: geometry.height * scale }}>
           <div className="wf-lane-canvas" ref={canvasRef} role="group" aria-label={p.label ?? "Workflow steps"}

@@ -25,10 +25,28 @@ let priorDescribedBy: string | null = null;
 /** A tip pinned by code (the refused drop caret), which hover and focus leave alone. */
 let pinned = false;
 
+/** Whether text is cut: wider or taller than its box (an ellipsis or a line clamp).
+ *  The box alone is not enough: a line-clamped flex item holding one long word reports a
+ *  scrollWidth equal to its clientWidth while the word is visibly cut, so the text itself is
+ *  measured too. */
+export function isCut(el: HTMLElement): boolean {
+  if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) return true;
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return false;
+  if (typeof document.createRange !== "function") return false;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const width = range.getBoundingClientRect?.().width ?? 0;
+  return width > el.clientWidth + 1;
+}
+
+/** The element whose tip to show. A `data-tip-when="cut"` tip only repeats text that is on
+ *  screen, so it shows only while that text is cut; otherwise the next tip out shows. */
 function tipTarget(node: EventTarget | null): HTMLElement | null {
   if (!(node instanceof Element)) return null;
   const el = node.closest<HTMLElement>("[data-tip]");
-  return el && el.dataset.tip ? el : null;
+  if (!el || !el.dataset.tip) return null;
+  if (el.dataset.tipWhen === "cut" && !isCut(el)) return tipTarget(el.parentElement);
+  return el;
 }
 
 function hide() {

@@ -10,10 +10,12 @@ import type { FlowLayout, StepView } from "../../../lib/workflow-editor-types";
 export type Density = "comfortable" | "compact";
 
 export const NODE = {
-  comfortable: { w: 176, h: 84 },
-  /** Compact fits more steps by geometry, never by smaller text: a narrower node whose title
-   *  runs the full width, with the icon and agent on the line under it. */
-  compact: { w: 100, h: 72 },
+  /** Three rows that always fit: a 2-line title beside the icon, the agent, the badges. */
+  comfortable: { w: 176, h: 104 },
+  /** Compact fits more steps by geometry, never by smaller text: a narrower node, as tall as it
+   *  needs for the same three rows (a full-width 2-line title, the agent, then the icon and
+   *  badges). 104px wide is what lets 11 steps fit a 1262px lane at the readable minimum. */
+  compact: { w: 104, h: 100 },
 } as const;
 /** A Wait step only shows its duration, so it is drawn narrower. */
 export const WAIT_W = { comfortable: 96, compact: 80 } as const;
