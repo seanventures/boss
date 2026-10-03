@@ -98,6 +98,23 @@ def test_a_seeded_role_without_work_is_not_agent_work():
     assert out["counts"]["total"] == 0
 
 
+def test_the_roster_lists_every_agent_the_step_picker_offers():
+    """The Agents page said "All 5" while a step's agent picker offered 34. The roster is the
+    picker's list (step_agents.agent_keys), with work where there is some, plus any agent doing
+    work with no registered role."""
+    out = workforce(FakeConn(roles=[role("architect"), role("cto"), role("human")],
+                             steps=[step("cto"), step("product_manager")]), "p")
+    ids = [a["id"] for a in out["roster"]]
+    assert sorted(ids) == ["architect", "cto", "product_manager"]
+    by_id = {a["id"]: a for a in out["roster"]}
+    assert by_id["architect"]["task"] == "No work in 30 days"
+    assert by_id["architect"]["status"] == IDLE and by_id["architect"]["registered"] is True
+    assert by_id["product_manager"]["registered"] is False
+    # Who worked comes first; the work feed itself is unchanged.
+    assert ids[-1] == "architect"
+    assert sorted(a["id"] for a in out["agents"]) == ["cto", "product_manager"]
+
+
 def test_a_running_step_makes_the_agent_working():
     out = workforce(FakeConn(roles=[role("coder")],
                              steps=[step("coder", status="running", age_s=120)]), "p")

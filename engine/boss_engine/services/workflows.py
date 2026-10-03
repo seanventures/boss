@@ -670,6 +670,97 @@ def normalise_workflow_spec(
     return normalized, problems
 
 
+def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
+    """For each reachable step, the steps that have certainly finished when it starts.
+
+    An ancestor on EVERY path, not merely on some: after a condition only what came before the
+    condition is certain. Parallel branches all run, so a join that waits for all of them has
+    every branch behind it (and one that releases on any has only what the branches share). A
+    loop body is not counted after its loop, nor is a branch counted at its parallel's own
+    `join` edge, which only says where the branches meet.
+    """
+    steps = _step_map(normalized)
+    preds: dict[str, list[str]] = {sid: [] for sid in steps}
+    for sid, step in steps.items():
+        skip = str(step.get("join") or "") if step.get("kind") == "parallel" else ""
+        for target in _targets(step):
+            if target in preds and target != skip:
+                preds[target].append(sid)
+    for sid, step in steps.items():
+        # A join no branch leads to explicitly still follows its parallel step.
+        if step.get("kind") == "parallel" and str(step.get("join") or "") in preds:
+            join = str(step["join"])
+            if not preds[join]:
+                preds[join].append(sid)
+    entry = str(normalized.get("entry_step") or "")
+    if entry not in steps:
+        return {}
+    reachable, frontier = {entry}, [entry]
+    while frontier:
+        for target in _targets(steps[frontier.pop()]):
+            if target in steps and target not in reachable:
+                reachable.add(target)
+                frontier.append(target)
+    before: dict[str, set[str]] = {entry: set()}
+    pending = [sid for sid in steps if sid in reachable and sid != entry]
+    # Settled in dependency order. A cycle (refused elsewhere) leaves its steps unsettled.
+    while pending:
+        progressed = False
+        for sid in list(pending):
+            incoming = [p for p in preds[sid] if p in reachable]
+            if not incoming or any(p not in before for p in incoming):
+                continue
+            sets = [before[p] | {p} for p in incoming]
+            step = steps[sid]
+            if step.get("kind") == "join" and step.get("success_policy", "all") == "all":
+                before[sid] = set().union(*sets)
+            else:
+                before[sid] = set.intersection(*sets)
+            pending.remove(sid)
+            progressed = True
+        if not progressed:
+            break
+    return before
+
+
+def binding_order_problems(normalized: dict[str, Any]) -> list[dict[str, Any]]:
+    """A step that reads another step's output must come after it, on every path.
+
+    Dragging Preview above Build left Preview reading Build's run id: Check said Ready and Save
+    would publish a workflow whose second step waits on output that cannot exist yet. One
+    problem per input, on the step that reads it and the input that is wired wrong.
+    """
+    steps = _step_map(normalized)
+    before = _runs_before(normalized)
+    found: list[dict[str, Any]] = []
+    for sid, step in steps.items():
+        if sid not in before:
+            continue  # unreachable: said already, and that is the thing to fix
+        inputs = (step.get("binding") or {}).get("inputs") or {}
+        if not isinstance(inputs, dict):
+            continue
+        for name, value in inputs.items():
+            if not isinstance(value, dict) or "from_step" not in value:
+                continue
+            source = str(value.get("from_step") or "")
+            if source in before[sid]:
+                continue
+            if source not in steps:
+                detail = (f"step '{sid}' gets {name} from step '{source}', "
+                          "which is not in this workflow.")
+            elif source == sid:
+                detail = f"step '{sid}' gets {name} from itself."
+            elif sid in before.get(source, set()):
+                label = _step_label(steps[source], source)
+                detail = f"step '{sid}' gets {name} from “{label}”, which runs after it."
+            else:
+                label = _step_label(steps[source], source)
+                detail = (f"step '{sid}' gets {name} from “{label}”, "
+                          "which does not always run before it.")
+            found.append(problem(sid, str(name), detail))
+    return found
+
+
 def validate_workflow_spec(spec: dict[str, Any],
                            roster: Optional[Iterable[str]] = None, *,
                            check_agents: bool = True) -> dict[str, Any]:
@@ -734,6 +825,11 @@ def spec_problems(
     product = namespace == PRODUCT_NAMESPACE
     normalized, shape = normalise_workflow_spec(
         spec, project_roster(connection, project_id), require_gate_question=product)
+    # A step reading output from one that has not run yet. Here, in the one collector, so Check
+    # shows it and Save refuses it with the same words.
+    said = {(p["step_id"], p["field"]) for p in shape}
+    shape = shape + [p for p in binding_order_problems(normalized)
+                     if (p["step_id"], p["field"]) not in said]
     steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict) and s.get("id")]
     flagged = {p["step_id"] for p in shape if p["step_id"]}
     binding: list[dict[str, Any]] = []
