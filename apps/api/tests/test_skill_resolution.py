@@ -188,7 +188,7 @@ def test_agent_loop_injects_system_skill_through_runtime_without_namespace_colli
     )
     invocations: list[dict] = []
 
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: adapter)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: adapter)
     monkeypatch.setattr(
         agent_loop,
         "list_mcp_servers",
@@ -272,7 +272,7 @@ def test_agent_loop_defers_high_risk_skill_to_blocking_decision(engine, monkeypa
             "environment": "staging",
         },
     )
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: adapter)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: adapter)
     monkeypatch.setattr(
         agent_loop,
         "list_mcp_servers",
@@ -320,7 +320,7 @@ def test_resume_agent_run_requires_approved_decision(engine, monkeypatch):
             "environment": "staging",
         },
     )
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: adapter)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: adapter)
     monkeypatch.setattr(
         agent_loop,
         "list_mcp_servers",

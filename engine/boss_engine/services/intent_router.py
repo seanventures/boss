@@ -15,7 +15,7 @@ from .agent_process import AgentProcessService
 from .budget import BudgetGovernor
 from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
-from .claude_cli_adapter import make_chat_adapter
+from . import model_routing
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
 from .turn_budget import TurnBudget
@@ -1413,30 +1413,35 @@ class IntentRouter:
         self.receipts = ReceiptService()
         self._answer_agent_obj = None  # lazy: read-only tool-grounded answerer
         self._chat_engine_applied = None  # which model that answerer was built for
+        self._answer_adapter = None  # the project's routed model (model_routing)
 
     def _use_project_chat_model(self, connection, project_id: str) -> None:
         """Point the answer agent at the model THIS PROJECT connected.
 
         Called once per turn, before the agent is built. The chat asked for OPENAI_API_KEY on
         an install whose operator had connected two subscriptions, because nothing had ever
-        chosen between them — see `setup_service.chat_engine_for`, which is where that choice
+        chosen between them — see `model_routing.choose`, which is where that choice
         now lives.
 
         The agent is cached, so the resolved engine is cached with it: a change in the console
         rebuilds it on the next turn rather than at the next restart.
         """
-        try:
-            from .setup_service import chat_engine_for
+        from . import model_routing
 
-            engine = chat_engine_for(connection, self.settings, project_id)
+        try:
+            choice = model_routing.choose(
+                connection, model_routing.routed_settings(connection, self.settings, project_id),
+                project_id)
+            key = (project_id, choice.engine, choice.source_id)
+            if key != self._chat_engine_applied or self._answer_adapter is None:
+                # The adapter is built here, while the turn's connection is open, on the chosen
+                # source's own stored credential (model_routing.project_chat_adapter).
+                self._answer_adapter = model_routing.project_chat_adapter(
+                    connection, self.settings, project_id)
+                self._answer_agent_obj = None
+            self._chat_engine_applied = key
         except Exception:  # noqa: BLE001 — a settings lookup must not end a conversation
             return
-        if engine and engine != (getattr(self.settings, "chat_llm_engine", "") or ""):
-            self.settings = self.settings.model_copy(update={"chat_llm_engine": engine})
-            self._answer_agent_obj = None
-        elif engine != self._chat_engine_applied:
-            self._answer_agent_obj = None
-        self._chat_engine_applied = engine
 
     def _answer_agent(self):
         """A read-only, tool-grounded agent used by the DISCUSS/answer path so the
@@ -1454,7 +1459,7 @@ class IntentRouter:
             from ..db import get_engine
             from ..tools import build_discuss_read_registry
 
-            from .claude_cli_adapter import make_agent_chat_adapter
+            from . import model_routing
 
             ctx = EngineContext(settings=self.settings, engine=get_engine(self.settings))
             # THE BRAIN IS CHOSEN HERE, NOT INHERITED.
@@ -1466,7 +1471,8 @@ class IntentRouter:
             edition = str(getattr(self.settings, "boss_edition", "community") or "community")
             self._answer_agent_obj = EngineAgent(
                 ctx, registry=build_discuss_read_registry(edition=edition),
-                adapter=make_agent_chat_adapter(self.settings),
+                adapter=(self._answer_adapter
+                         or model_routing.project_chat_adapter(None, self.settings, None)),
             )
         return self._answer_agent_obj
 
@@ -3566,7 +3572,9 @@ class IntentRouter:
             ),
         }
         try:
-            response, usage = make_chat_adapter(self.settings).create_chat_completion(
+            response, usage = model_routing.project_chat_adapter(
+                connection, self.settings, project_id,
+            ).create_chat_completion(
                 [prompt, *messages], tools=_TOOL_SCHEMAS
             )
             calls = response.get("tool_calls") or []

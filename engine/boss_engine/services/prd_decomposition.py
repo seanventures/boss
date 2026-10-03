@@ -22,7 +22,6 @@ from sqlalchemy import text
 
 from ..config import Settings
 from ..db import begin
-from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import load_code_task_run, start_code_task
 from .core import emit_event, make_id
 
@@ -103,9 +102,16 @@ def _extract_json_array(textv: str) -> list:
 
 
 def decompose_prd_into_tasks(settings: Settings, prd_or_directive: str, *,
-                             max_tasks: int = 6) -> list[dict]:
+                             max_tasks: int = 6, connection=None,
+                             project_id: Optional[str] = None, adapter=None) -> list[dict]:
     """Read a PRD/directive and return an ORDERED list of scoped, composable coding tasks:
-    [{title, instructions, acceptance_criteria: [...], order: int}]. Returns [] on failure."""
+    [{title, instructions, acceptance_criteria: [...], order: int}]. Returns [] on failure.
+
+    The model is the PROJECT's (model_routing): `make_chat_adapter(settings)` read the
+    deployment's `llm_engine`, so on a subscription-only install every decomposition failed with
+    "OPENAI_API_KEY is not configured" and the build started with no tasks."""
+    from . import model_routing
+
     messages = [
         {"role": "system", "content": _DECOMP_SYSTEM},
         {"role": "user", "content":
@@ -113,7 +119,8 @@ def decompose_prd_into_tasks(settings: Settings, prd_or_directive: str, *,
             + (prd_or_directive or "")[:9000]},
     ]
     try:
-        resp, _usage = make_chat_adapter(settings).create_chat_completion(messages)
+        model = adapter or model_routing.project_chat_adapter(connection, settings, project_id)
+        resp, _usage = model.create_chat_completion(messages)
         raw = resp.get("content") or ""
     except Exception as exc:  # noqa: BLE001 — decomposition failure degrades to empty, not a crash
         logger.warning("PRD decomposition model call failed: %s", exc)
@@ -164,7 +171,12 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
         except Exception as exc:  # noqa: BLE001 — seed failure degrades to an agent-authored scaffold
             logger.warning("deterministic scaffold seed failed, falling back to agent: %s", exc)
             root, seeded, decomp_input = None, 0, prd_or_directive
-    tasks = decompose_prd_into_tasks(settings, decomp_input, max_tasks=max_tasks)
+    from . import model_routing
+
+    # The project's model, resolved in a short transaction; the call runs outside it.
+    with begin(engine) as connection:
+        model = model_routing.project_chat_adapter(connection, settings, project_id)
+    tasks = decompose_prd_into_tasks(settings, decomp_input, max_tasks=max_tasks, adapter=model)
     if not tasks:
         return {"tasks": [], "started": False, "reason": "decomposition produced no tasks"}
     first, rest = tasks[0], tasks[1:]

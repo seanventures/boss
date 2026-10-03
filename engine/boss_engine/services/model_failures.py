@@ -78,7 +78,27 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "action": "Connect your own subscription in Setup → Model.",
             "href": SETUP_HREF, "retry": False,
         }
-    if "no_eligible_source" in lowered or "no eligible model" in lowered:
+    # A SKILL THAT NEEDS ONE PROVIDER'S API (image generation, speech-to-text) and the project
+    # has not connected it. The exception carries its own fix (model_routing.ProviderRequirement).
+    from .model_routing import PROVIDER_REQUIREMENTS, ProviderRequirementMissing
+
+    if ProviderRequirementMissing.MARKER in lowered:
+        named = next((r for r in PROVIDER_REQUIREMENTS.values()
+                      if r.label.lower() in lowered), None)
+        return {
+            "kind": "provider_requirement",
+            "headline": (f"This step needs {named.label[0].lower() + named.label[1:]}, and this "
+                         "project has not connected one." if named else
+                         "This step needs a provider capability this project has not "
+                         "connected."),
+            "action": named.fix if named else "Connect the provider it names in Repo and model.",
+            "href": SETUP_HREF, "retry": False,
+        }
+    if "no_eligible_source" in lowered or "no eligible model" in lowered \
+            or "openai_api_key is not configured" in lowered:
+        # "OPENAI_API_KEY is not configured" reaches here only when the project's model routing
+        # (model_routing.project_chat_adapter) found nothing connected and fell through to the
+        # OpenAI adapter — i.e. no model at all, not "you need OpenAI".
         return {
             "kind": "no_model",
             "headline": "No connected model can run this work.",
@@ -108,6 +128,37 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         "href": None, "retry": True,
         "detail": text[:300],
     }
+
+
+#: Failures that are FACTS about the project's setup — nothing connected that can answer, a
+#: provider capability not connected, the budget refusing a model turn. A retry re-reads the
+#: same setup and reaches the same sentence, so a step failing on one is settled at once.
+#: Deliberately narrow: "no eligible source" can be a window that resets, so it still retries.
+_SETTLED_MARKERS = ("openai_api_key is not configured",)
+
+
+def settled_failure(error: object) -> Optional[str]:
+    """The explained sentence for a failure retrying cannot fix, or None.
+
+    Called where EVERY workflow step failure is recorded (`workflows.fail_step`), so the
+    classification does not depend on which kind of step raised it: an agent step, a skill, a
+    typed decision ("typed decision failed: OPENAI_API_KEY is not configured.") or the runner's
+    catch-all. It was done only for agent steps, and every other path retried on a schedule and
+    deadlettered on the raw sentence.
+    """
+    text = str(error or "")
+    lowered = text.lower()
+    from .model_routing import ModelSpendRefused
+
+    said = explain(text)
+    settled = (said["kind"] == "provider_requirement"
+               or (said["kind"] == "no_model" and any(m in lowered for m in _SETTLED_MARKERS))
+               or ModelSpendRefused.MARKER in lowered)
+    if not settled:
+        return None
+    if text.startswith(said["headline"]):
+        return text            # already explained once; do not wrap it twice
+    return f"{said['headline']} {said['action']} ({text})"
 
 
 def mark_login(connection, project_id: str, source_id: Optional[str], *, rejected: bool) -> None:

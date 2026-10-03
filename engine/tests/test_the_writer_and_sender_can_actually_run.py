@@ -44,11 +44,9 @@ def _ctx(monkeypatch, model):
     local imports resolve. (An earlier version also tried to replace the module's __dict__,
     which is readonly and had nothing to do with anything.)
     """
-    import boss_engine.services.claude_cli_adapter as cli
-    import boss_engine.services.setup_service as setup
+    import boss_engine.services.model_routing as routing
 
-    monkeypatch.setattr(cli, "make_agent_chat_adapter", lambda _s: model)
-    monkeypatch.setattr(setup, "chat_engine_for", lambda *a, **k: "")
+    monkeypatch.setattr(routing, "project_chat_adapter", lambda *a, **k: model)
 
     class Ctx:
         settings = object()

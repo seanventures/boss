@@ -69,7 +69,9 @@ def test_running_unbounded_loop_offers_shell_only_in_enabled_editions(
         "transcript": [], "usage": {}, "finalize_ctx": {}, "step": 0,
     }
     monkeypatch.setattr(agent_loop, "load_agent_run", lambda *_args: run)
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda *_args: Recorder())
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: Recorder())
+    # No database here: the turn's budget reservation is model_routing.governed's own test.
+    monkeypatch.setattr(agent_loop, "governed", lambda adapter, *_a, **_k: adapter)
     monkeypatch.setattr(agent_loop, "MCPClient", lambda *_args: object())
     monkeypatch.setattr(agent_loop, "list_mcp_servers", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(

@@ -50,10 +50,10 @@ def pool(monkeypatch):
 
 
 def _adapter(monkeypatch, reply):
-    from boss_engine.services import claude_cli_adapter
+    from boss_engine.services import claude_cli_adapter, model_routing  # noqa: F401
 
     adapter = _Answers(reply)
-    monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter", lambda _s: adapter)
+    monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: adapter)
     return adapter
 
 
