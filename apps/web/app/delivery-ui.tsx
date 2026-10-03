@@ -27,6 +27,7 @@ import {
 } from "./delivery-manage";
 import { HardwareManagerLink } from "./hardware-manager-ui";
 import { DeployWizard, RecentDeployments } from "./deploy-ui";
+import { StackDeployPanel } from "./stack-deploy-ui";
 
 import { callAction } from "../lib/call-action";
 type Stage = {
@@ -544,9 +545,12 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged, communityEditio
 }
 
 export function DeliveryPipeline({ initial, secrets, deployments,
-                                   communityEdition = true }: {
+                                   communityEdition = true, actor }: {
   initial?: Pipeline | null; secrets?: SecretsView | null; deployments?: any;
   communityEdition?: boolean;
+  /** The signed-in actor. Without one the stack-deploy panel is not offered: every write it
+   *  makes is attributed, and a defaulted actor 403s on an authed install. */
+  actor?: string;
 }) {
   // The panel owns its data.
   //
@@ -585,8 +589,10 @@ export function DeliveryPipeline({ initial, secrets, deployments,
           <div className="ct-block-title">Nothing deploys yet</div>
           <p className="detail" style={{ marginTop: 0 }}>
             {communityEdition
-              ? "Register a destination for an app. Community host deployment is paused until "
-                + "approval and recovery steps are ready."
+              ? "Start with a VM: add it, authorise BOSS's key on it, and verify. Then add a "
+                + "stack target and deploy a repository that has a boss.deploy.yaml — every "
+                + "deployment waits for your approval. The older per-app container deploy "
+                + "stays paused in Community."
               : "Start with a machine: register a host, let BOSS onboard it, then point an "
                 + "app at it. Merged PRs deploy nowhere until an app has a target."}
           </p>
@@ -604,6 +610,7 @@ export function DeliveryPipeline({ initial, secrets, deployments,
           <HardwareManagerLink />
         </div>
         <FleetPanel projectId={data.project_id} targets={(data.targets || []) as any} />
+        {actor ? <StackDeployPanel projectId={data.project_id} actor={actor} /> : null}
 
         <details className="dm-advanced">
           <summary className="detail">Advanced — credentials, per-app onboarding</summary>
@@ -630,6 +637,8 @@ export function DeliveryPipeline({ initial, secrets, deployments,
         <HardwareManagerLink />
       </div>
       <FleetPanel projectId={data.project_id} targets={(data.targets || []) as any} />
+      {/* A repository with a boss.deploy.yaml, onto one of those VMs, through an approval. */}
+      {actor ? <StackDeployPanel projectId={data.project_id} actor={actor} /> : null}
 
       {/* ---- targets: one card per app, the console's card ---- */}
       <section className="ct-block">
@@ -672,8 +681,9 @@ export function DeliveryPipeline({ initial, secrets, deployments,
           {/* Still the right tool for the FIRST deploy of an app that merged before it had a
               target — BugBox is exactly that. Not the everyday path. */}
           {communityEdition
-            ? <div className="detail">Community host deployment is paused until its
-                approval and recovery steps are ready.</div>
+            ? <div className="detail">Community host deployment is paused for the per-app
+                container path; deploy a repository with a boss.deploy.yaml from “Deploy a
+                repository” above, which runs through an approved ChangeSet.</div>
             : <div><DeployWizard targets={(data.targets || []) as any} /></div>}
           <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
           <SecretsPanel initial={secrets} />

@@ -51,23 +51,25 @@ _COMMUNITY_HOST_WRITE_DENIAL = (
 )
 
 
+def outward_ssh_allowed(settings: Settings) -> bool:
+    """May BOSS open an SSH session at all — to VERIFY a host, or to apply a GOVERNED change?
+
+    Two different questions used to share one switch. BOSS_SSH_HOST_DEPLOY_ALLOWED gates the
+    legacy direct writes (key install, docker provisioning, retire, the per-app container
+    deploy) and defaults off, so a fresh Community install could not even run `echo` on the VM
+    it had just been handed: the Infra panel hid "Add a VM" behind a note telling the operator
+    to edit the BOSS host's environment. A read-only probe and a ChangeSet-approved stack
+    deployment carry their own governance, so they need only this, which defaults on.
+    """
+    return (bool(getattr(settings, "ssh_outward_allowed", True))
+            or bool(getattr(settings, "ssh_host_deploy_allowed", False)))
+
+
 def direct_host_writes_allowed(settings: Settings) -> bool:
     """Unknown editions and a disabled outward-SSH switch fail closed."""
     edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
     return (edition in _DIRECT_HOST_WRITE_EDITIONS
             and bool(getattr(settings, "ssh_host_deploy_allowed", False)))
-
-
-def governed_stack_deploys_allowed(settings: Settings) -> bool:
-    """Every edition, Community included, may deploy a stack through its governed path.
-
-    Direct host writes (installing a key, provisioning Docker, retiring a host) stay behind
-    `direct_host_writes_allowed`: they write to the machine outside any ChangeSet. A stack
-    deployment does not — it is applied inside an approved ChangeSet with a reservation and a
-    receipt (services/stack_deploy.py) — so only the outward-SSH switch applies to it.
-    Registering a host, minting its key and verifying it (a read-only ssh echo) need neither.
-    """
-    return bool(getattr(settings, "ssh_host_deploy_allowed", False))
 
 
 def require_direct_host_write_policy(settings: Settings) -> None:
@@ -693,14 +695,15 @@ def _classify(problems: list[str]) -> list[dict[str, str]]:
                            "row. Do NOT press Generate key again: that mints a new key "
                            "and invalidates the command you already have."),
             })
-        elif "ssh_host_deploy_allowed" in low or "outward ssh" in low:
+        elif "ssh_outward_allowed" in low or "outward ssh" in low:
             findings.append({
                 "kind": "outward_ssh_disabled",
                 "detail": text,
                 "remedy": ("BOSS is configured not to reach out over SSH at all, so no host "
-                           "can be verified or deployed to. Set BOSS_SSH_HOST_DEPLOY_ALLOWED=true "
-                           "in the environment (on a managed install, in the config store) and "
-                           "restart. This is a global switch, not a problem with this host."),
+                           "can be verified or deployed to. BOSS_SSH_OUTWARD_ALLOWED=false was "
+                           "set on this install; remove it (on a managed install, from the "
+                           "config store) and restart. This is a global switch, not a problem "
+                           "with this host."),
             })
         elif "bound but unusable" in low or "does not exist" in low:
             # The host row still points at a secret the store cannot produce. Naming the

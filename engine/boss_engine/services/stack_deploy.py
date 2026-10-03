@@ -358,9 +358,10 @@ def explain_failure(step: str, returncode: int, output: str, *,
     if returncode == 127 and "ssh` client" in lowered:
         return {"headline": "BOSS cannot run ssh where it is installed.",
                 "action": "Install openssh-client in the API image and restart BOSS."}
-    if "boss_ssh_host_deploy_allowed" in lowered or "configured not to reach out" in lowered:
+    if "boss_ssh_outward_allowed" in lowered or "configured not to reach out" in lowered:
         return {"headline": "BOSS is configured not to reach out over SSH.",
-                "action": "Set BOSS_SSH_HOST_DEPLOY_ALLOWED=true for the API and restart it."}
+                "action": "Remove BOSS_SSH_OUTWARD_ALLOWED=false from the API's environment "
+                          "and restart it."}
     if "permission denied (publickey" in lowered or "host key verification failed" in lowered:
         return {"headline": f"{host} refused BOSS's SSH key.",
                 "action": "In Infra, open the host, add the public key it shows to "

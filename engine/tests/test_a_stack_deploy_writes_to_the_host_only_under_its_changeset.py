@@ -168,7 +168,8 @@ def test_the_adapter_refuses_a_stack_write_without_a_changeset_before_running_ss
     ran = []
     monkeypatch.setattr(ssh_host_adapter.subprocess, "run",
                         lambda *a, **k: ran.append(a) or subprocess.CompletedProcess([], 0))
-    adapter = ssh_host_adapter.SSHHostAdapter(SimpleNamespace(ssh_host_deploy_allowed=True))
+    # A default Community install: no BOSS_SSH_HOST_DEPLOY_ALLOWED, outward SSH on by default.
+    adapter = ssh_host_adapter.SSHHostAdapter(SimpleNamespace(ssh_host_deploy_allowed=False))
     with pytest.raises(PermissionError, match="ChangeSet"):
         adapter.stack_exec(host="h", user="u", port=22, key_material=KEY, command="touch x",
                            write=True, changeset_id=None)
@@ -178,8 +179,9 @@ def test_the_adapter_refuses_a_stack_write_without_a_changeset_before_running_ss
 
 
 def test_the_adapter_honours_the_outward_ssh_switch(monkeypatch):
-    adapter = ssh_host_adapter.SSHHostAdapter(SimpleNamespace(ssh_host_deploy_allowed=False))
-    with pytest.raises(Exception, match="BOSS_SSH_HOST_DEPLOY_ALLOWED"):
+    adapter = ssh_host_adapter.SSHHostAdapter(
+        SimpleNamespace(ssh_outward_allowed=False, ssh_host_deploy_allowed=False))
+    with pytest.raises(Exception, match="BOSS_SSH_OUTWARD_ALLOWED"):
         adapter.stack_exec(host="h", user="u", port=22, key_material=KEY, command="echo ok")
 
 

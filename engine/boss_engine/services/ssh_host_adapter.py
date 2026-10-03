@@ -341,9 +341,13 @@ class SSHHostAdapter:
         stdin_text: str | None = None,
         stdin_path: str | None = None,
     ) -> subprocess.CompletedProcess:
-        if not self.settings.ssh_host_deploy_allowed:
+        # The same single switch the read-only Verify and the plan's preflight use: a stack
+        # write carries its own governance (an approved ChangeSet), so it needs outward SSH
+        # only, never the legacy BOSS_SSH_HOST_DEPLOY_ALLOWED direct-write switch.
+        from .deployment_fleet import outward_ssh_allowed
+        if not outward_ssh_allowed(self.settings):
             raise IntegrationConfigurationError(
-                "BOSS_SSH_HOST_DEPLOY_ALLOWED is false — BOSS is configured not to reach out "
+                "BOSS_SSH_OUTWARD_ALLOWED is false — BOSS is configured not to reach out "
                 "over SSH."
             )
         if write and not (changeset_id or "").strip():

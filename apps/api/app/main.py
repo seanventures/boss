@@ -7768,6 +7768,14 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     payload = {k: (v.strip() if isinstance(v, str) else v) for k, v in payload.items()}
     actor = _deployment_target_write_actor(payload)
 
+    # `host_id` makes "what deploys" and "where" ONE write. They were two calls (create, then
+    # attach): when the second failed the target existed with a typed address and no host, a
+    # resubmit hit 409, and the orphan still offered Deploy. With a host, the address is
+    # derived from the host row inside this transaction and never typed at all.
+    host_id = str(payload.get("host_id") or "").strip() or None
+    if host_id:
+        payload = {**payload, "target_kind": payload.get("target_kind") or "ssh",
+                   "target_ref": payload.get("target_ref") or "(from host)"}
     required = ("project_id", "app_name", "repo", "environment", "target_kind", "target_ref")
     for field in required:
         if not payload.get(field):
@@ -7799,6 +7807,12 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     if payload.get("publishable_ports"):
         resources.append({"kind": "publishable_ports",
                           "name": str(payload["publishable_ports"])})
+    # A stack target's three facts, stored where stack_deploy reads them.
+    from boss_engine.services.stack_targets import stack_resource_updates
+    try:
+        resources = merge_target_resources(resources, stack_resource_updates(payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     # Accept either "boss-sandbox" or "example-user/boss-sandbox". An operator copying a repo from
     # GitHub pastes the second form; rejecting it (or silently mis-cloning) is a trap.
@@ -7830,18 +7844,32 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
                    "permanently to start from scratch."
                    if clash["status"] != "active" else "")))
 
+        target_ref = payload["target_ref"]
+        if host_id:
+            from boss_engine.services.deployment_fleet import get_host, target_ref_for
+
+            host = get_host(connection, host_id)
+            if not host or host.get("project_id") != payload["project_id"]:
+                raise HTTPException(status_code=422, detail=(
+                    f"no deployment host {host_id} in this project; add the VM under Hosts "
+                    "first"))
+            if host.get("status") == "retired":
+                raise HTTPException(status_code=422, detail=(
+                    f"host {host['name']} is retired; nothing may be scheduled on it"))
+            target_ref = target_ref_for(host)
+
         connection.execute(text("""
             INSERT INTO deployment_targets
-              (id, project_id, app_name, repo, environment, target_kind, target_ref,
+              (id, project_id, app_name, repo, environment, target_kind, target_ref, host_id,
                domains, required_resources, secret_refs, health_checks, status, created_by,
                created_at, updated_at)
-            VALUES (:id,:p,:app,:repo,:env,:kind,:ref,
+            VALUES (:id,:p,:app,:repo,:env,:kind,:ref,:host,
                     CAST(:dom AS JSONB), CAST(:req AS JSONB), CAST(:sec AS JSONB),
                     CAST(:hc AS JSONB), :status, :by, now(), now())
         """), {
             "id": target_id, "p": payload["project_id"], "app": payload["app_name"],
             "repo": payload["repo"], "env": payload["environment"],
-            "kind": payload["target_kind"], "ref": payload["target_ref"],
+            "kind": payload["target_kind"], "ref": target_ref, "host": host_id,
             "dom": json.dumps(payload.get("domains") or []),
             "req": json.dumps(resources),
             "sec": json.dumps(payload.get("secret_refs") or []),
@@ -7881,11 +7909,17 @@ def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetU
     # silently deleting `app_entry`, `repo_owner` and anything else the target had declared.
     # Changing a port therefore erased which app to deploy — and the next deployment failed
     # with "cannot tell which app to deploy", naming a field nobody had touched.
+    from boss_engine.services.stack_targets import stack_resource_updates
+    try:
+        stack_updates = stack_resource_updates(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     resource_updates = {
         "app_port": payload.get("app_port"),
         "app_entry": payload.get("app_entry"),
         "repo_owner": payload.get("repo_owner"),
         "publishable_ports": payload.get("publishable_ports"),
+        **stack_updates,
     }
     explicit = payload.get("required_resources")
     updates_resources = explicit is not None or any(
@@ -7898,7 +7932,8 @@ def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetU
         raise HTTPException(status_code=422, detail=(
             "nothing to update. Understood fields: target_ref, status, environment, app_name, "
             "domains, health_checks, secret_refs, required_resources, app_port, app_entry, "
-            f"repo_owner, publishable_ports. Received: {sorted(payload)}"))
+            "repo_owner, publishable_ports, deploy_kind, manifest_path, public_url. "
+            f"Received: {sorted(payload)}"))
 
     with begin(engine) as connection:
         target = connection.execute(
@@ -8703,7 +8738,7 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.deployment_fleet import (
-        direct_host_writes_allowed, governed_stack_deploys_allowed, list_hosts,
+        direct_host_writes_allowed, list_hosts, outward_ssh_allowed,
     )
 
     with begin(engine) as connection:
@@ -8712,20 +8747,24 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
 
     # PRECONDITIONS, STATED UP FRONT.
     #
-    # `BOSS_SSH_HOST_DEPLOY_ALLOWED` is a global fail-closed switch, and it was only
-    # discovered at the Verify step: an operator could register a host, mint a key, paste
-    # an install command onto a real machine, and only then be told BOSS was never going
-    # to connect to anything. A precondition that can invalidate the whole wizard belongs
-    # at the top of it, not four steps in.
-    outward_ssh = bool(getattr(settings, "ssh_host_deploy_allowed", False))
+    # Whether BOSS may open an SSH session at all was only discovered at the Verify step once:
+    # an operator could register a host, mint a key, paste an install command onto a real
+    # machine, and only then be told BOSS was never going to connect to anything. A
+    # precondition that can invalidate the whole wizard belongs at the top of it.
+    #
+    # Two switches, two answers. `outward_ssh_allowed` (read-only verify and the governed
+    # stack deployment) is on by default, so a fresh Community install can add, verify and
+    # deploy to a VM. `host_writes_allowed` (legacy direct key install, provisioning, retire)
+    # stays behind an enterprise edition and BOSS_SSH_HOST_DEPLOY_ALLOWED.
+    outward_ssh = outward_ssh_allowed(settings)
     host_writes_allowed = direct_host_writes_allowed(settings)
     return {
         "hosts": hosts,
         "preconditions": {
             "outward_ssh_allowed": outward_ssh,
-            # Register, mint a key and verify: always available. A stack deployment through
-            # its governed ChangeSet: available in every edition once outward SSH is allowed.
-            "stack_deploy_allowed": governed_stack_deploys_allowed(settings),
+            # Register, mint a key and verify, and a stack deployment through its governed
+            # ChangeSet: every edition, whenever outward SSH is allowed (on by default).
+            "stack_deploy_allowed": outward_ssh,
             "host_writes_allowed": host_writes_allowed,
             "host_write_blocker": None if host_writes_allowed else {
                 "message": (
@@ -8738,10 +8777,10 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
                 ),
             },
             "blocker": None if outward_ssh else {
-                "setting": "BOSS_SSH_HOST_DEPLOY_ALLOWED",
+                "setting": "BOSS_SSH_OUTWARD_ALLOWED",
                 "message": ("BOSS is configured not to reach out over SSH, so no host can be "
-                            "verified, provisioned or deployed to. Set "
-                            "BOSS_SSH_HOST_DEPLOY_ALLOWED=true and restart."),
+                            "verified or deployed to. Remove BOSS_SSH_OUTWARD_ALLOWED=false "
+                            "and restart."),
             },
         },
     }
