@@ -32,6 +32,8 @@ from typing import Any, Optional
 CGROUP_V2 = Path("/sys/fs/cgroup")
 CGROUP_V1_CPU = Path("/sys/fs/cgroup/cpu")
 CGROUP_V1_MEM = Path("/sys/fs/cgroup/memory")
+#: /proc, as a constant so a test can stand a recorded machine in its place.
+PROC = Path("/proc")
 
 
 def _read_text(path: Path) -> Optional[str]:
@@ -76,7 +78,7 @@ def cpu_snapshot() -> dict[str, Any]:
     """
     out: dict[str, Any] = {"cores": os.cpu_count()}
 
-    raw = _read_text(Path("/proc/loadavg"))
+    raw = _read_text(PROC / "loadavg")
     if raw:
         parts = raw.split()
         try:
@@ -136,8 +138,31 @@ def measures_the_real_machine() -> bool:
     an ordinary Linux kernel and are NOT detected -- this returns True for them, which keeps
     today's behaviour rather than inventing a claim about a setup we cannot identify.
     """
-    version = _read_text(Path("/proc/version")) or ""
+    version = _read_text(PROC / "version") or ""
     return "linuxkit" not in version.lower()
+
+
+def _read_psi(path: Path) -> dict[str, float]:
+    """Parse a PSI file: `some avg10=1.23 avg60=... total=...` / `full avg10=...`.
+
+    Returns {"some_avg10": ..., "full_avg10": ...} for whichever lines exist.
+    """
+    out: dict[str, float] = {}
+    raw = _read_text(path)
+    if not raw:
+        return out
+    for line in raw.splitlines():
+        parts = line.split()
+        if not parts or parts[0] not in ("some", "full"):
+            continue
+        for field in parts[1:]:
+            key, _, value = field.partition("=")
+            if key == "avg10":
+                try:
+                    out[f"{parts[0]}_avg10"] = float(value)
+                except ValueError:
+                    pass
+    return out
 
 
 def memory_snapshot() -> dict[str, Any]:
@@ -145,24 +170,49 @@ def memory_snapshot() -> dict[str, Any]:
 
     `exited -9` is SIGKILL, and the OOM killer is the usual suspect. `memory.events` records
     whether it actually fired. A zero here would have ended I20's hour of guessing in seconds.
+
+    WHAT COUNTS AS "USED". Only memory the kernel cannot take back. On boss-1 (16 GB, Linux)
+    the console said "out of memory" while `free -m` read 13,780 MB available: 13 GB of it was
+    page cache, which the kernel hands back the moment anything asks. So:
+
+      * the host figure is MemAvailable, never MemFree;
+      * the cgroup figure is anon + unevictable from memory.stat, never memory.current, which
+        includes the container's file cache and approaches any limit on a perfectly idle box;
+      * `oom_kills` is CUMULATIVE since the cgroup was created — a fact about history, kept for
+        "why did that process die?", and never on its own a statement about now. Current
+        pressure is PSI (`psi_*`), and new kills are counted by `new_oom_kills`.
     """
     out: dict[str, Any] = {}
     current = _read_int(CGROUP_V2 / "memory.current")
     limit_raw = _read_text(CGROUP_V2 / "memory.max")
-    if current is None:  # cgroup v1 fallback
+    stat = _read_keyed(CGROUP_V2 / "memory.stat")
+    unreclaimable: Optional[int] = None
+    if current is not None:
+        if stat and "anon" in stat:
+            unreclaimable = stat.get("anon", 0) + stat.get("unevictable", 0)
+    else:  # cgroup v1 fallback
         current = _read_int(CGROUP_V1_MEM / "memory.usage_in_bytes")
         limit_raw = _read_text(CGROUP_V1_MEM / "memory.limit_in_bytes")
+        stat = _read_keyed(CGROUP_V1_MEM / "memory.stat")
+        if stat and ("total_rss" in stat or "rss" in stat):
+            unreclaimable = (stat.get("total_rss", stat.get("rss", 0))
+                             + stat.get("total_unevictable", stat.get("unevictable", 0)))
 
     if current is not None:
         out["used_mb"] = round(current / 1_048_576, 1)
+    if unreclaimable is not None:
+        out["unreclaimable_mb"] = round(unreclaimable / 1_048_576, 1)
     if limit_raw and limit_raw != "max":
         try:
             limit = int(limit_raw)
             # cgroup v1 reports a sentinel near 2^63 for "no limit"; treat that as uncapped.
             if limit < (1 << 62):
                 out["limit_mb"] = round(limit / 1_048_576, 1)
-                if current is not None and limit:
-                    out["used_pct"] = round(100 * current / limit, 1)
+                # Against the ceiling, only what cannot be reclaimed counts: cache is evicted
+                # before the OOM killer is ever consulted.
+                held = unreclaimable if unreclaimable is not None else current
+                if held is not None and limit:
+                    out["used_pct"] = round(100 * held / limit, 1)
         except ValueError:
             pass
 
@@ -177,7 +227,15 @@ def memory_snapshot() -> dict[str, Any]:
         if failcnt is not None:
             out["allocation_failures"] = failcnt
 
-    host = _read_keyed(Path("/proc/meminfo"))
+    # Pressure stall information: the share of the last 10 s that tasks spent waiting on
+    # memory. The host's own file first (it is not namespaced, so it IS the machine on a Linux
+    # server), then the container's.
+    psi = _read_psi(PROC / "pressure" / "memory") or _read_psi(CGROUP_V2 / "memory.pressure")
+    if psi:
+        out["psi_some_avg10"] = psi.get("some_avg10")
+        out["psi_full_avg10"] = psi.get("full_avg10")
+
+    host = _read_keyed(PROC / "meminfo")
     if host:
         out["host_total_mb"] = round(host.get("MemTotal", 0) / 1024, 1) or None
         out["host_available_mb"] = round(host.get("MemAvailable", 0) / 1024, 1) or None
@@ -188,6 +246,25 @@ def memory_snapshot() -> dict[str, Any]:
     # describe a VM, so the reading has to say which it is or it will be read as the machine.
     out["host_is_the_machine"] = measures_the_real_machine()
     return out
+
+
+#: Last oom_kill count seen per cgroup counter, so a verdict can ask "did the OOM killer fire
+#: SINCE I LAST LOOKED", which a cumulative counter cannot answer on its own.
+_OOM_SEEN: dict[str, int] = {}
+
+
+def new_oom_kills(count: Optional[int], *, key: str = "self",
+                  seen: Optional[dict[str, int]] = None) -> int:
+    """OOM kills since the previous call. The first reading is a baseline and returns 0:
+    a kill from last week must never become an alarm today."""
+    store = _OOM_SEEN if seen is None else seen
+    if count is None:
+        return 0
+    previous = store.get(key)
+    store[key] = int(count)
+    if previous is None or count < previous:  # first look, or the cgroup was recreated
+        return 0
+    return int(count) - previous
 
 
 def disk_snapshot(preview_root: Optional[str] = None) -> dict[str, Any]:
@@ -653,42 +730,122 @@ def host_is_degraded(summary: dict[str, Any], *, elapsed_seconds: float = 0.0) -
 _MOSTLY_THE_MACHINE = 0.4
 
 
+def _cause(host: dict[str, Any], gauges: dict[str, Any]) -> str:
+    """WHICH measurement raised the alarm. The headline may only name what was measured.
+
+    The first version of this said "This computer is out of memory" for EVERY severe verdict,
+    and most severe verdicts are not memory at all: stalls of BOSS's own heartbeat, a full disk,
+    CPU load. On boss-1, a 16 GB Linux server with 13.7 GB available and load 0.4, it told the
+    operator to restart a healthy machine.
+    """
+    bands = gauges.get("bands") or {}
+
+    def bad(name: str) -> bool:
+        return (bands.get(name) or {}).get("band", "ok") != "ok"
+
+    if gauges.get("memory_exhausted") or bad("memory") or bad("swap"):
+        return "memory"
+    if bad("disk"):
+        return "disk"
+    if bad("cpu"):
+        return "cpu"
+    if gauges.get("scope") == "machine" and "memory" in bands:
+        # A Linux server whose own gauges are all green, measured directly: the machine had
+        # room. Whatever kept BOSS's loop from running, it was not this server running out.
+        return "boss_process"
+    return "stall"
+
+
 def operator_advice(host: dict[str, Any], *, elapsed_minutes: float = 0.0,
-                    working_minutes: float = 0.0) -> dict[str, Any]:
+                    working_minutes: float = 0.0,
+                    gauges: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """The host verdict as an instruction, not a metric.
 
     Returns {"show": bool, "severity": ..., "headline": ..., "detail": ..., "action": ...}.
     `show` is false on a healthy machine: an indicator that is always on is an indicator
     nobody reads.
+
+    `gauges` is `pressure()`'s reading. It decides two things the stall evidence cannot:
+    WHAT is short (memory, disk, cpu — or nothing on the machine at all), and WHERE BOSS runs.
+    "Restart the computer" is advice for a laptop whose Docker Desktop VM is thrashing; on a
+    Linux server (`scope == "machine"`) it is never given — restarting a server takes every
+    service on it down and clears nothing that `free -m` / `docker stats` would not show.
     """
     state = str(host.get("state") or "ok")
     if state == "ok":
         return {"show": False}
+    gauges = gauges or {}
 
     stalled_min = float(host.get("stalled_seconds") or 0) / 60
     share = float(host.get("share_of_elapsed") or 0)
     severe = state == "critical" or share >= _MOSTLY_THE_MACHINE
+    scope = gauges.get("scope")  # "machine" (Linux server), "vm" (Docker Desktop), or unknown
+    server = scope == "machine"
+    noun = "server" if server else "computer"
+    cause = _cause(host, gauges)
 
     if elapsed_minutes and working_minutes:
         detail = (f"This run took {elapsed_minutes:.0f} minutes, and about "
                   f"{working_minutes:.0f} of those were BOSS actually working. The rest is "
-                  f"time the computer spent unable to run it.")
-    else:
-        detail = (f"The computer stopped running BOSS for about {stalled_min:.0f} minutes "
+                  f"time the {noun} spent unable to run it.")
+    elif stalled_min > 0:
+        detail = (f"The {noun} stopped running BOSS for about {stalled_min:.0f} minutes "
                   f"in total, in stretches, while this was going on.")
+    else:
+        detail = ""
+    if gauges.get("reasons"):
+        detail = (detail + " Right now: " + ", ".join(gauges["reasons"]) + ".").strip()
+
+    not_boss = True
+    if cause == "memory":
+        headline = (f"This {noun} is out of memory — BOSS is waiting on it" if severe
+                    else f"This {noun} is running low on memory")
+        if server:
+            action = ("Find what is holding the memory (`free -m`, `docker stats`) and stop it, "
+                      "or give the server more RAM. A restart is not needed.")
+        elif scope == "vm":
+            action = ("Restart the computer before the next run. Closing other applications "
+                      "helps, but a restart is what reliably clears it." if severe else
+                      "Close what you are not using. If it keeps happening, restart.")
+        else:
+            action = "Close what you are not using on the machine BOSS runs on."
+    elif cause == "disk":
+        headline = f"This {noun}'s disk is nearly full"
+        action = ("Free disk space — `docker system prune` reclaims old images and build "
+                  "cache — before the next run.")
+    elif cause == "cpu":
+        headline = (f"This {noun} is overloaded — BOSS is waiting on it" if severe
+                    else f"This {noun} is busy")
+        action = ("Find what is using the CPU (`top`, `docker stats`); run fewer builds at "
+                  "once if it is BOSS's own." if server else
+                  "Close what you are not using. If it keeps happening, restart.")
+    elif cause == "boss_process":
+        # Measured headroom on the server itself, so the honest statement is about BOSS.
+        not_boss = False
+        severe = False
+        headline = "BOSS was slow to respond — this server has room to spare"
+        action = ("Nothing to do on the server. If runs are slow, the API logs "
+                  "(`docker compose logs api`) around this time show what held it up.")
+    else:  # stalls with nothing measured to explain them: a VM, or an unknown platform
+        headline = (f"This {noun} is too busy to run BOSS — BOSS is waiting on it" if severe
+                    else f"This {noun} is struggling to keep up")
+        if scope == "vm":
+            action = ("Restart the computer before the next run. Closing other applications "
+                      "helps, but a restart is what reliably clears it." if severe else
+                      "Close what you are not using. If it keeps happening, restart.")
+        else:
+            action = "Close what you are not using on the machine BOSS runs on."
 
     return {
         "show": True,
         "severity": "critical" if severe else "warning",
-        # Deliberately about the MACHINE, so nobody reads it as the product failing.
-        "headline": ("This computer is out of memory — BOSS is waiting on it"
-                     if severe else "This computer is struggling to keep up"),
+        # Deliberately about the MACHINE, so nobody reads it as the product failing — except
+        # when the machine was measured and was fine.
+        "headline": headline,
         "detail": detail,
-        "action": ("Restart the computer before the next run. Closing other applications "
-                   "helps, but a restart is what reliably clears it."
-                   if severe else
-                   "Close what you are not using. If it keeps happening, restart."),
-        "not_a_boss_fault": True,
+        "action": action,
+        "cause": cause,
+        "not_a_boss_fault": not_boss,
         "stalled_minutes": round(stalled_min, 1),
     }
 
@@ -712,6 +869,10 @@ def operator_advice(host: dict[str, Any], *, elapsed_minutes: float = 0.0,
 PRESSURE_WARN = 0.85
 PRESSURE_CRITICAL = 0.95
 
+#: PSI `full avg10`: the share of the last 10 s in which EVERY task was stalled on memory.
+#: Any sustained full stall is reclaim thrashing; 10% is unambiguous.
+PSI_FULL_CRITICAL = 10.0
+
 
 def _band(fraction: float) -> str:
     if fraction >= PRESSURE_CRITICAL:
@@ -729,13 +890,35 @@ def pressure(memory: dict[str, Any], cpu: dict[str, Any],
     """
     out: dict[str, Any] = {"bands": {}, "state": "ok", "reasons": []}
 
+    # MEMORY IS WHAT CANNOT BE HANDED BACK. Host: 1 - MemAvailable/MemTotal (page cache is
+    # available). Container: anon + unevictable against its own limit, when it has one. The
+    # worse of the two is the band. Cumulative counters never enter it; see memory_snapshot.
     total = float(memory.get("host_total_mb") or 0)
     available = float(memory.get("host_available_mb") or 0)
-    if total > 0:
-        used = max(0.0, min(1.0, 1 - available / total))
+    fractions: list[float] = []
+    if total > 0 and memory.get("host_available_mb") is not None:
+        fractions.append(max(0.0, min(1.0, 1 - available / total)))
+    if memory.get("limit_mb") and memory.get("used_pct") is not None:
+        fractions.append(max(0.0, min(1.0, float(memory["used_pct"]) / 100)))
+    exhausted = False
+    if fractions:
+        used = max(fractions)
         out["bands"]["memory"] = {"used_pct": round(used * 100, 1), "band": _band(used)}
         if _band(used) != "ok":
             out["reasons"].append(f"memory {used:.0%} used")
+        exhausted = _band(used) == "critical"
+    psi_full = memory.get("psi_full_avg10")
+    if psi_full is not None and float(psi_full) >= PSI_FULL_CRITICAL:
+        exhausted = True
+        out["bands"].setdefault("memory", {"used_pct": None, "band": "critical"})
+        out["bands"]["memory"]["band"] = "critical"
+        out["reasons"].append(f"memory stalls {float(psi_full):.0f}% of the time")
+    if memory.get("oom_kills_new"):
+        exhausted = True
+        out["bands"].setdefault("memory", {"used_pct": None, "band": "critical"})
+        out["bands"]["memory"]["band"] = "critical"
+        out["reasons"].append(f"the OOM killer fired {memory['oom_kills_new']} time(s) just now")
+    out["memory_exhausted"] = exhausted
 
     per_core = memory.get("host_swap_used_mb")
     if per_core is not None and total > 0:
@@ -786,6 +969,9 @@ def pressure(memory: dict[str, Any], cpu: dict[str, Any],
 def pressure_now(preview_root: Optional[str] = None) -> dict[str, Any]:
     """Current pressure, read fresh. Never raises: every reader degrades to absent."""
     try:
-        return pressure(memory_snapshot(), cpu_snapshot(), disk_snapshot(preview_root))
+        memory = memory_snapshot()
+        # Only kills since the last look are evidence about NOW.
+        memory["oom_kills_new"] = new_oom_kills(memory.get("oom_kills"))
+        return pressure(memory, cpu_snapshot(), disk_snapshot(preview_root))
     except Exception:  # noqa: BLE001
         return {"bands": {}, "state": "ok", "reasons": []}

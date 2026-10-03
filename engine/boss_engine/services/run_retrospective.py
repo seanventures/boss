@@ -342,12 +342,12 @@ def host_advice(connection: Connection, project_id: str) -> dict[str, Any]:
         # before the first slow run is the whole point of having gauges as well as evidence.
         host = {"state": gauges["state"], "stalled_seconds": 0.0, "share_of_elapsed": 0.0,
                 "detail": "the machine is running low on " + " and ".join(gauges["reasons"])}
-    advice = operator_advice(host)
+    # The gauges go IN, not just alongside: they decide what the headline may claim (memory
+    # only when memory is actually unavailable) and what to advise (never "restart the
+    # computer" to a Linux server).
+    advice = operator_advice(host, gauges=gauges)
     if advice.get("show"):
         advice["gauges"] = gauges.get("bands", {})
-        if gauges.get("reasons"):
-            advice["detail"] = (advice.get("detail", "") + " Right now: "
-                                + ", ".join(gauges["reasons"]) + ".")
     return advice
 
 
