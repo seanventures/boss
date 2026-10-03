@@ -914,6 +914,8 @@ type FleetHost = {
   status: string; arch?: string | null; app_count: number;
   apps?: Array<{ app_name: string }>;
   key_secret_ref?: string | null;
+  /** The PUBLIC half of BOSS's key for this host — safe to show, and the thing to authorise. */
+  key_public?: string | null;
   install_command?: string | null;
   install_variants?: Record<string, string | boolean> | null;
   last_preflight?: {
@@ -1143,6 +1145,14 @@ export function FleetPanel({ projectId, targets = [] }: {
               {/* ── STEP 2: the one thing BOSS cannot do for you. ── */}
               {stage === "install" && cmd ? (
                 <div className="fleet-stage" data-testid="fleet-install">
+                  {/* THE KEY ITSELF, FIRST. The push command below is one way to authorise it;
+                      an operator who manages authorized_keys their own way (a provider panel,
+                      config management, a teammate with access) needs the public key and the
+                      exact line, not a command that assumes their laptop can reach the VM. */}
+                  <PublicKeyBlock host={h} publicKey={minted[h.id]?.public_key || h.key_public || ""}
+                                  copied={copied} onCopied={(what) => {
+                                    setCopied(what); window.setTimeout(() => setCopied(null), 2000);
+                                  }} />
                   {/* Onboarding does not fail because a customer is careless — it fails because
                       the tool assumed a situation they are not in. So ask which one. */}
                   <label className="detail" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1344,7 +1354,7 @@ export function FleetPanel({ projectId, targets = [] }: {
 
       <div style={{ marginTop: 12 }}>
         {canReachHosts ? (
-          <ActionButton busy={busy} label={openReg ? "Cancel" : "Register a host"}
+          <ActionButton busy={busy} label={openReg ? "Cancel" : "Add a VM"}
             busyLabel="…" onClick={() => setOpenReg((v) => !v)} />
         ) : <HostsUnreachableNote />}
       </div>
@@ -1355,21 +1365,76 @@ export function FleetPanel({ projectId, targets = [] }: {
             e.preventDefault();
             const fd = new FormData(e.currentTarget as HTMLFormElement);
             fd.set("project_id", projectId);
-            void run(() => callAction(registerDeploymentHostAction)(null, fd), () => setOpenReg(false));
+            if (!String(fd.get("name") ?? "").trim()) fd.set("name", String(fd.get("address") ?? "").trim());
+            // ADD A VM IS ONE MOVE: record it, then mint its key straight away so the next thing
+            // on screen is the public key to authorise — not a second button whose only job was
+            // to reveal it. Minting touches nothing on the VM; the key's private half goes to
+            // the secret store and is never shown.
+            void run(async () => {
+              const registered = await callAction(registerDeploymentHostAction)(null, fd);
+              const hostId = String((registered as any)?.data?.id ?? "");
+              if (!registered.ok || !hostId) return registered;
+              const keyed = await callAction(generateHostKeyAction)(
+                null, formOf({ host_id: hostId, backend: keyBackend }));
+              if (keyed.ok) setMinted((p) => ({ ...p, [hostId]: keyed.data }));
+              return keyed.ok ? keyed : { ok: false, error: `The VM was added, but its key was not generated: ${keyed.error ?? "unknown error"}. Press “Generate a key for me” on it.` };
+            }, () => setOpenReg(false));
           }}>
-          <Field label="Name" name="name" placeholder="hetzner-ci-01" required />
-          <Field label="Address" name="address" placeholder="192.0.2.202" required />
+          <Field label="Address" name="address" placeholder="192.0.2.202 or vm.example.com" required />
           <Field label="SSH user" name="ssh_user" defaultValue="root" />
+          <Field label="SSH port" name="ssh_port" type="number" min={1} max={65535} defaultValue="22" />
+          <Field label="Name (optional)" name="name" placeholder="defaults to the address" />
           {/* Left blank on purpose: verify reads `uname -m` from the box and corrects it. */}
           <Field label="Arch (optional)" name="arch" placeholder="detected on verify" />
           {/* BOSS cannot discover this, and getting it wrong fails the push with an error that
               points at the host instead of at the laptop. Blank = "my default ssh works". */}
           <Field label="Your SSH key (optional)" name="admin_identity_file"
                  placeholder="~/.ssh/id_ed25519 — blank if plain ssh works" />
-          <button className="cap-btn" type="submit" disabled={busy}>Register</button>
+          <button className="cap-btn primary" type="submit" disabled={busy}>Add VM and generate its key</button>
         </form>
       ) : null}
     </section>
+  );
+}
+
+/** The exact line that authorises BOSS on the VM, typed there as the SSH user BOSS will use. */
+export function authorizeLine(publicKey: string): string {
+  return "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+    + `printf '%s\\n' '${publicKey.trim()}' >> ~/.ssh/authorized_keys && `
+    + "chmod 600 ~/.ssh/authorized_keys";
+}
+
+function PublicKeyBlock({ host, publicKey, copied, onCopied }: {
+  host: FleetHost; publicKey: string; copied: string | null; onCopied: (what: string) => void;
+}) {
+  if (!publicKey.trim()) return null;
+  const line = authorizeLine(publicKey);
+  const copy = (what: string, text: string) => {
+    void navigator.clipboard?.writeText(text);
+    onCopied(what);
+  };
+  return (
+    <div className="fleet-key" data-testid="fleet-public-key">
+      <strong>BOSS&apos;s public key for {host.name}</strong>
+      <pre className="hw-command" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 }}>
+        {publicKey.trim()}
+      </pre>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <ActionButton busy={false} label={copied === `pub-${host.id}` ? "Copied" : "Copy public key"}
+          busyLabel="…" onClick={() => copy(`pub-${host.id}`, publicKey.trim())} />
+      </div>
+      <span className="detail">
+        Add it to <code>~/.ssh/authorized_keys</code> of <code>{host.ssh_user}</code> on{" "}
+        <code>{host.address}</code>. Logged in on the VM as {host.ssh_user}, this one line does it:
+      </span>
+      <pre className="hw-command" data-testid="fleet-authorize-line"
+           style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 }}>{line}</pre>
+      <div>
+        <ActionButton busy={false} label={copied === `line-${host.id}` ? "Copied" : "Copy line"}
+          busyLabel="…" onClick={() => copy(`line-${host.id}`, line)} />
+      </div>
+      <span className="detail">Or push it from a machine that can already SSH there:</span>
+    </div>
   );
 }
 
