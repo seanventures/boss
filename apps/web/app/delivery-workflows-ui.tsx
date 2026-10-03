@@ -1804,7 +1804,12 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
       // the corner reads as a rendering bug rather than as a pointer.
       const box = node.getBoundingClientRect();
       const frame = panel.getBoundingClientRect();
-      const centre = box.left + box.width / 2 - frame.left;
+      // A step scrolled out of the lane's view has nothing on screen to point at.
+      const view = lane.querySelector<HTMLElement>(".wf-lane-viewport")?.getBoundingClientRect();
+      const mid = box.left + box.width / 2;
+      const hidden = !!view && (mid < view.left || mid > view.right);
+      if (hidden) panel.setAttribute("data-arrow", "off"); else panel.removeAttribute("data-arrow");
+      const centre = mid - frame.left;
       const clamped = Math.max(18, Math.min(frame.width - 18, centre));
       detail.style.setProperty("--dw-arrow-x", `${Math.round(clamped)}px`);
     };
