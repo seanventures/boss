@@ -131,12 +131,15 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
     // machine, not registering an app.
     expect(markup).toContain("Nothing deploys yet");
     expect(markup).toContain("Register deployment target");
-    expect(markup).toContain("Community host deployment is paused");
+    // The per-app container path is still paused in Community; the governed stack path is the
+    // way in, and the empty state names it rather than saying deployment is impossible.
+    expect(markup).toContain("stays paused in Community");
+    expect(markup).toContain("boss.deploy.yaml");
     // THE DEADLOCK THIS GUARDS: the Hosts wizard was added only to the configured branch, so
     // it appeared once a deployment target already existed — unreachable on a fresh install,
     // which is exactly when it is needed. An empty state must contain the thing that ends it.
     expect(markup).toContain('data-testid="fleet-panel"');
-    expect(markup).toContain("Register a host");
+    expect(markup).toContain("Add a VM");
     // Deploy wizard is a live-fleet control; must not appear when nothing is registered.
     expect(markup).not.toContain("Plan a deployment");
     expect(markup).not.toContain("Deployment plans and history");

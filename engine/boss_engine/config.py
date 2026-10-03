@@ -348,6 +348,15 @@ class Settings(BaseSettings):
     ssh_host_deploy_allowed: bool = Field(
         default=False, alias="BOSS_SSH_HOST_DEPLOY_ALLOWED"
     )
+    # Outward SSH that is READ-ONLY (verifying a host: `echo; uname`) or GOVERNED (a stack
+    # deployment applying an approved Resource Plane ChangeSet with its reservation and receipt).
+    # On by default in every edition: without it the Infra flow — add a VM, verify it, deploy a
+    # repository to it — dead-ends on a fresh install until someone hand-edits the BOSS host's
+    # environment. It never enables the legacy direct host writes above; those stay behind
+    # BOSS_SSH_HOST_DEPLOY_ALLOWED and an enterprise edition. Set false to forbid it (an explicit
+    # BOSS_SSH_HOST_DEPLOY_ALLOWED=true still implies it: direct writes include reading).
+    # Read through deployment_fleet.outward_ssh_allowed(), never directly.
+    ssh_outward_allowed: bool = Field(default=True, alias="BOSS_SSH_OUTWARD_ALLOWED")
     # Path to the key, preferred over pasting material into config. Keeps the secret on
     # disk at 0600 instead of in a process environment.
     ssh_host_private_key_file: Optional[str] = Field(
