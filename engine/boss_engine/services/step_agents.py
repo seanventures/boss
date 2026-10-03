@@ -180,21 +180,30 @@ def shape_problems(step: dict[str, Any]) -> list[str]:
     Called from `validate_workflow_spec`, which has no connection. Whether the agent EXISTS is
     a fact about the project and is checked in `assignment_problems`.
     """
+    return captain_shape_problems(step) + [message for _, message in scope_shape_problems(step)]
+
+
+def scope_shape_problems(step: dict[str, Any]) -> list[tuple[str, str]]:
+    """What is wrong with a step's skills/MCP lists, as (field, sentence) pairs.
+
+    Paired with the field so the workflow editor can put the sentence on the control that
+    caused it; `shape_problems` is the same list as plain sentences.
+    """
     step_id = step.get("id", "?")
-    problems: list[str] = captain_shape_problems(step)
+    problems: list[tuple[str, str]] = []
     binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
     for field in ("skills", "mcp", "mcp_servers"):
         value = binding.get(field)
         if value is None:
             continue
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-            problems.append(f"step '{step_id}' {field} must be a list of names.")
+            problems.append((field, f"step '{step_id}' {field} must be a list of names."))
         elif not binding.get("agent_work"):
             # A custom step runs exactly ONE skill or tool, and a built-in runs its own. A list
             # here would be stored and ignored, which is the failure this whole change removes.
-            problems.append(
+            problems.append((field,
                 f"step '{step_id}' lists {field}, but only an agent step can be given a set "
-                "of skills or MCP servers. A custom step runs the one skill or tool it binds.")
+                "of skills or MCP servers. A custom step runs the one skill or tool it binds."))
     return problems
 
 

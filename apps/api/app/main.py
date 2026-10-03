@@ -679,7 +679,12 @@ from .request_bodies import (
     TargetSecretBindBody,
     WebAppBuildBody,
     WorkflowApplyBody,
+    WorkflowCheckBody,
     WorkflowCreateBody,
+    WorkflowDraftBody,
+    WorkflowPublishBody,
+    WorkflowRenameBody,
+    WorkflowWireBody,
     WorkflowCustomStepBody,
     WorkflowCustomStepUpdateBody,
     WorkflowDeployTargetBody,
@@ -23651,12 +23656,17 @@ def get_delivery_workflow_plan(
 
 
 @app.get("/v1/delivery-workflows/{workflow_key}/spec")
-def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
+def get_delivery_workflow_spec(workflow_key: str, project_id: str,
+                               version: Optional[int] = None) -> dict:
     """The steps a workflow currently has, plus what it was forked from.
 
     The builder opened empty and made a customer rebuild a ten-step workflow from scratch to
     change one thing. `forked_from` is returned alongside so "reset to the standard" has
     something to reset TO.
+
+    `version` opens an earlier one (read-only in the editor, "Viewing v2 · Restore"); `versions`
+    lists them all. On a standard, `copy` is the operator's own copy of it when they have one,
+    so Save offers "Update my copy" instead of making another.
     """
     with begin(engine) as connection:
         # LEFT JOIN, deliberately. A workflow created from scratch has no published version
@@ -23664,10 +23674,11 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
         # would refuse to open the very thing the "New workflow" button had just made.
         row = connection.execute(
             text(
-                "SELECT d.id, d.name, d.is_catalogue, d.forked_from_version_id, "
+                "SELECT d.id, d.name, d.description, d.is_catalogue, d.forked_from_version_id, "
                 "       v.id AS version_id, v.version, v.spec "
                 "FROM workflow_definitions d "
                 "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
+                "     AND (CAST(:version AS INTEGER) IS NULL OR v.version = :version) "
                 "WHERE d.project_id=:p AND d.workflow_key=:k "
                 "AND COALESCE(d.namespace,'system')='product' "
                 # THE VERSION THAT RUNS, not the highest-numbered one.
@@ -23683,10 +23694,13 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
                 "ORDER BY (v.id = d.active_version_id) DESC NULLS LAST, "
                 "         v.version DESC NULLS LAST LIMIT 1"
             ),
-            {"p": project_id, "k": workflow_key},
+            {"p": project_id, "k": workflow_key, "version": version},
         ).mappings().first()
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"no workflow '{workflow_key}'")
+        if row is None or (version is not None and row["version_id"] is None):
+            raise HTTPException(
+                status_code=404,
+                detail=(f"no version {version} of '{workflow_key}'" if row is not None
+                        else f"no workflow '{workflow_key}'"))
 
         origin = None
         if row["forked_from_version_id"]:
@@ -23704,10 +23718,34 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
                     "version": origin_row["version"],
                     "spec": origin_row["spec"],
                 }
+        versions = connection.execute(
+            text("SELECT v.version, v.published_at, (v.id = d.active_version_id) AS is_active "
+                 "FROM workflow_versions v "
+                 "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                 "WHERE d.id = :d ORDER BY v.version DESC"),
+            {"d": row["id"]},
+        ).mappings().all()
+        copy = None
+        if row["is_catalogue"]:
+            # THE COPY THE OPERATOR ALREADY HAS. Saving a standard again used to make another
+            # "(copy)" every time; the editor offers to update this one instead.
+            copy_row = connection.execute(
+                text("SELECT d.id, d.workflow_key, d.name FROM workflow_definitions d "
+                     "JOIN workflow_versions v ON v.id = d.forked_from_version_id "
+                     "WHERE d.project_id = :p AND v.workflow_definition_id = :source "
+                     "AND COALESCE(d.namespace, 'system') = 'product' "
+                     "AND NOT COALESCE(d.is_catalogue, false) AND d.status <> 'retired' "
+                     "ORDER BY d.updated_at DESC LIMIT 1"),
+                {"p": project_id, "source": row["id"]},
+            ).mappings().first()
+            if copy_row:
+                copy = {"definition_id": copy_row["id"], "workflow_key": copy_row["workflow_key"],
+                        "name": copy_row["name"]}
         return {
             "definition_id": row["id"],
             "workflow_key": workflow_key,
             "name": row["name"],
+            "description": row["description"] or "",
             "is_catalogue": row["is_catalogue"],
             "version": row["version"],
             # An empty step list rather than null: the builder renders "no steps yet", which is
@@ -23716,29 +23754,17 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
             # What it was forked from, so the builder can offer "reset to the standard" and
             # show what has drifted from it.
             "forked_from": origin,
+            "versions": [{"version": int(v["version"]),
+                          "published_at": v["published_at"].isoformat()
+                          if v["published_at"] else None,
+                          "is_active": bool(v["is_active"])} for v in versions],
+            "copy": copy,
         }
 
 
 def _free_workflow_key(connection, project_id: str, name: str) -> str:
-    """A key derived from the name, so a customer never has to invent an identifier.
-
-    Shared by create and import. Two callers deriving keys their own way is how one of them
-    ends up 409ing on a collision the other would have avoided — which is exactly what the
-    first version of forking did.
-    """
-    base = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_") or "workflow"
-    taken = {
-        row[0] for row in connection.execute(
-            text("SELECT workflow_key FROM workflow_definitions WHERE project_id=:p"),
-            {"p": project_id},
-        )
-    }
-    key = base
-    for suffix in range(2, 500):
-        if key not in taken:
-            return key
-        key = f"{base}_{suffix}"
-    return f"{base}_{uuid4().hex[:6]}"
+    """A key derived from the name — `workflows.free_workflow_key`, the one every maker uses."""
+    return workflow_runtime.free_workflow_key(connection, project_id, name)
 
 
 @app.post("/v1/delivery-workflows/create")
@@ -23869,6 +23895,197 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
         except workflow_runtime.WorkflowConflictError:
             return {"unchanged": True, "note": "This is identical to the current version."}
         return {"version": version}
+
+
+# ── The workflow editor (Workflow Studio) ─────────────────────────────────────────────────────
+#
+# Check, Save, rename, Describe and Auto-wire. Save is ONE call that creates, copies or updates
+# and publishes in a single transaction (`workflows.publish_from_editor`): the create-then-save
+# pair it replaces left an empty definition behind whenever the save failed, and minted another
+# "(copy)" each time a standard was saved again.
+
+
+def _editor_problems(problems: list) -> list[dict]:
+    """Problems as the editor reads them: {step_id, field, message}."""
+    return [{"step_id": p.get("step_id"), "field": p.get("field"), "message": p.get("message")}
+            for p in problems]
+
+
+def _problems_response(error: workflow_runtime.WorkflowError) -> JSONResponse:
+    """422 with every problem, each on its step and field — never just the first."""
+    problems = error.problems or [workflow_runtime.problem(None, None, str(error))]
+    return JSONResponse(status_code=422, content={
+        "detail": str(error), "problems": _editor_problems(problems)})
+
+
+class _EditorRefusal(Exception):
+    """Leaves the transaction (so it rolls back) carrying the response to send."""
+
+    def __init__(self, response: JSONResponse) -> None:
+        super().__init__("refused")
+        self.response = response
+
+
+def _editor_namespace(connection, project_id: str, definition_id: Optional[str]) -> str:
+    """Which rules a check applies: the definition's tier, refusing BOSS's own."""
+    if not definition_id:
+        return workflow_runtime.PRODUCT_NAMESPACE
+    try:
+        definition = workflow_runtime.require_namespace(
+            connection, project_id, definition_id, workflow_runtime.PRODUCT_NAMESPACE)
+    except workflow_runtime.WorkflowNamespaceError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except workflow_runtime.WorkflowNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return str(definition.get("namespace") or workflow_runtime.PRODUCT_NAMESPACE)
+
+
+@app.post("/v1/delivery-workflows/check")
+def check_delivery_workflow(payload: WorkflowCheckBody) -> dict:
+    """Everything Save would refuse, without saving — and the plan in numbers.
+
+    The same collector `publish_version` raises from, so a spec this passes is a spec Save
+    publishes. Writes nothing.
+    """
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    spec = payload.get("spec")
+    actor = _delivery_workflow_actor(payload)
+    if not project_id or not isinstance(spec, dict):
+        raise HTTPException(status_code=400, detail="project_id and spec are required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        namespace = _editor_namespace(connection, project_id, payload.get("definition_id"))
+        result = workflow_runtime.check_spec(connection, project_id, spec, namespace=namespace)
+    return {**result, "problems": _editor_problems(result["problems"])}
+
+
+@app.post("/v1/delivery-workflows/publish")
+def publish_delivery_workflow(payload: WorkflowPublishBody):
+    """Save what the editor holds: the next version of your workflow, a new one, or your copy.
+
+    One transaction. A refused save writes nothing; a save of a standard makes ONE copy, and
+    `update_copy_id` publishes onto the copy already made instead of making another.
+
+    Names are unique across the library, standards included: 409 {"Name in use",
+    suggested_name} (`<name> (mine)` for a standard's name). On `update_copy_id`, sending the
+    standard's own name keeps the copy's name; any other name renames the copy. Concurrent
+    saves in one project are taken in turn, so a 409 here is always a real name clash.
+    """
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    spec = payload.get("spec")
+    actor = _delivery_workflow_actor(payload)
+    if not project_id or not name or not isinstance(spec, dict):
+        raise HTTPException(status_code=400, detail="project_id, name and spec are required")
+    description = payload.get("description")
+    try:
+        with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_manage")
+            try:
+                return workflow_runtime.publish_from_editor(
+                    connection, project_id=project_id, actor=actor, name=name, spec=spec,
+                    definition_id=str(payload.get("definition_id") or "").strip() or None,
+                    description=None if description is None else str(description),
+                    from_workflow_key=payload.get("from_workflow_key"),
+                    update_copy_id=str(payload.get("update_copy_id") or "").strip() or None,
+                )
+            except workflow_runtime.WorkflowNameInUseError as error:
+                raise _EditorRefusal(JSONResponse(status_code=409, content={
+                    "detail": "Name in use", "suggested_name": error.suggested_name}))
+            except (workflow_runtime.WorkflowValidationError,
+                    workflow_runtime.WorkflowBindingBlockedError) as error:
+                raise _EditorRefusal(_problems_response(error))
+            except workflow_runtime.WorkflowNamespaceError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            except workflow_runtime.WorkflowNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except workflow_runtime.WorkflowConflictError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+    except _EditorRefusal as refusal:
+        return refusal.response
+
+
+@app.patch("/v1/delivery-workflows/{definition_id}")
+def rename_delivery_workflow(definition_id: str, payload: WorkflowRenameBody):
+    """Rename one of your workflows, or change its description. Publishes no version."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = _delivery_workflow_actor(payload)
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if payload.get("name") is None and payload.get("description") is None:
+        raise HTTPException(status_code=400, detail="name or description is required")
+    try:
+        with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_manage")
+            try:
+                definition = workflow_runtime.rename_definition(
+                    connection, project_id, definition_id, actor=actor,
+                    name=payload.get("name"), description=payload.get("description"))
+            except workflow_runtime.WorkflowNameInUseError as error:
+                raise _EditorRefusal(JSONResponse(status_code=409, content={
+                    "detail": "Name in use", "suggested_name": error.suggested_name}))
+            except workflow_runtime.WorkflowNamespaceError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            except workflow_runtime.WorkflowNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except workflow_runtime.WorkflowValidationError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+    except _EditorRefusal as refusal:
+        return refusal.response
+    return {"definition": definition}
+
+
+@app.post("/v1/delivery-workflows/wire")
+def wire_delivery_workflow(payload: WorkflowWireBody) -> dict:
+    """Connect each unset required input to the nearest earlier step that makes it, else to a
+    start-form field of that name. Returns the wired spec and what was connected; writes nothing.
+    """
+    from boss_engine.services.workflow_drafting import wire_spec
+
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    spec = payload.get("spec")
+    actor = _delivery_workflow_actor(payload)
+    if not project_id or not isinstance(spec, dict):
+        raise HTTPException(status_code=400, detail="project_id and spec are required")
+    ids = payload.get("ids")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        return wire_spec(connection, project_id, spec,
+                         ids=[str(i) for i in ids] if isinstance(ids, list) else None)
+
+
+@app.post("/v1/delivery-workflows/draft")
+def draft_delivery_workflow(payload: WorkflowDraftBody):
+    """Steps drafted from a sentence by the project's model, for the operator to review.
+
+    Writes nothing: the draft lands on the canvas and is saved, or not, like anything else
+    drawn there. 409 `no model` when the project has none to ask.
+    """
+    from boss_engine.services import workflow_drafting
+
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    actor = _delivery_workflow_actor(payload)
+    if not project_id or not description:
+        raise HTTPException(status_code=400, detail="project_id and description are required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+    try:
+        return workflow_drafting.draft_from_description(engine, settings, project_id,
+                                                        description)
+    except workflow_drafting.NoModelError:
+        return JSONResponse(status_code=409, content={"detail": "no model"})
+    except workflow_drafting.DraftError as error:
+        return JSONResponse(status_code=422, content={"detail": str(error)})
+    except Exception as error:  # noqa: BLE001 — the model's failure, said as one line
+        LOGGER.warning("workflow draft failed: %s", error)
+        return JSONResponse(status_code=502, content={
+            "detail": f"The model could not draft it: {type(error).__name__}."})
 
 
 @app.delete("/v1/delivery-workflows/runs/{run_id}")
@@ -24623,15 +24840,19 @@ def publish_workflow_version(
         try:
             # BOSS's own workflows are not an operator's to rewrite; the worker principal (the
             # only caller that maintains them over HTTP) is exempt.
-            if not _is_worker_principal():
-                definition = connection.execute(
-                    text("SELECT namespace, workflow_key FROM workflow_definitions "
-                         "WHERE id = :id AND project_id = :p"),
-                    {"id": definition_id, "p": payload.project_id},
-                ).mappings().first()
-                if definition:
-                    workflow_runtime.refuse_operator_edit_of_boss_workflow(
-                        dict(definition), settings.specpack_root / "workflows")
+            definition = connection.execute(
+                text("SELECT namespace, workflow_key, is_catalogue FROM workflow_definitions "
+                     "WHERE id = :id AND project_id = :p"),
+                {"id": definition_id, "p": payload.project_id},
+            ).mappings().first()
+            if definition and not _is_worker_principal():
+                workflow_runtime.refuse_operator_edit_of_boss_workflow(
+                    dict(definition), settings.specpack_root / "workflows")
+            # A STANDARD IS NOT EDITED IN PLACE, whichever door is used. The delivery-workflow
+            # endpoints refused it; this generic one published straight over it, so the copy
+            # rule held only for callers that happened to use the other route.
+            if definition:
+                workflow_runtime.require_editable(dict(definition))
             return WorkflowVersionSummary(
                 **workflow_runtime.publish_version(
                     connection,

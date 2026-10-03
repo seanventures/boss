@@ -119,23 +119,26 @@ export const PALETTE: Palette = {
               mcp_servers: [{ id: "mcp_1", name: "slack", tools: [{ name: "post" }] }] },
 };
 
+type GeneratedFlow = { workflow_key: string; name: string; description?: string; spec: Spec };
+type GeneratedFixture = { generated_by: string; catalogue: GeneratedFlow[]; branched: GeneratedFlow };
+
+function generatedFixture(): GeneratedFixture {
+  return JSON.parse(readFileSync(
+    new URL("../fixtures/catalogue-specs.json", import.meta.url), "utf8")) as GeneratedFixture;
+}
+
 /**
  * Every standard BOSS ships, as published (tests/fixtures/catalogue-specs.json, written by
- * scripts/dump-catalogue-specs.py from engine workflow_catalogue.py). Accepts a map of
- * key → spec, a list of specs, or a list of {workflow_key|key, spec}.
+ * scripts/dump-catalogue-specs.py from engine workflow_catalogue.py; a test refuses a stale one).
  */
 export function catalogueSpecs(): [string, Spec][] {
-  const raw: unknown = JSON.parse(readFileSync(
-    new URL("../fixtures/catalogue-specs.json", import.meta.url), "utf8"));
-  const entries: [string, unknown][] = Array.isArray(raw)
-    ? raw.map((item, i) => {
-      const obj = item as Record<string, unknown>;
-      return obj && "spec" in obj
-        ? [String(obj.workflow_key ?? obj.key ?? i), obj.spec]
-        : [String(obj?.workflow_name ?? i), item];
-    })
-    : Object.entries(raw as Record<string, unknown>);
-  return entries.map(([key, spec]) => [key, spec as Spec]);
+  return generatedFixture().catalogue.map((flow) => [flow.workflow_key, flow.spec]);
+}
+
+/** The generator's parallel / join / if-else graph with a key the editor does not know. */
+export function generatedBranched(): [string, Spec] {
+  const flow = generatedFixture().branched;
+  return [flow.workflow_key, flow.spec];
 }
 
 export const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
