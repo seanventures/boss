@@ -203,7 +203,7 @@ def _canary_budget_reserve_release(engine, settings, project_id):
         res = bg.reserve(c, project_id, category="canary", amount_usd_micros=1000,
                          reason="canary reserve", expires_in_minutes=5)
     if res.get("status") != "reserved":
-        return False, f"reserve denied: {res.get('status')}"
+        return False, f"reserve refused: {res.get('message') or 'no reason given'}"
     rid = res["reservation_id"]
     with begin(engine) as c:
         bg.release(c, project_id, rid, "canary release")

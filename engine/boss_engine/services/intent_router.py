@@ -2682,7 +2682,7 @@ class IntentRouter:
                 # granted, so the model was never called at all.
                 failure = (
                     f"no model budget was granted for this answer "
-                    f"(reservation {reservation.get('status') or 'refused'})"
+                    f"({reservation.get('message') or 'the budget refused it'})"
                 )
         except Exception as exc:  # noqa: BLE001 — a hiccup must never break the chat
             failure = f"{type(exc).__name__}: {exc}"

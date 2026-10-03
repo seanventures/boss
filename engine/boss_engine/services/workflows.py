@@ -4623,9 +4623,14 @@ def retry_failed_step(
     from .workflow_run_actions import require
 
     require(connection, project_id, run_id, "retry_step", step_id=step_id)
+    # A PERSON'S TRY AGAIN STARTS THE WAITS AFRESH, as it does the attempts. `waiting.count`
+    # bounds how often one step waits for the budget (wait_step); kept across a Retry, a step
+    # stopped after MAX_STEP_WAITS failed again at its very next wait — the person raised the
+    # cap as told, pressed Try again, and got "still not started after 30 tries" at once.
     connection.execute(
         text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
-             "lease_owner=NULL, lease_expires_at=NULL, run_after=now(), updated_at=now() "
+             "lease_owner=NULL, lease_expires_at=NULL, run_after=now(), updated_at=now(), "
+             "output = COALESCE(output, '{}'::jsonb) - 'waiting' "
              "WHERE id=:id"),
         {"id": row["id"]},
     )
@@ -4820,7 +4825,8 @@ def reopen_failed_step(
             UPDATE workflow_step_runs
             SET status='waiting', last_error=NULL, completed_at=NULL,
                 lease_owner=NULL, lease_expires_at=NULL,
-                output = COALESCE(output, '{}'::jsonb)
+                -- A reopened step starts its budget waits afresh, as a Try again does.
+                output = (COALESCE(output, '{}'::jsonb) - 'waiting')
                          || jsonb_build_object('await', CAST(:handle AS JSONB),
                                                'awaited_note', CAST(:note AS TEXT),
                                                'code_task_run_id', CAST(:new_id AS TEXT)),
@@ -5052,10 +5058,15 @@ def wait_step(
     earlier = (_json(row["output"], {}) or {}).get("waiting") or {}
     waits = int(earlier.get("count") or 0) + 1 if isinstance(earlier, dict) else 1
     if waits > MAX_STEP_WAITS:
+        # What keeps it full decides what to do: a per-minute cap spent continuously, or other
+        # work holding the budget's headroom for a long time (model_failures.explain).
+        held = "other work" in reason.lower()
         return fail_step(
             connection, project_id=project_id, step_run_id=step_run_id, worker_id=worker_id,
             error=(f"{reason.rstrip('.')} — still not started after {MAX_STEP_WAITS} tries. "
-                   "Raise the per-minute cap in Budget, then try it again."),
+                   + ("See what is holding the budget in Budget, or raise the daily or monthly "
+                      "cap, then try it again." if held else
+                      "Raise the per-minute cap in Budget, then try it again.")),
             retryable=False)
     delay = max(1, int(wait_seconds))
     wake_at = now_utc() + timedelta(seconds=delay)
