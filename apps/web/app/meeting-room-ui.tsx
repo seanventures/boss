@@ -21,23 +21,8 @@ import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 
 import { callAction } from "../lib/call-action";
-const ROLE_META: Record<string, { initials: string; tone: string }> = {
-  "Product Manager": { initials: "PM", tone: "accent" },
-  "Engineer / Architect": { initials: "EN", tone: "blue" },
-  "UX Designer": { initials: "UX", tone: "pink" },
-  "Privacy & Safety": { initials: "PS", tone: "amber" },
-  "Finance / FinOps": { initials: "FI", tone: "green" },
-  "Growth / Marketing": { initials: "GR", tone: "pink" },
-  "QA / Test": { initials: "QA", tone: "blue" },
-  "Customer Advocate": { initials: "CA", tone: "accent" },
-  Security: { initials: "SE", tone: "amber" },
-  "Data / Analytics": { initials: "DA", tone: "green" },
-  "Facilitator / Chief of Staff": { initials: "CS", tone: "green" },
-};
-
-function roleMeta(role: string) {
-  return ROLE_META[role] ?? { initials: role.slice(0, 2).toUpperCase(), tone: "muted" };
-}
+import type { AvatarState } from "../lib/agent-world-types";
+import { AgentAvatar } from "./agent-avatar";
 
 const ROLE_ORDER = [
   "Product Manager", "Engineer / Architect", "UX Designer", "Privacy & Safety",
@@ -90,9 +75,13 @@ function fmtDuration(start?: string | null, end?: string | null): string {
   return `${h}h ${m % 60}m`;
 }
 
-function Avatar({ role }: { role: string }) {
-  const m = roleMeta(role);
-  return <span className={`mr-avatar tone-${m.tone}`}>{m.initials}</span>;
+/** A seat's face. The seat title resolves to its agent through the one resolver, so a panel's
+ *  "QA / Test" is the same face as `qa` on a workflow step. The facilitator is BOSS itself. */
+function Avatar({ role, size = 26, state }: { role: string; size?: number; state?: AvatarState }) {
+  if (/facilitator/i.test(role)) {
+    return <AgentAvatar variant="boss" size={size} state={state} className="mr-avatar ag-face" />;
+  }
+  return <AgentAvatar agent={role} size={size} state={state} aiBadge={false} className="mr-avatar ag-face" />;
 }
 
 function ContributionCard({ role, text }: { role: string; text: string }) {

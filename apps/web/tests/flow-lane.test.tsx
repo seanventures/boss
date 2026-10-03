@@ -422,10 +422,11 @@ describe("every node says who runs it, at every density and in every mode", () =
           const name = r!.querySelector(".wf-node-agent-name")!.textContent!;
           expect(r!.dataset.tip!.split("\n")[0]).toBe(name);
         }
-        // A named agent is its own face: initials and colour, as on every other screen.
+        // A named agent is its own face: its kit character, as on every other screen.
         const face = agentMeta("qa", "QA Lead");
-        expect(rows[1]!.querySelector(".mr-avatar")!.textContent).toBe(face.initials);
         expect(rows[1]!.querySelector(".mr-avatar")!.classList.contains(`tone-${face.tone}`)).toBe(true);
+        expect(rows[1]!.querySelector(".mr-avatar svg.ag-av")!.getAttribute("data-kit")).toBe("boss-v1");
+        expect(rows[1]!.querySelector(".mr-avatar")!.textContent).toBe("");
       });
     }
   }

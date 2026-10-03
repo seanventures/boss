@@ -203,18 +203,9 @@ function notYet(name: string): never {
   throw new Error(`${name}: not implemented (agent world phase 0 stub)`);
 }
 
-/** [kit] lib/agent-avatar.ts */
-export function avatarSvg(_spec: AvatarSpec, _o: { size: number; state?: AvatarState; variant?: AvatarVariant }): string {
-  return notYet("avatarSvg");
-}
-/** [kit] lib/agent-identity.ts */
-export function agentIdentity(_keyOrTitle: string): AgentIdentity {
-  return notYet("agentIdentity");
-}
-/** [kit] lib/agent-identity.ts */
-export function useAgentIdentities(_projectId: string): Map<string, AgentIdentity> {
-  return notYet("useAgentIdentities");
-}
+// [kit] the real modules. Type-only imports there, so these re-exports make no runtime cycle.
+export { avatarSvg } from "./agent-avatar";
+export { agentIdentity, useAgentIdentities } from "./agent-identity";
 /** [agents] lib/agents-live.ts */
 export function useLivePresence(_projectId: string): Map<string, Presence> {
   return notYet("useLivePresence");

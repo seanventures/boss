@@ -17,7 +17,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { agentMeta } from "../app/agent-chip";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { AgentChip, agentMeta } from "../app/agent-chip";
+import { avatarSvg, specForRole } from "../lib/agent-avatar";
 import { codeOnly } from "./_helpers/source";
 
 const CHIP = codeOnly("app/agent-chip.tsx");
@@ -60,6 +64,28 @@ describe("an agent has a face", () => {
                                ["wizard", WIZARD]] as const) {
       expect(src, name).toContain("<AgentChip");
     }
+  });
+
+  it("the face is the agent's kit character, inside the same wrapper every layout already sizes", () => {
+    const html = renderToStaticMarkup(createElement(AgentChip, { roleKey: "release_manager", note: "by default" }));
+    expect(html).toContain("mr-avatar tone-green ag-face");
+    expect(html).toContain(avatarSvg(specForRole("release_manager"), { size: 24 }));
+    expect(html).toContain(">Release Manager<"); // the display name, not the raw key
+    expect(html).not.toContain(">RM<"); // no initials disc any more
+  });
+
+  it("a chip given a state shows it as a face and a word", () => {
+    const html = renderToStaticMarkup(createElement(AgentChip, { roleKey: "qa", state: "needs_you" }));
+    expect(html).toContain('data-state="needs_you"');
+    expect(html).toContain('class="av-badge"');
+    expect(html).toContain('class="ag-state-word" data-state="needs_you">Needs you<');
+    expect(renderToStaticMarkup(createElement(AgentChip, { roleKey: "qa" }))).not.toContain("ag-state-word");
+  });
+
+  it("two agents whose initials used to collide are told apart", () => {
+    // product_owner and providerops_manager were both "PO"; their faces were the same disc.
+    expect(agentMeta("providerops_manager").initials).not.toBe(agentMeta("product_owner").initials);
+    expect(avatarSvg(specForRole("providerops_manager"), { size: 24 })).not.toBe(avatarSvg(specForRole("product_owner"), { size: 24 }));
   });
 
   it("the source label is secondary to the name, not shouting beside it", () => {
