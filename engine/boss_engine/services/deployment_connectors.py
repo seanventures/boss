@@ -382,9 +382,13 @@ class SSHContainerConnector:
         # recorded but never resolved is not a binding.
         problems.extend(self._credential_problems(target, settings, connection))
 
-        if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
+        # Reaching the host at all. The legacy container deploy additionally needs
+        # BOSS_SSH_HOST_DEPLOY_ALLOWED, which deploy_ssh checks itself; asking for it here made
+        # the read-only Verify of a fresh Community host fail before it opened a session.
+        from .deployment_fleet import outward_ssh_allowed
+        if not outward_ssh_allowed(settings):
             problems.append(
-                "outward SSH deploys are disabled (BOSS_SSH_HOST_DEPLOY_ALLOWED is false)")
+                "outward SSH is disabled (BOSS_SSH_OUTWARD_ALLOWED is false)")
 
         if not (target.get("domains") or []):
             problems.append("target has no domain, so health cannot be observed")

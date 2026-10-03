@@ -944,7 +944,7 @@ export function findingLabel(kind: string): string {
     credential_lost: "Key no longer in the store",
     key_not_installed: "Key not on the host yet",
     expired_root_password: "Password expired on the host",
-    outward_ssh_disabled: "SSH deploys are switched off",
+    outward_ssh_disabled: "SSH is switched off",
     docker_missing: "Docker missing",
     other: "Problem",
   };
@@ -1448,8 +1448,8 @@ function formOf(values: Record<string, string>): FormData {
 function HostsUnreachableNote() {
   return (
     <span className="detail" data-testid="fleet-action-unavailable">
-      Unavailable while BOSS may not reach hosts over SSH — set BOSS_SSH_HOST_DEPLOY_ALLOWED=true
-      and restart (the notice at the top of this panel).
+      Unavailable while BOSS may not reach hosts over SSH — this install sets
+      BOSS_SSH_OUTWARD_ALLOWED=false (the notice at the top of this panel).
     </span>
   );
 }

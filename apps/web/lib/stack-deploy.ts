@@ -52,6 +52,13 @@ export type StackDeployment = {
   log_tail?: string | null;
   open_url?: string | null;
   error?: { headline?: string; action?: string } | null;
+  /**
+   * The API's verdict, from the target's whole history: true only on the target's latest
+   * deployment that applied a ChangeSet, when an earlier healthy commit exists.
+   */
+  rollback_available?: boolean | null;
+  /** The commit Roll back would deploy, when it is available. */
+  rollback_commit?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -65,9 +72,11 @@ export type StackTarget = {
   host_id?: string | null;
   target_ref?: string | null;
   status?: string | null;
-  deploy_kind?: string | null;
-  manifest_path?: string | null;
-  public_url?: string | null;
+  /**
+   * Where the API keeps every per-target fact, stack ones included:
+   * `{kind: "deploy_kind", name: "stack"}`, `{kind: "manifest_path", ...}`,
+   * `{kind: "public_url", ...}` (engine/boss_engine/services/stack_targets.py).
+   */
   required_resources?: Array<{ kind?: string; name?: string }> | null;
 };
 
@@ -114,20 +123,23 @@ export function isLive(status: string | null | undefined): boolean {
 }
 
 /**
- * The buttons a deployment offers, decided by its status and nothing else.
+ * The buttons a deployment offers, decided by the record and nothing else.
  *
  * Approve/Reject exist only while a decision is waiting AND the record names it — a button that
- * cannot name what it approves would approve nothing. Rollback is offered once the deployment
- * has finished either way: it plans a NEW deployment of the previous healthy commit, through the
- * same approval, so it is never offered while this one is still in flight.
+ * cannot name what it approves would approve nothing. Rollback is the API's call
+ * (`rollback_available`), because only the target's history can answer it: an OLDER healthy
+ * record would roll back past the live release, and a deployment refused at preflight never
+ * touched the host, so there is nothing to roll back.
  */
 export type StackAction = "approve" | "reject" | "rollback" | "open";
 
-export function stackActions(d: Pick<StackDeployment, "status" | "decision_id" | "open_url">): StackAction[] {
+export function stackActions(
+  d: Pick<StackDeployment, "status" | "decision_id" | "open_url" | "rollback_available">,
+): StackAction[] {
   const out: StackAction[] = [];
   if (d.status === "awaiting_approval" && d.decision_id) out.push("approve", "reject");
   if (d.status === "healthy" && d.open_url) out.push("open");
-  if (d.status === "healthy" || d.status === "failed") out.push("rollback");
+  if (d.rollback_available === true) out.push("rollback");
   return out;
 }
 
@@ -163,28 +175,27 @@ export function shortCommit(commit: string | null | undefined): string {
   return (commit ?? "").slice(0, 12);
 }
 
-/**
- * A stack target, read from whichever shape the target record carries it in.
- *
- * Canonical: top-level `deploy_kind: "stack"`. A target store that keeps per-target facts in
- * `required_resources` (as app_port and app_entry are) is read the same way, so the console does
- * not depend on which of the two the API settled on.
- */
+/** A stack fact, read from `required_resources` — the one place the API stores it. */
 function resource(t: StackTarget, kind: string): string | null {
   const hit = (t.required_resources ?? []).find((r) => r?.kind === kind);
   return hit?.name ? String(hit.name) : null;
 }
 
 export function isStackTarget(t: StackTarget): boolean {
-  return (t.deploy_kind ?? resource(t, "deploy_kind")) === "stack";
+  return resource(t, "deploy_kind") === "stack";
+}
+
+/** Bound to a VM. A target without a host has no ssh credential, so it offers no Deploy. */
+export function isAttached(t: StackTarget): boolean {
+  return Boolean(t.host_id);
 }
 
 export function targetManifestPath(t: StackTarget): string {
-  return t.manifest_path || resource(t, "manifest_path") || DEFAULT_MANIFEST_PATH;
+  return resource(t, "manifest_path") || DEFAULT_MANIFEST_PATH;
 }
 
 export function targetPublicUrl(t: StackTarget): string | null {
-  return t.public_url || resource(t, "public_url") || null;
+  return resource(t, "public_url");
 }
 
 /** `owner/name`, however the target recorded it. */
@@ -317,40 +328,34 @@ export async function getStackDeployment(id: string): Promise<Result<StackDeploy
 }
 
 /**
- * Register a stack target and point it at its VM.
+ * Register a stack target ON its VM, in one write.
  *
- * Two calls because they are two facts: what deploys (name, environment, repository, manifest)
- * and where (the host). `attach` derives the target's address from the host row, so the two can
- * never drift — the target is created with that same projection, never a typed address.
+ * `host_id` makes the API derive the target's address from the host row inside the same
+ * transaction, and refuse a retired host or one from another project — so there is never a
+ * target that exists without the VM it was meant for.
  */
 export async function createStackTarget(projectId: string, actor: string, input: {
   host: DeployHost; name: string; environment: string; repository: string;
   publicUrl: string; manifestPath: string;
 }): Promise<Result<StackTarget>> {
-  const user = (input.host.ssh_user || "root").trim();
-  const port = Number(input.host.ssh_port || 22);
-  const created = await send<StackTarget>("/v1/deployment-targets", {
+  return send<StackTarget>("/v1/deployment-targets", {
     project_id: projectId,
     actor,
     app_name: input.name,
     environment: input.environment.trim(),
     repo: input.repository,
-    target_kind: "ssh",
-    target_ref: `${user}@${input.host.address}:${port}`,
+    host_id: input.host.id,
     deploy_kind: "stack",
     manifest_path: input.manifestPath.trim() || DEFAULT_MANIFEST_PATH,
     public_url: input.publicUrl.trim() || null,
-    host_id: input.host.id,
   }, { scope: "stack-target-create", label: "Add stack target" });
-  if (!created.ok) return created;
-  const attached = await send<StackTarget>(
-    `/v1/deployment-hosts/${enc(input.host.id)}/attach`,
-    { target_id: created.data.id, actor },
-    { scope: `stack-target-attach-${created.data.id}`, label: "Point the target at its VM" });
-  if (!attached.ok) {
-    return { ok: false, error: `The target was added but not pointed at ${input.host.name}: ${attached.error}` };
-  }
-  return { ok: true, data: { ...created.data, host_id: input.host.id } };
+}
+
+/** Point a stack target that has no VM (one made elsewhere) at one. */
+export async function attachStackTarget(hostId: string, targetId: string,
+                                        actor: string): Promise<Result<unknown>> {
+  return send(`/v1/deployment-hosts/${enc(hostId)}/attach`, { target_id: targetId, actor },
+    { scope: `stack-target-attach-${targetId}`, label: "Point at a VM" });
 }
 
 export async function planStackDeploy(projectId: string, actor: string, input: {

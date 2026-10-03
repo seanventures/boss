@@ -17,8 +17,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { browserHref } from "../lib/browser-links";
 import { formatDateTime } from "../lib/datetime";
 import {
-  DEFAULT_MANIFEST_PATH, DEFAULT_REF, canHostStack, createStackTarget, decideStackDeploy, deployFormProblem,
-  getStackDeployment, isLive, listStackDeployments, loadHosts, loadRepositories, loadStackTargets,
+  DEFAULT_MANIFEST_PATH, DEFAULT_REF, attachStackTarget, canHostStack, createStackTarget, decideStackDeploy,
+  deployFormProblem, getStackDeployment, isAttached, isLive, listStackDeployments, loadHosts, loadRepositories, loadStackTargets,
   planStackDeploy, rollbackStackDeploy, shortCommit, stackActions, statusLabel, statusTone,
   stepText, targetFormProblem, targetManifestPath, targetPublicUrl, targetRepository,
   type DeployHost, type Repository, type StackDeployment, type StackTarget,
@@ -110,16 +110,21 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
                     <strong>{t.app_name}</strong>
                     <span className="cap-badge">{t.environment}</span>
                     <span className="detail">
-                      on {hostName(t.host_id) || t.target_ref || "an unattached VM"}
+                      {isAttached(t) ? `on ${hostName(t.host_id) || t.target_ref}` : "not on a VM yet"}
                       {" · "}<code>{targetRepository(t)}</code>
                       {" · "}<code>{targetManifestPath(t)}</code>
                     </span>
                     {url ? <a className="detail" href={browserHref(url)} target="_blank" rel="noreferrer">{url}</a> : null}
-                    <button type="button" className="cap-btn primary" data-testid="stack-target-deploy"
-                            onClick={() => setDeployTo(t.id)}>
-                      Deploy
-                    </button>
+                    {isAttached(t) ? (
+                      <button type="button" className="cap-btn primary" data-testid="stack-target-deploy"
+                              onClick={() => setDeployTo(t.id)}>
+                        Deploy
+                      </button>
+                    ) : null}
                   </div>
+                  {isAttached(t) ? null : (
+                    <PointAtVm target={t} hosts={verified} actor={actor} onDone={reload} />
+                  )}
                   {recent.length ? (
                     <ul className="sd-recent" data-testid="stack-recent">
                       {recent.map((d) => (
@@ -155,7 +160,7 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
           ) : null}
 
           <DeployRepository projectId={projectId} actor={actor} repos={repos} suggested={suggested}
-                            targets={targets} targetId={deployTo} onTarget={setDeployTo}
+                            targets={targets.filter(isAttached)} targetId={deployTo} onTarget={setDeployTo}
                             onPlanned={opened} />
 
           {openId ? (
@@ -168,6 +173,43 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
         </>
       ) : null}
     </section>
+  );
+}
+
+/** A stack target with no VM (made outside this panel) has no credential to deploy with. */
+function PointAtVm({ target, hosts, actor, onDone }: {
+  target: StackTarget; hosts: DeployHost[]; actor: string; onDone: () => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hostId, setHostId] = useState(hosts[0]?.id ?? "");
+
+  if (!hosts.length) {
+    return (
+      <p className="detail" data-testid="stack-target-unattached">
+        Not on a VM yet, so it cannot deploy. Add and verify a VM under Hosts, then point it here.
+      </p>
+    );
+  }
+  async function attach() {
+    setBusy(true); setError(null);
+    try {
+      const r = await attachStackTarget(hostId, target.id, actor);
+      if (!r.ok) { setError(r.error); return; }
+      await onDone();
+    } finally { setBusy(false); }
+  }
+  return (
+    <div className="sd-row" data-testid="stack-target-unattached">
+      <span className="detail">Not on a VM yet, so it cannot deploy.</span>
+      <select aria-label="VM" value={hostId} onChange={(e) => setHostId(e.target.value)}>
+        {hosts.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+      </select>
+      <button type="button" className="cap-btn" disabled={busy} onClick={() => void attach()}>
+        {busy ? "Pointing…" : "Point at a VM"}
+      </button>
+      {error ? <span className="detail" role="alert">{error}</span> : null}
+    </div>
   );
 }
 
@@ -498,8 +540,9 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
           ) : null}
           {actions.includes("rollback") ? (
             <button type="button" className="cap-btn" disabled={busy} onClick={() => void rollback()}
-                    title="Plans a deployment of the previous healthy commit, through the same approval">
-              Roll back
+                    data-testid="stack-rollback"
+                    title={`Plans a deployment of ${shortCommit(d.rollback_commit) || "the previous healthy commit"}, through the same approval`}>
+              Roll back{d.rollback_commit ? ` to ${shortCommit(d.rollback_commit)}` : ""}
             </button>
           ) : null}
         </div>

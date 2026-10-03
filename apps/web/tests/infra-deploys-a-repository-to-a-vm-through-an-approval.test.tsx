@@ -68,6 +68,32 @@ function deployment(over: Partial<StackDeployment> = {}): StackDeployment {
   };
 }
 
+/**
+ * What POST /v1/deployment-targets STORES, mirrored from apps/api/app/main.py and
+ * engine/boss_engine/services/stack_targets.py (pinned there by
+ * apps/api/tests/test_a_stack_target_is_stored_and_pointed_at_its_vm_in_one_write.py): stack facts
+ * become `required_resources` entries, an `owner/name` repo is split, and `host_id` derives the
+ * address. The list then answers with what was stored — never with the console's own request
+ * echoed back, which is how a dropped field once passed here and failed against the real API.
+ */
+function storedTarget(body: Record<string, unknown>, hosts: Array<typeof VM>) {
+  const resources: Array<{ kind: string; name: string }> = [{ kind: "container_runtime", name: "docker" }];
+  const [owner, repo] = String(body.repo).includes("/") ? String(body.repo).split("/") : ["", String(body.repo)];
+  if (owner) resources.push({ kind: "repo_owner", name: owner });
+  for (const kind of ["deploy_kind", "manifest_path", "public_url"]) {
+    const v = body[kind];
+    if (typeof v === "string" && v.trim()) resources.push({ kind, name: v.trim() });
+  }
+  const h = hosts.find((x) => x.id === body.host_id);
+  return {
+    id: `deptgt_${String(body.app_name)}`, project_id: body.project_id, app_name: body.app_name,
+    environment: body.environment, repo, target_kind: "ssh", status: "active",
+    host_id: h ? h.id : null,
+    target_ref: h ? `${h.ssh_user}@${h.address}:${h.ssh_port}` : body.target_ref,
+    required_resources: resources,
+  };
+}
+
 type Script = {
   deployments?: StackDeployment[];
   hosts?: unknown[];
@@ -81,16 +107,18 @@ type Script = {
 function installFetch(script: Script = {}) {
   calls = [];
   const reads = [...(script.reads ?? [])];
+  const hosts = (script.hosts ?? [VM, UNREACHED]) as Array<typeof VM>;
+  const targets = [...(script.targets ?? [TARGET, PER_APP_TARGET])] as Array<Record<string, unknown>>;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
     calls.push({ url, method, body });
     if (method === "GET" && url.startsWith("/api/deployment-hosts")) {
-      return json({ hosts: script.hosts ?? [VM, UNREACHED] });
+      return json({ hosts });
     }
     if (method === "GET" && url.startsWith("/v1/deployment-targets")) {
-      return json({ project_id: "project_1", items: script.targets ?? [TARGET, PER_APP_TARGET], limit: 200, offset: 0 });
+      return json({ project_id: "project_1", items: targets, limit: 200, offset: 0 });
     }
     if (method === "GET" && url.startsWith("/v1/projects/project_1/repositories")) {
       return json({ repositories: script.repositories ?? [
@@ -106,10 +134,15 @@ function installFetch(script: Script = {}) {
       return next ? json({ deployment: next }) : json({ detail: "no such deployment" }, 404);
     }
     if (method === "POST" && url === "/v1/deployment-targets") {
-      return json({ ...body, id: "deptgt_new", repo: "boss", repo_owner: "seanventures" }, 201);
+      const stored = storedTarget(body ?? {}, hosts);
+      targets.push(stored);
+      return json(stored, 201);
     }
     if (method === "POST" && url.endsWith("/attach")) {
-      return json({ id: body?.target_id, host_id: "host_1" });
+      const hostId = url.split("/").at(-2);
+      const t = targets.find((x) => x.id === body?.target_id);
+      if (t) t.host_id = hostId;
+      return json({ target_id: body?.target_id, host_id: hostId });
     }
     if (method === "POST" && url === "/v1/deployments/stack/plan") {
       const plan = script.plan ?? { status: 200, body: { deployment: deployment() } };
@@ -180,17 +213,25 @@ describe("a deployment offers only the buttons its status allows", () => {
     expect(stackActions({ status: "planned", decision_id: "dec_1" })).toEqual([]);
     expect(stackActions({ status: "running", decision_id: "dec_1", open_url: "https://x" })).toEqual([]);
   });
-  it("open and roll back once healthy; roll back once failed; nothing once rejected", () => {
-    expect(stackActions({ status: "healthy", open_url: "https://boss.example.com" })).toEqual(["open", "rollback"]);
-    expect(stackActions({ status: "healthy", open_url: null })).toEqual(["rollback"]);
-    expect(stackActions({ status: "failed" })).toEqual(["rollback"]);
+  it("open once healthy; roll back only when the API says this record can", () => {
+    expect(stackActions({ status: "healthy", open_url: "https://boss.example.com", rollback_available: true }))
+      .toEqual(["open", "rollback"]);
+    expect(stackActions({ status: "failed", rollback_available: true })).toEqual(["rollback"]);
     expect(stackActions({ status: "rejected", decision_id: "dec_1" })).toEqual([]);
+  });
+  it("no roll back on an older healthy record, or on a failure that never reached the host", () => {
+    // An older record in the recent list: rolling it back would deploy past the live release.
+    expect(stackActions({ status: "healthy", open_url: "https://boss.example.com", rollback_available: false }))
+      .toEqual(["open"]);
+    // Refused at preflight: nothing on the host changed, so there is nothing to roll back.
+    expect(stackActions({ status: "failed", rollback_available: false })).toEqual([]);
+    // A record from an API that does not say: never guessed from the status.
+    expect(stackActions({ status: "failed" })).toEqual([]);
   });
 });
 
-describe("a stack target is read from either record shape", () => {
-  it("top-level fields or required_resources", () => {
-    expect(isStackTarget({ id: "a", app_name: "a", environment: "p", deploy_kind: "stack" })).toBe(true);
+describe("a stack target is read from the shape the API stores", () => {
+  it("required_resources, and nothing else", () => {
     expect(isStackTarget(TARGET)).toBe(true);
     expect(isStackTarget(PER_APP_TARGET)).toBe(false);
     expect(targetManifestPath(TARGET)).toBe("boss.deploy.yaml");
@@ -238,7 +279,7 @@ describe("Infra → Deploy a repository", () => {
     expect(host.textContent).not.toContain("todo");
   });
 
-  it("adds a stack target on a reachable VM and points it at that VM", async () => {
+  it("adds a stack target on a reachable VM in one write, and it is listed with Deploy after reload", async () => {
     installFetch({ targets: [] });
     await renderPanel();
     expect(host.querySelector('[data-testid="stack-targets-empty"]')).not.toBeNull();
@@ -251,18 +292,40 @@ describe("Infra → Deploy a repository", () => {
     setField(form, "name", "boss");
     setField(form, "public_url", "https://boss.example.com");
     await submit(form);
-    await settle(() => calls.some((c) => c.url.endsWith("/attach")), "attach");
+    await settle(() => host.querySelectorAll('[data-testid="stack-target"]').length === 1, "target listed");
 
-    const created = calls.find((c) => c.method === "POST" && c.url === "/v1/deployment-targets");
-    expect(created?.body).toMatchObject({
+    const created = calls.filter((c) => c.method === "POST" && c.url === "/v1/deployment-targets");
+    expect(created).toHaveLength(1);
+    expect(created[0].body).toEqual({
       project_id: "project_1", actor: "ceo", app_name: "boss", environment: "production",
-      repo: "seanventures/boss", target_kind: "ssh", target_ref: "ubuntu@203.0.113.7:22",
+      repo: "seanventures/boss", host_id: "host_1",
       deploy_kind: "stack", manifest_path: "boss.deploy.yaml", public_url: "https://boss.example.com",
-      host_id: "host_1",
     });
+    // Where it runs is part of the same write: no second call can fail and leave an orphan.
+    expect(calls.some((c) => c.url.endsWith("/attach"))).toBe(false);
+    const card = host.querySelector('[data-testid="stack-target"]')!;
+    expect(card.textContent).toContain("boss-vm");
+    expect(card.textContent).toContain("https://boss.example.com");
+    expect(card.querySelector('[data-testid="stack-target-deploy"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="stack-deploy-form"]')).not.toBeNull();
+  });
+
+  it("a stack target with no VM offers Point at a VM, never Deploy", async () => {
+    const orphan = { ...TARGET, id: "deptgt_orphan", host_id: null, target_ref: "typed@198.51.100.9:22" };
+    installFetch({ targets: [orphan] });
+    await renderPanel();
+    const card = host.querySelector('[data-testid="stack-target"]')!;
+    expect(card.textContent).toContain("not on a VM yet");
+    expect(card.textContent).not.toContain("198.51.100.9");
+    expect(card.querySelector('[data-testid="stack-target-deploy"]')).toBeNull();
+    // Nor can a plan be raised against it from the form.
+    expect(host.querySelector('[data-testid="stack-deploy-form"]')).toBeNull();
+
+    await act(async () => { button("Point at a VM", card).click(); });
+    await settle(() => !!host.querySelector('[data-testid="stack-target-deploy"]'), "attached");
     const attach = calls.find((c) => c.url.endsWith("/attach"));
     expect(attach?.url).toBe("/v1/deployment-hosts/host_1/attach");
-    expect(attach?.body).toEqual({ target_id: "deptgt_new", actor: "ceo" });
+    expect(attach?.body).toEqual({ target_id: "deptgt_orphan", actor: "ceo" });
   });
 
   it("refuses a bad stack name without sending anything", async () => {
@@ -334,6 +397,7 @@ describe("a deployment view follows the record", () => {
       deployment({ status: "running", steps: [{ name: "fetch", status: "succeeded" }, { name: "install", status: "running" }],
                    log_tail: "Step 3/9: building api" }),
       deployment({ status: "healthy", open_url: "https://boss.example.com",
+                   rollback_available: true, rollback_commit: "fedcba9876543210",
                    steps: [{ name: "fetch", status: "succeeded" }, { name: "install", status: "succeeded" },
                            { name: "health", status: "succeeded" }] }),
     ] });
@@ -351,7 +415,9 @@ describe("a deployment view follows the record", () => {
     await settle(() => host.querySelector('[data-testid="stack-deployment"]')?.getAttribute("data-status") === "healthy", "healthy");
     const open = host.querySelector('[data-testid="stack-open"]') as HTMLAnchorElement;
     expect(open.getAttribute("href")).toBe("https://boss.example.com");
-    expect(buttons()).toContain("Roll back");
+    const rollback = host.querySelector('[data-testid="stack-rollback"]') as HTMLButtonElement;
+    expect(rollback.textContent).toBe("Roll back to fedcba987654");
+    expect(rollback.title).toContain("fedcba987654");
 
     // Settled: no more reads.
     const reads = calls.filter((c) => c.method === "GET").length;
@@ -368,12 +434,24 @@ describe("a deployment view follows the record", () => {
     expect(buttons()).not.toContain("Approve");
   });
 
+  it("a failure that never reached the host says what to do and offers no rollback", async () => {
+    installFetch();
+    await act(async () => {
+      root.render(<StackDeploymentView deploymentId="sdep_1" actor="ceo"
+        initial={deployment({ status: "failed", rollback_available: false,
+          error: { headline: "docker is not installed on boss-vm.", action: "Install docker, then plan again." } })} />);
+    });
+    expect(host.querySelector('[data-testid="stack-failure"]')?.textContent).toContain("plan again");
+    expect(host.querySelector('[data-testid="stack-rollback"]')).toBeNull();
+  });
+
   it("a failure says what happened and what to do, and offers a rollback", async () => {
     installFetch();
     const opened: StackDeployment[] = [];
     await act(async () => {
       root.render(<StackDeploymentView deploymentId="sdep_1" actor="ceo" onOpened={(d) => opened.push(d)}
         initial={deployment({ status: "failed", log_tail: "ERROR: port 443 already in use",
+          rollback_available: true, rollback_commit: "0000aaaa1111",
           error: { headline: "The health check never answered 200.", action: "Free port 443 on the VM, then deploy again." } })} />);
     });
     const failure = host.querySelector('[data-testid="stack-failure"]')!;
@@ -382,7 +460,7 @@ describe("a deployment view follows the record", () => {
     expect(host.querySelector('[data-testid="stack-log"]')?.textContent).toContain("port 443");
     expect(host.querySelector('[data-testid="stack-open"]')).toBeNull();
 
-    await act(async () => { button("Roll back").click(); });
+    await act(async () => { button("Roll back to 0000aaaa1111").click(); });
     await settle(() => opened.length === 1, "rollback opened");
     expect(calls.find((c) => c.url === "/v1/deployments/stack/sdep_1/rollback")?.body).toEqual({ actor: "ceo" });
     expect(opened[0].id).toBe("sdep_2");
