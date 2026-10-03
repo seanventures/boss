@@ -75,7 +75,7 @@ describe("the knob is read by the thing it governs", () => {
 });
 
 describe("a step can carry what it needs to KNOW", () => {
-  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+  const DW = codeOnly("app/workflows/define-step-form.tsx");
   const SVC = codeOnly("../../engine/boss_engine/services/workflow_custom_steps.py");
 
   it("asks for it when the step is defined", () => {
