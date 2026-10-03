@@ -41,10 +41,12 @@ function conversation(id: string, kind: string, seats: string[], over: Record<st
            seat_info: seats.map((k) => SEATS[k as keyof typeof SEATS]), ...over };
 }
 
-function sseResponse(): Response {
+function sseResponse(signal?: AbortSignal | null): Response {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
+  // Like a real fetch: aborting the request errors the body being read.
+  signal?.addEventListener("abort", () => controller.error(new DOMException("The operation was aborted.", "AbortError")));
   streams.push({
     push: (event, data) => {
       // Split each block in two, so the reader has to join chunks the way a real proxy splits them.
@@ -83,7 +85,7 @@ beforeEach(() => {
       conversations[id] = conversation(id, String(body.kind), body.seats as string[]);
       return Response.json(conversations[id], { status: 201 });
     }
-    if (/\/(turns|summary|propose)$/.test(path)) return sseResponse();
+    if (/\/(turns|summary|propose)$/.test(path)) return sseResponse(init?.signal);
     if (path.endsWith("/start")) return startReply(body);
     if (path.endsWith("/decisions")) return Response.json({ decision_id: "dec_1", conversation: conversations[path.split("/")[1]] });
     return Response.json({});
@@ -194,6 +196,29 @@ describe("talking to one agent", () => {
     await settle();
     expect(faceState("qa", sheet.querySelector(".ag-talk-head") as HTMLElement)).toBe("idle");
     expect(overBudget(sheet)).toEqual([]);
+  });
+
+  it("while it answers, Send becomes Stop; Stop cuts the answer off and keeps what was said", async () => {
+    await mountHost();
+    await act(async () => { converse.openTalk("qa"); });
+    await settle();
+    const sheet = q('[data-testid="ag-talk"]')!;
+    await push(0, "turn_start", { turn_id: "t1", seq: 1, speaker_kind: "agent", role_key: "qa" });
+    await push(0, "token", { turn_id: "t1", text: "Hello, I am" });
+    expect(sheet.querySelector('[data-testid="ag-send"]')).toBeNull();
+    const stop = sheet.querySelector<HTMLButtonElement>('[data-testid="ag-stop"]')!;
+    expect(stop.textContent).toBe("Stop");
+    expect(stop.title).toBe("Stop answering now");
+    // The server has not settled the cut-off answer yet when the console reloads.
+    conversations.cnv_1.turns = [{ turn_id: "t1", seq: 1, speaker_kind: "agent", role_key: "qa", kind: "message",
+      content: "", status: "streaming" }];
+    await act(async () => { stop.click(); });
+    await settle();
+    expect(sheet.querySelector('[data-testid="ag-stop"]')).toBeNull();
+    expect(sheet.querySelector('[data-testid="ag-send"]')).not.toBeNull();
+    expect(sheet.textContent).toContain("Stopped.");
+    expect(faceState("qa", sheet.querySelector(".ag-talk-head") as HTMLElement)).toBe("idle");
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/cnv_1").length).toBeGreaterThan(1);
   });
 
   it("a refusal says what to do, and nothing is lost from the box's history", async () => {
@@ -360,22 +385,51 @@ describe("the room", () => {
     expect(menu!.textContent).not.toContain("QA Lead");
   });
 
+  it("Stop sits in the room's head while it answers; the question asked stays, the rest do not speak", async () => {
+    const room = await openRoom();
+    expect(room.querySelector('[data-testid="ag-stop"]')).toBeNull();
+    await send(room, "Ship it?");
+    await push(0, "turn_start", { turn_id: "a", seq: 2, speaker_kind: "agent", role_key: "pm" });
+    const stop = room.querySelector<HTMLButtonElement>('.ag-room-head [data-testid="ag-stop"]')!;
+    expect(stop).not.toBeNull();
+    conversations.cnv_1.turns = [
+      { turn_id: "p", seq: 1, speaker_kind: "person", actor: "ceo", kind: "question", content: "Ship it?", status: "complete" },
+      { turn_id: "a", seq: 2, speaker_kind: "agent", role_key: "pm", kind: "error", content: "", status: "error",
+        payload: { kind: "stopped", headline: "Stopped.", action: "Ask again when ready.", retry: true } }];
+    await act(async () => { stop.click(); });
+    await settle();
+    expect(room.querySelector('[data-testid="ag-stop"]')).toBeNull();
+    // The question was recorded before anyone answered: it stays in the transcript.
+    expect(room.querySelector('[data-testid="ag-turn-person"]')!.textContent).toContain("Ship it?");
+    expect(room.textContent).toContain("Stopped.");
+    expect(room.textContent).not.toContain("Up next");
+    for (const k of ["pm", "qa", "security_reviewer"]) {
+      expect(room.querySelector(`[data-testid="ag-seat-${k}"]`)!.getAttribute("data-state")).toBe("idle");
+    }
+  });
+
   it("the summary says who was for and against, and a decision opens once", async () => {
     const room = await openRoom();
     conversations.cnv_1.turns = [
       { turn_id: "a", seq: 1, speaker_kind: "agent", role_key: "pm", kind: "message", content: "x", status: "complete" },
-      { turn_id: "s", seq: 2, speaker_kind: "agent", role_key: "pm", kind: "summary", content: "Ship behind a flag.",
+      { turn_id: "s0", seq: 2, speaker_kind: "agent", role_key: "pm", kind: "summary", content: "Wait.",
+        status: "complete", payload: { text: "Wait.", by_role_key: "pm", decisions: [],
+          next_actions: [{ text: "Pick an owner", owner_role_key: "pm", kind: "decision", decision_id: "dec_0" }] } },
+      { turn_id: "s", seq: 3, speaker_kind: "agent", role_key: "pm", kind: "summary", content: "Ship behind a flag.",
         status: "complete", payload: { text: "Ship behind a flag.", by_role_key: "pm",
           decisions: [{ text: "Flag it", for: ["pm"], against: ["security_reviewer"] }],
           next_actions: [{ text: "Pick a date", owner_role_key: "pm", kind: "decision" }] } }];
     await act(async () => { converse.openConversation("cnv_1"); });
     await settle();
-    const summary = document.querySelector('[data-testid="ag-summary"]')!;
+    const [older, summary] = [...document.querySelectorAll('[data-testid="ag-summary"]')];
+    // An older card's action already opened says so after a reload.
+    expect(older.querySelector("a[href*='decision=dec_0']")).not.toBeNull();
     expect(summary.textContent).toContain("For · Juno");
     expect(summary.textContent).toContain("Against · Security Reviewer");
     await act(async () => { summary.querySelector<HTMLButtonElement>('[data-testid="ag-open-decision"]')!.click(); });
     await settle();
-    expect(calls.filter((c) => c.path.endsWith("/decisions"))[0].body).toMatchObject({ index: 0 });
+    // Each card opens its own action: (its summary turn, index).
+    expect(calls.filter((c) => c.path.endsWith("/decisions"))[0].body).toMatchObject({ turn_id: "s", index: 0 });
     expect(summary.querySelector("a[href*='area=decisions']")).not.toBeNull();
     expect(room).toBeTruthy();
   });

@@ -74,6 +74,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, book, onClo
           disabled={busy || !conversation || conversation.status === "closed"}
           autoFocus
           onSend={(message) => void live.send(message)}
+          onStop={busy ? live.stop : undefined}
           extra={plan ? (
             <button type="button" className="ag-btn" data-testid="ag-propose"
                     disabled={busy || !spoke}

@@ -251,7 +251,7 @@ async function* postStream(path: string, body: Wire, signal?: AbortSignal): Asyn
 export function converseApi(actor: string): ConverseApi & {
   presets(projectId: string): Promise<{ items: PresetView[]; agents: SeatInfo[] }>;
   getView(projectId: string, conversationId: string): Promise<ConversationView>;
-  openDecision(projectId: string, conversationId: string, index: number): Promise<{ decisionId: string; conversation: ConversationView }>;
+  openDecision(projectId: string, conversationId: string, turnId: string, index: number): Promise<{ decisionId: string; conversation: ConversationView }>;
 } {
   const who = { actor };
   return {
@@ -308,9 +308,9 @@ export function converseApi(actor: string): ConverseApi & {
       return mapConversation(await postJson(`/${encodeURIComponent(conversationId)}/close`,
         { project_id: projectId, ...who }, "Close")) as unknown as Conversation;
     },
-    async openDecision(projectId, conversationId, index) {
+    async openDecision(projectId, conversationId, turnId, index) {
       const w = await postJson(`/${encodeURIComponent(conversationId)}/decisions`,
-        { project_id: projectId, ...who, index }, "Open decision");
+        { project_id: projectId, ...who, turn_id: turnId, index }, "Open decision");
       return { decisionId: str(w.decision_id), conversation: mapConversation((w.conversation ?? {}) as Wire) };
     },
   };
@@ -364,6 +364,13 @@ export const CONVERSE_COMMANDS: { key: string; label: string; sub: string; run: 
   { key: "room", label: "Open a room", sub: "2-5 agents at once", run: () => openPicker("room") },
 ];
 
+/** What a cut-off answer says; the same words the server settles it with. */
+export const STOPPED: ModelFailure = { kind: "stopped", headline: "Stopped.", action: "Ask again when ready.", retry: true };
+
+function stoppedTurn(t: TurnView): TurnView {
+  return { ...t, kind: "error", status: "error", error: STOPPED };
+}
+
 // ── useConversation ────────────────────────────────────────────────────────────────────────
 
 export type LiveState = {
@@ -398,18 +405,27 @@ export function useConversation(projectId: string, conversationId: string | null
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<ConverseProblem | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const alive = useRef(true);
 
-  const reload = useCallback(async () => {
+  /** The server's copy. `stopped`: answers this client cut off, which the server may not have
+   *  settled yet — they read as Stopped rather than as still streaming. */
+  const reload = useCallback(async (stopped?: Set<string>) => {
     if (!conversationId) { setConversation(null); return; }
     try {
-      setConversation(await api.current.getView(projectId, conversationId));
+      const fresh = await api.current.getView(projectId, conversationId);
+      if (!alive.current) return;
+      setConversation(stopped?.size ? { ...fresh, turns: fresh.turns.map((t) =>
+        stopped.has(t.turnId) && t.status === "streaming" ? stoppedTurn(t) : t) } : fresh);
     } catch (e) {
-      setProblem(problemOf(e));
+      if (alive.current) setProblem(problemOf(e));
     }
   }, [projectId, conversationId]);
 
   useEffect(() => { void reload(); }, [reload]);
-  useEffect(() => () => abort.current?.abort(), []);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; abort.current?.abort(); };
+  }, []);
 
   const apply = useCallback((event: ConverseEvent) => {
     setConversation((c) => {
@@ -479,12 +495,27 @@ export function useConversation(projectId: string, conversationId: string | null
     if (optimistic) setConversation((c) => c ? { ...c, turns: [...c.turns, optimistic] } : c);
     const controller = new AbortController();
     abort.current = controller;
+    // Answers this stream began and has not finished: what Stop cuts off.
+    const unfinished = new Set<string>();
     try {
-      for await (const event of open(controller.signal)) apply(event);
+      for await (const event of open(controller.signal)) {
+        if (event.type === "turn_start") unfinished.add(event.turnId);
+        if (event.type === "turn_end") unfinished.delete(event.turnId);
+        apply(event);
+      }
       await reload();
     } catch (e) {
-      if (optimistic) setConversation((c) => c ? { ...c, turns: c.turns.filter((t) => t !== optimistic) } : c);
-      if ((e as Error)?.name !== "AbortError") setProblem(problemOf(e));
+      if (controller.signal.aborted || (e as Error)?.name === "AbortError") {
+        // Stopped. What was said is recorded (the server took the turn before it streamed),
+        // so the transcript comes from the server, the cut-off answer reading as Stopped.
+        if (!alive.current) return;
+        setConversation((c) => c ? { ...c, turns: c.turns.map((t) =>
+          unfinished.has(t.turnId) && t.status === "streaming" ? stoppedTurn(t) : t) } : c);
+        await reload(unfinished);
+      } else {
+        if (optimistic) setConversation((c) => c ? { ...c, turns: c.turns.filter((t) => t !== optimistic) } : c);
+        setProblem(problemOf(e));
+      }
     } finally {
       setBusy(false);
       setLive({ speaking: null, thinking: [], queue: [] });
@@ -532,13 +563,15 @@ export function useConversation(projectId: string, conversationId: string | null
     } catch (e) { setProblem(problemOf(e)); }
   }, [projectId, conversationId]);
 
-  const openDecision = useCallback(async (index: number) => {
+  /** A summary's next action, addressed by its summary turn and index. */
+  const openDecision = useCallback(async (turnId: string, index: number) => {
     if (!conversationId) return "";
-    const done = await api.current.openDecision(projectId, conversationId, index);
+    const done = await api.current.openDecision(projectId, conversationId, turnId, index);
     setConversation(done.conversation);
     return done.decisionId;
   }, [projectId, conversationId]);
 
+  /** Stop the answering now: the seat speaking is cut off (Stopped), the rest do not speak. */
   const stop = useCallback(() => abort.current?.abort(), []);
 
   return { conversation, speaking: live.speaking, thinking: live.thinking, queue: live.queue, busy,

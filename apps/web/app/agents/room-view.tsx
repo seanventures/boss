@@ -21,7 +21,7 @@ import {
 } from "../../lib/agent-converse";
 import type { AvatarState } from "../../lib/agent-world-types";
 import {
-  AiBadge, Composer, ConverseFace, ProblemNote, ProposalCard, SeatBook, TurnItem, seatName,
+  AiBadge, Composer, ConverseFace, ProblemNote, ProposalCard, SeatBook, StopButton, TurnItem, seatName,
   useSeat, useStickToBottom,
 } from "./converse-parts";
 
@@ -87,6 +87,7 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
           </strong>
           {conversation ? <span className="ag-muted">{conversation.seats.length} agents</span> : null}
           <span className="ag-spacer" />
+          {busy ? <StopButton onStop={live.stop} /> : null}
           <button type="button" className="ag-btn" data-testid="ag-summarize"
                   disabled={busy || nobodySpoke}
                   title={nobodySpoke ? "Ask the room something first" : "The lead sums up: decisions and next steps"}
@@ -190,7 +191,7 @@ function ToToggle({ roleKey, on, onToggle }: { roleKey: string; on: boolean; onT
 function SummaryCard({ turn, summary, onStart, onDecision }: {
   turn: TurnView; summary: SummaryView;
   onStart: (id: string, o?: { startAnyway?: string[]; inputs?: Record<string, string> }) => Promise<string>;
-  onDecision: (index: number) => Promise<string>;
+  onDecision: (turnId: string, index: number) => Promise<string>;
 }) {
   const by = seatName(useSeat(summary.byRoleKey));
   return (
@@ -226,7 +227,7 @@ function SummaryCard({ turn, summary, onStart, onDecision }: {
               {a.kind === "start" && a.proposal ? (
                 <ProposalCard proposal={a.proposal} onStart={onStart} compact />
               ) : a.kind === "decision" ? (
-                <DecisionButton decisionId={a.decisionId} onOpen={() => onDecision(i)} />
+                <DecisionButton decisionId={a.decisionId} onOpen={() => onDecision(turn.turnId, i)} />
               ) : null}
             </li>
           ))}
@@ -246,7 +247,8 @@ function Stance({ roleKey, word }: { roleKey: string; word: "For" | "Against" })
 }
 
 function DecisionButton({ decisionId, onOpen }: { decisionId?: string; onOpen: () => Promise<string> }) {
-  const [id, setId] = useState(decisionId ?? "");
+  const [opened, setId] = useState("");
+  const id = opened || decisionId;
   const [pending, setPending] = useState(false);
   if (id) return <a className="ag-btn" href={`?area=decisions&decision=${encodeURIComponent(id)}`}>Decision open ↗</a>;
   return (
