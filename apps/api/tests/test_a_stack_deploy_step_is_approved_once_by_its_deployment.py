@@ -26,7 +26,7 @@ from apps.api.tests.test_a_stack_deploys_only_through_an_approved_changeset impo
 )
 
 
-def _deploy_run(engine, build_run_id: str) -> str:
+def _deploy_run(engine, build_run_id: str, **extra) -> str:
     """A published product workflow whose one step deploys the build, gated on release_manager
     exactly as the catalogue's deploy steps are."""
     key = f"ship_{uuid4().hex[:8]}"
@@ -43,7 +43,7 @@ def _deploy_run(engine, build_run_id: str) -> str:
                 "approval": {"approver_role": "release_manager"},
             }]})
         run = workflows.start_run(
-            c, project_id=HOME, actor="ceo", input_data={"build_run_id": build_run_id},
+            c, project_id=HOME, actor="ceo", input_data={"build_run_id": build_run_id, **extra},
             dedupe_key=f"dk_{uuid4().hex[:10]}", workflow_version_id=version["id"])
     return run["id"]
 
@@ -159,3 +159,88 @@ def test_an_active_stack_target_is_somewhere_to_deploy(engine, stack):
         ok, detail = workflow_readiness.check(c, api_main.settings, HOME, "deployment_target")
     assert ok, detail
     assert "stack target" in detail
+
+
+def _skip_and_retry(engine, run_id: str) -> dict:
+    from boss_engine.services import workflow_run_actions
+
+    with engine.begin() as c:
+        actions = workflow_run_actions.actions_for(c, HOME, [run_id])[run_id]
+    return {a["key"]: a for a in actions if a.get("step_id") == "deploy"}
+
+
+def test_a_rejected_release_is_never_skipped_only_tried_again(client, engine, stack):
+    from boss_engine.services import workflow_run_actions
+
+    run_id = _deploy_run(engine, _build(engine, '{"owner": "acme", "repo": "shop"}'))
+    _tick(engine)
+    decision_id = _step(engine, run_id)["output"]["decision_id"]
+    assert client.post(f"/v1/decisions/{decision_id}/reject",
+                       json={"actor": "ceo", "note": "no"}).status_code == 200
+    _tick(engine)
+    assert _step(engine, run_id)["status"] == "failed"
+
+    offered = _skip_and_retry(engine, run_id)
+    assert not offered.get("skip_step", {}).get("enabled"), offered
+    assert offered["retry_step"]["enabled"], offered
+    with engine.begin() as c:
+        try:
+            workflow_run_actions.require(c, HOME, run_id, "skip_step", step_id="deploy")
+        except Exception:  # noqa: BLE001 — refused, which is the point
+            refused = True
+        else:
+            refused = False
+    assert refused, "a person's no was skippable"
+
+
+def test_a_waived_gate_ships_only_to_the_stack_target_it_was_waived_for(
+        client, engine, stack, monkeypatch):
+    from boss_engine.services import stack_deploy
+
+    real = stack_deploy.stack_target_for_deploy
+    calls = {"n": 0}
+
+    def flips(*args, **kwargs):
+        # The gate sees the stack target; by execution it is gone (deactivated, a second target
+        # added, the host changed). The step must not fall through to an ungated deploy.
+        calls["n"] += 1
+        return real(*args, **kwargs) if calls["n"] == 1 else None
+
+    monkeypatch.setattr(stack_deploy, "stack_target_for_deploy", flips)
+    run_id = _deploy_run(engine, _build(engine, '{"owner": "acme", "repo": "shop"}'))
+    _tick(engine)
+
+    step = _step(engine, run_id)
+    # Stopped for the operator, settled (not retried into the same answer).
+    assert step["status"] in ("failed", "deadlettered"), step
+    assert "no longer resolves" in step["last_error"]
+    with engine.begin() as c:
+        snapshot = c.execute(text("SELECT binding_snapshot FROM workflow_step_runs "
+                                  "WHERE workflow_run_id = :r AND step_id = 'deploy'"),
+                             {"r": run_id}).scalar_one()
+        planned = c.execute(text("SELECT count(*) FROM stack_deployments WHERE project_id = :p"),
+                            {"p": HOME}).scalar_one()
+        legacy = c.execute(text("SELECT count(*) FROM deployment_runs WHERE project_id = :p"),
+                           {"p": HOME}).scalar_one()
+    assert snapshot["stack_gate_target_id"] == stack["target"]["id"]
+    assert planned == 0 and legacy == 0
+
+
+def test_an_approver_not_on_the_app_cannot_release_a_stack_deploy(client, engine, stack):
+    from boss_engine.services import agent_assignment
+
+    with engine.begin() as c:
+        agent_assignment.assign(c, project_id=HOME, app_name="Shop", role_keys=["pm"],
+                                actor="ceo")
+    run_id = _deploy_run(engine, _build(engine, '{"owner": "acme", "repo": "shop"}'),
+                         title="Shop")
+    _tick(engine)
+
+    step = _step(engine, run_id)
+    # Stopped for the operator, settled (not retried into the same answer).
+    assert step["status"] in ("failed", "deadlettered"), step
+    assert "release_manager" in step["last_error"] and "not assigned" in step["last_error"]
+    with engine.begin() as c:
+        planned = c.execute(text("SELECT count(*) FROM stack_deployments WHERE project_id = :p"),
+                            {"p": HOME}).scalar_one()
+    assert planned == 0
