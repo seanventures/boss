@@ -1,1 +1,321 @@
 /* Workflow Studio: flow. Classes are prefixed wf- and use only the base tokens. */
+
+/* ── The lane ──────────────────────────────────────────────────────────────────
+   One row that never wraps. It scrolls inside itself only (the page never scrolls sideways),
+   and every slot is absolutely placed from geometry.ts, so a drag only writes transforms. */
+.wf-lane {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background-color: var(--surface);
+  background-image: radial-gradient(color-mix(in srgb, var(--faint) 22%, transparent) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.wf-lane-viewport {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.wf-lane-sizer { position: relative; margin: 0 auto; }
+.wf-lane-canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.wf-lane[data-mode="design"] .wf-lane-viewport { padding-bottom: 28px; }
+
+.wf-slot { position: absolute; display: flex; }
+.wf-slot > .wf-node { flex: 1; min-width: 0; }
+.wf-lane[data-dragging] .wf-slot { transition: transform 150ms ease; }
+.wf-slot[data-origin] { opacity: 0; pointer-events: none; }
+.wf-slot-end { align-items: center; }
+
+.wf-flag {
+  position: absolute;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font: 600 0.75rem/1 var(--sans);
+  white-space: nowrap;
+}
+.wf-slot-end .wf-flag { position: static; width: 100%; height: 100%; }
+
+/* Connectors: in a linear flow each slot carries the line into it, so it moves with its node. */
+.wf-conn {
+  position: absolute; top: 50%; height: 2px; margin-top: -1px;
+  background: color-mix(in srgb, var(--faint) 55%, transparent);
+  pointer-events: none;
+}
+.wf-conn[data-flow="past"] { background: var(--green); }
+.wf-conn[data-flow="moving"] {
+  background: linear-gradient(90deg, var(--green), var(--accent), var(--green));
+  background-size: 200% 100%;
+  animation: wf-flow 1.6s linear infinite;
+}
+.wf-conn[data-flow="future"] { background: color-mix(in srgb, var(--faint) 30%, transparent); }
+@keyframes wf-flow { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* Branched flows are drawn as curves. */
+.wf-edges { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.wf-edge { fill: none; stroke: color-mix(in srgb, var(--faint) 70%, transparent); stroke-width: 1.5; }
+.wf-edge[data-kind="back"], .wf-edge[data-kind="loop"] { stroke-dasharray: 5 4; stroke: var(--accent); }
+.wf-edge[data-kind="yes"] { stroke: color-mix(in srgb, var(--green) 70%, transparent); }
+.wf-edge[data-kind="no"] { stroke: color-mix(in srgb, var(--red) 60%, transparent); }
+.wf-edge-head { fill: color-mix(in srgb, var(--faint) 70%, transparent); }
+.wf-edge-label {
+  fill: var(--muted); font: 600 12px/1 var(--sans);
+  paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round;
+}
+
+/* The `+` on a connector: there when you look for it, quiet otherwise. */
+.wf-gap {
+  position: absolute; width: 0; height: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2;
+}
+.wf-gap-add {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0;
+  border: 1px solid var(--accent); border-radius: 50%;
+  background: var(--bg); color: var(--accent);
+  cursor: pointer; opacity: 0;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.wf-gap:hover .wf-gap-add, .wf-gap-add:focus-visible, .wf-lane-canvas:hover .wf-gap-add { opacity: 1; }
+.wf-gap-add:hover { transform: scale(1.12); background: var(--accent); color: var(--bg); }
+.wf-gap-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-lane[data-dragging] .wf-gap { display: none; }
+@media (hover: none) { .wf-gap-add { opacity: 1; } }
+
+/* The insertion caret: accent where a drop is allowed, grey (with its reason) where not. */
+.wf-drop-caret {
+  position: absolute; width: 3px; border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  pointer-events: none; z-index: 3;
+}
+.wf-drop-caret[data-allowed="false"] { background: var(--faint); box-shadow: none; }
+.wf-drop-caret[data-allowed="false"]::after {
+  content: attr(data-tip);
+  position: absolute; top: -26px; left: 50%; transform: translateX(-50%);
+  padding: 3px 8px; border-radius: var(--r);
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--muted); font: 600 0.75rem/1.2 var(--sans); white-space: nowrap;
+}
+
+/* ── A node ────────────────────────────────────────────────────────────────── */
+.wf-node {
+  position: relative;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 0.8125rem/1.25 var(--sans);
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.wf-lane[data-mode="design"] .wf-node { cursor: grab; }
+.wf-node:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.wf-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-node[data-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.wf-node[data-problem="true"] { border-color: var(--red); box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 55%, transparent); }
+.wf-node[data-selected="true"][data-problem="true"] { box-shadow: 0 0 0 2px var(--red); }
+
+.wf-node-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.wf-node-icon {
+  position: relative;
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: var(--r);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.wf-node-icon[data-type="agent"], .wf-pal-icon[data-type="agent"] { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+.wf-node-icon[data-type="custom"], .wf-pal-icon[data-type="custom"] { color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.wf-node-icon[data-type="gate"], .wf-pal-icon[data-type="gate"] { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+.wf-node-icon[data-type="wait"], .wf-pal-icon[data-type="wait"],
+.wf-node-icon[data-type="subworkflow"], .wf-pal-icon[data-type="subworkflow"] { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.wf-node-title {
+  min-width: 0;
+  font-weight: 600; font-size: 0.875rem; line-height: 1.25;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.wf-node-agent {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  color: var(--muted); font-size: 0.75rem;
+}
+.wf-node-agent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-avatar { flex: none; }
+.wf-node .wf-avatar, .wf-avatars .wf-avatar { width: 20px; height: 20px; }
+.mr-avatar.wf-avatar { font-size: 0.75rem; letter-spacing: -0.04em; }
+.wf-avatar-glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.wf-avatar-glyph[data-kind="you"] { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--ink); }
+.wf-avatar-glyph[data-kind="person"] { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber); }
+.wf-node-wait { color: var(--ink); font-weight: 600; }
+
+.wf-node-badges { display: flex; align-items: center; gap: 6px; min-height: 16px; color: var(--muted); }
+.wf-badge { display: inline-flex; align-items: center; gap: 2px; font: 600 0.75rem/1 var(--sans); }
+.wf-badge[data-kind="forced"], .wf-badge[data-kind="approval"] { color: var(--amber); }
+.wf-badge[data-kind="unwired"] { color: var(--amber); }
+.wf-badge[data-kind="lacks"] { color: var(--amber); margin-left: auto; }
+
+.wf-node-problem {
+  position: absolute; top: -5px; right: -5px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--red); border: 2px solid var(--bg);
+}
+
+/* Variants. */
+.wf-node[data-type="gate"] { border-style: dashed; border-color: color-mix(in srgb, var(--amber) 70%, transparent); }
+.wf-node[data-type="subworkflow"] {
+  box-shadow: 3px 3px 0 -1px var(--bg), 3px 3px 0 0 var(--border);
+}
+.wf-node[data-type="wait"] { align-items: center; text-align: center; }
+.wf-node[data-type="wait"] .wf-node-head { flex-direction: column; align-items: center; gap: 4px; }
+
+/* Compact: icon and a two-line title on top; the agent's avatar and the badges (or, on a run,
+   the status) share the bottom line. A grid, so the bottom line is always in the box. */
+[data-density="compact"] .wf-node {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas: "head head" "agent meta"; column-gap: 6px; row-gap: 4px; padding: 7px 8px;
+}
+[data-density="compact"] .wf-node-head { grid-area: head; gap: 6px; min-height: 0; overflow: hidden; }
+[data-density="compact"] .wf-node-icon { width: 20px; height: 20px; }
+[data-density="compact"] .wf-node-title { font-size: 0.78rem; line-height: 1.2; }
+[data-density="compact"] .wf-node-agent { grid-area: agent; }
+[data-density="compact"] .wf-node-agent-name { display: none; }
+[data-density="compact"] .wf-node-badges,
+[data-density="compact"] .wf-node-status { grid-area: meta; min-height: 0; align-self: center; }
+[data-density="compact"] .wf-node-badges { justify-self: end; }
+[data-density="compact"] .wf-node .wf-avatar { width: 18px; height: 18px; }
+
+/* Run mode: the left edge says where the work has got to. */
+.wf-node[data-mode="run"] { border-left-width: 3px; cursor: pointer; }
+.wf-node[data-phase="done"] { border-left-color: var(--green); }
+.wf-node[data-phase="moving"] { border-left-color: var(--accent); }
+.wf-node[data-phase="needs_you"] { border-left-color: var(--amber); }
+.wf-node[data-phase="failed"] { border-left-color: var(--red); }
+.wf-node[data-phase="future"] { border-left-color: var(--border); opacity: 0.72; }
+.wf-node[data-phase="skipped"] { border-left-color: var(--faint); border-style: dashed; opacity: 0.72; }
+.wf-node-status { font: 600 0.75rem/1.2 var(--sans); color: var(--muted); min-height: 14px;
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-node-status[data-phase="needs_you"] { color: var(--amber); }
+.wf-node-status[data-phase="failed"] { color: var(--red); }
+.wf-node-status[data-phase="moving"] { color: var(--accent); }
+.wf-node-mark {
+  position: absolute; right: -4px; bottom: -4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--bg); color: var(--bg); background: var(--faint);
+}
+.wf-node-mark[data-phase="done"] { background: var(--green); }
+.wf-node-mark[data-phase="needs_you"] { background: var(--amber); }
+.wf-node-mark[data-phase="failed"] { background: var(--red); }
+/* The step in flight breathes; only its shadow moves, so nothing reflows for a long run. */
+.wf-node[data-phase="moving"] .wf-node-icon { animation: wf-pulse 1.8s ease-in-out infinite; }
+@keyframes wf-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wf-node[data-phase="moving"] .wf-node-icon { animation: none; box-shadow: 0 0 0 2px var(--accent); }
+  .wf-conn[data-flow="moving"] { animation: none; }
+  .wf-lane[data-dragging] .wf-slot { transition: none; }
+}
+
+/* The dragged copy that follows the pointer. */
+.wf-ghost { display: flex; opacity: 0.9; cursor: grabbing; }
+.wf-ghost > .wf-node, .wf-ghost > .wf-pal-item { flex: 1; min-width: 0; box-shadow: var(--shadow-lg); }
+:root[data-wf-dragging] { cursor: grabbing; }
+:root[data-wf-dragging] * { user-select: none; }
+
+/* Zoom toggle, bottom-right of the lane. */
+.wf-zoom {
+  position: absolute; right: 8px; bottom: 6px;
+  display: inline-flex; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--bg); overflow: hidden; z-index: 2;
+}
+.wf-zoom-btn {
+  padding: 3px 9px; border: 0; background: transparent; color: var(--muted);
+  font: 600 0.75rem/1.2 var(--sans); cursor: pointer;
+}
+.wf-zoom-btn[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--ink); }
+
+/* Minimap: one dot per step and the visible window, under a lane that scrolls. */
+.wf-minimap {
+  position: relative; height: 24px; margin: 0 12px 8px;
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  cursor: pointer; touch-action: none;
+}
+.wf-lane[data-mode="design"] .wf-minimap { margin-right: 108px; }
+.wf-minimap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-minimap-dot {
+  position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+  border-radius: 50%; background: var(--faint);
+}
+.wf-minimap-dot[data-selected="true"] { background: var(--accent); }
+.wf-minimap-dot[data-problem="true"] { background: var(--red); }
+.wf-minimap-dot[data-phase="done"] { background: var(--green); }
+.wf-minimap-dot[data-phase="needs_you"] { background: var(--amber); }
+.wf-minimap-box {
+  position: absolute; top: 2px; bottom: 2px;
+  border: 1px solid var(--accent); border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  cursor: grab;
+}
+
+/* Library card rail: icons and hairlines, one line. */
+.wf-mini { display: flex; align-items: center; flex-wrap: nowrap; gap: 0; margin: 0; padding: 0; list-style: none;
+           overflow: hidden; min-width: 0; }
+.wf-mini-step {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 4px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.wf-mini-step[data-gate="true"] { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+.wf-mini-step:not(:first-child) { margin-left: 6px; position: relative; }
+.wf-mini-step:not(:first-child)::after {
+  content: ""; position: absolute; right: 100%; top: 50%; width: 6px; height: 1px; background: var(--border);
+}
+.wf-mini-more { flex: none; margin-left: 6px; color: var(--muted); font: 600 0.75rem/1 var(--sans); }
+
+/* A dot node (StepNode mode="dot"). */
+.wf-dot-node {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 4px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* The one tooltip (tip-layer.tsx). */
+.wf-tip {
+  position: fixed; z-index: 10002; max-width: min(320px, calc(100vw - 16px));
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--bg); color: var(--ink); box-shadow: var(--shadow);
+  font: 400 0.75rem/1.45 var(--sans); white-space: pre-line; pointer-events: none;
+}
+.wf-tip[hidden] { display: none; }
+
+/* Screen-reader only. */
+.wf-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* The Runs rail when it is this lane: the header chip that opens who is on the run. */
+.wf-run-path { display: grid; gap: 10px; min-width: 0; }
+.wf-run-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

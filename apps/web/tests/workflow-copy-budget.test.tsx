@@ -7,15 +7,19 @@
  * walked: no run of text longer than six words outside a tooltip, and no <p> inside the editor.
  * Explanations belong in a HelpTip or a `title`, which this walk does not count.
  *
- * One file for the whole studio (spec 3.8 item 6). This part covers the inspector (agent task,
- * built-in, gate, workflow settings) and the JSON view; the lane, palette, top bar and library
- * add their own `describe` blocks here.
+ * One file for the whole studio (spec 3.8 item 6), one walker (_helpers/copy-budget.ts). This
+ * covers the inspector (agent task, built-in, gate, workflow settings), the JSON view, and the
+ * canvas: the lane in design and run mode, the palette, QuickAdd and the new-workflow screen
+ * (the editor's whole shell is walked in tests/workflow-editor.test.tsx, against the real store).
+ * The library adds its own `describe` block here.
  */
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EditorState, Spec } from "../lib/workflow-editor-types";
+import { overBudget, paragraphs } from "./_helpers/copy-budget";
+import { linear, PALETTE as CANVAS_PALETTE, STRETCH } from "./_helpers/canvas-fixtures";
 
 vi.mock("../lib/workflow-editor-types", async (orig) => {
   const real = await orig<typeof import("../lib/workflow-editor-types")>();
@@ -33,23 +37,10 @@ vi.mock("../lib/workflow-editor-types", async (orig) => {
 const { Inspector } = await import("../app/workflows/editor/inspector/inspector");
 const { JsonView } = await import("../app/workflows/editor/json/json-view");
 const { PALETTE, makeState } = await import("./_helpers/workflow-editor-fakes");
-
-const MAX_WORDS = 6;
-
-/** Visible text runs (an element's own text), outside tooltips, text boxes and the JSON text. */
-export function overBudget(root: Element): string[] {
-  const out: string[] = [];
-  const skip = (el: Element) => el.closest('[data-tip], [role="tooltip"], textarea, script, style, option, datalist');
-  for (const el of [root, ...root.querySelectorAll("*")]) {
-    if (skip(el)) continue;
-    const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent ?? "").join("");
-    const words = own.replace(/[·▸•|]/g, " ").trim().split(/\s+/).filter(Boolean);
-    if (words.length > MAX_WORDS) out.push(own.trim());
-  }
-  return out;
-}
-
-const paragraphs = (root: Element) => [...root.querySelectorAll(".wf-editor p")].map((p) => p.textContent);
+const { FlowLane } = await import("../app/workflows/flow/flow-lane");
+const { StepPalette } = await import("../app/workflows/editor/palette");
+const { QuickAdd } = await import("../app/workflows/editor/quick-add");
+const { EmptyState } = await import("../app/workflows/editor/empty-state");
 
 const SPEC: Spec = {
   entry_step: "research",
@@ -117,6 +108,48 @@ describe("the JSON view says it in six words or fewer", () => {
       jsonText: "{ \"steps\": [ }", jsonError: { line: 1, message: "Unexpected token }" },
     })} palette={PALETTE} dispatch={() => {}} />);
     expect(overBudget(el)).toEqual([]);
+  });
+});
+
+describe("the canvas says it in six words or fewer", () => {
+  const problems = [{ step_id: "build", field: null, message: "This step needs an input that nothing upstream makes" }];
+  it("a lane being designed, linear and branched", async () => {
+    const el = await render(<>
+      <FlowLane spec={linear(12, (i) => (i === 1 ? { captain: "qa" } : {}))} palette={CANVAS_PALETTE} mode="design"
+                problems={problems} selection="build" onMove={() => {}} onInsert={() => {}}
+                renderGapAction={() => <button type="button" aria-label="Add a step here">+</button>} />
+      <FlowLane spec={STRETCH} palette={CANVAS_PALETTE} mode="design" />
+    </>);
+    expect(overBudget(el)).toEqual([]);
+    expect(paragraphs(el)).toEqual([]);
+  });
+
+  it("a lane on a run", async () => {
+    const el = await render(<FlowLane spec={linear(6)} palette={CANVAS_PALETTE} mode="run" runState={{
+      research: { phase: "done", meta: "5m 43s" },
+      meeting: { phase: "skipped", meta: "skipped", tip: "No research phase: the build was already running" },
+      spec_review: { phase: "needs_you", meta: "needs you" },
+    }} />);
+    expect(overBudget(el)).toEqual([]);
+  });
+
+  it("the palette, open and as a rail, and QuickAdd", async () => {
+    const anchor = document.createElement("button");
+    document.body.appendChild(anchor);
+    const el = await render(<>
+      <StepPalette palette={CANVAS_PALETTE} onPick={() => {}} onNewStep={() => {}} onEditStep={() => {}} />
+      <StepPalette palette={CANVAS_PALETTE} collapsed onToggle={() => {}} onPick={() => {}} onNewStep={() => {}}
+                   onEditStep={() => {}} />
+      <QuickAdd palette={CANVAS_PALETTE} anchor={anchor} open onPick={() => {}} onClose={() => {}} />
+    </>);
+    expect(overBudget(el)).toEqual([]);
+    expect(overBudget(document.querySelector('[data-testid="wf-quick-add"]')!)).toEqual([]);
+  });
+
+  it("the new-workflow screen", async () => {
+    const el = await render(<EmptyState projectId="p1" dispatch={() => {}} onAddFirst={() => {}} />);
+    expect(overBudget(el)).toEqual([]);
+    expect(paragraphs(el)).toEqual([]);
   });
 });
 

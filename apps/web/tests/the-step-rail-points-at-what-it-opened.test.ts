@@ -16,13 +16,15 @@ const UI = codeOnly("app/delivery-workflows-ui.tsx");
 const CSS = cssOnly("app/globals.css");
 
 describe("the step rail", () => {
-  it("wraps on purpose rather than by cascade accident", () => {
-    // The later .dw-rail rule set `overflow-x: auto` and no `flex-wrap`, so the earlier rule's
-    // `flex-wrap: wrap` was left standing: the rail wrapped AND carried a scroll container
-    // that could never scroll.
-    const rule = CSS.slice(CSS.lastIndexOf(".dw-rail {"), CSS.lastIndexOf(".dw-rail {") + 400);
-    expect(rule).toContain("flex-wrap: wrap");
-    expect(rule).not.toContain("overflow-x: auto");
+  it("never wraps: the run is one row that scrolls inside itself", () => {
+    // REWRITTEN (Workflow Studio). The rail wrapped to a second row, so a step's place in the
+    // flow depended on the window width. The run is now the shared lane: one row, placed by
+    // geometry, that fits itself and scrolls sideways inside its own box only.
+    const FLOW_CSS = cssOnly("app/workflows/flow.css");
+    const rule = FLOW_CSS.slice(FLOW_CSS.indexOf(".wf-lane-viewport {"), FLOW_CSS.indexOf(".wf-lane-viewport {") + 200);
+    expect(rule).toContain("overflow-x: auto");
+    // Every step is placed absolutely from computed columns, so there is nothing to wrap.
+    expect(FLOW_CSS).toContain(".wf-slot { position: absolute;");
   });
 
   it("draws every step the same size, so the row reads as a sequence", () => {
@@ -59,7 +61,7 @@ describe("the detail reads as a callout", () => {
   it("points at the step that was clicked, measured rather than computed", () => {
     // A position computed from an index is right until a label wraps to two lines or the rail
     // reflows — and then it points at the wrong box while looking just as confident.
-    expect(UI).toContain('rail.querySelector<HTMLElement>(\'[data-picked="true"] .dw-node-btn\')');
+    expect(UI).toContain(".wf-node[data-selected=\"true\"], [data-testid=\"dw-node-agents\"][data-picked=\"true\"]");
     expect(UI).toContain("--dw-arrow-x");
   });
 
@@ -78,9 +80,10 @@ describe("the detail reads as a callout", () => {
     expect(UI).toContain("Math.max(18, Math.min(frame.width - 18, centre))");
   });
 
-  it("re-measures when the rail reflows", () => {
+  it("re-measures when the rail reflows, or scrolls inside itself", () => {
     expect(UI).toContain('window.addEventListener("resize", place)');
     expect(UI).toContain('window.removeEventListener("resize", place)');
+    expect(UI).toContain('lane?.addEventListener("scroll", place, { passive: true })');
   });
 
   it("centres the notch when nothing has been measured", () => {
@@ -134,9 +137,11 @@ describe("the rail reads as boxes", () => {
 
   it("connects the first step to the node before it", () => {
     // Agents and Research were the only pair in the rail with no line between them, because
-    // "no earlier step" was treated as "nothing has flowed".
-    expect(UI).toContain('const previous = index > 0 ? phaseOf(steps[index - 1]) : "done";');
-    expect(UI).not.toContain("{index > 0 ? (");
+    // "no earlier step" was treated as "nothing has flowed". On the shared lane the first
+    // step's line comes from Start, which has always flowed (REWRITTEN).
+    const LANE = codeOnly("app/workflows/flow/flow-lane.tsx");
+    expect(LANE).toContain('index <= 0 ? "start"');
+    expect(LANE).toContain('const passed = previous === "start"');
   });
 });
 
