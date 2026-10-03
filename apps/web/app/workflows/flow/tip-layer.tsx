@@ -44,9 +44,29 @@ export function isCut(el: HTMLElement): boolean {
 function tipTarget(node: EventTarget | null): HTMLElement | null {
   if (!(node instanceof Element)) return null;
   const el = node.closest<HTMLElement>("[data-tip]");
-  if (!el || !el.dataset.tip) return null;
+  // A trigger whose popover is open (Popover marks it) says nothing: its tip would sit over that
+  // popover. Not every expanded thing: a disclosure such as "Hide steps" is expanded at rest.
+  if (!el || !el.dataset.tip || el.hasAttribute("data-pop-open")) return null;
+  // A tip shown only when its text is cut walks up to the next tip when the text fits.
   if (el.dataset.tipWhen === "cut" && !isCut(el)) return tipTarget(el.parentElement);
   return el;
+}
+
+/** What a tip must never cover: an open popover, or a modal dialog. */
+const OPEN_LAYERS = '.wf-pop-float, [role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]';
+
+const overlaps = (a: DOMRect, b: DOMRect) =>
+  a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+/** Whether the bubble, where it now stands, covers an open popover `el` is not inside. */
+function coversAPopover(el: HTMLElement): boolean {
+  if (!bubble) return false;
+  const tip = bubble.getBoundingClientRect();
+  for (const pop of document.querySelectorAll<HTMLElement>(OPEN_LAYERS)) {
+    if (pop.contains(el)) continue;
+    if (overlaps(tip, pop.getBoundingClientRect())) return true;
+  }
+  return false;
 }
 
 function hide() {
@@ -93,6 +113,8 @@ function show(el: HTMLElement, immediate: boolean) {
     priorDescribedBy = el.getAttribute("aria-describedby");
     el.setAttribute("aria-describedby", priorDescribedBy ? `${priorDescribedBy} ${BUBBLE_ID}` : BUBBLE_ID);
     place(el);
+    // An open popover is what the operator is working in; no tip from outside it covers it.
+    if (coversAPopover(el)) hide();
   };
   if (immediate) open();
   else timer = window.setTimeout(open, SHOW_AFTER_MS);
@@ -152,6 +174,12 @@ export function pinTip(el: HTMLElement): void {
     bubble.textContent = el.dataset.tip ?? "";
     place(el);
   }
+}
+
+/** Takes down whatever tip shows now: a popover or dialog opening calls it, so the tip of the
+ *  button that opened it does not stay over it. */
+export function hideTip(): void {
+  hide();
 }
 
 /** Takes down a tip `pinTip` showed; a hovered tip is left alone. */
