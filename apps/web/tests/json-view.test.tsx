@@ -19,8 +19,7 @@ vi.mock("../lib/workflow-editor-types", async (orig) => {
   const f = await import("./_helpers/workflow-editor-fakes");
   return {
     ...real,
-    stepView: f.fakeStepView, upstreamOf: f.fakeUpstreamOf, wireInputs: f.fakeWireInputs,
-    lineOfStep: f.fakeLineOfStep, stepAtLine: f.fakeStepAtLine, FlowLane: f.FakeFlowLane,
+    FlowLane: f.FakeFlowLane,
     checkSpec: vi.fn(), publishSpec: vi.fn(),
   };
 });
@@ -31,7 +30,7 @@ const { JsonView, jsonGate } = await import("../app/workflows/editor/json/json-v
 const { useSaveFlow } = await import("../app/workflows/editor/save/use-save-flow");
 const { lineDiff, foldDiff } = await import("../app/workflows/editor/json/line-diff");
 const types = await import("../lib/workflow-editor-types");
-const { PALETTE, fakeReducer, makeState, setValue, q, fakeLineOfStep } = await import("./_helpers/workflow-editor-fakes");
+const { PALETTE, reducer, makeState, setValue, q } = await import("./_helpers/workflow-editor-fakes");
 
 const SPEC: Spec = {
   entry_step: "research",
@@ -52,7 +51,7 @@ function SaveButton({ state, dispatch }: { state: EditorState; dispatch: (a: Edi
 }
 
 function Harness({ initial }: { initial: EditorState }) {
-  const [state, dispatch] = useReducer(fakeReducer, initial);
+  const [state, dispatch] = useReducer(reducer, initial);
   box.state = state;
   box.dispatch = dispatch;
   const gate = jsonGate(state);
@@ -140,7 +139,7 @@ describe("caret and selection", () => {
     await act(async () => { q<HTMLButtonElement>(el, "node-build")!.click(); });
     expect(box.state!.selection).toBe("build");
     const caretLine = text().value.slice(0, text().selectionStart).split("\n").length;
-    expect(caretLine).toBe(fakeLineOfStep(text().value, "build"));
+    expect(caretLine).toBe(types.lineOfStep(text().value, "build"));
   });
 
   it("an edit made elsewhere re-serialises the text and keeps the caret on the same step", async () => {

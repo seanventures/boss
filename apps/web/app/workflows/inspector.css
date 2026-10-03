@@ -148,8 +148,12 @@
   overflow-x: hidden; background: var(--surface); border-left: 1px solid var(--border);
   color: var(--ink);
 }
-.wf-insp-body { border: 0; margin: 0; padding: 0 16px 24px; min-width: 0; }
-.wf-insp-body:disabled { opacity: 0.75; }
+.wf-insp-body { padding: 0 16px 24px; min-width: 0; }
+/* The controls that edit, locked as one while viewing an old version or the JSON is broken.
+   Labels, (i) tips and × sit outside, so they keep working. */
+.wf-editable { border: 0; margin: 0; padding: 0; min-width: 0; }
+.wf-editable-inline { display: inline-flex; align-items: center; gap: 4px; }
+.wf-editable:disabled { opacity: 0.6; }
 
 .wf-insp-head {
   position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; gap: 8px;

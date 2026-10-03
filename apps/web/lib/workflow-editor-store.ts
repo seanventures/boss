@@ -123,9 +123,17 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
       return { ...emptyEditorState(a.meta), spec: a.spec,
                loaded: a.meta.workflow_key === null ? null : a.spec };
 
-    case "SAVED":
-      return { ...s, spec: a.spec, loaded: a.spec, meta: a.meta, loadedMeta: a.meta, problems: [],
-               jsonText: null, jsonError: null };
+    case "SAVED": {
+      // The baseline moves; the draft does not. Whatever was edited while the save was in
+      // flight is still in `s.spec` / `s.meta` and stays there, unsaved, rather than being
+      // replaced by the snapshot the request was made from.
+      const sent = a.sent ?? s.meta;
+      const kept = Object.fromEntries(EDITED_META
+        .filter((k) => !deepEqual(s.meta[k] ?? null, sent[k] ?? null))
+        .map((k) => [k, s.meta[k]]));
+      return { ...s, loaded: a.spec, meta: { ...a.meta, ...kept }, loadedMeta: a.meta,
+               problems: deepEqual(s.spec, a.spec) ? [] : s.problems };
+    }
 
     case "SET_SPEC":
       return commit(s, a.spec, a.fromJson ? { jsonText: s.jsonText } : {});
@@ -493,10 +501,10 @@ export function useWorkflowEditor(key: string | "new", projectId: string,
 
   useEffect(() => {
     // Just saved a new workflow or a copy, and the URL moved to its key: what is in memory IS
-    // that workflow. Reloading would only flash a spinner.
+    // that workflow, including anything edited while the save was in flight. Reloading would
+    // flash a spinner and throw those edits away.
     const current = stateRef.current;
-    if (key !== "new" && current.meta.workflow_key === key && current.loaded && !version
-        && !isDirty(current)) {
+    if (key !== "new" && current.meta.workflow_key === key && current.loaded && !version) {
       setLoading(false);
       return;
     }

@@ -5,9 +5,8 @@ import React, {
 } from "react";
 import { CheckCircle, Copy, GitDiff, MagicWand, WarningCircle } from "@phosphor-icons/react";
 
-import { FlowLane, lineOfStep, stepAtLine } from "../../../../lib/workflow-editor-types";
+import { FlowLane, deepEqual, lineOfStep, stepAtLine } from "../../../../lib/workflow-editor-types";
 import type { EditorAction, EditorState, Palette, Problem } from "../../../../lib/workflow-editor-types";
-import { deepEqual } from "../save/dirty";
 import { foldDiff, lineDiff } from "./line-diff";
 
 /** Whether broken JSON blocks Visual and Save, and the one tooltip both show. */

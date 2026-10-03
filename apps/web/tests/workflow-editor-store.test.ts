@@ -176,6 +176,19 @@ describe("structural edits", () => {
     expect(saved.loadedMeta.version).toBe(4);
   });
 
+  it("SAVED moves the baseline only: edits made after the request was sent stay, unsaved", () => {
+    const sent = run(loaded(), { type: "PATCH_STEP", id: "build", patch: { title: "Make" } });
+    const later = run(run(sent, { type: "PATCH_STEP", id: "build", patch: { captain: "dev" } }),
+                      { type: "SET_META", patch: { description: "typed meanwhile" } });
+    const saved = run(later, { type: "SAVED", spec: sent.spec,
+                               meta: { ...sent.meta, name: "Server name", version: 4 }, sent: sent.meta });
+    expect(saved.loaded).toEqual(sent.spec);
+    expect(saved.spec).toBe(later.spec);
+    expect(saved.meta).toMatchObject({ name: "Server name", description: "typed meanwhile", version: 4 });
+    expect(saved.loadedMeta.description).toBe(sent.meta.description);
+    expect(isDirty(saved)).toBe(true);
+  });
+
   it("a name change alone is something to save", () => {
     expect(isDirty(run(loaded(), { type: "SET_META", patch: { name: "Ship faster" } }))).toBe(true);
   });

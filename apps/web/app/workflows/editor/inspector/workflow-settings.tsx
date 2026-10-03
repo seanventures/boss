@@ -4,13 +4,13 @@ import React, { useState, type Dispatch } from "react";
 import { GearSix, X } from "@phosphor-icons/react";
 
 import { TOAST_EVENT, apiWrite } from "../../../../lib/api-write";
-import { NameInUseError, renameWorkflow } from "../../../../lib/workflow-editor-types";
+import { NameInUseError, isDirty, renameWorkflow } from "../../../../lib/workflow-editor-types";
 import type { EditorAction, EditorState } from "../../../../lib/workflow-editor-types";
+import { Editable } from "./editable";
 import { Section } from "./step-inspector";
 import {
   STEP_ID, formCanRequire, formFields, humanise, withFormFields, type FieldType, type FormField,
 } from "./step-facts";
-import { specDirty } from "../save/dirty";
 
 /** The work classes a workflow can be used for, in the operator's words (workflow_catalogue). */
 export const WORK_CLASSES: { key: string; label: string }[] = [
@@ -54,7 +54,8 @@ export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, o
   const [busy, setBusy] = useState(false);
 
   const commitMeta = async () => {
-    if (!published || !meta.definition_id || specDirty(state)) return;
+    // Unsaved edits other than these two fields: the rename rides along with the next Save.
+    if (!published || !meta.definition_id || isDirty({ ...state, meta: state.loadedMeta })) return;
     const patch: { name?: string; description?: string } = {};
     if (meta.name.trim() !== loadedMeta.name) patch.name = meta.name.trim();
     if (meta.description !== loadedMeta.description) patch.description = meta.description;
@@ -64,7 +65,9 @@ export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, o
     try {
       await renameWorkflow(projectId, meta.definition_id, patch);
       setNameError("");
-      dispatch({ type: "SAVED", spec: state.spec, meta: { ...meta, name: meta.name.trim() } });
+      // Only the names moved: the spec baseline stays, and a name typed while this was in
+      // flight is kept as the next change.
+      dispatch({ type: "SAVED", spec: state.loaded ?? state.spec, meta: { ...meta, name: meta.name.trim() }, sent: meta });
     } catch (e) {
       if (e instanceof NameInUseError) setNameError("Name in use");
       else toast("error", String((e as Error)?.message ?? e));
@@ -85,18 +88,22 @@ export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, o
 
       <label className="wf-field" title={standard ? "Shipped with BOSS. Saving makes your own copy." : undefined}>
         <span className="wf-label">Name</span>
-        <input className="wf-input" value={meta.name} readOnly={standard} maxLength={120}
-               aria-invalid={nameError ? true : undefined} data-testid="wf-settings-name"
-               onChange={(e) => { setNameError(""); dispatch({ type: "SET_META", patch: { name: e.target.value } }); }}
-               onBlur={() => void commitMeta()} />
+        <Editable>
+          <input className="wf-input" value={meta.name} readOnly={standard} maxLength={120}
+                 aria-invalid={nameError ? true : undefined} data-testid="wf-settings-name"
+                 onChange={(e) => { setNameError(""); dispatch({ type: "SET_META", patch: { name: e.target.value } }); }}
+                 onBlur={() => void commitMeta()} />
+        </Editable>
         {nameError ? <span className="wf-field-error" role="alert">{nameError}</span> : null}
       </label>
       <label className="wf-field">
         <span className="wf-label">Description</span>
-        <textarea className="wf-text" rows={2} value={meta.description} readOnly={standard}
-                  data-testid="wf-settings-description" disabled={busy}
-                  onChange={(e) => dispatch({ type: "SET_META", patch: { description: e.target.value } })}
-                  onBlur={() => void commitMeta()} />
+        <Editable>
+          <textarea className="wf-text" rows={2} value={meta.description} readOnly={standard}
+                    data-testid="wf-settings-description" disabled={busy}
+                    onChange={(e) => dispatch({ type: "SET_META", patch: { description: e.target.value } })}
+                    onBlur={() => void commitMeta()} />
+        </Editable>
       </label>
 
       <StartForm state={state} dispatch={dispatch} />
