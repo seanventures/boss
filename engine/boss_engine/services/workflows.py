@@ -19,21 +19,26 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from .core import create_blocking_decision, emit_event, json_hash, make_id, now_utc
-from .workflow_custom_steps import validate_step as defined_step_problems
+from .workflow_custom_steps import (
+    validate_step as defined_step_problems,
+    validate_step_fields as defined_step_field_problems,
+)
 from .workflow_capabilities import (
     approval_mode_for as effective_approval_mode,
     validate_custom_step as custom_step_problems,
     effective_approval as effective_approval_policy,
     estimate_minutes as capability_minutes,
     project_requirements as capability_project_requirements,
-    validate_step as capability_problems,
+    validate_step_fields as capability_problems,
     validate_captain,
 )
 from .step_agents import (
     AGENT_RULES_KEY,
     CURRENT_AGENT_RULES,
     assignment_problems as step_agent_problems,
-    shape_problems as step_agent_shape_problems,
+    captain_shape_problems as step_agent_captain_problems,
+    named_agent as step_named_agent,
+    scope_shape_problems as step_agent_scope_problems,
     tag_steps as tag_steps_with_agent_rules,
     under_current_rules as under_current_agent_rules,
 )
@@ -89,7 +94,11 @@ _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class WorkflowError(RuntimeError):
-    pass
+    """`problems`, when given, is every problem found, one per step and field (see `problem`)."""
+
+    def __init__(self, *args: Any, problems: Optional[list[dict[str, Any]]] = None) -> None:
+        super().__init__(*args)
+        self.problems: list[dict[str, Any]] = list(problems or [])
 
 
 class WorkflowNotFoundError(WorkflowError):
@@ -282,6 +291,385 @@ def project_roster(connection: Connection, project_id: str) -> frozenset[str]:
     return frozenset(roles | (REGISTERED_ROLES - deleted) | HUMAN_ROLES)
 
 
+#: The longest step title the editor may set. A title names a node on a canvas; anything longer
+#: is a description, and the step already has one.
+STEP_TITLE_MAX = 80
+
+#: "step 'build' (Build) needs …" → "needs …": the step travels as `step_id`, so the editor
+#: does not repeat it in front of every message.
+_STEP_PREFIX = re.compile(r"^step '[^']*'(?: \([^)]*\))?:?\s+")
+
+
+def problem(step_id: Optional[str], field: Optional[str], detail: str) -> dict[str, Any]:
+    """One thing wrong with a spec, said where it is.
+
+    `detail` is the full sentence (what an exception or the chat agent says). `message` is the
+    same sentence without the step prefix, for the editor, which already shows the step.
+    """
+    detail = str(detail).strip()
+    short = _STEP_PREFIX.sub("", detail) if step_id else detail
+    return {"step_id": step_id, "field": field,
+            "message": (short[:1].upper() + short[1:]) if short else detail,
+            "detail": detail}
+
+
+def problems_sentence(problems: Iterable[dict[str, Any]]) -> str:
+    """Every problem as the one sentence an exception carries."""
+    return " ".join(p["detail"] for p in problems)
+
+
+def normalise_workflow_spec(
+    spec: Any,
+    roster: Optional[Iterable[str]] = None, *,
+    check_agents: bool = True,
+    require_gate_question: bool = False,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The spec as the runtime stores it, and EVERYTHING wrong with it.
+
+    Every problem at once, each with the step and field it is about, because a builder that
+    surfaces one error at a time makes a customer fix a workflow five times to publish it once.
+    `validate_workflow_spec` raises these; `spec_problems` adds what needs the project. The
+    normalised spec is best effort when there are problems and must not be published.
+
+    `require_gate_question` is the editor's rule: a gate a person will be asked has to say what
+    it asks. Off for BOSS's own workflows, which compose a question when the gate opens.
+    """
+    problems: list[dict[str, Any]] = []
+    if not isinstance(spec, dict):
+        return {}, [problem(None, None, "workflow spec must be an object.")]
+    raw_steps = spec.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return dict(spec), [problem(None, "steps",
+                                    "workflow spec must contain at least one step.")]
+
+    normalized_steps: list[dict[str, Any]] = []
+    ids: set[str] = set()
+    # Whether the graph can be walked. A step with no usable id, kind or `next` makes edges
+    # meaningless, so the reachability checks wait until those are fixed.
+    walkable = True
+    for raw in raw_steps:
+        if not isinstance(raw, dict):
+            problems.append(problem(None, None, "every workflow step must be an object."))
+            walkable = False
+            continue
+        step = dict(raw)
+        try:
+            step_id = _clean_text(step.get("id"), "step.id")
+        except WorkflowValidationError as error:
+            problems.append(problem(None, "id", str(error)))
+            walkable = False
+            continue
+        if not _STEP_ID.fullmatch(step_id):
+            problems.append(problem(step_id, "id", (
+                f"step id '{step_id}' must use letters, numbers, dot, underscore, or dash.")))
+            walkable = False
+            continue
+        if step_id in ids:
+            problems.append(problem(step_id, "id", f"duplicate workflow step id '{step_id}'."))
+            walkable = False
+            continue
+        ids.add(step_id)
+
+        def bad(field: Optional[str], detail: str, _id: str = step_id) -> None:
+            problems.append(problem(_id, field, detail))
+
+        try:
+            kind = _clean_text(step.get("kind"), f"step '{step_id}' kind").lower()
+        except WorkflowValidationError as error:
+            bad("kind", str(error))
+            walkable = False
+            continue
+        if kind not in WORKFLOW_KINDS:
+            bad("kind", f"step '{step_id}' kind must be one of: "
+                        f"{', '.join(sorted(WORKFLOW_KINDS))}.")
+            walkable = False
+            continue
+        step["id"] = step_id
+        step["kind"] = kind
+        # WHAT THE OPERATOR CALLS IT. Optional, set by the editor, and the one name the canvas,
+        # the plan and a run all show. Absent unless somebody wrote one: a standard saved as a
+        # copy with no edits must come back exactly as it went in.
+        if "title" in step:
+            title = step["title"]
+            if title is None or (isinstance(title, str) and not title.strip()):
+                step.pop("title")
+            elif not isinstance(title, str):
+                bad("title", f"step '{step_id}' title must be text.")
+            elif len(title.strip()) > STEP_TITLE_MAX:
+                bad("title", f"step '{step_id}' title must be {STEP_TITLE_MAX} characters "
+                             "or fewer.")
+            else:
+                step["title"] = title.strip()
+        try:
+            attempts = int(step.get("max_attempts", 3))
+        except (TypeError, ValueError):
+            attempts = 0
+        if attempts < 1 or attempts > 25:
+            bad("max_attempts", f"step '{step_id}' max_attempts must be between 1 and 25.")
+        else:
+            step["max_attempts"] = attempts
+        if "next" in step and isinstance(step["next"], str):
+            step["next"] = [step["next"]]
+        elif "next" not in step:
+            step["next"] = []
+        elif not isinstance(step["next"], list):
+            bad("next", f"step '{step_id}' next must be a list.")
+            walkable = False
+
+        binding = step.get("binding") or {}
+        if not isinstance(binding, dict):
+            bad("binding", f"step '{step_id}' binding must be an object.")
+            normalized_steps.append(step)
+            continue
+        step["binding"] = binding
+        # WHO RUNS IT, FOR EVERY KIND OF STEP — the part that needs no project to see: `human`
+        # only on a gate, a name that is an agent key, and skills/MCP lists only where something
+        # reads them. Whether the named agent EXISTS, and whether it holds what the step needs,
+        # is `step_agents.assignment_problems`, run at publish and at start with the project in
+        # hand. That used to be a hard-coded set of role keys checked here, which refused every
+        # agent made on the Agents page.
+        captain_shape = step_agent_captain_problems(step) if check_agents else []
+        for detail in captain_shape:
+            bad("captain", detail)
+        if check_agents:
+            for field, detail in step_agent_scope_problems(step):
+                bad(field, detail)
+
+        def captain_problems() -> None:
+            # The shape was said above; saying it again from validate_captain would double it.
+            if check_agents and not captain_shape:
+                for detail in validate_captain(step, roster):
+                    bad("captain", detail)
+
+        def approval_mode() -> None:
+            approval = dict(step.get("approval") or {})
+            mode = str(approval.get("mode", "auto")).lower()
+            if mode not in ("auto", "manual"):
+                bad("approval", f"step '{step_id}' approval mode must be 'auto' or 'manual'.")
+                return
+            # AUTO DOES NOT MEAN UNATTENDED. The agent's own loop suspends on any skill at or
+            # above the risk floor, so a step that reaches a tier-3 publish stops for a person
+            # whatever this says. Recorded as asked rather than rewritten, because the gate that
+            # fires is the skill's, not the step's.
+            approval["mode"] = mode
+            approval.setdefault("on_timeout", "block")
+            step["approval"] = approval
+
+        if kind == "capability" and binding.get("agent_work"):
+            # A STEP WHOSE SPECIFICATION IS A SENTENCE. It binds no capability and no custom
+            # step, so neither of the checks below applies — what it needs is an instruction and,
+            # optionally, an agent. See services/agent_steps.py for why this shape exists.
+            wiring = binding.get("inputs") or {}
+            if not isinstance(wiring, dict) or "instructions" not in wiring:
+                bad("instructions", (
+                    f"step '{step_id}' must wire 'instructions' — that is the whole of what it "
+                    "tells the agent to do. Read it from the run's input, or pin a literal."))
+            # WHETHER THE NAMED AGENT EXISTS is checked here against the project's roster
+            # (agents stream); whether it HOLDS what the step is scoped to is
+            # `step_agents.assignment_problems` at publish and at start (steps stream). Both
+            # fail closed, because a step given to an agent that can do nothing wastes a run.
+            captain_problems()
+            approval_mode()
+        elif kind == "capability" and binding.get("typed_decision"):
+            # A JUDGEMENT WITH ITS ANSWERS NAMED UP FRONT. The step asks one question about what
+            # it is wired, a decision model picks one of the options, and an ordinary `condition`
+            # routes on `steps.<id>.output.answer`. See services/typed_decisions.py.
+            for detail in typed_decision_problems(step_id, binding):
+                bad("binding", detail)
+            # Nothing to approve: it reads and answers, it acts on nothing. What acts is the
+            # branch it selects, and that branch carries its own gate.
+            step["approval"] = {"mode": "auto", "on_timeout": "block"}
+        elif kind == "capability" and binding.get("custom_step"):
+            # A step the customer defined. It cannot be checked here — whether the skill it
+            # binds still exists, and what risk tier it really carries, are facts about the
+            # project, not about the spec. `spec_problems` does it with a connection in hand;
+            # this pass only confirms the shape.
+            if not str(binding.get("custom_step") or "").strip():
+                bad("binding", f"step '{step_id}' does not say which custom step it runs.")
+            # A CUSTOM STEP MAY NAME AN AGENT TOO, and until now only the built-in capabilities
+            # had their captain checked — so a typo in a role on a customer's step published
+            # cleanly and was denied at run time, twenty minutes into a workflow, as
+            # "caller 'vidoe_editor' not in allowed_callers". Who may RUN it is
+            # `step_agents.assignment_problems`.
+            captain_problems()
+            approval_mode()
+        elif kind == "capability":
+            # Every problem at once. A builder that surfaces one error at a time makes a
+            # customer fix a workflow five times to publish it once.
+            found = [
+                (field, detail) for field, detail in capability_problems(
+                    step if check_agents else {k: v for k, v in step.items() if k != "captain"},
+                    roster if check_agents else None)
+                if not (field == "captain" and captain_shape)
+            ]
+            for field, detail in found:
+                bad(field, detail)
+            if not found:
+                # Store the EFFECTIVE approval mode, not the requested one: a plan that reads
+                # "auto" beside a step that will stop and wait is a plan nobody can trust.
+                step["approval"] = effective_approval_policy(
+                    str(binding["capability"]), step.get("approval")
+                )
+        if kind == "skill" and not binding.get("skill_id"):
+            bad("binding", f"skill step '{step_id}' requires binding.skill_id.")
+        if kind == "skill" and step.get("approval"):
+            # A customer's own step is under the same floor as a standard one. Without this,
+            # "custom step" would be the documented way to deploy to production unattended.
+            # The skill's real risk tier is checked against the project registry in
+            # `_validate_bindings`, which is the only place that can see it.
+            approval = dict(step["approval"])
+            mode = str(approval.get("mode", "auto")).lower()
+            if mode not in ("auto", "manual"):
+                bad("approval", f"step '{step_id}' approval mode must be 'auto' or 'manual'.")
+            else:
+                approval["mode"] = mode
+                step["approval"] = approval
+        if kind == "integration" and not binding.get("integration_connection_id"):
+            bad("binding",
+                f"integration step '{step_id}' requires binding.integration_connection_id.")
+        if kind == "agent_group" and not binding.get("agent_group_version_id"):
+            bad("binding",
+                f"agent_group step '{step_id}' requires binding.agent_group_version_id.")
+        if kind == "subworkflow" and not binding.get("workflow_version_id"):
+            bad("binding", f"subworkflow step '{step_id}' requires binding.workflow_version_id.")
+        if kind == "condition":
+            if not isinstance(step.get("expression"), dict):
+                bad("expression",
+                    f"condition step '{step_id}' requires a declarative expression.")
+            for branch in ("on_true", "on_false"):
+                if not str(step.get(branch) or "").strip():
+                    bad(branch, f"condition step '{step_id}' {branch} is required.")
+                    walkable = False
+        if kind == "parallel":
+            branches = step.get("branches")
+            if not isinstance(branches, list) or len(branches) < 2:
+                bad("branches", f"parallel step '{step_id}' requires at least two branches.")
+                walkable = walkable and isinstance(branches, list)
+            if not str(step.get("join") or "").strip():
+                bad("join", f"parallel step '{step_id}' join is required.")
+        if kind == "join":
+            wait_for = step.get("wait_for")
+            if not isinstance(wait_for, list) or not wait_for:
+                bad("wait_for", f"join step '{step_id}' requires wait_for.")
+                step["wait_for"] = []
+            if step.get("success_policy", "all") not in {"all", "any"}:
+                bad("success_policy",
+                    f"join step '{step_id}' success_policy must be all or any.")
+        if kind == "bounded_loop":
+            if not str(step.get("body") or "").strip():
+                bad("body", f"bounded_loop step '{step_id}' body is required.")
+            if not isinstance(step.get("expression"), dict):
+                bad("expression",
+                    f"bounded_loop step '{step_id}' requires a declarative expression.")
+            try:
+                maximum = int(step.get("max_iterations", 0))
+            except (TypeError, ValueError):
+                maximum = 0
+            if maximum < 1 or maximum > 100:
+                bad("max_iterations", f"bounded_loop step '{step_id}' max_iterations must be "
+                                      "between 1 and 100.")
+            else:
+                step["max_iterations"] = maximum
+        if kind == "timer":
+            try:
+                seconds = int(step.get("wait_seconds", 0))
+            except (TypeError, ValueError):
+                seconds = -1
+            if seconds < 0 or seconds > 31_536_000:
+                bad("wait_seconds", f"timer step '{step_id}' wait_seconds must be between 0 "
+                                    "and 31536000.")
+            else:
+                step["wait_seconds"] = seconds
+        if kind == "decision":
+            # A QUESTION IS WANTED. BOSS's own gates compose one when they open, from the
+            # workflow and the step they follow. The editor asks for one and refuses a gate
+            # without it (`require_gate_question`): the person answering it should be asked what
+            # its author meant, not a sentence guessed from the step before.
+            question = str(step.get("question") or "").strip()
+            step["question"] = question[:400] if question else ""
+            if require_gate_question and not question:
+                bad("question", f"step '{step_id}' is an approval gate with no question. "
+                                "Say what the person is approving.")
+            # What the reviewer should look at. Carried as written; the gate joins it to
+            # whatever the earlier steps produced when it opens.
+            step["guidance"] = str(step.get("guidance") or "").strip()[:1000]
+        if "compensation" in step and not isinstance(step["compensation"], dict):
+            bad("compensation", f"step '{step_id}' compensation must be an object.")
+        normalized_steps.append(step)
+
+    entry: Optional[str] = None
+    try:
+        entry = _clean_text(spec.get("entry_step"), "entry_step")
+    except WorkflowValidationError as error:
+        problems.append(problem(None, "entry_step", str(error)))
+    if entry is not None and entry not in ids and walkable:
+        problems.append(problem(None, "entry_step", f"entry step '{entry}' does not exist."))
+        entry = None
+    try:
+        input_schema = validate_input_schema(spec.get("input_schema"))
+    except WorkflowValidationError as error:
+        problems.append(problem(None, "input_schema", str(error)))
+        input_schema = spec.get("input_schema") if isinstance(spec.get("input_schema"),
+                                                               dict) else {}
+
+    normalized = {
+        **spec,
+        "entry_step": entry if entry is not None else spec.get("entry_step"),
+        "input_schema": input_schema,
+        "output_schema": spec.get("output_schema") or {},
+        "steps": normalized_steps,
+    }
+    if not walkable:
+        return normalized, problems
+
+    steps = _step_map(normalized)
+    dangling = False
+    for step in normalized_steps:
+        for target in _targets(step):
+            if target not in steps:
+                dangling = True
+                problems.append(problem(step["id"], "next", (
+                    f"step '{step['id']}' references missing step '{target}'.")))
+        if step["kind"] == "join":
+            for dependency in step.get("wait_for") or []:
+                if dependency not in steps:
+                    dangling = True
+                    problems.append(problem(step["id"], "wait_for", (
+                        f"join step '{step['id']}' waits for missing step '{dependency}'.")))
+    if dangling or entry is None:
+        return normalized, problems
+
+    # Declared edges must be acyclic.  Repetition is represented only by a
+    # bounded_loop controller, never by an arbitrary graph cycle.
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    cycle: list[str] = []
+
+    def visit(step_id: str) -> None:
+        if cycle:
+            return
+        if step_id in visiting:
+            cycle.append(step_id)
+            return
+        if step_id in visited:
+            return
+        visiting.add(step_id)
+        for target in _targets(steps[step_id]):
+            visit(target)
+        visiting.remove(step_id)
+        visited.add(step_id)
+
+    visit(entry)
+    if cycle:
+        problems.append(problem(cycle[0], "next", (
+            f"unbounded cycle detected at step '{cycle[0]}'; use bounded_loop.")))
+        return normalized, problems
+    for step_id in sorted(ids - visited):
+        problems.append(problem(step_id, None, (
+            f"step '{step_id}' cannot be reached from the entry step: no step leads to it.")))
+    return normalized, problems
+
+
 def validate_workflow_spec(spec: dict[str, Any],
                            roster: Optional[Iterable[str]] = None, *,
                            check_agents: bool = True) -> dict[str, Any]:
@@ -295,275 +683,126 @@ def validate_workflow_spec(spec: dict[str, Any],
     `check_agents=False` skips the step-agent rules altogether. Those rules are new. A version
     published before them carries no `step_agent_rules` stamp, and is started and run under the
     rules it was published under — see `_published_spec`. Publishing always applies them.
+
+    Raises with every problem, not the first; `error.problems` carries them one per field.
     """
-    if not isinstance(spec, dict):
-        raise WorkflowValidationError("workflow spec must be an object.")
-    raw_steps = spec.get("steps")
-    if not isinstance(raw_steps, list) or not raw_steps:
-        raise WorkflowValidationError("workflow spec must contain at least one step.")
-
-    normalized_steps: list[dict[str, Any]] = []
-    ids: set[str] = set()
-    for raw in raw_steps:
-        if not isinstance(raw, dict):
-            raise WorkflowValidationError("every workflow step must be an object.")
-        step = dict(raw)
-        step_id = _clean_text(step.get("id"), "step.id")
-        if not _STEP_ID.fullmatch(step_id):
-            raise WorkflowValidationError(
-                f"step id '{step_id}' must use letters, numbers, dot, underscore, or dash."
-            )
-        if step_id in ids:
-            raise WorkflowValidationError(f"duplicate workflow step id '{step_id}'.")
-        ids.add(step_id)
-        kind = _clean_text(step.get("kind"), f"step '{step_id}' kind").lower()
-        if kind not in WORKFLOW_KINDS:
-            raise WorkflowValidationError(
-                f"step '{step_id}' kind must be one of: {', '.join(sorted(WORKFLOW_KINDS))}."
-            )
-        step["id"] = step_id
-        step["kind"] = kind
-        step["max_attempts"] = int(step.get("max_attempts", 3))
-        if step["max_attempts"] < 1 or step["max_attempts"] > 25:
-            raise WorkflowValidationError(
-                f"step '{step_id}' max_attempts must be between 1 and 25."
-            )
-        if "next" in step and isinstance(step["next"], str):
-            step["next"] = [step["next"]]
-        elif "next" not in step:
-            step["next"] = []
-        elif not isinstance(step["next"], list):
-            raise WorkflowValidationError(f"step '{step_id}' next must be a list.")
-
-        binding = step.get("binding") or {}
-        if not isinstance(binding, dict):
-            raise WorkflowValidationError(f"step '{step_id}' binding must be an object.")
-        step["binding"] = binding
-        # WHO RUNS IT, FOR EVERY KIND OF STEP — the part that needs no project to see: `human`
-        # only on a gate, a name that is an agent key, and skills/MCP lists only where something
-        # reads them. Whether the named agent EXISTS, and whether it holds what the step needs,
-        # is `step_agents.assignment_problems`, run at publish and at start with the project in
-        # hand. That used to be a hard-coded set of role keys checked here, which refused every
-        # agent made on the Agents page.
-        agent_problems = step_agent_shape_problems(step) if check_agents else []
-        if agent_problems:
-            raise WorkflowValidationError(" ".join(agent_problems))
-        if kind == "capability" and binding.get("agent_work"):
-            # A STEP WHOSE SPECIFICATION IS A SENTENCE. It binds no capability and no custom
-            # step, so neither of the checks below applies — what it needs is an instruction and,
-            # optionally, an agent. See services/agent_steps.py for why this shape exists.
-            wiring = binding.get("inputs") or {}
-            if not isinstance(wiring, dict) or "instructions" not in wiring:
-                raise WorkflowValidationError(
-                    f"step '{step_id}' must wire 'instructions' — that is the whole of what it "
-                    "tells the agent to do. Read it from the run's input, or pin a literal.")
-            # WHETHER THE NAMED AGENT EXISTS is checked here against the project's roster
-            # (agents stream); whether it HOLDS what the step is scoped to is
-            # `step_agents.assignment_problems` at publish and at start (steps stream). Both
-            # fail closed, because a step given to an agent that can do nothing wastes a run.
-            if check_agents:
-                captain_problems = validate_captain(step, roster)
-                if captain_problems:
-                    raise WorkflowValidationError(" ".join(captain_problems))
-            approval = dict(step.get("approval") or {})
-            mode = str(approval.get("mode", "auto")).lower()
-            if mode not in ("auto", "manual"):
-                raise WorkflowValidationError(
-                    f"step '{step_id}' approval mode must be 'auto' or 'manual'.")
-            # AUTO DOES NOT MEAN UNATTENDED. The agent's own loop suspends on any skill at or
-            # above the risk floor, so a step that reaches a tier-3 publish stops for a person
-            # whatever this says. Recorded as asked rather than rewritten, because the gate that
-            # fires is the skill's, not the step's.
-            approval["mode"] = mode
-            approval.setdefault("on_timeout", "block")
-            step["approval"] = approval
-        elif kind == "capability" and binding.get("typed_decision"):
-            # A JUDGEMENT WITH ITS ANSWERS NAMED UP FRONT. The step asks one question about what
-            # it is wired, a decision model picks one of the options, and an ordinary `condition`
-            # routes on `steps.<id>.output.answer`. See services/typed_decisions.py.
-            problems = typed_decision_problems(step_id, binding)
-            if problems:
-                raise WorkflowValidationError(" ".join(problems))
-            # Nothing to approve: it reads and answers, it acts on nothing. What acts is the
-            # branch it selects, and that branch carries its own gate.
-            step["approval"] = {"mode": "auto", "on_timeout": "block"}
-        elif kind == "capability" and binding.get("custom_step"):
-            # A step the customer defined. It cannot be checked here — whether the skill it
-            # binds still exists, and what risk tier it really carries, are facts about the
-            # project, not about the spec. `_validate_bindings` does it with a connection in
-            # hand; this pass only confirms the shape.
-            if not str(binding.get("custom_step") or "").strip():
-                raise WorkflowValidationError(
-                    f"step '{step_id}' does not say which custom step it runs."
-                )
-            # A CUSTOM STEP MAY NAME AN AGENT TOO, and until now only the built-in capabilities
-            # had their captain checked — so a typo in a role on a customer's step published
-            # cleanly and was denied at run time, twenty minutes into a workflow, as
-            # "caller 'vidoe_editor' not in allowed_callers". Who may RUN it is
-            # `step_agents.assignment_problems`.
-            if check_agents:
-                captain_problems = validate_captain(step, roster)
-                if captain_problems:
-                    raise WorkflowValidationError(" ".join(captain_problems))
-            approval = dict(step.get("approval") or {})
-            mode = str(approval.get("mode", "auto")).lower()
-            if mode not in ("auto", "manual"):
-                raise WorkflowValidationError(
-                    f"step '{step_id}' approval mode must be 'auto' or 'manual'."
-                )
-            approval["mode"] = mode
-            approval.setdefault("on_timeout", "block")
-            step["approval"] = approval
-        elif kind == "capability":
-            # Every problem at once. A builder that surfaces one error at a time makes a
-            # customer fix a workflow five times to publish it once.
-            problems = capability_problems(
-                step if check_agents else {k: v for k, v in step.items() if k != "captain"},
-                roster if check_agents else None)
-            if problems:
-                raise WorkflowValidationError(" ".join(problems))
-            # Store the EFFECTIVE approval mode, not the requested one: a plan that reads
-            # "auto" beside a step that will stop and wait is a plan nobody can trust.
-            step["approval"] = effective_approval_policy(
-                str(binding["capability"]), step.get("approval")
-            )
-        if kind == "skill" and not binding.get("skill_id"):
-            raise WorkflowValidationError(f"skill step '{step_id}' requires binding.skill_id.")
-        if kind == "skill" and step.get("approval"):
-            # A customer's own step is under the same floor as a standard one. Without this,
-            # "custom step" would be the documented way to deploy to production unattended.
-            # The skill's real risk tier is checked against the project registry in
-            # `_validate_bindings`, which is the only place that can see it.
-            approval = dict(step["approval"])
-            mode = str(approval.get("mode", "auto")).lower()
-            if mode not in ("auto", "manual"):
-                raise WorkflowValidationError(
-                    f"step '{step_id}' approval mode must be 'auto' or 'manual'."
-                )
-            approval["mode"] = mode
-            step["approval"] = approval
-        if kind == "integration" and not binding.get("integration_connection_id"):
-            raise WorkflowValidationError(
-                f"integration step '{step_id}' requires binding.integration_connection_id."
-            )
-        if kind == "agent_group" and not binding.get("agent_group_version_id"):
-            raise WorkflowValidationError(
-                f"agent_group step '{step_id}' requires binding.agent_group_version_id."
-            )
-        if kind == "subworkflow" and not binding.get("workflow_version_id"):
-            raise WorkflowValidationError(
-                f"subworkflow step '{step_id}' requires binding.workflow_version_id."
-            )
-        if kind == "condition":
-            if not isinstance(step.get("expression"), dict):
-                raise WorkflowValidationError(
-                    f"condition step '{step_id}' requires a declarative expression."
-                )
-            _clean_text(step.get("on_true"), f"condition step '{step_id}' on_true")
-            _clean_text(step.get("on_false"), f"condition step '{step_id}' on_false")
-        if kind == "parallel":
-            branches = step.get("branches")
-            if not isinstance(branches, list) or len(branches) < 2:
-                raise WorkflowValidationError(
-                    f"parallel step '{step_id}' requires at least two branches."
-                )
-            _clean_text(step.get("join"), f"parallel step '{step_id}' join")
-        if kind == "join":
-            wait_for = step.get("wait_for")
-            if not isinstance(wait_for, list) or not wait_for:
-                raise WorkflowValidationError(f"join step '{step_id}' requires wait_for.")
-            if step.get("success_policy", "all") not in {"all", "any"}:
-                raise WorkflowValidationError(
-                    f"join step '{step_id}' success_policy must be all or any."
-                )
-        if kind == "bounded_loop":
-            _clean_text(step.get("body"), f"bounded_loop step '{step_id}' body")
-            if not isinstance(step.get("expression"), dict):
-                raise WorkflowValidationError(
-                    f"bounded_loop step '{step_id}' requires a declarative expression."
-                )
-            maximum = int(step.get("max_iterations", 0))
-            if maximum < 1 or maximum > 100:
-                raise WorkflowValidationError(
-                    f"bounded_loop step '{step_id}' max_iterations must be between 1 and 100."
-                )
-            step["max_iterations"] = maximum
-        if kind == "timer":
-            seconds = int(step.get("wait_seconds", 0))
-            if seconds < 0 or seconds > 31_536_000:
-                raise WorkflowValidationError(
-                    f"timer step '{step_id}' wait_seconds must be between 0 and 31536000."
-                )
-            step["wait_seconds"] = seconds
-        if kind == "decision":
-            # A QUESTION IS WANTED, NOT REQUIRED.
-            #
-            # This refused any decision step without one, while the palette offered no way to
-            # write one — so "Approval gate" could be dropped on the canvas and never saved.
-            # The palette asks for it now, and a step that still arrives without one gets a
-            # question composed from the workflow and the step it sits after, which is what a
-            # human reading the Approvals page needs anyway.
-            question = str(step.get("question") or "").strip()
-            step["question"] = question[:400] if question else ""
-            # What the reviewer should look at. Carried as written; the gate joins it to
-            # whatever the earlier steps produced when it opens.
-            step["guidance"] = str(step.get("guidance") or "").strip()[:1000]
-        if "compensation" in step and not isinstance(step["compensation"], dict):
-            raise WorkflowValidationError(
-                f"step '{step_id}' compensation must be an object."
-            )
-        normalized_steps.append(step)
-
-    entry = _clean_text(spec.get("entry_step"), "entry_step")
-    if entry not in ids:
-        raise WorkflowValidationError(f"entry step '{entry}' does not exist.")
-
-    normalized = {
-        **spec,
-        "entry_step": entry,
-        "input_schema": validate_input_schema(spec.get("input_schema")),
-        "output_schema": spec.get("output_schema") or {},
-        "steps": normalized_steps,
-    }
-    steps = _step_map(normalized)
-    for step in normalized_steps:
-        for target in _targets(step):
-            if target not in steps:
-                raise WorkflowValidationError(
-                    f"step '{step['id']}' references missing step '{target}'."
-                )
-        if step["kind"] == "join":
-            for dependency in step["wait_for"]:
-                if dependency not in steps:
-                    raise WorkflowValidationError(
-                        f"join step '{step['id']}' waits for missing step '{dependency}'."
-                    )
-
-    # Declared edges must be acyclic.  Repetition is represented only by a
-    # bounded_loop controller, never by an arbitrary graph cycle.
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(step_id: str) -> None:
-        if step_id in visiting:
-            raise WorkflowValidationError(
-                f"unbounded cycle detected at step '{step_id}'; use bounded_loop."
-            )
-        if step_id in visited:
-            return
-        visiting.add(step_id)
-        for target in _targets(steps[step_id]):
-            visit(target)
-        visiting.remove(step_id)
-        visited.add(step_id)
-
-    visit(entry)
-    unreachable = sorted(ids - visited)
-    if unreachable:
-        raise WorkflowValidationError(
-            "unreachable workflow steps: " + ", ".join(unreachable)
-        )
+    normalized, problems = normalise_workflow_spec(spec, roster, check_agents=check_agents)
+    if problems:
+        raise WorkflowValidationError(problems_sentence(problems), problems=problems)
     return normalized
+
+
+_PROBLEM_STEP = re.compile(r"^step '([^']+)'")
+
+
+def _agent_problem(detail: str, steps: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """An `assignment_problems` sentence, placed on its step and the control that fixes it.
+
+    Every sentence that function writes opens with "step '<id>'" — the step is read from there,
+    and the field from what the step is: its skills or MCP list when that is what was named
+    wrongly, otherwise the agent picker.
+    """
+    match = _PROBLEM_STEP.match(detail)
+    step_id = match.group(1) if match and match.group(1) in steps else None
+    if step_id is None:
+        return problem(None, None, detail)
+    if " is scoped to " in detail:
+        field = "skills"
+    elif "names MCP server" in detail or "holds MCP server" in detail:
+        field = "mcp"
+    else:
+        field = "captain"
+    return problem(step_id, field, detail)
+
+
+def spec_problems(
+    connection: Connection, project_id: str, spec: Any, *,
+    namespace: str = PRODUCT_NAMESPACE,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Everything that would stop this spec publishing in this project, and nothing else.
+
+    THE ONE COLLECTOR. `publish_version` raises what this returns and the editor's Check shows
+    it, so a spec Check passes is a spec Save publishes, and one it fails is refused by Save
+    with the same problems. Two lists drifting apart is how a builder says "ready" and a save
+    then fails.
+
+    Returns (normalised spec, shape problems, binding problems). Shape problems need only the
+    spec and the roster; binding problems need the project — a custom step's real risk tier, and
+    whether the agent named on each step exists and holds what the step needs. A step with a
+    shape problem is not asked the binding questions: its first problem is the one to fix.
+    """
+    product = namespace == PRODUCT_NAMESPACE
+    normalized, shape = normalise_workflow_spec(
+        spec, project_roster(connection, project_id), require_gate_question=product)
+    steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict) and s.get("id")]
+    flagged = {p["step_id"] for p in shape if p["step_id"]}
+    binding: list[dict[str, Any]] = []
+    # Custom steps first, and only the customer's: their risk tier comes from the skill or MCP
+    # server they bind, so this is the first moment the real tier is knowable — and the builder
+    # is where the customer can still do something about it. BOSS's own definitions are
+    # governed by the machinery around them (see `_validate_bindings`).
+    if product:
+        for step in steps:
+            if step["id"] in flagged or not (step.get("binding") or {}).get("custom_step"):
+                continue
+            for field, detail in defined_step_field_problems(connection, project_id, step):
+                binding.append(problem(step["id"], field, detail))
+        flagged |= {p["step_id"] for p in binding}
+    # WHO RUNS EACH STEP, settled while the operator is still in the builder: a named agent this
+    # project has, holding what its step is scoped to, or — where nobody is named — at least one
+    # agent that may run it. After the risk checks above, because "this needs a person" is the
+    # more fundamental thing to fix. See services/step_agents.py.
+    clean = [s for s in steps if s["id"] not in flagged]
+    if clean:
+        by_id = {s["id"]: s for s in clean}
+        binding.extend(
+            _agent_problem(detail, by_id)
+            for detail in step_agent_problems(connection, project_id, {**normalized,
+                                                                       "steps": clean}))
+    return normalized, shape, binding
+
+
+def check_spec(
+    connection: Connection, project_id: str, spec: Any, *,
+    namespace: str = PRODUCT_NAMESPACE,
+) -> dict[str, Any]:
+    """What Save would say, without saving: every problem, and the plan in numbers.
+
+    Writes nothing. The summary is read from the spec as written, so the editor's chips agree
+    with the steps on screen rather than with the version last published.
+    """
+    from .workflow_readiness import requirements
+
+    normalized, shape, binding = spec_problems(connection, project_id, spec,
+                                               namespace=namespace)
+    problems = shape + binding
+    steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict)]
+    agents: list[str] = []
+    for step in steps:
+        named = step_named_agent(step)
+        if named and named != "human" and named not in agents:
+            agents.append(named)
+    approvals = [str(s.get("id")) for s in steps
+                 if s.get("kind") == "decision"
+                 or str((s.get("approval") or {}).get("mode") or "").lower() == "manual"]
+    try:
+        minutes = capability_minutes({"steps": steps}) or None
+    except Exception:  # noqa: BLE001 — an estimate must never be why a check fails
+        minutes = None
+    needs: list[str] = []
+    try:
+        for item in requirements({**normalized, "steps": steps},
+                                 connection=connection, project_id=project_id):
+            if item["key"] not in needs:
+                needs.append(item["key"])
+    except Exception:  # noqa: BLE001 — nor a needs list on a half-written spec
+        logger.debug("needs of an unfinished spec could not be read", exc_info=True)
+    return {
+        "ok": not problems,
+        "problems": problems,
+        "summary": {"steps": len(steps), "agents": agents, "approvals": approvals,
+                    "typical_minutes": minutes, "needs": needs},
+    }
 
 
 def _serialize_definition(row: Any) -> dict[str, Any]:
@@ -687,9 +926,9 @@ def refuse_operator_edit_of_boss_workflow(definition: dict[str, Any], workflow_r
         # templates, not BOSS's own workflows, so the advice could not be followed.
         raise WorkflowNamespaceError(
             f"'{key}' is one of BOSS's own workflows and is not editable from the console — a "
-            "change to it changes how BOSS itself works. To make something like it, start your "
-            "own workflow in Workflow > Design a workflow, or fork a template from Workflow > "
-            "Catalogue."
+            "change to it changes how BOSS itself works. To make something like it, press New "
+            "workflow in Workflows > Library, or open a standard there and save it as your "
+            "copy."
         )
 
 
@@ -790,7 +1029,7 @@ def require_editable(definition: dict[str, Any]) -> None:
     if definition.get("is_catalogue"):
         raise WorkflowNamespaceError(
             f"'{definition['workflow_key']}' is a standard workflow BOSS ships and cannot be "
-            "edited in place. Fork it to make your own version."
+            "edited in place. Save it as your copy to change it."
         )
 
 
@@ -905,8 +1144,32 @@ def list_definitions(
                    COALESCE((SELECT v.spec->'input_schema'
                              FROM workflow_versions v
                              -- Doubled braces: this SQL is an f-string ({clause} above).
-                             WHERE v.id = d.active_version_id), '{{}}'::jsonb) AS input_schema
+                             WHERE v.id = d.active_version_id), '{{}}'::jsonb) AS input_schema,
+                   -- WHAT IT IS A COPY OF, so the library can group copies under their source
+                   -- and say "from Standard Product Delivery" instead of leaving fifty
+                   -- "(copy)" rows that nobody can tell apart.
+                   src.workflow_key AS forked_from_workflow_key,
+                   src.name AS forked_from_name,
+                   -- WHETHER IT HAS EVER RUN, which decides Delete (nothing to keep) versus
+                   -- Retire (its history must stay readable) before the operator presses it.
+                   (SELECT count(*) FROM workflow_runs r
+                     WHERE r.workflow_definition_id = d.id) AS run_count,
+                   last_run.status AS last_run_status,
+                   last_run.created_at AS last_run_at,
+                   -- The classes of work routed to it, so a card can say what it is used for.
+                   ARRAY(SELECT DISTINCT m.selector_value FROM workflow_mappings m
+                           JOIN workflow_versions mv ON mv.id = m.workflow_version_id
+                          WHERE mv.workflow_definition_id = d.id
+                            AND m.selector_kind = 'work_class' AND m.enabled
+                          ORDER BY m.selector_value) AS used_for
             FROM workflow_definitions d
+            LEFT JOIN workflow_versions srcv ON srcv.id = d.forked_from_version_id
+            LEFT JOIN workflow_definitions src ON src.id = srcv.workflow_definition_id
+            LEFT JOIN LATERAL (
+                SELECT r.status, r.created_at FROM workflow_runs r
+                 WHERE r.workflow_definition_id = d.id
+                 ORDER BY r.created_at DESC LIMIT 1
+            ) last_run ON TRUE
             WHERE d.project_id=:project_id {clause}
             ORDER BY d.updated_at DESC, d.workflow_key
             """
@@ -937,8 +1200,29 @@ def list_definitions(
         # so "Start one" sent a sample brief instead of asking for the fields the steps read.
         schema = _json(row["input_schema"], {})
         item["input_schema"] = schema if isinstance(schema, dict) else {}
+        # The library's own names for what is already here (WorkflowSummary in the console's
+        # workflow-editor-types), so the card reads the row as it comes.
+        item["definition_id"] = item["id"]
+        item["version"] = item["active_version"]
+        item["forked_from_workflow_key"] = row["forked_from_workflow_key"]
+        item["forked_from_name"] = row["forked_from_name"]
+        item["run_count"] = int(row["run_count"] or 0)
+        item["last_run"] = ({"status": row["last_run_status"], "at": _iso(row["last_run_at"])}
+                            if row["last_run_status"] else None)
+        item["used_for"] = list(row["used_for"] or [])
         items.append(item)
     return items
+
+
+def step_title(step: Any) -> str:
+    """The name the operator gave a step on the canvas, or "" when they gave none.
+
+    ONE NAME PER STEP. The builder, the plan and a run each derived their own label — the
+    capability's, the custom step's, the id — so one step was called three things. A `title`
+    on the step, when present, is what all of them show; without one each falls back as before.
+    """
+    title = step.get("title") if isinstance(step, dict) else None
+    return title.strip() if isinstance(title, str) else ""
 
 
 def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any]]:
@@ -954,6 +1238,8 @@ def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any
     invites exactly the question it was asked — "did you assign the agents or not?" — about a
     workflow where all three were assigned correctly.
     """
+    from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
+
     if not isinstance(specs, list):
         return []
     outline: list[dict[str, Any]] = []
@@ -963,11 +1249,22 @@ def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any
         binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
         custom = str(binding.get("custom_step") or "")
         capability = str(binding.get("capability") or "")
+        # The operator's own name for it where there is one: the title they gave the step,
+        # else the label of their custom step. Falling back to the key beats falling back to
+        # nothing: a step whose definition was deleted still has to appear.
+        label = (step_title(step) or step_labels.get(custom) or custom or capability
+                 or str(step.get("id") or ""))
         outline.append({
             "id": str(step.get("id") or ""),
-            # The operator's own name for it where there is one. Falling back to the key beats
-            # falling back to nothing: a step whose definition was deleted still has to appear.
-            "label": step_labels.get(custom) or custom or capability or str(step.get("id") or ""),
+            "label": label,
+            # What the library card's mini-lane tooltips (WorkflowSummary.steps[].title): a name
+            # a person reads, so a built-in step is its capability's label, never its key.
+            "title": (step_title(step) or step_labels.get(custom)
+                      or (get_capability(capability).label if capability in CAPABILITY_KEYS
+                          else "")
+                      or label),
+            # Which built-in it runs, so the card can draw its icon; absent on every other kind.
+            "capability": capability or None,
             "kind": str(step.get("kind") or ""),
             "mine": bool(custom),
             # WHO ANSWERS FOR IT. Empty is meaningful and differs by kind: on an ordinary step it
@@ -1177,7 +1474,18 @@ def publish_version(
     ).mappings().first()
     if not definition:
         raise WorkflowNotFoundError("Workflow definition not found.")
-    normalized = validate_workflow_spec(spec, project_roster(connection, project_id))
+    # THE SAME COLLECTOR THE EDITOR'S CHECK RUNS (`spec_problems`), so check-ok is publish-ok.
+    # A spec that is malformed is refused as such; one that is well formed but cannot run in
+    # this project — a custom step over the risk floor, an agent that holds nothing it needs —
+    # is refused as blocked. Either way with every problem, one per step and field.
+    normalized, shape, blocked = spec_problems(
+        connection, project_id, spec,
+        namespace=str(definition.get("namespace") or SYSTEM_NAMESPACE))
+    if shape:
+        raise WorkflowValidationError(problems_sentence(shape + blocked),
+                                      problems=shape + blocked)
+    if blocked:
+        raise WorkflowBindingBlockedError(problems_sentence(blocked), problems=blocked)
     # STAMPED WITH THE AGENT RULES IT WAS CHECKED UNDER, so a start or a run months from now
     # applies those rules and not whatever this code says then. A step-level copy (which
     # `_run_spec` adds for the runner) is never trusted from a caller.
@@ -1185,25 +1493,6 @@ def publish_version(
     for step in normalized["steps"]:
         step.pop(AGENT_RULES_KEY, None)
     _hold_new_typed_decision_work(normalized)
-
-    # Custom steps are checked HERE as well as at start_run, and only these. Their risk tier
-    # comes from the skill or MCP server they bind, so this is the first moment the real tier
-    # is knowable — and the builder is where the customer can still do something about it.
-    # Everything else stays at start_run, where it has always been: applying the rest of the
-    # binding checks at publish would fail workflows that publish now and bind later.
-    if str(definition.get("namespace") or SYSTEM_NAMESPACE) == PRODUCT_NAMESPACE:
-        for step in normalized["steps"]:
-            if (step.get("binding") or {}).get("custom_step"):
-                problems = defined_step_problems(connection, project_id, step)
-                if problems:
-                    raise WorkflowBindingBlockedError(" ".join(problems))
-    # WHO RUNS EACH STEP, settled while the operator is still in the builder: a named agent
-    # this project has, holding what its step is scoped to, or — where nobody is named — at
-    # least one agent that may run it. After the risk checks above, because "this needs a
-    # person" is the more fundamental thing to fix. See services/step_agents.py.
-    agent_problems = step_agent_problems(connection, project_id, normalized)
-    if agent_problems:
-        raise WorkflowBindingBlockedError(" ".join(agent_problems))
 
     digest = json_hash(normalized)
     existing = connection.execute(
@@ -1317,6 +1606,207 @@ def publish_version(
     result = _serialize_version(row)
     result["duplicate"] = False
     return result
+
+
+# ── The workflow editor: one atomic save ──────────────────────────────────────────────────────
+#
+# The console's editor saves through `publish_from_editor` and nothing else. Saving used to be
+# two calls — create (or fork) a definition, then publish a version — so a save whose publish
+# failed left an empty definition behind, and a repeated save of a standard minted another
+# "(copy)" each time: one project had fifty-four of them. Here the definition and its first
+# version are written together or not at all, a copy is updated rather than duplicated, and a
+# name the operator already uses is refused before anything is written.
+
+
+class WorkflowNameInUseError(WorkflowConflictError):
+    """The operator already has a workflow by that name. Carries a free one to offer."""
+
+    def __init__(self, name: str, suggested_name: str) -> None:
+        super().__init__(f"'{name}' is already the name of one of your workflows.")
+        self.name = name
+        self.suggested_name = suggested_name
+
+
+def free_workflow_key(connection: Connection, project_id: str, name: str) -> str:
+    """A key derived from the name, so a customer never has to invent an identifier.
+
+    Shared by every way a workflow is made — create, import, fork and the editor's save. Two
+    callers deriving keys their own way is how one of them ends up 409ing on a collision the
+    other would have avoided — which is exactly what the first version of forking did.
+    """
+    from uuid import uuid4
+
+    base = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_") or "workflow"
+    taken = {
+        row[0] for row in connection.execute(
+            text("SELECT workflow_key FROM workflow_definitions WHERE project_id=:p"),
+            {"p": project_id},
+        )
+    }
+    key = base
+    for suffix in range(2, 500):
+        if key not in taken:
+            return key
+        key = f"{base}_{suffix}"
+    return f"{base}_{uuid4().hex[:6]}"
+
+
+def _own_names(connection: Connection, project_id: str,
+               exclude_id: Optional[str] = None) -> set[str]:
+    """The names of the operator's own live workflows, folded for comparison.
+
+    Only theirs: a standard may share a name with the copy made of it until the copy is
+    renamed, and a retired workflow has left the library.
+    """
+    rows = connection.execute(
+        text("SELECT name FROM workflow_definitions "
+             "WHERE project_id = :p AND COALESCE(namespace, 'system') = 'product' "
+             "AND NOT COALESCE(is_catalogue, false) AND status <> 'retired' "
+             "AND (CAST(:exclude AS TEXT) IS NULL OR id <> :exclude)"),
+        {"p": project_id, "exclude": exclude_id},
+    ).scalars().all()
+    return {str(name).strip().casefold() for name in rows}
+
+
+def refuse_name_in_use(connection: Connection, project_id: str, name: str,
+                       exclude_id: Optional[str] = None) -> None:
+    """Refuse a name one of the operator's own workflows already has, offering a free one.
+
+    Two workflows with one name is how a library ends up listing several entries nobody can
+    tell apart. Case and surrounding space do not make a name different.
+    """
+    taken = _own_names(connection, project_id, exclude_id)
+    if name.strip().casefold() not in taken:
+        return
+    base = re.sub(r"\s+\d+$", "", name.strip()) or name.strip()
+    for number in range(2, 500):
+        candidate = f"{base} {number}"
+        if candidate.casefold() not in taken:
+            raise WorkflowNameInUseError(name, candidate)
+    raise WorkflowNameInUseError(name, f"{base} {make_id('n')[-4:]}")
+
+
+def rename_definition(
+    connection: Connection, project_id: str, definition_id: str, *, actor: str,
+    name: Optional[str] = None, description: Optional[str] = None,
+) -> dict[str, Any]:
+    """Change what one of the operator's workflows is called, or its description.
+
+    No new version: a name is not part of what runs, so renaming must not make running work
+    look as though its workflow changed under it. Refuses a standard and BOSS's own, like every
+    other edit, and a name the operator already uses.
+    """
+    definition = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
+    require_editable(definition)
+    changes: dict[str, Any] = {}
+    if name is not None:
+        cleaned = _clean_text(name, "name")
+        if cleaned != definition["name"]:
+            refuse_name_in_use(connection, project_id, cleaned, exclude_id=definition_id)
+            changes["name"] = cleaned
+    if description is not None:
+        cleaned_description = str(description).strip() or None
+        if cleaned_description != definition.get("description"):
+            changes["description"] = cleaned_description
+    if changes:
+        assignments = ", ".join(f"{column} = :{column}" for column in changes)
+        connection.execute(
+            text(f"UPDATE workflow_definitions SET {assignments}, updated_at = now() "
+                 "WHERE id = :id AND project_id = :p"),
+            {**changes, "id": definition_id, "p": project_id},
+        )
+        emit_event(connection, project_id, "workflow.definition_renamed", actor,
+                   "workflow_definition", definition_id,
+                   {"workflow_key": definition["workflow_key"], **changes,
+                    "previous_name": definition["name"]})
+    return {"id": definition_id, "workflow_key": definition["workflow_key"],
+            "name": changes.get("name", definition["name"]),
+            "description": changes.get("description", definition.get("description")),
+            "changed": sorted(changes)}
+
+
+def publish_from_editor(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    name: str,
+    spec: Any,
+    definition_id: Optional[str] = None,
+    description: Optional[str] = None,
+    from_workflow_key: Optional[str] = None,
+    update_copy_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Save what the editor holds, as one act: the operator's own workflow, a new one, or a copy.
+
+      * `update_copy_id` — publish onto that existing copy (the "Update my copy" choice).
+      * `definition_id` of the operator's own workflow — publish its next version.
+      * no `definition_id`, or a standard's — create the operator's workflow and publish v1.
+        `from_workflow_key` (or the standard's own key) is recorded as what it was copied from.
+
+    Name and description travel with the save. Every problem is found BEFORE anything is
+    written, so a refused save leaves nothing behind even for a caller that commits anyway;
+    the definition and its first version are then written in the caller's one transaction.
+
+    Returns {"unchanged": True} when the save would change nothing at all, else
+    {"definition": {id, workflow_key, name}, "version": n, "created": bool}.
+    """
+    cleaned_name = _clean_text(name, "name")
+    target: Optional[dict[str, Any]] = None
+    source_key = str(from_workflow_key or "").strip() or None
+    if update_copy_id:
+        target = require_namespace(connection, project_id, update_copy_id, PRODUCT_NAMESPACE)
+        require_editable(target)
+    elif definition_id:
+        loaded = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
+        if loaded.get("is_catalogue"):
+            # A STANDARD IS NEVER EDITED IN PLACE. Saving one makes the operator's copy of it.
+            source_key = source_key or str(loaded["workflow_key"])
+        else:
+            target = loaded
+
+    refuse_name_in_use(connection, project_id, cleaned_name,
+                       exclude_id=str(target["id"]) if target else None)
+    _, shape, blocked = spec_problems(connection, project_id, spec,
+                                      namespace=PRODUCT_NAMESPACE)
+    if shape:
+        raise WorkflowValidationError(problems_sentence(shape + blocked),
+                                      problems=shape + blocked)
+    if blocked:
+        raise WorkflowBindingBlockedError(problems_sentence(blocked), problems=blocked)
+
+    created = False
+    renamed = False
+    if target is None:
+        source = None
+        if source_key:
+            source = running_version(connection, project_id, source_key)
+            if source is None:
+                raise WorkflowNotFoundError(f"no workflow '{source_key}' to copy.")
+        target = create_definition(
+            connection, project_id=project_id,
+            workflow_key=free_workflow_key(connection, project_id, cleaned_name),
+            name=cleaned_name, description=(str(description or "").strip() or None),
+            actor=actor, namespace=PRODUCT_NAMESPACE, is_catalogue=False,
+            forked_from_version_id=str(source["version_id"]) if source else None,
+        )
+        created = True
+    else:
+        renamed = bool(rename_definition(
+            connection, project_id, str(target["id"]), actor=actor, name=cleaned_name,
+            description=description)["changed"])
+
+    version = publish_version(connection, project_id=project_id,
+                              definition_id=str(target["id"]), spec=spec, actor=actor)
+    if (not created and not renamed and version.get("duplicate")
+            and not version.get("reactivated")):
+        return {"unchanged": True}
+    current = connection.execute(
+        text("SELECT id, workflow_key, name FROM workflow_definitions WHERE id = :id"),
+        {"id": target["id"]},
+    ).mappings().one()
+    return {"definition": dict(current), "version": int(version["version"]),
+            "created": created}
 
 
 def create_mapping(
@@ -3172,7 +3662,7 @@ def _step_label(template: dict[str, Any], step_id: str) -> str:
     """What the operator calls this step — the catalogue's label, not the internal id."""
     from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
-    label = str(template.get("label") or "").strip()
+    label = step_title(template) or str(template.get("label") or "").strip()
     if label:
         return label
     key = str((template.get("binding") or {}).get("capability") or "")

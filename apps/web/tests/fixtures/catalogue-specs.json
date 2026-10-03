@@ -1,0 +1,2858 @@
+{
+  "generated_by": "scripts/dump-catalogue-specs.py",
+  "catalogue": [
+    {
+      "workflow_key": "standard_product_delivery",
+      "name": "Standard Product Delivery",
+      "description": "Idea to shipped, watched software. The full path, with gates where money and production are involved.",
+      "spec": {
+        "entry_step": "research",
+        "steps": [
+          {
+            "id": "research",
+            "kind": "capability",
+            "binding": {
+              "capability": "research",
+              "inputs": {
+                "seed": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "meeting"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                },
+                "research": {
+                  "from_step": "research",
+                  "field": "dossier"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "build"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "pm",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "preview"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "plrr"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "plrr",
+            "kind": "capability",
+            "binding": {
+              "capability": "plrr",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "plrr",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [
+              "notify"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "notify",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": {
+                  "from_input": "title"
+                },
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Ship working, watched software. The panel's PRD is the build brief: it is handed straight to an engineering agent, so it must be specific enough to implement and to test against.",
+        "workflow_name": "Standard Product Delivery",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should it do?",
+              "description": "Who it is for and what a person can do with it, in two or three sentences. The panel argues from this text and its PRD is the build brief, so a thin brief produces a thin product.",
+              "examples": [
+                "A shift-swap board where staff offer a shift they cannot work, colleagues claim it, and the manager approves the swap. Used on a phone, mid-shift."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            },
+            "notify_channel": {
+              "type": "string",
+              "title": "Who to tell",
+              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "examples": [
+                "email:team@example.com"
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "minor_feature",
+      "name": "Minor Feature",
+      "description": "A small addition to something that already exists. Skips research; still reviewed, still gated at the door to production.",
+      "spec": {
+        "entry_step": "meeting",
+        "steps": [
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "build"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "preview"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "notify"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "notify",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": {
+                  "from_input": "title"
+                },
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Add one small thing to software that already exists, quickly. There is no research step and no spec review — the PRD goes straight to the build, so keep it tight and do not redesign the surrounding product.",
+        "workflow_name": "Minor Feature",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should change, and in which app?",
+              "description": "One small addition to an app that already exists. Name the app and the change; this path has no research and no spec review.",
+              "examples": [
+                "In the existing Shift swap board: add a 'Download CSV' button to the approvals page that exports this month's approved swaps."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            },
+            "notify_channel": {
+              "type": "string",
+              "title": "Who to tell",
+              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "examples": [
+                "email:team@example.com"
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "major_feature",
+      "name": "Major Feature",
+      "description": "A feature large enough to deserve research and a spec of its own. A person signs off how it looks and works, and again before it ships.",
+      "spec": {
+        "entry_step": "research",
+        "steps": [
+          {
+            "id": "research",
+            "kind": "capability",
+            "binding": {
+              "capability": "research",
+              "inputs": {
+                "seed": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "meeting"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                },
+                "research": {
+                  "from_step": "research",
+                  "field": "dossier"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "build"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "pm",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "preview"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "ux_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "ux_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "ux_review",
+              "inputs": {}
+            },
+            "next": [
+              "report"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "design_critic",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Specify a feature large enough to deserve its own spec, then build it. The PRD is the build brief and must be arguable on its merits, not just implementable. Once it is built, a person signs off the way it looks and works.",
+        "workflow_name": "Major Feature",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What is the feature?",
+              "description": "The feature, who needs it and why. It is researched and specified before it is built, and a person signs off the preview and the release.",
+              "examples": [
+                "Let staff offer a recurring shift (every Tuesday for six weeks) in one action, with the manager approving the series or individual dates."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "fast_fix",
+      "name": "Fast Fix / Hotfix",
+      "description": "Something is broken now. No research, no panel — build, prove it, have someone say yes, ship.",
+      "spec": {
+        "entry_step": "build",
+        "steps": [
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "notify"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "notify",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": {
+                  "from_input": "title"
+                },
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Something is broken in production now. Fix exactly that: the smallest change that makes the failure stop, with a test that would have caught it. Do not redesign the surrounding code; a person approves the release.",
+        "workflow_name": "Fast Fix / Hotfix",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "title",
+            "directive"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What is broken?",
+              "description": "What fails, where, and how to see it fail. The build makes the smallest change that stops it, with a test that would have caught it.",
+              "examples": [
+                "In the Shift swap board, the approvals page returns HTTP 500 when a swap has no claimant. It should list the swap as unclaimed instead."
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            },
+            "notify_channel": {
+              "type": "string",
+              "title": "Who to tell",
+              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "examples": [
+                "email:team@example.com"
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "research_led_discovery",
+      "name": "Research-Led Discovery",
+      "description": "Find out whether it is worth building at all. Ends in a decision and a document, not in code.",
+      "spec": {
+        "entry_step": "research",
+        "steps": [
+          {
+            "id": "research",
+            "kind": "capability",
+            "binding": {
+              "capability": "research",
+              "inputs": {
+                "seed": {
+                  "from_input": "directive"
+                },
+                "deep": true
+              }
+            },
+            "next": [
+              "meeting"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                },
+                "research": {
+                  "from_step": "research",
+                  "field": "dossier"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "document"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "pm",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "document",
+            "kind": "capability",
+            "binding": {
+              "capability": "document",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Decide whether this is worth building AT ALL. This run ends in a decision and a written record, not in code. The panel's job is a recommendation with the case for and against and what would change the answer — not an implementation plan.",
+        "workflow_name": "Research-Led Discovery",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What do you want to find out?",
+              "description": "The question, and the decision it feeds. This ends in a written recommendation, not in code.",
+              "examples": [
+                "Do hourly-staff teams of 20-200 people already have a good way to swap shifts, and would a manager pay for one that enforces approval rules?"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "backend_service_setup",
+      "name": "Backend Service Setup",
+      "description": "Stand up a new service: scaffold, endpoints, tests, deploy, watch.",
+      "spec": {
+        "entry_step": "meeting",
+        "steps": [
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "build"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "cto",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [
+              "document"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "document",
+            "kind": "capability",
+            "binding": {
+              "capability": "document",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Stand up a new service: scaffold, endpoints, tests, deployment and monitoring. The PRD is the build brief and must name the endpoints, the data it owns and how it is watched.",
+        "workflow_name": "Backend Service Setup",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What service should exist?",
+              "description": "What it serves, the data it owns and who calls it. The PRD names the endpoints and how it is watched.",
+              "examples": [
+                "A small HTTP service that stores weekly rotas and answers 'who is on shift at time T' for other apps, with a health check and request metrics."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "ux_certification",
+      "name": "Frontend / UX Certification",
+      "description": "For work whose whole point is how it looks and feels. A person uses the preview and signs off before it ships.",
+      "spec": {
+        "entry_step": "meeting",
+        "steps": [
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "build"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "preview"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "ux_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "ux_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "ux_review",
+              "inputs": {}
+            },
+            "next": [
+              "report"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "design_critic",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "The point of this work is how it looks and feels. A person will use the preview and sign it off. The PRD must therefore state the interaction, the states (empty, loading, error) and what 'good' means concretely enough for a reviewer to judge against.",
+        "workflow_name": "Frontend / UX Certification",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What is the experience?",
+              "description": "The interaction, its states (empty, loading, error) and what 'good' means, concretely enough for a reviewer to judge the preview against.",
+              "examples": [
+                "Make claiming an offered shift one tap on a phone, with a clear confirmation and an undo for ten seconds."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "security_hardening",
+      "name": "Security Hardening",
+      "description": "Threat-led work with a security sign-off that cannot be automated away.",
+      "spec": {
+        "entry_step": "research",
+        "steps": [
+          {
+            "id": "research",
+            "kind": "capability",
+            "binding": {
+              "capability": "research",
+              "inputs": {
+                "seed": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "build"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "research",
+                  "field": "dossier"
+                }
+              }
+            },
+            "next": [
+              "review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "review",
+            "kind": "capability",
+            "binding": {
+              "capability": "review",
+              "inputs": {
+                "seats": [
+                  "security"
+                ]
+              }
+            },
+            "next": [
+              "security_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "security_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_review",
+              "inputs": {}
+            },
+            "next": [
+              "report"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "security_reviewer",
+              "risk_tier": 3,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Threat-led work ending in a security sign-off that cannot be automated away. The research names what an attacker would try and what is exposed; the build closes those, and the reviewer gets the evidence for each.",
+        "workflow_name": "Security Hardening",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What needs hardening?",
+              "description": "The system and the threat you are worried about. Research names what an attacker would try; the build closes it and a person signs off the security posture.",
+              "examples": [
+                "Make sure only a shift's own manager can approve its swap: check for IDOR on the approve endpoint and for CSRF on the approvals form."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "data_migration",
+      "name": "Data / Migration Change",
+      "description": "Changes to data are the ones you cannot take back. The rollback is specified up front, and a person approves before the migration runs.",
+      "spec": {
+        "entry_step": "meeting",
+        "steps": [
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "build"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "cto",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "cto",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [
+              "document"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "document",
+            "kind": "capability",
+            "binding": {
+              "capability": "document",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Change data, which is the change you cannot take back. The PRD must state the rollback, how the migration is verified, and what happens to in-flight work — a person approves the release before the migration runs.",
+        "workflow_name": "Data / Migration Change",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What data changes?",
+              "description": "The change, the rollback, and what happens to work in flight. A person approves before the migration runs.",
+              "examples": [
+                "Store shift start and end as UTC plus the site's timezone instead of local time, migrating existing rows, with a rollback that restores the old columns."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "compliance_release",
+      "name": "Compliance-Ready Release",
+      "description": "Everything the standard path does, plus the evidence and the signature an auditor will ask for.",
+      "spec": {
+        "entry_step": "research",
+        "steps": [
+          {
+            "id": "research",
+            "kind": "capability",
+            "binding": {
+              "capability": "research",
+              "inputs": {
+                "seed": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "meeting"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                },
+                "research": {
+                  "from_step": "research",
+                  "field": "dossier"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "build"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "pm",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "security_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "security_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_review",
+              "inputs": {}
+            },
+            "next": [
+              "preview"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "security_reviewer",
+              "risk_tier": 3,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [
+              "document"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "document",
+            "kind": "capability",
+            "binding": {
+              "capability": "document",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Everything the standard path does, plus the evidence and the signature that make it auditable. The PRD must name the controls being satisfied and the evidence each produces.",
+        "workflow_name": "Compliance-Ready Release",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What is being released, under which controls?",
+              "description": "The change and the controls it must satisfy. Each control's evidence is produced and a person signs off security and the release.",
+              "examples": [
+                "Record every swap approval and rejection in an append-only audit log with who, when and why, retained for a year."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "third_party_integration",
+      "name": "Third-Party Integration",
+      "description": "Bringing someone else's system in. Research first, because the surprises are always in their API and not in your code.",
+      "spec": {
+        "entry_step": "research",
+        "steps": [
+          {
+            "id": "research",
+            "kind": "capability",
+            "binding": {
+              "capability": "research",
+              "inputs": {
+                "seed": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "meeting"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                },
+                "research": {
+                  "from_step": "research",
+                  "field": "dossier"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "build"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "cto",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "monitor"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "monitor",
+            "kind": "capability",
+            "binding": {
+              "capability": "monitor",
+              "inputs": {}
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Bring someone else's system in. Research went first because their API decides the design; the PRD must state the contract, the failure modes and what happens when they are down.",
+        "workflow_name": "Third-Party Integration",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "Which system are you bringing in, and for what?",
+              "description": "The other system, what you need from it, and what should happen when it is down. Research reads their API first.",
+              "examples": [
+                "Post a message to the team's Slack channel when a shift is offered, and update it when the swap is claimed or approved."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "deprecation_sunset",
+      "name": "Deprecation / Sunset",
+      "description": "Taking something away. The grace period is a step, so nobody removes a thing the day after announcing it.",
+      "spec": {
+        "entry_step": "meeting",
+        "steps": [
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "announce"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "announce",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": {
+                  "from_input": "title"
+                },
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [
+              "grace"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "grace",
+            "kind": "timer",
+            "wait_seconds": 604800,
+            "binding": {},
+            "next": [
+              "build"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "document"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "document",
+            "kind": "capability",
+            "binding": {
+              "capability": "document",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Take something away without stranding anyone. The panel must define the grace period, who is told and when, and what replaces it — the notification is a step, not an afterthought.",
+        "workflow_name": "Deprecation / Sunset",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title",
+            "notify_channel"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What is being taken away?",
+              "description": "What goes, what replaces it, and who must be told. The announcement is sent first and the removal waits a week.",
+              "examples": [
+                "Remove the old paper-style swap request form now that the board replaces it; redirect its URL to the board."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "notify_channel": {
+              "type": "string",
+              "title": "Who to tell",
+              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "examples": [
+                "email:team@example.com"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    }
+  ],
+  "branched": {
+    "workflow_key": "branched_review",
+    "name": "Branched review",
+    "description": "Parallel reviews, a join and an if / else.",
+    "spec": {
+      "entry_step": "research",
+      "x_team_note": "Unknown keys survive a save.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "directive"
+        ],
+        "properties": {
+          "directive": {
+            "type": "string",
+            "title": "What to build"
+          }
+        }
+      },
+      "steps": [
+        {
+          "id": "research",
+          "kind": "capability",
+          "title": "Look into it",
+          "binding": {
+            "capability": "research",
+            "inputs": {
+              "seed": {
+                "from_input": "directive"
+              }
+            }
+          },
+          "next": [
+            "reviews"
+          ],
+          "max_attempts": 3,
+          "approval": {
+            "mode": "auto",
+            "on_timeout": "block",
+            "risk_tier": 1,
+            "forced_manual": false
+          }
+        },
+        {
+          "id": "reviews",
+          "kind": "parallel",
+          "branches": [
+            "ux",
+            "security"
+          ],
+          "join": "reviewed",
+          "next": [],
+          "max_attempts": 3,
+          "binding": {}
+        },
+        {
+          "id": "ux",
+          "kind": "capability",
+          "binding": {
+            "capability": "ux_review",
+            "inputs": {}
+          },
+          "next": [
+            "reviewed"
+          ],
+          "max_attempts": 3,
+          "approval": {
+            "mode": "manual",
+            "on_timeout": "block",
+            "risk_tier": 2,
+            "forced_manual": true
+          }
+        },
+        {
+          "id": "security",
+          "kind": "capability",
+          "binding": {
+            "capability": "security_review",
+            "inputs": {}
+          },
+          "next": [
+            "reviewed"
+          ],
+          "max_attempts": 3,
+          "approval": {
+            "mode": "manual",
+            "on_timeout": "block",
+            "risk_tier": 3,
+            "forced_manual": true
+          }
+        },
+        {
+          "id": "reviewed",
+          "kind": "join",
+          "wait_for": [
+            "ux",
+            "security"
+          ],
+          "success_policy": "all",
+          "next": [
+            "worth_it"
+          ],
+          "max_attempts": 3,
+          "binding": {}
+        },
+        {
+          "id": "worth_it",
+          "kind": "condition",
+          "expression": {
+            "path": "steps.research.output.dossier",
+            "op": "exists"
+          },
+          "on_true": "go",
+          "on_false": "stop",
+          "next": [],
+          "max_attempts": 3,
+          "binding": {}
+        },
+        {
+          "id": "go",
+          "kind": "decision",
+          "captain": "human",
+          "question": "Build it?",
+          "guidance": "Read the dossier first.",
+          "next": [],
+          "max_attempts": 3,
+          "binding": {}
+        },
+        {
+          "id": "stop",
+          "kind": "timer",
+          "wait_seconds": 60,
+          "next": [],
+          "max_attempts": 3,
+          "binding": {}
+        }
+      ],
+      "output_schema": {},
+      "step_agent_rules": 2
+    }
+  }
+}

@@ -20,6 +20,11 @@ TYPED_OPERATIONS = {
     ("post", "/v1/delivery-workflows/create"),
     ("post", "/v1/delivery-workflows/fork"),
     ("post", "/v1/delivery-workflows/save"),
+    ("post", "/v1/delivery-workflows/check"),
+    ("post", "/v1/delivery-workflows/publish"),
+    ("patch", "/v1/delivery-workflows/{definition_id}"),
+    ("post", "/v1/delivery-workflows/draft"),
+    ("post", "/v1/delivery-workflows/wire"),
     ("post", "/v1/delivery-workflows/apply"),
     ("post", "/v1/delivery-workflows/start"),
     ("post", "/v1/delivery-workflows/schedules"),
@@ -62,7 +67,7 @@ from app.main import app
 from scripts.tests.test_typed_request_bodies import TYPED_OPERATIONS
 
 schema = app.openapi()
-assert len(TYPED_OPERATIONS) == 23
+assert len(TYPED_OPERATIONS) == 28
 for method, path in TYPED_OPERATIONS:
     operation = schema['paths'][path][method]
     body = operation['requestBody']['content']['application/json']['schema']

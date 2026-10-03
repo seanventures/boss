@@ -42,6 +42,14 @@ def _draft(monkeypatch, *, existing, args):
     calls = {"published": [], "mapped": [], "created": []}
 
     class _Wf:
+        PRODUCT_NAMESPACE = "product"
+
+        @staticmethod
+        def spec_problems(*_args, **_kwargs):
+            # The publish collector draft_workflow now asks before creating anything; these
+            # tests are about what the tool does with a valid draft, so it finds nothing.
+            return {}, [], []
+
         @staticmethod
         def publish_version(*_args, **kwargs):
             calls["published"].append(kwargs)

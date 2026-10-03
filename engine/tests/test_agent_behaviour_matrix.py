@@ -1244,9 +1244,13 @@ def test_a_step_that_names_a_skill_defines_the_step_rather_than_refusing():
     The model was right and the plumbing was not: naming the skill IS what the operator means.
     """
     src = pathlib.Path("engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
+    # The helper moved to the drafting service the console's Describe shares; the tool imports it.
+    drafting = pathlib.Path("engine/boss_engine/services/workflow_drafting.py").read_text(
+        encoding="utf-8")
 
-    assert "def _ensure_steps_for_skills(" in src
-    helper = src[src.index("def _ensure_steps_for_skills("):src.index("def _draft_problems(")]
+    assert "def _ensure_steps_for_skills(" in drafting
+    helper = drafting[drafting.index("def _ensure_steps_for_skills("):
+                      drafting.index("def _resolve_subworkflows(")]
     # BOTH kinds of skill: authored, and the ones BOSS ships. Only the first was ever checked,
     # so the entire media pipeline validated as missing.
     assert "_skill_exists(connection, project_id, wanted)" in helper

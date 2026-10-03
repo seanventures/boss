@@ -1032,3 +1032,44 @@ class StackDeployExecuteBody(BaseModel):
     job_id: str = Field(min_length=1)
     worker_id: str = Field(min_length=1)
     lease_token: str = Field(min_length=1)
+
+
+# ── The workflow editor (Workflow Studio) ──────────────────────────────────────────────────────
+
+
+class WorkflowCheckBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "spec"]})
+
+    spec: dict[str, Any] | None = None
+    definition_id: str | None = None
+
+
+class WorkflowPublishBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "name", "spec"]})
+
+    definition_id: str | None = None
+    name: str | None = None
+    description: str | None = None
+    spec: dict[str, Any] | None = None
+    from_workflow_key: str | None = None
+    update_copy_id: str | None = None
+
+
+class WorkflowRenameBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id"]})
+
+    name: str | None = None
+    description: str | None = None
+
+
+class WorkflowDraftBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "description"]})
+
+    description: str | None = None
+
+
+class WorkflowWireBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "spec"]})
+
+    spec: dict[str, Any] | None = None
+    ids: list[str] | None = None

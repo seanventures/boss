@@ -226,6 +226,10 @@ def _stops_for_a_person(step: Mapping[str, Any]) -> bool:
 
 
 def _label(step: Mapping[str, Any], custom: Mapping[str, Mapping[str, Any]]) -> str:
+    from .workflows import step_title
+
+    if step_title(step):
+        return step_title(step)
     binding = step.get("binding") or {}
     own = custom.get(str(binding.get("custom_step") or "")) or {}
     key = str(binding.get("capability") or "")

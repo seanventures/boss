@@ -45,6 +45,13 @@ def test_delivery_workflow_controls_reject_foreign_project(client, engine, monke
             ("POST", "/v1/delivery-workflows/create", {"name": "Private workflow"}),
             ("POST", "/v1/delivery-workflows/fork", {"workflow_key": "standard_product_delivery"}),
             ("POST", "/v1/delivery-workflows/save", {"definition_id": "private", "spec": {}}),
+            # The workflow editor: Check, Save, rename, Describe and Auto-wire.
+            ("POST", "/v1/delivery-workflows/check", {"spec": {"steps": []}}),
+            ("POST", "/v1/delivery-workflows/publish",
+             {"name": "Private", "spec": {"steps": []}}),
+            ("PATCH", "/v1/delivery-workflows/private", {"name": "Changed"}),
+            ("POST", "/v1/delivery-workflows/draft", {"description": "Anything"}),
+            ("POST", "/v1/delivery-workflows/wire", {"spec": {"steps": []}}),
             ("DELETE", "/v1/delivery-workflows/private", None),
             ("POST", "/v1/delivery-workflows/runs/private/retry-step", {"step_id": "build"}),
             ("POST", "/v1/delivery-workflows/runs/private/skip-step",
