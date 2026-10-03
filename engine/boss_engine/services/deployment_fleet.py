@@ -58,6 +58,18 @@ def direct_host_writes_allowed(settings: Settings) -> bool:
             and bool(getattr(settings, "ssh_host_deploy_allowed", False)))
 
 
+def governed_stack_deploys_allowed(settings: Settings) -> bool:
+    """Every edition, Community included, may deploy a stack through its governed path.
+
+    Direct host writes (installing a key, provisioning Docker, retiring a host) stay behind
+    `direct_host_writes_allowed`: they write to the machine outside any ChangeSet. A stack
+    deployment does not — it is applied inside an approved ChangeSet with a reservation and a
+    receipt (services/stack_deploy.py) — so only the outward-SSH switch applies to it.
+    Registering a host, minting its key and verifying it (a read-only ssh echo) need neither.
+    """
+    return bool(getattr(settings, "ssh_host_deploy_allowed", False))
+
+
 def require_direct_host_write_policy(settings: Settings) -> None:
     """Guard the service itself so callers cannot skip the HTTP route's check."""
     edition = str(getattr(settings, "boss_edition", "community")).strip().lower()

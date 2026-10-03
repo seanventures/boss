@@ -151,8 +151,25 @@ SUPPORTED_PROVIDERS = {
             "ssh_host.workload.health_check",
             "ssh_host.workload.teardown",
             "ssh_host.job.run",
+            # A whole application stack from its own boss.deploy.yaml, on a fleet host, with
+            # that host's key. See services/stack_deploy.py.
+            "ssh_host.stack.deploy",
         ],
     },
+}
+
+#: Operations too long for one database transaction. A ten-minute install cannot run inside the
+#: transaction that holds the ChangeSet: its `applying` status and receipt would stay
+#: uncommitted while the host is written, and roll back if the process died. Their apply is
+#: owned by a domain service, in committed phases (begin_phased_apply, then the provider work
+#: with no transaction open, then complete_phased_apply), and the generic approve/apply routes
+#: refuse them so there is exactly one way in. Value: what to do instead.
+PHASED_APPLY_SKILLS: dict[str, str] = {
+    "ssh_host.stack.deploy": (
+        "is a stack deployment: approve its decision{decision} and BOSS's worker applies it "
+        "(services/stack_deploy.py). It is never approved or applied through the ChangeSet "
+        "routes."
+    ),
 }
 
 PROVIDER_CONNECTION_PROFILES: dict[str, dict[str, Any]] = {
@@ -3169,8 +3186,11 @@ class ResourcePlaneService:
         *,
         changeset_id: str,
         actor: str,
+        phased_owner: bool = False,
     ) -> dict[str, Any]:
         row = self._get_changeset_any_project(connection, changeset_id)
+        if not phased_owner:
+            self._refuse_phased(row)
         if row["status"] not in {"pending_approval", "policy_checked", "budget_reserved"}:
             raise ValueError(f"ChangeSet is {row['status']} and cannot be approved.")
 
@@ -3264,6 +3284,347 @@ class ResourcePlaneService:
         )
         return self.get_changeset(connection, row["project_id"], changeset_id)
 
+    @staticmethod
+    def _phased_skill(changeset: dict[str, Any]) -> Optional[str]:
+        for operation in changeset.get("operations") or []:
+            skill_id = str((operation or {}).get("skill_id") or "")
+            if skill_id in PHASED_APPLY_SKILLS:
+                return skill_id
+        return None
+
+    def _refuse_phased(self, changeset: dict[str, Any]) -> None:
+        """The generic approve/apply routes refuse a ChangeSet whose apply has an owner."""
+        skill_id = self._phased_skill(changeset)
+        if skill_id:
+            decision = changeset.get("approval_decision_id")
+            raise ValueError(
+                f"ChangeSet {changeset['id']} "
+                + PHASED_APPLY_SKILLS[skill_id].format(
+                    decision=f" {decision}" if decision else "")
+            )
+
+    def begin_phased_apply(
+        self,
+        connection: Connection,
+        *,
+        changeset_id: str,
+        actor: str,
+        created_by_job_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Phase one of a long apply: the caller COMMITS this before the first provider write.
+
+        The ChangeSet becomes `applying` and every operation gets its receipt and an
+        `in_progress` resource receipt, so a host written by phase two always has a durable
+        record of the attempt — even if the process applying it dies. Returns, per operation,
+        the operation and its receipt ids.
+        """
+        changeset = self._get_changeset_any_project(connection, changeset_id)
+        project_id = changeset["project_id"]
+        if not self._phased_skill(changeset):
+            raise ValueError("Only a phased operation is applied through begin_phased_apply.")
+        if changeset["status"] != "approved":
+            raise ValueError(f"ChangeSet is {changeset['status']}, not approved.")
+        if not changeset["reservation_id"] or not connection.execute(
+            text("SELECT 1 FROM budget_reservations WHERE id = :r"),
+            {"r": changeset["reservation_id"]},
+        ).first():
+            raise ValueError("ChangeSet has no budget reservation.")
+        if int(changeset["expected_cost_usd_micros"]) > 0 and not (
+            self.budget.assert_active_reservation(
+                connection, project_id, changeset["reservation_id"]
+            )
+        ):
+            raise ValueError("ChangeSet's budget reservation is no longer active.")
+        operations = connection.execute(
+            text(
+                """
+                SELECT id, project_id, changeset_id, provider_account_id, operation_index,
+                       skill_id, action, resource_type, resource_ref, desired_state,
+                       risk_tier, destructive, production_affecting, status,
+                       resource_receipt_id
+                FROM changeset_operations
+                WHERE changeset_id = :changeset_id
+                ORDER BY operation_index ASC
+                """
+            ),
+            {"changeset_id": changeset_id},
+        ).mappings().all()
+        if not operations:
+            raise ValueError("ChangeSet has no operations to apply.")
+        connection.execute(
+            text(
+                "UPDATE changesets SET status = 'applying', applied_by = :actor, "
+                "updated_at = now() WHERE id = :changeset_id"
+            ),
+            {"changeset_id": changeset_id, "actor": actor},
+        )
+        scope = self._scope(connection, project_id)
+        started: list[dict[str, Any]] = []
+        for operation in operations:
+            operation = dict(operation)
+            provider = self._provider_from_skill(operation["skill_id"])
+            dedupe_key = self._operation_dedupe_key(
+                changeset_id, int(operation["operation_index"]), operation
+            )
+            payload = {
+                "skill_id": operation["skill_id"],
+                "action": operation["action"],
+                "desired_state": operation.get("desired_state") or {},
+                "actor": actor,
+            }
+            receipt, _ = self.receipts.create_or_reuse(
+                connection,
+                scope["org_id"],
+                scope["workspace_id"],
+                project_id,
+                dedupe_key,
+                operation["skill_id"],
+                {
+                    "project_id": project_id,
+                    "changeset_id": changeset_id,
+                    "operation_id": operation["id"],
+                    "provider_account_id": operation["provider_account_id"],
+                    "provider": provider,
+                    "resource_type": operation["resource_type"],
+                    "resource_ref": operation["resource_ref"],
+                },
+                payload,
+                created_by_job_id=created_by_job_id,
+                data_boundary="internal",
+            )
+            resource_receipt_id = connection.execute(
+                text(
+                    "SELECT id FROM resource_receipts "
+                    "WHERE project_id = :p AND dedupe_key = :k"
+                ),
+                {"p": project_id, "k": dedupe_key},
+            ).scalar()
+            if not resource_receipt_id:
+                resource_receipt_id = make_id("rrcpt")
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO resource_receipts (
+                            id, project_id, changeset_id, operation_id, provider_account_id,
+                            receipt_id, dedupe_key, provider, action, resource_type,
+                            resource_ref, status, request_hash, created_by_job_id
+                        )
+                        VALUES (
+                            :id, :project_id, :changeset_id, :operation_id,
+                            :provider_account_id, :receipt_id, :dedupe_key, :provider,
+                            :action, :resource_type, :resource_ref, 'in_progress',
+                            :request_hash, :created_by_job_id
+                        )
+                        """
+                    ),
+                    {
+                        "id": resource_receipt_id,
+                        "project_id": project_id,
+                        "changeset_id": changeset_id,
+                        "operation_id": operation["id"],
+                        "provider_account_id": operation["provider_account_id"],
+                        "receipt_id": receipt["id"],
+                        "dedupe_key": dedupe_key,
+                        "provider": provider,
+                        "action": operation["action"],
+                        "resource_type": operation["resource_type"],
+                        "resource_ref": operation["resource_ref"],
+                        "request_hash": json_hash(payload),
+                        "created_by_job_id": created_by_job_id,
+                    },
+                )
+            connection.execute(
+                text(
+                    "UPDATE changeset_operations SET status = 'applying', "
+                    "resource_receipt_id = :rr, updated_at = now() WHERE id = :o"
+                ),
+                {"rr": resource_receipt_id, "o": operation["id"]},
+            )
+            started.append(
+                {
+                    "operation": operation,
+                    "dedupe_key": dedupe_key,
+                    "receipt_id": receipt["id"],
+                    "resource_receipt_id": resource_receipt_id,
+                }
+            )
+        emit_event(
+            connection,
+            project_id,
+            "changeset.apply_started",
+            actor,
+            "changeset",
+            changeset_id,
+            {"resource_receipt_ids": [item["resource_receipt_id"] for item in started]},
+        )
+        return started
+
+    def complete_phased_apply(
+        self,
+        connection: Connection,
+        *,
+        changeset_id: str,
+        actor: str,
+        outcomes: dict[str, dict[str, Any]],
+        missing_message: str = "The operation did not report a result.",
+    ) -> dict[str, Any]:
+        """Phase three: the verdict, in one short transaction. Idempotent.
+
+        `outcomes` maps operation id to {"result": {...}} or {"error": {...}}; an operation
+        with no outcome failed (it never reported back). A receipt already finished is left
+        alone, so a verdict recorded once is never rewritten.
+        """
+        changeset = self._get_changeset_any_project(connection, changeset_id)
+        project_id = changeset["project_id"]
+        rows = connection.execute(
+            text(
+                """
+                SELECT rr.id, rr.receipt_id, rr.status, rr.operation_id,
+                       o.skill_id, o.action, o.resource_type, o.resource_ref,
+                       o.desired_state, o.provider_account_id, o.operation_index
+                FROM resource_receipts rr
+                JOIN changeset_operations o ON o.id = rr.operation_id
+                WHERE rr.changeset_id = :c
+                ORDER BY o.operation_index ASC
+                """
+            ),
+            {"c": changeset_id},
+        ).mappings().all()
+        failed = not rows
+        for row in rows:
+            if row["status"] != "in_progress":
+                failed = failed or row["status"] != "succeeded"
+                continue
+            outcome = outcomes.get(row["operation_id"]) or {
+                "error": {"message": missing_message}
+            }
+            result = outcome.get("result")
+            error = None if result is not None else dict(outcome.get("error") or {})
+            if error is not None:
+                error.setdefault("skill_id", row["skill_id"])
+            status = "succeeded" if error is None else "failed"
+            failed = failed or status == "failed"
+            provider_ref = (result or {}).get("provider_ref")
+            connection.execute(
+                text(
+                    """
+                    UPDATE resource_receipts
+                    SET status = :status, provider_ref = :provider_ref,
+                        result = CAST(:result AS JSONB), error = CAST(:error AS JSONB),
+                        updated_at = now()
+                    WHERE id = :id AND status = 'in_progress'
+                    """
+                ),
+                {
+                    "id": row["id"],
+                    "status": status,
+                    "provider_ref": provider_ref,
+                    "result": json.dumps(result),
+                    "error": json.dumps(error),
+                },
+            )
+            if status == "succeeded":
+                self.receipts.mark_succeeded(
+                    connection, row["receipt_id"], provider_ref, result or {}
+                )
+                self._persist_managed_resource_from_result(
+                    connection,
+                    project_id=project_id,
+                    provider_account_id=row["provider_account_id"],
+                    operation={**dict(row), "id": row["operation_id"],
+                               "changeset_id": changeset_id},
+                    resource_receipt_id=row["id"],
+                    receipt_id=row["receipt_id"],
+                    result=result or {},
+                )
+            else:
+                self.receipts.mark_failed(connection, row["receipt_id"], error or {})
+                self._create_deadletter(
+                    connection,
+                    project_id=project_id,
+                    source_kind="resource_receipt",
+                    source_id=row["id"],
+                    reason=str((error or {}).get("message") or "provider action failed"),
+                    payload={
+                        "changeset_id": changeset_id,
+                        "operation_id": row["operation_id"],
+                        "skill_id": row["skill_id"],
+                    },
+                )
+            connection.execute(
+                text(
+                    "UPDATE changeset_operations SET status = :s, updated_at = now() "
+                    "WHERE id = :o"
+                ),
+                {"s": status, "o": row["operation_id"]},
+            )
+            emit_event(
+                connection,
+                project_id,
+                f"resource_receipt.{status}",
+                actor,
+                "resource_receipt",
+                row["id"],
+                {
+                    "changeset_id": changeset_id,
+                    "operation_id": row["operation_id"],
+                    "error": error,
+                    "provider_ref": provider_ref,
+                },
+            )
+        if changeset["status"] != "applying":
+            # Already finished: the verdict above was the receipts' only.
+            return self.get_changeset(connection, project_id, changeset_id)
+        final_status = "deadlettered" if failed else "applied"
+        if changeset["reservation_id"]:
+            if failed:
+                self.budget.release(
+                    connection,
+                    project_id,
+                    changeset["reservation_id"],
+                    "Released reservation because ProviderOps ChangeSet actuation failed.",
+                )
+            else:
+                self.budget.settle(
+                    connection,
+                    project_id,
+                    changeset["reservation_id"],
+                    rows[0]["receipt_id"],
+                    "provider",
+                    "resource_plane.changeset.apply",
+                    int(changeset["expected_cost_usd_micros"]),
+                    None,
+                )
+        connection.execute(
+            text(
+                """
+                UPDATE changesets
+                SET status = :status, applied_at = now(), failure_reason = :failure_reason,
+                    updated_at = now()
+                WHERE id = :changeset_id AND status = 'applying'
+                """
+            ),
+            {
+                "status": final_status,
+                "failure_reason": (
+                    "One or more provider actions failed; see resource receipts and deadletters."
+                    if failed
+                    else None
+                ),
+                "changeset_id": changeset_id,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "changeset.applied" if not failed else "changeset.deadlettered",
+            actor,
+            "changeset",
+            changeset_id,
+            {"status": final_status, "resource_receipt_ids": [row["id"] for row in rows]},
+        )
+        return self.get_changeset(connection, project_id, changeset_id)
+
     def apply_changeset(
         self,
         connection: Connection,
@@ -3275,6 +3636,7 @@ class ResourcePlaneService:
     ) -> dict[str, Any]:
         changeset = self._get_changeset_any_project(connection, changeset_id)
         project_id = changeset["project_id"]
+        self._refuse_phased(changeset)
         if changeset["status"] != "approved":
             emit_event(
                 connection,
@@ -5783,6 +6145,9 @@ class ResourcePlaneService:
     ) -> dict[str, Any]:
         skill_id = operation["skill_id"]
         provider = self._provider_from_skill(skill_id)
+        if skill_id in PHASED_APPLY_SKILLS:
+            # Never inside one apply transaction: see PHASED_APPLY_SKILLS.
+            raise ProviderAdapterError(f"{skill_id} is applied in phases by its owning service.")
         if not account:
             raise ProviderAdapterError("Provider write operation requires a ProviderAccount.")
         if account["provider"] != provider:

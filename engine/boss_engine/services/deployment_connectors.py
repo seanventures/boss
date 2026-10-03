@@ -780,9 +780,14 @@ class SSHContainerConnector:
         # ResourceReceipt for the host write. Keep Community read/plan paths available, but
         # stop every execution entrypoint here before credentials or SSH are touched.
         if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
+            # The governed route EXISTS now — a stack target deployed from the app's own
+            # boss.deploy.yaml (services/stack_deploy.py) carries a ChangeSet, a reservation
+            # and a receipt. This ungoverned one-container path stays closed in Community.
             return {"status": "blocked", "problems": [
                 "Community SSH deployment is disabled until it uses an approved "
-                "Resource Plane ChangeSet, budget reservation, and ResourceReceipt"
+                "Resource Plane ChangeSet, budget reservation, and ResourceReceipt. "
+                "Deploy through a stack target instead: add boss.deploy.yaml to the "
+                "repository and plan it with POST /v1/deployments/stack/plan."
             ]}
         from ..db import begin
 

@@ -1772,6 +1772,24 @@ def _perform_capability(
     # Enforced here rather than by binding preview_url into eleven catalogue entries, five of
     # which have a preview step: a rule written once cannot be forgotten by the next person to
     # add a workflow.
+    #
+    # A STACK TARGET IS THE EXCEPTION, AND IT IS NOT A LOOPHOLE. An app that declares how it is
+    # deployed (boss.deploy.yaml) is planned straight from the build's pull-request head onto
+    # its host, and held for approval like every governed effect. Its manifest's health checks
+    # are the proof it runs; a platform of several services cannot be previewed as one
+    # container, so requiring a preview would make such apps undeployable from a workflow.
+    if key == "deploy":
+        from .stack_deploy import plan_for_workflow_step, stack_target_for_deploy
+
+        stack_target = stack_target_for_deploy(
+            connection, project_id, inputs,
+            default_owner=str(getattr(getattr(ctx, "settings", None), "target_github_owner", "")
+                              or ""))
+        if stack_target is not None:
+            return plan_for_workflow_step(
+                ctx.engine, getattr(ctx, "settings", None), project_id=project_id,
+                actor=actor, target=stack_target, inputs=inputs,
+                workflow_run_id=str(context.get("run_id") or "") or None)
     if key == "deploy":
         missing = _preview_missing_for_run(connection, context)
         if missing:
@@ -2089,10 +2107,17 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
                    frozenset({"succeeded", "healthy"}),
                    frozenset({"failed", "blocked", "cancelled", "rolled_back",
                               "rollback_pending", "unhealthy"})),
+    # A stack deployment (boss.deploy.yaml) is done when its health checks passed on the host.
+    # `awaiting_approval` and `running` are in flight: a person has not answered, or the apply
+    # is still going.
+    "stack_deployment": ("stack_deployments",
+                         frozenset({"healthy"}),
+                         frozenset({"failed", "rejected"})),
 }
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
-_REASON_COLUMN: dict[str, str] = {"deployment_runs": "failure_reason"}
+_REASON_COLUMN: dict[str, str] = {"deployment_runs": "failure_reason",
+                                  "stack_deployments": "failure_reason"}
 
 
 def _terminal_evidence(
@@ -2187,6 +2212,18 @@ def _terminal_evidence(
             first = next((str(d) for d in (domains or []) if str(d).strip()), "")
             if first:
                 evidence["deployed_url"] = first if "://" in first else f"http://{first}"
+            return evidence
+        if kind == "stack_deployment":
+            row = connection.execute(
+                text("SELECT status, open_url, commit_sha FROM stack_deployments WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            if not row:
+                return {}
+            evidence = {"stack_deployment_id": awaited_id, "deployment_status": row["status"],
+                        "commit": row["commit_sha"]}
+            if row["open_url"]:
+                evidence["deployed_url"] = row["open_url"]
             return evidence
         if kind == "agent_run":
             # WHAT THE AGENT ACTUALLY PRODUCED, read after the approval, not the snapshot

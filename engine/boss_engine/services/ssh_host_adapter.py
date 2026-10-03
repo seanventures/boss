@@ -316,6 +316,81 @@ class SSHHostAdapter:
         )
         return proc.returncode == 0
 
+    # -- application stacks (boss.deploy.yaml) -----------------------------
+    #
+    # A stack is deployed with the HOST's own key (the fleet's per-host secret), not the global
+    # BOSS_SSH_HOST_PRIVATE_KEY the container methods above use: one key per machine is the
+    # whole point of the fleet table. The material arrives resolved for this call only, goes to
+    # a 0600 file BOSS owns, and is deleted when the call returns.
+    #
+    # A WRITE needs the id of the ChangeSet it is applying. The adapter cannot check that the
+    # ChangeSet is approved — stack_deploy does that against the database before the first
+    # write — but it refuses to be called for a write with none at all, so no caller can reach
+    # a host by forgetting the governed path exists.
+    def stack_exec(
+        self,
+        *,
+        host: str,
+        user: str,
+        port: int,
+        key_material: str,
+        command: str,
+        timeout: int = 120,
+        write: bool = False,
+        changeset_id: str | None = None,
+        stdin_text: str | None = None,
+        stdin_path: str | None = None,
+    ) -> subprocess.CompletedProcess:
+        if not self.settings.ssh_host_deploy_allowed:
+            raise IntegrationConfigurationError(
+                "BOSS_SSH_HOST_DEPLOY_ALLOWED is false — BOSS is configured not to reach out "
+                "over SSH."
+            )
+        if write and not (changeset_id or "").strip():
+            raise PermissionError(
+                "A stack write to a host needs the approved Resource Plane ChangeSet it "
+                "applies; none was given."
+            )
+        if not (key_material or "").strip():
+            raise IntegrationConfigurationError("This host has no usable SSH key.")
+        fd, key_path = tempfile.mkstemp(suffix=".pem")
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(key_material if key_material.endswith("\n") else key_material + "\n")
+            os.chmod(key_path, 0o600)
+            argv = [
+                "ssh", "-i", key_path, "-p", str(int(port)),
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "ConnectTimeout=15",
+                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+                f"{user}@{host}", command,
+            ]
+            try:
+                if stdin_path:
+                    with open(stdin_path, "rb") as source:
+                        proc = subprocess.run(argv, stdin=source, capture_output=True,
+                                              timeout=timeout)
+                    return subprocess.CompletedProcess(
+                        argv, proc.returncode,
+                        (proc.stdout or b"").decode("utf-8", "replace"),
+                        (proc.stderr or b"").decode("utf-8", "replace"))
+                return subprocess.run(argv, input=stdin_text if stdin_text is not None else "",
+                                      capture_output=True, text=True, timeout=timeout)
+            except FileNotFoundError:
+                return subprocess.CompletedProcess(
+                    argv, 127, "",
+                    "the `ssh` client is not installed where BOSS runs, so it cannot reach any "
+                    "host. Install openssh-client in the API image.")
+            except subprocess.TimeoutExpired:
+                return subprocess.CompletedProcess(
+                    argv, 124, "", f"the command did not finish within {timeout}s on {host}.")
+        finally:
+            try:
+                os.unlink(key_path)
+            except OSError:
+                pass
+
     def run_job_to_completion(
         self,
         *,

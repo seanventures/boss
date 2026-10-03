@@ -198,6 +198,8 @@ def clean_tables(engine):
             # `deployment_targets` delete below fail — poisoning every subsequent test in the
             # session with a ForeignKeyViolation.
             "deployment_health_samples",
+            # Stack deployments reference targets, hosts, changesets and decisions.
+            "stack_deployments",
             "deployment_runs",
             "changeset_operations",
             "changesets",

@@ -454,6 +454,7 @@ class DecisionService:
             self._handle_non_approved_follow_on(
                 connection, refreshed, action="reject", actor=actor, note=note
             )
+            self._handle_rejected_follow_on(connection, refreshed, actor=actor)
             return self.get_row(connection, decision_id)
 
         if action == "revise":
@@ -819,6 +820,25 @@ class DecisionService:
             self.role_governance.apply_decision_outcome(
                 connection, row, "approve", actor, row.get("resolution_note")
             )
+        elif action == "deploy_stack":
+            # A stack deployment held for approval: approving it approves its ChangeSet and
+            # queues the apply as a durable worker job (services/stack_deploy.py).
+            from .stack_deploy import on_decision_approved
+
+            on_decision_approved(connection, self.settings, row, actor)
+
+    def _handle_rejected_follow_on(
+        self, connection: Connection, row: dict[str, Any], *, actor: str
+    ) -> None:
+        """What REFUSING releases. Distinct from the revise path: nothing here reads a note.
+
+        A rejected stack deployment closes its ChangeSet and hands back its reservation, so
+        the console stops showing it as waiting for somebody.
+        """
+        if (row["recommendation"] or {}).get("action") == "deploy_stack":
+            from .stack_deploy import on_decision_not_approved
+
+            on_decision_not_approved(connection, self.settings, row, actor, "rejected")
 
     def _handle_non_approved_follow_on(
         self,

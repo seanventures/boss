@@ -363,6 +363,10 @@ def capabilities() -> list[str]:
         "investigation.run",
         # Governed Discovery research: each stage reserves, leases and receipts its own spend.
         "discovery.run",
+        # An approved stack deployment (boss.deploy.yaml): the API applies its ChangeSet under
+        # this job's lease. Declared here or the worker never leases it and the deploy sits
+        # `running` at step one.
+        "deployment.stack_apply",
         "docs.update",
         "agent.resume",
         "software_factory.propose_pr",
@@ -806,6 +810,16 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         if result.get("status") == "failed" and result.get("retry"):
             # A stage failed outright; the next attempt replays the stages already paid for.
             raise RuntimeError(result.get("error") or "Discovery stage failed.")
+        return result
+    if job.kind == "deployment.stack_apply":
+        # A deploy of a whole stack takes minutes; the API owns it and the lease fences it.
+        result = client.run_stack_deploy({
+            "deployment_id": job.payload["deployment_id"], "job_id": job.id,
+            "worker_id": client.worker_id, "lease_token": job.lease_token,
+        })
+        # Waiting on the target (another deployment is writing it) is not a failure: the API
+        # has already handed the job back to the queue without spending an attempt, so there
+        # is nothing to complete or fail here (see the job_deferred check after execution).
         return result
     if job.kind == "investigation.run":
         # A long one by design: a real debugging session reads the code, the database and the
@@ -1304,6 +1318,13 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 hb_client.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    if isinstance(result, dict) and result.get("job_deferred"):
+        # The control plane re-queued this job itself (JobLeaseService.defer_leased): our
+        # lease is gone, and completing it would fail or, worse, mark waiting work done.
+        LOGGER.info("job_deferred_by_api worker_id=%s job_id=%s reason=%s",
+                    settings.worker_id, job.id, result.get("error"))
+        return True
 
     # Reconciliation owns its bounded retry/deadletter transition in the same
     # transaction that records provider-read Receipts and observations.

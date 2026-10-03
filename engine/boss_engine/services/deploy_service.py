@@ -739,7 +739,8 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
     if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
         raise PermissionError(
             "Community SSH deployment is disabled until it uses an approved Resource Plane "
-            "ChangeSet, budget reservation, and ResourceReceipt"
+            "ChangeSet, budget reservation, and ResourceReceipt. Deploy through a stack target "
+            "(boss.deploy.yaml, POST /v1/deployments/stack/plan), which does."
         )
     if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
         raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
