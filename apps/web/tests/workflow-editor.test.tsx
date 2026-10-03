@@ -104,7 +104,7 @@ const nonChecks = () => api.writes.filter((w) => w.action !== "check");
 describe("the bar stays one row", () => {
   const css = () => readFileSync("app/workflows/editor.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
-  it("holds every control in one row that does not wrap at 1100px of content or more", async () => {
+  it("holds every control in one row that does not wrap at a 1100px bar or wider", async () => {
     await mount();
     const row = byTest("wf-topbar-row");
     for (const id of ["wf-back", "wf-name", "wf-version", "wf-kind", "wf-undo", "wf-view-visual", "wf-describe",
@@ -113,13 +113,34 @@ describe("the bar stays one row", () => {
     }
     const sheet = css();
     expect(sheet).toMatch(/\.wf-topbar-row \{[^}]*flex-wrap: nowrap;/);
-    // Nothing on the bar wraps outside the narrow-bar container query.
+    // Nothing on the bar's row wraps outside the narrow-bar container query.
     const outside = sheet.replace(/@container[^{]*\{[^}]*\{[^}]*\}\s*\}/g, "");
-    expect(outside).not.toMatch(/\.wf-topbar[^{]*\{[^}]*flex-wrap: wrap/);
-    // That query only fires under 1100px of bar: its own padding (2 × 12px) and border (2 × 1px) off.
-    const at = Number(sheet.match(/@container wf-topbar \(max-width: (\d+)px\)/)![1]);
-    expect(at).toBeLessThanOrEqual(1100 - 26);
+    expect(outside).not.toMatch(/\.wf-topbar-row[^{]*\{[^}]*flex-wrap: wrap/);
+    // The query is strict: a bar of exactly 1100px (its padding 2 × 12px and border 2 × 1px off,
+    // 1074px of content) never matches it. `max-width: 1074px` would.
+    const q = sheet.match(/@container wf-topbar \(([^)]*)\)/)![1];
+    expect(q).toMatch(/^width < \d+px$/);
+    expect(Number(q.match(/\d+/)![0])).toBeLessThanOrEqual(1100 - 26);
     expect(sheet).toMatch(/\.wf-topbar \{[^}]*container: wf-topbar \/ inline-size;/);
+  });
+
+  it("wraps by group, never item by item: the actions move as one block and ⋯ stays with Save", async () => {
+    await mount();
+    const row = byTest("wf-topbar-row");
+    const groups = [...row.children] as HTMLElement[];
+    expect(groups.map((g) => g.dataset.testid)).toEqual(["wf-bar-identity", "wf-bar-actions"]);
+    const identity = byTest("wf-bar-identity");
+    for (const id of ["wf-back", "wf-name", "wf-version", "wf-kind"]) expect(identity.contains(byTest(id)), id).toBe(true);
+    const actions = byTest("wf-bar-actions");
+    for (const id of ["wf-undo", "wf-redo", "wf-view-visual", "wf-describe", "wf-check", "wf-start", "wf-save", "wf-more"]) {
+      expect(actions.contains(byTest(id)), id).toBe(true);
+    }
+    // ⋯ shares its unbreakable group with Save, Start and Check, so no width leaves it alone.
+    const commit = byTest("wf-bar-commit");
+    expect(commit.contains(byTest("wf-more")) && commit.contains(byTest("wf-save"))).toBe(true);
+    const sheet = css();
+    expect(sheet).toMatch(/\.wf-bar-tools, \.wf-bar-commit \{[^}]*flex: none; flex-wrap: nowrap;/);
+    expect(sheet).toMatch(/\.wf-bar-actions \{[^}]*justify-content: flex-end;[^}]*margin-left: auto;/);
   });
 
   it("gives way at the name first: it is cut with an ellipsis and the whole name is its tooltip", async () => {
@@ -128,8 +149,8 @@ describe("the bar stays one row", () => {
     expect(name.dataset.tip).toBe("Standard Product Delivery");
     expect(name.dataset.tipWhen).toBe("cut");
     const sheet = css();
-    expect(sheet).toMatch(/\.wf-topbar-row > \* \{ flex: none; white-space: nowrap; \}/);
-    expect(sheet).toMatch(/\.wf-topbar-row > \.wf-name \{ flex: 0 1 [^;]+; min-width: [^;]+; \}/);
+    expect(sheet).toMatch(/\.wf-bar-identity > \* \{ flex: none; white-space: nowrap; \}/);
+    expect(sheet).toMatch(/\.wf-bar-identity > \.wf-name \{ flex: 0 1 [^;]+; min-width: [^;]+; \}/);
     expect(sheet).toMatch(/\.wf-name-input \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
   });
 });

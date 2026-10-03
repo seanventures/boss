@@ -53,9 +53,12 @@
 }
 
 /* ── Top bar ── */
-/* ONE ROW. The name gives way first (it is cut with an ellipsis, and the whole name is its
-   tooltip), then the copy chip; the actions never move. Only a bar narrower than 1100px may
-   wrap, measured on the bar itself (a container query), not on the window. */
+/* Two groups: who this is (Library, name, chips, the unsaved dot) and what you can do (undo
+   through ⋯). ONE ROW: the name gives way first (cut with an ellipsis, the whole name is its
+   tooltip), then the copy chip; the actions never move. Only a bar under 1100px (measured on the
+   bar, a container query, not the window) wraps, and then by group: the actions go to their own
+   line, aligned right, as one block. On a phone the actions split once more, Check · Start ·
+   Save · ⋯ staying together, so ⋯ is never left alone on a line. */
 .wf-topbar {
   position: sticky; top: 0; z-index: 10;
   container: wf-topbar / inline-size;
@@ -68,14 +71,24 @@
   min-height: 38px; min-width: 0;
   flex-wrap: nowrap;
 }
-.wf-topbar-row > * { flex: none; white-space: nowrap; }
-.wf-topbar-row > .wf-spacer { flex: 1 1 0; min-width: 0; }
-@container wf-topbar (max-width: 1074px) {
-  .wf-topbar-row { flex-wrap: wrap; }
+.wf-bar-identity {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1 1 auto; min-width: 0;
+}
+.wf-bar-identity > * { flex: none; white-space: nowrap; }
+.wf-bar-identity > .wf-name { flex: 0 1 40ch; min-width: 7ch; }
+.wf-bar-identity > .wf-open-copy { flex: 0 1 auto; min-width: 7ch; overflow: hidden; }
+.wf-bar-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  flex: none; max-width: 100%; margin-left: auto;
+  flex-wrap: wrap;
+}
+.wf-bar-tools, .wf-bar-commit { display: flex; align-items: center; gap: 8px; flex: none; flex-wrap: nowrap; }
+.wf-bar-tools > *, .wf-bar-commit > * { flex: none; white-space: nowrap; }
+@container wf-topbar (width < 1074px) {
+  .wf-topbar-row { flex-wrap: wrap; row-gap: 6px; }
 }
 .wf-bar-group { display: inline-flex; gap: 2px; }
-.wf-topbar-row > .wf-name { flex: 0 1 40ch; min-width: 7ch; }
-.wf-topbar-row > .wf-open-copy { flex: 0 1 auto; min-width: 7ch; overflow: hidden; }
 .wf-cut { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-name { position: relative; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .wf-name-input {
