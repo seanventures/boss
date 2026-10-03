@@ -76,8 +76,11 @@
   flex: 1 1 auto; min-width: 0;
 }
 .wf-bar-identity > * { flex: none; white-space: nowrap; }
-.wf-bar-identity > .wf-name { flex: 0 1 40ch; min-width: 7ch; }
-.wf-bar-identity > .wf-open-copy { flex: 0 1 auto; min-width: 7ch; overflow: hidden; }
+/* THE NAME IS WHAT YOU ARE EDITING; it keeps room before anything else gives way. On a standard
+   with a copy, "Standard…" was all that showed while "You have a copy" kept its width. The copy
+   chip now yields first (shrink 8 vs 1) down to its icon-sized minimum. */
+.wf-bar-identity > .wf-name { flex: 0 1 40ch; min-width: min(20ch, 45%); }
+.wf-bar-identity > .wf-open-copy { flex: 0 8 auto; min-width: 3ch; overflow: hidden; text-overflow: ellipsis; }
 .wf-bar-actions {
   display: flex; align-items: center; justify-content: flex-end; gap: 8px;
   flex: none; max-width: 100%; margin-left: auto;

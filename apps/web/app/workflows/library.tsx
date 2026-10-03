@@ -696,7 +696,7 @@ function LibraryCard(p: CardProps) {
         ) : null}
 
         {pop.open === "delete" ? (
-          <div className="wf-pop wf-confirm" role="dialog" aria-label="Confirm delete"
+          <div className="wf-pop wf-card-confirm" role="dialog" aria-label="Confirm delete"
                data-testid={`wf-card-confirm-${w.workflow_key}`}>
             <span>{retire ? "Retire" : "Delete"} “<span data-user-text>{w.name}</span>”?</span>
             <button type="button" className="wf-btn wf-btn-danger wf-btn-sm" disabled={deleting}
