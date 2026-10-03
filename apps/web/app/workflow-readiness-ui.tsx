@@ -15,7 +15,7 @@
  * checklist rather than each wording it differently.
  */
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { AreaLink } from "./area-link";
 import { isAreaId } from "../lib/area-ids";

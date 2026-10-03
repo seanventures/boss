@@ -157,10 +157,12 @@ def main() -> None:
             "required": ["instructions"],
             "properties": {
                 "video_url": {
-                    "title": "Video link (optional — you can put it in the instructions instead)",
-                    "description": "Google Drive share link, or any direct HTTPS link. Leave it "
-                                   "blank and write the link into your instructions; the agent "
-                                   "fetches whatever you point it at either way.",
+                    "title": "Video link",
+                    "format": "uri",
+                    "description": "Optional. Google Drive share link, or any direct HTTPS "
+                                   "link. Leave it blank and write the link into your "
+                                   "instructions; the agent fetches whatever you point it at "
+                                   "either way.",
                     "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
                 "instructions": {
@@ -192,11 +194,13 @@ def main() -> None:
                         "keep it exactly as it is. Put the ending slide on the end."],
                 },
                 "asset_url": {
-                    "title": "A picture or clip to use — ending slide, title card, logo, badge",
+                    "title": "Picture or clip",
+                    "format": "uri",
                     "description": (
-                        "Optional. A link to a PICTURE or a short clip. Say in your instructions "
-                        "what it is for and the agent uses it accordingly: \"put the ending "
-                        "slide on the end\", \"keep the channel badge in the top-right corner\".\n"
+                        "Optional. A link to a PICTURE or a short clip — ending slide, title "
+                        "card, logo, badge. Say in your instructions what it is for and the "
+                        "agent uses it accordingly: \"put the ending slide on the end\", "
+                        "\"keep the channel badge in the top-right corner\".\n"
                         "WORTH KNOWING: converting landscape to portrait crops the sides, so a "
                         "logo or badge sitting in a corner of the original is cut off. If you "
                         "want it kept, link the image here and say where it goes — the agent "
@@ -204,15 +208,16 @@ def main() -> None:
                     "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
                 "title": {
-                    "title": "YouTube title (optional — or say where to find it)",
-                    "description": "Leave blank if your instructions point at a brief that "
-                                   "contains it. The upload is PRIVATE either way, and YouTube "
-                                   "refuses a video with no title, so the agent writes one from "
+                    "title": "YouTube title",
+                    "description": "Optional. Leave blank if your instructions point at a "
+                                   "brief that contains it. The upload is PRIVATE either way, "
+                                   "and YouTube refuses a video with no title, so the agent "
+                                   "writes one from "
                                    "the brief if you have not.",
                 },
                 "description": {
-                    "title": "YouTube description (optional — or say where to find it)",
-                    "description": "Same: written in the brief, typed here, or left out.",
+                    "title": "YouTube description",
+                    "description": "Optional. Written in the brief, typed here, or left out.",
                 },
             },
         },

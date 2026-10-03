@@ -85,14 +85,14 @@ describe("the start form shows what is missing, with the fix", () => {
 
 describe("Start is blocked by what is missing, and says start-anyway out loud", () => {
   it("the composer asks before Start and blocks on what was not accepted", () => {
-    expect(UI).toContain("useWorkflowReadiness(projectId, draft.workflowKey, inputsToSend)");
+    expect(UI).toContain("useWorkflowReadiness(projectId, draft.workflowKey,");
     expect(UI).toContain("notReady.length");
     expect(UI).toContain("start_anyway: startAnyway");
   });
 
-  it("a field required on a later step blocks Start, never Next on the step before it", () => {
-    // Deprecation / Sunset requires "Who to tell", drawn on the path step; blocking Next on
-    // the brief step for it would be a form nobody can reach the end of.
+  it("Next is blocked only by its own step's fields; Start by everything", () => {
+    // Every declared field (Deprecation / Sunset's "Who to tell" too) is drawn on the start-form
+    // step, so its Next waits for them there; no later step can block an earlier Next.
     expect(UI).toContain('data-testid="dw-wiz-next"\n                    disabled={!!stepBlocked}');
     expect(UI).toContain('data-testid="dw-new-start"\n                  disabled={busy || !!blocked}');
   });

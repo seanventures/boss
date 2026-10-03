@@ -175,7 +175,8 @@ describe("every Start lands on the Runs composer, preselected", () => {
     await click($('[data-testid="wf-card-start-family_video"]'));
     expect(params().get("tab")).toBe("runs");
     expect($('[data-testid="dw-new-project"]')).not.toBeNull();
-    expect($('[data-testid="dw-new-workflow-family_video"]')?.getAttribute("aria-checked")).toBe("true");
+    // Preselected: the composer is on that workflow and opens on its own start form.
+    expect($('[data-testid="dw-new-project"]')?.dataset.workflow).toBe("family_video");
   });
 
   it("from the editor", async () => {
@@ -184,7 +185,8 @@ describe("every Start lands on the Runs composer, preselected", () => {
     await click($('[data-testid="editor-start"]'));
     expect(params().get("wf")).toBeNull();
     expect(params().get("tab")).toBe("runs");
-    expect($('[data-testid="dw-new-workflow-family_video"]')?.getAttribute("aria-checked")).toBe("true");
+    // Preselected: the composer is on that workflow and opens on its own start form.
+    expect($('[data-testid="dw-new-project"]')?.dataset.workflow).toBe("family_video");
   });
 });
 
