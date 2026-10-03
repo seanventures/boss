@@ -8,7 +8,7 @@ import {
 } from "../lib/workflow-inputs";
 
 const UI_SRC = readFileSync(
-  new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+  new URL("../app/workflows/new-project-composer.tsx", import.meta.url), "utf8");
 
 /** A draft with nothing in it, for the reasons `blockingReason` gives back. */
 const EMPTY: Parameters<typeof blockingReason>[1] = {
@@ -112,7 +112,7 @@ describe("a workflow asks for what it needs", () => {
 // "" rather than null when nothing is blocking — so the right-hand side never evaluated and the
 // check was dead code under a button that looked ready to press.
 describe("a required input left blank", () => {
-  const UI = readFileSync(new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+  const UI = readFileSync(new URL("../app/workflows/new-project-composer.tsx", import.meta.url), "utf8");
 
   it("is caught by the form rather than by the runtime", () => {
     expect(UI).toContain("|| (stillBlank.length ? `Needs ${stillBlank.join(\", \")}` : \"\")");

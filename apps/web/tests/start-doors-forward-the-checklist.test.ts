@@ -50,7 +50,7 @@ const ALL = [...sources("app"), ...sources("lib")];
 const START_TO_API = /\/v1\/delivery-workflows\/start|["'`]\/v1\/workflow-runs["'`]/;
 /** Browser code that asks for a start through our own routes or actions. */
 const START_FROM_SCREEN =
-  /action: "start"|["'`]\/api\/builds["'`]|runStudioWorkflow\)|act\([^)]*"start"/;
+  /action: "start"|["'`]\/api\/builds["'`]|act\([^)]*"start"|\bpost\("start"/;
 
 const READINESS = {
   ready: false,
@@ -82,8 +82,9 @@ describe("every door that sends a start to the API", () => {
   it("is found — the enumeration is not empty", () => {
     expect(doors).toEqual(expect.arrayContaining([
       "app/api/builds/route.ts", "app/api/delivery-workflows/route.ts",
-      "app/agent-studio-actions.ts",
     ]));
+    // Agent Studio's Run door (POST /v1/workflow-runs) is gone: every Start is the composer.
+    expect(doors).not.toContain("app/agent-studio-actions.ts");
   });
 
   it.each(doors)("%s flattens a refusal through lib/start-refusal", (path) => {
@@ -103,7 +104,7 @@ describe("every screen that starts work", () => {
   it("is found — the enumeration is not empty", () => {
     expect(screens).toEqual(expect.arrayContaining([
       "app/ask-boss-hero.tsx", "app/delivery-workflows-ui.tsx", "app/run-report-ui.tsx",
-      "app/agent-studio-ui.tsx",
+      "app/workflows/new-project-composer.tsx",
     ]));
   });
 
@@ -163,18 +164,21 @@ describe("re-running a run", () => {
 });
 
 describe("schedules", () => {
+  // Set from a Library card's Schedule… popover (app/workflows/library.tsx); saved by the area.
+  const LIBRARY = codeOnly("app/workflows/library.tsx");
   const UI = codeOnly("app/delivery-workflows-ui.tsx");
 
   it("show what their firing will refuse while being saved, and store Start anyway", () => {
-    const view = UI.slice(UI.indexOf("function YoursView("));
-    expect(view).toContain("useWorkflowReadiness(projectId, scheduleDraft?.workflowKey");
-    expect(view).toContain("<ReadinessPanel readiness={draftReadiness}");
+    const view = LIBRARY.slice(LIBRARY.indexOf("function SchedulePopover("));
+    expect(view).toContain("useWorkflowReadiness(projectId, draft.workflowKey, draft.values)");
+    expect(view).toContain("<ReadinessPanel readiness={readiness}");
     expect(UI).toContain("start_anyway: draft.startAnyway");
   });
 
   it("say what was missing when a firing did not start, each with its fix", () => {
-    expect(UI).toContain("s.last_missing.map(");
-    expect(readFileSync("app/delivery-workflows-ui.tsx", "utf8"))
-      .toContain('data-testid={`dw-sched-refused-${s.id}`}');
+    expect(LIBRARY).toContain("s.last_missing.map((m) =>");
+    expect(LIBRARY).toContain("${m.fix ? ` (${m.fix})` : \"\"}");
+    expect(readFileSync("app/workflows/library.tsx", "utf8"))
+      .toContain('data-testid={`wf-sched-refused-${s.id}`}');
   });
 });

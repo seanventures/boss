@@ -61,8 +61,12 @@ describe("the operator's 'move things along' button", () => {
 
 describe("names, not role keys", () => {
   it("points at the area the rail actually has", () => {
+    // The builder's "Open it in Agent work" left with the builder; whatever this area says
+    // about agents names the area the rail has now — Agents — and never a retired one.
     expect(UI).not.toContain("Agents page");
-    expect(UI).toContain("Open it in Agent work");
+    for (const retired of ["Agent work", "Agent Studio", "Team structure"]) {
+      expect(UI).not.toContain(retired);
+    }
   });
 
   it("a run waiting on a role says the role's name", () => {

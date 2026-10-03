@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { runLaneState, type RunStep } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -140,7 +141,8 @@ describe("the Engineering Captain leads the work", () => {
 });
 
 describe("the composer looks like the console it is in", () => {
-  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+  // The Runs composer moved to its own module (app/workflows/new-project-composer.tsx).
+  const DW = codeOnly("app/workflows/new-project-composer.tsx");
   const CSS_N = codeOnly("app/globals.css");
   const DS = codeOnly("app/design-system.css");
 
@@ -155,8 +157,10 @@ describe("the composer looks like the console it is in", () => {
   it("puts the field and its controls on one surface", () => {
     // Three separate elements sharing a row read as a form; the Command Center's composer is
     // the same act from another page and looks like one thing.
-    expect(CSS_N).toContain(".dw-new-box {");
-    expect(CSS_N).toContain(".dw-new-box:focus-within");
+    // REWRITTEN: this pinned `.dw-new-box`, a rule no element wore any more — it went with the
+    // other dead workflow CSS. What the composer's field wears is what must be styled.
+    expect(DW).toContain('className="dw-new-input"');
+    expect(CSS_N).toContain(".dw-new-input");
   });
 
   it("starts on the shortcut every other composer uses", () => {
@@ -199,12 +203,19 @@ describe("a step that failed while the run went on", () => {
     expect(DW).toContain('"dw-step-failed-on"');
   });
 
-  it("still lets the path continue past it", () => {
-    // It is not a stopped run: the project carried on without it, and the rail should say so.
-    expect(DW).toContain('"failed_on"].includes(previous ?? "")');
-  });
-
-  it("has its own colour rather than borrowing one", () => {
-    expect(CSS).toContain('.dw-node[data-phase="failed_on"]');
-  });
+  it("still lets the path continue past it, and says which it was on the lane", () => {
+    // It is not a stopped run: the project carried on without it. On the run's lane it is a
+    // failure (red) whose line says it went on; the step after it is not held back.
+    const base = { kind: "capability", capability: null, evidence: [], error: null, approval: {},
+                   due_at: null, timeout_applied: null, attempt: 1, started_at: null,
+                   completed_at: null, decision_id: null };
+    const lane = runLaneState({ steps: [
+      { ...base, step_id: "research", status: "failed",
+        output: { recorded_as: "failed_continued" } },
+      { ...base, step_id: "build", status: "running", output: {} },
+    ] as RunStep[] });
+    expect(lane.research).toEqual({ phase: "failed", meta: "failed, went on" });
+    expect(lane.build.phase).toBe("moving");
+  });;
+;
 });

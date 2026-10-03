@@ -165,22 +165,25 @@ describe("the rail keeps the timing and drops the noise", () => {
   });
 
   it("the node uses it", () => {
-    expect(UI).toContain(") : railMeta(step)}");
+    // The run's lane is told it, step by step (runLaneState).
+    expect(UI).toContain("meta: railMeta(step)");
   });
 });
 
 describe("the workflow agent is reachable from the workflow page", () => {
+  const LIBRARY = codeOnly("app/workflows/library.tsx");
   it("there is a way in, where workflows are managed", () => {
     // The tools to create, edit and delete a workflow in conversation shipped with no entry
     // point — so the feature existed and nobody could find it, which is the same as not having
     // built it.
-    expect(UI).toContain('data-testid="dw-workflow-agent"');
-    expect(UI).toContain("Design one with BOSS");
+    // The Library's "Ask BOSS", beside "+ New workflow".
+    expect(LIBRARY).toContain('data-testid="wf-lib-ask"');
+    expect(LIBRARY).toContain("Ask BOSS");
   });
 
   it("and it opens addressed to a role, with an opener that says what it can do", () => {
-    const at = UI.indexOf('data-testid="dw-workflow-agent"');
-    const block = UI.slice(at, at + 900);
+    const at = LIBRARY.indexOf('data-testid="wf-lib-ask"');
+    const block = LIBRARY.slice(at, at + 900);
     expect(block).toContain('"program_manager"');
     expect(block).toContain("draft a new one");
     expect(block).toContain("retire one");

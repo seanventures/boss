@@ -19,7 +19,8 @@ import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
 
-const WIZARD = codeOnly("app/agent-creation-wizard.tsx");
+/** New agent: the one door (the five-step wizard is retired; its runtime fields are Advanced). */
+const DIALOG = codeOnly("app/agent-quick-create.tsx");
 const ACTIONS = codeOnly("app/agent-studio-actions.ts");
 const LIB = codeOnly("lib/agent-wizard.ts");
 const ROSTER = codeOnly("app/workforce-ui.tsx");
@@ -27,16 +28,17 @@ const ROSTER = codeOnly("app/workforce-ui.tsx");
 describe("making a new agent", () => {
   it("the roster has a way to add one", () => {
     expect(ROSTER).toContain('data-testid="wf-new-agent"');
-    // The one-screen create is what the button opens; the full Studio wizard is one press on.
+    // ONE dialog, wherever it is opened from: Blank (with an Advanced profile) or a template.
     expect(ROSTER).toContain("<AgentQuickCreate");
-    expect(ROSTER).toContain("<AgentCreationWizard");
+    expect(ROSTER).not.toContain("AgentCreationWizard");
+    expect(DIALOG).toContain('data-testid="aq-tab-blank"');
+    expect(DIALOG).toContain('data-testid="aq-tab-template"');
   });
 
-  it("the wizard can make a role rather than only borrow one", () => {
-    // Every option was a role that already existed, so the wizard could only ever point at
-    // somebody else's.
-    expect(WIZARD).toContain("A new role for this agent");
-    expect(WIZARD).toContain("draft.roleKey === NEW_ROLE");
+  it("a profile made with the agent is for a NEW agent, never somebody else's role", () => {
+    // The wizard once could only point at an existing role. New agent's Advanced profile always
+    // makes the agent it describes.
+    expect(DIALOG).toContain("...createInitialAgentWizardDraft(NEW_ROLE, input.actor)");
   });
 
   // REWRITTEN. These asserted the wizard POSTed /v1/roles with the chosen skills in

@@ -15,7 +15,8 @@ import { codeOnly } from "./_helpers/source";
  * The wizard's rules are pure functions on the draft, so these are real tests of the behaviour
  * rather than assertions that some markup exists.
  */
-const UI = codeOnly("app/delivery-workflows-ui.tsx");
+// The Runs composer lives in its own module since the Workflows area became Runs + Library.
+const UI = codeOnly("app/workflows/new-project-composer.tsx");
 
 const draft = (over: Partial<Parameters<typeof briefFrom>[0]> = {}) => ({
   title: "", directive: "", audience: "", criteria: [""],

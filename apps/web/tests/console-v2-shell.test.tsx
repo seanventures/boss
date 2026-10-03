@@ -98,8 +98,10 @@ describe("the v2 shell", () => {
     // 2026-10-02). Labels now match v1 unless docs/product/console_v2_parity.yaml says why —
     // see console-v2-surface.test.ts.
     for (const label of [
-      "Projects", "Hive", "Agent work", "Team structure", "Approvals",
-      "Workflow", "Receipts", "Infra & Models", "Settings",
+      // v1 renamed its own: "Agent work" is Agents and "Workflow" is Workflows (Workflow
+      // Studio), and /v2/factory, /v2/org and /v2/boss open those v1 areas.
+      "Projects", "Hive", "Agents", "Team structure", "Approvals",
+      "Workflows", "Receipts", "Infra & Models", "Settings",
     ]) {
       expect(shell).toContain(`label: "${label}"`);
     }

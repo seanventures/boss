@@ -68,27 +68,6 @@ describe("the master-detail split collapses", () => {
   });
 });
 
-describe("the workflow builder's toolbar collapses too", () => {
-  const narrow = atBreakpoint(900);
-
-  it("gives up its fixed field widths", () => {
-    // 196px and 186px are comfortable on a desktop and wider than the column on a phone.
-    expect(narrow).toContain(".dw-head-picker .field, .dw-new .field { min-width: 0; width: 100%; }");
-  });
-
-  it("drops the divider, which separates nothing once stacked", () => {
-    expect(narrow).toContain(".dw-head-divider { display: none; }");
-  });
-
-  it("stops pushing the actions to the right of a row that no longer exists", () => {
-    expect(narrow).toContain(".dw-canvas-actions { margin-left: 0; width: 100%; }");
-  });
-
-  it("lets a step's controls wrap instead of crushing its label", () => {
-    expect(narrow).toContain(".dw-draft-step { flex-wrap: wrap; }");
-  });
-});
-
 describe("cards fit a phone", () => {
   const phone = atBreakpoint(560);
 

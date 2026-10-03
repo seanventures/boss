@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  STOPPED_STEP_STATUSES, bucketOf, runNeedsYou, runToOpen, skippedBy, stoppedAnswers,
-  stoppedStep, type RunAction, type RunStep,
+  STOPPED_STEP_STATUSES, bucketOf, runLaneState, runNeedsYou, runToOpen, skippedBy,
+  stoppedAnswers, stoppedStep, type RunAction, type RunStep,
 } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
 import { standingOf } from "./_helpers/run-standing";
@@ -114,7 +114,9 @@ describe("an operator's skip reads as one", () => {
       skipped_by_operator: true, skipped_by: "ceo", skip_reason: "out of budget" } });
     expect(skippedBy(byOperator)).toBe("skipped by ceo: out of budget");
     expect(skippedBy(step("skipped", { output: { reason: "path_not_reached" } }))).toBe("");
-    expect(UI).toContain('data-testid="dw-node-skipped-by-operator"');
+    // And the run's lane says it on the node, not only in a tooltip.
+    expect(runLaneState({ steps: [byOperator] })[byOperator.step_id])
+      .toEqual({ phase: "skipped", meta: "skipped by ceo: out of budget" });
   });
 
   it("gives every step its own detail, so a half-typed reason does not follow you", () => {

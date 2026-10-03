@@ -2,6 +2,7 @@
 
 import { IDENTITY_PARAMS, searchForNewProject } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
+import { resolveLegacyArea } from "./legacy-areas";
 import { onChanged } from "./changed";
 import {
   cookieWith,
@@ -34,7 +35,6 @@ import {
   Database,
   Gauge,
   GitBranch,
-  Graph,
   ShieldCheck,
   House,
   List,
@@ -132,7 +132,6 @@ const ICONS = {
   "ai-sre": Siren,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
-  studio: Graph,
   foundations: PaintBrush,
   components: SquaresFour,
 } as const;
@@ -176,10 +175,12 @@ const AREAS: AreaDef[] = [
   // after; they were first only because they come first chronologically, which is not the same
   // as being what an operator opens the console to look at.
   { id: "code_tasks", label: "Projects", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
-  { id: "delivery_workflows", label: "Workflow", sub: "How work moves — pick a path, watch it, build your own", group: "Run", icon: ICONS.delivery_workflows },
-  { id: "workforce", label: "Agent work", sub: "Recent work, grouped by role", group: "Run", icon: ICONS.org },
-  { id: "org_chart", label: "Team structure", sub: "Planned roles and observed handoffs", group: "Run", icon: ICONS.processes },
-  { id: "studio", label: "Agent Studio", sub: "Create, test, and run agents", group: "Run", icon: ICONS.studio },
+  // ONE HOME PER OBJECT. Workflow, Agent work, Team structure and Agent Studio were four rows
+  // for two things: workflows (built, run and watched in one area) and the agents that work
+  // them (roster, team and panels in one area). Old links to the retired two still land —
+  // app/legacy-areas.ts.
+  { id: "delivery_workflows", label: "Workflows", sub: "Build, run and watch workflows", group: "Run", icon: ICONS.delivery_workflows },
+  { id: "workforce", label: "Agents", sub: "Who does the work", group: "Run", icon: ICONS.org },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "delivery", label: "Infra", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   // TOP LEVEL, NOT NESTED. Grouping these under an "Observability" heading put the two screens
@@ -499,7 +500,16 @@ export default function ConsoleShell({
   // without the 7s auto-refresh snapping the user back.
   const queryString = searchParams.toString();
   useEffect(() => {
-    const area = new URLSearchParams(queryString).get("area");
+    // A RETIRED SURFACE IS REWRITTEN BEFORE ANYTHING READS IT. The server redirects these too;
+    // this covers the URL changing under a mounted console (Back, a pushState from a panel).
+    const legacy = resolveLegacyArea(new URLSearchParams(queryString));
+    if (legacy) {
+      try {
+        window.history.replaceState(null, "", `${window.location.pathname}?${legacy}${window.location.hash}`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      } catch { /* non-browser */ }
+    }
+    const area = (legacy ?? new URLSearchParams(queryString)).get("area");
     if (area && AREAS.some((a) => a.id === area)) {
       setActive(area as AreaId);
       return;
@@ -641,7 +651,10 @@ export default function ConsoleShell({
       if (!raw.startsWith("?") && !raw.startsWith("/?")) return;
 
       const url = new URL(raw, window.location.href);
-      if (!isInConsoleLink(raw, {
+      // An old link (Agent Studio, Team structure, a retired Workflow tab) opens what it meant.
+      const legacy = resolveLegacyArea(url.searchParams);
+      if (legacy) url.search = `?${legacy}`;
+      if (!isInConsoleLink(`?${url.searchParams}`, {
         pathname: url.pathname,
         currentPathname: window.location.pathname,
         target: link.target,

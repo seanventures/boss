@@ -1,10 +1,13 @@
 import React from "react";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The lane and the editor are other tests' business; they get stand-ins here.
+vi.mock("../app/workflows/studio-parts", () => import("./_helpers/studio-parts-stub"));
 
 import {
-  DID_NOTHING, RunsView, bucketOf, didNothing, phaseOf, runIsLive, stoppedStep,
+  DID_NOTHING, RunsView, bucketOf, didNothing, phaseOf, runIsLive, runLaneState, stoppedStep,
   type RunStep,
 } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
@@ -77,12 +80,12 @@ describe("a step that did nothing does not read as work done", () => {
       expect(didNothing(s)).toBe(true);
       expect(phaseOf(s)).toBe("nothing");
       const html = view(runOf("completed", [s]));
+      // Its detail says so, in its own words.
       expect(html).toContain('data-phase="nothing"');
-      expect(html).toContain('data-testid="dw-node-did-nothing"');
       expect(html).toContain(DID_NOTHING);
-      // The step's own node — not the Agents node before it, which is always complete.
-      expect(html).not.toMatch(/<li class="dw-node" data-phase="done"[^>]*data-testid="dw-node"/);
-      expect(html).toMatch(/<li class="dw-node" data-phase="nothing"[^>]*data-testid="dw-node"/);
+      // And the run's lane is never told it is done: it is drawn skipped, saying nothing was done.
+      expect(runLaneState({ steps: [s] })[capability]).toEqual({ phase: "skipped", meta: "nothing done" });
+      expect(html).toMatch(new RegExp(`data-step-id="${capability}"[^>]*data-phase="skipped"`));
     });
   }
 
