@@ -85,7 +85,8 @@ describe("a custom step can be changed", () => {
   it("repopulates the form from the step being edited", () => {
     expect(form).toContain('useState(editing?.label ?? "")');
     expect(form).toContain('useState(editing?.knowledge ?? "")');
-    expect(form).toContain("(editing?.inputs ?? []).map((i) => i.name).join");
+    expect(form).toContain("useState<string[]>((editing?.inputs ?? []).map((i) => i.name))");
+    expect(form).toContain("useState<string[]>(editing?.produces ?? [])");
   });
 
   it("rebuilds the form when a different step is picked", () => {
