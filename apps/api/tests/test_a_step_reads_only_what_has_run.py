@@ -101,3 +101,66 @@ def test_a_source_that_is_not_in_the_workflow_is_named(client):
     body = _post(client, "check", spec=spec).json()
     assert [p["message"] for p in _order_problems(body["problems"])] == [
         "Gets run_id from step 'gone', which is not in this workflow."]
+
+
+def _research_on_one_branch(meeting_inputs: dict) -> dict:
+    """Research behind 'do we have research?'; the panel after the branches meet."""
+    gate = {"id": "want_research", "kind": "condition",
+            "expression": {"path": "input.title", "op": "eq", "value": "deep"},
+            "on_true": "research", "on_false": "meeting"}
+    research = {"id": "research", "kind": "capability", "next": ["meeting"],
+                "binding": {"capability": "research",
+                            "inputs": {"seed": {"from_input": "directive"}}}}
+    meeting = {"id": "meeting", "kind": "capability", "next": [],
+               "binding": {"capability": "meeting", "inputs": meeting_inputs}}
+    return {"entry_step": "want_research",
+            "input_schema": {"directive": "string", "title": "string"},
+            "steps": [gate, research, meeting]}
+
+
+def _meeting_problems(problems: list[dict]) -> list[dict]:
+    return [p for p in problems if p["step_id"] == "meeting"]
+
+
+def test_an_optional_input_may_read_from_a_step_on_one_branch(client):
+    """The runner leaves an optional input out when its source did not run, so it is fine."""
+    spec = _research_on_one_branch({
+        "directive": {"from_input": "directive"},
+        "research": {"from_step": "research", "field": "dossier"}})
+    body = _post(client, "check", spec=spec).json()
+    assert _meeting_problems(body["problems"]) == [], body["problems"]
+
+
+def test_a_required_input_may_not(client):
+    spec = _research_on_one_branch({
+        "directive": {"from_step": "research", "field": "dossier"}})
+    body = _post(client, "check", spec=spec).json()
+    assert [p["message"] for p in _meeting_problems(body["problems"])
+            if p["field"] == "directive"] == [
+        "Gets directive from “Research”, which does not always run before it."], body["problems"]
+
+
+def test_an_optional_input_reading_a_later_step_is_still_refused(client):
+    spec = _research_on_one_branch({
+        "directive": {"from_input": "directive"},
+        "research": {"from_step": "research", "field": "dossier"}})
+    gate, research, meeting = spec["steps"]
+    # Panel first, research after it.
+    gate["on_true"], gate["on_false"] = "meeting", "meeting"
+    meeting["next"], research["next"] = ["research"], []
+    body = _post(client, "check", spec=spec).json()
+    assert [p["message"] for p in _meeting_problems(body["problems"])] == [
+        "Gets research from “Research”, which runs after it."], body["problems"]
+
+
+def test_a_custom_steps_own_optional_set_is_the_one_asked():
+    """A custom step's optional inputs come from its definition, as they do in the runner."""
+    from boss_engine.services.workflows import binding_order_problems
+
+    spec = _research_on_one_branch({})
+    spec["steps"][2]["binding"] = {"custom_step": "overlay",
+                                   "inputs": {"image": {"from_step": "research",
+                                                        "field": "dossier"}}}
+    assert binding_order_problems(spec, lambda step: frozenset({"image"})) == []
+    assert [p["field"] for p in binding_order_problems(spec, lambda step: frozenset())] == [
+        "image"]
