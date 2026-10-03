@@ -17,6 +17,7 @@
  */
 
 import type { ReactNode } from "react";
+import type { AvatarSize, AvatarState } from "../lib/agent-world-types";
 
 /** Initials and a tone per agent. Deliberately the same palette the meeting room uses. */
 const META: Record<string, { initials: string; tone: string }> = {
@@ -86,6 +87,10 @@ export function AgentChip({ roleKey, label, note, children, href }: {
   /** A remove button, or nothing on a read-only list. */
   children?: ReactNode;
   href?: string;
+  /** Face size in px. Accepted now, drawn once the avatar kit lands (Agent World). */
+  size?: AvatarSize;
+  /** What the agent is doing. Accepted now, drawn once the avatar kit lands (Agent World). */
+  state?: AvatarState;
 }) {
   const meta = agentMeta(roleKey, label);
   const name = label || roleKey.replace(/_/g, " ");
