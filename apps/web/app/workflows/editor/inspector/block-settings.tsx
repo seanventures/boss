@@ -8,21 +8,18 @@ import type {
 } from "../../../../lib/workflow-editor-types";
 import { asObj, bindingOf, strings } from "./step-facts";
 
-/** A library row, with the active version's id when the API sends it: a "Run another workflow"
- *  step is pinned to a VERSION (`binding.workflow_version_id`), not to a key. */
-type LibraryRow = WorkflowSummary & { active_version_id?: string | null };
+const libraryCache = new Map<string, Promise<WorkflowSummary[]>>();
 
-const libraryCache = new Map<string, Promise<LibraryRow[]>>();
-
-/** The project's workflows, fetched once per project while the editor is open. */
-export function useLibrary(projectId: string, wanted: boolean): LibraryRow[] | null {
-  const [rows, setRows] = useState<LibraryRow[] | null>(null);
+/** The project's workflows, fetched once per project while the editor is open. A "Run another
+ *  workflow" step is pinned to a VERSION (`active_version_id`), not to a key. */
+export function useLibrary(projectId: string, wanted: boolean): WorkflowSummary[] | null {
+  const [rows, setRows] = useState<WorkflowSummary[] | null>(null);
   useEffect(() => {
     if (!wanted) return;
     let live = true;
     let pending = libraryCache.get(projectId);
     if (!pending) {
-      pending = fetchLibrary(projectId).then((r) => r as LibraryRow[]);
+      pending = fetchLibrary(projectId);
       pending.catch(() => libraryCache.delete(projectId));
       libraryCache.set(projectId, pending);
     }
@@ -47,6 +44,16 @@ function splitDuration(seconds: number): { amount: number; unit: (typeof UNITS)[
 export function FieldError({ problems, field }: { problems: Problem[]; field: string }) {
   const hit = problems.find((p) => p.field === field);
   return hit ? <span className="wf-field-error" role="alert" title={hit.message}>{hit.message}</span> : null;
+}
+
+/** The step fields BlockSettings draws a control for — and so where a problem on one shows. */
+export function blockFieldKeys(view: StepView, block: BlockDef | undefined): string[] {
+  if (view.type === "condition") return ["expression"];
+  if (view.type === "parallel" || view.type === "join" || view.type === "loop") return [];
+  return block?.configure.length ? block.configure.map((c) => c.key)
+    : view.type === "gate" ? ["question", "guidance", "approver_role"]
+    : view.type === "wait" ? ["wait_seconds"]
+    : view.type === "subworkflow" ? ["workflow_version_id"] : [];
 }
 
 /**
@@ -82,10 +89,7 @@ export function BlockSettings({ step, view, block, palette, projectId, workflowK
     );
   }
 
-  const fields = block?.configure.length ? block.configure.map((c) => c.key)
-    : view.type === "gate" ? ["question", "guidance", "approver_role"]
-    : view.type === "wait" ? ["wait_seconds"]
-    : view.type === "subworkflow" ? ["workflow_version_id"] : [];
+  const fields = blockFieldKeys(view, block);
   const conf = (key: string) => block?.configure.find((c) => c.key === key);
 
   return (
