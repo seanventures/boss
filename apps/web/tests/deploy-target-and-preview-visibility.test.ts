@@ -256,17 +256,21 @@ describe("a skipped step says why, instead of reading as a fault", () => {
     // status: not_applicable with a sentence saying why, and the chain threw that sentence
     // away and printed two words that sound like a defect.
     expect(SOURCE).not.toContain('phase === "skipped" ? "not run"');
-    // REWRITTEN for the shared run lane: the node's words come from laneStateOf.
+    // On the run's lane it is `skipped` (laneStateOf), never a failure.
     const skipped = { step_id: "research", kind: "capability", status: "skipped", capability: "research",
                       output: { status: "not_applicable", note: "No research phase" } } as unknown as RunStep;
+    expect(laneStateOf(skipped).phase).toBe("skipped");
     expect(laneStateOf(skipped).meta).toBe("skipped");
   });
 
   it("carries the recorded reason", () => {
-    expect(SOURCE).toContain("function skipReason");
+    // The lane node's tooltip, and the opened step, both show the sentence the capability
+    // recorded when it stood aside.
     const skipped = { step_id: "research", kind: "capability", status: "skipped", capability: "research",
                       output: { status: "not_applicable", note: "No research phase" } } as unknown as RunStep;
     expect(laneStateOf(skipped).tip).toBe("No research phase");
+    expect(SOURCE).toContain('data-testid="dw-step-note"');
+    expect(SOURCE).toContain("{String(step.output.note)}");
   });
 });
 

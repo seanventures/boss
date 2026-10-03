@@ -40,11 +40,12 @@ const AGENT_WRITE_SURFACE = [
 /** Every console file that writes an agent today, reviewed. A new one must be added here — and
  *  pass the same check — rather than slip in unreviewed. */
 const KNOWN_AGENT_WRITERS = [
-  "app/agent-creation-wizard.tsx",
   "app/agent-detail-ui.tsx",
+  // Agent Studio's agent half, moved onto the agent's page (Profile: Test) and the Agents
+  // area's Panels view (Run). The wizard is gone: New agent is app/agent-quick-create.tsx.
+  "app/agent-profile-ui.tsx",
   "app/agent-quick-create.tsx",
   "app/agent-studio-actions.ts",
-  "app/agent-studio-ui.tsx",
   "app/api/agent/route.ts",
   "app/api/skills/route.ts",
   // The 'Give <skill> to <captain>' grant on a workflow step row (moved out of
@@ -54,7 +55,6 @@ const KNOWN_AGENT_WRITERS = [
   // agent's grant through /api/skills, so it is an agent writer too — reviewed at integration.
   "app/mcp-servers-ui.tsx",
   "app/skills-ui.tsx",
-  "app/workforce-ui.tsx",
   "lib/agent-studio.ts",
   "lib/agents.ts",
 ];
@@ -133,6 +133,11 @@ describe("agent writes carry the signed-in actor", () => {
   it("the agent screens are handed the signed-in actor by the page", () => {
     const page = codeOnly(join(ROOT, "app/page.tsx"));
     expect(page).toMatch(/<WorkforceArea[^>]*actor=\{activeActorId\}/);
-    expect(page).toMatch(/<AgentStudio[\s\S]{0,200}actor=\{activeActorId\}/);
+    // And the Agents area hands it on to every screen inside it that writes.
+    const area = codeOnly(join(ROOT, "app/workforce-ui.tsx"));
+    expect(area).toMatch(/<AgentDetail[^>]*actor=\{actor\}/);
+    expect(area).toMatch(/<AgentQuickCreate[^>]*actor=\{actor\}/);
+    expect(area).toMatch(/<PanelsView[^>]*actor=\{actor\}/);
+    expect(codeOnly(join(ROOT, "app/agent-detail-ui.tsx"))).toMatch(/<AgentProfile[^>]*actor=\{actor\}/);
   });
 });

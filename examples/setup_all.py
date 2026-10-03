@@ -150,7 +150,7 @@ def main() -> None:
     outcome = "checked" if args.dry_run else "installed"
     print(f"  {len(installed)} {outcome}" + (f", {len(failed)} skipped" if failed else ""))
     if installed and not args.dry_run:
-        print("  Delivery → Yours, in the console.")
+        print("  Workflows → Library, in the console.")
     if not_ready:
         # INSTALLED IS NOT THE SAME AS RUNNABLE. The email examples installed cleanly on an
         # install with no mail server and failed at their last, approved step; this is the

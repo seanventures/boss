@@ -2,21 +2,19 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { RoleFeedItem } from "../lib/roles";
-import type { SkillFeedItem } from "../lib/skills";
-import { AgentCreationWizard } from "./agent-creation-wizard";
+import type { AgentStudioFeed } from "../lib/agent-studio";
 import { AgentDetail } from "./agent-detail-ui";
+import { PanelsView, orphanProfiles } from "./agent-profile-ui";
 import { AgentQuickCreate } from "./agent-quick-create";
+import { FocusedAgents } from "./focused-agents-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
 
 /**
- * Workforce and Org Chart, in v1's own styling.
+ * The Agents area: Roster, Team and Panels, in v1's own styling.
  *
- * The data is the same the v2 screens read — one fetch each, already bounded server-side. What
- * differs is the chrome: v2's classes live under `.v2-shell` and render unstyled here, so these
- * use v1's own compact list and structure styles rather than importing unstyled components.
+ * The data is the same the v2 screens read — one fetch each, already bounded server-side.
  */
 
 /** Acronyms stay acronyms: "Qa" and "Cto" read as typos. */
@@ -33,83 +31,53 @@ function volumeOf(a: V2Agent): number {
   return (a.calls ?? 0) + (a.steps ?? 0);
 }
 
-function AgentModelHelp() {
-  return (
-    <span className="org-model-help">
-      <button type="button" aria-label="How roles, agents, and runs fit together">?</button>
-      <span role="tooltip">
-        A role names a responsibility. An agent definition sets its behavior. Runs record actual
-        work. Team structure is a plan; it does not route tasks.
-      </span>
-    </span>
-  );
-}
-
-function openArea(area: "org_chart" | "studio"): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("area", area);
-  url.searchParams.delete("role");
-  url.searchParams.delete("studio_role");
-  window.history.pushState(null, "", url.toString());
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
-/** Where to go to put a question to one of these agents, keeping who you are. */
-/** Open the console's side dock, addressed to this member of the workforce.
- *
- *  This was an <a href> that rebuilt the query string and sent the operator to the Agents
- *  AREA, so asking one question cost them whatever they were looking at — and the answer came
- *  from BOSS-in-general anyway, because the name was only prose in a prefilled box.
- *
- *  Now it edits the CURRENT url and tells the shell to re-read it: same page, same scroll
- *  position, panel open on the right with the agent's name in its head. `dock_role` is what
- *  makes the reply come from that role's lens and its own past arguments.
- */
-function askAgent(agentName: string): void {
-  // `dock_role` is what makes the reply come from that role's lens and its own past arguments.
-  openDockAbout({ subject: null, role: agentName, question: `@${agentName}: ` });
-}
-
 /** Open one agent. Addressable, because a view nobody can link to is one nobody can send. */
 function openAgent(roleKey: string): void {
   try {
     const url = new URL(window.location.href);
-    url.searchParams.set("role", roleKey);
-    window.history.pushState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
-}
-
-function openRoleWork(roleKey: string): void {
-  try {
-    const url = new URL(window.location.href);
     url.searchParams.set("area", "workforce");
     url.searchParams.set("role", roleKey);
-    url.searchParams.delete("studio_role");
     window.history.pushState(null, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   } catch { /* non-browser */ }
 }
 
-function openAgentDefinition(roleKey: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("area", "studio");
-    url.searchParams.set("studio_role", roleKey);
-    url.searchParams.delete("role");
-    window.history.pushState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+/** Open the console's side dock, addressed to this member of the workforce: same page, the
+ *  panel on the right with the agent's name in its head. `dock_role` is what makes the reply
+ *  come from that role's lens and its own past arguments. */
+function askAgent(agentName: string): void {
+  openDockAbout({ subject: null, role: agentName, question: `@${agentName}: ` });
 }
 
+export type AgentsView = "roster" | "team" | "panels";
+
+/** The view the URL names. `view` is shared with other areas (the workflow editor uses
+ *  visual|json), so anything this area does not know is the roster. */
+export function readAgentsView(search: string): AgentsView {
+  const v = new URLSearchParams(search).get("view");
+  return v === "team" || v === "panels" ? v : "roster";
+}
+
+/**
+ * Agents: every agent, keyed by `role_key` — the thing a workflow step's `captain` names, so
+ * the roster, the team, a step's agent picker and an agent's "Used in" all count the same.
+ *
+ * Three views of one set: the Roster (who they are and what they have done), the Team (planned
+ * reporting lines; it does not route work) and Panels (agents that decide together; hidden
+ * until there is one). One "+ New agent" makes an agent wherever it is pressed.
+ */
 export function WorkforceArea(
-  { workforce, skills = [], actor }: {
-    workforce: Workforce; skills?: SkillFeedItem[];
+  { workforce, chart, studio, actor }: {
+    workforce: Workforce;
+    chart?: OrgChart;
+    /** The Studio catalog: Profiles, Panels, and orphan definitions offered as templates. */
+    studio?: AgentStudioFeed;
     /** The signed-in actor every agent write is made as — never a literal. */
     actor: string;
   },
 ) {
-  const [filter, setFilter] = useState<"all" | "working" | "worked">("all");
+  const [view, setViewState] = useState<AgentsView>("roster");
+  const [filter, setFilter] = useState<"all" | "working" | "worked" | "duty">("all");
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
   // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
@@ -117,43 +85,24 @@ export function WorkforceArea(
   useEffect(() => {
     const sync = () => {
       try {
-        setOpenRole(new URL(window.location.href).searchParams.get("role") ?? "");
+        const url = new URL(window.location.href);
+        setOpenRole(url.searchParams.get("role") ?? "");
+        setViewState(readAgentsView(url.search));
       } catch { /* non-browser */ }
     };
     sync();
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
-  // MAKE ONE. The page listed 26 agents and offered no way to add a 27th. "quick" is the
-  // one-screen create (name, purpose, skills, MCP servers, reports-to) that makes the agent and
-  // its grants in one request; "studio" is Agent Studio's full wizard, for prompts, rules and a
-  // model policy, which now also grants what it asks for.
-  const [creating, setCreating] = useState<"" | "quick" | "studio">("");
-  const [roleOptions, setRoleOptions] = useState<RoleFeedItem[]>([]);
-  useEffect(() => {
-    if (creating !== "studio") return;
-    let alive = true;
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/agent?view=roles&project_id=${encodeURIComponent(workforce.project_id)}`,
-          { cache: "no-store" });
-        if (!r.ok) return;
-        const body = await r.json();
-        if (!alive) return;
-        // Only the four fields the wizard's picker reads. The rest of RoleFeedItem is a
-        // scoreboard this list has no use for, and inventing zeros for it would put numbers on
-        // screen that describe nothing.
-        setRoleOptions(((body.items ?? []) as Array<Record<string, unknown>>).map((x) => ({
-          id: String(x.id ?? x.role_key ?? ""),
-          roleKey: String(x.role_key ?? ""),
-          displayName: String(x.display_name ?? x.role_key ?? ""),
-          autonomyLevel: Number(x.autonomy_level ?? 0),
-        } as RoleFeedItem)));
-      } catch { /* the wizard still offers "a new role", which is the point of it here */ }
-    })();
-    return () => { alive = false; };
-  }, [creating, workforce.project_id]);
+  const setView = (next: AgentsView) => {
+    setViewState(next);
+    try {
+      const url = new URL(window.location.href);
+      if (next === "roster") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+      window.history.pushState(null, "", url.toString());
+    } catch { /* non-browser */ }
+  };
+  const [creating, setCreating] = useState(false);
 
   const closeAgent = useCallback(() => {
     setOpenRole("");
@@ -168,132 +117,141 @@ export function WorkforceArea(
   // DELETED HERE, GONE HERE. The roster is server data refreshed on an interval; without this a
   // just-deleted agent stays on screen and opening it says it does not exist.
   const [deleted, setDeleted] = useState<Set<string>>(new Set());
+  const everyone = useMemo(() => (workforce.agents ?? []).filter((a) => !deleted.has(a.id)),
+                           [workforce.agents, deleted]);
   const agents = useMemo(() => {
-    const list = (workforce.agents ?? []).filter((a) => !deleted.has(a.id));
     const scoped = filter === "working"
-      ? list.filter((a) => a.status === "WORKING" || a.status === "STUCK")
-      : filter === "worked" ? list.filter((a) => volumeOf(a) > 0) : list;
+      ? everyone.filter((a) => a.status === "WORKING" || a.status === "STUCK")
+      : filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0) : everyone;
     const query = search.trim().toLowerCase();
     return query ? scoped.filter((a) => `${a.name} ${a.role} ${a.task}`.toLowerCase().includes(query)) : scoped;
-  }, [workforce.agents, filter, search, deleted]);
+  }, [everyone, filter, search]);
 
-  const counts = workforce.counts ?? { WORKING: 0, STUCK: 0, IDLE: 0, total: 0 };
-  const workedCount = (workforce.agents ?? []).filter((a) => volumeOf(a) > 0).length;
-  const unregisteredCount = (workforce.agents ?? []).filter((agent) => !agent.registered).length;
-  const shownAgents = filter === "all" && !search.trim() && !showAll
-    ? agents.slice(0, 8) : agents;
+  const working = everyone.filter((a) => a.status === "WORKING" || a.status === "STUCK").length;
+  // COUNTED, NOT ASSUMED: roles idle all window have recorded no work.
+  const workedCount = everyone.filter((a) => volumeOf(a) > 0).length;
+  const unregisteredCount = everyone.filter((agent) => !agent.registered).length;
+  const shownAgents = filter === "all" && !search.trim() && !showAll ? agents.slice(0, 12) : agents;
+  const panels = studio?.panels ?? [];
+  const orphans = useMemo(() => studio ? orphanProfiles(studio, everyone.map((a) => a.id)) : [],
+                          [studio, everyone]);
 
   if (!workforce.apiReachable) {
     return (
-      <p className="detail">
-        Could not reach the control plane{workforce.blockedReason ? ` — ${workforce.blockedReason}` : ""}.
-        An empty roster would read as a company with no agents.
+      <p className="detail" title={workforce.blockedReason}>
+        Could not reach the control plane
       </p>
     );
   }
 
-
-  // The detail view, over the roster. Rendered here rather than as a route because the console
-  // mounts every area at once and a route would be a second place agents can be listed.
-  if (openRole) {
-    return <AgentDetail projectId={workforce.project_id} roleKey={openRole} actor={actor}
-                        onClose={closeAgent}
-                        onDeleted={(key) => setDeleted((d) => new Set(d).add(key))} />;
-  }
   return (
-    <div className="roster">
-      <div className="roster-filterbar">
-        {/* COUNTED, NOT ASSUMED. This said "{total} roles with recorded work" over every
-            registered role, idle ones included — 22 on boss-1, most of which had done nothing. */}
-        <span className="detail" data-testid="wf-roster-count">
-          {counts.total} role{counts.total === 1 ? "" : "s"} · {workedCount} with recorded work
-        </span>
-        <span className="roster-filters">
-          {(["all", "working", "worked"] as const).map((f) => (
-            <button
-              key={f}
-              type="button"
-              className="cap-btn"
-              data-active={filter === f}
-              onClick={() => setFilter(f)}
-              data-testid={`wf-filter-${f}`}
-            >
-              {f === "all" ? `All ${counts.total}` : f === "working" ? `Working or stuck ${counts.WORKING + counts.STUCK}` : "Has done work"}
+    <div className="wf-agents" data-testid="agents-area">
+      <header className="wf-lib-head">
+        <div className="wf-tabs" role="tablist" aria-label="Agents">
+          <button type="button" role="tab" className="wf-tab" aria-selected={view === "roster"}
+                  data-testid="agents-view-roster" onClick={() => setView("roster")}>
+            Roster <em data-testid="wf-roster-count">({everyone.length})</em>
+          </button>
+          <button type="button" role="tab" className="wf-tab" aria-selected={view === "team"}
+                  data-testid="agents-view-team" title="Planned reporting lines. Doesn't change who runs a step."
+                  onClick={() => setView("team")}>Team</button>
+          {panels.length ? (
+            <button type="button" role="tab" className="wf-tab" aria-selected={view === "panels"}
+                    data-testid="agents-view-panels" onClick={() => setView("panels")}>
+              Panels <em>({panels.length})</em>
             </button>
-          ))}
-          {/* A ROSTER YOU CANNOT ADD TO. The page listed 26 agents and had no way to make a
-              27th — the only wizard in BOSS is in Agent Studio, and it writes
-              `agent_definitions`, which this roster does not read. */}
-          <button type="button" className="cap-btn roster-new" data-testid="wf-new-agent"
-                  onClick={() => setCreating("quick")}>Create agent</button>
-        </span>
-      </div>
-      <div className="roster-guide">
-        <span>Work is grouped by role.</span>
-        <AgentModelHelp />
-        <button type="button" onClick={() => openArea("org_chart")}>Team structure</button>
-        <button type="button" onClick={() => openArea("studio")}>Agent Studio</button>
-      </div>
-      <input className="roster-search" type="search" aria-label="Find an agent role"
-             placeholder="Find an agent role" value={search}
-             onChange={(event) => setSearch(event.target.value)} />
+          ) : null}
+        </div>
+        <span className="wf-lib-spacer" />
+        {view === "roster" ? (
+          <label className="wf-lib-search">
+            <input type="search" aria-label="Find an agent" placeholder="Find an agent"
+                   value={search} onChange={(event) => setSearch(event.target.value)} />
+          </label>
+        ) : null}
+        <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-new-agent"
+                onClick={() => setCreating(true)}>+ New agent</button>
+      </header>
 
-      {creating === "quick" ? (
-        <AgentQuickCreate projectId={workforce.project_id} actor={actor}
-                          onClose={() => setCreating("")}
-                          onOpenStudio={() => setCreating("studio")}
-                          onCreated={(roleKey) => { setCreating(""); openAgent(roleKey); }} />
-      ) : null}
-      {creating === "studio" ? (
-        // SAME WIZARD, SO IT NEEDS THE SAME SKILLS. This passed `[]`, so the commission
-        // dialog opened from the Agents page always said "No installed skills are available
-        // to request" — the identical dialog opened from Agent Studio offered them.
-        <AgentCreationWizard projectId={workforce.project_id} actor={actor} roles={roleOptions}
-                             skills={skills} onClose={() => setCreating("")} />
+      {creating ? (
+        <AgentQuickCreate projectId={workforce.project_id} actor={actor} orphans={orphans}
+                          onClose={() => setCreating(false)}
+                          onCreated={(roleKey) => { setCreating(false); openAgent(roleKey); }} />
       ) : null}
 
-      {/* Governance gap, said once and at the top: an agent running work without a registered
-          role has no trust score, no autonomy level and no violation tracking. */}
-      {unregisteredCount > 0 ? (
-        <p className="detail roster-ungoverned" data-testid="roster-ungoverned">
-          Work is attributed to {unregisteredCount} unregistered role{unregisteredCount === 1 ? "" : "s"}.
-          Review authority before another run.
-        </p>
-      ) : null}
-
-      {agents.length === 0 ? (
-        (workforce.agents ?? []).length === 0 && filter === "all" && !search.trim() ? (
-          <div className="roster-empty" data-testid="workforce-empty">
-            <p className="detail">No customer agent work recorded yet. Browse agent definitions in Agent Studio, then run an agent or workflow to see work here.</p>
-            <button type="button" className="cap-btn" onClick={() => openArea("studio")}>Browse agent definitions</button>
-          </div>
-        ) : <p className="detail">No agent work matches this filter.</p>
+      {view === "team" ? (
+        chart ? <OrgChartArea projectId={workforce.project_id} actor={actor} chart={chart} />
+          : <p className="detail">Team unavailable</p>
+      ) : view === "panels" && studio ? (
+        <PanelsView feed={studio} actor={actor} />
       ) : (
-        <div className="roster-grid" data-testid="roster-grid">
-          {shownAgents.map((a) => (
-            <article className="roster-card" key={a.id} data-status={a.status}
-                     data-testid={`wf-agent-${a.id}`}>
-              <header className="roster-card-head">
-                <span className="roster-name">{a.name}</span>
-                <span className="roster-state">{a.status === "IDLE" ? "Idle" : a.status === "WORKING" ? "Working" : a.status === "STUCK" ? "Stuck" : "At gate"}</span>
-              </header>
-              <p className="roster-task">{a.last_touched || (a.task === "No work in this window." ? "No recent work" : a.task.replace(/^last: /, "Last: "))}</p>
-              <div className="roster-actions">
-                <button type="button" className="roster-open" onClick={() => openAgent(a.id)}
-                        data-testid={`wf-open-${a.id}`}>Details</button>
-                <button type="button" onClick={() => openAgentDefinition(a.id)}
-                        data-testid={`wf-definition-${a.id}`}>Definition</button>
-                <button type="button" className="roster-ask" onClick={() => askAgent(a.name)}
-                        data-testid={`wf-ask-${a.id}`}>Ask</button>
+        <div className="roster">
+          <div className="roster-filterbar">
+            <span className="roster-filters">
+              {(["all", "working", "worked", "duty"] as const).map((f) => (
+                <button key={f} type="button" className="cap-btn" data-active={filter === f}
+                        onClick={() => setFilter(f)} data-testid={`wf-filter-${f}`}
+                        title={f === "duty" ? "Agents that watch and act on their own" : undefined}>
+                  {f === "all" ? `All ${everyone.length}` : f === "working" ? `Working ${working}`
+                    : f === "worked" ? `Has done work ${workedCount}` : "On duty"}
+                </button>
+              ))}
+            </span>
+            {/* Governance gap, said once: an agent running work without a registered role has
+                no trust score, no autonomy level and no violation tracking. */}
+            {unregisteredCount > 0 ? (
+              <span className="detail roster-ungoverned" data-testid="roster-ungoverned"
+                    title="Work by roles nothing governs. Review their authority before another run.">
+                {unregisteredCount} unregistered
+              </span>
+            ) : null}
+          </div>
+
+          {filter === "duty" ? (
+            <FocusedAgents projectId={workforce.project_id} actor={actor} />
+          ) : agents.length === 0 ? (
+            everyone.length === 0 && filter === "all" && !search.trim() ? (
+              <div className="roster-empty" data-testid="workforce-empty">
+                <span className="detail">No agents yet</span>
+                <button type="button" className="wf-btn" onClick={() => setCreating(true)}>+ New agent</button>
               </div>
-            </article>
-          ))}
+            ) : <p className="detail">No match</p>
+          ) : (
+            <div className="roster-grid" data-testid="roster-grid">
+              {shownAgents.map((a) => (
+                <article className="roster-card" key={a.id} data-status={a.status}
+                         data-testid={`wf-agent-${a.id}`}>
+                  <header className="roster-card-head">
+                    <span className="roster-name">{a.name}</span>
+                    <span className="roster-state">{a.status === "IDLE" ? "Idle" : a.status === "WORKING" ? "Working" : a.status === "STUCK" ? "Stuck" : "At gate"}</span>
+                  </header>
+                  <p className="roster-task" title={a.task}>
+                    {a.last_touched || (a.task === "No work in this window." ? "No recent work" : a.task.replace(/^last: /, "Last: "))}
+                  </p>
+                  <div className="roster-actions">
+                    <button type="button" className="roster-open" onClick={() => openAgent(a.id)}
+                            data-testid={`wf-open-${a.id}`}>Details</button>
+                    <button type="button" className="roster-ask" onClick={() => askAgent(a.name)}
+                            data-testid={`wf-ask-${a.id}`}>Ask</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          {filter !== "duty" && !showAll && filter === "all" && !search.trim() && agents.length > shownAgents.length ? (
+            <button type="button" className="roster-show-all" onClick={() => setShowAll(true)}>
+              Show all {agents.length}
+            </button>
+          ) : null}
         </div>
       )}
-      {!showAll && filter === "all" && !search.trim() && agents.length > shownAgents.length ? (
-        <button type="button" className="roster-show-all" onClick={() => setShowAll(true)}>
-          Show all {agents.length} roles
-        </button>
+
+      {/* The detail view, over every view. Rendered here rather than as a route because the
+          console mounts every area at once and a route would be a second place agents live. */}
+      {openRole ? (
+        <AgentDetail projectId={workforce.project_id} roleKey={openRole} actor={actor}
+                     studio={studio} onClose={closeAgent}
+                     onDeleted={(key) => setDeleted((d) => new Set(d).add(key))} />
       ) : null}
     </div>
   );
@@ -313,11 +271,6 @@ export function WorkforceArea(
 export function OrgChartArea({ chart, projectId, actor }: {
   chart: OrgChart; projectId: string; actor: string;
 }) {
-  type AgentTemplate = {
-    id: string; name: string; description: string; role_key: string;
-    category: string; installed: boolean; active: boolean;
-    mobile?: { execution_status: string; device_targets: string[] } | null;
-  };
   const [live, setLive] = useState<OrgChart>(chart);
   const [view, setView] = useState<"planned" | "observed">("planned");
   const [roleSearch, setRoleSearch] = useState("");
@@ -328,12 +281,6 @@ export function OrgChartArea({ chart, projectId, actor }: {
   const [placementTargets, setPlacementTargets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [templateOpen, setTemplateOpen] = useState(false);
-  const [templates, setTemplates] = useState<AgentTemplate[]>([]);
-  const [templateSearch, setTemplateSearch] = useState("");
-  const [templateError, setTemplateError] = useState<string | null>(null);
-  const [installing, setInstalling] = useState<string | null>(null);
-  const [installedTemplate, setInstalledTemplate] = useState<string | null>(null);
   const unassignedRef = useRef<HTMLDetailsElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -370,43 +317,6 @@ export function OrgChartArea({ chart, projectId, actor }: {
     return () => { alive = false; };
   }, [rolePickerOpen, projectId]);
 
-  useEffect(() => {
-    if (!templateOpen) return;
-    let alive = true;
-    void fetch(`/v1/agent-studio/templates?project_id=${encodeURIComponent(projectId)}`,
-      { cache: "no-store" })
-      .then(async (response) => {
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.detail ?? `Templates returned ${response.status}`);
-        return body;
-      })
-      .then((body) => { if (alive) { setTemplates(body.items ?? []); setTemplateError(null); } })
-      .catch((error) => { if (alive) setTemplateError(String(error.message ?? error)); });
-    return () => { alive = false; };
-  }, [templateOpen, projectId]);
-
-  const installTemplate = useCallback(async (templateId: string) => {
-    setInstalling(templateId); setTemplateError(null);
-    try {
-      const response = await apiWrite(
-        `/v1/agent-studio/templates/${encodeURIComponent(templateId)}/install`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ project_id: projectId, actor }),
-        });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.detail ?? `Install returned ${response.status}`);
-      setTemplates((current) => current.map((item) => item.id === templateId
-        ? { ...item, installed: true, active: true } : item));
-      setInstalledTemplate(templateId);
-      setNote("Added to Agent Studio. The team structure is unchanged; no work has started.");
-    } catch (error) {
-      setTemplateError(String((error as Error).message ?? error));
-    } finally { setInstalling(null); }
-  }, [projectId, actor]);
-
-  const visibleTemplates = templates.filter((item) =>
-    `${item.name} ${item.description} ${item.category}`.toLowerCase()
-      .includes(templateSearch.trim().toLowerCase()));
 
   const reload = useCallback(async () => {
     try {
@@ -417,7 +327,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
   }, [projectId]);
 
   const place = useCallback(async (agentId: string, reportsTo: string | null) => {
-    setBusy(true); setNote(null); setInstalledTemplate(null);
+    setBusy(true); setNote(null);
     try {
       const r = await apiWrite(`/api/org`, {
         method: "PUT",
@@ -434,7 +344,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
   }, [projectId, actor, reload]);
 
   const release = useCallback(async (agentId: string) => {
-    setBusy(true); setNote(null); setInstalledTemplate(null);
+    setBusy(true); setNote(null);
     try {
       const url = `/api/org?project_id=${encodeURIComponent(projectId)}`
         + `&agent_id=${encodeURIComponent(agentId)}`
@@ -492,7 +402,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
 
   if (!chartNow.apiReachable) {
     return <p className="detail" role="alert">
-      Team structure is unavailable{chartNow.blockedReason ? ` — ${chartNow.blockedReason}` : ""}.
+      The team is unavailable{chartNow.blockedReason ? ` — ${chartNow.blockedReason}` : ""}.
     </p>;
   }
 
@@ -500,13 +410,12 @@ export function OrgChartArea({ chart, projectId, actor }: {
     <div className="org" data-declared={view === "planned" && placedCount > 0}
          data-view={view}>
       <div className="org-viewbar">
-        <div className="org-views" role="tablist" aria-label="Team structure views">
+        <div className="org-views" role="tablist" aria-label="Team views">
           <button type="button" role="tab" aria-selected={view === "planned"}
                   onClick={() => setView("planned")}>Planned roles</button>
           <button type="button" role="tab" aria-selected={view === "observed"}
                   onClick={() => setView("observed")}>Actual handoffs</button>
         </div>
-        <AgentModelHelp />
       </div>
       <p className="detail" data-testid="org-provenance">
         {view === "planned"
@@ -529,56 +438,9 @@ export function OrgChartArea({ chart, projectId, actor }: {
             Clear planned structure
           </button>
         ) : null}
-        {view === "planned" ? <button type="button" className="cap-btn" aria-expanded={templateOpen}
-                aria-controls="org-template-picker" data-testid="org-template-toggle"
-                onClick={() => setTemplateOpen((value) => !value)}>
-          {templateOpen ? "Close templates" : "Add agent from template"}
-        </button> : null}
       </div>
-      {view === "planned" && templateOpen ? (
-        <section className="org-templates" id="org-template-picker"
-                 aria-label="Agent templates" data-testid="org-templates">
-          <div className="org-template-head">
-            <div>
-              <strong>Agent templates</strong>
-              <p>Templates create agent definitions in Studio. They do not add reporting lines or start work.</p>
-            </div>
-            <input type="search" aria-label="Search agent templates" placeholder="Find a role"
-                   value={templateSearch} onChange={(event) => setTemplateSearch(event.target.value)} />
-          </div>
-          {templateError ? <p role="alert" className="org-template-error">{templateError}</p> : null}
-          <div className="org-template-list">
-            {visibleTemplates.map((item) => (
-              <article className="org-template" key={item.id}>
-                <div>
-                  <strong>{item.name}</strong>
-                  <span>{item.category} · {humanise(item.role_key)}</span>
-                  <p>{item.description}</p>
-                  {item.mobile ? (
-                    <small>Device work needs a configured Android or macOS/Xcode runner.</small>
-                  ) : null}
-                </div>
-                <button type="button" className="cap-btn" disabled={item.installed || !!installing}
-                        data-testid={`org-template-${item.id}`}
-                        onClick={() => void installTemplate(item.id)}>
-                  {item.installed ? "In Studio" : installing === item.id ? "Adding…" : "Add"}
-                </button>
-              </article>
-            ))}
-          </div>
-          {!templateError && templates.length === 0 ? <p className="detail">Loading templates…</p> : null}
-          {templates.length > 0 && visibleTemplates.length === 0 ? <p className="detail">No matching templates.</p> : null}
-        </section>
-      ) : null}
-      {note ? <p className="org-note" data-tone={installedTemplate ? "ok" : "error"}
+      {note ? <p className="org-note" data-tone="error"
                  data-testid="org-note">{note}</p> : null}
-      {installedTemplate ? (
-        <button type="button" className="org-next-action"
-                onClick={() => openAgentDefinition(
-                  templates.find((item) => item.id === installedTemplate)?.role_key ?? installedTemplate)}>
-          Open definition in Agent Studio
-        </button>
-      ) : null}
 
       {treeNow.length === 0 ? (
         <div className="org-empty" data-testid="org-empty">
@@ -632,10 +494,8 @@ export function OrgChartArea({ chart, projectId, actor }: {
                         : chartNow.root_inferred ? "Display root" : "Handoff start"}
                   </span>
                   <span className="org-node-tools">
-                    <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
+                    <button type="button" className="org-node-act" onClick={() => openAgent(n.id)}
                             data-testid={`org-work-${n.id}`}>Work</button>
-                    <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
-                            data-testid={`org-definition-${n.id}`}>Definition</button>
                     {view === "planned" ? <>
                       {parentId ? <button type="button" className="org-node-act" disabled={busy}
                               title="Make this a top-level role"
@@ -660,7 +520,6 @@ export function OrgChartArea({ chart, projectId, actor }: {
                  onToggle={(event) => setRolePickerOpen(event.currentTarget.open)}>
           <summary>Add role to team</summary>
           <p className="detail">Choose a definition to place in the team. Adding it does not start work.</p>
-          <button type="button" className="org-node-act" onClick={() => openArea("studio")}>Browse agent definitions</button>
           {rolesError ? <p className="detail" role="alert">Could not load roles: {rolesError}</p> : null}
           {rolesLoading ? <p className="detail">Loading roles…</p> : null}
           <label className="org-unassigned-search">
@@ -675,10 +534,8 @@ export function OrgChartArea({ chart, projectId, actor }: {
                 <span>{displayName(n)}</span>
                 {/* Testids say which list the button is in: the same id was reused in the tree,
                     this bench and the no-handoffs list, so a test could not tell them apart. */}
-                <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
+                <button type="button" className="org-node-act" onClick={() => openAgent(n.id)}
                         data-testid={`org-bench-work-${n.id}`}>Work</button>
-                <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
-                        data-testid={`org-bench-definition-${n.id}`}>Definition</button>
                 {/* ONLY ROLES IN THE PLAN. This listed chartNow.tree, which falls back to the
                     observed tree when nothing is planned, so a role could be told to report to
                     somebody the plan did not contain — and then rendered at the top level with
@@ -700,7 +557,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
               </div>
             ))}
             {!rolesLoading && !rolesError && matchingPlaceable.length === 0 ? (
-              <p className="detail">No available roles match. Browse Agent Studio to add a definition.</p>
+              <p className="detail">No match. Make one with + New agent.</p>
             ) : null}
           </div>
         </details>
@@ -713,10 +570,8 @@ export function OrgChartArea({ chart, projectId, actor }: {
             {isolated.map((n) => (
               <div className="org-unassigned-row" key={n.id} data-testid={`org-alone-${n.id}`}>
                 <span>{displayName(n)}</span>
-                <button type="button" className="org-node-act" onClick={() => openRoleWork(n.id)}
+                <button type="button" className="org-node-act" onClick={() => openAgent(n.id)}
                         data-testid={`org-alone-work-${n.id}`}>Work</button>
-                <button type="button" className="org-node-act" onClick={() => openAgentDefinition(n.id)}
-                        data-testid={`org-alone-definition-${n.id}`}>Definition</button>
               </div>
             ))}
           </div>

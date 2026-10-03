@@ -61,8 +61,6 @@ import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
-import { AgentStudio } from "./agent-studio-ui";
-import { FocusedAgents } from "./focused-agents-ui";
 import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
 import { ActivityLog } from "./activity-log-ui";
@@ -142,7 +140,8 @@ import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { appIdentity } from "./app-identity";
 import { CodeTasksHome } from "./code-tasks-ui";
-import { OrgChartArea, WorkforceArea } from "./workforce-ui";
+import { WorkforceArea } from "./workforce-ui";
+import { resolveLegacyArea, searchParamsFrom } from "./legacy-areas";
 import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
@@ -176,6 +175,7 @@ import { fetchSandboxFeed } from "../lib/sandboxes";
 import { SandboxesHome } from "./sandboxes-ui";
 import { AreaLink } from "./area-link";
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
 import { fetchOrgs } from "../lib/orgs";
 import { OrgGate, OrgReconnect } from "./org-gate";
 import { fetchApprovalRules } from "../lib/approval-rules";
@@ -496,6 +496,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // the batch above, but nothing makes it block the org lookup either — and a promise created
   // now is already in flight while the code in between runs.
   const observabilityPromise = getObservabilityAction(obsHost).catch(() => null);
+  // A RETIRED SURFACE NEVER RENDERS. Agent Studio, Team structure and the Workflow area's old
+  // tabs are rewritten to where they live now before anything is fetched for them; one table,
+  // shared with the shell's link handler (app/legacy-areas.ts).
+  const legacy = resolveLegacyArea(searchParamsFrom(resolvedSearchParams));
+  if (legacy) redirect(`/?${legacy}`);
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
   const requestedArea = getParam(resolvedSearchParams?.area);
@@ -886,7 +891,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       Promise.resolve(budgetArea.commitmentRecons),
       Promise.resolve(budgetArea.finopsSummary),
       fetchWorkflowFeed(activeProjectId, needs("ops")),
-      fetchAgentStudioFeed(activeProjectId, needs("studio")),
+      // The Agents area reads it: Profile on an agent, Panels, and orphan definitions offered
+      // as templates in New agent.
+      fetchAgentStudioFeed(activeProjectId, needs("workforce")),
       fetchWorkOrchestrationFeed(activeProjectId, needs("portfolio")),
     ]);
   // These were two sequential awaits in the middle of an otherwise parallel render, so the
@@ -1077,21 +1084,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </span>
           </div>
           <MissionAgentRoster roles={roles.items} tasks={tasks.items} />
-        </section>
-        ) : null}
-
-        {shows("studio") ? (
-        <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
-          <AgentStudio
-            feed={agentStudioFeed}
-            roles={roles.items}
-            skills={skills.items}
-            actor={activeActorId}
-          />
-          <details className="studio-duty-details">
-            <summary>On-duty automations</summary>
-            <FocusedAgents projectId={activeProjectId} actor={activeActorId} />
-          </details>
         </section>
         ) : null}
 
@@ -4865,26 +4857,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("workforce") ? (
-        <section className="panel-stack" data-area="workforce" aria-label="Workforce">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Agent work</span>
-              <h3>What each role has done</h3>
-            </div>
-          </div>
-          <WorkforceArea workforce={workforceData} skills={skills.items} actor={activeActorId} />
-        </section>
-        ) : null}
-
-        {shows("org_chart") ? (
-        <section className="panel-stack" data-area="org_chart" aria-label="Team structure">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Team structure</span>
-              <h3>Plan roles and inspect handoffs</h3>
-            </div>
-          </div>
-          <OrgChartArea projectId={activeProjectId} actor={activeActorId} chart={orgChartData} />
+        <section className="panel-stack" data-area="workforce" aria-label="Agents">
+          <WorkforceArea workforce={workforceData} chart={orgChartData} studio={agentStudioFeed}
+                         actor={activeActorId} />
         </section>
         ) : null}
 
@@ -5154,14 +5129,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("delivery_workflows") ? (
-        <section className="panel-stack" data-area="delivery_workflows"
-                 aria-label="Delivery workflows">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Workflows</span>
-              <h2>The path work takes — pick one, watch it, build your own.</h2>
-            </div>
-          </div>
+        <section className="panel-stack" data-area="delivery_workflows" aria-label="Workflows">
           <DeliveryWorkflows projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}

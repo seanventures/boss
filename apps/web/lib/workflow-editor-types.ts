@@ -11,11 +11,10 @@
  *
  * The model's functions (S1) are re-exported at the bottom from their own modules, so a stream
  * may import them from here or from lib/workflow-graph.ts, lib/step-view.ts,
- * lib/workflow-editor-store.ts and lib/workflow-api.ts directly. The components are STUBS:
- * their signatures are the contract and each throws until its owning stream lands the real one
- * in its own module (named beside it).
+ * lib/workflow-editor-store.ts and lib/workflow-api.ts directly. The lane's components are
+ * re-exported too; the editor shell and the inspector, JSON and save parts are imported from their
+ * own modules (named at the bottom), because they import this file.
  */
-import type { Dispatch, JSX, ReactNode } from "react";
 
 /* ── Spec ─────────────────────────────────────────────────────────────────────────── */
 
@@ -145,11 +144,7 @@ export type InputSource = { from_input: string } | { from_step: string; field: s
 
 export type PaletteItem = { capability?: string; customStep?: string; agentTask?: true; block?: BlockDef["kind"] };
 
-/* ── Stubs ────────────────────────────────────────────────────────────────────────── */
-
-function notImplemented(name: string): never {
-  throw new Error(`${name}: not implemented`);
-}
+/* ── Implementations ────────────────────────────────────────────────────────────────────────── */
 
 // S1 · the model, from its own modules.
 export {
@@ -174,28 +169,6 @@ export { StepNode } from "../app/workflows/flow/step-node";
 export { FlowLane } from "../app/workflows/flow/flow-lane";
 export { MiniLane } from "../app/workflows/flow/mini-lane";
 
-// S3 · app/workflows/editor/inspector/*, json/*, save/*
-/** Step properties, or the workflow settings when nothing is selected. */
-export function Inspector(p: { state: EditorState; palette: Palette; dispatch: Dispatch<EditorAction>;
-  projectId: string; onClose(): void; refreshPalette(): Promise<void> }): JSX.Element {
-  return notImplemented("Inspector");
-}
-export function JsonView(p: { state: EditorState; palette: Palette | null;
-  dispatch: Dispatch<EditorAction> }): JSX.Element {
-  return notImplemented("JsonView");
-}
-export function useSaveFlow(p: { state: EditorState; dispatch: Dispatch<EditorAction>; projectId: string;
-  onNavigate(key: string): void }): {
-  save(): Promise<void>; check(): Promise<void>; saving: boolean; checking: boolean; popover: ReactNode;
-  label: "Save" | "Save as my copy";
-} {
-  return notImplemented("useSaveFlow");
-}
-export function DefineStepModal(p: { projectId: string; edit?: CustomStepDef; open: boolean;
-  onClose(created?: CustomStepDef): void }): JSX.Element {
-  return notImplemented("DefineStepModal");
-}
-/** Re-checks the draft after an 800ms pause in editing. */
-export function useAutoCheck(state: EditorState, dispatch: Dispatch<EditorAction>, projectId: string): void {
-  notImplemented("useAutoCheck");
-}
+// S3 · the inspector, JSON view, save flow and define-step dialog live in
+// app/workflows/editor/{inspector,json,save}/ and app/workflows/editor/define-step-modal.tsx and
+// are imported from there: each imports this file, so a re-export here would be a cycle.

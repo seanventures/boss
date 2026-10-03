@@ -33,8 +33,7 @@ def test_each_one_is_refused_with_advice_that_can_be_followed(key):
         workflows.refuse_operator_edit_of_boss_workflow(
             {"namespace": "system", "workflow_key": key}, ROOT)
     assert "not editable from the console" in str(refused.value)
-    # REWRITTEN: "Workflow > Design a workflow" is gone; New workflow lives in the Library.
-    assert "Workflows > Library" in str(refused.value)
+    assert "Workflows > Library > + New workflow" in str(refused.value)
     assert "Fork it in Workflow > Catalogue" not in str(refused.value)
 
 

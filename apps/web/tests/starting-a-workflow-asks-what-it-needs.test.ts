@@ -16,7 +16,10 @@ import { blockingReason, type NewProjectDraft } from "../app/delivery-workflows-
 import { workflowInputFields } from "../lib/workflow-inputs";
 import { codeOnly } from "./_helpers/source";
 
-const UI = codeOnly("app/delivery-workflows-ui.tsx");
+// The Runs composer lives in its own module since the Workflows area became Runs + Library.
+const UI = codeOnly("app/workflows/new-project-composer.tsx");
+const AREA = codeOnly("app/delivery-workflows-ui.tsx");
+const LIBRARY = codeOnly("app/workflows/library.tsx");
 
 const DRAFT: NewProjectDraft = {
   title: "", directive: "", audience: "", criteria: [], workflowKey: "",
@@ -25,8 +28,10 @@ const DRAFT: NewProjectDraft = {
 
 describe("a workflow that declares inputs opens the form", () => {
   it("Start one does not fire a sample when the workflow needs values", () => {
-    expect(UI).toContain("setStartWith(key)");
-    expect(UI).toContain("openComposerOn(key)");
+    // Every Start (a Library card, the editor) opens the composer on that workflow.
+    expect(AREA).toContain("setStartWith(key)");
+    expect(AREA).toContain("onStart={(key, example) => openComposerOn(key, example)}");
+    expect(AREA).toContain("onStart={(key) => { setEditing(null); openComposerOn(key); }}");
   });
 
   it("and the composer opens on the step that collects them, already on that workflow", () => {
@@ -43,9 +48,10 @@ describe("a workflow that declares inputs opens the form", () => {
     // repository on a random demo idea — for six templates a new-product brief that did not
     // fit them. Every catalogue template now declares its brief, Start opens the form, and the
     // template's own example is the explicit "Try an example", filled in to read first.
-    expect(UI).not.toContain("sample: true");
-    expect(UI).toContain("onTryExample={(key) =>");
-    expect(UI).toContain('data-testid={`dw-example-${entry.key}`}');
+    for (const src of [UI, AREA, LIBRARY]) expect(src).not.toContain("sample: true");
+    // "Try example" on a standard's card hands its example to the same composer.
+    expect(LIBRARY).toContain("p.onStart(w.workflow_key, example)");
+    expect(LIBRARY).toContain('data-testid={`wf-card-example-${w.workflow_key}`}');
   });
 });
 

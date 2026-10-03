@@ -446,7 +446,7 @@ export function WorkBoard({
           const tone: Tone = failed ? "red" : running ? "blue" : "green";
           return (
             <button key={t.id} type="button" className={`wf-task${t.id === active?.id ? " active" : ""}`} onClick={() => selectTask(t.id)}>
-              <span className={`wf-dot tone-${tone}`} />
+              <span className={`wf-board-dot tone-${tone}`} />
               <span className="wf-task-body">
                 <span className="wf-task-title">{t.title.replace(/^CEO command:\s*/, "")}</span>
                 <span className="wf-task-meta">
@@ -656,12 +656,12 @@ export function WorkBoard({
             <div className="wf-section-title">Outcome</div>
             <div className="wf-outcome">
               {tArtifacts.map((a) => (
-                <span key={a.id} className="wf-chip"><Ic.doc /> {humanize(a.artifactType)}</span>
+                <span key={a.id} className="wf-outcome-chip"><Ic.doc /> {humanize(a.artifactType)}</span>
               ))}
               {tDecisions.map((d) => {
                 const tone: Tone = d.status === "approved" ? "green" : d.status === "rejected" ? "red" : d.status === "pending" ? "amber" : "muted";
                 return (
-                  <span key={d.id} className={`wf-chip tone-${tone}`}><Ic.gavel /> {d.question.slice(0, 40)} · {d.status}</span>
+                  <span key={d.id} className={`wf-outcome-chip tone-${tone}`}><Ic.gavel /> {d.question.slice(0, 40)} · {d.status}</span>
                 );
               })}
               {tArtifacts.length === 0 && tDecisions.length === 0 ? <p className="detail">No outcome yet.</p> : null}

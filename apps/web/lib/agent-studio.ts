@@ -1,5 +1,12 @@
 import { API_URL, authHeaders, resolveProjectId } from "./client";
 
+/**
+ * The Studio catalog, as the Agents area reads it: agent definitions (an agent's Profile, and
+ * orphan definitions offered as templates by New agent), panels, and their recent runs.
+ * Workflows and the A2A trace are no longer drawn by the console; the endpoint still serves
+ * them.
+ */
+
 export type StudioAgent = {
   id: string;
   agent_key: string;
@@ -47,42 +54,6 @@ export type StudioPanel = {
   };
 };
 
-export type StudioWorkflowStep = {
-  id: string;
-  kind: string;
-  next?: string[];
-  binding?: Record<string, unknown>;
-  [key: string]: unknown;
-};
-
-export type StudioWorkflowSpec = {
-  entry_step: string;
-  steps: StudioWorkflowStep[];
-  input_schema?: Record<string, unknown>;
-  output_schema?: Record<string, unknown>;
-  [key: string]: unknown;
-};
-
-export type StudioWorkflowVersion = {
-  id: string;
-  version: number;
-  status: string;
-  spec: StudioWorkflowSpec;
-  content_hash: string;
-  published_at: string;
-};
-
-export type StudioWorkflow = {
-  id: string;
-  workflow_key: string;
-  name: string;
-  description?: string;
-  status: string;
-  active_version_id?: string;
-  version_count?: number;
-  versions: StudioWorkflowVersion[];
-};
-
 export type StudioRun = {
   id: string;
   status: string;
@@ -100,31 +71,14 @@ export type StudioRun = {
   blocked_reason?: string;
 };
 
-export type A2AMessage = {
-  id: string;
-  channel_key: string;
-  message_kind: string;
-  sender_kind: string;
-  sender_id: string;
-  status: string;
-  trace_id: string;
-  correlation_id: string;
-  delivery_count: number;
-  acknowledged_count: number;
-  created_at: string;
-  payload: Record<string, unknown>;
-};
-
 export type AgentStudioFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
   agents: StudioAgent[];
   panels: StudioPanel[];
-  workflows: StudioWorkflow[];
   agentRuns: StudioRun[];
   panelRuns: StudioRun[];
-  workflowRuns: StudioRun[];
   tests: Array<{
     id: string;
     status: string;
@@ -132,22 +86,6 @@ export type AgentStudioFeed = {
     created_at: string;
     result: { summary?: string; checks?: Array<{ kind: string; passed: boolean }> };
   }>;
-  a2a: {
-    channels: Array<{
-      id: string;
-      channel_key: string;
-      name: string;
-      status: string;
-      subscriber_count: number;
-      message_count: number;
-    }>;
-    messages: A2AMessage[];
-    health: {
-      status: string;
-      transport?: { status?: string; configured?: boolean; latency_ms?: number };
-      ledger?: Record<string, number>;
-    };
-  };
 };
 
 export async function fetchAgentStudioFeed(
@@ -178,25 +116,14 @@ export async function fetchAgentStudioFeed(
       );
     }
     const payload = (await response.json()) as Record<string, unknown>;
-    const a2a = (payload.a2a ?? {}) as Record<string, unknown>;
     return {
       projectId: resolved,
       apiReachable: true,
       agents: (payload.agents as StudioAgent[]) ?? [],
       panels: (payload.panels as StudioPanel[]) ?? [],
-      workflows: (payload.workflows as StudioWorkflow[]) ?? [],
       agentRuns: (payload.agent_runs as StudioRun[]) ?? [],
       panelRuns: (payload.panel_runs as StudioRun[]) ?? [],
-      workflowRuns: (payload.workflow_runs as StudioRun[]) ?? [],
       tests: (payload.tests as AgentStudioFeed["tests"]) ?? [],
-      a2a: {
-        channels: (a2a.channels as AgentStudioFeed["a2a"]["channels"]) ?? [],
-        messages: (a2a.messages as A2AMessage[]) ?? [],
-        health:
-          (a2a.health as AgentStudioFeed["a2a"]["health"]) ?? {
-            status: "unknown",
-          },
-      },
     };
   } catch (error) {
     return emptyFeed(
@@ -213,15 +140,8 @@ function emptyFeed(projectId: string, blockedReason: string): AgentStudioFeed {
     blockedReason,
     agents: [],
     panels: [],
-    workflows: [],
     agentRuns: [],
     panelRuns: [],
-    workflowRuns: [],
     tests: [],
-    a2a: {
-      channels: [],
-      messages: [],
-      health: { status: "unavailable" },
-    },
   };
 }

@@ -20,7 +20,7 @@ v2_nav:
   missions: {v1Area: code_tasks}
   hive: {v1Area: agent, label_differs_because: "Hive is the v2 picture of every agent at once; v1's BOSS Agent is one conversation."}
   factory: {v1Area: workforce}
-  org: {v1Area: org_chart}
+  org: {v1Area: workforce, label_differs_because: "In v1 Team structure is a view of Agents (?area=workforce&view=team); /v2/org opens it."}
   panels: {v1Area: decisions}
   boss: {v1Area: delivery_workflows}
   timeline: {v1Area: activity, label_differs_because: "v2 shows receipts — the recorded effects — not the whole activity log."}
@@ -37,16 +37,12 @@ code_tasks:
   risk: Retry, steer and the per-run log viewer stay in v1 — v2 links each project back to its v1 card for those controls.
 delivery_workflows:
   to: boss
-  what: The workflow catalogue and each workflow's stages.
-  risk: Building or editing a workflow, schedules and the run timeline are v1-only; v2 is read-only here.
+  what: The v2 Workflows screen opens the v1 Library (/v2/boss redirects there).
+  risk: None beyond v1 — building, editing, running and scheduling a workflow all happen in v1's Workflows area.
 workforce:
   to: factory
-  what: What each agent role has done.
-  risk: Staffing and per-role chat are v1-only.
-org_chart:
-  to: org
-  what: Planned roles and observed handoffs.
-  risk: Editing the team structure is v1-only.
+  what: The v2 Agents and Team structure screens open v1 Agents (Roster, Team, Panels); Agent Studio and Team structure are views of it.
+  risk: None beyond v1 — creating, editing and testing an agent all happen in v1's Agents area.
 agent:
   to: hive
   what: Every agent, at once.
@@ -159,10 +155,6 @@ org:
   to: settings
   what: Agent roles.
   risk: Actors, permissions, packs and modules are v1-only.
-studio:
-  to: factory
-  what: Agents appear by the work they did.
-  risk: Creating, testing and publishing an agent is v1-only.
 sandboxes:
   to: null
   what: The execution plane inspector is an operator tool with no v2 screen.

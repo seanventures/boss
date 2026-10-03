@@ -10,7 +10,8 @@ import { repositoryHint } from "../app/delivery-workflows-ui";
  * default whenever one exists, so the branch only renders when there is none — and Community
  * has none at all. The build then deadlettered with "No repository registered for project …".
  */
-const UI = codeOnly("app/delivery-workflows-ui.tsx");
+// The Runs composer lives in its own module since the Workflows area became Runs + Library.
+const UI = codeOnly("app/workflows/new-project-composer.tsx");
 
 describe("the repository step", () => {
   it("says a build needs a connected repository when there is none", () => {

@@ -85,7 +85,8 @@ function definitionOf(projectId: string, key: string, version: number): Promise<
 }
 
 function paletteOf(projectId: string): Promise<Palette | null> {
-  const now = Date.now();
+  // A monotonic clock: this is an age, not a time anyone reads.
+  const now = performance.now();
   const held = palettes.get(projectId);
   if (held && now - held.at < PALETTE_TTL_MS) return held.value;
   const value = fetchPalette(projectId).catch(() => {

@@ -10,14 +10,16 @@
  * One file for the whole studio (spec 3.8 item 6), one walker (_helpers/copy-budget.ts). This
  * covers the inspector (agent task, built-in, gate, workflow settings), the JSON view, and the
  * canvas: the lane in design and run mode, the palette, QuickAdd and the new-workflow screen
- * (the editor's whole shell is walked in tests/workflow-editor.test.tsx, against the real store).
- * The library adds its own `describe` block here.
+ * (the editor's whole shell is walked in tests/workflow-editor.test.tsx, against the real store),
+ * and the Library: its grid, every card menu and confirm, the empty state and the Steps view.
+ * Text the operator wrote (a workflow's name, its description, a schedule's sentence) is theirs,
+ * not copy, and is marked `data-user-text`.
  */
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { EditorState, Spec } from "../lib/workflow-editor-types";
+import type { EditorState, Spec, WorkflowSummary } from "../lib/workflow-editor-types";
 import { overBudget, paragraphs } from "./_helpers/copy-budget";
 import { linear, PALETTE as CANVAS_PALETTE, STRETCH } from "./_helpers/canvas-fixtures";
 
@@ -30,6 +32,8 @@ vi.mock("../lib/workflow-editor-types", async (orig) => {
     fetchLibrary: vi.fn(async () => []),
   };
 });
+// The Library mounts the studio's parts through one path; it is the area under test here.
+vi.mock("../app/workflows/studio-parts", () => import("./_helpers/studio-parts-stub"));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -40,6 +44,8 @@ const { FlowLane } = await import("../app/workflows/flow/flow-lane");
 const { StepPalette } = await import("../app/workflows/editor/palette");
 const { QuickAdd } = await import("../app/workflows/editor/quick-add");
 const { EmptyState } = await import("../app/workflows/editor/empty-state");
+const stub = await import("./_helpers/studio-parts-stub");
+const { Library } = await import("../app/workflows/library");
 
 const SPEC: Spec = {
   entry_step: "research",
@@ -153,10 +159,102 @@ describe("the canvas says it in six words or fewer", () => {
   });
 });
 
+async function surface(node: React.ReactElement, before?: (host: HTMLElement) => Promise<void>) {
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => root!.render(node));
+  for (let i = 0; i < 10; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  if (before) await before(host);
+  return host;
+}
+
+const wf = (over: Partial<WorkflowSummary>): WorkflowSummary => ({
+  definition_id: `def_${over.workflow_key}`, workflow_key: "k", name: "K", is_catalogue: false,
+  version: 3, step_count: 2, run_count: 0, steps: [{ id: "a", title: "Plan" }], ...over,
+});
+
+const libraryProps = {
+  projectId: "p1", busy: null, inputSchemas: {}, workClasses: ["project.new", "ops.incident"],
+  riskFloor: 2, examples: { spd: { title: "Example", directive: "Build it" } },
+  schedules: [{ id: "s1", workflow_key: "mine", name: "Mine weekly", enabled: true,
+                describes: "Every Monday at 08:00 in Asia/Kolkata, with the usual sectors",
+                next_run_at: null, last_run_at: null, last_error: "the model was out of credit" }],
+  customSteps: [{ step_key: "file_issue", label: "File an issue in the tracker for this project",
+                  summary: "A long summary that would be a paragraph if it were drawn on screen",
+                  binding_kind: "skill" as const, skill_id: "tracker.file_issue", mcp_tool_name: null,
+                  inputs: [], produces: [], enabled: true, risk_tier: 3, risk_source: "skill",
+                  trusted: true, usable: false, unusable_reason: "Its skill was removed from the project",
+                  approval_forced_manual: true }],
+  uninstalledStandards: 3, onInstallStandards: vi.fn(),
+  onStart: vi.fn(), onOpen: vi.fn(), onNew: vi.fn(), onDuplicate: vi.fn(), onUseFor: vi.fn(),
+  onSaveSchedule: vi.fn(async () => true), onToggleSchedule: vi.fn(), onDeleteSchedule: vi.fn(),
+  onRemoveStep: vi.fn(), onStepsChanged: vi.fn(),
+};
+
+const click = async (el: Element | null) => {
+  expect(el).not.toBeNull();
+  await act(async () => { (el as HTMLElement).click(); });
+  for (let i = 0; i < 5; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+};
+
+describe("the Library has no paragraphs", () => {
+  it("the grid, with yours, copies, standards and a long description", async () => {
+    stub.fetchLibrary.mockResolvedValue([
+      wf({ workflow_key: "mine", name: "A rather long workflow name that the operator chose",
+           description: "Cuts a family video, writes its captions and publishes it to the channel",
+           run_count: 2, last_run: { status: "completed", at: "2026-10-01T00:00:00Z" } }),
+      wf({ workflow_key: "spd", name: "Standard Product Delivery", is_catalogue: true }),
+      wf({ workflow_key: "c1", name: "SPD (copy)", forked_from_workflow_key: "spd",
+           forked_from_name: "Standard Product Delivery" }),
+      wf({ workflow_key: "c2", name: "SPD (copy) (copy)", forked_from_workflow_key: "spd",
+           forked_from_name: "Standard Product Delivery" }),
+    ]);
+    const el = await surface(<Library {...libraryProps} />, async (h) => {
+      await click(h.querySelector('[data-testid="wf-card-copies-spd"]'));
+      await click(h.querySelector('[data-testid="wf-card-select-mine"]'));
+    });
+    expect(overBudget(el)).toEqual([]);
+  });
+
+  it("every menu and confirm a card opens", async () => {
+    stub.fetchLibrary.mockResolvedValue([
+      wf({ workflow_key: "mine", name: "Mine", run_count: 1 }),
+      wf({ workflow_key: "spd", name: "Standard Product Delivery", is_catalogue: true }),
+    ]);
+    for (const [key, item] of [["mine", "Retire"], ["mine", "Use for…"], ["mine", "Schedule…"],
+                               ["spd", "Use for…"]] as const) {
+      const el = await surface(<Library {...libraryProps} />, async (h) => {
+        await click(h.querySelector(`[data-testid="wf-card-more-${key}"]`));
+        expect(overBudget(h), `${key} menu`).toEqual([]);
+        await click([...h.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === item) ?? null);
+      });
+      expect(overBudget(el), `${key} › ${item}`).toEqual([]);
+      act(() => root!.unmount());
+      host!.remove();
+    }
+    root = null; host = null;
+  });
+
+  it("the empty Library and the Steps view", async () => {
+    stub.fetchLibrary.mockResolvedValue([]);
+    const el = await surface(<Library {...libraryProps} />);
+    expect(overBudget(el)).toEqual([]);
+    await click(el.querySelector('[data-testid="wf-lib-view-steps"]'));
+    expect(overBudget(el)).toEqual([]);
+  });
+});
+
 describe("the walk itself", () => {
   it("catches a sentence and ignores one inside a tooltip", () => {
     const div = document.createElement("div");
     div.innerHTML = '<span>This is a sentence that runs far too long</span><span role="tooltip">This one is allowed to be long, it is help</span>';
     expect(overBudget(div)).toEqual(["This is a sentence that runs far too long"]);
+  });
+
+  it("does not count what the operator wrote", () => {
+    const div = document.createElement("div");
+    div.innerHTML = '<span data-user-text>whatever the operator typed can be as long as they like</span>';
+    expect(overBudget(div)).toEqual([]);
   });
 });

@@ -114,8 +114,8 @@ describe("an operator's skip reads as one", () => {
       skipped_by_operator: true, skipped_by: "ceo", skip_reason: "out of budget" } });
     expect(skippedBy(byOperator)).toBe("skipped by ceo: out of budget");
     expect(skippedBy(step("skipped", { output: { reason: "path_not_reached" } }))).toBe("");
-    // On the run lane the node says it in words (REWRITTEN for the shared lane).
-    expect(laneStateOf(byOperator).meta).toBe("skipped by ceo: out of budget");
+    // And the run's lane says it on the node, not only in a tooltip.
+    expect(laneStateOf(byOperator)).toMatchObject({ phase: "skipped", meta: "skipped by ceo: out of budget" });
     expect(laneStateOf(step("skipped", { output: { reason: "path_not_reached" } })).meta).toBe("skipped");
   });
 

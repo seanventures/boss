@@ -66,7 +66,7 @@ python3 examples/meeting-to-tickets/setup.py \
 ```
 
    The parameters are the same for every example — see [examples/README.md](../README.md).
-3. Open **Delivery → Workflows → "Meeting to tickets" → Start one** and fill in:
+3. Open **Workflows → Library**, find "Meeting to tickets", then **⋯ → Start** and fill in:
    - `transcript` — paste the notes or transcript
    - `context` — optional: who the team are, what the project is called, anything the transcript
      assumes
@@ -115,7 +115,7 @@ The script only calls the public API; every step below does the same thing in th
    A skill BOSS ships is *available*, not *installed*. Until it is enabled, binding a step to it
    fails with *"not registered in this project"*.
 
-2. **Define two steps.** **Delivery → Build your own → Your steps → Define a step.**
+2. **Define two steps.** **Workflows → Library → Steps → + New step.**
 
    | Name | Skill | Inputs |
    |---|---|---|
@@ -124,7 +124,7 @@ The script only calls the public API; every step below does the same thing in th
 
    The second step will show **always needs a person**.
 
-3. **Create the workflow, wire it, and assign the agents.** **Create a new workflow** → drag both
+3. **Create the workflow, wire it, and assign the agents.** **Workflows → Library → + New workflow** → drag both
    steps on → open each step's **inputs**:
 
    | Step | Input | Source |

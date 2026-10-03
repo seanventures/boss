@@ -94,13 +94,11 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "budget",
   "enterprise",
 
-  // Workforce and Org Chart. BOSS's pitch is governed AI labour, and until these were here the
-  // console could show what the agents produced but never the agents themselves -- who did the
-  // work, how well it went, and which of them are running without a registered role at all.
-  // That last one is a governance fact an operator should not have to go looking for.
+  // Agents (roster, team and panels in one area). BOSS's pitch is governed AI labour, and until
+  // this was here the console could show what the agents produced but never the agents
+  // themselves -- who did the work, how well it went, and which of them are running without a
+  // registered role at all. Team structure and Agent Studio are views of it now.
   "workforce",
-  "org_chart",
-  "studio",
 
   // The path from an idea to shipped software. Without these the console lists the places
   // work ENDS UP -- approvals, jobs, reports -- and none of the places it starts, so an

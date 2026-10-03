@@ -3,36 +3,37 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
-import { formatDateTime } from "../lib/datetime";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
 import { AgentChip } from "./agent-chip";
 import { AgentsOnThis } from "./agents-on-this";
-import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
 import { openDockAbout, type DockSubject } from "../lib/dock-subject";
-import { inputsWithTheDirective, missingRequired, suppliedInputs, workflowInputFields }
-  from "../lib/workflow-inputs";
+import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
-import { ReadinessPanel, StartRefusal, WIZARD_COLLECTS, asReadiness, unaccepted,
-         useWorkflowReadiness, type PendingRefusal, type Readiness } from "./workflow-readiness-ui";
-import { AreaLink } from "./area-link";
-import { isAreaId } from "../lib/area-ids";
+import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { RunReportPanel } from "./run-report-ui";
-import { HelpTip } from "./help-tip";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
-import { draftFromSpecStep, specFromDraft } from "../lib/workflow-spec";
-import { AgentStepScope, RanAs, StepAgentPicker, stepAgentChip } from "./step-agents-ui";
+import { RanAs, stepAgentChip } from "./step-agents-ui";
 import { browserHref } from "../lib/browser-links";
 import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
 import { DefineStepForm } from "./workflows/define-step-form";
 import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
-import { FlowLane } from "./workflows/flow/flow-lane";
-import { runLaneSpec, runPalette, useRunDefinition } from "./workflows/flow/run-lane";
+import { Library, type Schedule } from "./workflows/library";
+import { get, post } from "./workflows/delivery-api";
+import { NewProjectComposer } from "./workflows/new-project-composer";
+// The Runs composer moved to app/workflows/; its helpers are re-exported so imports hold.
+export {
+  blockingReason, briefFrom, composerFields, criteriaFrom, linksFrom, repositoryHint,
+  type NewProjectDraft,
+} from "./workflows/new-project-composer";
+import {
+  FlowLane, WorkflowEditor, runLaneSpec, runPalette, useRunDefinition,
+} from "./workflows/studio-parts";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -106,7 +107,7 @@ export type Bindable = {
   }[];
 };
 
-type CatalogueEntry = {
+export type CatalogueEntry = {
   key: string;
   name: string;
   description: string;
@@ -127,7 +128,7 @@ type CatalogueEntry = {
   example?: { title?: string; directive?: string } | null;
 };
 
-type Installed = {
+export type Installed = {
   id: string;
   workflow_key: string;
   name: string;
@@ -138,6 +139,8 @@ type Installed = {
   /** Enough to DRAW an operator's own workflow rather than only count it. Optional because a
    *  definition with no published version has neither. */
   step_count?: number;
+  /** The classes of work this workflow is the one used for. */
+  used_for?: string[];
   /** WHICH steps, not just how many. "Steps 4" says how big a workflow is and nothing about
    *  what it does, so the only way to find out was to open the editor. */
   steps?: { id: string; label: string; kind: string; mine: boolean; approval: string;
@@ -148,54 +151,6 @@ type Installed = {
    *  workflow somebody made without inputs. */
   input_schema?: unknown;
 };
-
-/** When a workflow runs without anybody asking. `describes` is rendered by the API so the
- *  console cannot word a schedule differently from the thing that fires it. */
-type Schedule = {
-  id: string;
-  workflow_key: string;
-  name: string;
-  describes: string;
-  enabled: boolean;
-  next_run_at: string | null;
-  last_run_at: string | null;
-  last_error: string | null;
-  /** Present on every schedule the API returns. Optional on the type so an older
-   *  payload still renders the sentence and the pause control. */
-  cadence?: string;
-  minute?: number;
-  hour?: number;
-  weekday?: number | null;
-  timezone?: string;
-  input?: Record<string, unknown>;
-  /** What was missing the last time a firing was refused, each with its fix. */
-  last_missing?: { key: string; label: string; fix?: string; area?: string | null }[];
-  /** Readiness keys this schedule may start without (the unattended Start anyway). */
-  start_anyway?: string[];
-};
-
-type ScheduleDraft = {
-  workflowKey: string;
-  name: string;
-  scheduleId: string | null;
-  timezone: string;
-  values: Record<string, string>;
-  /** Missing things the operator accepted this schedule may start without. */
-  startAnyway: string[];
-};
-
-function browserTimeZone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-}
-
-function scheduleFormValues(input: Record<string, unknown> | undefined): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const [key, value] of Object.entries(input ?? {})) {
-    if (value == null) continue;
-    values[key] = typeof value === "string" ? value : String(value);
-  }
-  return values;
-}
 
 export type RunStep = {
   step_id: string;
@@ -401,7 +356,6 @@ export function didNothing(step: RunStep): boolean {
     && (step.output as { status?: string } | undefined)?.status === "recorded";
 }
 
-/** A step the runtime completed by recording that its phase never happened. */
 /** Why a step did not apply — the sentence the capability recorded when it stood aside. */
 function skipReason(step: RunStep): string {
   const out = (step.output ?? {}) as { note?: unknown; reason?: unknown };
@@ -501,171 +455,9 @@ function byLiveness(a: Run, b: Run): number {
   return (b.created_at ?? b.updated_at ?? "").localeCompare(a.created_at ?? a.updated_at ?? "");
 }
 
-/** A step on the canvas. `kind` is "capability" for the work steps and a control kind
- *  ("timer", "decision", "subworkflow") for the blocks the runtime has always supported. */
-export type Draft = {
-  id: string;
-  kind: string;
-  capability?: string;
-  /** Set instead of `capability` when the step is one the customer defined. */
-  customStep?: string;
-  /** HOW THIS STEP'S INPUTS ARE WIRED, exactly as the saved spec has them.
-   *
-   *  Dropped on load and rebuilt on save, every input became `{from_input: <name>}` — so
-   *  opening a workflow whose steps feed each other and pressing Save replaced
-   *  `{from_step: "fetch-link", field: "media_artifact_id"}` with a demand that the operator
-   *  type a media artifact id by hand. The chain was destroyed by viewing and saving, with
-   *  nothing on screen having been changed. */
-  inputs?: Record<string, unknown>;
-  /** WHICH AGENT RUNS THIS STEP. A capability step's captain has always become the actor; a
-   *  custom step ignored it, so a customer's workflow had no agent in it anywhere. */
-  captain?: string;
-  /** THIS STEP'S WHOLE SPECIFICATION, when it is an agent step.
-   *
-   *  Every other kind of step binds a skill and BOSS decides what happens. This one says what is
-   *  WANTED and the agent works out how, using the skills it holds. That is what stops the
-   *  product needing a release per use case: a new kind of request needs the agent to hold a
-   *  skill, not BOSS to ship a step.
-   *
-   *  Either a run input the operator fills in at the start ({from_input}), or a literal pinned
-   *  here for a workflow that always does the same thing. */
-  agentWork?: boolean;
-  instructions?: unknown;
-  /** An agent step's scope — the skills it may use and the MCP servers it may reach. */
-  skills?: string[];
-  mcp?: string[];
-  approval?: string;
-  config?: Record<string, unknown>;
-  /** The step as loaded; a save is a merge over it (see lib/workflow-spec.ts). */
-  original?: Record<string, unknown>;
-};
-
-type Block = {
-  kind: string;
-  label: string;
-  summary: string;
-  canvas_required: boolean;
-  defaults?: Record<string, unknown>;
-  configure?: { field: string; label: string; type: string }[];
-};
-
-/** What a workflow WILL DO — the plan, not the graph. Built by `workflow_explain` and shared
- *  with the chat agent's `describe_workflow`, so the console and the agent cannot drift into
- *  describing the same workflow two different ways. */
-type PlanStep = {
-  position: number;
-  id: string;
-  label: string;
-  /** The capability's own sentence. A step called "Document" says nothing on its own. */
-  does: string;
-  capability: string | null;
-  /** The skill or MCP tool this actually executes. */
-  runs: string | null;
-  /** The agent that answers for this step. */
-  agent: string | null;
-  approval: string;
-  approval_is_forced: boolean;
-  approval_note: string;
-  risk_tier: number | null;
-  typical_minutes: number | null;
-  /** What it spends beyond its minutes — PLRR is a second build pass. */
-  cost_note?: string | null;
-  inputs: { name: string; source: string; ready: boolean }[];
-  produces: string[];
-};
-
-type WorkflowPlan = {
-  name: string;
-  version: number | null;
-  published: boolean;
-  summary: string;
-  steps: PlanStep[];
-  you_must_supply: string[];
-  results: string[];
-  agents: string[];
-  gates: number;
-  typical_minutes?: number;
-  can_start?: boolean;
-  blocked_because?: string[];
-};
-
-type WorkflowSpec = {
-  definition_id: string;
-  workflow_key: string;
-  name: string;
-  is_catalogue: boolean;
-  version: number;
-  spec: { entry_step?: string; steps: Record<string, unknown>[] };
-  forked_from: { workflow_key: string; name: string; version: number;
-                 spec: { steps: Record<string, unknown>[] } } | null;
-};
-
-//: THE FOUR THINGS AN OPERATOR DOES HERE, IN THE ORDER THEY DO THEM.
-//:
-//: "Build your Own, Design one with BOSS all should come in one page and it's hard to find.
-//:  Workflow step should be separate page."
-//:
-//: `design` holds BOTH ways to author a workflow, because they are the same intent arrived at
-//: differently — describe it and have BOSS draft it, or draw it yourself. They were split
-//: across a tab and a button that sat IN the tab bar without being one, which is why the agent
-//: was hard to find: it looked like a tab, behaved like an action, and was neither.
-//:
-//: `steps` is management of the customer's own steps — defining and retiring them. It was
-//: buried in the builder's palette, below however many steps already existed, so the way to
-//: make one was the thing you had to scroll to find. The palette still LISTS them, because
-//: that is where you place one; it no longer tries to be where you author one too.
-const TABS = ["running", "yours", "catalogue", "design", "steps"] as const;
-type Tab = (typeof TABS)[number];
-
-/**
- * The builder's glyphs.
- *
- * Same approach as the nav's: inline SVG on a 16px grid, `currentColor` throughout, so an icon
- * dims and brightens with the label beside it instead of needing a second set of active rules.
- * A whole icon package for eleven glyphs is a lot of bytes for eleven glyphs.
- *
- * Each says what the control DOES rather than decorating it — import is an arrow landing in a
- * tray, reset is an arrow going back, create is a check. The words stay: an icon-only control
- * in a builder is a guessing game.
- */
-const WF_ICONS: Record<string, React.ReactNode> = {
-  // Editing — a pencil on a line.
-  edit: <><path d="M11.3 2.2a1.7 1.7 0 0 1 2.4 2.4L6 12.3l-3.2.9.9-3.2 7.6-7.8Z" /><path d="M10.2 3.4l2.4 2.4" /></>,
-  // New — a plus, boxed, because it makes a new thing rather than adding to this one.
-  plus: <><rect x="1.8" y="1.8" width="12.4" height="12.4" rx="3" /><path d="M8 5.2v5.6M5.2 8h5.6" /></>,
-  // Import — steps landing on the canvas.
-  importIn: <><path d="M8 1.8v7.4" /><path d="M5.2 6.6 8 9.4l2.8-2.8" /><path d="M2.4 10.6v1.8a1.8 1.8 0 0 0 1.8 1.8h7.6a1.8 1.8 0 0 0 1.8-1.8v-1.8" /></>,
-  // Import again — the same arrow, going round.
-  again: <><path d="M13.6 8a5.6 5.6 0 1 1-1.7-4" /><path d="M13.8 1.9v3.4h-3.4" /></>,
-  // Create — it exists now.
-  check: <><path d="M2.6 8.4 6.2 12l7.2-8" /></>,
-  // Cancel.
-  x: <><path d="M4 4l8 8M12 4l-8 8" /></>,
-  // Save a new version — a document with a tick.
-  save: <><path d="M3.2 2.4h6.2l3.4 3.4v7.8a1 1 0 0 1-1 1H3.2a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z" /><path d="M9.2 2.4v3.6h3.6" /><path d="M5.4 10.2 7 11.8l3-3.4" /></>,
-  // Reset — back to how it was.
-  reset: <><path d="M2.4 8a5.6 5.6 0 1 0 1.7-4" /><path d="M2.2 1.9v3.4h3.4" /></>,
-  // A fact, not a warning.
-  info: <><circle cx="8" cy="8" r="6.2" /><path d="M8 7.4v3.4M8 5.2h.01" /></>,
-  // Steps — the shape the canvas draws.
-  steps: <><rect x="2.2" y="2.2" width="11.6" height="3.4" rx="1.2" /><rect x="2.2" y="10.4" width="11.6" height="3.4" rx="1.2" /><path d="M8 5.6v4.8" /></>,
-  // An empty canvas.
-  empty: <><rect x="1.8" y="3" width="12.4" height="10" rx="2" strokeDasharray="2.6 2.2" /><path d="M8 6.6v2.8M6.6 8h2.8" /></>,
-};
-
-function WfIcon({ id }: { id: keyof typeof WF_ICONS | string }) {
-  const d = WF_ICONS[id];
-  // No placeholder box for an unknown id: an empty square beside a label reads as a broken
-  // image, while the label on its own reads as a control without an icon, which is what it is.
-  if (!d) return null;
-  return (
-    <svg className="dw-icon" viewBox="0 0 16 16" width="15" height="15" fill="none"
-         stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"
-         aria-hidden focusable="false">
-      {d}
-    </svg>
-  );
-}
+/** The canvas step type now lives with the spec it is read from (lib/workflow-spec.ts); the
+ *  name stays for the modules that import it from here. */
+export type { DraftStep as Draft } from "../lib/workflow-spec";
 
 /** One value from a step's output, short enough for a single line. */
 function summarise(value: unknown): string {
@@ -706,41 +498,10 @@ function tone(status: string): string {
   return "idle";
 }
 
-async function get<T>(view: string, projectId: string): Promise<T | { error: string }> {
-  const params = new URLSearchParams({ view });
-  if (projectId) params.set("project_id", projectId);
-  try {
-    const r = await fetch(`/api/delivery-workflows?${params}`, { cache: "no-store" });
-    const body = await r.json();
-    return r.ok ? body : { error: body?.error ?? `API returned ${r.status}` };
-  } catch (e) {
-    return { error: String((e as Error)?.message ?? e) };
-  }
-}
-
 /** The operator's presses on this panel: one at a time, the one running named by `busy`.
  *  ONLY presses. The automatic recheck below is not one — when it shared this scope, of several
  *  runs ready to continue only the first was put back, and a Retry pressed during it vanished. */
 const PANEL_PRESSES = "delivery-workflows-panel";
-
-/** POST one run action. `key` is the press's Idempotency-Key when a press sends it; without
- *  one (a background recheck) apiWrite mints its own and takes no press scope. */
-async function post(action: string, payload: Record<string, unknown>, key?: string) {
-  try {
-    const r = await apiWrite("/api/delivery-workflows", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, ...payload }),
-    }, { key });
-    const body = await r.json();
-    // A start refused for what the project lacks carries the checklist, so the form can draw it.
-    return r.ok ? { ok: true as const, data: body }
-      : { ok: false as const, error: body?.error,
-          readiness: (body?.readiness ?? undefined) as Readiness | undefined };
-  } catch (e) {
-    return { ok: false as const, error: String((e as Error)?.message ?? e) };
-  }
-}
 
 /**
  * A run's own answer, taken from ANOTHER screen — the Command Center's Retry.
@@ -761,23 +522,58 @@ export async function sendRunAnswer(projectId: string, actor: string, runId: str
   }, key));
 }
 
+/** The Workflows area's two tabs. The editor is not a tab: `&wf=` replaces both, full width. */
+export type AreaTab = "runs" | "library";
+
+/** What the URL says this area is showing. Read on every popstate, so Back works. */
+export function readAreaUrl(search: string): { tab: AreaTab; wf: string | null } {
+  const params = new URLSearchParams(search);
+  return {
+    tab: params.get("tab") === "library" ? "library" : "runs",
+    wf: params.get("wf")?.trim() || null,
+  };
+}
+
+/** Change this area's URL and tell every panel listening on it. */
+function setAreaUrl(patch: Record<string, string | null>, mode: "push" | "replace" = "push") {
+  try {
+    const url = new URL(window.location.href);
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) url.searchParams.delete(key); else url.searchParams.set(key, value);
+    }
+    if (url.toString() === window.location.href) return;
+    if (mode === "push") window.history.pushState(null, "", `${url.pathname}${url.search}`);
+    else window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
+/** The editor's own parameters; cleared together when it closes. */
+const EDITOR_PARAMS = { wf: null, step: null, view: null, v: null, from: null } as const;
+
 export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
-  const [tab, setTab] = useState<Tab>("running");
+  const [tab, setTabState] = useState<AreaTab>("runs");
+  const [editing, setEditing] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () => {
+      const now = readAreaUrl(window.location.search);
+      setTabState(now.tab);
+      setEditing(now.wf);
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+  const setTab = useCallback((next: AreaTab) => {
+    setTabState(next);
+    setAreaUrl({ tab: next, ...EDITOR_PARAMS });
+  }, []);
+
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
-  const [blocks, setBlocks] = useState<Block[]>([]);
   const [riskFloor, setRiskFloor] = useState(2);
-  /** The agents a step can be given to. Taken from the capabilities payload rather than the
-   *  agent directory, because THIS list is the one the publish-time captain check validates
-   *  against — offering a role that would then be refused is worse than offering none. */
-  const [stepRoles, setStepRoles] = useState<string[]>([]);
-  /** `role_key` → the MCP servers that agent HOLDS (role_mcp_servers), from the capabilities
-   *  payload. A step's MCP list narrows what its agent holds and never grants (integration of
-   *  the agents and steps streams), so the scope offers only these. */
-  const [mcpHoldings, setMcpHoldings] = useState<Record<string, string[]>>({});
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [customSteps, setCustomSteps] = useState<CustomStep[]>([]);
-  const [bindable, setBindable] = useState<Bindable>({ skills: [], mcp_servers: [] });
   const [runs, setRuns] = useState<Run[]>([]);
   // WHERE THIS PROJECT CAN SHIP. Fetched once for the release gate: choosing a target is part
   // of the deploy decision, and a gate that only says yes/no cannot express "yes, to staging".
@@ -786,29 +582,6 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // EVERY AGENT THIS PROJECT HAS, so "assign" can offer them by name rather than by role_key.
   // One fetch for the whole screen: a picker per run would be one request per run.
   const [roles, setRoles] = useState<Array<{ role_key: string; display_name?: string | null }>>([]);
-  /** WHICH AGENT HOLDS WHICH SKILL, `role_key` → skill ids.
-   *
-   *  Needed because naming an agent on a step is only half the decision. The other half is
-   *  whether that agent is allowed to do the thing — `skill_runtime` checks `role_skills` at run
-   *  time and refuses if the grant is missing. Without this the builder happily let someone put
-   *  an agent on a tier-3 publish step, save it, start it, wait for the approval, and only then
-   *  be told the agent could not call it. One fetch; the whole project's assignments. */
-  const [holdings, setHoldings] = useState<Record<string, string[]>>({});
-  const loadHoldings = useCallback(async () => {
-    try {
-      const r = await fetch(
-        `/api/skills?view=assignments&project_id=${encodeURIComponent(projectId)}`,
-        { cache: "no-store" });
-      if (!r.ok) return;
-      const body = await r.json();
-      const next: Record<string, string[]> = {};
-      for (const a of (body?.assignments ?? []) as Array<{ role_key: string; skill_id: string }>) {
-        (next[a.role_key] ??= []).push(a.skill_id);
-      }
-      setHoldings(next);
-    } catch { /* the builder still works; it just cannot warn about a missing grant */ }
-  }, [projectId]);
-  useEffect(() => { void loadHoldings(); }, [loadHoldings]);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -826,11 +599,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   /* RE-READ AFTER BINDING — the reason "Set target" looked like it had done nothing.
    *
    * This list was fetched once per project and never again. So the operator pressed Set target,
-   * the target really was created (deptgt_ee5dae79, 'Onboarding Path Builder.', active), and
-   * the step went on rendering the same empty form, because the only evidence that a target now
-   * exists lives in this array. Their reasonable conclusion was that the button had not worked,
-   * and the reasonable next action is to press it again — which is exactly the "he may click
-   * set target multiple times" the operator described. */
+   * the target really was created, and the step went on rendering the same empty form, because
+   * the only evidence that a target now exists lives in this array. */
   const reloadTargets = useCallback(async () => {
     try {
       const res = await fetch(
@@ -848,15 +618,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     // TWO INDEPENDENT LOADS, AND THEY MUST STAY INDEPENDENT.
     //
     // These were two try/catch blocks in ONE async function, each ending `if (!res.ok) return;`
-    // — and `return` does not skip the rest of a block, it leaves the whole function. So when
-    // /api/deployment-targets answered 503, the hosts fetch NEVER RAN. `hosts` stayed empty,
-    // and the deploy step told the operator "this project has no verified host. Add one under
-    // Infra and Models" while Infra showed hetzner-ci-01 VERIFIED and READY TO DEPLOY. They
-    // reported it perhaps ten times; every fix went to the message, the picker and the wire
-    // format, and the request that would have populated it was never being made.
-    //
-    // Separate functions, started separately: one endpoint being down cannot silence the
-    // other. The catch blocks always intended this; the early `return` quietly undid it.
+    // — and `return` leaves the whole function. So when /api/deployment-targets answered 503,
+    // the hosts fetch NEVER RAN, and the deploy step said "this project has no verified host"
+    // while Infra showed one verified. One endpoint being down must not silence the other.
     const loadTargets = async () => {
       try {
         const res = await fetch(
@@ -887,15 +651,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  // A PREVIEW IS ASKED FOR IN A SECOND AND ARRIVES IN A MINUTE.
-  //
-  // `act` clears `busy` when the POST returns, and start_preview returns "starting" straight
-  // away — so the button flashed "Starting…" for about a second, went back to normal, and the
-  // notice said "Preview — done." while nothing was serving yet. From the operator's side the
-  // click did nothing, which is an invitation to click it again and boot a second copy.
-  //
-  // This holds the build's id from the click until a preview URL actually shows up (or the
-  // wait is plainly too long), and the poll below refreshes so it appears without another click.
+  // A PREVIEW IS ASKED FOR IN A SECOND AND ARRIVES IN A MINUTE. This holds the build's id from
+  // the click until a preview URL actually shows up (or the wait is plainly too long), and the
+  // poll below refreshes so it appears without another click.
   const [previewStarting, setPreviewStarting] = useState<{ runId: string; at: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /** A start this panel made that was refused for what the project lacks. */
@@ -905,47 +663,32 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // because the list re-polls every few seconds: re-deciding each time would reopen a run the
   // operator had just closed, which is a page that argues with you.
   const openedOnce = useRef(false);
-  // START A PROJECT IS THE SMALLER JOB ON THIS PAGE, and it was the whole top of it — a
-  // composer above the fold, pushing what is actually running below it. Collapsed to one line
-  // unless there is nothing to look at yet, in which case an empty page with a closed box is
-  // just a dead end.
+  // The composer is collapsed to one button unless there is nothing to look at yet.
   const [composerOpen, setComposerOpen] = useState(false);
-  /** The workflow "Start one" chose, so the composer opens on it rather than on a blank path
-   *  question the operator has already answered by pressing a button on that workflow's card. */
+  /** The workflow Start chose, so the composer opens on it rather than on a blank question. */
   const [startWith, setStartWith] = useState<string | undefined>(undefined);
-  /** "Try an example" — the template's own example brief, filled in for the operator to read. */
+  /** "Try example" — the standard's own example brief, filled in for the operator to read. */
   const [startExample, setStartExample] =
     useState<{ title?: string; directive?: string } | null>(null);
-  /** EVERY START OPENS THE FORM. Catalogue and Yours both sent `sample: true`, so the run was
-   *  on a random demo idea rather than the operator's work — research, a panel, a build and a
-   *  pull request in THEIR repository, on "Build a meeting cost meter" (boss-1 map,
-   *  2026-10-02). Now Start opens the composer on that workflow, with its readiness. */
-  const openComposerOn = (key: string, example?: { title?: string; directive?: string } | null) => {
+  /** EVERY START OPENS THE FORM: the composer on that workflow, with its readiness. A run is
+   *  never started blind on a sample directive (boss-1 map, 2026-10-02). */
+  const openComposerOn = useCallback((key: string,
+                                      example?: { title?: string; directive?: string } | null) => {
     setStartWith(key);
     setStartExample(example ?? null);
     setComposerOpen(true);
-    setTab("running");
-  };
-  // Lifted out of the builder so forking can land the operator on the thing they just made.
-  const [builderTarget, setBuilderTarget] = useState<string>("");
+    setTab("runs");
+  }, [setTab]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft | null>(null);
-  // WHAT WAS JUST MADE, so the builder can SAY it was made.
-  //
-  // Import worked and looked like it had not: the form closed, the toolbar came back looking
-  // exactly as before, and the only confirmation was a sticky line 104px up the page that is
-  // easy to miss entirely. Returning to a toolbar that looks unchanged reads as "cancelled",
-  // which is how a working feature got reported as broken.
-  const [justMade, setJustMade] = useState<{ id: string; name: string; from?: string } | null>(null);
 
   const load = useCallback(async () => {
     const [caps, cat, inst, live, mine, sched] = await Promise.all([
-      get<{ capabilities: Capability[]; blocks: Block[]; manual_approval_risk_floor: number }>(
+      get<{ capabilities: Capability[]; manual_approval_risk_floor: number }>(
         "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
       get<{ runs: Run[] }>("runs", projectId),
-      get<{ steps: CustomStep[]; bindable: Bindable }>("custom_steps", projectId),
+      get<{ steps: CustomStep[] }>("custom_steps", projectId),
       get<{ schedules: Schedule[] }>("schedules", projectId),
     ]);
     // SCHEDULES ARE NOT LOAD-BEARING. An install whose schedule table predates this feature
@@ -960,18 +703,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setSchedules(("error" in (sched as object))
       ? [] : ((sched as { schedules?: Schedule[] }).schedules ?? []));
     setCapabilities((caps as { capabilities: Capability[] }).capabilities ?? []);
-    setBlocks((caps as { blocks?: Block[] }).blocks ?? []);
     setRiskFloor((caps as { manual_approval_risk_floor: number }).manual_approval_risk_floor ?? 2);
-    setStepRoles((caps as { roles?: string[] }).roles ?? []);
-    setMcpHoldings(Object.fromEntries(
-      ((caps as { agents?: Array<{ role_key: string; mcp?: string[] }> }).agents ?? [])
-        .map((a) => [a.role_key, a.mcp ?? []])));
     setCatalogue((cat as { items: CatalogueEntry[] }).items ?? []);
     setInstalled((inst as { items: Installed[] }).items ?? []);
     setRuns((live as { runs: Run[] }).runs ?? []);
     setCustomSteps((mine as { steps?: CustomStep[] }).steps ?? []);
-    setBindable((mine as { bindable?: Bindable }).bindable
-                ?? { skills: [], mcp_servers: [] });
     setState("ready");
     setError(null);
   }, [projectId]);
@@ -984,15 +720,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // ARRIVING AT THIS SCREEN RE-TESTS WHAT STOPPED THINGS.
   //
   // A failed step's error is a record of a past attempt, and this page rendered it as a
-  // statement about now — so after the missing deployment target was created, the Deploy step
-  // went on saying in red that the app had nowhere to ship to, on a run marked dead-lettered.
-  // The operator's words: "not sure why the workflow is not updated with the latest... it
-  // should automatically refresh when we get to the workflow screen again".
-  //
-  // The read path already reports, per step, whether the recorded blocker still holds. When it
-  // does not, this puts the step back without being asked. Safe to be automatic: `recheck`
-  // re-queues ONLY steps whose blocker has actually cleared, and re-queuing an already-queued
-  // step is a no-op.
+  // statement about now. The read path reports, per step, whether the recorded blocker still
+  // holds; when it does not, this puts the step back without being asked. Safe to be
+  // automatic: `recheck` re-queues ONLY steps whose blocker has actually cleared.
   const rechecked = useRef<Set<string>>(new Set());
   useEffect(() => {
     const stale = runs.filter((r) => (r.steps ?? []).some(
@@ -1007,8 +737,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       // recheck cannot refuse another's, and none can refuse a button the operator presses.
       const results = await Promise.all(todo.map((r) =>
         post("recheck", { project_id: projectId, actor, run_id: r.id })));
-      // A recheck that did not get through is tried again on the next poll, not written off for
-      // as long as the page is open.
+      // A recheck that did not get through is tried again on the next poll.
       results.forEach((r, i) => { if (!r.ok) rechecked.current.delete(todo[i].id); });
       const moved = results.reduce((n, r) => n + (
         (r.ok ? ((r.data as { requeued?: unknown[] })?.requeued ?? []).length : 0)), 0);
@@ -1020,25 +749,18 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     })();
   }, [runs, projectId, actor, load]);
 
-  // KEEP ASKING, EVEN WHEN NOTHING IS RUNNING.
-  //
-  // This used to stop polling when no run was live — "an idle console is idle". But a console
-  // cannot know that work has STARTED without asking: a project kicked off from the Command
-  // Center, from the Factory form, or by approving a PRD creates its run somewhere else
-  // entirely. Anyone who had this page open when the only run was blocked saw a frozen list
-  // and no sign of the project they had just started, because the page never asked again.
-  //
-  // Fast while something is in flight, slower when idle — idle still means "watch for work
-  // appearing", not "stop looking".
+  // KEEP ASKING, EVEN WHEN NOTHING IS RUNNING. A console cannot know that work has STARTED
+  // without asking: a project kicked off from the Command Center, the Factory form, or by
+  // approving a PRD creates its run somewhere else. Fast while something is in flight, slower
+  // when idle — idle still means "watch for work appearing".
   const anyLive = runs.some(runIsLive);
   useEffect(() => {
     const t = window.setInterval(() => { void load(); }, anyLive ? 8000 : 15000);
     return () => window.clearInterval(t);
   }, [anyLive, load]);
 
-  // A RUN THAT IS ON ITS WAY. Arriving from Build, the run may not be in the list yet — it is
-  // created by the press, and this page had loaded before it. Poll fast until it shows rather
-  // than presenting an empty list, which reads as "nothing happened".
+  // A RUN THAT IS ON ITS WAY. Arriving from Build, the run may not be in the list yet. Poll
+  // fast until it shows rather than presenting an empty list, which reads as "nothing happened".
   const awaited = openRun && !runs.some((r) => r.id === openRun) ? openRun : null;
   useEffect(() => {
     if (!awaited) return;
@@ -1047,18 +769,24 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   }, [awaited, load]);
 
   // SENT HERE TO START SOMETHING. `?new=1` is a one-shot command, consumed on read so a later
-  // navigation cannot re-deliver it — the same rule the Factory form learned the hard way.
+  // navigation cannot re-deliver it.
   useEffect(() => {
     const read = () => {
       const intent = readNewProjectIntent(window.location.search);
       if (!intent.open) return;
-      setTab("running");
+      setTabState("runs");
+      setComposerOpen(true);
       window.setTimeout(() => {
         document.querySelector<HTMLTextAreaElement>('[data-testid="dw-new-directive"]')?.focus();
       }, 0);
       try {
+        // Consumed, and the URL says where it landed: the Runs tab, not an editor left open.
+        const next = new URLSearchParams(intent.nextSearch);
+        next.set("tab", "runs");
+        for (const key of Object.keys(EDITOR_PARAMS)) next.delete(key);
         window.history.replaceState(null, "",
-          `${window.location.pathname}${intent.nextSearch}${window.location.hash}`);
+          `${window.location.pathname}?${next}${window.location.hash}`);
+        setEditing(null);
       } catch { /* non-browser — the composer is on screen either way */ }
     };
     read();
@@ -1066,9 +794,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.removeEventListener("popstate", read);
   }, []);
 
-  // OPEN THE RUN THE OPERATOR WAS SENT HERE TO SEE. Creating a project redirects here with
-  // `?wfr=<id>`; expanding it on arrival is the difference between "your project is somewhere
-  // in this list" and showing them the steps.
+  // OPEN THE RUN THE OPERATOR WAS SENT HERE TO SEE (`?wfr=<id>`).
   useEffect(() => {
     const read = () => {
       const wanted = new URLSearchParams(window.location.search).get("wfr");
@@ -1090,15 +816,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.clearInterval(timer);
   }, [previewStarting, load]);
 
-  // ONE PRESS AT A TIME, AND A REFUSED PRESS IS SAID OUT LOUD.
-  //
-  // `busy` disables the buttons only after React re-renders, so a quick second click still
-  // fired: "Stop and run again" pressed twice started two workflows. Every press on this panel
-  // goes through `pressOn`, which holds the panel's press scope in lib/api-write's one registry
+  // ONE PRESS AT A TIME, AND A REFUSED PRESS IS SAID OUT LOUD. Every press on this panel goes
+  // through `pressOn`, which holds the panel's press scope in lib/api-write's one registry
   // (registered before any await) and is the ONLY thing that sets `busy`. The same press again
-  // joins the running one; a different press is refused by the helper, which says so in the
-  // operator's words ("Retry was not sent — Stop is still in progress") instead of the old
-  // `return { error: "already running" }` that every button threw away.
+  // joins the running one; a different press is refused in the operator's words.
   type PressResult<T> = T | { ok: false; error: string; refused: true };
   const pressOn = useCallback(<T,>(label: string, what: unknown,
                                    run: (key: string) => Promise<T>): Promise<PressResult<T>> =>
@@ -1120,11 +841,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
   // `dedupeFromPress`: a start that must be a NEW run per press, and the same run for its
   // duplicates, gets `dedupe_key: <prefix>:<press key>` — minted from the press INSIDE it, so
-  // it is not part of what the press is recognised by. Re-run put a fresh randomUUID into its
-  // payload, the payload is the press's fingerprint, and so a double click did not join the
-  // first click: it was refused and toasted "the previous Re-run is still in progress", against
-  // the rule that a double click sends once and says nothing (review of 6ca9119).
-  // The refusal's retry is this same press again; a ref, so the callback need not name itself.
+  // it is not part of what the press is recognised by (review of 6ca9119).
   const actRef = useRef<((label: string, action: string, payload: Record<string, unknown>,
                           dedupeFromPress?: string) => Promise<unknown>) | null>(null);
   const act = useCallback((label: string, action: string, payload: Record<string, unknown>,
@@ -1137,9 +854,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         ...(dedupeFromPress ? { dedupe_key: `${dedupeFromPress}:${key}` } : {}),
       }, key);
       // A START REFUSED FOR WHAT THE PROJECT LACKS gets the checklist and "<label> anyway",
-      // whichever button started it — Re-run, Stop and run again, Build on this research.
-      // They showed a sentence and no way past (review of the readiness change). The retry is
-      // the same press with exactly the keys the operator ticked.
+      // whichever button started it. The retry is the same press with exactly the keys ticked.
       const readiness = !result.ok ? asReadiness(result.readiness) : null;
       if (readiness) {
         setRefusal({ label, message: result.error ?? "", readiness,
@@ -1148,21 +863,15 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                                                        dedupeFromPress) });
         return result;
       }
-      // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
-      // always requires a person" is the whole value of the validation.
-      // A START IS NOT A FINISH. start_preview answers "starting" in a second and the app
-      // serves a minute later; "Starting a preview — done." told the operator nothing would
-      // follow. Where the engine says what happens next, say that instead.
+      // The engine's own sentence, not "something went wrong". A START IS NOT A FINISH: where
+      // the engine says what happens next (start_preview), say that instead of "done".
       const next = result.ok && action === "start_preview"
         ? (result.data as { message?: unknown } | undefined)?.message : undefined;
       setNotice(result.ok ? (typeof next === "string" && next ? `${label}: ${next}` : `${label} — done.`)
                           : `${label} — ${result.error}`);
-      // The Factory card and the deployment panels render the same rows this just changed.
+      // The Factory card, the deployment panels and the Library render what this just changed.
       if (result.ok) notifyChanged("workflows", { action });
-      // RELOAD WHILE STILL BUSY. `busy` was cleared BEFORE this, so every action ended the
-      // same way: the button snapped back to its normal label and the console then spent
-      // seconds re-fetching with nothing on screen to say so. From the operator's side that
-      // is a click that did nothing — reported as "I clicked and there's no indicator".
+      // RELOAD WHILE STILL BUSY, so the button does not snap back before the screen updates.
       if (result.ok) await load();
       return result;
     }), [pressOn, projectId, actor, load]);
@@ -1176,42 +885,60 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setOpenRun((current) => current ?? runToOpen(runs));
   }, [runs]);
 
+  const [scheduleFor, setScheduleFor] = useState<string | null>(null);
+  const openWorkflow = useCallback((key: string, extra: Record<string, string | null> = {}) => {
+    setEditing(key);
+    setAreaUrl({ ...EDITOR_PARAMS, ...extra, wf: key });
+  }, []);
+
+  // THE EDITOR REPLACES THE TABS, full width. It loads its own data, so it does not wait on
+  // this area's run list.
+  if (editing) {
+    return (
+      <div className="dw" data-testid="delivery-workflows">
+        <WorkflowEditor projectId={projectId} workflowKey={editing} actor={actor}
+                        usedFor={installed.find((w) => w.workflow_key === editing)?.used_for}
+                        onBack={() => { setEditing(null); setTab("library"); }}
+                        onStart={(key) => { setEditing(null); openComposerOn(key); }}
+                        // The schedule popover lives on the workflow's Library card.
+                        onSchedule={(key) => { setEditing(null); setScheduleFor(key); setTab("library"); }} />
+      </div>
+    );
+  }
+
   if (state === "loading") {
-    return <p className="detail" data-testid="dw-loading">Loading delivery workflows…</p>;
+    return <p className="detail" data-testid="dw-loading">Loading workflows…</p>;
   }
   if (state === "failed") {
     return (
-      <p className="detail" style={{ color: "#f85149" }} data-testid="dw-error">
-        Could not load delivery workflows — {error}
+      <p className="detail" style={{ color: "var(--red)" }} data-testid="dw-error">
+        Could not load workflows — {error}
       </p>
     );
   }
 
+  const tabs = (
+    <div className="wf-tabs" role="tablist" aria-label="Workflows">
+      <button type="button" role="tab" aria-selected={tab === "runs"} className="wf-tab"
+              data-testid="dw-tab-runs" onClick={() => setTab("runs")}>
+        Runs <em>({runs.length})</em>
+      </button>
+      <button type="button" role="tab" aria-selected={tab === "library"} className="wf-tab"
+              data-testid="dw-tab-library" onClick={() => setTab("library")}>
+        Library
+      </button>
+    </div>
+  );
+  const installedStandards = new Set(installed.filter((i) => i.is_catalogue).map((i) => i.workflow_key));
+
   return (
     <div className="dw" data-testid="delivery-workflows">
-      <div className="dw-tabs" role="tablist" aria-label="Delivery workflows">
-        {TABS.map((t) => (
-          <button key={t} type="button" role="tab" aria-selected={tab === t}
-                  className="dw-tab" data-active={tab === t}
-                  onClick={() => setTab(t)} data-testid={`dw-tab-${t}`}>
-            {t === "running" ? `Running (${runs.length})`
-              : t === "yours" ? `Yours (${ownWorkflows(installed).length})`
-              // The catalogue counts what BOSS ships, and only that. It used to add the
-              // customer's own to the total, so the number answered no question anybody had.
-              : t === "catalogue" ? `Catalogue (${catalogue.length})`
-              : t === "design" ? "Design a workflow"
-              : `Your steps (${customSteps.length})`}
-          </button>
-        ))}
-      </div>
-
-      {/* WHAT IS HAPPENING RIGHT NOW. Per-button labels are easy to forget on the next
-          button added, and they say nothing during the reload that follows the request. This
-          is one indicator every action gets for free, for as long as the action is running. */}
+      {/* WHAT IS HAPPENING RIGHT NOW. One indicator every action gets for free, for as long as
+          the action is running. */}
       {busy ? (
         <p className="dw-notice dw-working" data-testid="dw-working" role="status" aria-live="polite">
           <span className="dw-spin" aria-hidden />
-          {busy}… <span className="detail">working — the list refreshes when it finishes</span>
+          {busy}…
         </p>
       ) : notice ? (
         <p className="dw-notice" data-testid="dw-notice">{notice}</p>
@@ -1221,219 +948,30 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                       onDismiss={() => setRefusal(null)} />
       ) : null}
 
-      {tab === "running" ? (
-        composerOpen || runs.length === 0 ? (
-          <div className="dw-composer-open">
-            {runs.length ? (
-              <button type="button" className="linklike dw-composer-hide"
-                      data-testid="dw-composer-hide"
-                      onClick={() => {
-                        setComposerOpen(false); setStartWith(undefined); setStartExample(null);
-                      }}>Hide</button>
-            ) : null}
-            <NewProjectComposer
-              projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
-              startWith={startWith} example={startExample}
-              // KEYED ON THE CHOICE, so pressing "Start one" on a different workflow rebuilds
-              // the composer rather than leaving it on the first one's inputs.
-              key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}`}
-              onStarted={(runId) => {
-                if (runId) setOpenRun(runId);
-                setComposerOpen(false);
-                setStartWith(undefined);
-                setStartExample(null);
-                setNotice(runId ? `Started ${runId}.` : "Started.");
-                void load();
-              }}
-            />
-          </div>
-        ) : (
-          <button type="button" className="dw-composer-trigger" data-testid="dw-composer-open"
-                  onClick={() => setComposerOpen(true)}>
-            <span className="dw-composer-plus" aria-hidden>+</span>
-            Start a project
-            <span className="detail">
-              describe an outcome, choose a workflow, and follow its progress
-            </span>
-          </button>
-        )
-      ) : null}
-      {tab === "running" && awaited ? (
-        <p className="dw-awaiting detail" data-testid="dw-awaiting">
-          Starting <code>{awaited}</code>… the run appears here the moment it is created.
-        </p>
-      ) : null}
-      {tab === "running" ? (
-        <RunsView
-          projectId={projectId}
-          runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
-          capabilities={capabilities} targets={targets} hosts={hosts}
-          actor={actor} roles={roles}
-          // SAY WHAT IT DID. "Advance now" reported success while advancing nothing — a run
-          // waiting on a person cannot be ticked forward — and a button that always says
-          // "done" is indistinguishable from a button that does nothing.
-          // NOT THE WORKER'S PUMP. "Advance now" called /run-capabilities, which only the
-          // worker principal may call — on every authenticated install (boss-1) it answered 403
-          // — and ticking the queue is the worker's job, not an operator's. What an operator
-          // means by it is "is anything stuck that could move now?", which is a re-check of each
-          // unfinished run: the console key may do that, and it says what it put back.
-          onAdvance={() => void pressOn("Advance", null, async (key) => {
-            const open = runsToRecheckInBulk(runs);
-            let requeued = 0;
-            const failed: string[] = [];
-            for (const run of open) {
-              // One press, one key: the server derives each request's key from the press AND
-              // its body, so every run is re-checked once however often Advance is pressed.
-              const r = await post("recheck", { project_id: projectId, actor, run_id: run.id },
-                                   key);
-              if (!r.ok) failed.push(r.error ?? "refused");
-              else requeued += ((r.data as { requeued?: unknown[] })?.requeued ?? []).length;
-            }
-            const checked = `Checked ${open.length} live run${open.length === 1 ? "" : "s"}. `;
-            setNotice(failed.length ? `${checked}Check again — ${failed[0]}`
-              : !open.length ? "No run is live, so there is nothing to check. To revive a "
-                + "failed run, open it and use Re-check on that run."
-              : requeued ? `${checked}Put ${requeued} step${requeued === 1 ? "" : "s"} `
-                + "back in the queue; they run on the next tick."
-              : checked
-                + "Nothing could move yet — each run is waiting on a person or on work in flight.");
-            await load();
-          })}
-          onRetryStep={(runId, stepId) =>
-            act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
-          // SKIP AND PROCEED. A failed step stops the run; going on without it is a decision,
-          // so the step asks why (inline, beside the button) and the reason is kept on the step
-          // and in the run's history.
-          onSkipStep={(runId, stepId, reason) =>
-            act("Skip", "skip_step", { run_id: runId, step_id: stepId, reason })}
-          onSetTarget={(runId, targetId) =>
-            act("Set target", "set_input", { run_id: runId, values: { target_id: targetId } })}
-          onPrepareTarget={(runId, hostId) =>
-            act("Prepare target", "prepare_target",
-                { run_id: runId, host_id: hostId, environment: "staging" })}
-          onRunPreview={(buildRunId) => {
-            setPreviewStarting({ runId: buildRunId, at: Date.now() });
-            // "Starting a preview" — not "done". The old label claimed the work had finished
-            // when only the request had been accepted.
-            return act("Starting a preview", "start_preview", { run_id: buildRunId });
-          }}
-          previewStarting={previewStarting?.runId ?? ""}
-          // Both: the run's input changes AND the target list gains a row. Reloading only the
-          // runs left the step believing there was still nowhere to ship.
-          onBound={() => { void load(); void reloadTargets(); }}
-          onRecheck={(run) => act("Re-check", "recheck", { run_id: run.id })}
-          onStop={(run) => act("Stop", "stop", {
-            run_id: run.id, reason: "stopped by the operator from the console",
-          })}
-          onDelete={async (run) => {
-            // ASKED, BECAUSE IT CANNOT BE UNDONE. The only irreversible thing on this screen.
-            if (!window.confirm(
-              `Remove this ${run.workflow_name} run for good?\n\n`
-              + "Its steps and history go with it. Anything it produced — files, issues, "
-              + "anything published — is untouched. This cannot be undone.")) return;
-            await pressOn("Remove", run.id, async (key) => {
-              setNotice(null);
-              const query = new URLSearchParams({
-                project_id: projectId, actor, run_id: run.id,
-              });
-              const response = await apiWrite(`/api/delivery-workflows?${query}`,
-                                              { method: "DELETE" }, { key });
-              const body = await response.json().catch(() => ({}));
-              setNotice(response.ok
-                ? "Removed."
-                : `Remove — ${(body as { error?: string }).error ?? response.status}`);
-              if (response.ok) { setOpenRun(null); await load(); }
-            });
-          }}
-          onRerun={(run) => act("Re-run", "start", {
-            workflow_key: run.workflow_key, input: inputForRerun(run.input),
-            // THE CHOICE MADE FOR THIS RUN CARRIES OVER. A run started without a deployment
-            // host was refused on its re-run; the server now repeats what was accepted for
-            // `rerun_of`, and anything newly missing draws the checklist.
-            rerun_of: run.id,
-            // One fresh run per press; a retried or doubled request returns the same run.
-          }, `again:${run.id}`)}
-          // STOP, THEN START — in that order and as ONE press.
-          //
-          // "Run this workflow again does not stop the current run and start from the
-          // beginning." It did not, by design: re-running while a run is live makes a SECOND
-          // workflow for the same project, which is how three ended up going at once. The
-          // screen's own advice was "cancel this run first", for a control it did not offer.
-          // Now it offers it, and this does both — the stop has to land before the start, or
-          // the new run joins the old one instead of replacing it.
-          //
-          // ONE REQUEST, CHECKED BEFORE ANYTHING IS STOPPED. This was a stop and then a start
-          // from the browser; once Start could refuse a project that lacks something, the stop
-          // succeeded, the start was refused, and the operator was left with no run at all
-          // (review of the readiness change). `replaces_run` makes the server check, then stop,
-          // then start, in one transaction — a refusal leaves the original running and draws
-          // the checklist here, and the original run's accepted gaps carry over.
-          onStopAndRerun={async (run) => {
-            await act("Stop and run again", "start", {
-              workflow_key: run.workflow_key, input: inputForRerun(run.input),
-              replaces_run: run.id,
-              // A RUN IS REPLACED ONCE. However often this is pressed for run X, the server
-              // returns the same replacement — the second press no longer starts a second one.
-              dedupe_key: `replace:${run.id}`,
-            });
-          }}
-          // BUILD ON WHAT THIS ALREADY FOUND. The server resolves the dossier from the run and
-          // sets the adopt key itself — a client may not assert that work has happened. What
-          // travels is the evidence, not the panel: a Research-Led Discovery panel answered a
-          // go/no-go, so the delivery run holds its own and argues FROM the findings.
-          onBuildOnThis={(run) => act("Build on this research", "start", {
-            // NAME THE WORKFLOW, NOT THE CLASS. `project.new` is shared by Research-Led
-            // Discovery (once applied as the default), Backend Service Setup, and Standard
-            // Product Delivery. Sending only the class either restarts discovery — the thing
-            // this button exists to leave behind — or 409s when nothing is mapped yet, which
-            // is every project that started research by key. The label promises Standard
-            // Product Delivery; the payload has to.
-            workflow_key: "standard_product_delivery",
-            work_class: "project.new", from_run: run.id,
-            input: inputForRerun(run.input),
-          })}
-        />
-      ) : tab === "yours" ? (
-        <YoursView
-          projectId={projectId}
-          installed={installed} schedules={schedules} busy={busy}
-          onStart={(key) => {
-            // A WORKFLOW IS NEVER STARTED BLIND.
-            //
-            // `sample: true` is "surprise me": the API picks a sample directive for the
-            // workflow's WORK CLASS. On a workflow that asks for a video link it was refused
-            // or injected a software brief; on a catalogue one it spent a build on a demo idea
-            // in the operator's repository. Either way the operator never got to say what they
-            // wanted. Start opens the form on this workflow, with what it needs and whether
-            // this project has it; a sample is the catalogue card's explicit "Try an example".
-            openComposerOn(key);
-          }}
-          onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
-          scheduleDraft={scheduleDraft}
-          onOpenSchedule={(item, existing) => {
-            // ASKED, NOT ASSUMED. Monday 08:00 is the common case and the zone is not
-            // guessable — a report arriving at 3am because the browser's zone was used and
-            // nobody said so is the failure this avoids. Required inputs are asked here too:
-            // the schedule runs them unattended, so a button that stores only a time zone
-            // cannot start a newsletter.
-            setScheduleDraft({
-              workflowKey: item.workflow_key,
-              name: existing?.name ?? item.name,
-              scheduleId: existing?.id ?? null,
-              timezone: existing?.timezone || browserTimeZone(),
-              values: scheduleFormValues(existing?.input),
-              startAnyway: existing?.start_anyway ?? [],
-            });
-          }}
-          onCancelSchedule={() => setScheduleDraft(null)}
-          onChangeSchedule={(next) => setScheduleDraft(next)}
-          onSubmitSchedule={async (draft) => {
+      {tab === "library" ? (
+        <Library
+          projectId={projectId} tabs={tabs} busy={busy} schedules={schedules}
+          inputSchemas={Object.fromEntries([
+            ...catalogue.map((c) => [c.key, c.input_schema] as const),
+            ...installed.map((i) => [i.workflow_key, i.input_schema] as const),
+          ])}
+          examples={Object.fromEntries(catalogue.map((c) => [c.key, c.example ?? null]))}
+          workClasses={[...new Set(catalogue.map((c) => c.work_class).filter(Boolean))].sort()}
+          uninstalledStandards={catalogue.filter((c) => !installedStandards.has(c.key)).length}
+          onInstallStandards={() => void act("Install the standards", "install", {})}
+          customSteps={customSteps} riskFloor={riskFloor}
+          onStart={(key, example) => openComposerOn(key, example)}
+          onOpen={(key) => openWorkflow(key)}
+          onNew={() => openWorkflow("new")}
+          onDuplicate={(key) => openWorkflow("new", { from: key })}
+          scheduleFor={scheduleFor} onScheduleShown={() => setScheduleFor(null)}
+          onUseFor={(key, workClass) =>
+            void act(`Use for ${workClass}`, "apply", { workflow_key: key, work_class: workClass })}
+          onSaveSchedule={async (draft) => {
             const chosen = installed.find((w) => w.workflow_key === draft.workflowKey);
             const fields = workflowInputFields(chosen?.input_schema);
-            // REQUIRED INPUTS ARE STORED WITH THE SCHEDULE. Blank required fields stay
-            // on the form; the API would refuse them, and a click that fails after the
-            // operator thought it was saved is the gap this replaces.
-            if (missingRequired(fields, draft.values).length || !draft.timezone.trim()) return;
+            // REQUIRED INPUTS ARE STORED WITH THE SCHEDULE: it runs them unattended.
+            if (missingRequired(fields, draft.values).length || !draft.timezone.trim()) return false;
             const existing = schedules.find((s) => s.id === draft.scheduleId);
             const result = await act(
               draft.scheduleId ? `Update schedule ${draft.name}` : `Schedule ${draft.name}`,
@@ -1447,15 +985,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                 minute: existing?.minute ?? 0,
                 timezone: draft.timezone.trim(),
                 input: suppliedInputs(fields, draft.values),
-                // THE UNATTENDED START ANYWAY. A schedule has nobody to press it on Monday, so
-                // what the operator accepted on the checklist above is stored with it.
+                // THE UNATTENDED START ANYWAY, stored with the schedule.
                 start_anyway: draft.startAnyway,
                 ...(draft.scheduleId ? { schedule_id: draft.scheduleId } : {}),
               });
-            if (result.ok) setScheduleDraft(null);
+            return Boolean((result as { ok?: boolean }).ok);
           }}
-          onToggleSchedule={async (id, enabled) => {
-            await pressOn(enabled ? "Resume schedule" : "Pause schedule", id, async (key) => {
+          onToggleSchedule={(id, enabled) => void pressOn(
+            enabled ? "Resume schedule" : "Pause schedule", id, async (key) => {
               const r = await apiWrite("/api/delivery-workflows", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1463,196 +1000,175 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                                        enabled, project_id: projectId, actor }),
               }, { key });
               const body = await r.json();
-              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
+              if (!r.ok) { setNotice(String(body?.error ?? `API returned ${r.status}`)); return; }
               await load();
-            });
-          }}
-          onDeleteSchedule={async (id) => {
-            await pressOn("Remove schedule", id, async (key) => {
-              const r = await apiWrite(
-                `/api/delivery-workflows?view=schedules&schedule_id=${encodeURIComponent(id)}`
-                  + `&project_id=${encodeURIComponent(projectId)}`
-                  + `&actor=${encodeURIComponent(actor)}`,
-                { method: "DELETE" }, { key });
-              const body = await r.json();
-              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
-              await load();
-            });
-          }}
-        />
-      ) : tab === "catalogue" ? (
-        <CatalogueView
-          catalogue={catalogue} installed={installed} busy={busy}
-          onInstall={() => act("Install the catalogue", "install", {})}
-          onApply={(key, workClass) =>
-            act(`Apply ${key}`, "apply", { workflow_key: key, work_class: workClass })}
-          onStart={(key) =>
-            // THE OPERATOR'S OWN BRIEF. This sent `sample: true`, so the run was a demo idea
-            // the API picked — for six templates a new-product brief that did not fit them —
-            // and it spent a build in the operator's repository (boss-1 map, 2026-10-02).
-            openComposerOn(key)}
-          onTryExample={(key) =>
-            // AN EXAMPLE THAT FITS THE TEMPLATE, SHOWN BEFORE IT RUNS. Filled into the form to
-            // read and change; nothing starts until Start is pressed there.
-            openComposerOn(key, catalogue.find((c) => c.key === key)?.example ?? null)}
-          onFork={async (key) => {
-            const entry = catalogue.find((c) => c.key === key);
-            // A UNIQUE KEY PER FORK.
-            //
-            // `${key}_custom` collided the second time anyone forked the same workflow, and a
-            // 409 with the notice scrolled off the top of a long page is indistinguishable
-            // from a button that does nothing — which is exactly how this was reported.
-            const taken = new Set(installed.map((i) => i.workflow_key));
-            let candidate = `${key}_custom`;
-            for (let n = 2; taken.has(candidate); n += 1) candidate = `${key}_custom_${n}`;
-            const result = await act(`Fork ${entry?.name ?? key}`, "fork", {
-              workflow_key: key,
-              new_key: candidate,
-              // Called what it is a copy OF. "(yours)" said nothing the row does not already
-              // show — the console knows which workflows are catalogue templates and which are
-              // the customer's own.
-              new_name: uniqueWorkflowName(entry?.name ?? key, installed.map((i) => i.name)),
-            });
-            // IT IS CALLED "FORK TO EDIT", SO GO AND EDIT IT.
-            //
-            // On success the only visible change was a line of text at the top of the page:
-            // the new workflow appears in the BUILDER's dropdown, on a tab the operator is not
-            // looking at. Landing them in the editor with it selected is what the button says
-            // it does.
-            if (result.ok) {
-              const created = (result.data as { definition?: { id: string } })?.definition;
-              if (created?.id) setBuilderTarget(created.id);
-              setTab("design");
-            }
-          }}
-          // Same landing as a fork: select it in the builder and switch to that tab, so the
-          // card and the "Editing" picker are two doors into one thing rather than two lists
-          // that disagree about what exists.
-          onEditMine={(definitionId) => { setBuilderTarget(definitionId); setTab("design"); }}
-        />
-      ) : tab === "steps" ? (
-        <StepsView
-          customSteps={customSteps} bindable={bindable} riskFloor={riskFloor}
-          projectId={projectId} busy={busy}
-          onDefineStep={async (fields) => {
-            // A step_key means the form was editing one that exists. Different verb, different
-            // route: the key lives in the PATH for an edit, which is what keeps it out of the
-            // fields an edit can change — a renamed step must not orphan the workflows placing
-            // it.
-            if (fields.step_key) {
-              return pressOn(`Save ${fields.label}`, fields, async (key) => {
-                try {
-                  const r = await apiWrite("/api/delivery-workflows", {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ ...fields, actor }),
-                  }, { key });
-                  const body = await r.json();
-                  if (!r.ok) {
-                    return { ok: false, error: String(body?.error ?? `API returned ${r.status}`) };
-                  }
-                  setNotice(`Saved ${fields.label}`);
-                  await load();
-                  return { ok: true };
-                } catch (e) {
-                  return { ok: false, error: String((e as Error)?.message ?? e) };
-                }
-              });
-            }
-            const result = await act(`Define ${fields.label}`, "define_step", fields);
-            if (result.ok) await load();
-            return result;
-          }}
-          onRemoveStep={async (stepKey) => {
-            await pressOn(`Remove ${stepKey}`, stepKey, async (key) => {
-              const r = await apiWrite(
-                `/api/delivery-workflows?project_id=${encodeURIComponent(projectId)}`
-                  + `&step_key=${encodeURIComponent(stepKey)}`
-                  + `&actor=${encodeURIComponent(actor)}`,
-                { method: "DELETE" }, { key },
-              );
-              const body = await r.json();
-              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
-              setNotice(`Removed ${stepKey}`);
-              await load();
-            });
-          }}
+            })}
+          onDeleteSchedule={(id) => void pressOn("Remove schedule", id, async (key) => {
+            const r = await apiWrite(
+              `/api/delivery-workflows?view=schedules&schedule_id=${encodeURIComponent(id)}`
+                + `&project_id=${encodeURIComponent(projectId)}`
+                + `&actor=${encodeURIComponent(actor)}`,
+              { method: "DELETE" }, { key });
+            const body = await r.json();
+            if (!r.ok) { setNotice(String(body?.error ?? `API returned ${r.status}`)); return; }
+            await load();
+          })}
+          onRemoveStep={(stepKey) => void pressOn(`Remove ${stepKey}`, stepKey, async (key) => {
+            const r = await apiWrite(
+              `/api/delivery-workflows?project_id=${encodeURIComponent(projectId)}`
+                + `&step_key=${encodeURIComponent(stepKey)}`
+                + `&actor=${encodeURIComponent(actor)}`,
+              { method: "DELETE" }, { key },
+            );
+            const body = await r.json();
+            if (!r.ok) { setNotice(String(body?.error ?? `API returned ${r.status}`)); return; }
+            setNotice(`Removed ${stepKey}`);
+            await load();
+          })}
+          onStepsChanged={() => void load()}
         />
       ) : (
-        <>
-        {/* TWO WAYS TO AUTHOR THE SAME THING, SIDE BY SIDE.
-            Describing it is the faster path for most people and the one that reads as least
-            intimidating, so it is first — but it is offered AS A CHOICE rather than as the
-            answer, because an operator who knows the shape they want should not have to
-            negotiate it in prose. */}
-        <div className="dw-design-ways" data-testid="dw-design-ways">
-          <article className="dw-design-way">
-            <h3>Describe it</h3>
-            <p className="detail">
-              Tell BOSS the path you want in your own words. It drafts the workflow, names the
-              steps, and offers it back to create in one press — and it can edit or retire an
-              existing one the same way.
+        <div className="wf-runs-area">
+          <header className="wf-lib-head">
+            {tabs}
+            <span className="wf-lib-spacer" />
+            {runs.length && !composerOpen ? (
+              <button type="button" className="wf-btn wf-btn-primary" data-testid="dw-composer-open"
+                      title="Describe an outcome, choose a workflow, follow it"
+                      onClick={() => setComposerOpen(true)}>
+                + Start a project
+              </button>
+            ) : null}
+          </header>
+          {composerOpen || runs.length === 0 ? (
+            <div className="dw-composer-open">
+              {runs.length ? (
+                <button type="button" className="linklike dw-composer-hide"
+                        data-testid="dw-composer-hide"
+                        onClick={() => {
+                          setComposerOpen(false); setStartWith(undefined); setStartExample(null);
+                        }}>Hide</button>
+              ) : null}
+              <NewProjectComposer
+                projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
+                startWith={startWith} example={startExample}
+                // KEYED ON THE CHOICE, so Start on a different workflow rebuilds the composer
+                // rather than leaving it on the first one's inputs.
+                key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}`}
+                onStarted={(runId) => {
+                  if (runId) setOpenRun(runId);
+                  setComposerOpen(false);
+                  setStartWith(undefined);
+                  setStartExample(null);
+                  setNotice(runId ? `Started ${runId}.` : "Started.");
+                  void load();
+                }}
+              />
+            </div>
+          ) : null}
+          {awaited ? (
+            <p className="dw-awaiting detail" data-testid="dw-awaiting">
+              Starting <code>{awaited}</code>…
             </p>
-            <button type="button" className="cap-btn primary" data-testid="dw-workflow-agent"
-                    onClick={() => askBossAbout(
-                      null,
-                      "I want to work on this project's workflows. You can draft a new one from"
-                      + " a described sequence of steps, change an existing one, define a custom"
-                      + " step backed by a skill, or retire one. Start by telling me which"
-                      + " workflows this project has and what each is for.",
-                      "program_manager")}>
-              Design one with BOSS
-            </button>
-          </article>
-          <article className="dw-design-way">
-            <h3>Draw it</h3>
-            <p className="detail">
-              Place steps on the canvas below yourself. Start from nothing, or fork one of the
-              catalogue workflows and change what you need.
-            </p>
-          </article>
+          ) : null}
+          <RunsView
+            projectId={projectId}
+            runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
+            capabilities={capabilities} targets={targets} hosts={hosts}
+            actor={actor} roles={roles}
+            onOpenWorkflow={(key) => openWorkflow(key)}
+            // NOT THE WORKER'S PUMP. What an operator means by "Advance" is "is anything stuck
+            // that could move now?", which is a re-check of each unfinished run: the console key
+            // may do that, and it says what it put back.
+            onAdvance={() => void pressOn("Advance", null, async (key) => {
+              const open = runsToRecheckInBulk(runs);
+              let requeued = 0;
+              const failed: string[] = [];
+              for (const run of open) {
+                // One press, one key: the server derives each request's key from the press AND
+                // its body, so every run is re-checked once however often Advance is pressed.
+                const r = await post("recheck", { project_id: projectId, actor, run_id: run.id },
+                                     key);
+                if (!r.ok) failed.push(r.error ?? "refused");
+                else requeued += ((r.data as { requeued?: unknown[] })?.requeued ?? []).length;
+              }
+              const checked = `Checked ${open.length} live run${open.length === 1 ? "" : "s"}. `;
+              setNotice(failed.length ? `${checked}Check again — ${failed[0]}`
+                : !open.length ? "No run is live, so there is nothing to check. To revive a "
+                  + "failed run, open it and use Re-check on that run."
+                : requeued ? `${checked}Put ${requeued} step${requeued === 1 ? "" : "s"} `
+                  + "back in the queue; they run on the next tick."
+                : checked
+                  + "Nothing could move yet — each run is waiting on a person or on work in flight.");
+              await load();
+            })}
+            onRetryStep={(runId, stepId) =>
+              act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
+            // SKIP AND PROCEED. Going on without a failed step is a decision, so the step asks
+            // why and the reason is kept on the step and in the run's history.
+            onSkipStep={(runId, stepId, reason) =>
+              act("Skip", "skip_step", { run_id: runId, step_id: stepId, reason })}
+            onSetTarget={(runId, targetId) =>
+              act("Set target", "set_input", { run_id: runId, values: { target_id: targetId } })}
+            onPrepareTarget={(runId, hostId) =>
+              act("Prepare target", "prepare_target",
+                  { run_id: runId, host_id: hostId, environment: "staging" })}
+            onRunPreview={(buildRunId) => {
+              setPreviewStarting({ runId: buildRunId, at: Date.now() });
+              return act("Starting a preview", "start_preview", { run_id: buildRunId });
+            }}
+            previewStarting={previewStarting?.runId ?? ""}
+            // Both: the run's input changes AND the target list gains a row.
+            onBound={() => { void load(); void reloadTargets(); }}
+            onRecheck={(run) => act("Re-check", "recheck", { run_id: run.id })}
+            onStop={(run) => act("Stop", "stop", {
+              run_id: run.id, reason: "stopped by the operator from the console",
+            })}
+            onDelete={async (run) => {
+              // ASKED, BECAUSE IT CANNOT BE UNDONE.
+              if (!window.confirm(
+                `Remove this ${run.workflow_name} run for good?\n\n`
+                + "Its steps and history go with it. Anything it produced — files, issues, "
+                + "anything published — is untouched. This cannot be undone.")) return;
+              await pressOn("Remove", run.id, async (key) => {
+                setNotice(null);
+                const query = new URLSearchParams({
+                  project_id: projectId, actor, run_id: run.id,
+                });
+                const response = await apiWrite(`/api/delivery-workflows?${query}`,
+                                                { method: "DELETE" }, { key });
+                const body = await response.json().catch(() => ({}));
+                setNotice(response.ok
+                  ? "Removed."
+                  : `Remove — ${(body as { error?: string }).error ?? response.status}`);
+                if (response.ok) { setOpenRun(null); await load(); }
+              });
+            }}
+            onRerun={(run) => act("Re-run", "start", {
+              workflow_key: run.workflow_key, input: inputForRerun(run.input),
+              // THE CHOICE MADE FOR THIS RUN CARRIES OVER (`rerun_of`).
+              rerun_of: run.id,
+              // One fresh run per press; a retried or doubled request returns the same run.
+            }, `again:${run.id}`)}
+            // STOP, THEN START — as ONE request, checked before anything is stopped
+            // (`replaces_run`): a refusal leaves the original running and draws the checklist.
+            onStopAndRerun={async (run) => {
+              await act("Stop and run again", "start", {
+                workflow_key: run.workflow_key, input: inputForRerun(run.input),
+                replaces_run: run.id,
+                // A RUN IS REPLACED ONCE, however often this is pressed.
+                dedupe_key: `replace:${run.id}`,
+              });
+            }}
+            // BUILD ON WHAT THIS ALREADY FOUND. The server resolves the dossier from the run; the
+            // payload names the workflow (not only the class) because `project.new` is shared.
+            onBuildOnThis={(run) => act("Build on this research", "start", {
+              workflow_key: "standard_product_delivery",
+              work_class: "project.new", from_run: run.id,
+              input: inputForRerun(run.input),
+            })}
+          />
         </div>
-        <BuilderView
-          capabilities={capabilities} blocks={blocks} riskFloor={riskFloor}
-          installed={installed} projectId={projectId} actor={actor}
-          customSteps={customSteps} bindable={bindable}
-          justMade={justMade} onDismissJustMade={() => setJustMade(null)}
-          onManageSteps={() => setTab("steps")}
-          busy={busy} target={builderTarget} setTarget={setBuilderTarget}
-          stepRoles={stepRoles} holdings={holdings} mcpHoldings={mcpHoldings}
-          onGranted={loadHoldings}
-          onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
-          onCreate={async (name, spec, fromKey) => {
-            // TWO CALLS, AND THE ORDER MATTERS.
-            //
-            // When the steps came from somewhere, `fork` is what records where — which is the
-            // only thing that makes "Reset to the standard" mean anything later. Fork copies
-            // the SOURCE's steps though, so whatever the operator changed on the canvas is
-            // written straight after as the next version. Starting from nothing needs no
-            // lineage, so it is a plain create.
-            const result = fromKey
-              ? await act(`Create ${name}`, "fork", { workflow_key: fromKey, new_name: name })
-              : await act(`Create ${name}`, "create", { name });
-            if (!result.ok) return;
-            const created = (result.data as { definition?: { id: string } })?.definition;
-            if (!created?.id) return;
-
-            const steps = (spec as { steps?: unknown[] })?.steps ?? [];
-            if (steps.length) {
-              // Silent on a no-op: forking already stored these exact steps, and the runtime
-              // answers an identical spec with "unchanged" rather than a new version.
-              await act(`Save ${name}`, "save", { definition_id: created.id, spec });
-            }
-            setBuilderTarget(created.id);
-            setJustMade({
-              id: created.id, name,
-              from: fromKey
-                ? installed.find((i) => i.workflow_key === fromKey)?.name
-                : undefined,
-            });
-          }}
-        />
-        </>
       )}
     </div>
   );
@@ -1786,814 +1302,6 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
   return out;
 }
 
-/** A repository this project can build in, from its registry. */
-type Repo = { id: string; full_name: string; role?: string | null; default_branch?: string };
-
-/** What the wizard has collected so far. One object so a Back button costs nothing. */
-export type NewProjectDraft = {
-  title: string;
-  directive: string;
-  audience: string;
-  criteria: string[];
-  workflowKey: string;
-  repository: string;
-  links: string[];
-  /** Who will be on it. Empty means "whatever BOSS seeds" — see the wizard's agents step. */
-  agents: string[];
-  /** What THIS workflow declared it needs — a video to fetch, a clip to trim, a channel to
-   *  publish to. Keyed by field name; only filled-in values are sent. */
-  inputs: Record<string, string>;
-};
-
-const EMPTY_DRAFT: NewProjectDraft = {
-  title: "", directive: "", audience: "", criteria: [""],
-  workflowKey: "", repository: "", links: [], agents: [], inputs: {},
-};
-
-const STEPS = ["What you are building", "How it gets built", "Where it lives", "Review"] as const;
-
-/** The brief, assembled the way the pipeline reads best.
- *
- * Not decoration. A one-line directive produces a panel arguing about one line: BOSS's own
- * sample briefs are written as who-it-is-for plus what-it-does plus criteria, because that is
- * what a spec review can actually review. The wizard collects the parts and joins them here,
- * so the operator writes prose and the pipeline receives structure.
- */
-export function briefFrom(draft: NewProjectDraft): string {
-  const parts = [draft.directive.trim()];
-  if (draft.audience.trim()) parts.push(`Who it is for: ${draft.audience.trim()}`);
-  return parts.filter(Boolean).join("\n");
-}
-
-/** Criteria worth sending: blank rows are UI, not requirements. */
-export function criteriaFrom(draft: NewProjectDraft): string[] {
-  return draft.criteria.map((c) => c.trim()).filter(Boolean);
-}
-
-/** Links worth sending, and only ones an agent could actually open. */
-export function linksFrom(draft: NewProjectDraft): string[] {
-  return draft.links
-    .map((l) => l.trim())
-    .filter((l) => /^https?:\/\//i.test(l));
-}
-
-/**
- * What the repository step says about where the code goes.
- *
- * NO PLATFORM DEFAULT IS PROMISED. With nothing registered this said "the platform default is
- * used" — but the API pre-selects that default whenever one exists, so reaching this branch
- * means there is none. Community has none at all, and the build then deadlettered with "No
- * repository registered for project …" after the panel had already run. The form says what is
- * true: builds need a connected GitHub repository, and where to connect one.
- */
-export function repositoryHint(
-  suggested: { name: string; source: string } | null, repoCount: number,
-): { text: string; needsConnection: boolean } {
-  if (suggested) {
-    return {
-      text: ` Pre-selected: ${suggested.name}${
-        suggested.source === "registry_primary" ? " — this project's primary." : "."}`,
-      needsConnection: false,
-    };
-  }
-  if (repoCount > 0) {
-    return {
-      text: " This project has more than one repository and none is primary, so choose one below.",
-      needsConnection: false,
-    };
-  }
-  return {
-    text: " This project has no repository connected yet, and a build needs one: BOSS opens "
-      + "its pull request in a GitHub repository you connect. The panel and PRD still run "
-      + "without one; the build step stops until a repository is connected.",
-    needsConnection: true,
-  };
-}
-
-/** What stops the operator moving on, said as the thing to do rather than as an error. */
-export function blockingReason(
-  step: number, draft: NewProjectDraft, declaresInputs = false,
-): string {
-  if (step === 0) {
-    // A WORKFLOW THAT DECLARES ITS OWN INPUTS DOES NOT NEED A BRIEF.
-    //
-    // This demand exists because the catalogue's paths convene a PANEL that argues from the
-    // text, and a thin brief produces a thin spec. A workflow that asks for a video link and
-    // editing instructions convenes nothing: its steps read the fields it declared, and the
-    // real instruction is one of them. Demanding twenty characters of prose as well is asking
-    // the operator to write a brief nobody reads, to satisfy a check meant for a different
-    // kind of work.
-    if (declaresInputs) return "";
-    if (draft.directive.trim().length < 20) {
-      return "Describe what you want built — a sentence or two, not a title. "
-           + "The panel argues from this text, so a thin brief produces a thin spec.";
-    }
-  }
-  return "";
-}
-
-/**
- * STARTING WORK, WHERE THE WORK IS WATCHED.
- *
- * "New project" lived in Factory because Factory was where projects were listed. Now the
- * workflow drives — the press starts a run, and the run convenes the panel, waits for the
- * approval, builds, previews and asks before it deploys — so the page that shows those steps
- * is the page that should start them.
- *
- * AND IT IS A WIZARD, NOT A BOX.
- *
- * It was one textarea and a workflow dropdown. Everything else a build needs — which repository
- * the code goes in, what "done" means, anything the builder should read first — was either
- * defaulted silently or not asked at all, and the first chance to correct any of it was the
- * spec review, after a panel had already been convened on a guess. Starting a project is the
- * one moment where a minute of the operator's attention is worth more than any later
- * intervention, and it was the moment the console asked for the least.
- *
- * Four steps, each of which can be skipped by pressing on: nothing here is required except the
- * description, because a wizard that demands ten answers is a wizard people route around.
- */
-/** The inputs the composer draws for a workflow: what it declared, less what the wizard's own
- *  steps already collect for a catalogue template (the brief, its name, the repository...). A
- *  workflow somebody made keeps every field it declared — its `title` may mean a YouTube title,
- *  not the run's name. */
-export function composerFields(schema: unknown, isCatalogue: boolean) {
-  return workflowInputFields(schema).filter((f) => !(isCatalogue && WIZARD_COLLECTS.has(f.name)));
-}
-
-function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted, startWith,
-                             example }: {
-  projectId: string; actor: string;
-  workflows: Installed[];
-  catalogue: CatalogueEntry[];
-  onStarted: (runId: string | null) => void;
-  /** A workflow the operator asked to start, chosen already. Opens on the step that collects
-   *  what that workflow declared it needs, because they have already made the path decision. */
-  startWith?: string;
-  /** "Try an example": the template's own example brief, filled in for the operator to read
-   *  and change — never started unseen. */
-  example?: { title?: string; directive?: string } | null;
-}) {
-  // A CATALOGUE TEMPLATE OPENS ON ITS BRIEF. Its directive is collected on the first step, and
-  // opening on the path step (right for a workflow whose inputs are all its own) put the one
-  // required answer behind a Back button.
-  const [step, setStep] = useState(() => {
-    if (!startWith) return 0;
-    const isCatalogue = catalogue.some((c) => c.key === startWith);
-    const schema = workflows.find((w) => w.workflow_key === startWith)?.input_schema;
-    return isCatalogue || !composerFields(schema, isCatalogue).length ? 0 : 1;
-  });
-  const [draft, setDraft] = useState<NewProjectDraft>(
-    startWith ? { ...EMPTY_DRAFT, workflowKey: startWith,
-                  title: example?.title ?? "", directive: example?.directive ?? "" }
-              : EMPTY_DRAFT);
-  /** The missing needs the operator chose to start without — sent as `start_anyway`. */
-  const [startAnyway, setStartAnyway] = useState<string[]>([]);
-  /** The checklist from a refused start, when the path was "this project's usual path" and
-   *  could not be asked about beforehand. */
-  const [refusal, setRefusal] = useState<Readiness | null>(null);
-  // WHO WILL BE ON IT. Read from the API rather than guessed here: start_run seeds from
-  // STAGE_ROLES plus the chosen workflow's approver roles, and a second copy of that rule in
-  // the console would drift from the one that actually runs.
-  const [defaultAgents, setDefaultAgents] = useState<string[]>([]);
-  const [allRoles, setAllRoles] = useState<Array<{ role_key: string;
-                                                   display_name?: string | null }>>([]);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/project-agents?project_id=${encodeURIComponent(projectId)}&defaults=1`
-          + (draft.workflowKey ? `&workflow_key=${encodeURIComponent(draft.workflowKey)}` : ""),
-          { cache: "no-store" });
-        if (r.ok && alive) setDefaultAgents(((await r.json())?.default_roles ?? []) as string[]);
-      } catch { /* the wizard still starts the run; BOSS seeds them either way */ }
-    })();
-    return () => { alive = false; };
-  }, [projectId, draft.workflowKey]);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const r = await fetch(`/api/agent?view=roles&project_id=${encodeURIComponent(projectId)}`,
-                              { cache: "no-store" });
-        if (r.ok && alive) setAllRoles(((await r.json())?.items ?? []) as typeof allRoles);
-      } catch { /* the picker is empty; the defaults still show */ }
-    })();
-    return () => { alive = false; };
-  }, [projectId]);
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [suggested, setSuggested] = useState<{ name: string; source: string } | null>(null);
-  const repoHint = repositoryHint(suggested, repos.length);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const set = <K extends keyof NewProjectDraft>(key: K, value: NewProjectDraft[K]) =>
-    setDraft((d) => ({ ...d, [key]: value }));
-
-  // WHERE THE CODE GOES, ANSWERED BEFORE IT IS ASKED.
-  //
-  // The project's registry knows its repositories and which one is primary; nothing over HTTP
-  // could read it, so this form could not offer them and every build went to the deployment's
-  // global default. Loaded on mount so the field arrives filled in — the operator confirms a
-  // real answer instead of composing one.
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      const r = await get<{ repositories: Repo[]; suggested: string; suggested_source: string }>(
-        "repositories", projectId);
-      // A project with no registry is a normal state, not an error to surface: the repository
-      // step says a build needs one and where to connect it (see repositoryHint).
-      if (!alive || !r || "error" in r) return;
-      setRepos(r.repositories ?? []);
-      if (r.suggested) setSuggested({ name: r.suggested, source: r.suggested_source });
-    })();
-    return () => { alive = false; };
-  }, [projectId]);
-
-  /** The catalogue entry behind an installed workflow, for its description and gates. */
-  const describe = (key: string): CatalogueEntry | undefined =>
-    catalogue.find((c) => c.key === key);
-
-  // WHAT THE CHOSEN WORKFLOW WILL ASK FOR. Read from the installed definition rather than
-  // hardcoded: a custom workflow declares its own, and the form has to draw whatever that is.
-  const selectedWorkflowSchema = workflows.find(
-    (w) => w.workflow_key === draft.workflowKey)?.input_schema;
-  const selectedIsCatalogue = !!describe(draft.workflowKey);
-  const declaredInputs = composerFields(selectedWorkflowSchema, selectedIsCatalogue);
-
-  // WHAT WILL ACTUALLY BE SENT, worked out once and used for the guard, the review and the
-  // start — three places that disagreed. The operator's directive stands in for a single blank
-  // prose input rather than being asked for twice; see `inputsWithTheDirective`.
-  const inputsToSend = selectedIsCatalogue
-    ? suppliedInputs(declaredInputs, draft.inputs)
-    : inputsWithTheDirective(declaredInputs, draft.inputs, draft.directive);
-  const stillBlank = missingRequired(declaredInputs, inputsToSend);
-
-  // CAN IT RUN HERE. Asked as soon as the path is known, so what is missing is on screen
-  // before Start rather than in a run that fails at its last step.
-  const asked = useWorkflowReadiness(projectId, draft.workflowKey, inputsToSend);
-  const readiness = asked ?? refusal;
-  const notReady = unaccepted(readiness, startAnyway);
-
-  // `??` WAS WRONG HERE AND IT COST A RUN. `blockingReason` returns "" for "nothing is
-  // blocking", and "" is neither null nor undefined, so the right-hand side never ran and this
-  // whole check was dead code: a required input left blank sailed past the form and was refused
-  // by the runtime instead, as `WorkflowValidationError: this workflow needs 1 input(s) it was
-  // not given: instructions` under a button that had looked perfectly ready to press.
-  // A catalogue template's brief IS its declared directive, collected on step 0 — so the
-  // twenty-character rule applies to it like any software brief.
-  // WHAT STOPS MOVING ON is only this step's own question. A required field drawn on a later
-  // step (Deprecation / Sunset's "Who to tell") must not disable Next on the step before it —
-  // that is a form you cannot get to the end of. It still blocks Start, below.
-  const stepBlocked = blockingReason(step, draft,
-                                     declaredInputs.length > 0 && !selectedIsCatalogue);
-  const blocked = stepBlocked
-    // A required input still blank blocks the start, and says which one — the run would be
-    // refused by the runtime anyway, and being told at the form is the difference between a
-    // correction and a failed run.
-    || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "")
-    // So does something the project lacks, unless the operator chose to start without it.
-    || (notReady.length
-        ? `Not ready here yet: ${notReady.map((m) => m.label).join("; ")} — see below.`
-        : "");
-
-  const start = async () => {
-    // WHAT THIS RUN IS CALLED, when the operator wrote no brief.
-    //
-    // A workflow that declares its own inputs is started from those, and `briefFrom` returns
-    // "" — which made the button silently do nothing, the worst possible response to a press.
-    // The run still needs something readable in the runs list, so it is named after the
-    // workflow and the instruction the operator actually gave.
-    const chosen = workflows.find((w) => w.workflow_key === draft.workflowKey);
-    const declared = declaredInputs.length > 0;
-    const supplied = String(draft.inputs.instructions ?? "").trim();
-    const text = briefFrom(draft).trim()
-      || (declared
-          ? [chosen?.name ?? draft.workflowKey, supplied].filter(Boolean).join(": ")
-          : "");
-    if (!text || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const title = draft.title.trim()
-        || (text.length > 72 ? `${text.slice(0, 69)}…` : text);
-      const criteria = criteriaFrom(draft);
-      const links = linksFrom(draft);
-      const r = await post("start", {
-        project_id: projectId, actor,
-        ...(draft.workflowKey
-            ? { workflow_key: draft.workflowKey }
-            : { work_class: "project.new" }),
-        input: {
-          title, directive: text,
-          // Sent only when the operator gave one. An empty string here would read as a
-          // deliberate choice of "" further down and beat the project's own default.
-          ...(criteria.length ? { acceptance_criteria: criteria } : {}),
-          ...(links.length ? { reference_links: links } : {}),
-          ...(draft.repository ? { repository: draft.repository } : {}),
-          // WHAT THIS WORKFLOW DECLARED IT NEEDS. from_input resolves any field name, so a
-          // step binding `video_url` reads it straight from here. Only filled-in values are
-          // sent: an empty string would read further down as a deliberate choice of empty.
-          ...inputsToSend,
-        },
-        ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
-      });
-      if (!r.ok) {
-        setError(r.error ?? "Could not start it.");
-        // Refused for what the project lacks: draw the list where the operator is looking.
-        if ("readiness" in r && r.readiness) setRefusal(r.readiness);
-        return;
-      }
-      const run = (r.data as { run?: { id?: string }; id?: string } | undefined);
-      // WHO IS ON IT, recorded as a CHOICE — but only when it differs from what start_run
-      // already seeded. Writing an identical list back as `operator` would claim a decision
-      // nobody made, and the panel distinguishes the two on purpose.
-      const chosen = draft.agents;
-      const sameAsDefault = chosen.length === defaultAgents.length
-        && chosen.every((a) => defaultAgents.includes(a));
-      if (chosen.length && !sameAsDefault) {
-        try {
-          await apiWrite("/api/project-agents", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ project_id: projectId, app: title, actor,
-                                   role_keys: chosen }),
-          });
-          // Anyone the operator took OFF the default list has to come off for real, or the
-          // wizard would show a choice the run does not honour.
-          for (const gone of defaultAgents.filter((d) => !chosen.includes(d))) {
-            await apiWrite("/api/project-agents", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ project_id: projectId, app: title, actor,
-                                     action: "unassign", role_key: gone }),
-            });
-          }
-        } catch { /* the run is started and seeded; the assignment can be fixed on the run */ }
-      }
-      setDraft(EMPTY_DRAFT);
-      setStep(0);
-      onStarted(String(run?.run?.id ?? run?.id ?? "") || null);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="dw-new dw-wizard" data-testid="dw-new-project">
-      <div className="dw-new-head">
-        <h3>New project</h3>
-        {/* "you approve" was the PRD approval, which is automatic by default — the step now
-            says so, and so does this. The person's decision is the release. */}
-        <p className="detail">
-          A panel specs it, the spec is approved automatically, then it builds, previews, and
-          asks you before it deploys.
-        </p>
-      </div>
-
-      {/* WHERE YOU ARE AND WHAT IS LEFT. Four unlabelled dots would be decoration; the names
-          are what let somebody decide whether to keep going or press Start now. */}
-      <ol className="dw-wiz-rail" data-testid="dw-wiz-rail">
-        {STEPS.map((label, i) => (
-          <li key={label} data-state={i === step ? "current" : i < step ? "done" : "todo"}>
-            <button type="button" className="dw-wiz-crumb"
-                    data-testid={`dw-wiz-crumb-${i}`}
-                    // Backwards freely; forwards only over ground already covered, so the
-                    // rail cannot be used to skip the one question that is required.
-                    disabled={i > step}
-                    onClick={() => setStep(i)}>
-              <span className="dw-wiz-num" aria-hidden>{i < step ? "✓" : i + 1}</span>
-              <span>{label}</span>
-            </button>
-          </li>
-        ))}
-      </ol>
-
-      {step === 0 ? (
-        <div className="dw-wiz-body" data-testid="dw-wiz-step-0">
-          <div className="dw-field">
-            <span className="dw-field-label"><label htmlFor="dw-new-directive">What should it do?</label> <HelpTip
-              label="Project description"
-              text="The panel and builder use your words. Describe what the product does and what a person can accomplish with it in two or three sentences." /></span>
-            <textarea
-              id="dw-new-directive"
-              className="dw-new-input" rows={5} value={draft.directive}
-              data-testid="dw-new-directive"
-              placeholder={"A shift-swap board where staff can offer a shift they cannot work "
-                + "and colleagues can claim it, with the manager approving the swap."}
-              onChange={(e) => set("directive", e.target.value)}
-              onKeyDown={(e) => {
-                // ⌘/Ctrl+Enter starts with the defaults, as it did before the wizard and as
-                // every other composer in this console does. The remaining steps all have a
-                // defensible default, so the shortcut is not a way of skipping a decision —
-                // it is the same "Start with defaults" the footer offers, from the keyboard.
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  if (!blocked) void start();
-                }
-              }}
-            />
-          </div>
-
-          <div className="dw-field">
-            <span className="dw-field-label"><label htmlFor="dw-new-audience">Who is it for?</label> <em>optional</em> <HelpTip
-              label="Intended users"
-              text="Describe the people and setting. A duty manager using a phone mid-shift needs a different interface from office staff." /></span>
-            <input id="dw-new-audience" className="input" value={draft.audience} data-testid="dw-new-audience"
-                   placeholder="a duty manager on a phone, mid-shift"
-                   onChange={(e) => set("audience", e.target.value)} />
-          </div>
-
-          <fieldset className="dw-field">
-            <legend className="dw-field-label">
-              How will you know it works? <em>optional</em> <HelpTip
-                label="Acceptance criteria"
-                text="These become checks for the build. Leave them blank and the panel will propose criteria for your approval." />
-            </legend>
-            <span className="dw-field-hint">These become acceptance criteria.</span>
-            {draft.criteria.map((c, i) => (
-              <div className="dw-crit-row" key={i}>
-                <input className="input" value={c} data-testid={`dw-new-criterion-${i}`}
-                       placeholder={i === 0
-                         ? "a member of staff can offer a shift in under 30 seconds"
-                         : "another thing that must be true"}
-                       onChange={(e) => {
-                         const next = [...draft.criteria];
-                         next[i] = e.target.value;
-                         set("criteria", next);
-                       }} />
-                {draft.criteria.length > 1 ? (
-                  <button type="button" className="cap-btn dw-crit-drop"
-                          aria-label="Remove this criterion"
-                          onClick={() => set("criteria",
-                            draft.criteria.filter((_, j) => j !== i))}>×</button>
-                ) : null}
-              </div>
-            ))}
-            <button type="button" className="linklike" data-testid="dw-new-criterion-add"
-                    onClick={() => set("criteria", [...draft.criteria, ""])}>
-              + another
-            </button>
-          </fieldset>
-        </div>
-      ) : null}
-
-      {step === 1 ? (
-        <div className="dw-wiz-body" data-testid="dw-wiz-step-1">
-          <span className="dw-field-label">Which path should it take? <HelpTip
-            label="Workflow paths"
-            text="Every path produces software you can review. Paths differ in the review, evidence, and approval gates along the way." /></span>
-          <div className="dw-wiz-choices" role="radiogroup" aria-label="Workflow">
-            <button type="button" role="radio" className="dw-wiz-choice"
-                    aria-checked={draft.workflowKey === ""}
-                    data-selected={draft.workflowKey === ""}
-                    data-testid="dw-new-workflow-default"
-                    onClick={() => set("workflowKey", "")}>
-              <span className="dw-wiz-choice-name">This project&apos;s usual path</span>
-              <span className="detail">
-                Whatever this project maps for new work. The same resolution every other entry
-                point uses.
-              </span>
-            </button>
-            {workflows.map((w) => {
-              const entry = describe(w.workflow_key);
-              return (
-                <button type="button" role="radio" className="dw-wiz-choice" key={w.id}
-                        aria-checked={draft.workflowKey === w.workflow_key}
-                        data-selected={draft.workflowKey === w.workflow_key}
-                        data-testid={`dw-new-workflow-${w.workflow_key}`}
-                        onClick={() => set("workflowKey", w.workflow_key)}>
-                  <span className="dw-wiz-choice-name">{w.name}</span>
-                  {entry ? <span className="detail">{entry.description}</span> : null}
-                  {entry ? (
-                    <span className="dw-wiz-choice-meta detail">
-                      {entry.step_count} steps
-                      {entry.gates?.length
-                        ? ` · you approve: ${entry.gates.join(", ")}`
-                        : " · no approval gates"}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* WHAT THIS WORKFLOW NEEDS SUPPLIED.
-              Rendered FROM the chosen workflow's declaration, not hardcoded: a custom workflow
-              that fetches a video, trims a clip and publishes to a channel declares those, and
-              until now was startable only by a caller that already knew the field names.
-              Nothing renders for a workflow that declares none; for a catalogue template only
-              what the wizard's own steps do not already ask (who to tell) is drawn here. */}
-          {declaredInputs.length ? (
-            <div className="dw-wiz-inputs" data-testid="dw-workflow-inputs">
-              <span className="dw-field-label">What this path needs <HelpTip
-                label="Workflow inputs"
-                text="These values are read when the run starts. Put lasting choices such as a channel, icon, or house style in the skill or agent instead." /></span>
-              {declaredInputs.map((field) => (
-                <div className="dw-wiz-input" key={field.name}>
-                  <span className="dw-field-label">
-                    <label htmlFor={`dw-workflow-input-${field.name}`}>{field.label}</label>
-                    {field.required ? <em className="dw-req" aria-hidden> required</em> : null}
-                    {field.help ? <HelpTip label={field.label} text={field.help} /> : null}
-                  </span>
-                  {field.help ? <span className="dw-field-hint">{field.help}</span> : null}
-                  {/* Multi-line instructions need enough room to review the complete value. */}
-                  {field.kind === "multiline" ? (
-                    <textarea
-                      id={`dw-workflow-input-${field.name}`}
-                      rows={3}
-                      value={draft.inputs[field.name] ?? ""}
-                      placeholder={field.example}
-                      data-testid={`dw-workflow-input-${field.name}`}
-                      aria-required={field.required || undefined}
-                      onChange={(e) =>
-                        setDraft((d) => ({ ...d,
-                          inputs: { ...d.inputs, [field.name]: e.target.value } }))}
-                    />
-                  ) : (
-                    <input
-                      id={`dw-workflow-input-${field.name}`}
-                      type={field.kind === "number" ? "number" : "text"}
-                      inputMode={field.kind === "number" ? "numeric" : undefined}
-                      value={draft.inputs[field.name] ?? ""}
-                      placeholder={field.example}
-                      data-testid={`dw-workflow-input-${field.name}`}
-                      aria-required={field.required || undefined}
-                      onChange={(e) =>
-                        setDraft((d) => ({ ...d,
-                          inputs: { ...d.inputs, [field.name]: e.target.value } }))}
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          {/* WHO WILL BE ON IT. The wizard collected a title, a directive, criteria, a workflow
-              and a repository, and never once mentioned agents — so a project was created with
-              no say in who would build it. The defaults are shown pre-selected rather than as
-              an empty box: they are what BOSS seeds anyway, and an empty picker would imply
-              nobody is coming. */}
-          <span className="dw-field-label dw-agents-label">Who works on it</span>
-          <span className="dw-field-hint">
-            These are the agents that would run this path anyway. Take one off and it may not
-            sign off this app&rsquo;s gates; add one and it may.
-          </span>
-          <div className="aot-list" data-testid="dw-wiz-agents">
-            {(draft.agents.length ? draft.agents : defaultAgents).map((key) => (
-              <AgentChip key={key} roleKey={key}
-                         label={allRoles.find((r) => r.role_key === key)?.display_name
-                                || key.replace(/_/g, " ")}>
-                <button type="button" className="aot-x" aria-label={`Remove ${key}`}
-                        onClick={() => set("agents",
-                          (draft.agents.length ? draft.agents : defaultAgents)
-                            .filter((k) => k !== key))}>✕</button>
-              </AgentChip>
-            ))}
-            <select className="mr-select aot-pick" value="" data-testid="dw-wiz-agent-add"
-                    onChange={(e) => {
-                      if (!e.target.value) return;
-                      const now = draft.agents.length ? draft.agents : defaultAgents;
-                      set("agents", [...now, e.target.value]);
-                    }}>
-              <option value="">+ Add an agent…</option>
-              {allRoles
-                .filter((r) => !(draft.agents.length ? draft.agents : defaultAgents)
-                  .includes(r.role_key))
-                .map((r) => (
-                  <option key={r.role_key} value={r.role_key}>
-                    {r.display_name || r.role_key}
-                  </option>
-                ))}
-            </select>
-          </div>
-          {draft.agents.length ? (
-            <span className="dw-field-hint">
-              Changed from the default.{" "}
-              <button type="button" className="dw-linkish"
-                      onClick={() => set("agents", [])}>Put it back</button>
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {step === 2 ? (
-        <div className="dw-wiz-body" data-testid="dw-wiz-step-2">
-          <span className="dw-field-label">Which repository?</span>
-          <span className="dw-field-hint" data-testid="dw-new-repo-hint">
-            Where the branch and the pull request go.
-            {repoHint.text}
-            {repoHint.needsConnection ? (
-              <>
-                {" "}Connect one in{" "}
-                <a data-testid="dw-new-repo-connect"
-                   href={consoleHref(
-                     typeof window !== "undefined" ? window.location.search : "",
-                     { area: "setup" })}>
-                  Settings → Repo and model → Repository
-                </a>
-                {" "}(a fine-grained token with Contents and Pull requests: read and write),
-                then come back.
-              </>
-            ) : null}
-          </span>
-          <div className="dw-wiz-choices" role="radiogroup" aria-label="Repository">
-            <button type="button" role="radio" className="dw-wiz-choice"
-                    aria-checked={draft.repository === ""}
-                    data-selected={draft.repository === ""}
-                    data-testid="dw-new-repo-default"
-                    onClick={() => set("repository", "")}>
-              <span className="dw-wiz-choice-name">
-                {suggested ? suggested.name
-                  : repoHint.needsConnection ? "No repository yet" : "The project default"}
-              </span>
-              <span className="detail">
-                {suggested
-                  ? "What this project resolves to today. Leave it unless you mean elsewhere."
-                  : repoHint.needsConnection
-                    ? "Resolved when the build starts; connect a repository before then."
-                    : "Resolved when the build starts."}
-              </span>
-            </button>
-            {repos
-              .filter((r) => r.full_name !== suggested?.name)
-              .map((r) => (
-                <button type="button" role="radio" className="dw-wiz-choice" key={r.id}
-                        aria-checked={draft.repository === r.full_name}
-                        data-selected={draft.repository === r.full_name}
-                        data-testid={`dw-new-repo-${r.full_name}`}
-                        onClick={() => set("repository", r.full_name)}>
-                  <span className="dw-wiz-choice-name">{r.full_name}</span>
-                  <span className="detail">
-                    {r.role ? `${r.role} · ` : ""}branch {r.default_branch || "main"}
-                  </span>
-                </button>
-              ))}
-          </div>
-
-          <fieldset className="dw-field">
-            <legend className="dw-field-label">
-              Anything it should read first? <em>optional</em>
-            </legend>
-            <span className="dw-field-hint">
-              Links the agents must open before designing or writing — an API doc, a repo whose
-              conventions to follow, a design. They are fetched and read, not indexed or
-              searched, so they have to be reachable without a login. A link that cannot be
-              opened is reported, never guessed at.
-            </span>
-            {[...draft.links, ""].map((link, i) => (
-              <input className="input dw-link-row" key={i} value={link}
-                     data-testid={`dw-new-link-${i}`}
-                     placeholder="https://docs.example.com/api"
-                     onChange={(e) => {
-                       const next = [...draft.links];
-                       if (i < next.length) next[i] = e.target.value;
-                       else next.push(e.target.value);
-                       set("links", next.filter((l, j) => l.trim() || j < next.length - 1));
-                     }} />
-            ))}
-          </fieldset>
-        </div>
-      ) : null}
-
-      {step === 3 ? (
-        <div className="dw-wiz-body" data-testid="dw-wiz-step-3">
-          {/* WHAT IS ABOUT TO HAPPEN, IN THE ORDER IT WILL HAPPEN. A confirmation screen that
-              only repeats the form is a second form. This says what the press DOES, including
-              the parts that cost money and the parts that will stop and wait for a person. */}
-          <dl className="dw-wiz-review">
-            <dt>Building</dt>
-            <dd data-testid="dw-review-directive">{briefFrom(draft) || "—"}</dd>
-            <dt>Path</dt>
-            <dd data-testid="dw-review-workflow">
-              {draft.workflowKey
-                ? (workflows.find((w) => w.workflow_key === draft.workflowKey)?.name
-                   ?? draft.workflowKey)
-                : "This project's usual path"}
-            </dd>
-            <dt>Repository</dt>
-            <dd data-testid="dw-review-repo">
-              {draft.repository || suggested?.name || "the project default"}
-            </dd>
-            {/* WHO RUNS IT, on the screen that says what the press does.
-                It is chosen on step 2 and was reported twice as missing — a thing on a screen
-                you have to click through to is a thing nobody finds. Repeated here, where
-                everything about to happen is confirmed, and editable in place. */}
-            <dt>Agents</dt>
-            <dd data-testid="dw-review-agents">
-              <div className="aot-list">
-                {(draft.agents.length ? draft.agents : defaultAgents).map((key) => (
-                  <AgentChip key={key} roleKey={key}
-                             label={allRoles.find((r) => r.role_key === key)?.display_name
-                                    || key.replace(/_/g, " ")}
-                             note={draft.agents.length ? "chosen" : "by default"}>
-                    <button type="button" className="aot-x" aria-label={`Remove ${key}`}
-                            onClick={() => set("agents",
-                              (draft.agents.length ? draft.agents : defaultAgents)
-                                .filter((k) => k !== key))}>✕</button>
-                  </AgentChip>
-                ))}
-                <select className="mr-select aot-pick" value=""
-                        data-testid="dw-review-agent-add"
-                        onChange={(e) => {
-                          if (!e.target.value) return;
-                          const now = draft.agents.length ? draft.agents : defaultAgents;
-                          set("agents", [...now, e.target.value]);
-                        }}>
-                  <option value="">+ Add an agent…</option>
-                  {allRoles
-                    .filter((r) => !(draft.agents.length ? draft.agents : defaultAgents)
-                      .includes(r.role_key))
-                    .map((r) => (
-                      <option key={r.role_key} value={r.role_key}>
-                        {r.display_name || r.role_key}
-                      </option>
-                    ))}
-                </select>
-              </div>
-            </dd>
-            {/* WHAT THE WORKFLOW WILL BE GIVEN. The review listed the brief, the path, the
-                repository and the agents, and said nothing about the fields the run is
-                actually started from — so an operator whose directive is standing in for the
-                instruction could not see that it was. */}
-            {declaredInputs.length ? (
-              <>
-                <dt>It will be given</dt>
-                <dd data-testid="dw-review-inputs">
-                  <ul>
-                    {declaredInputs
-                      .filter((f) => inputsToSend[f.name])
-                      .map((f) => (
-                        <li key={f.name}>
-                          <span className="detail">{f.label}: </span>
-                          {inputsToSend[f.name]}
-                        </li>
-                      ))}
-                  </ul>
-                </dd>
-              </>
-            ) : null}
-            {criteriaFrom(draft).length ? (
-              <>
-                <dt>Done when</dt>
-                <dd data-testid="dw-review-criteria">
-                  <ul>{criteriaFrom(draft).map((c) => <li key={c}>{c}</li>)}</ul>
-                </dd>
-              </>
-            ) : null}
-            {linksFrom(draft).length ? (
-              <>
-                <dt>Reads first</dt>
-                <dd data-testid="dw-review-links">
-                  <ul>{linksFrom(draft).map((l) => <li key={l}><code>{l}</code></li>)}</ul>
-                </dd>
-              </>
-            ) : null}
-          </dl>
-          <p className="detail dw-wiz-warn">
-            Starting spends model budget: research, a panel and a build. It will stop and ask
-            you before it deploys anything.
-          </p>
-        </div>
-      ) : null}
-
-      <ReadinessPanel readiness={readiness} accepted={startAnyway} projectId={projectId}
-                      onAccept={setStartAnyway} />
-
-      {blocked ? <p className="dw-new-error" data-testid="dw-wiz-blocked">{blocked}</p> : null}
-
-      <div className="dw-wiz-foot">
-        {step > 0 ? (
-          <button type="button" className="cap-btn" data-testid="dw-wiz-back"
-                  onClick={() => setStep((n) => n - 1)}>Back</button>
-        ) : null}
-        <span className="dw-wiz-spacer" />
-        {/* START IS AVAILABLE FROM THE FIRST STEP. Everything after the description has a
-            defensible default, so making somebody walk four screens to accept four defaults
-            would be ceremony. The wizard is there for the operator who wants it. */}
-        {step < STEPS.length - 1 ? (
-          <>
-            <button type="button" className="linklike" data-testid="dw-wiz-start-now"
-                    disabled={busy || !!blocked}
-                    onClick={() => void start()}>
-              {busy ? "Starting…" : "Start with defaults"}
-            </button>
-            <button type="button" className="cap-btn primary" data-testid="dw-wiz-next"
-                    disabled={!!stepBlocked}
-                    onClick={() => setStep((n) => n + 1)}>Next</button>
-          </>
-        ) : (
-          <button type="button" className="cap-btn primary" data-testid="dw-new-start"
-                  disabled={busy || !!blocked}
-                  onClick={() => void start()}>
-            {busy ? "Starting…" : "Start the project"}
-          </button>
-        )}
-      </div>
-      {error ? <p className="dw-new-error" data-testid="dw-new-error">{error}</p> : null}
-    </section>
-  );
-}
-
 
 /**
  * The input a RE-RUN should start from.
@@ -2669,10 +1377,12 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                    onSetTarget, onPrepareTarget,
                    onRunPreview,
                    onBound, projectId, actor, roles,
-                   previewStarting,
+                   previewStarting, onOpenWorkflow,
                    targets, hosts }: {
   projectId: string;
   actor: string;
+  /** Open the workflow a run follows, in the editor. */
+  onOpenWorkflow?: (workflowKey: string) => void;
   /** Every agent this project has, for the "Agents on this" picker. */
   roles: Array<{ role_key: string; display_name?: string | null }>;
   runs: Run[];
@@ -2709,10 +1419,8 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   if (runs.length === 0) {
     return (
       <div className="dw-empty" data-testid="dw-no-runs">
-        <p>Nothing is running yet.</p>
-        <p className="detail">
-          Describe what you want built in the box above and press Build, or pick a workflow
-          from the Catalogue tab and start it.
+        <p title="Describe what you want above, or press Start on a workflow in the Library">
+          Nothing running yet
         </p>
       </div>
     );
@@ -2851,11 +1559,8 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                   : run.blocked_reason}
               </p>
             ) : null}
-            {/* The "Agents on this" panel is the rail's FIRST NODE now, not a block above it.
-                A panel over the chain is a thing you have to notice; a node in the chain is
-                where somebody reading the steps already is. */}
             {open ? (
-              <StepPath run={run} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
+              <StepPath run={run} onOpenWorkflow={onOpenWorkflow} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onSkipStep={(stepId, reason) => onSkipStep(run.id, stepId, reason)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
@@ -3013,11 +1718,13 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                    onStopAndRerun, onBuildOnThis, onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
-                   previewStarting, busy, actor, roles }: {
+                   previewStarting, busy, actor, roles, onOpenWorkflow }: {
   projectId: string;
   actor: string;
   roles: Array<{ role_key: string; display_name?: string | null }>;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
+  /** Open the workflow this run follows in the editor. */
+  onOpenWorkflow?: (workflowKey: string) => void;
   onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
   onSkipStep: (stepId: string, reason: string) => void;
   /** Stop a live run — the work it started, not only its bookkeeping. */
@@ -3065,13 +1772,9 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   const [picked, setPicked] = useState<string | null>(initial?.step_id ?? null);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
 
-  // WHERE THE CALLOUT POINTS.
-  //
-  // The rail wraps, so the picked step can be on either row and its position changes with the
-  // window. Measured from the DOM rather than computed from an index: a computed position is
-  // right until a label wraps to two lines or the rail reflows, and then it points at the
-  // wrong box while looking exactly as confident.
-  const railRef = useRef<HTMLDivElement | null>(null);
+  // WHERE THE CALLOUT POINTS. Measured from the DOM rather than computed from an index: the
+  // lane fits itself to the width, so a computed position is right until it is not.
+  const laneRef = useRef<HTMLDivElement | null>(null);
   const detailRef = useRef<HTMLDivElement | null>(null);
   // Drawn from the definition version this run ran, as the designer draws it (titles, custom
   // steps, agents, branches); from the run's own step list only until that has loaded.
@@ -3081,71 +1784,81 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
     [definition.palette, capabilities, roles]);
   const laneState = useMemo(() => Object.fromEntries(steps.map((s) => [s.step_id, laneStateOf(s)])), [steps]);
 
+  // WHO WORKS THIS RUN is a property of the app, not a stage of its delivery — so it is a chip
+  // on the run's bar, not a node in the lane the runtime never runs.
+  const [showAgents, setShowAgents] = useState(false);
+
   useEffect(() => {
     const place = () => {
-      const rail = railRef.current;
+      const lane = laneRef.current;
       const detail = detailRef.current;
-      if (!rail || !detail) return;
-      const node = rail.querySelector<HTMLElement>(
-        '.wf-node[data-selected="true"], [data-testid="dw-node-agents"][data-picked="true"]');
+      if (!lane || !detail || !picked) return;
+      const node = lane.querySelector<HTMLElement>(`[data-step-id="${CSS.escape(picked)}"]`)
+        ?? lane.querySelector<HTMLElement>('[data-selected="true"]');
       const panel = detail.querySelector<HTMLElement>(".dw-detail");
       if (!node || !panel) {
         detail.style.removeProperty("--dw-arrow-x");
         return;
       }
-      // MEASURED IN THE PANEL'S OWN COORDINATES. `offsetLeft` is relative to whichever
-      // ancestor happens to be positioned, which is not the panel — so the notch landed at an
-      // offset that looked plausible and pointed at the wrong step.
+      // MEASURED IN THE PANEL'S OWN COORDINATES, and never off its end: a notch hanging past
+      // the corner reads as a rendering bug rather than as a pointer.
       const box = node.getBoundingClientRect();
       const frame = panel.getBoundingClientRect();
       const centre = box.left + box.width / 2 - frame.left;
-      // Never off the end: a notch hanging past the panel's corner reads as a rendering bug
-      // rather than as a pointer. 18px keeps it clear of the rounded corner.
       const clamped = Math.max(18, Math.min(frame.width - 18, centre));
       detail.style.setProperty("--dw-arrow-x", `${Math.round(clamped)}px`);
     };
     place();
-    // The lane refits on resize and scrolls sideways inside itself; either moves the node.
-    const lane = railRef.current?.querySelector(".wf-lane-viewport");
+    // RE-MEASURED WHENEVER THE NODES MAY HAVE MOVED, not only when the window does. The notch
+    // was measured on a pick and a window resize, so it pointed at a stale x after the run's
+    // saved workflow replaced the fallback lane (branches drawn), after the Agents chip was
+    // toggled off (a fresh wrapper with no position), and after the lane refitted to a
+    // container that resized on its own (review of ws/ia, 2026-10-03). The dependencies cover
+    // the first two; the observers cover the lane reflowing for any reason.
     window.addEventListener("resize", place);
-    lane?.addEventListener("scroll", place, { passive: true });
+    const lane = laneRef.current;
+    // The lane also scrolls sideways inside itself, which moves the node without resizing it.
+    const viewport = lane?.querySelector(".wf-lane-viewport");
+    viewport?.addEventListener("scroll", place, { passive: true });
+    const detail = detailRef.current;
+    const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    const moved = typeof MutationObserver === "undefined" ? null : new MutationObserver(place);
+    if (lane) {
+      sized?.observe(lane);
+      moved?.observe(lane, { subtree: true, childList: true, attributes: true });
+    }
+    if (detail) sized?.observe(detail);
     return () => {
       window.removeEventListener("resize", place);
-      lane?.removeEventListener("scroll", place);
+      viewport?.removeEventListener("scroll", place);
+      sized?.disconnect();
+      moved?.disconnect();
     };
-  }, [picked, steps.length]);
-
-  // ASSIGNMENT IS STEP ONE, in the chain where it can be seen.
-  //
-  // It was a panel above the rail and the operator could not find it — "where when creating a
-  // new project do we have the option to assign the agents?" It is in the wizard's second
-  // screen, which is exactly the problem: a thing you have to go looking for.
-  //
-  // A UI NODE, NOT A CAPABILITY. Making it a real step would mean editing all twelve catalogue
-  // workflows, a new capability in the runtime, and a step that can execute, fail and block a
-  // run. Assignment is a property of the app, not a stage of its delivery — so the rail shows
-  // it first and the runtime never sees it. It carries no duration and no status badge,
-  // because it does not run.
-  const AGENTS_NODE = "__agents__";
-  const showAgents = picked === AGENTS_NODE;
+  }, [picked, steps.length, laneSpec, showAgents]);
 
   return (
     <div className="dw-path" data-testid="dw-path">
-      {/* THE SAME LANE THE DESIGNER DRAWS, in run mode: one row that never wraps, scrolling
-          inside itself, with each step named and drawn exactly as it is in the editor. Who is
-          on the run is a chip above it rather than a pseudo-step in the chain. */}
-      <div className="wf-run-path" ref={railRef}>
-        <div className="wf-run-head">
-          <button type="button" className="wf-chip wf-chip-btn" data-testid="dw-node-agents"
-                  aria-pressed={showAgents} data-picked={showAgents ? "true" : undefined}
-                  data-tip={terminal ? "Who ran each step" : "Who is on this run · auto-confirmed"}
-                  onClick={() => setPicked(showAgents ? (initial?.step_id ?? null) : AGENTS_NODE)}>
-            Agents
+      <div className="wf-run-bar">
+        <button type="button" className="wf-tag" aria-pressed={showAgents}
+                data-testid="dw-run-agents" title={terminal ? "Agents, as run" : "Agents on this run"}
+                onClick={() => setShowAgents((v) => !v)}>
+          Agents
+        </button>
+        {onOpenWorkflow ? (
+          <button type="button" className="wf-link" data-testid="dw-run-open-workflow"
+                  title={`${run.workflow_name} v${run.version}`}
+                  onClick={() => onOpenWorkflow(run.workflow_key)}>
+            Open workflow
           </button>
-        </div>
-        <FlowLane spec={laneSpec} palette={lanePalette} mode="run" runState={laneState}
-                  selection={showAgents ? null : current?.step_id ?? null}
-                  onSelect={(id) => { if (id) setPicked(id); }} label="Workflow steps" />
+        ) : null}
+      </div>
+      <div className="wf-run-lane" ref={laneRef} data-testid="dw-run-lane">
+        <FlowLane spec={laneSpec} palette={lanePalette} mode="run" label="Workflow steps"
+                  selection={showAgents ? null : picked} runState={laneState}
+                  onSelect={(id) => {
+                    // Only a step this run has: a branch it never took has nothing to show.
+                    if (id && steps.some((s) => s.step_id === id)) { setShowAgents(false); setPicked(id); }
+                  }} />
       </div>
       {showAgents ? (
         <AgentsOnThis projectId={projectId} actor={actor} roles={roles}
@@ -4657,1748 +3370,4 @@ function ChangeRecord({ documentId }: { documentId: string }) {
       ) : null}
     </details>
   );
-}
-
-/** WHAT THIS WORKFLOW WILL DO, above the steps that edit it.
- *
- *  Reported: "I want to see the workflow and its definition, what it will do, then trigger
- *  the run… we need to know what kind of results it will bring, any agents associated or any
- *  task associated — right now those info are missing. I also don't know how to customize a
- *  specific workflow step."
- *
- *  Every fact here already existed: the capability palette holds what a step does, what it
- *  produces, which agent captains it and what forces a gate; the stored bindings hold where
- *  each input comes from. Nothing joined them, so the operator's view of a workflow was four
- *  labels and four dropdowns.
- *
- *  Collapsed by default AFTER the first look would be wrong — this is the thing they came to
- *  read, so it is open, and the step editor below it is what they scroll to.
- */
-function WorkflowPlanPanel({ plan, onCustomize }: {
-  plan: WorkflowPlan;
-  /** Jump the editor to one step. "How do I customize a specific step" had no answer that
-   *  did not involve counting rows in a second list. */
-  onCustomize: (stepId: string) => void;
-}) {
-  if (!plan.published) {
-    return (
-      <section className="stack-card dw-plan" data-testid="dw-plan">
-        <p className="detail">{plan.summary}</p>
-      </section>
-    );
-  }
-  return (
-    <section className="stack-card dw-plan" data-testid="dw-plan">
-      <header className="dw-plan-head">
-        <h4>What this will do</h4>
-        <span className="detail">
-          v{plan.version}
-          {typeof plan.typical_minutes === "number" && plan.typical_minutes > 0
-            ? ` · ~${plan.typical_minutes} min` : ""}
-        </span>
-      </header>
-
-      {/* The plan in a sentence, for the person who will not read the table. */}
-      <p className="dw-plan-summary" data-testid="dw-plan-summary">{plan.summary}</p>
-
-      {/* THE THREE QUESTIONS, ANSWERED AT THE TOP rather than inferred from the list. */}
-      <dl className="dw-plan-facts">
-        <div>
-          <dt>You supply</dt>
-          <dd data-testid="dw-plan-supply">
-            {plan.you_must_supply.length
-              ? plan.you_must_supply.join(", ")
-              : "nothing — every input comes from a step"}
-          </dd>
-        </div>
-        <div>
-          <dt>It produces</dt>
-          <dd data-testid="dw-plan-results">
-            {plan.results.length ? plan.results.join(", ") : "no recorded output"}
-          </dd>
-        </div>
-        <div>
-          <dt>Agents</dt>
-          <dd data-testid="dw-plan-agents">
-            {plan.agents.length
-              ? plan.agents.map((a) => a.replace(/_/g, " ")).join(", ")
-              : "none assigned"}
-          </dd>
-        </div>
-      </dl>
-
-      {/* A WORKFLOW THAT CANNOT START SHOULD SAY SO HERE, not when the run deadletters 41
-          seconds later with "needs 'media_artifact_id', which is not set". */}
-      {plan.can_start === false && plan.blocked_because?.length ? (
-        <p className="dw-plan-blocked" data-testid="dw-plan-blocked">
-          <strong>This cannot run yet.</strong>{" "}
-          {plan.blocked_because.join("; ")}.
-        </p>
-      ) : null}
-
-      <ol className="dw-plan-steps">
-        {plan.steps.map((step) => (
-          <li key={step.id} className="dw-plan-step"
-              data-gate={step.approval === "manual" || undefined}
-              data-testid={`dw-plan-step-${step.id}`}>
-            <div className="dw-plan-step-head">
-              <span className="dw-plan-num">{step.position}</span>
-              <strong>{step.label}</strong>
-              <span className="dw-plan-approval" data-forced={step.approval_is_forced || undefined}>
-                {step.approval === "manual" ? "stops for you" : "runs automatically"}
-              </span>
-            </div>
-
-            {step.does ? <p className="detail dw-plan-does">{step.does}</p> : null}
-
-            <p className="detail dw-plan-meta">
-              {step.agent ? <>Run by <strong>{step.agent.replace(/_/g, " ")}</strong></> : null}
-              {step.runs ? <> · runs <code>{step.runs}</code></> : null}
-              {typeof step.risk_tier === "number" ? <> · risk {step.risk_tier}</> : null}
-            </p>
-
-            {/* WHY it stops, not just that it does. "Forced" is the difference between a
-                setting the operator can change and one the risk floor decided for them. */}
-            {/* "automatic" is the PRD approval: the note says who answers it instead, and how
-                to make it a person's. */}
-            {step.approval === "manual" || step.approval === "automatic" ? (
-              <p className="detail dw-plan-note">{step.approval_note}</p>
-            ) : null}
-            {step.cost_note ? (
-              <p className="detail dw-plan-note" data-testid={`dw-plan-cost-${step.id}`}>
-                {step.cost_note}
-              </p>
-            ) : null}
-
-            {step.inputs.length ? (
-              <ul className="dw-plan-io">
-                {step.inputs.map((input) => (
-                  <li key={input.name} data-ready={input.ready}>
-                    <code>{input.name}</code> — {input.source}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
-            {step.produces.length ? (
-              <p className="detail dw-plan-produces">
-                Produces: {step.produces.join(", ")}
-              </p>
-            ) : null}
-
-            <button type="button" className="linklike"
-                    onClick={() => onCustomize(step.id)}
-                    data-testid={`dw-plan-customize-${step.id}`}>
-              Customize this step
-            </button>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
-/* ── Catalogue ───────────────────────────────────────────────────────────────── */
-
-/** The workflows this operator made, as opposed to the ones BOSS ships.
- *
- *  ONE DEFINITION, because the tab count and the grid disagreed. The Catalogue tab read
- *  `catalogue.length` — shipped entries only — while the screen underneath it also renders
- *  these. So an operator who authored a workflow saw it appear on the tab and the number stay
- *  at 12, which reads as "it was not saved".
- *
- *  `is_catalogue` is a thin reed to lean on: in the database it is also false for the 33
- *  bootstrap workflows that run BOSS itself, and they are kept out of here only because the
- *  endpoint filters to the `product` namespace upstream. It holds, but it holds by accident of
- *  someone else's WHERE clause. Worth keying on namespace once we decide whether an operator
- *  can promote their own workflow into the shipped catalogue.
- */
-function ownWorkflows(installed: Installed[]): Installed[] {
-  return installed.filter((i) => !i.is_catalogue);
-}
-
-
-/** A CUSTOMER'S OWN WORKFLOWS, ON THEIR OWN SCREEN.
- *
- *  These sat under the twelve BOSS ships, on a tab called Catalogue — so the thing somebody
- *  built was filed beneath the things they did not, and the count on the tab was the two added
- *  together. Examples make that worse: install three and your own work is below a list you did
- *  not write.
- *
- *  Same cards, their own tab, plus the one thing a workflow of your own needs that a catalogue
- *  entry does not — a way to say when it should run without anybody asking. */
-function YoursView({ projectId, installed, schedules, busy, onStart, onEditMine, scheduleDraft,
-                     onOpenSchedule, onCancelSchedule, onChangeSchedule, onSubmitSchedule,
-                     onToggleSchedule, onDeleteSchedule }: {
-  projectId: string;
-  installed: Installed[];
-  schedules: Schedule[];
-  busy: string | null;
-  onStart: (key: string, workClass: string) => void;
-  onEditMine: (definitionId: string) => void;
-  scheduleDraft: ScheduleDraft | null;
-  onOpenSchedule: (item: Installed, existing?: Schedule) => void;
-  onCancelSchedule: () => void;
-  onChangeSchedule: (next: ScheduleDraft) => void;
-  onSubmitSchedule: (draft: ScheduleDraft) => void;
-  onToggleSchedule: (id: string, enabled: boolean) => void;
-  onDeleteSchedule: (id: string) => void;
-}) {
-  const ours = useMemo(() => ownWorkflows(installed), [installed]);
-  // WHAT ITS FIRING WILL REFUSE, ASKED WHILE SAVING. A schedule runs with nobody at the
-  // keyboard; a deploy-ending one on a project with no host refused every firing and was
-  // switched off after five, and nobody had been told at save time (review of the readiness
-  // change). The checklist is drawn here, and what is ticked is stored with the schedule.
-  const draftReadiness = useWorkflowReadiness(projectId, scheduleDraft?.workflowKey ?? "",
-                                              scheduleDraft?.values ?? {});
-  const byWorkflow = useMemo(() => {
-    const map = new Map<string, Schedule[]>();
-    for (const s of schedules) {
-      map.set(s.workflow_key, [...(map.get(s.workflow_key) ?? []), s]);
-    }
-    return map;
-  }, [schedules]);
-
-  if (ours.length === 0) {
-    return (
-      <div className="dw-catalogue">
-        <p className="detail" data-testid="dw-yours-empty">
-          Nothing of your own yet. Build one on <b>Design a workflow</b>, or run one of the
-          setup scripts in <code>examples/</code> to get a working one to take apart.
-        </p>
-      </div>
-    );
-  }
-
-  const drafting = scheduleDraft
-    ? installed.find((item) => item.workflow_key === scheduleDraft.workflowKey)
-    : undefined;
-  const draftFields = workflowInputFields(drafting?.input_schema);
-  const draftMissing = scheduleDraft ? missingRequired(draftFields, scheduleDraft.values) : [];
-
-  return (
-    <div className="dw-catalogue">
-      {scheduleDraft && drafting ? (
-        <form className="dw-sched-draft-form" data-testid="dw-sched-draft-form"
-              onSubmit={(event) => { event.preventDefault(); onSubmitSchedule(scheduleDraft); }}>
-          <span className="dw-field-label">
-            <label htmlFor="dw-sched-draft-zone">
-              {scheduleDraft.scheduleId ? "Edit" : "Run"} &quot;{drafting.name}&quot; every
-              Monday at 08:00 — in which time zone?
-            </label>
-          </span>
-          <input id="dw-sched-draft-zone" className="input" value={scheduleDraft.timezone}
-                 data-testid="dw-sched-draft-zone"
-                 onChange={(event) => onChangeSchedule(
-                   { ...scheduleDraft, timezone: event.target.value })} />
-          {draftFields.map((field) => (
-            <div className="dw-wiz-input" key={field.name}>
-              <span className="dw-field-label">
-                <label htmlFor={`dw-sched-draft-input-${field.name}`}>{field.label}</label>
-                {field.required ? <em className="dw-req"> required</em> : null}
-              </span>
-              {field.kind === "multiline" ? (
-                <textarea id={`dw-sched-draft-input-${field.name}`} rows={3}
-                          value={scheduleDraft.values[field.name] ?? ""}
-                          data-testid={`dw-sched-draft-input-${field.name}`}
-                          onChange={(event) => onChangeSchedule({
-                            ...scheduleDraft,
-                            values: { ...scheduleDraft.values, [field.name]: event.target.value },
-                          })} />
-              ) : (
-                <input id={`dw-sched-draft-input-${field.name}`} className="input"
-                       value={scheduleDraft.values[field.name] ?? ""}
-                       data-testid={`dw-sched-draft-input-${field.name}`}
-                       onChange={(event) => onChangeSchedule({
-                         ...scheduleDraft,
-                         values: { ...scheduleDraft.values, [field.name]: event.target.value },
-                       })} />
-              )}
-            </div>
-          ))}
-          <ReadinessPanel readiness={draftReadiness} accepted={scheduleDraft.startAnyway}
-                          projectId={projectId}
-                          onAccept={(keys) => onChangeSchedule({ ...scheduleDraft,
-                                                                 startAnyway: keys })} />
-          {unaccepted(draftReadiness, scheduleDraft.startAnyway).length ? (
-            <p className="detail" data-testid="dw-sched-draft-will-refuse">
-              Saved as it is, each run will be refused — nothing is spent, and the schedule
-              shows why — until these are added or you tick Start anyway.
-            </p>
-          ) : null}
-          <div className="dw-card-actions">
-            <button type="submit" className="cap-btn primary"
-                    disabled={!!busy || !scheduleDraft.timezone.trim() || draftMissing.length > 0}
-                    data-testid="dw-sched-draft-save">
-              {draftMissing.length ? `Needs ${draftMissing.join(", ")}` : "Save schedule"}
-            </button>
-            <button type="button" className="cap-btn" onClick={onCancelSchedule}>Cancel</button>
-          </div>
-        </form>
-      ) : null}
-      <div className="dw-grid">
-        {ours.map((item) => {
-          const mine = byWorkflow.get(item.workflow_key) ?? [];
-          return (
-            <article key={item.id} className="dw-card" data-testid={`dw-mine-${item.workflow_key}`}>
-              <header className="dw-card-head">
-                <h4>{item.name}</h4>
-                <span className="dw-class" data-class="yours">yours</span>
-              </header>
-              <p className="detail dw-card-desc">{item.description || "No description."}</p>
-              <dl className="dw-stats">
-                <div><dt>Steps</dt><dd>{item.step_count ?? 0}</dd></div>
-                <div><dt>Version</dt><dd>{item.active_version ?? "—"}</dd></div>
-                <div><dt>Status</dt><dd>{item.active_version ? "published" : "draft"}</dd></div>
-              </dl>
-              {item.steps?.length ? (
-                <ol className="dw-card-steps" data-testid={`dw-mine-steps-${item.workflow_key}`}>
-                  {item.steps.map((step, i) => (
-                    <li key={step.id || i}>
-                      <span className="dw-card-step-n">{i + 1}</span>
-                      <span className="dw-card-step-label">{step.label}</span>
-                      {/* WHO RUNS IT, on the card. The product's claim is that agents do the
-                          work and steps track it, and a card listing three step names with no
-                          agent anywhere invites the question "did you assign them or not?" —
-                          asked about a workflow where all three were assigned correctly.
-                          Empty is not blank: on an agent step it means BOSS chooses per run. */}
-                      {step.captain ? (
-                        <span className="dw-card-step-agent" title={`Runs as ${step.captain}`}>
-                          {step.captain}
-                        </span>
-                      ) : step.agent_work ? (
-                        <span className="dw-card-step-agent" data-auto="true"
-                              title="BOSS picks the agent whose skills fit the instruction">
-                          agent chosen per run
-                        </span>
-                      ) : null}
-                      {step.agent_work ? (
-                        <span className="dw-card-step-kind" title="This step has no fixed skill — it works from your instructions">
-                          your instructions
-                        </span>
-                      ) : null}
-                      {step.approval === "manual" ? (
-                        <span className="dw-card-step-gate" title="stops for a person">
-                          needs you
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-
-              {/* WHEN IT RUNS WITHOUT ANYBODY ASKING. Rendered as the sentence the API
-                  produced, so the console cannot describe a schedule differently from the
-                  thing that fires it. */}
-              {mine.length ? (
-                <ul className="dw-card-schedules" data-testid={`dw-sched-${item.workflow_key}`}>
-                  {mine.map((s) => (
-                    <li key={s.id} data-enabled={s.enabled}>
-                      <span className="dw-sched-when">{s.describes}</span>
-                      <span className="detail">
-                        {s.enabled
-                          // formatDateTime, not toLocaleString: the server renders in one zone
-                          // and the browser in another, and the mismatch is a hydration error
-                          // rather than a cosmetic difference. There is a guard for this.
-                          ? (s.next_run_at ? `next ${formatDateTime(s.next_run_at)}` : "")
-                          : "paused"}
-                        {s.last_missing?.length ? ""
-                          : s.last_error ? ` · last run failed: ${s.last_error}` : ""}
-                      </span>
-                      {/* NOT STARTED, AND WHY — each missing item with its fix, kept by the
-                          schedule as structure. It was the readiness paragraph cut at 500
-                          characters, which could lose the sentence saying what to do. */}
-                      {s.last_missing?.length ? (
-                        <span className="detail dw-sched-refused"
-                              data-testid={`dw-sched-refused-${s.id}`}>
-                          Last time it was due it did not start — missing:{" "}
-                          {s.last_missing.map((m, i) => (
-                            <span key={m.key}>
-                              {i ? "; " : ""}<b>{m.label}</b>
-                              {m.fix ? (
-                                <> — {isAreaId(m.area) ? <AreaLink area={m.area}>{m.fix}</AreaLink>
-                                              : m.fix}</>
-                              ) : null}
-                            </span>
-                          ))}
-                          . Or edit it and tick Start anyway.
-                        </span>
-                      ) : null}
-                      <span className="dw-sched-actions">
-                        <button type="button" className="linklike" disabled={!!busy}
-                                data-testid={`dw-sched-toggle-${s.id}`}
-                                onClick={() => onToggleSchedule(s.id, !s.enabled)}>
-                          {s.enabled ? "pause" : "resume"}
-                        </button>
-                        <button type="button" className="linklike" disabled={!!busy}
-                                data-testid={`dw-sched-edit-${s.id}`}
-                                onClick={() => onOpenSchedule(item, s)}>edit inputs</button>
-                        <button type="button" className="linklike" disabled={!!busy}
-                                onClick={() => onDeleteSchedule(s.id)}>remove</button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              <div className="dw-card-actions">
-                <button type="button" className="cap-btn primary"
-                        disabled={!!busy || !item.active_version}
-                        onClick={() => onStart(item.workflow_key, "")}
-                        data-testid={`dw-start-mine-${item.workflow_key}`}>
-                  {item.active_version ? "Start one" : "No version yet"}
-                </button>
-                <button type="button" className="cap-btn" disabled={!!busy}
-                        onClick={() => onEditMine(item.id)}
-                        data-testid={`dw-edit-mine-${item.workflow_key}`}>
-                  Edit
-                </button>
-                {/* Offered only once there is something to run. A schedule pointing at a
-                    workflow with no published version is refused by the API anyway, and
-                    offering it is how somebody meets that refusal for no reason. */}
-                {item.active_version ? (
-                  <button type="button" className="cap-btn" disabled={!!busy}
-                          data-testid={`dw-schedule-${item.workflow_key}`}
-                          onClick={() => onOpenSchedule(item)}>
-                    Schedule
-                  </button>
-                ) : null}
-              </div>
-            </article>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork,
-                        onEditMine, onTryExample }: {
-  catalogue: CatalogueEntry[];
-  installed: Installed[];
-  busy: string | null;
-  onInstall: () => void;
-  onApply: (key: string, workClass: string) => void;
-  /** Opens the start form on this template, for the operator's own brief. */
-  onStart: (key: string, workClass: string) => void;
-  /** Opens the same form filled with the template's own example, to read before starting. */
-  onTryExample?: (key: string) => void;
-  onFork: (key: string) => void;
-  /** Open one of the operator's own workflows in the builder, by definition id — the same
-   *  handle the builder's "Editing" picker uses, so the card and the dropdown agree. */
-  onEditMine: (definitionId: string) => void;
-}) {
-  // Only the CATALOGUE ones count toward "installed". `installed` also holds the customer's own
-  // forks, so counting all of them read "14 of 12 installed in this project" — a number that
-  // cannot be true and makes the reader doubt everything else on the card.
-  const have = useMemo(
-    () => new Set(installed.filter((i) => i.is_catalogue).map((i) => i.workflow_key)),
-    [installed],
-  );
-  // WHAT THE OPERATOR MADE, AS THINGS RATHER THAN AS A NUMBER.
-  //
-  // This used to be `.length`, rendered as the tail of a sentence — "· 1 of your own" — and
-  // that was the ONLY trace of an operator's own workflow anywhere on this screen. The grid
-  // below maps `catalogue`, which holds shipped entries only. So a workflow BOSS had just
-  // published was real, editable, startable, and invisible: reported as "the workflow itself
-  // does not exist in Catalogue and how is it coming to Edit mode, it is completely wrong".
-  //
-  // It is not the Edit list that was wrong. It was this one, for leaving them out.
-  return (
-    <div className="dw-catalogue">
-      <div className="dw-runs-head">
-        <span className="detail">
-          {have.size} of {catalogue.length} standard workflows installed
-        </span>
-        <button type="button" className="cap-btn" onClick={onInstall} disabled={!!busy}
-                data-testid="dw-install">
-          {busy === "Install the catalogue" ? "Installing…" : "Install all"}
-        </button>
-      </div>
-      <div className="dw-grid">
-        {catalogue.map((entry) => (
-          <article key={entry.key} className="dw-card" data-class={entry.work_class}
-                   data-testid={`dw-card-${entry.key}`}>
-            <header className="dw-card-head">
-              <h4>{entry.name}</h4>
-              {/* The class of work this is FOR, as a chip rather than grey mono text. It is
-                  what a customer matches against when choosing, so it should be findable at a
-                  glance across twelve cards. */}
-              <span className="dw-class" data-class={entry.work_class}>{entry.work_class}</span>
-            </header>
-            <p className="detail dw-card-desc">{entry.description}</p>
-
-            {/* THE STEPS ARE A SEQUENCE, AND A WRAPPED LIST OF CHIPS SAYS THEY ARE A SET.
-                Order is the whole meaning of a workflow, so the card draws it as a rail: each
-                step joined to the next, gates marked, and the shape readable before anyone
-                commits to it. */}
-            <ol className="dw-rail" aria-label="Steps, in order">
-              {entry.steps.map((step, index) => {
-                const gate = entry.gates.includes(step.id);
-                return (
-                  <li key={step.id} className="dw-rail-step" data-gate={gate || undefined}>
-                    <span className="dw-rail-dot" aria-hidden />
-                    <span className="dw-rail-label">{step.capability}</span>
-                    {index < entry.steps.length - 1 ? (
-                      <span className="dw-rail-link" aria-hidden />
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ol>
-
-            {/* Three numbers a customer chooses on, each with a label — "10 · ~112 min · 2" is
-                unreadable without them. */}
-            <dl className="dw-stats">
-              <div><dt>Steps</dt><dd>{entry.step_count}</dd></div>
-              <div><dt>Typically</dt><dd>{entry.estimated_minutes}<small>min</small></dd></div>
-              <div data-emphasis={entry.gates.length > 0 || undefined}>
-                <dt>Approvals</dt><dd>{entry.gates.length}</dd>
-              </div>
-            </dl>
-
-            {/* WHAT IT NEEDS, IN THE PREFLIGHT'S WORDS — including a model and the agents its
-                gates name, which "repository · deployment target" left out. */}
-            {(entry.needs?.length ?? entry.requires_project.length) > 0 ? (
-              <p className="dw-needs" data-testid={`dw-needs-${entry.key}`}>
-                <span className="dw-needs-label">Needs</span>
-                {(entry.needs ?? entry.requires_project.map((k) => ({ key: k, label: k })))
-                  .map((need) => (
-                    <span key={need.key} className="dw-need">
-                      {need.label.replace(/_/g, " ")}
-                    </span>
-                  ))}
-              </p>
-            ) : <p className="dw-needs dw-needs-none">Nothing to set up first</p>}
-            {entry.automatic_approvals?.length ? (
-              <p className="detail dw-card-auto" data-testid={`dw-auto-${entry.key}`}>
-                The PRD is approved automatically; you approve{" "}
-                {entry.gates.length ? entry.gates.join(", ") : "nothing else"}.
-              </p>
-            ) : null}
-            {entry.cost_notes?.map((c) => (
-              <p key={c.step} className="detail dw-card-cost"
-                 data-testid={`dw-cost-${entry.key}-${c.step}`}>
-                <strong>{c.step}</strong>: {c.note}
-              </p>
-            ))}
-
-            <div className="dw-card-actions">
-              {have.has(entry.key) ? (
-                <>
-                  {/* One primary action. Three equal buttons make a customer read all three
-                      every time to find the one they want. */}
-                  <button type="button" className="cap-btn primary" disabled={!!busy}
-                          onClick={() => onApply(entry.key, entry.work_class)}
-                          data-testid={`dw-apply-${entry.key}`}>
-                    Apply to {entry.work_class}
-                  </button>
-                  <button type="button" className="cap-btn" disabled={!!busy}
-                          data-testid={`dw-start-${entry.key}`}
-                          onClick={() => onStart(entry.key, entry.work_class)}>Start one</button>
-                  {entry.example && onTryExample ? (
-                    <button type="button" className="linklike" disabled={!!busy}
-                            data-testid={`dw-example-${entry.key}`}
-                            onClick={() => onTryExample(entry.key)}>Try an example</button>
-                  ) : null}
-                  {/* Fork, never edit: the standard stays pristine so "reset" means something. */}
-                  <button type="button" className="cap-btn" disabled={!!busy}
-                          onClick={() => onFork(entry.key)}
-                          data-testid={`dw-fork-${entry.key}`}>Fork to edit</button>
-                </>
-              ) : (
-                <span className="detail">Install the catalogue to use this.</span>
-              )}
-            </div>
-          </article>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ── Your steps ───────────────────────────────────────────────────────────────── */
-
-/**
- * The customer's OWN steps, managed somewhere they fit.
- *
- * This lived in the builder's palette — the define button beneath however many steps already
- * existed, so with eleven of them the way to make a new one was the one thing you had to
- * scroll to find, on a panel whose job is placing steps rather than authoring them.
- *
- * Splitting it is not just tidying. A step is a durable object of its own: it names a skill,
- * carries a risk tier, and can be placed in several workflows or none. Managing it inside the
- * editor for ONE workflow made it look like a property of that workflow.
- *
- * The palette still lists these, because that is where you place one. It no longer tries to be
- * where you author one too.
- */
-function StepsView({
-  customSteps, bindable, riskFloor, projectId, busy, onDefineStep, onRemoveStep,
-}: {
-  customSteps: CustomStep[];
-  bindable: Bindable;
-  riskFloor: number;
-  projectId: string;
-  busy: string | null;
-  onDefineStep: (fields: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
-  onRemoveStep: (stepKey: string) => void;
-}) {
-  const [defining, setDefining] = useState(false);
-  /** The step being changed. A step could be defined and removed and never corrected, so
-   *  fixing a summary meant deleting it — and delete gives the replacement a NEW KEY, which
-   *  every workflow placing the old one silently loses. */
-  const [editing, setEditing] = useState<CustomStep | null>(null);
-  const unusable = customSteps.filter((c) => !c.usable);
-
-  return (
-    <section className="dw-steps" data-testid="dw-steps">
-      <div className="section-head">
-        <div>
-          <span className="eyebrow">Your steps</span>
-          <h2>Things this project can do that BOSS does not ship.</h2>
-          <p className="detail">
-            A step of your own runs one of your skills or an MCP tool — filing a ticket, telling
-            a compliance system, publishing a video. Define it once here and place it in any
-            workflow.
-          </p>
-        </div>
-        {!defining && !editing ? (
-          <button type="button" className="cap-btn primary" disabled={!!busy}
-                  onClick={() => setDefining(true)} data-testid="dw-define-step">
-            + Define a step
-          </button>
-        ) : null}
-      </div>
-
-      {defining || editing ? (
-        <DefineStepForm bindable={bindable} riskFloor={riskFloor} busy={busy}
-                        projectId={projectId} editing={editing}
-                        // Keyed by the step, so switching from one step to another rebuilds
-                        // the form rather than leaving the first one's values in the fields.
-                        key={editing?.step_key ?? "new"}
-                        onCancel={() => { setDefining(false); setEditing(null); }}
-                        onDefine={async (fields) => {
-                          const result = await onDefineStep(fields);
-                          if (result.ok) { setDefining(false); setEditing(null); }
-                          return result;
-                        }} />
-      ) : null}
-
-      {/* BROKEN ONES FIRST, AND SAID PLAINLY. A step bound to a skill that no longer exists
-          sits in the palette looking placeable and fails the run that places it. Buried in a
-          list it is invisible; at the top with its reason it is a thing to fix. */}
-      {unusable.length > 0 ? (
-        <p className="dw-notice" data-testid="dw-steps-unusable">
-          {unusable.length === 1
-            ? `1 step cannot run: ${unusable[0].unusable_reason}`
-            : `${unusable.length} steps cannot run — each says why below.`}
-        </p>
-      ) : null}
-
-      {customSteps.length === 0 && !defining ? (
-        <p className="detail" data-testid="dw-steps-empty">
-          None yet. Define one above, or describe what you want to the Program Manager on the
-          Design tab and let BOSS write it.
-        </p>
-      ) : (
-        <ul className="skill-list" data-testid="dw-steps-list">
-          {customSteps.map((c) => (
-            <li key={c.step_key} className="skill-row" data-enabled={c.usable}>
-              <span className="skill-row-main">
-                <b>{c.label}</b>
-                <code className="detail">{c.step_key}</code>
-                <span className="cap-badge tone-muted">{c.binding_kind}</span>
-                {c.approval_forced_manual ? (
-                  <span className="cap-badge tone-amber">always approved</span>
-                ) : null}
-                {!c.usable ? <span className="cap-badge tone-pink">cannot run</span> : null}
-              </span>
-              <span className="detail">
-                {/* WHAT IT RUNS, not what it was named. A step called "Cleanup" bound to a
-                    tier-3 tool should not read as harmless. */}
-                {c.usable ? `runs ${c.risk_source}` : c.unusable_reason}
-              </span>
-              {c.summary ? <span className="detail">{c.summary}</span> : null}
-              <span className="dw-step-actions">
-                <button type="button" className="linklike" disabled={!!busy}
-                        data-testid={`dw-step-edit-${c.step_key}`}
-                        onClick={() => { setDefining(false); setEditing(c); }}>
-                  Edit
-                </button>
-                <button type="button" className="linklike" disabled={!!busy}
-                        data-testid={`dw-step-remove-${c.step_key}`}
-                        onClick={() => onRemoveStep(c.step_key)}>
-                  Remove
-                </button>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, actor, busy,
-                      customSteps, bindable, onManageSteps, stepRoles, holdings, mcpHoldings,
-                      onGranted,
-                      justMade, onDismissJustMade,
-                      target, setTarget, onSave, onCreate }: {
-  capabilities: Capability[];
-  blocks: Block[];
-  riskFloor: number;
-  installed: Installed[];
-  projectId: string;
-  /** The signed-in actor; the grant offered on a step row is made as them. */
-  actor: string;
-  customSteps: CustomStep[];
-  bindable: Bindable;
-  /** Take the operator to where steps are authored. The palette places them; it does not
-   *  make them. */
-  onManageSteps: () => void;
-  /** Agents a step can be assigned to, exactly as the publish-time check will accept them. */
-  stepRoles: string[];
-  /** `role_key` → the skills that agent HOLDS, so the row can say whether the agent named on a
-   *  step is actually permitted to run it — and offer the grant instead of failing mid-run. */
-  holdings: Record<string, string[]>;
-  /** `role_key` → the MCP servers that agent holds; see DeliveryWorkflows. */
-  mcpHoldings: Record<string, string[]>;
-  onGranted: () => void;
-  /** The workflow created a moment ago, so the builder can confirm it rather than looking
-   *  identical to the state before the click. */
-  justMade: { id: string; name: string; from?: string } | null;
-  onDismissJustMade: () => void;
-  busy: string | null;
-  target: string;
-  setTarget: (id: string) => void;
-  onSave: (definitionId: string, spec: Record<string, unknown>) => void;
-  /** Creates the workflow AND writes the steps that are on the canvas. `fromKey` is the
-   *  workflow the steps were imported from, so the lineage that makes "Reset to the standard"
-   *  meaningful survives — importing into the canvas would otherwise lose it. */
-  onCreate: (name: string, spec: Record<string, unknown>, fromKey?: string) => void;
-}) {
-  // Only a customer's OWN workflows can be edited. Offering a catalogue one here and refusing
-  // on save would be a control that lies about what it does.
-  const editable = useMemo(() => installed.filter((i) => !i.is_catalogue), [installed]);
-  const [draft, setDraft] = useState<Draft[]>([]);
-  const [dragging, setDragging] = useState<number | null>(null);
-  // What the selected workflow currently IS, and what it was forked from.
-  const [loaded, setLoaded] = useState<WorkflowSpec | null>(null);
-  const [loadingSpec, setLoadingSpec] = useState(false);
-  const [specError, setSpecError] = useState<string | null>(null);
-  // WHAT IT WILL DO, as opposed to which steps it has.
-  //
-  // The header said "4 steps · written from scratch" and the rows said "Edit the video /
-  // auto". That is the whole of what an operator could learn before starting a run: not what
-  // a step does, not what it produces, not which agent answers for it, not that "auto" on a
-  // tier-3 step is going to stop and wait for them anyway.
-  const [plan, setPlan] = useState<WorkflowPlan | null>(null);
-  //: Which step "Customize this step" sent them to, so the row can say so. Cleared on the
-  //: next selection — a highlight that never goes away stops meaning anything.
-  const [focusStep, setFocusStep] = useState<string | null>(null);
-  /** Which step has its inputs open. One at a time: a canvas with every step expanded is a
-   *  form, and the thing being edited is the ORDER as much as the wiring. */
-  const [wiringStep, setWiringStep] = useState<string | null>(null);
-  //: MAKING ONE COMES FIRST, and the default has to agree with the tabs.
-  //:
-  //: The tab ORDER already says this — "somebody who opens 'Build your own' is usually here to
-  //: build one; editing is what you do on a return visit" — but the state behind it opened on
-  //: Edit, so the first tab was the one the eye lands on and the second was the one selected.
-  //: Every reset `beginCreating` performs is already the initial value of the state it clears,
-  //: so starting here needs nothing stashed: there is no canvas yet to put back.
-  const [creating, setCreating] = useState(true);
-  // EXCEPT WHEN SOMEBODY ASKED TO EDIT A PARTICULAR ONE.
-  //
-  // Making "Create" the default tab left the Edit button on a workflow card doing nothing
-  // visible: it set the target and switched to this tab, which then opened on Create — so the
-  // control named Edit reliably landed on the create screen. The builder's OWN target changes
-  // come from a picker that is only rendered while editing, so a target arriving while
-  // `creating` is true can only have come from outside, which makes this unambiguous.
-  useEffect(() => {
-    if (target) setCreating(false);
-    // Deliberately keyed on `target` alone: re-running when `creating` changes would fight the
-    // tabs, snapping the operator back out of Create every time they pressed it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
-  const [newName, setNewName] = useState("");
-  const [importFrom, setImportFrom] = useState("");
-  /** The canvas as it was before "New workflow" was pressed, so Cancel puts it back rather
-   *  than leaving the operator on an empty canvas for a workflow they did not change. */
-  const [stashed, setStashed] = useState<Draft[] | null>(null);
-  /** Which workflow's steps are currently on the canvas, and how many came across. Set by
-   *  Import, cleared by Cancel — this is what lets the panel say what it just did without
-   *  anything having been saved. */
-  const [importedFrom, setImportedFrom] = useState<{ key: string; name: string; steps: number } | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-
-
-  /** What an import would be called if the operator names nothing. Shown as the placeholder,
-   *  so the name the workflow WILL get is visible before the button is pressed.
-   *
-   *  Two things it has to avoid, both of which happened:
-   *    - COMPOUNDING. Copying a copy produced "Minor Feature (copy) (copy)", and the one after
-   *      that would have been worse. The existing suffix is stripped before a new one is added.
-   *    - COLLIDING. The workflow KEY was made unique but the NAME was not, so the picker
-   *      listed two entries reading "Minor Feature (yours) (copy)" and neither said which was
-   *      which. Names are now numbered against what the project already has.
-   */
-  const defaultImportName = useMemo(() => {
-    if (!importFrom) return "";
-    const source = installed.find((i) => i.workflow_key === importFrom);
-    if (!source) return "";
-    return uniqueWorkflowName(source.name, installed.map((i) => i.name));
-  }, [importFrom, installed]);
-  const [defining, setDefining] = useState(false);
-
-  useEffect(() => {
-    if (!target && editable.length) setTarget(editable[0].id);
-  }, [editable, target, setTarget]);
-
-  /** Turn a stored spec into canvas steps. Each keeps the step it came from, because a save
-   *  is a MERGE over it — see lib/workflow-spec.ts for what was being lost before. */
-  const toDraft = useCallback((steps: Record<string, unknown>[]): Draft[] =>
-    steps.map(draftFromSpecStep), []);
-  /** The spec the canvas was IMPORTED from, while creating — its input_schema and every field
-   *  the canvas does not draw travel into the new workflow with its steps. */
-  const [importedSpec, setImportedSpec] = useState<Record<string, unknown> | null>(null);
-
-  /** Open the new-workflow panel on an EMPTY canvas. */
-  const beginCreating = useCallback(() => {
-    setStashed(draft);
-    setDraft([]);
-    setImportedFrom(null);
-    setImportedSpec(null);
-    setImportError(null);
-    setNewName("");
-    setImportFrom("");
-    setCreating(true);
-  }, [draft]);
-
-  const cancelCreating = useCallback(() => {
-    setCreating(false);
-    setNewName("");
-    setImportFrom("");
-    setImportedFrom(null);
-    setImportedSpec(null);
-    setImportError(null);
-    if (stashed) setDraft(stashed);
-    setStashed(null);
-  }, [stashed]);
-
-  /** IMPORT BRINGS THE STEPS HERE. IT DOES NOT SAVE ANYTHING.
-   *
-   *  It used to fork server-side on the spot: a workflow appeared in the project before the
-   *  operator had decided anything, and the screen jumped into editing it. Nothing is written
-   *  now until Create — Import only fills the canvas, so the steps can be changed first and
-   *  abandoning the idea leaves nothing behind. */
-  const importSteps = useCallback(async () => {
-    if (!importFrom) return;
-    setImporting(true);
-    setImportError(null);
-    try {
-      const params = new URLSearchParams({
-        view: "spec", project_id: projectId, key: importFrom,
-      });
-      const r = await fetch(`/api/delivery-workflows?${params}`, { cache: "no-store" });
-      const body = (await r.json()) as WorkflowSpec & { error?: string };
-      if (!r.ok || !body?.spec?.steps) {
-        setImportError(body?.error ?? "could not read that workflow's steps");
-        return;
-      }
-      const steps = toDraft(body.spec.steps);
-      setDraft(steps);
-      setImportedSpec(body.spec as Record<string, unknown>);
-      setImportedFrom({
-        key: importFrom,
-        name: installed.find((i) => i.workflow_key === importFrom)?.name ?? importFrom,
-        steps: steps.length,
-      });
-    } catch (e) {
-      setImportError(String((e as Error)?.message ?? e));
-    } finally {
-      setImporting(false);
-    }
-  }, [importFrom, projectId, toDraft, installed]);
-
-  // OPEN WITH WHAT IS THERE.
-  //
-  // The builder started empty, so changing one step of a ten-step workflow meant rebuilding
-  // the other nine from memory — and saving would have silently replaced the workflow with
-  // whatever partial thing had been assembled.
-  // KEYED ON THE WORKFLOW, NOT ON THE ARRAY.
-  //
-  // `editable` is derived from `installed`, which the eight-second poll replaces with a new
-  // array every time — so depending on it re-ran this effect constantly, and any hiccup in the
-  // refetch cleared the canvas. A customer editing a ten-step workflow could lose it because a
-  // background poll happened to fail. The KEY is what actually identifies what to load.
-  const targetKey = useMemo(
-    () => editable.find((i) => i.id === target)?.workflow_key ?? "",
-    [editable, target],
-  );
-
-  useEffect(() => {
-    // WHILE CREATING, THE CANVAS IS THE NEW WORKFLOW'S.
-    //
-    // Nothing exists on the server yet, so there is no spec to load — and loading the selected
-    // workflow's steps over the ones just imported is exactly the confusion between "the one
-    // you are editing" and "the one you are making" that this flow had.
-    if (creating) return;
-    if (!targetKey) { setLoaded(null); setDraft([]); setPlan(null); return; }
-    let live = true;
-    setLoadingSpec(true);
-    // The plan is fetched ALONGSIDE the spec rather than on a click, because "what will this
-    // do" is the question you have while looking at it — making it a second interaction is
-    // how it ends up never being asked.
-    void (async () => {
-      const p = new URLSearchParams({ view: "plan", project_id: projectId, key: targetKey });
-      try {
-        const r = await fetch(`/api/delivery-workflows?${p}`, { cache: "no-store" });
-        const body = (await r.json()) as WorkflowPlan & { error?: string };
-        if (live && r.ok && Array.isArray(body?.steps)) setPlan(body);
-      } catch {
-        /* the plan is an explanation; failing to load one must not break the editor */
-      }
-    })();
-    void (async () => {
-      const params = new URLSearchParams({
-        view: "spec", project_id: projectId, key: targetKey,
-      });
-      try {
-        const r = await fetch(`/api/delivery-workflows?${params}`, { cache: "no-store" });
-        const body = (await r.json()) as WorkflowSpec & { error?: string };
-        if (!live) return;
-        if (r.ok && body?.spec?.steps) {
-          setLoaded(body);
-          setDraft(toDraft(body.spec.steps));
-        }
-        // NO `else` THAT CLEARS. A failed refetch is a reason to keep what is on the canvas,
-        // not to throw it away — the steps already there are the customer's work, and an
-        // empty canvas after a network blip is indistinguishable from having deleted it.
-        else {
-          setSpecError(
-            (body as { error?: string })?.error ?? "could not read the current steps",
-          );
-        }
-      } catch (e) {
-        if (live) setSpecError(String((e as Error)?.message ?? e));
-      } finally {
-        if (live) setLoadingSpec(false);
-      }
-    })();
-    return () => { live = false; };
-  }, [targetKey, projectId, toDraft, creating]);
-
-  /** Put it back the way the standard has it. */
-  const reset = useCallback(() => {
-    if (!loaded?.forked_from) return;
-    setDraft(toDraft(loaded.forked_from.spec.steps));
-  }, [loaded, toDraft]);
-
-  /** Unique per drop. Adding "build" twice with one id is rejected by the runtime, at save
-   *  time, after a whole workflow has been laid out. */
-  const nextId = (current: Draft[], stem: string) => {
-    const taken = new Set(current.map((s) => s.id));
-    let n = current.filter((s) => s.id.startsWith(`${stem}_`)).length + 1;
-    while (taken.has(`${stem}_${n}`)) n += 1;
-    return `${stem}_${n}`;
-  };
-
-  const add = (capability: Capability) =>
-    setDraft((current) => [...current, {
-      id: nextId(current, capability.key),
-      kind: "capability",
-      capability: capability.key,
-      approval: capability.approval_forced_manual ? "manual" : "auto",
-      config: {},
-    }]);
-
-  /** A step that says what is wanted and lets an agent work out how.
-   *
-   *  IT BINDS NOTHING, and that is the whole point. Every other step on this canvas names a
-   *  skill, so a request the skill cannot express needs BOSS to ship a new one — which is how a
-   *  framework turns into a thousand special cases. This one carries an instruction, and the
-   *  agent's own skills are the vocabulary.
-   *
-   *  `auto` is honest here: the agent's loop still stops for a person on any skill at or above
-   *  the risk floor, so a step that reaches a publish waits whatever this says.
-   */
-  const addAgentWork = () =>
-    setDraft((current) => [...current, {
-      id: nextId(current, "agent_work"),
-      kind: "capability",
-      agentWork: true,
-      approval: "auto",
-      config: {},
-    }]);
-
-  /** A step the customer defined. Its approval mode follows the resolved risk tier, so a
-   *  tier-3 tool arrives on the canvas already marked manual rather than being switched
-   *  silently at save time. */
-  const addCustom = (step: CustomStep) =>
-    setDraft((current) => [...current, {
-      id: nextId(current, step.step_key),
-      kind: "capability",
-      customStep: step.step_key,
-      approval: step.approval_forced_manual ? "manual" : "auto",
-      config: {},
-    }]);
-
-  /** A control block: wait, an approval gate, or another workflow. */
-  const addBlock = (block: Block) =>
-    setDraft((current) => [...current, {
-      id: nextId(current, block.kind),
-      kind: block.kind,
-      approval: "auto",
-      config: { ...(block.defaults ?? {}) },
-    }]);
-
-  /** What this step takes, and whether each one is required — the customer's own steps declare
-   *  it, the built-in capabilities declare it, and the wiring panel needs one answer. */
-  const declaredInputs = useCallback((step: Draft) => {
-    if (step.customStep) {
-      const mine = customSteps.find((c) => c.step_key === step.customStep);
-      return (mine?.inputs ?? []).map((i) => ({ name: i.name, required: i.required }));
-    }
-    const capability = capabilities.find((c) => c.key === step.capability);
-    return [
-      ...(capability?.required_inputs ?? []).map((name) => ({ name, required: true })),
-      ...(capability?.optional_inputs ?? []).map((name) => ({ name, required: false })),
-    ];
-  }, [capabilities, customSteps]);
-
-  /** What the steps BEFORE this one produce. Only earlier steps: a workflow that reads from a
-   *  step which has not run yet cannot resolve, and the runtime would fail it mid-run rather
-   *  than at save — so the choice is not offered in the first place. */
-  const upstream = useCallback((index: number) =>
-    draft.slice(0, index).map((step) => {
-      const mine = step.customStep
-        ? customSteps.find((c) => c.step_key === step.customStep)
-        : undefined;
-      const capability = step.capability
-        ? capabilities.find((c) => c.key === step.capability)
-        : undefined;
-      return {
-        id: step.id,
-        label: mine?.label ?? capability?.label ?? step.id,
-        fields: (mine?.produces ?? capability?.produces ?? []) as string[],
-      };
-    }), [draft, capabilities, customSteps]);
-
-  /** Change one input's wiring on one step. */
-  const setWire = useCallback((stepId: string, input: string, value: unknown) =>
-    setDraft((current) => current.map((step) => {
-      if (step.id !== stepId) return step;
-      const inputs = { ...(step.inputs ?? {}) };
-      if (value === undefined) delete inputs[input];
-      else inputs[input] = value;
-      return { ...step, inputs };
-    })), []);
-
-  const move = (from: number, to: number) =>
-    setDraft((current) => {
-      if (to < 0 || to >= current.length || from === to) return current;
-      const next = [...current];
-      const [item] = next.splice(from, 1);
-      next.splice(to, 0, item);
-      return next;
-    });
-
-  // THE SPEC IS A MERGE OVER WHAT WAS LOADED, not a rebuild from the canvas. Rebuilding dropped
-  // input_schema (so Start fell back to a sample), an agent step's produces/agents/max_steps, a
-  // typed decision's binding and every field the canvas does not draw — one save broke every
-  // bundled example. See lib/workflow-spec.ts.
-  const spec = useMemo(() => specFromDraft(draft, {
-    loaded: creating ? importedSpec : (loaded?.spec as Record<string, unknown> | undefined),
-    capabilities,
-    customSteps,
-  }), [draft, capabilities, customSteps, creating, importedSpec, loaded]);
-
-  return (
-    <div className="dw-builder">
-      <aside className="dw-palette" aria-label="Steps you can add">
-        {/* THE WAY TO MAKE A STEP, AT THE TOP, WHERE SOMEBODY LOOKING FOR IT WILL LOOK.
-            It was moved next to the "Your steps" sub-heading once already, which is still
-            below fourteen built-in capabilities: on a normal screen you scroll past the whole
-            palette before the control appears, and the operator reported twice that there was
-            no obvious way to add a step. The one below stays — this is the discoverable one. */}
-        <div className="dw-palette-heading-row">
-          <h4 className="dw-palette-heading">Steps</h4>
-          {/* STILL THE DISCOVERABLE CONTROL, now a door rather than a form. Authoring a step
-              on the panel that places them meant a long form unfolding inside a narrow column
-              while the canvas sat behind it. It goes where steps are managed instead. */}
-          <button type="button" className="cap-btn dw-define" disabled={!!busy}
-                  onClick={onManageSteps} data-testid="dw-define-step-top">
-            + New step
-          </button>
-        </div>
-        <p className="detail dw-palette-summary">
-          Click a step to add it, or make one of your own that runs your skill or an MCP tool.
-        </p>
-        {/* FIRST IN THE PALETTE, because it is the general answer and the fourteen below it are
-            the specific ones. An operator whose request does not match a listed capability used
-            to have nothing to reach for; this is the step for "just do what I asked". */}
-        <button type="button" className="dw-palette-item dw-palette-agent"
-                onClick={addAgentWork} disabled={!!busy}
-                data-testid="dw-palette-agent-work"
-                title="The step carries your instructions; the agent uses the skills it holds">
-          <span className="dw-palette-label">Let an agent work it out</span>
-          <span className="detail dw-palette-summary">
-            You write what you want in plain English. An agent does it with the skills it holds —
-            no fixed list of operations, so a new kind of request needs a new skill on the agent,
-            not a new step here.
-          </span>
-        </button>
-        {capabilities.map((c) => (
-          <button key={c.key} type="button" className="dw-palette-item"
-                  onClick={() => add(c)} disabled={!!busy}
-                  data-testid={`dw-palette-${c.key}`}
-                  title={`${c.summary}${c.requires_project.length ? ` · needs ${c.requires_project.join(", ")}` : ""}`}>
-            <span className="dw-palette-label">{c.label}</span>
-            {/* Risk is shown in the palette, before the step is placed. Finding out at save
-                time that a step can never be automatic is finding out too late. */}
-            {c.approval_forced_manual ? (
-              <span className="dw-gate">always approved</span>
-            ) : null}
-            <span className="detail dw-palette-summary">{c.summary}</span>
-          </button>
-        ))}
-        <p className="detail dw-floor">
-          Anything at risk tier {riskFloor} or above always requires a person. That is not
-          configurable.
-        </p>
-
-        {/* THE CUSTOMER'S OWN STEPS, in the same palette as the built-in ones. A separate
-            drawer for "your" steps would make people learn which of their steps BOSS wrote. */}
-        {/* THE CONTROL WITH ITS HEADING, not below whatever happens to be listed. With eleven
-            of the customer's own steps the button sat off the bottom of the panel, so the way
-            to make one was the one thing you had to scroll to find. */}
-        {/* THE PALETTE LISTS THESE; IT NO LONGER AUTHORS THEM.
-            Defining a step lived here, beneath however many already existed, so with eleven of
-            them the way to make one was the thing you had to scroll to find — on a panel whose
-            job is placing steps. Authoring moved to the Your steps tab, which is also where a
-            step that cannot run says why. */}
-        <div className="dw-palette-heading-row">
-          <h4 className="dw-palette-heading">Your steps</h4>
-        </div>
-        {customSteps.length === 0 ? (
-          <p className="detail dw-palette-summary">
-            None yet — define one on the <b>Your steps</b> tab, or describe what you want to
-            the Program Manager on <b>Design a workflow</b>.
-          </p>
-        ) : null}
-        {customSteps.map((c) => (
-          <button key={c.step_key} type="button" className="dw-palette-item dw-palette-mine"
-                  onClick={() => addCustom(c)} disabled={!!busy || !c.usable}
-                  data-testid={`dw-palette-custom-${c.step_key}`}
-                  title={c.usable
-                    ? `${c.summary || c.label} · runs ${c.risk_source}`
-                    : (c.unusable_reason ?? "")}>
-            <span className="dw-palette-label">{c.label}</span>
-            {c.approval_forced_manual ? (
-              <span className="dw-gate">always approved</span>
-            ) : null}
-            <span className="detail dw-palette-summary">
-              {/* What it RUNS, not what it was named. A step called "Cleanup" bound to a
-                  tier-3 tool should not read as harmless in the palette. */}
-              {c.usable ? `runs ${c.risk_source}` : c.unusable_reason}
-            </span>
-            {/* NO × HERE ANY MORE. On a palette item it read as "take this off the
-                canvas" and actually deleted the step from the PROJECT — a destructive act in
-                the shape of a dismissal. Removing one is on the Your steps tab, where the row
-                is about the step itself rather than about placing it. */}
-          </button>
-        ))}
-
-        {/* CONTROL BLOCKS. The runtime has supported these since it was written and the
-            builder never offered them, so a customer could only ever author a straight line.
-            The ones that need somewhere to draw a branch are listed but not placeable — a
-            palette entry that produces a spec the runtime rejects is a promise the product
-            cannot keep. */}
-        <h4 className="dw-palette-heading">Flow</h4>
-        {blocks.filter((b) => !b.canvas_required).map((b) => (
-          <button key={b.kind} type="button" className="dw-palette-item"
-                  onClick={() => addBlock(b)} disabled={!!busy}
-                  data-testid={`dw-block-${b.kind}`} title={b.summary}>
-            <span className="dw-palette-label">{b.label}</span>
-            <span className="detail dw-palette-summary">{b.summary}</span>
-          </button>
-        ))}
-        {blocks.some((b) => b.canvas_required) ? (
-          <details className="dw-soon">
-            <summary className="detail">
-              {blocks.filter((b) => b.canvas_required).length} more, once the canvas can draw
-              branches
-            </summary>
-            {blocks.filter((b) => b.canvas_required).map((b) => (
-              <p key={b.kind} className="detail dw-soon-item">
-                <strong>{b.label}</strong> — {b.summary}
-              </p>
-            ))}
-          </details>
-        ) : null}
-      </aside>
-
-      <section className="dw-canvas" aria-label="Your workflow">
-        {/* SAY IT WORKED, WHERE THE PERSON IS LOOKING.
-            Import created the workflow, copied its steps and selected it — and then showed a
-            toolbar identical to the one before the click, so it read as "went back to editing",
-            which is how a working feature got reported as broken. The confirmation belongs on
-            the canvas that changed, not in a sticky line further up the page. */}
-        {justMade && justMade.id === target ? (
-          <p className="dw-made" data-testid="dw-made">
-            <span className="dw-made-tick" aria-hidden>✓</span>
-            <span>
-              Created <strong>{justMade.name}</strong>
-              {justMade.from ? <> from <strong>{justMade.from}</strong></> : null}
-              {draft.length ? ` · ${draft.length} step${draft.length === 1 ? "" : "s"} copied` : ""}
-              . You are editing it now — change what you want, then save.
-            </span>
-            <button type="button" className="dw-made-x" onClick={onDismissJustMade}
-                    aria-label="Dismiss">×</button>
-          </p>
-        ) : null}
-        {/* TWO TABS, BECAUSE THEY ARE TWO JOBS.
-            Editing an existing workflow and authoring a new one were one screen separated only
-            by a button: "Editing: Standard Product Delivery" sat beside "Start from: Backend
-            Service Setup", and the operator had to work out which of the two workflows the
-            controls acted on. The project has 54 definitions, a large share of them named
-            "(copy)" and "(copy 2)" — accidental forks are the predictable result of a screen
-            that does not say which mode it is in.
-
-            The modes already existed; only the way in and out did not. `beginCreating` stashes
-            the canvas and `cancelCreating` restores it, so the tabs are a faithful control for
-            state that was always there — no behaviour changes, the choice is just visible. */}
-        <div className="dw-mode-tabs" role="tablist" aria-label="What do you want to do?">
-          {/* MAKING ONE COMES FIRST. Somebody who opens "Build your own" is usually here to
-              build one; editing is what you do on a return visit. Reading order should match
-              that, and the first tab is where the eye lands. */}
-          <button type="button" role="tab" className="dw-mode-tab"
-                  aria-selected={creating} data-testid="dw-tab-new"
-                  disabled={!!busy}
-                  onClick={() => { if (!creating) beginCreating(); }}>
-            <WfIcon id="plus" /> Create a new workflow
-          </button>
-          <button type="button" role="tab" className="dw-mode-tab"
-                  aria-selected={!creating} data-testid="dw-tab-edit"
-                  disabled={!!busy}
-                  onClick={() => { if (creating) cancelCreating(); }}>
-            <WfIcon id="edit" /> Edit an existing workflow
-          </button>
-        </div>
-        <div className="dw-canvas-head" data-mode={creating ? "creating" : "editing"}>
-          {/* ONE QUESTION AT A TIME.
-              "Editing: Standard Product Delivery" beside "Start from: Backend Service Setup"
-              asks the operator to hold two different workflows in mind and says nothing about
-              which the buttons act on — and the answer was "the one you are not making". While
-              a new workflow is being named, the controls that belong to the old one (which one
-              you are editing, reset it, save it) are not just noise, they are wrong. */}
-          {/* TWO GROUPS, NOT FIVE CONTROLS IN A ROW.
-              Left is what you are working on — which workflow, or the new one you are naming.
-              Right is what happens to it. Flat and evenly weighted, the row gave "+ New
-              workflow" the same presence as "Reset to the standard", so the one control that
-              starts something read as the least important thing on the line. */}
-          <div className="dw-head-left">
-          {!creating ? (
-            <div className="dw-head-picker">
-              <label className="field">
-                <span><WfIcon id="edit" /> Editing</span>
-                <select className="input" value={target}
-                        onChange={(e) => setTarget(e.target.value)} data-testid="dw-target">
-                  {/* The tab is called "Build your own", and until now the only way in was to
-                      fork something — so a screen that promised authorship offered only
-                      editing. */}
-                  {editable.length === 0
-                    ? <option value="">Nothing of your own yet</option>
-                    : null}
-                  {editable.map((i) => (
-                    <option key={i.id} value={i.id}>{i.name}</option>
-                  ))}
-                </select>
-              </label>
-              {/* A header made only of controls tells you nothing about the thing they act on.
-                  Two facts, in the space the dead gap used to occupy: how big this workflow is,
-                  and whether it came from a standard — which is also what decides whether
-                  "Reset to the standard" beside it means anything. */}
-              {target ? (
-                <p className="detail dw-head-meta" data-testid="dw-head-meta">
-                  {draft.length} step{draft.length === 1 ? "" : "s"}
-                  {loaded?.forked_from
-                    ? <> · from <strong>{loaded.forked_from.name}</strong></>
-                    : " · written from scratch"}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {creating ? (
-            <form className="dw-new" onSubmit={(e) => {
-              e.preventDefault();
-              // CREATE IS THE ONLY THING THAT WRITES.
-              //
-              // Import used to fork on the spot, so a workflow appeared in the project before
-              // the operator had decided anything and the screen jumped straight into editing
-              // it. Now the canvas is filled first, changed if they want, and only saved here.
-              const name = newName.trim() || defaultImportName;
-              if (!name) return;
-              onCreate(name, spec, importedFrom?.key);
-            }}>
-              <label className="field">
-                <span><WfIcon id="edit" /> Name</span>
-                <input className="input" autoFocus value={newName}
-                       placeholder={defaultImportName || "Name it"}
-                       onChange={(e) => setNewName(e.target.value)}
-                       onKeyDown={(e) => { if (e.key === "Escape") cancelCreating(); }}
-                       aria-label="Name for the new workflow" data-testid="dw-new-name" />
-              </label>
-              <label className="field dw-new-from">
-                <span><WfIcon id="importIn" /> Start from</span>
-                <select className="input" value={importFrom} data-testid="dw-new-from"
-                        onChange={(e) => setImportFrom(e.target.value)}>
-                  <option value="">Nothing — an empty workflow</option>
-                  {/* Every workflow in the project, not only the customer's own: importing a
-                      standard is the common case, and it is what "work on top of it" means. */}
-                  {installed.map((i) => (
-                    <option key={i.id} value={i.workflow_key}>
-                      {i.name}{i.is_catalogue ? " (standard)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {/* The three buttons are ONE group, so they wrap together. Left loose they broke
-                  apart at this width and Cancel dropped onto a line of its own, which reads as
-                  a layout fault rather than a wrap. */}
-              <span className="dw-new-actions">
-              {/* Import is a SEPARATE, non-destructive step: it fills the canvas below and
-                  nothing else. Pressing it twice, or picking a different source and pressing
-                  it again, is safe — no workflow exists yet to duplicate. */}
-              <button type="button" className="cap-btn" data-testid="dw-import-steps"
-                      onClick={() => void importSteps()}
-                      disabled={!!busy || !importFrom || importing}>
-                <WfIcon id={importedFrom ? "again" : "importIn"} />
-                {importing ? "Importing…" : importedFrom ? "Import again" : "Import steps"}
-              </button>
-              <button type="submit" className="cap-btn primary"
-                      disabled={!!busy || !(newName.trim() || defaultImportName)}
-                      data-testid="dw-new-confirm">
-                <WfIcon id="check" /> Create
-              </button>
-              <button type="button" className="cap-btn" onClick={cancelCreating}>
-                <WfIcon id="x" /> Cancel
-              </button>
-              </span>
-              {importError ? (
-                <span className="detail dw-new-error" data-testid="dw-import-error">
-                  <WfIcon id="info" /> Could not import — {importError}
-                </span>
-              ) : importedFrom ? (
-                // Said in the panel, because the panel is where the operator still is. The
-                // point of the whole change is that they do NOT get moved somewhere else.
-                <span className="detail dw-new-hint" data-testid="dw-imported">
-                  <WfIcon id="steps" />
-                  {importedFrom.steps} step{importedFrom.steps === 1 ? "" : "s"} from{" "}
-                  <strong>{importedFrom.name}</strong> are on the canvas. Change them, then
-                  press Create — nothing is saved until you do.
-                </span>
-              ) : !newName.trim() && !importFrom ? (
-                <span className="detail dw-new-hint" data-testid="dw-new-hint">
-                  <WfIcon id="info" /> Name it, or pick something to start from.
-                </span>
-              ) : null}
-            </form>
-          ) : null}
-          {/* The "+ New workflow" button that used to live here is now the second TAB. A
-              divider and an accent-tinted CTA were both attempts to say "this is a different
-              intention" inside a row that still mixed the two; a tablist says it outright, and
-              says which one you are in. */}
-          </div>
-          {/* Hidden while creating, for the same reason: both act on the workflow in the
-              dropdown that is no longer on screen. */}
-          <span className="dw-canvas-actions" hidden={creating}>
-            {/* RESET TO THE STANDARD. Only offered when there is something to reset TO — a
-                fork records what it came from, and a workflow written from scratch has no
-                original, so the control would be a lie on one of them. */}
-            {!creating && loaded?.forked_from ? (
-              <button type="button" className="cap-btn" disabled={!!busy}
-                      onClick={reset} data-testid="dw-reset"
-                      title={`Put the steps back the way ${loaded.forked_from.name} has them`}>
-                <WfIcon id="reset" /> Reset to the standard
-              </button>
-            ) : null}
-            {!creating ? (
-              <button type="button" className="cap-btn primary"
-                      disabled={!!busy || !target || draft.length === 0}
-                      onClick={() => onSave(target, spec)} data-testid="dw-save">
-                <WfIcon id="save" />
-                {busy === "Save" ? "Saving…" : "Save as a new version"}
-              </button>
-            ) : null}
-          </span>
-        </div>
-
-        {specError ? (
-          <p className="detail dw-spec-error" data-testid="dw-spec-error">
-            Could not re-read the saved steps — {specError}. What is on the canvas is still
-            yours; saving will publish it.
-          </p>
-        ) : null}
-        {/* ABOVE THE EDITOR, BECAUSE READING COMES BEFORE CHANGING.
-            The operator's order was explicit: "first I want to see the workflow and its
-            definition, what it will do, THEN trigger the run". */}
-        {!creating && plan ? (
-          <WorkflowPlanPanel
-            plan={plan}
-            onCustomize={(stepId) => {
-              // Scroll the editor to that step and focus it, so "customize this step" lands
-              // on the row rather than on a list the operator has to search.
-              const row = document.querySelector(`[data-step-row="${stepId}"]`);
-              if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
-              setFocusStep(stepId);
-            }}
-          />
-        ) : null}
-        {loadingSpec && draft.length === 0 ? (
-          <p className="detail dw-canvas-empty" data-testid="dw-canvas-loading">
-            Reading the current steps…
-          </p>
-        ) : draft.length === 0 ? (
-          <div className="dw-canvas-empty" data-testid="dw-canvas-empty">
-            <span className="dw-empty-mark" aria-hidden><WfIcon id="empty" /></span>
-            <p className="detail">
-              {target
-                ? "No steps yet — add them from the left, in the order they should run."
-                : "Start a new workflow, or fork one of the standards to change it."}
-            </p>
-          </div>
-        ) : (
-          <ol className="dw-draft">
-            {draft.map((step, index) => {
-              const capability = capabilities.find((c) => c.key === step.capability);
-              const mine = customSteps.find((c) => c.step_key === step.customStep);
-              return (
-                <li key={step.id} className="dw-draft-step" draggable
-                    data-dragging={dragging === index || undefined}
-                    data-drop={dragging !== null && dragging !== index ? "true" : undefined}
-                    onDragStart={() => setDragging(index)}
-                    onDragEnd={() => setDragging(null)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => { if (dragging !== null) move(dragging, index); setDragging(null); }}
-                    // The anchor "Customize this step" scrolls to. Keyed by STEP ID, which is
-                    // what the plan knows — an index would break the moment a row is dragged.
-                    data-step-row={step.id}
-                    data-focused={focusStep === step.id || undefined}
-                    data-testid={`dw-draft-${step.id}`}>
-                  <span className="dw-draft-grip" aria-hidden>⋮⋮</span>
-                  <span className="dw-draft-n">{index + 1}</span>
-                  <span className="dw-draft-label">
-                    {step.kind !== "capability"
-                      ? blocks.find((b) => b.kind === step.kind)?.label ?? step.kind
-                      : step.agentWork
-                        ? "Let an agent work it out"
-                        : step.customStep
-                          ? mine?.label ?? step.customStep
-                          : capability?.label ?? step.capability}
-                  </span>
-                  {step.customStep ? <span className="dw-draft-kind">yours</span> : null}
-                  {step.agentWork ? <span className="dw-draft-kind">agent</span> : null}
-                  {/* A control block is visibly a different sort of thing from a work step. */}
-                  {step.kind !== "capability" ? (
-                    <span className="dw-draft-kind">flow</span>
-                  ) : null}
-                  {/* WHAT THE STEP ACTUALLY DOES.
-                      The row said "Plan the edit · yours · auto" and nothing else, so a
-                      workflow could be reordered, saved and started by somebody who could not
-                      find out which skill any of it ran, what it needed, or why one step said
-                      manual. Every field here was already on the client; none of it was drawn. */}
-                  <span className="dw-draft-what">
-                    <span className="dw-draft-runs">
-                      {step.agentWork
-                        ? (step.captain
-                            ? `${(holdings[step.captain] ?? []).length} skill${
-                                (holdings[step.captain] ?? []).length === 1 ? "" : "s"
-                              } to choose from`
-                            : "whichever agent fits the instruction")
-                        : mine
-                          ? (mine.usable ? `runs ${mine.risk_source}` : mine.unusable_reason)
-                          : capability
-                            ? `${capability.skills.length} skill${
-                                capability.skills.length === 1 ? "" : "s"}${
-                                capability.captain ? ` · ${capability.captain}` : ""}`
-                            : null}
-                    </span>
-                    {(mine?.summary || capability?.summary) ? (
-                      <span className="dw-draft-summary">
-                        {mine?.summary || capability?.summary}
-                      </span>
-                    ) : null}
-                    {mine?.inputs?.length ? (
-                      <span className="dw-draft-inputs">
-                        needs {mine.inputs.map((i) => i.name).join(", ")}
-                      </span>
-                    ) : null}
-                    {mine?.knowledge ? (
-                      // House rules an operator wrote for this step. Shown as a hint rather
-                      // than in full: it can be pages, and the row is not where it is read.
-                      <span className="dw-draft-inputs" title={mine.knowledge}>
-                        carries your notes
-                      </span>
-                    ) : null}
-                    {/* WHY it is manual, where it is not the operator's choice. A locked
-                        control with no reason reads as a broken control. */}
-                    {(mine?.approval_forced_manual || capability?.approval_forced_manual) ? (
-                      <span className="dw-draft-forced">
-                        always needs a person — risk tier{" "}
-                        {mine?.risk_tier ?? capability?.risk_tier} is at or above the floor
-                      </span>
-                    ) : null}
-                  </span>
-                  {/* THE STEP'S WHOLE SPECIFICATION, editable in the row.
-                      Two shapes, because both are things operators say: ask me when the run
-                      starts (the usual one — the same workflow does a different job each time),
-                      or pin it here for a workflow that always does the same thing. */}
-                  {step.agentWork ? (
-                    <span className="dw-draft-agentwork">
-                      <label className="dw-agentwork-mode">
-                        <select className="input"
-                                value={isFromInput(step.instructions) ? "ask" : "fixed"}
-                                data-testid={`dw-agentwork-mode-${step.id}`}
-                                onChange={(e) => setDraft((c) => c.map((st, i) => (i === index
-                                  ? { ...st, instructions: e.target.value === "ask"
-                                      ? { from_input: "instructions" } : "" }
-                                  : st)))}>
-                          <option value="ask">ask me when the run starts</option>
-                          <option value="fixed">always do this</option>
-                        </select>
-                      </label>
-                      {isFromInput(step.instructions) ? (
-                        <span className="detail dw-agentwork-hint">
-                          The agent is given whatever you type in the{" "}
-                          <code>{String((step.instructions as {from_input: string}).from_input)}</code>{" "}
-                          box when you start a run.
-                        </span>
-                      ) : (
-                        <textarea className="input dw-agentwork-text" rows={3}
-                                  value={typeof step.instructions === "string"
-                                         ? step.instructions : ""}
-                                  data-testid={`dw-agentwork-text-${step.id}`}
-                                  placeholder={"What you want done, in plain English. The agent\n"
-                                    + "works out which of its skills to use, and in what order."}
-                                  onChange={(e) => setDraft((c) => c.map((st, i) => (i === index
-                                    ? { ...st, instructions: e.target.value } : st)))} />
-                      )}
-                    </span>
-                  ) : null}
-                  {/* WHO RUNS IT. The premise of the product is that agents do the work and
-                      the steps track it — which is already true of BOSS's own pipelines, where
-                      a capability's captain becomes the actor. A customer's step ignored it and
-                      the builder never offered it, so their workflows had no agent anywhere.
-                      Empty is the existing behaviour: the anonymous workflow runner — EXCEPT on
-                      an agent step, where it means "whichever agent fits", which BOSS works out
-                      from what each one is for and what it holds. */}
-                  {/* A GATE NEEDS AN AGENT TOO, AND IT IS THE ONE STEP WHERE THAT MATTERS MOST.
-                      This rendered only for `capability`, so an Approval gate — kind
-                      `decision` — showed no agent control at all: the operator could place the
-                      one step whose entire purpose is that a PERSON answers it, and had nowhere
-                      to say who. */}
-                  {/* THE PROJECT'S AGENTS, not a constant list — and what an empty choice MEANS
-                      for this kind of step, said in the option itself: BOSS picks the agent
-                      that holds what the step needs (services/step_agents.py). A person is
-                      offered on a gate only. */}
-                  {(step.kind === "capability" || step.kind === "decision")
-                   && stepRoles.length ? (
-                    <StepAgentPicker
-                      value={step.captain}
-                      onChange={(next) => setDraft((c) =>
-                        c.map((st, i) => (i === index ? { ...st, captain: next } : st)))}
-                      roles={stepRoles} holdings={holdings}
-                      isGate={step.kind === "decision" || Boolean(capability?.is_gate)}
-                      emptyLabel={step.kind === "decision"
-                        ? "a person (default)"
-                        : step.agentWork
-                          ? "whichever agent fits — BOSS picks"
-                          : mine
-                            ? `the agent holding ${mine.skill_id ?? "this step's tool"} — BOSS picks`
-                            : "whoever starts the run (built-in step)"}
-                      testId={`dw-draft-captain-${step.id}`}
-                      ariaLabel={`Agent for ${step.id}`} />
-                  ) : null}
-                  {step.agentWork ? (
-                    <AgentStepScope
-                      stepId={step.id}
-                      skills={step.skills ?? []} mcp={step.mcp ?? []}
-                      available={step.captain
-                        ? (holdings[step.captain] ?? [])
-                        : [...new Set(Object.values(holdings).flat())].sort()}
-                      // Only servers an agent HOLDS: the named agent's, or — when BOSS picks —
-                      // any agent's (it then picks among the holders). A step never grants one.
-                      servers={bindable.mcp_servers
-                        .filter((s) => (step.captain
-                          ? (mcpHoldings[step.captain] ?? [])
-                          : Object.values(mcpHoldings).flat()).includes(s.name)
-                          || (step.mcp ?? []).includes(s.name))
-                        .map((s) => ({ id: s.id, name: s.name }))}
-                      onChange={(scope) => setDraft((c) => c.map((st, i) => (i === index
-                        ? { ...st, skills: scope.skills, mcp: scope.mcp } : st)))} />
-                  ) : null}
-                  {/* CAN THAT AGENT ACTUALLY DO IT?
-                      Naming an agent is half the decision; holding the skill is the other half,
-                      and it is the half the run enforces. Checked here, in the row, with the
-                      grant one click away — because the alternative is finding out after the
-                      run has waited on a human approval. */}
-                  {step.agentWork ? (
-                    // AN AGENT STEP HAS NO ONE SKILL TO CHECK — the whole of what the agent
-                    // holds is what it may use. What is worth saying is when it holds NOTHING,
-                    // because then the step is guaranteed to fail.
-                    step.captain && (holdings[step.captain] ?? []).length === 0 ? (
-                      <span className="dw-draft-grant" data-testid={`dw-empty-${step.id}`}>
-                        {roleLabel(step.captain)} holds no skills, so it cannot do anything.
-                        Open it in Agent work and give it the skills this work needs.
-                      </span>
-                    ) : null
-                  ) : (
-                    <CaptainCanRunIt projectId={projectId} actor={actor} step={step} mine={mine}
-                                     holdings={holdings} onGranted={onGranted} />
-                  )}
-                  <select className="input dw-draft-approval" value={step.approval}
-                          disabled={step.kind !== "capability"
-                                    || capability?.approval_forced_manual
-                                    || mine?.approval_forced_manual}
-                          onChange={(e) => setDraft((c) =>
-                            c.map((s, i) => (i === index ? { ...s, approval: e.target.value } : s)))}
-                          aria-label={`Approval for ${step.id}`}>
-                    <option value="auto">auto</option>
-                    <option value="manual">manual</option>
-                  </select>
-                  {/* Keyboard equivalents for the drag. A reorder control reachable only by
-                      pointer is a builder half the operators cannot use. */}
-                  <span className="dw-draft-moves">
-                    <button type="button" className="cap-btn" aria-label={`Move ${step.id} earlier`}
-                            onClick={() => move(index, index - 1)} disabled={index === 0}>↑</button>
-                    <button type="button" className="cap-btn" aria-label={`Move ${step.id} later`}
-                            onClick={() => move(index, index + 1)}
-                            disabled={index === draft.length - 1}>↓</button>
-                    <button type="button" className="cap-btn" aria-label={`Remove ${step.id}`}
-                            onClick={() => setDraft((c) => c.filter((_, i) => i !== index))}>×</button>
-                  </span>
-                  {/* WHERE EACH INPUT COMES FROM.
-                      Every input was written as "ask the operator for it by name", so a
-                      workflow built here could not feed one step into the next — the one thing
-                      a workflow is for. It also could not pin a value, which is how a publish
-                      step chooses between two connected channels. */}
-                  {step.kind === "capability" && declaredInputs(step).length ? (
-                    <button type="button" className="linklike dw-draft-wire-toggle"
-                            data-testid={`dw-wire-${step.id}`}
-                            onClick={() => setWiringStep(wiringStep === step.id ? null : step.id)}>
-                      {wiringStep === step.id ? "hide inputs" : `inputs (${declaredInputs(step).length})`}
-                    </button>
-                  ) : null}
-                  {wiringStep === step.id ? (
-                    <div className="dw-wire" data-testid={`dw-wire-panel-${step.id}`}>
-                      {declaredInputs(step).map((declared) => {
-                        const wire = (step.inputs ?? {})[declared.name] as
-                          Record<string, unknown> | string | undefined;
-                        const mode = wire && typeof wire === "object"
-                          ? ("from_step" in wire ? "step" : "run")
-                          : wire === undefined ? "run" : "fixed";
-                        const sources = upstream(index);
-                        return (
-                          <div key={declared.name} className="dw-wire-row">
-                            <label className="dw-wire-name">
-                              {declared.name}
-                              {declared.required ? null : <span className="detail"> (optional)</span>}
-                            </label>
-                            <select className="input dw-wire-mode" value={mode}
-                                    data-testid={`dw-wire-mode-${step.id}-${declared.name}`}
-                                    onChange={(e) => {
-                                      const next = e.target.value;
-                                      if (next === "run") {
-                                        setWire(step.id, declared.name, { from_input: declared.name });
-                                      } else if (next === "fixed") {
-                                        setWire(step.id, declared.name, "");
-                                      } else {
-                                        const first = sources[0];
-                                        setWire(step.id, declared.name, {
-                                          from_step: first?.id ?? "",
-                                          field: first?.fields[0] ?? "",
-                                        });
-                                      }
-                                    }}>
-                              <option value="run">asked when the run starts</option>
-                              <option value="step" disabled={sources.length === 0}>
-                                {sources.length ? "from an earlier step" : "from an earlier step (none yet)"}
-                              </option>
-                              <option value="fixed">a fixed value</option>
-                            </select>
-
-                            {mode === "run" ? (
-                              <input className="input dw-wire-value"
-                                     value={String((wire as { from_input?: string })?.from_input
-                                                   ?? declared.name)}
-                                     aria-label={`Name asked for ${declared.name}`}
-                                     onChange={(e) => setWire(step.id, declared.name,
-                                                              { from_input: e.target.value })} />
-                            ) : null}
-
-                            {mode === "fixed" ? (
-                              <input className="input dw-wire-value" value={String(wire ?? "")}
-                                     placeholder="e.g. youtube_2"
-                                     aria-label={`Fixed value for ${declared.name}`}
-                                     data-testid={`dw-wire-fixed-${step.id}-${declared.name}`}
-                                     onChange={(e) => setWire(step.id, declared.name, e.target.value)} />
-                            ) : null}
-
-                            {mode === "step" ? (
-                              <span className="dw-wire-pair">
-                                <select className="input"
-                                        value={String((wire as { from_step?: string })?.from_step ?? "")}
-                                        aria-label={`Step supplying ${declared.name}`}
-                                        data-testid={`dw-wire-step-${step.id}-${declared.name}`}
-                                        onChange={(e) => setWire(step.id, declared.name, {
-                                          from_step: e.target.value,
-                                          field: sources.find((u) => u.id === e.target.value)
-                                                   ?.fields[0] ?? "",
-                                        })}>
-                                  {sources.map((u) => (
-                                    <option key={u.id} value={u.id}>{u.label}</option>
-                                  ))}
-                                </select>
-                                {/* FREE TEXT, NOT A CLOSED LIST. `produces` is what a step
-                                    DECLARES; a skill can return more, and a picker that only
-                                    offered the declared ones would make the rest unreachable. */}
-                                <input className="input dw-wire-value"
-                                       list={`dw-fields-${step.id}-${declared.name}`}
-                                       value={String((wire as { field?: string })?.field ?? "")}
-                                       placeholder="which field"
-                                       aria-label={`Field supplying ${declared.name}`}
-                                       onChange={(e) => setWire(step.id, declared.name, {
-                                         from_step: (wire as { from_step?: string })?.from_step ?? "",
-                                         field: e.target.value,
-                                       })} />
-                                <datalist id={`dw-fields-${step.id}-${declared.name}`}>
-                                  {(sources.find(
-                                    (u) => u.id === (wire as { from_step?: string })?.from_step,
-                                  )?.fields ?? []).map((f) => <option key={f} value={f} />)}
-                                </datalist>
-                              </span>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </section>
-    </div>
-  );
-}
-
-
-/** Whether a step's instruction is read from the run's input rather than pinned on the step. */
-function isFromInput(value: unknown): boolean {
-  return Boolean(value && typeof value === "object" && "from_input" in (value as object));
 }

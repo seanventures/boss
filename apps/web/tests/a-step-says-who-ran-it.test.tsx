@@ -10,12 +10,12 @@
  */
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import {
-  AgentStepScope,
-  HOW_CHOSEN, NOT_AN_AGENT, RanAs, StepAgentPicker, stalePick, stepAgentChip,
-} from "../app/step-agents-ui";
+// The lane and the editor are other tests' business; they get stand-ins here.
+vi.mock("../app/workflows/studio-parts", () => import("./_helpers/studio-parts-stub"));
+
+import { HOW_CHOSEN, NOT_AN_AGENT, RanAs, stepAgentChip } from "../app/step-agents-ui";
 import { codeOnly } from "./_helpers/source";
 
 (globalThis as Record<string, unknown>).React = React;
@@ -67,31 +67,11 @@ describe("the run view says who ran each step, how they were chosen and why", ()
   });
 });
 
-describe("the step-agent picker offers the project's agents", () => {
-  const render = (isGate: boolean, value?: string) => renderToStaticMarkup(
-    <StepAgentPicker value={value} onChange={() => undefined}
-                     roles={["docs_writer", "video_editor", "human"]}
-                     holdings={{ video_editor: ["video.trim"] }} isGate={isGate}
-                     emptyLabel="whichever agent fits — BOSS picks" testId="t" ariaLabel="a" />);
-
-  it("lists them with what each holds, and an empty choice that says what it means", () => {
-    const html = render(false);
-    expect(html).toContain("whichever agent fits — BOSS picks");
-    expect(html).toContain("docs_writer · 0 skills");
-    expect(html).toContain("video_editor · 1 skill");
-  });
-
-  it("offers a person on a gate, and only on a gate", () => {
-    expect(render(true)).toContain("a person (human)");
-    expect(render(false)).not.toContain('value="human"');
-  });
-
-  it("keeps a name the project no longer has visible, and says so", () => {
-    expect(render(false, "engineering_captain"))
-      .toContain("engineering_captain — not an agent on this project");
-  });
-
-  it("is fed from the capabilities payload, which now carries the project's roles", () => {
+describe("the editor's agent choices come from the project's roster", () => {
+  // REWRITTEN (Workflow Studio): the builder's <select> picker is gone. Choosing an agent is the
+  // inspector's combobox (tests/inspector.test.tsx pins its options and the stale-name and
+  // person-on-a-step cases). What stays here is where its roster comes from.
+  it("is fed from the capabilities payload, which carries the project's roles", () => {
     const api = codeOnly("../../apps/api/app/main.py");
     // Integration: the roles are the project's roster (workflows.project_roster — its agents
     // plus the bundled roles it has not deleted), the same list publish accepts, so the picker
@@ -100,21 +80,6 @@ describe("the step-agent picker offers the project's agents", () => {
     expect(api).toContain('"agents": [{"role_key": a["role_key"]');
     expect(api).not.toContain('"roles": sorted(REGISTERED_ROLES)');
     expect(api).not.toContain("roster or REGISTERED_ROLES");
-  });
-});
-
-describe("a loaded 'human' on a step that is not a gate says why it cannot stay", () => {
-  it("shows it with the reason instead of as the empty choice", () => {
-    // THE INCIDENT: `human` was valid on any step before a person could only answer a gate.
-    // Such a spec loaded as "whichever agent fits", and Save returned a 422 nothing on the
-    // canvas explained.
-    const html = renderToStaticMarkup(
-      <StepAgentPicker value="human" onChange={() => undefined} roles={["docs_writer", "human"]}
-                       holdings={{}} isGate={false} emptyLabel="BOSS picks" testId="t"
-                       ariaLabel="a" />);
-    expect(html).toContain("human — only a gate can wait for a person");
-    expect(html).toMatch(/<option value="human" selected="">/);
-    expect(stalePick("human", ["docs_writer"], true)).toBeNull();
   });
 });
 
@@ -142,25 +107,5 @@ describe("the chip beside a run step never contradicts who ran it", () => {
     const view = codeOnly("app/delivery-workflows-ui.tsx");
     expect(view).toContain("stepAgentChip(step.captain, step.output, capability?.captain)");
     expect(view).not.toContain('"answers for this step"');
-  });
-});
-
-describe("a step's MCP list narrows what its agent holds, and never grants", () => {
-  // INTEGRATION of the agents stream (role_mcp_servers is THE grant the runtime reads) with the
-  // steps stream (a step may name MCP servers): the runtime offers held ∩ named, so the builder
-  // offers only servers an agent holds, and an empty list means the agent's own servers — it
-  // said "no MCP servers", which stopped being true when agents could hold servers.
-  it("says what an empty list means", () => {
-    const html = renderToStaticMarkup(
-      <AgentStepScope stepId="s" skills={[]} mcp={[]} available={[]}
-                      servers={[{ id: "m1", name: "mattermost" }]} onChange={() => undefined} />);
-    expect(html).toContain("may use every MCP server its agent holds");
-    expect(html).not.toContain("no MCP servers");
-  });
-
-  it("offers only the servers an agent holds", () => {
-    const ui = codeOnly("app/delivery-workflows-ui.tsx");
-    expect(ui).toContain("? (mcpHoldings[step.captain] ?? [])");
-    expect(ui).toContain(": Object.values(mcpHoldings).flat()).includes(s.name)");
   });
 });

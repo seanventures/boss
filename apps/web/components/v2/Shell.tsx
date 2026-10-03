@@ -36,10 +36,10 @@ import type { CompanyOverview } from "../../lib/v2/overview";
 export const V2_NAV = [
   { id: "missions", label: "Projects", href: "/v2", built: true, v1Area: "code_tasks" },
   { id: "hive", label: "Hive", href: "/v2/hive", built: true, v1Area: "agent" },
-  { id: "factory", label: "Agent work", href: "/v2/factory", built: true, v1Area: "workforce" },
-  { id: "org", label: "Team structure", href: "/v2/org", built: true, v1Area: "org_chart" },
+  { id: "factory", label: "Agents", href: "/v2/factory", built: true, v1Area: "workforce" },
+  { id: "org", label: "Team structure", href: "/v2/org", built: true, v1Area: "workforce" },
   { id: "panels", label: "Approvals", href: "/v2/panels", built: true, v1Area: "decisions" },
-  { id: "boss", label: "Workflow", href: "/v2/boss", built: true, v1Area: "delivery_workflows" },
+  { id: "boss", label: "Workflows", href: "/v2/boss", built: true, v1Area: "delivery_workflows" },
   { id: "timeline", label: "Receipts", href: "/v2/timeline", built: true, v1Area: "activity" },
   { id: "infra", label: "Infra & Models", href: "/v2/infra", built: true, v1Area: "delivery" },
   { id: "settings", label: "Settings", href: "/v2/settings", built: true, v1Area: "setup" },
