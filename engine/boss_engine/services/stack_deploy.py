@@ -15,10 +15,13 @@ BOSS performs it through the same governance as every other provider effect:
              the path) and a blocking decision for a person to approve.
     approve  the existing decisions API. Approval approves the ChangeSet and queues a durable
              worker job; a ten-minute install never runs inside anyone's HTTP request.
-    apply    the worker hands the leased job to the API, which applies the ChangeSet. INSIDE
-             that apply — ChangeSet `applying`, reservation present, receipt written — the
-             commit's tree is streamed to the host, the environment written, the manifest's
-             steps run, the health checks probed ON the host, and `current` switched.
+    apply    the worker hands the leased job to the API, which applies the ChangeSet in three
+             phases (see "Execute" below): the ChangeSet `applying` and its receipts are
+             COMMITTED first; then, with no transaction open, the commit's tree is streamed to
+             the host, the environment written, the manifest's steps run, the health checks
+             probed ON the host and `current` switched; then the verdict is recorded. The
+             decision and this job are the only way in: the generic ChangeSet approve/apply
+             routes refuse a stack deployment (resource_plane.PHASED_APPLY_SKILLS).
 
 Host layout (one directory per stack, default /opt/boss-apps/<name>):
 
@@ -28,7 +31,8 @@ Host layout (one directory per stack, default /opt/boss-apps/<name>):
     .boss/installed        present after the first healthy deploy: later deploys run `update`
 
 Credentials: the GitHub token is used inside the API container only, to download the tarball;
-it never reaches the host or a log. Generated environment values are minted once per (target,
+it never reaches the host or a log. A manifest's `{secret: NAME}` reads only an app secret the
+operator set on that target — never a project secret, a host key or a GitHub credential. Generated environment values are minted once per (target,
 stack), stored through the secret store and reused; their values never appear in a response,
 an event or the log tail (every output is redacted by value).
 
@@ -38,6 +42,7 @@ which is simply a new governed deployment of the previous healthy commit.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -613,7 +618,8 @@ _COLUMNS = (
     "id, project_id, target_id, host_id, repository, ref, commit_sha, manifest, status, "
     "decision_id, changeset_id, reservation_id, job_id, steps, log_tail, open_url, error, "
     "failure_reason, preflight, workflow_run_id, code_task_run_id, rollback_of, "
-    "apply_started_at, created_by, created_at, updated_at, finished_at"
+    "apply_started_at, created_by, created_at, updated_at, finished_at, deploy_dir, "
+    "waiting_on, apply_token"
 )
 
 
@@ -658,6 +664,12 @@ def serialize(row: Any) -> dict[str, Any]:
         "workflow_run_id": data.get("workflow_run_id"),
         "code_task_run_id": data.get("code_task_run_id"),
         "rollback_of": data.get("rollback_of"),
+        "dir": data.get("deploy_dir"),
+        # Approved, but queued behind another deployment writing the same host directory.
+        "waiting": ({"headline": "Waiting for deployment "
+                                 f"{data['waiting_on']} to finish on this host directory.",
+                     "deployment_id": data["waiting_on"]}
+                    if data.get("waiting_on") and data.get("status") == "running" else None),
         "created_by": data.get("created_by"),
         "created_at": _iso(data.get("created_at")),
         "updated_at": _iso(data.get("updated_at")),
@@ -795,11 +807,43 @@ def _find_secret_ref(connection: Connection, project_id: str, keys: list[str]) -
     return str(row[0]) if row else None
 
 
-def operator_secret_ref(connection: Connection, project_id: str, name: str) -> Optional[str]:
-    """The secret an operator set in BOSS under `name` (project scope), or None."""
+#: What a manifest's `{secret: NAME}` may never read, whatever it is named: a machine's SSH key or
+#: a GitHub credential. Neither is an application's configuration, and both would leave BOSS
+#: for a host whose install commands come from a pull request an agent wrote.
+_FORBIDDEN_SECRET_KINDS = frozenset({"private_key", "ssh_private_key"})
+_FORBIDDEN_SECRET_PROVIDERS = frozenset({"github", "private_key", "ssh_private_key"})
+
+
+def operator_secret_ref(connection: Connection, project_id: str, target_id: str,
+                        name: str) -> Optional[str]:
+    """The APP secret an operator set on THIS target under `name`, or None.
+
+    A manifest is repository content, so what it can name must be bounded by what the operator
+    deliberately handed this target — not by everything the project's secret store holds.
+    Only a secret scoped to this deployment target, at the key BOSS derives for (target,
+    name), is found: never a raw backend key, never another target's or a host's secret, and
+    never an SSH key or GitHub credential even if someone scoped one here.
+    """
     from .secrets_service import ref_key_for
 
-    return _find_secret_ref(connection, project_id, [ref_key_for(project_id, name), name])
+    row = connection.execute(
+        text("SELECT id, secret_kind, provider FROM secret_refs WHERE project_id = :p "
+             "AND status = 'active' AND scope_type = 'deployment_target' AND scope_id = :t "
+             "AND ref_key = :k ORDER BY updated_at DESC LIMIT 1"),
+        {"p": project_id, "t": target_id, "k": ref_key_for(target_id, name)}).mappings().first()
+    if not row:
+        return None
+    if (str(row["secret_kind"] or "").lower() in _FORBIDDEN_SECRET_KINDS
+            or str(row["provider"] or "").lower() in _FORBIDDEN_SECRET_PROVIDERS):
+        return None
+    return str(row["id"])
+
+
+def _secret_action(target_id: str, names: list[str]) -> str:
+    return (f"In BOSS, set each as a secret ON THIS TARGET (POST /v1/secrets with scope_type "
+            f"deployment_target, scope_id {target_id}, name {', '.join(names)}), then plan "
+            "again. Project-wide secrets, host keys and GitHub credentials are never readable "
+            "from a manifest.")
 
 
 def ensure_generated_secret(engine, settings: Settings, *, project_id: str, target_id: str,
@@ -853,15 +897,30 @@ def _environment(connection: Connection, settings: Settings, *, deployment: dict
             values[item.key] = value
             hidden.append(value)
         else:
-            ref = operator_secret_ref(connection, deployment["project_id"], item.value)
+            ref = operator_secret_ref(connection, deployment["project_id"],
+                                      deployment["target_id"], item.value)
             if not ref:
                 raise StackStepFailed(
-                    "environment", f"The secret {item.value!r} ({item.key}) is not set in BOSS.",
-                    f"Set a project secret named {item.value!r} in BOSS, then deploy again.")
+                    "environment",
+                    f"The secret {item.value!r} ({item.key}) is not set on this target.",
+                    _secret_action(deployment["target_id"], [item.value]))
             value = resolve_secret_ref(connection, ref, settings)
             values[item.key] = value
             hidden.append(value)
     return values, hidden
+
+
+def _lock_key(*parts: str) -> int:
+    """A Postgres advisory-lock key (signed 64-bit) for a tuple of names."""
+    digest = hashlib.sha256("\x1f".join(str(p) for p in parts).encode()).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def _live_deployment(connection: Connection, target_id: str, commit: str):
+    return connection.execute(
+        text(f"SELECT {_COLUMNS} FROM stack_deployments WHERE target_id = :t "
+             "AND commit_sha = :c AND status = ANY(:s) ORDER BY created_at DESC LIMIT 1"),
+        {"t": target_id, "c": commit, "s": list(ACTIVE_STATES)}).mappings().first()
 
 
 # ── Plan ─────────────────────────────────────────────────────────────────────────────────────
@@ -921,10 +980,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     commit = github.resolve_commit(owner, repo, ref)
 
     with engine.begin() as connection:
-        running = connection.execute(
-            text(f"SELECT {_COLUMNS} FROM stack_deployments WHERE target_id = :t "
-                 "AND commit_sha = :c AND status = ANY(:s) ORDER BY created_at DESC LIMIT 1"),
-            {"t": target_id, "c": commit, "s": list(ACTIVE_STATES)}).mappings().first()
+        running = _live_deployment(connection, target_id, commit)
         if running:
             # The same commit to the same place is ONE deployment. A second click, a retried
             # workflow step or two operators at once must not queue a second install.
@@ -946,12 +1002,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                                f"Fix {path} in the repository and deploy again.")
 
     with engine.begin() as connection:
-        missing = [f"{key} → {name}" for key, name in rendered["env_secrets"].items()
-                   if not operator_secret_ref(connection, project_id, name)]
+        missing = {key: name for key, name in rendered["env_secrets"].items()
+                   if not operator_secret_ref(connection, project_id, target_id, name)}
     if missing:
         raise StackDeployError(
-            f"The manifest reads secrets BOSS does not have: {', '.join(missing)}.",
-            "Set each as a project secret in BOSS under that name, then deploy again.")
+            "The manifest reads secrets this target does not have: "
+            + ", ".join(f"{key} → {name}" for key, name in missing.items()) + ".",
+            _secret_action(target_id, sorted(set(missing.values()))))
 
     problems = preflight_host(access, manifest)
     if problems:
@@ -964,6 +1021,30 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     summary = manifest.summary()
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
+        # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
+        # an ssh preflight), so the early `running` lookup cannot be the guarantee: a double
+        # click, a retried step or two operators would each get past it. The unique index on
+        # live (target, commit) rows is the backstop for anything that skips this function.
+        connection.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                           {"k": _lock_key("stack-plan", target_id)})
+        running = _live_deployment(connection, target_id, commit)
+        if running:
+            return {**serialize(running), "reused": True}
+        clash = connection.execute(
+            text("SELECT d.id, d.target_id, t.app_name, t.environment FROM stack_deployments d "
+                 "JOIN deployment_targets t ON t.id = d.target_id "
+                 "WHERE d.host_id = :h AND d.deploy_dir = :dir AND d.target_id <> :t "
+                 "AND t.status = 'active' AND d.status <> 'rejected' "
+                 "ORDER BY d.created_at DESC LIMIT 1"),
+            {"h": host["id"], "dir": manifest.dir, "t": target_id}).mappings().first()
+        if clash:
+            raise StackDeployError(
+                f"{manifest.dir} on {host['name']} already belongs to {clash['app_name']} "
+                f"({clash['environment']}, target {clash['target_id']}).",
+                "Two targets on one host must not share a directory: each has its own "
+                "generated secrets and would overwrite the other's deploy.env. Set a different "
+                "`dir` in this manifest (for example per environment), or deploy to another "
+                "host.", status_code=409)
         reservation = BudgetGovernor(settings).reserve(
             connection, project_id, "provider", 0,
             f"Stack deployment {deployment_id}: {owner}/{repo}@{short} to {host['name']}",
@@ -1000,7 +1081,10 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
              "changeset_id": changeset["id"], "target_id": target_id,
              "repository": f"{owner}/{repo}", "ref": ref, "commit": commit,
              "host": host["name"], "dir": manifest.dir, "steps": summary["steps"],
-             "env_keys": summary["env_keys"]},
+             "env_keys": summary["env_keys"],
+             # Which BOSS secret each key carries to the host: the approver sees the names.
+             "env_secrets": dict(rendered["env_secrets"]),
+             "generated_env_keys": summary["generated_env_keys"]},
             {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
              "cost_confidence": "no_provider_spend"},
             "stack_deploy_requires_approval", risk_tier=2, default_action="hold")
@@ -1025,16 +1109,17 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                  "(id, project_id, target_id, host_id, repository, ref, commit_sha, manifest, "
                  " manifest_text, status, decision_id, changeset_id, reservation_id, steps, "
                  " log_tail, open_url, preflight, workflow_run_id, code_task_run_id, "
-                 " rollback_of, created_by) "
+                 " rollback_of, created_by, deploy_dir) "
                  "VALUES (:i, :p, :t, :h, :repo, :ref, :c, CAST(:m AS JSONB), :mt, "
                  "        'awaiting_approval', :d, :cs, :res, CAST(:steps AS JSONB), '', :open, "
-                 "        CAST(:pf AS JSONB), :wr, :cr, :rb, :by)"),
+                 "        CAST(:pf AS JSONB), :wr, :cr, :rb, :by, :dir)"),
             {"i": deployment_id, "p": project_id, "t": target_id, "h": host["id"],
              "repo": f"{owner}/{repo}", "ref": ref, "c": commit, "m": json.dumps(summary),
              "mt": manifest_text, "d": decision_id, "cs": changeset["id"],
              "res": reservation["reservation_id"], "steps": json.dumps(steps),
              "open": rendered["open_url"], "pf": json.dumps({"ok": True, "host": host["name"]}),
-             "wr": workflow_run_id, "cr": run_id, "rb": rollback_of, "by": actor})
+             "wr": workflow_run_id, "cr": run_id, "rb": rollback_of, "by": actor,
+             "dir": manifest.dir})
         emit_event(connection, project_id, "deployment.stack_planned", actor,
                    "stack_deployment", deployment_id,
                    {"target_id": target_id, "repository": f"{owner}/{repo}", "ref": ref,
@@ -1078,8 +1163,13 @@ def on_decision_approved(connection: Connection, settings: Settings, decision: d
     row = _row(connection, deployment_id, lock=True) if deployment_id else None
     if not row or row["status"] != "awaiting_approval":
         return None
-    changeset = ResourcePlaneService(settings).approve_changeset(
-        connection, changeset_id=row["changeset_id"], actor=actor)
+    rp = ResourcePlaneService(settings)
+    changeset = rp.get_changeset(connection, row["project_id"], row["changeset_id"])
+    if changeset.get("status") != "approved":
+        # The decision is the ChangeSet's only door (the generic ChangeSet routes refuse a
+        # stack deployment), and one already approved still gets its job queued below.
+        changeset = rp.approve_changeset(connection, changeset_id=row["changeset_id"],
+                                         actor=actor, phased_owner=True)
     if changeset.get("status") != "approved":
         # Dual control still waiting on another approver role: nothing runs yet.
         return None
@@ -1123,12 +1213,65 @@ def on_decision_not_approved(connection: Connection, settings: Settings, decisio
 
 
 # ── Execute (the worker's leased job, handed to the API) ─────────────────────────────────────
+#
+# An apply is three phases, and only the middle one is long:
+#
+#   1. one short transaction, COMMITTED before any host write: the ChangeSet `applying`, its
+#      receipt and an `in_progress` resource receipt, and the row's apply_started_at plus an
+#      owner token. A host is never written without a durable record that BOSS was writing it.
+#   2. the host work, with NO transaction open. Progress goes out in its own tiny writes,
+#      guarded by the owner token.
+#   3. one short transaction: the verdict on the receipts, the ChangeSet and the row.
+#
+# Two session-level advisory locks, held by the applying request for all three phases, are how
+# everyone else tells "an apply is running" from "an apply died": one per deployment, one per
+# (host, directory). Postgres drops them when the process holding them dies, so a replay that
+# CAN take the deployment's lock knows nobody is applying it any more — and one that cannot is
+# looking at a live apply and waits instead of failing it.
+
+#: How long a job waits before asking again whether the target is free.
+WAIT_SECONDS = 30
+
+
+class _ApplyLocks:
+    """Session advisory locks on a dedicated AUTOCOMMIT connection: no transaction stays open."""
+
+    def __init__(self, engine):
+        self._engine = engine
+        self._conn = None
+        self._held: list[int] = []
+
+    def __enter__(self) -> "_ApplyLocks":
+        self._conn = self._engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+        return self
+
+    def try_lock(self, key: int) -> bool:
+        got = bool(self._conn.execute(text("SELECT pg_try_advisory_lock(:k)"),
+                                      {"k": key}).scalar())
+        if got:
+            self._held.append(key)
+        return got
+
+    def __exit__(self, *exc) -> None:
+        try:
+            for key in reversed(self._held):
+                self._conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+        except Exception:  # noqa: BLE001 — closing the session releases them regardless
+            log.warning("stack deploy: advisory unlock failed", exc_info=True)
+        finally:
+            self._conn.close()
+
+
+def _short(connection: Connection) -> None:
+    """Nothing in an apply's bookkeeping waits long on a row lock: it fails and says so."""
+    connection.execute(text("SET LOCAL lock_timeout = '10s'"))
+
 
 def _fail(connection: Connection, deployment_id: str, project_id: str, *, headline: str,
           action: str, actor: str, steps: Optional[list] = None,
           log_tail: Optional[str] = None) -> None:
     fields: dict[str, Any] = {"status": "failed", "finished_at": "__now__",
-                              "failure_reason": headline,
+                              "failure_reason": headline, "waiting_on": None,
                               "error": {"headline": headline, "action": action}}
     if steps is not None:
         fields["steps"] = steps
@@ -1139,84 +1282,176 @@ def _fail(connection: Connection, deployment_id: str, project_id: str, *, headli
                deployment_id, {"headline": headline})
 
 
+def _close_governance(connection: Connection, settings: Settings, row: Any, *, actor: str,
+                      reason: str) -> None:
+    """A deployment that ends without a verdict from its apply still closes its ChangeSet:
+    an `applying` one gets its receipts failed, an unapplied one is deadlettered and hands
+    back its reservation."""
+    from .budget import BudgetGovernor
+    from .resource_plane import ResourcePlaneService
+
+    status = connection.execute(text("SELECT status FROM changesets WHERE id = :c"),
+                                {"c": row["changeset_id"]}).scalar()
+    if status == "applying":
+        ResourcePlaneService(settings).complete_phased_apply(
+            connection, changeset_id=row["changeset_id"], actor=actor, outcomes={},
+            missing_message=reason)
+    elif status in ("approved", "pending_approval", "policy_checked", "budget_reserved"):
+        connection.execute(
+            text("UPDATE changesets SET status = 'deadlettered', failure_reason = :r, "
+                 "updated_at = now() WHERE id = :c"), {"c": row["changeset_id"], "r": reason})
+        if row["reservation_id"]:
+            BudgetGovernor(settings).release(connection, row["project_id"],
+                                             row["reservation_id"], reason)
+
+
 def execute_stack_job(engine, settings: Settings, *, deployment_id: str, job_id: str,
-                      worker_id: str, lease_token: str) -> dict[str, Any]:
-    """Apply an approved deployment under the worker's lease. Idempotent across replays."""
+                      worker_id: str, lease_token: str, adapter: Any = None) -> dict[str, Any]:
+    """Apply an approved deployment under the worker's lease. Idempotent across replays.
+
+    Returns `job_deferred: True` when the job was handed back to the queue without spending an
+    attempt (the worker then neither completes nor fails it): this deployment is being applied
+    by another request right now, or another deployment is writing the same host directory.
+    """
     from .jobs import JobLeaseService, LeaseNotFoundError
     from .resource_plane import ResourcePlaneService
 
-    with engine.begin() as connection:
-        try:
-            JobLeaseService(settings).require_active_lease(connection, worker_id, job_id,
-                                                           lease_token)
-        except LeaseNotFoundError as exc:
-            return {"status": "failed", "retry": False, "error": f"lease: {exc}"}
-        row = _row(connection, deployment_id, lock=True)
-        if not row:
-            return {"status": "failed", "retry": False, "error": "no such deployment"}
-        if row["status"] != "running":
-            return {"status": row["status"], "retry": False,
-                    "deployment": serialize(row)}
-        if row["apply_started_at"] is not None:
-            # A REPLAY AFTER A CRASH. The host may be half way through an install, and running
-            # it again blind is how a database gets initialised twice. Stop, say so, and let a
-            # person decide: deploying again runs `update` once `installed` exists.
-            _fail(connection, deployment_id, row["project_id"],
-                  headline="BOSS was interrupted while this deployment was running, so the "
-                           "host may be part-way through it.",
-                  action="Open the host's log to see where it stopped, then deploy again or "
-                         "roll back.", actor=worker_id)
-            connection.execute(
-                text("UPDATE changesets SET status = 'deadlettered', failure_reason = :r, "
-                     "updated_at = now() WHERE id = :c AND status IN ('approved', 'applying')"),
-                {"c": row["changeset_id"], "r": "apply interrupted; not replayed"})
-            return {"status": "failed", "retry": False,
-                    "deployment": serialize(_row(connection, deployment_id))}
-        busy = connection.execute(
-            text("SELECT id FROM stack_deployments WHERE target_id = :t AND id <> :i "
-                 "AND status = 'running' AND apply_started_at IS NOT NULL LIMIT 1"),
-            {"t": row["target_id"], "i": deployment_id}).first()
-        if busy:
-            return {"status": "waiting", "retry": True,
-                    "error": f"another deployment ({busy[0]}) is running on this target"}
-        _set(connection, deployment_id, apply_started_at="__now__", job_id=job_id)
-
-    with engine.begin() as connection:
-        try:
-            result = ResourcePlaneService(settings).apply_changeset(
-                connection, changeset_id=row["changeset_id"],
-                actor=str(row["created_by"] or worker_id), created_by_job_id=job_id)
-        except ValueError as exc:
-            _fail(connection, deployment_id, row["project_id"],
-                  headline=f"The ChangeSet could not be applied: {exc}",
-                  action="Plan the deployment again.", actor=worker_id)
-            result = {"status": "blocked"}
-        if result.get("status") == "blocked":
-            current = _row(connection, deployment_id)
-            if current and current["status"] == "running":
+    jobs = JobLeaseService(settings)
+    with _ApplyLocks(engine) as locks:
+        with engine.begin() as connection:
+            _short(connection)
+            try:
+                jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+            except LeaseNotFoundError as exc:
+                return {"status": "failed", "retry": False, "error": f"lease: {exc}"}
+            row = _row(connection, deployment_id, lock=True)
+            if not row:
+                return {"status": "failed", "retry": False, "error": "no such deployment"}
+            if row["status"] != "running":
+                return {"status": row["status"], "retry": False, "deployment": serialize(row)}
+            if not locks.try_lock(_lock_key("stack-deploy", deployment_id)):
+                # Another request is applying THIS deployment right now — typically a worker
+                # restarted while the API kept going. Its verdict is coming; replaying would be
+                # wrong and failing it would be a lie.
+                note = "This deployment is still being applied; waiting for its result."
+                jobs.defer_leased(connection, worker_id, job_id, lease_token,
+                                  delay_seconds=WAIT_SECONDS, reason="stack_deploy_in_flight",
+                                  message=note)
+                return {"status": "running", "retry": False, "job_deferred": True,
+                        "error": note, "deployment": serialize(row)}
+            if row["apply_started_at"] is not None:
+                # A REPLAY AFTER A CRASH: an apply started, and nobody holds its lock, so the
+                # process running it is gone. The host may be half way through an install, and
+                # running it again blind is how a database gets initialised twice. Stop, say
+                # so, and let a person decide: deploying again runs `update` once `installed`
+                # exists.
                 _fail(connection, deployment_id, row["project_id"],
-                      headline="Resource Plane blocked the apply.",
-                      action="Open the decision it raised in Decisions.", actor=worker_id)
-        final = _row(connection, deployment_id)
-        if final["status"] == "running":
-            # The operation never reached its own verdict — refused at the governance check,
-            # or the provider layer failed before it. The receipt holds why.
-            reason = connection.execute(
-                text("SELECT error FROM resource_receipts WHERE changeset_id = :c "
-                     "ORDER BY created_at DESC LIMIT 1"), {"c": row["changeset_id"]}).scalar()
-            message = str((_json(reason) or {}).get("message") or "it did not run")
-            _fail(connection, deployment_id, row["project_id"],
-                  headline=f"The deployment did not run: {message}"[:300],
-                  action="Plan the deployment again.", actor=worker_id)
-            final = _row(connection, deployment_id)
+                      headline="BOSS was interrupted while this deployment was running, so the "
+                               "host may be part-way through it.",
+                      action="Open the host's log to see where it stopped, then deploy again or "
+                             "roll back.", actor=worker_id)
+                _close_governance(connection, settings, row, actor=worker_id,
+                                  reason="apply interrupted; not replayed")
+                return {"status": "failed", "retry": False,
+                        "deployment": serialize(_row(connection, deployment_id))}
+            directory = str(row["deploy_dir"] or "")
+            if not directory:
+                from .app_deploy_manifest import load_manifest as _load
+
+                directory = _load(row["manifest_text"]).dir
+            if not locks.try_lock(_lock_key("stack-dir", str(row["host_id"] or ""), directory)):
+                other = connection.execute(
+                    text("SELECT id FROM stack_deployments WHERE host_id = :h "
+                         "AND deploy_dir = :d AND id <> :i AND status = 'running' "
+                         "AND apply_started_at IS NOT NULL ORDER BY apply_started_at LIMIT 1"),
+                    {"h": row["host_id"], "d": directory, "i": deployment_id}).scalar()
+                note = (f"Waiting for deployment {other or '(another)'} to finish writing "
+                        f"{directory} on this host.")
+                _set(connection, deployment_id, waiting_on=other or "another deployment")
+                jobs.defer_leased(connection, worker_id, job_id, lease_token,
+                                  delay_seconds=WAIT_SECONDS, reason="stack_deploy_target_busy",
+                                  message=note)
+                return {"status": "waiting", "retry": False, "job_deferred": True,
+                        "error": note, "deployment": serialize(_row(connection, deployment_id))}
+            actor = str(row["created_by"] or worker_id)
+            try:
+                started = ResourcePlaneService(settings).begin_phased_apply(
+                    connection, changeset_id=row["changeset_id"], actor=actor,
+                    created_by_job_id=job_id)
+            except ValueError as exc:
+                _fail(connection, deployment_id, row["project_id"],
+                      headline=f"The ChangeSet could not be applied: {exc}",
+                      action="Plan the deployment again.", actor=worker_id)
+                _close_governance(connection, settings, row, actor=worker_id, reason=str(exc))
+                return {"status": "failed", "retry": False,
+                        "deployment": serialize(_row(connection, deployment_id))}
+            token = _secrets.token_hex(16)
+            _set(connection, deployment_id, apply_started_at="__now__", job_id=job_id,
+                 apply_token=token, waiting_on=None)
+        # Phase 1 is committed. From here to the verdict no transaction is open.
+        operation_id = str(started[0]["operation"]["id"])
+        try:
+            outcome = apply_on_host(engine, settings, deployment_id=deployment_id,
+                                    apply_token=token, dedupe_key=started[0]["dedupe_key"],
+                                    adapter=adapter)
+            error = None
+        except _ApplyFailed as exc:
+            outcome, error = None, exc
+        except PermissionError as exc:
+            # Governance changed under us between phases: nothing was written; say so.
+            outcome, error = None, _ApplyFailed(str(exc), "Plan the deployment again.")
+        with engine.begin() as connection:
+            _short(connection)
+            return _finalize(connection, settings, deployment_id=deployment_id, token=token,
+                             operation_id=operation_id, outcome=outcome, error=error,
+                             actor=actor)
+
+
+class _ApplyFailed(Exception):
+    """The host work ended without a healthy stack: headline, action and what had run."""
+
+    def __init__(self, headline: str, action: str, steps: Optional[list] = None,
+                 log_tail: Optional[str] = None):
+        super().__init__(headline)
+        self.headline = headline
+        self.action = action
+        self.steps = steps
+        self.log_tail = log_tail
+
+
+def _finalize(connection: Connection, settings: Settings, *, deployment_id: str, token: str,
+              operation_id: str, outcome: Optional[dict], error: Optional[_ApplyFailed],
+              actor: str) -> dict[str, Any]:
+    from .resource_plane import ResourcePlaneService
+
+    row = _row(connection, deployment_id, lock=True)
+    if error is None:
+        outcomes = {operation_id: {"result": outcome["provider_result"]}}
+    else:
+        outcomes = {operation_id: {"error": {"message": error.headline,
+                                             "error_type": "StackDeployFailed"}}}
+    ResourcePlaneService(settings).complete_phased_apply(
+        connection, changeset_id=row["changeset_id"], actor=actor, outcomes=outcomes)
+    if row["status"] == "running" and row["apply_token"] == token:
+        if error is None:
+            _set(connection, deployment_id, status="healthy", finished_at="__now__",
+                 steps=outcome["steps"], log_tail=outcome["log_tail"],
+                 open_url=outcome["open_url"], error=None, failure_reason=None)
+            emit_event(connection, row["project_id"], "deployment.stack_healthy", actor,
+                       "stack_deployment", deployment_id,
+                       {"commit": row["commit_sha"], "mode": outcome["mode"],
+                        "open_url": outcome["open_url"]})
+        else:
+            _fail(connection, deployment_id, row["project_id"], headline=error.headline,
+                  action=error.action, actor=actor, steps=error.steps, log_tail=error.log_tail)
+    final = _row(connection, deployment_id)
     return {"status": final["status"], "retry": False, "deployment": serialize(final)}
 
 
-def _require_governed(connection: Connection, operation: dict, dedupe_key: str,
+def _require_governed(connection: Connection, changeset_id: str, dedupe_key: str,
                       deployment: Any) -> None:
     """The ONLY door to a host write in Community: an applying ChangeSet that was approved,
-    with its reservation and this operation's receipt already recorded."""
-    changeset_id = str(operation.get("changeset_id") or "")
+    with its reservation and this operation's receipt already COMMITTED (phase one)."""
     cs = connection.execute(
         text("SELECT status, approved_by, reservation_id, project_id FROM changesets "
              "WHERE id = :c"), {"c": changeset_id}).mappings().first()
@@ -1235,112 +1470,156 @@ def _require_governed(connection: Connection, operation: dict, dedupe_key: str,
         raise PermissionError("Stack deployment refused: its receipt was not recorded first.")
 
 
-def apply_stack_operation(connection: Connection, settings: Settings, operation: dict, *,
-                          receipt_dedupe_key: str, adapter: Any = None) -> dict[str, Any]:
-    """The `ssh_host.stack.deploy` operation, called by ResourcePlaneService inside apply.
+def _require_owner(deployment: Any, apply_token: str) -> None:
+    """Only the apply that started this deployment (phase one, under its job) writes the host.
 
-    Progress is written on a SEPARATE connection so the console can watch it; the verdict is
-    written on THIS one, so `healthy` and the receipt commit together.
+    Every other caller — the generic ChangeSet apply, a stale request, a replay — is refused
+    here, so nothing can skip the busy-target lock, the replay fence or the approval.
+    """
+    if deployment is None:
+        raise PermissionError("Stack deployment refused: no such deployment.")
+    if deployment["status"] != "running" or deployment["apply_started_at"] is None:
+        raise PermissionError(
+            f"Stack deployment refused: it is {deployment['status']}, not running under its "
+            "worker job.")
+    if not deployment["job_id"] or not apply_token or deployment["apply_token"] != apply_token:
+        raise PermissionError("Stack deployment refused: this request does not own its apply.")
+
+
+def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token: str,
+                  dedupe_key: str, adapter: Any = None) -> dict[str, Any]:
+    """Phase two: the host work, with no database transaction open while it runs.
+
+    Raises PermissionError before touching anything when the caller does not own a governed
+    apply of this deployment, and _ApplyFailed (with the steps and log so far) when the stack
+    did not come up healthy.
     """
     from .app_deploy_manifest import load_manifest as _load
     from .core import now_utc
     from .deployment_fleet import get_host
-    from .resource_plane import ProviderAdapterError
 
-    desired = operation.get("desired_state") or {}
-    deployment_id = str(desired.get("deployment_id") or "")
-    row = _row(connection, deployment_id) if deployment_id else None
-    _require_governed(connection, operation, receipt_dedupe_key, row)
-    deployment = dict(row)
-    project_id = deployment["project_id"]
-    actor = str(deployment.get("created_by") or "boss")
-    progress_engine = connection.engine
+    applier: Optional[StackApplier] = None
+    with engine.begin() as connection:
+        deployment = _row(connection, deployment_id)
+        _require_owner(deployment, apply_token)
+        _require_governed(connection, str(deployment["changeset_id"]), dedupe_key, deployment)
+        deployment = dict(deployment)
+        project_id = deployment["project_id"]
+        try:
+            target = _target(connection, deployment["target_id"]) or {}
+            host = get_host(connection, deployment["host_id"]) if deployment["host_id"] else None
+            if not host:
+                raise StackStepFailed("prepare", "The target's host no longer exists.",
+                                      "Attach the target to a host in Infra and deploy again.")
+            manifest = _load(deployment["manifest_text"])
+            rendered = render(manifest, _deployment_ctx(target, host, deployment["commit_sha"],
+                                                         deployment["ref"]))
+            owner, repo = split_repository(deployment["repository"])
+            access = host_access_for(connection, settings, host, adapter)
+            github = github_source_for(connection, settings, project_id, owner, repo)
+            env_values, hidden = _environment(connection, settings, deployment=deployment,
+                                              manifest=manifest, rendered=rendered)
+        except (StackStepFailed, StackDeployError, ManifestError) as exc:
+            raise _ApplyFailed(
+                getattr(exc, "headline", None) or f"The manifest is not valid: {exc}",
+                getattr(exc, "action", None) or "Fix boss.deploy.yaml and deploy again.")
 
     def record(steps: list[dict[str, Any]], log_tail: str) -> None:
         try:
-            with progress_engine.begin() as c:
-                _set(c, deployment_id, steps=steps, log_tail=log_tail)
-        except Exception:  # noqa: BLE001 — progress is for watching; the verdict is below
+            with engine.begin() as c:
+                _short(c)
+                c.execute(
+                    text("UPDATE stack_deployments SET steps = CAST(:s AS JSONB), "
+                         "log_tail = :l, updated_at = now() WHERE id = :i "
+                         "AND apply_token = :tok AND status = 'running'"),
+                    {"s": json.dumps(steps), "l": log_tail, "i": deployment_id,
+                     "tok": apply_token})
+        except Exception:  # noqa: BLE001 — progress is for watching; the verdict is phase 3
             log.warning("stack deploy %s: progress not recorded", deployment_id, exc_info=True)
 
-    applier: Optional[StackApplier] = None
     try:
-        target = _target(connection, deployment["target_id"]) or {}
-        host = get_host(connection, deployment["host_id"]) if deployment["host_id"] else None
-        if not host:
-            raise StackStepFailed("prepare", "The target's host no longer exists.",
-                                  "Attach the target to a host in Infra and deploy again.")
-        manifest = _load(deployment["manifest_text"])
-        rendered = render(manifest, _deployment_ctx(target, host, deployment["commit_sha"],
-                                                     deployment["ref"]))
-        owner, repo = split_repository(deployment["repository"])
-        access = host_access_for(connection, settings, host, adapter)
-        github = github_source_for(connection, settings, project_id, owner, repo)
-        env_values, hidden = _environment(connection, settings, deployment=deployment,
-                                          manifest=manifest, rendered=rendered)
         applier = StackApplier(
             access=access, rendered=rendered, commit=deployment["commit_sha"],
             ref=deployment["ref"], env_values=env_values,
             redact_values=hidden + [access.key_material],
-            changeset_id=str(operation.get("changeset_id")),
+            changeset_id=str(deployment["changeset_id"]),
             fetch_tree=lambda dest: github.download_tarball(owner, repo,
                                                             deployment["commit_sha"], dest),
             record=record, now=lambda: now_utc().isoformat())
         outcome = applier.run()
-    except (StackStepFailed, StackDeployError, ManifestError) as exc:
-        headline = getattr(exc, "headline", None) or f"The manifest is not valid: {exc}"
-        action = getattr(exc, "action", None) or "Fix boss.deploy.yaml and deploy again."
-        _fail(connection, deployment_id, project_id, headline=headline, action=action,
-              actor=actor, steps=applier.steps if applier else None,
-              log_tail=applier.log if applier else None)
-        raise ProviderAdapterError(headline)
-    except Exception as exc:  # noqa: BLE001 — recorded with a sentence, then re-raised
-        said = explain_failure("deploy", 1, str(exc))
-        _fail(connection, deployment_id, project_id, headline=said["headline"],
-              action=said["action"], actor=actor,
-              steps=applier.steps if applier else None,
-              log_tail=applier.log if applier else None)
-        raise ProviderAdapterError(said["headline"])
-
-    _set(connection, deployment_id, status="healthy", finished_at="__now__",
-         steps=outcome["steps"], log_tail=outcome["log_tail"], open_url=outcome["open_url"],
-         error=None, failure_reason=None)
-    emit_event(connection, project_id, "deployment.stack_healthy", actor, "stack_deployment",
-               deployment_id, {"commit": deployment["commit_sha"], "mode": outcome["mode"],
-                               "open_url": outcome["open_url"]})
+    except (StackStepFailed, StackDeployError) as exc:
+        raise _ApplyFailed(exc.headline, exc.action, applier.steps if applier else None,
+                           applier.log if applier else None)
+    except Exception as exc:  # noqa: BLE001 — recorded with a sentence, never a stack trace
+        log.warning("stack deploy %s failed unexpectedly", deployment_id, exc_info=True)
+        said = explain_failure("deploy", 1, redact(str(exc), hidden + [access.key_material]))
+        raise _ApplyFailed(said["headline"], said["action"],
+                           applier.steps if applier else None, applier.log if applier else None)
     return {
-        "provider_ref": f"ssh://{access.user}@{access.host}{manifest.dir}@"
-                        f"{deployment['commit_sha'][:12]}",
-        "resource_external_id": f"stack:{deployment['target_id']}:{manifest.name}",
-        "resource_name": manifest.name,
-        "resource_type": "ssh_host.stack",
-        "state": "active",
-        "health_status": "healthy",
-        "operation": outcome["mode"],
-        "commit": deployment["commit_sha"],
-        "open_url": outcome["open_url"],
+        **outcome,
+        "provider_result": {
+            "provider_ref": f"ssh://{access.user}@{access.host}{manifest.dir}@"
+                            f"{deployment['commit_sha'][:12]}",
+            "resource_external_id": f"stack:{deployment['target_id']}:{manifest.name}",
+            "resource_name": manifest.name,
+            "resource_type": "ssh_host.stack",
+            "state": "active",
+            "health_status": "healthy",
+            "operation": outcome["mode"],
+            "commit": deployment["commit_sha"],
+            "open_url": outcome["open_url"],
+        },
     }
 
 
-def fail_for_deadlettered_job(connection: Connection, job: dict, error: dict) -> None:
-    """A deadlettered apply job fails its deployment, with the reason in words."""
+def fail_for_deadlettered_job(connection: Connection, job: dict, error: dict,
+                              settings: Optional[Settings] = None) -> None:
+    """A deadlettered apply job fails its deployment, with the reason in words — unless an
+    apply of it is still running somewhere, which owns the verdict."""
     if job.get("kind") != JOB_KIND:
         return
     payload = _json(job.get("payload")) or {}
     deployment_id = str(payload.get("deployment_id") or "")
-    row = _row(connection, deployment_id) if deployment_id else None
+    row = _row(connection, deployment_id, lock=True) if deployment_id else None
     if not row or row["status"] != "running":
+        return
+    if not connection.execute(text("SELECT pg_try_advisory_xact_lock(:k)"),
+                              {"k": _lock_key("stack-deploy", deployment_id)}).scalar():
         return
     _fail(connection, deployment_id, row["project_id"],
           headline="The worker job running this deployment stopped before it finished.",
           action=f"Deploy again. The worker said: {str(error.get('message') or '')[:200]}",
           actor="worker")
+    if settings is not None:
+        _close_governance(connection, settings, row, actor="worker",
+                          reason="the apply job was deadlettered")
 
 
 # ── Workflows: the deploy step, for a stack target ───────────────────────────────────────────
 
+def build_repository(spec: Any, default_owner: str = "") -> Optional[str]:
+    """owner/repo of the repository a build worked in, or None when it cannot be told.
+
+    The owner is part of the identity: `someone/shop` is not `acme/shop`, and a pull request
+    number means nothing outside its own repository.
+    """
+    spec = _json(spec) or {}
+    repo = str(spec.get("repo") or "").strip().removesuffix(".git").strip("/")
+    if "/" in repo:
+        owner, _, repo = repo.rpartition("/")
+        owner = owner.rsplit("/", 1)[-1]
+    else:
+        owner = str(spec.get("owner") or default_owner or "").strip()
+    return f"{owner}/{repo}" if owner and repo else None
+
+
+def _same_repository(a: Optional[str], b: Optional[str]) -> bool:
+    return bool(a) and bool(b) and str(a).lower() == str(b).lower()
+
+
 def stack_target_for_deploy(connection: Connection, project_id: str,
-                            inputs: dict[str, Any]) -> Optional[dict]:
+                            inputs: dict[str, Any], *,
+                            default_owner: str = "") -> Optional[dict]:
     """The stack target a workflow's deploy step is bound to, or None for the legacy path."""
     target_id = str(inputs.get("target_id") or "").strip()
     if target_id:
@@ -1354,16 +1633,15 @@ def stack_target_for_deploy(connection: Connection, project_id: str,
         return None
     spec = connection.execute(text("SELECT spec FROM code_task_runs WHERE id = :i"),
                               {"i": run_id}).scalar()
-    repo = str((_json(spec) or {}).get("repo") or "").lower()
-    if not repo:
+    repository = build_repository(spec, default_owner)
+    if not repository:
         return None
     environment = str(inputs.get("environment") or "").strip()
     rows = [dict(r) for r in connection.execute(
         text("SELECT * FROM deployment_targets WHERE project_id = :p AND target_kind = :k "
              "AND status = 'active' AND (:e = '' OR environment = :e) ORDER BY created_at"),
         {"p": project_id, "k": TARGET_KIND, "e": environment}).mappings().all()]
-    rows = [r for r in rows
-            if str(r.get("repo") or "").lower().rsplit("/", 1)[-1] == repo.rsplit("/", 1)[-1]]
+    rows = [r for r in rows if _same_repository(r.get("repo"), repository)]
     return rows[0] if len(rows) == 1 else None
 
 
@@ -1386,10 +1664,18 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
     if not run["pull_request_number"]:
         return {"capability": "deploy", "tool": None, "status": "failed",
                 "error": "the build opened no pull request, so there is no commit to deploy."}
-    spec = _json(run["spec"]) or {}
+    built = build_repository(run["spec"], str(getattr(settings, "target_github_owner", "")
+                                              or ""))
     repository = str(target.get("repo") or "")
-    if "/" not in repository and spec.get("owner") and spec.get("repo"):
-        repository = f"{spec['owner']}/{spec['repo']}"
+    if "/" not in repository:
+        repository = built or ""
+    if not _same_repository(built, repository):
+        # pull/N names a pull request only inside its own repository. Planning the target's
+        # repository at the build's number would deploy somebody else's change.
+        return {"capability": "deploy", "tool": None, "status": "failed",
+                "error": (f"the build worked in {built or 'an unnamed repository'}, but target "
+                          f"{target.get('app_name')!r} deploys {repository or 'nothing'}; "
+                          "bind the deploy step to a stack target for the build's repository.")}
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target["id"],

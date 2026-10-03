@@ -269,14 +269,102 @@ def test_a_job_replayed_after_a_crash_fails_cleanly_without_touching_the_host(
 def test_an_apply_outside_an_approved_changeset_is_refused_before_the_host(
         client, engine, stack):
     deployment = _plan(client, stack)
+    # Not running under its job: nobody may write the host for it, whatever they pass.
+    with pytest.raises(PermissionError, match="not running under its worker job"):
+        stack_deploy.apply_on_host(engine, api_main.settings, deployment_id=deployment["id"],
+                                   apply_token="", dedupe_key="x")
+    # Even a row forged to look owned is refused while its ChangeSet is not being applied.
     with engine.begin() as connection:
-        operation = dict(connection.execute(
-            text("SELECT * FROM changeset_operations WHERE changeset_id = :c"),
-            {"c": deployment["changeset_id"]}).mappings().one())
-        with pytest.raises(PermissionError, match="approved ChangeSet"):
-            stack_deploy.apply_stack_operation(
-                connection, api_main.settings, operation, receipt_dedupe_key="x")
+        connection.execute(
+            text("UPDATE stack_deployments SET status = 'running', apply_started_at = now(), "
+                 "job_id = 'job_forged', apply_token = 'tok' WHERE id = :d"),
+            {"d": deployment["id"]})
+    with pytest.raises(PermissionError, match="approved ChangeSet"):
+        stack_deploy.apply_on_host(engine, api_main.settings, deployment_id=deployment["id"],
+                                   apply_token="tok", dedupe_key="x")
     assert stack["host"].writes() == []
+
+
+def test_the_changeset_routes_refuse_a_stack_deployment_and_point_at_its_decision(
+        client, engine, stack):
+    deployment = _plan(client, stack)
+    changeset_id = deployment["changeset_id"]
+
+    approved = client.post(f"/v1/changesets/{changeset_id}/approve", json={"actor": "ceo"})
+    applied = client.post(f"/v1/changesets/{changeset_id}/apply", json={"actor": "ceo"})
+
+    assert approved.status_code == 422, approved.text
+    assert deployment["decision_id"] in approved.json()["detail"]
+    assert applied.status_code == 422, applied.text
+    assert stack["host"].writes() == [], "the generic apply route wrote the host"
+    fetched = client.get(f"/v1/deployments/stack/{deployment['id']}").json()["deployment"]
+    assert fetched["status"] == "awaiting_approval"
+    # The decision is still the way in, and it still works.
+    result, _ = _approve_and_execute(client, engine, deployment)
+    assert result["status"] == "healthy", result
+
+
+def test_a_decision_still_queues_the_apply_when_its_changeset_was_already_approved(
+        client, engine, stack):
+    deployment = _plan(client, stack)
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE changesets SET status = 'approved', approved_by = 'ceo', "
+                                "approved_at = now() WHERE id = :c"),
+                           {"c": deployment["changeset_id"]})
+    result, _ = _approve_and_execute(client, engine, deployment)
+    assert result["status"] == "healthy", result
+
+
+def test_a_planned_dir_another_target_on_the_host_uses_is_refused(client, engine, stack):
+    first = _plan(client, stack)
+    staging = client.post("/v1/deployments/stack/targets", json={
+        "project_id": HOME, "host_id": stack["target"]["host_id"], "repository": "acme/shop",
+        "app_name": stack["target"]["app_name"], "environment": "staging", "actor": "ceo"})
+    assert staging.status_code == 201, staging.text
+    response = client.post("/v1/deployments/stack/plan", json={
+        "project_id": HOME, "target_id": staging.json()["id"], "ref": "main", "actor": "ceo"})
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "/opt/boss-apps/shop" in detail["headline"]
+    assert stack["target"]["id"] in detail["headline"] and "dir" in detail["action"]
+    assert first["dir"] == "/opt/boss-apps/shop"
+
+
+def test_two_plans_of_the_same_commit_at_once_are_one_deployment(client, engine, stack):
+    import threading
+
+    # Both plans pass the early lookup, then meet inside the host preflight — the window in
+    # which a double click used to create two deployments, ChangeSets and decisions.
+    barrier = threading.Barrier(2, timeout=30)
+    host = stack["host"]
+    real = host.stack_exec
+
+    def meet(**kwargs):
+        if "BOSS_SSH_OK" in kwargs["command"]:
+            barrier.wait()
+        return real(**kwargs)
+
+    host.stack_exec = meet
+    results: list = []
+
+    def plan():
+        results.append(stack_deploy.plan_stack_deploy(
+            engine, api_main.settings, project_id=HOME, target_id=stack["target"]["id"],
+            repository=None, ref="main", actor="ceo"))
+
+    threads = [threading.Thread(target=plan) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    assert len(results) == 2
+    assert results[0]["id"] == results[1]["id"]
+    with engine.begin() as connection:
+        count = connection.execute(
+            text("SELECT count(*) FROM stack_deployments WHERE target_id = :t"),
+            {"t": stack["target"]["id"]}).scalar_one()
+    assert count == 1
 
 
 def test_a_rejected_decision_rejects_the_deployment_and_releases_the_reservation(
@@ -352,3 +440,34 @@ def test_the_workflow_deploy_step_plans_a_stack_without_a_preview(
         f"/v1/deployments/stack/{result['stack_deployment_id']}").json()["deployment"]
     assert deployment["commit"] == "e" * 40 and deployment["ref"] == "pull/7"
     assert deployment["code_task_run_id"] == run_id
+
+
+def _build(engine, spec: str, number: int = 7) -> str:
+    run_id = f"crun_{uuid4().hex[:10]}"
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO code_task_runs (id, project_id, status, title, spec, "
+                 "pull_request_number) VALUES (:i, :p, 'completed', 'A feature', "
+                 "CAST(:s AS JSONB), :n)"),
+            {"i": run_id, "p": HOME, "s": spec, "n": number})
+    return run_id
+
+
+def test_a_build_of_a_same_named_repository_never_deploys_to_another_owners_target(
+        client, engine, stack):
+    run_id = _build(engine, '{"owner": "other", "repo": "shop"}')
+    with engine.begin() as connection:
+        found = stack_deploy.stack_target_for_deploy(connection, HOME, {"run_id": run_id})
+    assert found is None, "other/shop matched the acme/shop target by name alone"
+
+    named = stack_deploy.plan_for_workflow_step(
+        engine, api_main.settings, project_id=HOME, actor="ceo", target=stack["target"],
+        inputs={"run_id": run_id}, workflow_run_id=None)
+    assert named["status"] == "failed"
+    assert "other/shop" in named["error"] and "acme/shop" in named["error"]
+    assert client.get("/v1/deployments/stack", params={"project_id": HOME}).json()["items"] == []
+
+    own = _build(engine, '{"owner": "ACME", "repo": "shop"}')
+    with engine.begin() as connection:
+        found = stack_deploy.stack_target_for_deploy(connection, HOME, {"run_id": own})
+    assert found and found["id"] == stack["target"]["id"]

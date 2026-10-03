@@ -167,7 +167,8 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     with begin(engine) as c:
         stack_target = stack_target_for_deploy(
             c, project_id, {"target_id": target_id, "run_id": run_id,
-                            "environment": environment if target_id else ""})
+                            "environment": environment if target_id else ""},
+            default_owner=str(getattr(settings, "target_github_owner", "") or ""))
     if stack_target is not None:
         planned = plan_for_workflow_step(engine, settings, project_id=project_id, actor=actor,
                                          target=stack_target, inputs={"run_id": run_id},

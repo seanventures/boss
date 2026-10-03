@@ -122,6 +122,9 @@ class DeployManifest:
             "env_keys": self.env_keys(),
             "generated_env_keys": [e.key for e in self.env if e.source == "generate"],
             "secret_env_keys": [e.key for e in self.env if e.source == "secret"],
+            # KEY -> the BOSS secret it reads, so whoever approves sees WHICH secret goes to
+            # the host, not only that some key does.
+            "secret_env": {e.key: e.value for e in self.env if e.source == "secret"},
             "health": [{"url": h.url, "expect": h.expect,
                         "timeout_seconds": h.timeout_seconds} for h in self.health],
             "open_url": self.open_url,
