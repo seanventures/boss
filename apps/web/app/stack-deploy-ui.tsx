@@ -10,16 +10,16 @@
  * application that ships a manifest deploys through the same four clicks.
  *
  * Every state the operator can see is the API's record, re-read while it moves. Buttons are the
- * ones `stackActions` allows for the record's status — never a guess from what was last pressed.
+ * record's own `actions`, decided by the API — never a guess from status or what was last pressed.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { browserHref } from "../lib/browser-links";
 import { formatDateTime } from "../lib/datetime";
 import {
-  DEFAULT_MANIFEST_PATH, DEFAULT_REF, attachStackTarget, canHostStack, createStackTarget, decideStackDeploy,
+  DEFAULT_MANIFEST_PATH, DEFAULT_REF, canHostStack, createStackTarget, decideStackDeploy, deploymentActions,
   deployFormProblem, getStackDeployment, isAttached, isLive, listStackDeployments, loadHosts, loadRepositories, loadStackTargets,
-  planStackDeploy, rollbackStackDeploy, shortCommit, stackActions, statusLabel, statusTone,
+  planStackDeploy, rollbackStackDeploy, shortCommit, statusLabel, statusTone,
   stepText, targetFormProblem, targetManifestPath, targetPublicUrl, targetRepository,
   type DeployHost, type Repository, type StackDeployment, type StackTarget,
 } from "../lib/stack-deploy";
@@ -123,7 +123,9 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
                     ) : null}
                   </div>
                   {isAttached(t) ? null : (
-                    <PointAtVm target={t} hosts={verified} actor={actor} onDone={reload} />
+                    <p className="detail" data-testid="stack-target-unattached">
+                      Not on a VM, so it cannot deploy. Add the stack target again on a verified VM.
+                    </p>
                   )}
                   {recent.length ? (
                     <ul className="sd-recent" data-testid="stack-recent">
@@ -173,43 +175,6 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
         </>
       ) : null}
     </section>
-  );
-}
-
-/** A stack target with no VM (made outside this panel) has no credential to deploy with. */
-function PointAtVm({ target, hosts, actor, onDone }: {
-  target: StackTarget; hosts: DeployHost[]; actor: string; onDone: () => void | Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [hostId, setHostId] = useState(hosts[0]?.id ?? "");
-
-  if (!hosts.length) {
-    return (
-      <p className="detail" data-testid="stack-target-unattached">
-        Not on a VM yet, so it cannot deploy. Add and verify a VM under Hosts, then point it here.
-      </p>
-    );
-  }
-  async function attach() {
-    setBusy(true); setError(null);
-    try {
-      const r = await attachStackTarget(hostId, target.id, actor);
-      if (!r.ok) { setError(r.error); return; }
-      await onDone();
-    } finally { setBusy(false); }
-  }
-  return (
-    <div className="sd-row" data-testid="stack-target-unattached">
-      <span className="detail">Not on a VM yet, so it cannot deploy.</span>
-      <select aria-label="VM" value={hostId} onChange={(e) => setHostId(e.target.value)}>
-        {hosts.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
-      </select>
-      <button type="button" className="cap-btn" disabled={busy} onClick={() => void attach()}>
-        {busy ? "Pointing…" : "Point at a VM"}
-      </button>
-      {error ? <span className="detail" role="alert">{error}</span> : null}
-    </div>
   );
 }
 
@@ -424,7 +389,7 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
     );
   }
 
-  const actions = stackActions(d);
+  const actions = deploymentActions(d);
   const status = String(d.status);
   const manifest = d.manifest ?? {};
 

@@ -312,9 +312,6 @@ class DeploymentTargetCreateBody(OpenProjectBody):
     status: SkipValidation[str | None] = None
     # With host_id, target_ref is derived from the host and may be omitted.
     host_id: SkipValidation[str | None] = None
-    deploy_kind: SkipValidation[str | None] = None
-    manifest_path: SkipValidation[str | None] = None
-    public_url: SkipValidation[str | None] = None
 
 
 class DeploymentTargetUpdateBody(OpenRequestBody):
@@ -333,9 +330,6 @@ class DeploymentTargetUpdateBody(OpenRequestBody):
     app_entry: SkipValidation[str | None] = None
     repo_owner: SkipValidation[str | None] = None
     publishable_ports: SkipValidation[str | int | list[int] | None] = None
-    deploy_kind: SkipValidation[str | None] = None
-    manifest_path: SkipValidation[str | None] = None
-    public_url: SkipValidation[str | None] = None
 
 
 class DeploymentTargetTeardownBody(OpenRequestBody):

@@ -7780,7 +7780,12 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     for field in required:
         if not payload.get(field):
             raise HTTPException(status_code=422, detail=f"{field} is required")
-    if str(payload["target_kind"]).lower() == "stack":
+    # A stack target has exactly one way in. Stack facts sent here (a deploy_kind of "stack", a
+    # manifest path, a public URL) would otherwise be dropped and leave an ordinary ssh target
+    # that no stack deploy can use.
+    if (str(payload["target_kind"]).lower() == "stack"
+            or str(payload.get("deploy_kind") or "").lower() == "stack"
+            or payload.get("manifest_path") or payload.get("public_url")):
         raise HTTPException(
             status_code=422,
             detail="stack targets are created with POST /v1/deployments/stack/targets, "
@@ -7807,12 +7812,6 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     if payload.get("publishable_ports"):
         resources.append({"kind": "publishable_ports",
                           "name": str(payload["publishable_ports"])})
-    # A stack target's three facts, stored where stack_deploy reads them.
-    from boss_engine.services.stack_targets import stack_resource_updates
-    try:
-        resources = merge_target_resources(resources, stack_resource_updates(payload))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
 
     # Accept either "boss-sandbox" or "example-user/boss-sandbox". An operator copying a repo from
     # GitHub pastes the second form; rejecting it (or silently mis-cloning) is a trap.
@@ -7909,17 +7908,11 @@ def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetU
     # silently deleting `app_entry`, `repo_owner` and anything else the target had declared.
     # Changing a port therefore erased which app to deploy — and the next deployment failed
     # with "cannot tell which app to deploy", naming a field nobody had touched.
-    from boss_engine.services.stack_targets import stack_resource_updates
-    try:
-        stack_updates = stack_resource_updates(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
     resource_updates = {
         "app_port": payload.get("app_port"),
         "app_entry": payload.get("app_entry"),
         "repo_owner": payload.get("repo_owner"),
         "publishable_ports": payload.get("publishable_ports"),
-        **stack_updates,
     }
     explicit = payload.get("required_resources")
     updates_resources = explicit is not None or any(
@@ -7932,7 +7925,7 @@ def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetU
         raise HTTPException(status_code=422, detail=(
             "nothing to update. Understood fields: target_ref, status, environment, app_name, "
             "domains, health_checks, secret_refs, required_resources, app_port, app_entry, "
-            "repo_owner, publishable_ports, deploy_kind, manifest_path, public_url. "
+            "repo_owner, publishable_ports. "
             f"Received: {sorted(payload)}"))
 
     with begin(engine) as connection:

@@ -5981,6 +5981,10 @@ class DeploymentTargetSummary(BaseModel):
     #: targets looked unbound while the host panel, querying the column directly, listed one of
     #: them as bound to it.
     host_id: Optional[str] = None
+    #: A stack target's (target_kind 'stack') repository manifest and public address — the
+    #: canonical columns POST /v1/deployments/stack/targets writes. None on every other kind.
+    manifest_path: Optional[str] = None
+    public_url: Optional[str] = None
     domains: list[str]
     required_resources: list[dict[str, Any]]
     # Existing deployment targets record a binding (for example,
