@@ -31,6 +31,8 @@ import { browserHref } from "../lib/browser-links";
 import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
 import { DefineStepForm } from "./workflows/define-step-form";
 import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
+import { FlowLane } from "./workflows/flow/flow-lane";
+import { runPalette, runSpec } from "./workflows/flow/run-lane";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -2946,6 +2948,30 @@ export function railMeta(step: RunStep): string {
   return ["succeeded", "completed"].includes(step.status) ? "" : step.status;
 }
 
+/** A step's place on the run lane: the phase its left edge shows and the words under it.
+ *
+ *  The states that are NOT plain progress keep their own words, because "this one failed" or
+ *  "this did nothing" must never be something you infer from a colour: a step that did nothing
+ *  is never drawn as done, and an operator's skip says who and why. */
+export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?: string } {
+  if (needsYou(step)) return { phase: "needs_you", meta: "needs you" };
+  switch (phaseOf(step)) {
+    case "nothing": return { phase: "skipped", meta: "nothing done", tip: DID_NOTHING };
+    case "skipped": {
+      const by = skippedBy(step);
+      if (by) return { phase: "skipped", meta: by, tip: by };
+      return { phase: "skipped", meta: "skipped", tip: skipReason(step) || "this step did not apply to this run" };
+    }
+    case "failed": return { phase: "failed", meta: railMeta(step) || "failed" };
+    case "failed_on": return { phase: "failed", meta: "failed — went on",
+                               tip: "It failed, and the run went on without it" };
+    case "findings": return { phase: "done", meta: railMeta(step) || "findings", tip: "Finished with findings" };
+    case "done": return { phase: "done", meta: railMeta(step) };
+    case "now": return { phase: "moving", meta: railMeta(step) };
+    default: return { phase: "future", meta: railMeta(step) || "pending" };
+  }
+}
+
 export function needsYou(step: RunStep): boolean {
   // THE GATE'S STATE, NOT ONLY THE STEP'S.
   //
@@ -3045,15 +3071,19 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   // window. Measured from the DOM rather than computed from an index: a computed position is
   // right until a label wraps to two lines or the rail reflows, and then it points at the
   // wrong box while looking exactly as confident.
-  const railRef = useRef<HTMLOListElement | null>(null);
+  const railRef = useRef<HTMLDivElement | null>(null);
   const detailRef = useRef<HTMLDivElement | null>(null);
+  const laneSpec = useMemo(() => runSpec(steps), [steps]);
+  const lanePalette = useMemo(() => runPalette(capabilities, roles), [capabilities, roles]);
+  const laneState = useMemo(() => Object.fromEntries(steps.map((s) => [s.step_id, laneStateOf(s)])), [steps]);
 
   useEffect(() => {
     const place = () => {
       const rail = railRef.current;
       const detail = detailRef.current;
       if (!rail || !detail) return;
-      const node = rail.querySelector<HTMLElement>('[data-picked="true"] .dw-node-btn');
+      const node = rail.querySelector<HTMLElement>(
+        '.wf-node[data-selected="true"], [data-testid="dw-node-agents"][data-picked="true"]');
       const panel = detail.querySelector<HTMLElement>(".dw-detail");
       if (!node || !panel) {
         detail.style.removeProperty("--dw-arrow-x");
@@ -3071,9 +3101,14 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
       detail.style.setProperty("--dw-arrow-x", `${Math.round(clamped)}px`);
     };
     place();
-    // The rail reflows on resize, and a label that wraps moves every box after it.
+    // The lane refits on resize and scrolls sideways inside itself; either moves the node.
+    const lane = railRef.current?.querySelector(".wf-lane-viewport");
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    lane?.addEventListener("scroll", place, { passive: true });
+    return () => {
+      window.removeEventListener("resize", place);
+      lane?.removeEventListener("scroll", place);
+    };
   }, [picked, steps.length]);
 
   // ASSIGNMENT IS STEP ONE, in the chain where it can be seen.
@@ -3092,95 +3127,22 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
 
   return (
     <div className="dw-path" data-testid="dw-path">
-      <ol className="dw-rail" aria-label="Workflow steps" ref={railRef}>
-        <li className="dw-node dw-node-agents" data-phase="done"
-            data-picked={showAgents ? "true" : undefined} data-testid="dw-node-agents">
-          <button type="button" className="dw-node-btn"
+      {/* THE SAME LANE THE DESIGNER DRAWS, in run mode: one row that never wraps, scrolling
+          inside itself, with each step named and drawn exactly as it is in the editor. Who is
+          on the run is a chip above it rather than a pseudo-step in the chain. */}
+      <div className="wf-run-path" ref={railRef}>
+        <div className="wf-run-head">
+          <button type="button" className="wf-chip wf-chip-btn" data-testid="dw-node-agents"
+                  aria-pressed={showAgents} data-picked={showAgents ? "true" : undefined}
+                  data-tip={terminal ? "Who ran each step" : "Who is on this run · auto-confirmed"}
                   onClick={() => setPicked(showAgents ? (initial?.step_id ?? null) : AGENTS_NODE)}>
-            {/* `dw-dot` for the GRID BEHAVIOUR, not the colour: it spans both rows, so the
-                first column is the width of the marker. Without it the marker sat in row 1 and
-                "auto-confirmed" in row 2 of the SAME column, which sized that column to the
-                word and pushed "Agents" to the far right of its own node. */}
-            <span className="dw-dot dw-node-dot" aria-hidden>◇</span>
-            <span className="dw-node-name">Agents</span>
-            <span className="dw-node-meta">
-              <span className="detail">{terminal ? "as run" : "auto-confirmed"}</span>
-            </span>
+            Agents
           </button>
-        </li>
-        {steps.map((step, index) => {
-          const phase = phaseOf(step);
-          const capability = step.capability ? byKey.get(step.capability) : undefined;
-          // THE FIRST STEP HAS A PREDECESSOR TOO. It is the Agents node, which is complete
-          // before any step runs — so treating "no earlier step" as "nothing has flowed" left
-          // Agents and Research as the only pair in the rail with no line between them.
-          const previous = index > 0 ? phaseOf(steps[index - 1]) : "done";
-          return (
-            <li key={step.step_id} className="dw-node" data-phase={phase}
-                data-picked={step.step_id === picked} data-testid="dw-node">
-              {/* The connector INTO this step: solid once the work has flowed through it,
-                  animated while it is flowing, dim before. Drawn for every step including the
-                  first, whose predecessor is the Agents node. */}
-              <i className="dw-link" aria-hidden
-                 data-flow={["done", "skipped", "findings", "nothing", "failed_on"].includes(previous ?? "")
-                   ? (phase === "now" ? "moving" : "past") : "future"} />
-              <button type="button" className="dw-node-btn"
-                      aria-current={phase === "now" ? "step" : undefined}
-                      onClick={() => setPicked(step.step_id)}>
-                {/* THE KIND, AS A SHAPE — with the outcome still readable.
-                    Ten nodes that differ only by a number and a tick make "find the deploy" a
-                    reading task. A glyph is learned once. The states that are NOT plain progress
-                    keep their mark, because "this one failed" must never be something you have
-                    to infer from an icon. */}
-                <span className="dw-dot" data-phase={phase} aria-hidden>
-                  {phase === "failed" ? "!"
-                    : phase === "failed_on" ? "✕"
-                    : phase === "findings" ? "▲"
-                    : phase === "skipped" ? "–"
-                    : phase === "nothing" ? "○"
-                    : hasStepIcon(step.capability ?? undefined)
-                      ? <StepIcon capability={step.capability ?? undefined} />
-                      : phase === "done" ? "✓" : index + 1}
-                </span>
-                <span className="dw-node-name">{capability?.label ?? step.capability ?? step.step_id}</span>
-                <span className="dw-node-meta">
-                  {needsYou(step) ? (
-                    <em className="dw-node-you" data-testid="dw-node-you">needs you</em>
-                  ) : phase === "nothing" ? (
-                    <span className="dw-node-skipped" data-testid="dw-node-did-nothing"
-                          title={DID_NOTHING}>
-                      nothing done
-                    </span>
-                  ) : phase === "skipped" ? (
-                    // "not run" READS AS A FAULT, and the reason was recorded all along.
-                    //
-                    // Research shows this on most runs and an operator who has watched it run
-                    // for four minutes on another run reasonably reads it as broken. It is
-                    // not: the step returns `status: not_applicable` with a sentence saying
-                    // why — "No research phase — this project was started directly, and the
-                    // build was already running when this workflow began" — and the chain
-                    // threw that sentence away and printed two words that sound like a defect.
-                    // AN OPERATOR'S SKIP IS SAID, NOT HIDDEN IN A TOOLTIP. "skipped ⓘ" read
-                    // the same for a branch the run never took and for a failed step somebody
-                    // chose to go on without — opposite things. Who and why are on the rail.
-                    skippedBy(step) ? (
-                      <span className="dw-node-skipped" data-by-operator="true"
-                            data-testid="dw-node-skipped-by-operator" title={skippedBy(step)}>
-                        {skippedBy(step)}
-                      </span>
-                    ) : (
-                      <span className="dw-node-skipped" data-testid="dw-node-skipped"
-                            title={skipReason(step) || "this step did not apply to this run"}>
-                        skipped{skipReason(step) ? " ⓘ" : ""}
-                      </span>
-                    )
-                  ) : railMeta(step)}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
+        </div>
+        <FlowLane spec={laneSpec} palette={lanePalette} mode="run" runState={laneState}
+                  selection={showAgents ? null : current?.step_id ?? null}
+                  onSelect={(id) => { if (id) setPicked(id); }} label="Workflow steps" />
+      </div>
       {showAgents ? (
         <AgentsOnThis projectId={projectId} actor={actor} roles={roles}
                       appName={appIdentity(run.input as AppRun).name}

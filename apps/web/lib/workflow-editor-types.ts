@@ -159,28 +159,12 @@ export {
 } from "./workflow-api";
 export { applyStepPatch, inputSourceOf, deepEqual, TITLE_MAX } from "./workflow-spec";
 
-// S2 · app/workflows/flow/*, app/workflows/editor/*
-export function StepNode(p: { view: StepView; mode: "design" | "run" | "dot"; selected?: boolean;
-  problem?: string;
-  run?: { phase: "done" | "moving" | "needs_you" | "failed" | "future" | "skipped"; meta: string };
-  onSelect?(): void }): JSX.Element {
-  return notImplemented("StepNode");
-}
-export function FlowLane(p: { spec: Spec; palette: Palette | null; mode: "design" | "run" | "preview";
-  density?: "auto" | "compact"; selection?: string | null; problems?: Problem[];
-  runState?: Record<string, { phase: string; meta: string }>; onSelect?(id: string | null): void;
-  onInsert?(at: number, item: PaletteItem): void; onMove?(id: string, to: number): void;
-  canMove?(id: string, to: number): boolean; renderGapAction?(at: number): ReactNode }): JSX.Element {
-  return notImplemented("FlowLane");
-}
-/** The library card rail. */
-export function MiniLane(p: { steps: WorkflowSummary["steps"] }): JSX.Element {
-  return notImplemented("MiniLane");
-}
-export function WorkflowEditor(p: { projectId: string; workflowKey: string | "new"; onBack(): void;
-  onStart(key: string): void }): JSX.Element {
-  return notImplemented("WorkflowEditor");
-}
+// S2 · the canvas, from its own modules. WorkflowEditor is imported from
+// app/workflows/editor/workflow-editor.tsx directly: it composes the inspector, which imports
+// this file, and a re-export here would make that a cycle.
+export { StepNode } from "../app/workflows/flow/step-node";
+export { FlowLane } from "../app/workflows/flow/flow-lane";
+export { MiniLane } from "../app/workflows/flow/mini-lane";
 
 // S3 · app/workflows/editor/inspector/*, json/*, save/*
 /** Step properties, or the workflow settings when nothing is selected. */

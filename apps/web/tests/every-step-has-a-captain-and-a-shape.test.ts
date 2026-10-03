@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { StepNode } from "../app/workflows/flow/step-node";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -64,15 +68,25 @@ describe("every step has its own shape", () => {
 
   it("and a kind with no glyph falls back rather than guessing", () => {
     // A shared icon would be worse than none: it asserts a similarity that does not exist.
+    // REWRITTEN (Workflow Studio): the lane's node falls back to its TYPE's glyph (agent task,
+    // your step, gate…), never to another step's.
     expect(ICONS).toContain("export function hasStepIcon");
-    expect(UI).toContain('hasStepIcon(step.capability ?? undefined)');
-    expect(UI).toContain('phase === "done" ? "✓" : index + 1');
+    const NODE_ICON = codeOnly("app/workflows/flow/type-icons.tsx");
+    expect(NODE_ICON).toContain("if (hasStepIcon(icon)) return <StepIcon capability={icon} size={size} />;");
+    expect(NODE_ICON).toContain("TYPE_ICONS[type]");
   });
 
   it("a failure keeps its mark, which an icon must never hide", () => {
-    const at = UI.indexOf('<span className="dw-dot" data-phase={phase}');
-    const block = UI.slice(at, at + 600);
-    expect(block.indexOf('phase === "failed" ? "!"')).toBeLessThan(block.indexOf("hasStepIcon"));
+    // The run lane's node marks the outcome ON the icon (✕ failed, – skipped, ✓ done), and says
+    // it to a screen reader, so a glyph that only says what kind of step it is cannot hide it.
+    const html = renderToStaticMarkup(createElement(StepNode, {
+      mode: "run", run: { phase: "failed", meta: "3m 2s" },
+      view: { id: "deploy", title: "Deploy", type: "builtin", icon: "deploy",
+              agent: { kind: "you", label: "You", tip: "" },
+              badges: { approval: false, forced: false, inputs: 0, unwired: [], skills: 0, mcp: 0, lacks: [] } },
+    }));
+    expect(html).toMatch(/class="wf-node-mark" data-phase="failed"/);
+    expect(html).toContain(">Failed<");
   });
 
   it("the card wears the same glyph as its rail node", () => {

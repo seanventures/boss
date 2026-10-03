@@ -165,7 +165,9 @@ describe("the rail keeps the timing and drops the noise", () => {
   });
 
   it("the node uses it", () => {
-    expect(UI).toContain(") : railMeta(step)}");
+    // The run lane's node words come from laneStateOf, which reads railMeta (REWRITTEN).
+    const at = UI.indexOf("export function laneStateOf");
+    expect(UI.slice(at, at + 1600)).toContain('case "done": return { phase: "done", meta: railMeta(step) };');
   });
 });
 
