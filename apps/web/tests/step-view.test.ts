@@ -38,6 +38,19 @@ describe("who runs a step", () => {
       .toEqual({ kind: "person", label: "A person", tip: "Waits for a person to answer." });
   });
 
+  it("3. a built-in sign-off (a capability that is a gate) with no captain is A person", () => {
+    const palette = { ...PALETTE, capabilities: PALETTE.capabilities.map((c) =>
+      c.key === "ux_review" ? { ...c, is_gate: true } : c) };
+    const signOff = stepView({ id: "ux_signoff", kind: "capability", next: [],
+                               binding: { capability: "ux_review", inputs: {} } }, palette);
+    expect(signOff.agent).toEqual({ kind: "person", label: "A person",
+                                    tip: "Waits for a person to answer." });
+    expect(signOff.badges.approval).toBe(true);
+    expect(signOff.type).toBe("builtin");
+    // The same capability, not a gate, is still the starter's.
+    expect(view({ binding: { capability: "ux_review" } }).agent.label).toBe("You");
+  });
+
   it("4. an agent task is Auto, and names the only agent that can do it", () => {
     expect(agentTask().agent).toEqual({ kind: "auto", label: "Auto",
       tip: "BOSS picks an agent holding every allowed skill." });

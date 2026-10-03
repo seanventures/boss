@@ -21,6 +21,7 @@ let root: Root | null = null;
 let activeVersion = 3;
 let reads: string[] = [];
 let specMissing = false;
+let failing = new Set<string>();
 
 function Probe({ k, version }: { k: string; version?: number }) {
   editor = useWorkflowEditor(k, "p1", { version });
@@ -35,12 +36,24 @@ async function mount(k: string, version?: number) {
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 }
 
+/** The same editor, re-rendered with another key or version (the URL changed). */
+async function rerender(k: string, version?: number) {
+  await act(async () => { root!.render(createElement(Probe, { k, version })); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+}
+
+const draftOf = (k: string) => {
+  const raw = window.localStorage.getItem(`boss:wf-draft:p1:${k}`);
+  return raw ? JSON.parse(raw) : null;
+};
+
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 450)); });
 
 beforeEach(() => {
   reads = [];
   activeVersion = 3;
   specMissing = false;
+  failing = new Set();
   window.localStorage.clear();
   vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
     const url = new URL(String(input), "http://console.test");
@@ -51,6 +64,9 @@ beforeEach(() => {
                              human_role: "human" });
     }
     if (view === "custom_steps") return Response.json({ steps: [], bindable: {} });
+    if (view === "spec" && failing.has(url.searchParams.get("key") ?? "")) {
+      return Response.json({ detail: "upstream down" }, { status: 502 });
+    }
     if (view === "spec" && specMissing) {
       return Response.json({ detail: "no workflow 'ghost'" }, { status: 404 });
     }
@@ -176,6 +192,64 @@ describe("useWorkflowEditor", () => {
     const after = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(after);
     expect(after.defaultPrevented).toBe(true);
+  });
+
+  it("going from an older version back to the running one loads the running one", async () => {
+    await mount("ship", 2);
+    expect(editor.state.meta).toMatchObject({ version: 2, readOnlyVersion: 2 });
+    await rerender("ship");
+    expect(reads.filter((r) => r.startsWith("spec"))).toEqual(["spec@2", "spec"]);
+    expect(editor.state.meta).toMatchObject({ version: 3, readOnlyVersion: null });
+  });
+
+  it("after saving a new workflow the URL's move to its key does not reload it", async () => {
+    await mount("new");
+    act(() => editor.dispatch({ type: "INSERT", at: -1, step: { id: "only", kind: "timer",
+                                                                wait_seconds: 5, next: [] } }));
+    act(() => editor.dispatch({ type: "SAVED", spec: editor.state.spec,
+      meta: { ...editor.state.meta, definition_id: "wfd_9", workflow_key: "mine", version: 1 } }));
+    await rerender("mine");
+    expect(reads.filter((r) => r.startsWith("spec"))).toEqual([]);
+    expect(editor.state.spec.steps.map((s) => s.id)).toEqual(["only"]);
+    // ...and its drafts are kept under its own key from here on.
+    act(() => editor.dispatch({ type: "PATCH_STEP", id: "only", patch: { title: "Pause" } }));
+    await settle();
+    expect(draftOf("mine")?.spec.steps[0].title).toBe("Pause");
+  });
+
+  it("a load that fails keeps the draft stored for that workflow", async () => {
+    await mount("ship");
+    act(() => editor.dispatch({ type: "PATCH_STEP", id: "build", patch: { title: "Make it" } }));
+    await settle();
+    act(() => root?.unmount());
+    failing.add("ship");
+    await mount("ship");
+    await settle();
+    expect(editor.error).toBe("upstream down");
+    expect(draftOf("ship")?.spec.steps[1].title).toBe("Make it");
+  });
+
+  it("a workflow that fails to load never gets another workflow's draft", async () => {
+    await mount("ship");
+    act(() => editor.dispatch({ type: "PATCH_STEP", id: "build", patch: { title: "Make it" } }));
+    await settle();
+    failing.add("other");
+    await rerender("other");
+    await settle();
+    expect(editor.error).toBe("upstream down");
+    expect(editor.state.spec.steps).toEqual([]);
+    expect(draftOf("other")).toBeNull();
+    expect(draftOf("ship")?.spec.steps[1].title).toBe("Make it");
+  });
+
+  it("broken JSON keeps the draft of the edits made before it", async () => {
+    await mount("ship");
+    act(() => editor.dispatch({ type: "PATCH_STEP", id: "build", patch: { title: "Make it" } }));
+    await settle();
+    act(() => editor.dispatch({ type: "SET_JSON_TEXT", text: "{ \"steps\": [" }));
+    expect(editor.state.jsonError).not.toBeNull();
+    await settle();
+    expect(draftOf("ship")?.spec.steps[1].title).toBe("Make it");
   });
 
   it("reports a workflow that cannot be loaded", async () => {
