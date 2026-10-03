@@ -27,9 +27,8 @@ import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 import { draftFromSpecStep, specFromDraft } from "../lib/workflow-spec";
 import { AgentStepScope, RanAs, StepAgentPicker, stepAgentChip } from "./step-agents-ui";
+import { browserHref } from "../lib/browser-links";
 
-/** Where the API lives, for the proxy path a preview link resolves to. */
-const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
 
 /**
  * Delivery workflows: choose one, watch it run, build your own.
@@ -1765,7 +1764,7 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
   const href = record ? operatorPreviewOpenHref(record) : null;
   if (href) {
     out.push({ label: "open the preview", external: true,
-               href: href.startsWith("http") ? href : `${PREVIEW_API}${href}` });
+               href: browserHref(href) });
   }
   return out;
 }

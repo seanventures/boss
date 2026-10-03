@@ -68,6 +68,7 @@ import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
 import { ActionForm } from "./client-forms";
 import { displayTitle } from "../lib/directive-subject";
+import { browserHref, previewWebHref } from "../lib/browser-links";
 
 /** Whether Retry can do anything: not while it runs, and not on a build that finished clean —
  *  the same rule as the engine's refuse_finished_retry. */
@@ -178,7 +179,6 @@ function OverrideControls({ runId }: { runId: string }) {
   );
 }
 
-const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
 
 function PreviewLogs({ previewId }: { previewId: string }) {
   const [open, setOpen] = useState(false);
@@ -273,7 +273,7 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
               <ArrowsClockwise size={15} weight="bold" aria-hidden /> Building preview…
             </span>
           ) : href ? (
-            <a className="cap-btn primary" href={href.startsWith("http") ? href : `${PREVIEW_API}${href}`} target="_blank" rel="noreferrer">
+            <a className="cap-btn primary" href={browserHref(href)} target="_blank" rel="noreferrer">
               <ArrowSquareOut size={15} weight="bold" aria-hidden />
               {p.status === "verified" ? "View verified preview" : "Open preview"}
             </a>
@@ -755,7 +755,7 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   // browser. Handing it out is where the agent's advice to "open http://127.0.0.1:46181" came
   // from -- it read the column and repeated it faithfully.
   const builtPreviewUrl = benchmark.built?.preview_id
-    ? `${PREVIEW_API}/v1/previews/${encodeURIComponent(benchmark.built.preview_id)}/web/`
+    ? previewWebHref(benchmark.built.preview_id)
     : null;
 
   // `force` is the difference between "build this" and "build it AGAIN". It is only ever set
@@ -2934,7 +2934,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
     const p = previews.find(
       (x) => x.run_id === runId && (x.status === "running" || x.status === "starting"),
     );
-    return p ? `${PREVIEW_API}/v1/previews/${encodeURIComponent(p.id)}/web/` : null;
+    return p ? previewWebHref(p.id) : null;
   };
 
   // The panel owns its list.

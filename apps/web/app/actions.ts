@@ -10,6 +10,7 @@ import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
 import { act, apiFetch } from "../lib/server-action";
 import { missingInput, type ActionResult } from "../lib/action-result";
+import { previewWebHref } from "../lib/browser-links";
 
 export async function setPipelineDefaultAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
@@ -3509,10 +3510,10 @@ export async function startPreviewAction(
   try {
     const res = await client.startPreview(runId, 60, getActor(formData));
     revalidatePath("/");
-    // Return the api-routed proxy URL — the preview's own 127.0.0.1 port isn't reachable from the
-    // browser on a remote box, so the api reverse-proxies to it. Works locally too.
+    // A same-origin gateway path: neither the preview's 127.0.0.1 port nor this server's API
+    // address is reachable from the operator's browser (see lib/browser-links).
     if (res.status === "running" && res.id) {
-      return { url: `${API_URL}/v1/previews/${encodeURIComponent(res.id)}/web/` };
+      return { url: previewWebHref(res.id) };
     }
     // Library/CLI build — there is no live web app to serve, so it was "run" by executing its
     // tests. Show that outcome instead of mislabeling a passing test run as a failure.
