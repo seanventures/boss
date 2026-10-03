@@ -24,8 +24,9 @@
 .wf-lane[data-mode="design"] .wf-lane-viewport { padding-bottom: 28px; }
 /* In the editor the lane is a region, not a strip: tall enough that the flow sits in the middle
    of a calm surface and reads at a glance, never taller than the window leaves room for (a deep
-   branched flow scrolls inside it). The drawing is centred in it, top to bottom. */
-.wf-lane[data-mode="design"] {
+   branched flow scrolls inside it). The drawing is centred in it, top to bottom. A workflow
+   with no steps keeps the plain Start → End strip, so the empty state's choices stay on top. */
+.wf-lane[data-mode="design"]:not([data-empty]) {
   display: flex; flex-direction: column; justify-content: center;
   min-height: clamp(240px, 40vh, 360px);
   max-height: max(360px, calc(100vh - 180px));

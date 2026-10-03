@@ -343,7 +343,7 @@ export function FlowLane(p: {
   return (
     <div className="wf-lane" ref={rootRef} data-mode={mode} data-density={geometry.density}
          data-linear={linear ? "true" : "false"} data-scrolls={scrolls ? "true" : undefined}
-         data-testid="wf-lane">
+         data-empty={steps.length ? undefined : "true"} data-testid="wf-lane">
       <div className="wf-lane-viewport" ref={viewportRef} id={viewportId}>
         <div className="wf-lane-sizer" style={{ width: sizerW, height: geometry.height * scale }}>
           <div className="wf-lane-canvas" ref={canvasRef} role="group" aria-label={p.label ?? "Workflow steps"}

@@ -22,6 +22,7 @@ const { MiniLane, MINI_LANE_MAX } = await import("../app/workflows/flow/mini-lan
 const geometry = await import("../app/workflows/flow/geometry");
 const { layoutFlow } = await import("../lib/workflow-graph");
 const { agentMeta } = await import("../app/agent-chip");
+const { isCut } = await import("../app/workflows/flow/tip-layer");
 
 /** The lane's width in the console at 1440px: the shell's icon rail (84px), the palette as a
  *  rail (48px), the editor's gutters (2 × 16px), the grid gap (12px) and the lane's border
@@ -378,6 +379,33 @@ describe("a title wraps only between words", () => {
   });
 });
 
+describe("a cut title is found by measuring its text, not only its box", () => {
+  const box = (scroll: number, client: number) => {
+    const el = document.createElement("span");
+    el.className = "wf-node-title";
+    el.textContent = "Productionization";
+    for (const [k, v] of [["scrollWidth", scroll], ["clientWidth", client], ["scrollHeight", 18], ["clientHeight", 18]] as const) {
+      Object.defineProperty(el, k, { configurable: true, value: v });
+    }
+    return el;
+  };
+  const textWide = (width: number) => vi.spyOn(document, "createRange").mockImplementation(() => ({
+    selectNodeContents() {}, getBoundingClientRect: () => ({ width }) as DOMRect,
+  }) as unknown as Range);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("calls one long word cut when the box reports no overflow (a line-clamped flex item)", () => {
+    // Chrome: scrollWidth 118, clientWidth 118 for a visibly cut "Productionizati…".
+    textWide(160);
+    expect(isCut(box(118, 118))).toBe(true);
+  });
+
+  it("does not call text cut when it fits", () => {
+    textWide(90);
+    expect(isCut(box(118, 118))).toBe(false);
+  });
+});
+
 describe("every node says who runs it, at every density and in every mode", () => {
   const expected = ["You", "QA Lead", "A person", "Auto", "Auto · QA Lead", "You"];
   for (const mode of ["design", "run"] as const) {
@@ -439,8 +467,21 @@ describe("Compact is three readable rows, and the lane is a region the flow sits
     });
   }
 
+  it("gives an empty workflow no region: its lane is the plain Start → End strip", () => {
+    const h = render(<FlowLane spec={linear(0)} palette={PALETTE} mode="design" />);
+    const lane = h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!;
+    expect(lane.dataset.empty).toBe("true");
+    // No rule that gives the lane a height may reach a lane marked empty.
+    for (const [sel, body] of allRules()) {
+      if (!/^\.wf-lane(\[[^\]]*\])*(:not\(\[data-empty\]\))?$/.test(sel) || !/min-height:\s*(?!0)/.test(body)) continue;
+      expect(sel, sel).toMatch(/:not\(\[data-empty\]\)/);
+    }
+    const full = render(<FlowLane spec={linear(3)} palette={PALETTE} mode="design" />);
+    expect(full.querySelector<HTMLElement>('[data-testid="wf-lane"]')!.dataset.empty).toBeUndefined();
+  });
+
   it("centres the drawing in an editor region with a floor and a ceiling on its height", () => {
-    const region = allRules().find(([sel]) => sel === '.wf-lane[data-mode="design"]')![1];
+    const region = allRules().find(([sel]) => sel === '.wf-lane[data-mode="design"]:not([data-empty])')![1];
     expect(region).toMatch(/justify-content:\s*center/);
     expect(region).toMatch(/min-height:\s*clamp\(/);
     expect(region).toMatch(/max-height:/);
