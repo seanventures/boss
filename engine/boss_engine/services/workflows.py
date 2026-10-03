@@ -1056,6 +1056,8 @@ def create_definition(
         raise WorkflowValidationError(
             f"namespace must be one of: {', '.join(sorted(NAMESPACES))}."
         )
+    # A key or name another maker is choosing right now is not free yet: wait for it.
+    hold_workflow_names(connection, project_id)
     definition_id = make_id("wfd")
     try:
         row = connection.execute(
@@ -1616,6 +1618,28 @@ def publish_version(
 # "(copy)" each time: one project had fifty-four of them. Here the definition and its first
 # version are written together or not at all, a copy is updated rather than duplicated, and a
 # name the operator already uses is refused before anything is written.
+#
+# NAMES ARE UNIQUE ACROSS WHAT THE LIBRARY LISTS: the operator's own live workflows AND the
+# standards. A copy saved under its standard's name sits next to it as two rows nobody can tell
+# apart. And the check is read-then-write, so every reader of the names and keys holds
+# `_NAMES_LOCK` first (`hold_workflow_names`): two saves at once are serialised rather than both
+# passing the check — or both deriving `race_x` and one failing on the database's unique key
+# with a 409 that is not a name clash at all.
+
+#: Held exclusively, until the transaction ends, by whatever reads names or keys to write one.
+_NAMES_LOCK = "boss.workflow_names:"
+
+
+def hold_workflow_names(connection: Connection, project_id: str) -> None:
+    """Serialise naming in this project until the transaction ends (see _NAMES_LOCK).
+
+    Taken by `free_workflow_key`, `refuse_name_in_use` and `create_definition`, so every maker
+    — create, fork, the editor's save and rename, and a caller naming its own key — is
+    covered without remembering to.
+    Re-entrant: a transaction that already holds it takes it again at no cost.
+    """
+    connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                       {"k": _NAMES_LOCK + str(project_id)})
 
 
 class WorkflowNameInUseError(WorkflowConflictError):
@@ -1636,6 +1660,8 @@ def free_workflow_key(connection: Connection, project_id: str, name: str) -> str
     """
     from uuid import uuid4
 
+    # Before reading what is taken: the key is only free until the caller's insert commits.
+    hold_workflow_names(connection, project_id)
     base = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_") or "workflow"
     taken = {
         row[0] for row in connection.execute(
@@ -1651,34 +1677,49 @@ def free_workflow_key(connection: Connection, project_id: str, name: str) -> str
     return f"{base}_{uuid4().hex[:6]}"
 
 
-def _own_names(connection: Connection, project_id: str,
-               exclude_id: Optional[str] = None) -> set[str]:
-    """The names of the operator's own live workflows, folded for comparison.
+def _library_names(connection: Connection, project_id: str,
+                   exclude_id: Optional[str] = None) -> dict[str, bool]:
+    """Every name the library lists, folded for comparison -> whether it is a standard's.
 
-    Only theirs: a standard may share a name with the copy made of it until the copy is
-    renamed, and a retired workflow has left the library.
+    The operator's own live workflows and the standards: a copy named like its standard is as
+    indistinguishable as two copies named alike. A retired workflow has left the library, and
+    BOSS's own workflows are never listed there.
     """
     rows = connection.execute(
-        text("SELECT name FROM workflow_definitions "
+        text("SELECT name, COALESCE(is_catalogue, false) AS standard "
+             "FROM workflow_definitions "
              "WHERE project_id = :p AND COALESCE(namespace, 'system') = 'product' "
-             "AND NOT COALESCE(is_catalogue, false) AND status <> 'retired' "
+             "AND status <> 'retired' "
              "AND (CAST(:exclude AS TEXT) IS NULL OR id <> :exclude)"),
         {"p": project_id, "exclude": exclude_id},
-    ).scalars().all()
-    return {str(name).strip().casefold() for name in rows}
+    ).mappings().all()
+    names: dict[str, bool] = {}
+    for row in rows:
+        folded = str(row["name"]).strip().casefold()
+        names[folded] = names.get(folded, False) or bool(row["standard"])
+    return names
 
 
 def refuse_name_in_use(connection: Connection, project_id: str, name: str,
                        exclude_id: Optional[str] = None) -> None:
-    """Refuse a name one of the operator's own workflows already has, offering a free one.
+    """Refuse a name the library already lists, offering a free one.
 
     Two workflows with one name is how a library ends up listing several entries nobody can
-    tell apart. Case and surrounding space do not make a name different.
+    tell apart — a standard and a copy of it as much as two copies. Case and surrounding space
+    do not make a name different. A standard's name is offered back as `<name> (mine)`, the
+    name the editor suggests for a copy; any other as `<name> 2`.
     """
-    taken = _own_names(connection, project_id, exclude_id)
-    if name.strip().casefold() not in taken:
+    hold_workflow_names(connection, project_id)
+    taken = _library_names(connection, project_id, exclude_id)
+    folded = name.strip().casefold()
+    if folded not in taken:
         return
-    base = re.sub(r"\s+\d+$", "", name.strip()) or name.strip()
+    if taken[folded]:
+        base = f"{name.strip()} (mine)"
+        if base.casefold() not in taken:
+            raise WorkflowNameInUseError(name, base)
+    else:
+        base = re.sub(r"\s+\d+$", "", name.strip()) or name.strip()
     for number in range(2, 500):
         candidate = f"{base} {number}"
         if candidate.casefold() not in taken:
@@ -1744,9 +1785,13 @@ def publish_from_editor(
       * no `definition_id`, or a standard's — create the operator's workflow and publish v1.
         `from_workflow_key` (or the standard's own key) is recorded as what it was copied from.
 
-    Name and description travel with the save. Every problem is found BEFORE anything is
-    written, so a refused save leaves nothing behind even for a caller that commits anyway;
-    the definition and its first version are then written in the caller's one transaction.
+    Name and description travel with the save. A name is checked only when it changes, and a
+    name the library already lists is refused (409, with a free one) — a standard's included.
+    One exception: on `update_copy_id`, the name of the standard being saved from is the
+    editor's title for the standard, not a rename, so the copy keeps its own name. Every
+    problem is found BEFORE anything is written, so a refused save leaves nothing behind even
+    for a caller that commits anyway; the definition and its first version are then written
+    in the caller's one transaction.
 
     Returns {"unchanged": True} when the save would change nothing at all, else
     {"definition": {id, workflow_key, name}, "version": n, "created": bool}.
@@ -1754,19 +1799,28 @@ def publish_from_editor(
     cleaned_name = _clean_text(name, "name")
     target: Optional[dict[str, Any]] = None
     source_key = str(from_workflow_key or "").strip() or None
-    if update_copy_id:
-        target = require_namespace(connection, project_id, update_copy_id, PRODUCT_NAMESPACE)
-        require_editable(target)
-    elif definition_id:
+    standard: Optional[dict[str, Any]] = None
+    if definition_id:
         loaded = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
         if loaded.get("is_catalogue"):
             # A STANDARD IS NEVER EDITED IN PLACE. Saving one makes the operator's copy of it.
+            standard = loaded
             source_key = source_key or str(loaded["workflow_key"])
-        else:
+        elif not update_copy_id:
             target = loaded
+    if update_copy_id:
+        target = require_namespace(connection, project_id, update_copy_id, PRODUCT_NAMESPACE)
+        require_editable(target)
+        # The editor titles a standard with the standard's name. Sent back on "Update my
+        # copy", that is not a rename: renaming the copy to it would list the copy and the
+        # standard under one name. A different name is a rename, checked like any other.
+        if standard is not None and (cleaned_name.casefold()
+                                     == str(standard["name"]).strip().casefold()):
+            cleaned_name = str(target["name"])
 
-    refuse_name_in_use(connection, project_id, cleaned_name,
-                       exclude_id=str(target["id"]) if target else None)
+    if target is None or cleaned_name != target["name"]:
+        refuse_name_in_use(connection, project_id, cleaned_name,
+                           exclude_id=str(target["id"]) if target else None)
     _, shape, blocked = spec_problems(connection, project_id, spec,
                                       namespace=PRODUCT_NAMESPACE)
     if shape:
