@@ -49,3 +49,20 @@ describe("a browser link never names the API host", () => {
       "https://boss.example.com/v1/previews/p/web/");
   });
 });
+
+describe("a preview page travels through the console unchanged", () => {
+  const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
+
+  it("does not strip the trailing slash an app redirects to (no 308 loop)", () => {
+    expect(read("next.config.ts")).toMatch(/skipTrailingSlashRedirect:\s*true/);
+    expect(read("app/v1/[...path]/route.ts")).toContain("`${API_URL}${incoming.pathname}${incoming.search}`");
+  });
+
+  it("passes a previewed app's redirect target through", () => {
+    expect(read("app/v1/[...path]/route.ts")).toMatch(/"location"\]/);
+  });
+
+  it("sends a signed-out preview tab to the login page, not a JSON 401", () => {
+    expect(read("middleware.ts")).toMatch(/previewPage[\s\S]*text\/html/);
+  });
+});

@@ -3,6 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@boss/api-client"],
+  // A previewed app's own URLs pass through /v1/previews/<id>/web/ untouched. Next's default
+  // 308 `/x/` -> `/x` fought every app that redirects `/docs` -> `/docs/` (http.server,
+  // Starlette, Django): the API re-added the slash, Next stripped it, ERR_TOO_MANY_REDIRECTS.
+  skipTrailingSlashRedirect: true,
 
   experimental: {
     // GOING BACK TO AN AREA YOU JUST LOOKED AT MUST NOT COST A SERVER ROUND TRIP.

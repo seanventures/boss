@@ -144,7 +144,8 @@ def describe_gate(connection, *, preview_id: str) -> Optional[dict[str, Any]]:
     return {
         "preview_id": preview_id,
         "preview_status": preview.get("status"),
-        "preview_url": preview.get("url"),
+        # For people and agents: the gateway path, never app_previews.url (127.0.0.1:<port>).
+        "preview_url": _open_url(preview_id),
         "run_id": run_id,
         "repo": preview.get("repo"),
         "branch": preview.get("branch"),
@@ -175,3 +176,9 @@ def record_preview_approval(connection, *, preview_id: str, actor: str,
         raise PreviewGateError("; ".join(gate["blockers"]), status=409)
 
     return {**gate, "note": note}
+
+
+def _open_url(preview_id: Optional[str]) -> Optional[str]:
+    from .preview_service import operator_preview_open_url
+
+    return operator_preview_open_url(preview_id) if preview_id else None

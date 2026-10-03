@@ -1048,7 +1048,9 @@ def _running_preview(
             row["id"], row["url"],
         )
         return None
-    return {"preview_id": row["id"], "preview_url": row["url"], "adopted": True}
+    # preview_url is the internal address this module probes; open_url is the one to show.
+    return {"preview_id": row["id"], "preview_url": row["url"], "adopted": True,
+            "open_url": f"/v1/previews/{row['id']}/web/"}
 
 
 def _plrr_brief(connection: Connection, project_id: str, context: dict[str, Any]) -> str:
