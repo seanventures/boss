@@ -39,7 +39,7 @@ describe("the repository step", () => {
   it("links to the existing GitHub connection screen, not an environment variable", () => {
     expect(UI).not.toContain("so the platform default is used");
     expect(UI).toContain('{ area: "setup" }');
-    expect(UI).toContain("Settings → Repo and model → Repository");
+    expect(UI).toContain('data-testid="dw-new-repo-connect"');
     expect(UI).not.toContain("BOSS_TARGET_GITHUB_OWNER");
   });
 });

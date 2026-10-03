@@ -10,7 +10,7 @@
  * problem is reported.
  */
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { apiWrite } from "../lib/api-write";
 

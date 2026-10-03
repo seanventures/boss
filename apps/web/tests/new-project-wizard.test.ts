@@ -80,8 +80,8 @@ describe("what gets sent, and what does not", () => {
     // deliberate choice of "no criteria" and can beat the panel's own.
     // `codeOnly` collapses `{}` to a space, so the empty branch of each ternary is not
     // matchable — assert the guard and the payload, which is the part that matters.
-    const body = UI.slice(UI.indexOf("const start = async () =>"),
-                          UI.indexOf('data-testid="dw-new-project"'));
+    const body = UI.slice(UI.indexOf("export function startInput("),
+                          UI.indexOf("export function NewProjectComposer("));
     expect(body).toContain("criteria.length ? { acceptance_criteria: criteria }");
     expect(body).toContain("links.length ? { reference_links: links }");
     expect(body).toContain("draft.repository ? { repository: draft.repository }");
@@ -125,7 +125,7 @@ describe("the choices show why one is right", () => {
     // A <select> hides the descriptions, and the descriptions are the entire basis for
     // choosing: the paths differ in how much argument and gating happens, which is a question
     // about risk rather than speed.
-    expect(UI).toContain("entry.description");
+    expect(UI).toContain("e.description");
     expect(UI).toContain("you approve: ");
     expect(UI).toContain("no approval gates");
   });
@@ -160,6 +160,6 @@ describe("the last step says what the press will do", () => {
 
   it("and says plainly that it spends money and will stop before deploying", () => {
     expect(UI).toContain("spends model budget");
-    expect(UI).toContain("before it deploys");
+    expect(UI).toContain("asks before it deploys");
   });
 });
