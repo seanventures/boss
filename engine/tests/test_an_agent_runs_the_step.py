@@ -11,7 +11,6 @@ now lives in `step_agents` and is asked, not read: the named agent, else the age
 the skill, else the workflow only where the skill's own policy names it, else a refusal. The
 end-to-end runs are in test_workflow_custom_steps.py and apps/api/tests/test_who_runs_a_step.py.
 """
-import inspect
 
 import pytest
 
@@ -130,8 +129,16 @@ def test_a_misspelt_agent_is_caught_when_the_workflow_is_published():
     roster check and the steps stream's shape check are one validate_captain; without a roster
     only the shape is checked, which the test above pins.)
     """
-    source = inspect.getsource(workflows)
-    assert "captain_problems = validate_captain(step, roster)" in source
+    # REWRITTEN from a source grep to the behaviour: a custom step and an agent step naming an
+    # agent the roster lacks are both refused, on the step's agent field.
+    for binding in ({"custom_step": "publish_video"},
+                    {"agent_work": True, "inputs": {"instructions": "Publish it."}}):
+        _, problems = workflows.normalise_workflow_spec(
+            {"entry_step": "publish",
+             "steps": [{"id": "publish", "kind": "capability", "captain": "vidoe_editor",
+                        "binding": binding}]},
+            roster={"video_editor", "release_auditor"})
+        assert [p["field"] for p in problems if "vidoe_editor" in p["detail"]] == ["captain"]
     assert validate_captain({"id": "publish", "captain": "vidoe_editor"},
                             roster={"video_editor", "release_auditor"})
 

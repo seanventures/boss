@@ -89,7 +89,8 @@ def test_the_save_time_check_accepts_an_agent_that_HOLDS_the_skill():
     how I came to widen a skill's allowed_callers when the right move was to give the agent the
     skill.
     """
-    source = inspect.getsource(cs.validate_step)
+    # validate_step reads its sentences from validate_step_fields, where the check lives.
+    source = inspect.getsource(cs.validate_step_fields)
     assert "_agent_holds(" in source
     holds = inspect.getsource(cs._agent_holds)
     assert "role_skills" in holds

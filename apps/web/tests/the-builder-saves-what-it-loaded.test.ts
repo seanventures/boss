@@ -28,7 +28,7 @@ import { insertStep, isLinear, linearOrder } from "../lib/workflow-graph";
 import {
   draftFromSpecStep, inputsReadBy, mergeInputSchema, specFromDraft, type DraftStep,
 } from "../lib/workflow-spec";
-import { BRANCHES, PALETTE, PARALLEL, catalogueSpecs, clone } from "./_helpers/workflow-fixtures";
+import { BRANCHES, PALETTE, PARALLEL, catalogueSpecs, clone, generatedBranched } from "./_helpers/workflow-fixtures";
 
 type Obj = Record<string, unknown>;
 
@@ -94,6 +94,7 @@ function untouched(s: SpecStep): StepPatch {
 
 const FLOWS: [string, Spec][] = [
   ...catalogueSpecs(),
+  generatedBranched(),
   ["video example", VIDEO],
   ["parallel and join", PARALLEL],
   ["if/else and a loop", BRANCHES],

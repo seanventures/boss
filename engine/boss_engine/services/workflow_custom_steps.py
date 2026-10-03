@@ -434,74 +434,83 @@ def validate_step(
     connection: Connection, project_id: str, step: dict[str, Any]
 ) -> list[str]:
     """Everything wrong with one custom step as used in a workflow."""
-    problems: list[str] = []
+    return [message for _, message in validate_step_fields(connection, project_id, step)]
+
+
+def validate_step_fields(
+    connection: Connection, project_id: str, step: dict[str, Any]
+) -> list[tuple[str, str]]:
+    """`validate_step` with the field each sentence is about (`binding`, `approval`,
+    `captain`, or the name of the input that is not set), decided where it is found."""
+    problems: list[tuple[str, str]] = []
     step_id = step.get("id", "?")
     binding = step.get("binding") or {}
     key = str(binding.get("custom_step") or "").strip()
     if not key:
-        problems.append(f"step '{step_id}' does not say which custom step it runs.")
+        problems.append(("binding", f"step '{step_id}' does not say which custom step it runs."))
         return problems
 
     definition = get(connection, project_id, key)
     if definition is None:
-        problems.append(
-            f"step '{step_id}' uses custom step '{key}', which this project does not have."
-        )
+        problems.append((
+            "binding",
+            f"step '{step_id}' uses custom step '{key}', which this project does not have."))
         return problems
+    label = definition["label"]
     if not definition["enabled"]:
-        problems.append(f"step '{step_id}' uses '{definition['label']}', which is turned off.")
+        problems.append(("binding", f"step '{step_id}' uses '{label}', which is turned off."))
     if not definition["usable"]:
         # Fail closed, and say WHY. "Custom step is unusable" sends somebody hunting.
-        problems.append(
-            f"step '{step_id}' uses '{definition['label']}', which cannot run: "
-            f"{definition['unusable_reason']}"
-        )
+        problems.append((
+            "binding",
+            f"step '{step_id}' uses '{label}', which cannot run: "
+            f"{definition['unusable_reason']}"))
 
     inputs = binding.get("inputs") or {}
     for declared in definition["inputs"]:
         if declared.get("required") and not inputs.get(declared["name"]):
-            problems.append(
-                f"step '{step_id}' ({definition['label']}) needs '{declared['name']}'."
-            )
+            problems.append((
+                str(declared["name"]),
+                f"step '{step_id}' ({label}) needs '{declared['name']}'."))
 
     approval = step.get("approval") or {}
     requested = approval.get("mode")
     if definition["approval_forced_manual"] and str(requested).lower() == "auto":
-        problems.append(
-            f"step '{step_id}' ({definition['label']}) runs something at risk tier "
+        problems.append((
+            "approval",
+            f"step '{step_id}' ({label}) runs something at risk tier "
             f"{definition['risk_tier']} and always requires a person."
             if not definition.get("requires_person") or (
                 definition["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR)
-            else f"step '{step_id}' ({definition['label']}) requires a person: "
+            else f"step '{step_id}' ({label}) requires a person: "
                  f"{definition['requires_person']} Set its approval to manual, or review the "
-                 "server first."
-        )
+                 "server first."))
     on_timeout = approval.get("on_timeout")
     if on_timeout is not None:
         action = str(on_timeout).lower()
         if action not in TIMEOUT_ACTIONS:
-            problems.append(
-                f"step '{step_id}' on_timeout must be one of: {', '.join(TIMEOUT_ACTIONS)}."
-            )
+            problems.append((
+                "approval",
+                f"step '{step_id}' on_timeout must be one of: {', '.join(TIMEOUT_ACTIONS)}."))
         elif action == "approve" and definition.get("requires_person"):
             # A timeout that approves is nobody approving — exactly what an unreviewed
             # server's tool may not have.
-            problems.append(
-                f"step '{step_id}' ({definition['label']}) cannot approve itself on a timeout: "
-                f"{definition['requires_person']} Use 'escalate' or 'block'."
-            )
+            problems.append((
+                "approval",
+                f"step '{step_id}' ({label}) cannot approve itself on a timeout: "
+                f"{definition['requires_person']} Use 'escalate' or 'block'."))
         elif action == "approve" and definition["risk_tier"] >= TIMEOUT_APPROVE_RISK_CEILING:
-            problems.append(
-                f"step '{step_id}' ({definition['label']}) is risk tier "
+            problems.append((
+                "approval",
+                f"step '{step_id}' ({label}) is risk tier "
                 f"{definition['risk_tier']} and cannot approve itself on a timeout. "
-                "Use 'escalate' or 'block'."
-            )
+                "Use 'escalate' or 'block'."))
     if definition["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR and not definition["trusted"]:
-        problems.append(
-            f"step '{step_id}' ({definition['label']}) binds an untrusted "
+        problems.append((
+            "binding",
+            f"step '{step_id}' ({label}) binds an untrusted "
             f"{definition['binding_kind'].replace('_', ' ')} at risk tier "
-            f"{definition['risk_tier']}. Only a reviewed one can be given that much reach."
-        )
+            f"{definition['risk_tier']}. Only a reviewed one can be given that much reach."))
 
     # CAN THE AGENT NAMED ACTUALLY RUN THIS? Asked HERE rather than discovered mid-run.
     #
@@ -528,11 +537,11 @@ def validate_step(
         # be refused for doing correctly.
         if callers and captain not in callers and not _agent_holds(
                 connection, project_id, captain, skill_id):
-            problems.append(
+            problems.append((
+                "captain",
                 f"step '{step_id}' gives '{definition['label']}' to {captain}, which is not "
                 f"allowed to run {skill_id}. Either give {captain} that skill on the Agents "
-                f"page, or use one of: {', '.join(sorted(callers))}."
-            )
+                f"page, or use one of: {', '.join(sorted(callers))}."))
     return problems
 
 

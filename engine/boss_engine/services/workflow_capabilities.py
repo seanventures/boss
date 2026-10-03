@@ -665,44 +665,59 @@ def validate_step(step: Mapping[str, Any],
     Returns a list rather than raising on the first problem: a builder showing one error at a
     time makes a customer fix a workflow five times to publish it once.
     """
-    problems: list[str] = validate_captain(step, roster)
+    return [message for _, message in validate_step_fields(step, roster)]
+
+
+def validate_step_fields(step: Mapping[str, Any],
+                         roster: Optional[Iterable[str]] = None) -> list[tuple[str, str]]:
+    """`validate_step` with the field each sentence is about: `captain`, `binding`, `inputs`,
+    `approval`, or the name of the input that is not set.
+
+    The workflow editor puts each problem on the control that caused it, so the field is
+    decided here, where the problem is found, and never parsed back out of the sentence.
+    """
+    problems: list[tuple[str, str]] = [("captain", m) for m in validate_captain(step, roster)]
     binding = step.get("binding") or {}
     key = str(binding.get("capability") or "").strip()
     step_id = step.get("id", "?")
 
     if not key:
-        problems.append(f"step '{step_id}' has no capability.")
+        problems.append(("binding", f"step '{step_id}' has no capability."))
         return problems
     if key not in CAPABILITY_KEYS:
-        problems.append(
+        problems.append((
+            "binding",
             f"step '{step_id}' uses unknown capability '{key}'. "
             f"Known: {', '.join(sorted(CAPABILITY_KEYS))}."
-        )
+        ))
         return problems
 
     capability = get(key)
     inputs = binding.get("inputs") or {}
     if not isinstance(inputs, Mapping):
-        problems.append(f"step '{step_id}' inputs must be an object.")
+        problems.append(("inputs", f"step '{step_id}' inputs must be an object."))
         inputs = {}
 
     for name in capability.required_inputs:
         value = inputs.get(name)
         # A reference to an earlier step counts as supplied — it is resolved at run time.
         if value is None or (isinstance(value, str) and not value.strip()):
-            problems.append(
+            problems.append((
+                name,
                 f"step '{step_id}' ({capability.label}) needs '{name}', which is not set."
-            )
+            ))
 
     unknown = set(inputs) - set(capability.required_inputs) - set(capability.optional_inputs)
     if unknown:
         # Named rather than ignored: a typo'd input that is silently dropped is a step that
         # does something subtly different from what the customer wrote down.
-        problems.append(
+        problems.append((
+            "inputs",
             f"step '{step_id}' ({capability.label}) does not take: {', '.join(sorted(unknown))}."
-        )
+        ))
 
-    problems.extend(validate_approval(step_id, capability, step.get("approval") or {}))
+    problems.extend(("approval", m) for m in validate_approval(
+        step_id, capability, step.get("approval") or {}))
     return problems
 
 

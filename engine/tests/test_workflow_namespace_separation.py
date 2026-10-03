@@ -186,7 +186,9 @@ def test_a_catalogue_workflow_cannot_be_edited_in_place(eng, project):
         standard = _make(c, project, "standard_delivery", namespace="product", catalogue=True)
         with pytest.raises(workflows.WorkflowNamespaceError) as caught:
             workflows.require_editable(standard)
-    assert "Fork it" in str(caught.value)
+    # REWRITTEN: this pinned "Fork it". The editor saves a standard as the operator's copy, and
+    # the refusal names that act — the one the console offers.
+    assert "save it as your copy" in str(caught.value).lower()
 
 
 def test_a_customers_own_workflow_is_editable(eng, project):
