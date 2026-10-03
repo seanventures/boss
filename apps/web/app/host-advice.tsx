@@ -6,7 +6,12 @@ import React, { useEffect, useState } from "react";
 import { Warning } from "@phosphor-icons/react";
 
 /**
- * "This computer is out of memory" — said to the person who can fix it.
+ * "This computer is out of memory" — said to the person who can fix it, and ONLY when it is.
+ *
+ * The words come from the API (operator_advice in self_observability.py), which names the
+ * measured cause — memory, disk, cpu, or BOSS itself on a server with room — and gives restart
+ * advice only for a laptop's Docker VM. A fixed "out of memory, restart" once appeared on a
+ * healthy 16 GB Linux server; this component renders the API's wording and adds none of its own.
  *
  * WHY THIS COMPONENT EXISTS. Two runs this week were read as BOSS degrading while the machine
  * underneath was thrashing: one took 85 minutes that should have taken 20, another 242 minutes
@@ -26,6 +31,8 @@ export type HostAdvice = {
   detail?: string;
   action?: string;
   stalled_minutes?: number;
+  /** Which measurement raised it: "memory" | "disk" | "cpu" | "boss_process" | "stall". */
+  cause?: string;
 };
 
 export function useHostAdvice(projectId: string, pollMs = 60_000): HostAdvice {

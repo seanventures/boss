@@ -13,6 +13,9 @@ from boss_engine.services.self_observability import operator_advice
 
 # The real run: 242 minutes elapsed, 63 of them model work.
 REAL = {"state": "critical", "stalled_seconds": 10740.0, "share_of_elapsed": 0.74}
+# ...on a Mac, behind Docker Desktop. Restart advice is for THAT platform only; a Linux server
+# is never told to restart (see test_a_healthy_server_is_never_told_it_is_out_of_memory.py).
+LAPTOP = {"scope": "vm", "bands": {}, "reasons": []}
 
 
 def test_a_healthy_machine_says_nothing_at_all():
@@ -33,7 +36,8 @@ def test_it_names_the_computer_not_the_product():
 
 
 def test_it_tells_them_what_to_do():
-    assert "estart" in operator_advice(REAL, elapsed_minutes=242, working_minutes=63)["action"]
+    assert "estart" in operator_advice(REAL, elapsed_minutes=242, working_minutes=63,
+                                       gauges=LAPTOP)["action"]
 
 
 def test_it_gives_the_split_they_can_check_themselves():
