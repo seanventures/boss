@@ -382,12 +382,16 @@ class TypedDecisionSpend:
             risk_tier=1,
         )
         if reserved.get("status") != "reserved":
-            decision_id = reserved.get("decision_id") or self._decision(
-                connection,
-                f"Budget refused typed decision {self.run_id}/{self.step_id}",
-                "budget_denied",
-                {"attempt": self.attempt, "message": reserved.get("message")},
-            )
+            # A refusal that clears by itself (the per-minute cap) asks nobody to decide
+            # anything: the runner waits and tries again (workflow_capability_runner._as_wait).
+            decision_id = reserved.get("decision_id")
+            if decision_id is None and not reserved.get("transient"):
+                decision_id = self._decision(
+                    connection,
+                    f"Budget refused typed decision {self.run_id}/{self.step_id}",
+                    "budget_denied",
+                    {"attempt": self.attempt, "message": reserved.get("message")},
+                )
             self._emit(connection, "typed_decision.spend_refused", dedupe, {
                 "decision_id": decision_id,
                 "attempt": self.attempt,

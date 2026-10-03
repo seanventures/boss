@@ -64,6 +64,65 @@ class SettledCapabilityError(CapabilityExecutionError):
     """
 
 
+class CapabilityWaitError(CapabilityExecutionError):
+    """The capability could not start YET, for a reason that clears by itself.
+
+    The per-minute budget is the case: five runs started within seconds of each other spend
+    the minute's allowance, and the sixth reservation is refused until the window moves on.
+    That is not a failure, not an attempt, and nothing a person has to decide — the step goes
+    back to wait `wait_seconds`, the run says what it is waiting for, and the next tick after
+    that tries again (`workflows.wait_step`). It used to fail the step, which with one attempt
+    dead-lettered the run at its first step.
+    """
+
+    def __init__(self, message: str, *, wait_seconds: int = 30, kind: str = "budget_wait"):
+        super().__init__(message)
+        self.wait_seconds = int(wait_seconds)
+        self.kind = kind
+
+
+def _as_wait(error: CapabilityExecutionError) -> Optional[CapabilityWaitError]:
+    """The wait a capability failure really is, or None.
+
+    Raised explicitly by the paths that know (a custom step's skill, `CapabilityWaitError`),
+    and recognised here for any other capability whose budget reservation was refused by the
+    per-minute cap — read by the same classifier every surface uses (model_failures.explain),
+    so a refusal that clears by itself waits wherever in the runner it surfaces."""
+    if isinstance(error, CapabilityWaitError):
+        return error
+    if isinstance(error, SettledCapabilityError):
+        return None
+    from .model_failures import explain
+
+    said = explain(str(error))
+    if said.get("kind") != "budget_wait":
+        return None
+    return CapabilityWaitError(said["headline"], wait_seconds=30)
+
+
+def _as_settled(error: CapabilityExecutionError) -> CapabilityExecutionError:
+    """The error as it should be FAILED: settled when only a person can lift it.
+
+    The other half of `_as_wait`, read by the same classifier. A budget refusal a person must
+    lift — the cap, a tier-2 freeze, a used-up allocation — reaches the runner from more than
+    one door: a custom step says so itself (raise_for_budget), but a typed decision's
+    reservation, or a model gateway's `ModelCapacityDeniedError('Budget cap exceeded. Decision
+    created.')`, arrived as a plain retryable error. fail_step then retried it with no delay up
+    to max_attempts, each retry reserving again and opening ANOTHER blocking "Budget
+    reservation denied" decision, and the step dead-lettered instead of stopping once with
+    what to do. Classified here, once, every kind of step stops the same way."""
+    if isinstance(error, SettledCapabilityError):
+        return error
+    from .model_failures import explain
+
+    said = explain(str(error))
+    if said.get("kind") != "budget_refused":
+        return error
+    detail = str(error).strip().rstrip(".")
+    return SettledCapabilityError(
+        f"{said['headline'].rstrip('.')}: {detail}. {said['action']}")
+
+
 #: Where `_resolve_inputs` records the explicit marker for each optional input whose source step
 #: was skipped. Kept on the step's CONTEXT, not among its inputs, so no tool ever receives it as
 #: an argument; `execute_step` writes it onto the step's output as `skipped_inputs`.
@@ -1578,9 +1637,16 @@ def _execute_step(
             )
         except step_agents.StepAgentError as error:
             raise CapabilityExecutionError(str(error)) from error
+        except custom_steps.CustomStepWait as error:
+            # Not yet, and it clears by itself: the step waits rather than fails.
+            raise CapabilityWaitError(str(error), wait_seconds=error.wait_seconds,
+                                      kind=error.kind) from error
         except custom_steps.CustomStepError as error:
             # Translated, not wrapped: the runner's failure path records
             # CapabilityExecutionError, and the customer's sentence is the part worth keeping.
+            # A refusal only a person can lift is settled: one stop, with Retry / Skip.
+            if getattr(error, "settled", False):
+                raise SettledCapabilityError(str(error)) from error
             raise CapabilityExecutionError(str(error)) from error
 
     key = str(binding.get("capability") or "")
@@ -3707,17 +3773,33 @@ def tick(
                         "capability": output.get("capability"), "outcome": "succeeded",
                     })
             except CapabilityExecutionError as error:
-                workflows.fail_step(
-                    connection, project_id=project_id, step_run_id=claimed["id"],
-                    worker_id=worker_id, error=str(error),
-                    # A settled verdict fails once and says so. Retrying it spends ticks and
-                    # minutes to arrive at the same sentence.
-                    retryable=not isinstance(error, SettledCapabilityError),
-                )
-                performed.append({
-                    "run_id": run_id, "step_id": claimed["step_id"],
-                    "outcome": "failed", "error": str(error),
-                })
+                wait = _as_wait(error)
+                if wait is not None:
+                    # NOT YET, NOT FAILED. No `continue` here: it would skip the run's savepoint
+                    # commit in the `else` below.
+                    waited = workflows.wait_step(
+                        connection, project_id=project_id, step_run_id=claimed["id"],
+                        worker_id=worker_id, reason=str(wait),
+                        wait_seconds=wait.wait_seconds, kind=wait.kind,
+                    )
+                    performed.append({
+                        "run_id": run_id, "step_id": claimed["step_id"],
+                        "outcome": "waiting" if waited["status"] == "ready" else "failed",
+                        "waiting_for": wait.kind, "error": str(wait),
+                    })
+                else:
+                    error = _as_settled(error)
+                    workflows.fail_step(
+                        connection, project_id=project_id, step_run_id=claimed["id"],
+                        worker_id=worker_id, error=str(error),
+                        # A settled verdict fails once and says so. Retrying it spends ticks and
+                        # minutes to arrive at the same sentence.
+                        retryable=not isinstance(error, SettledCapabilityError),
+                    )
+                    performed.append({
+                        "run_id": run_id, "step_id": claimed["step_id"],
+                        "outcome": "failed", "error": str(error),
+                    })
             except Exception as error:  # noqa: BLE001
                 # A CLAIMED STEP MUST NOT BE STRANDED BY A SURPRISE.
                 #

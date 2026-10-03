@@ -42,6 +42,22 @@ class SkillPermissionError(RuntimeError):
     pass
 
 
+def budget_refusal(reservation: dict[str, Any]) -> dict[str, Any]:
+    """What a refused reservation means for whoever asked: {refusal, transient,
+    retry_after_seconds, message, decision_id}. `transient` is True only for a refusal that
+    clears by itself (the per-minute burst cap) — the caller waits and tries again; anything
+    else needs a person to raise a cap, and the caller stops and says so."""
+    transient = bool(reservation.get("transient"))
+    return {
+        "refusal": str(reservation.get("refusal") or "denied"),
+        "transient": transient,
+        "retry_after_seconds": (int(reservation.get("retry_after_seconds") or 30)
+                                if transient else None),
+        "message": str(reservation.get("message") or "Budget reservation denied."),
+        "decision_id": reservation.get("decision_id"),
+    }
+
+
 class SkillRuntimeService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -219,17 +235,25 @@ class SkillRuntimeService:
                 connection, project_id, category=category, amount_usd_micros=estimate,
                 reason=f"skill:{skill_id}", expires_in_minutes=10)
             if reservation.get("status") != "reserved":
-                reason = f"budget denied: {reservation.get('status')}"
+                # WHICH REFUSAL, NOT JUST THAT ONE HAPPENED. This said "budget denied: denied"
+                # — the status twice — so a per-minute refusal that clears by itself and a cap
+                # only a person can raise read the same, and every caller treated both as a
+                # failure. The governor's own sentence names it, and `budget` carries whether
+                # it clears by itself (`transient`) and when to try again.
+                budget = budget_refusal(reservation)
+                reason = f"budget refused: {budget['message']}"
                 record_policy_eval(
                     connection, project_id, "skill.invoke", "deny",
                     action=skill_id, reason=reason,
-                    detail={"caller": caller, "category": category, "estimate": estimate})
-                return self._record(
+                    detail={"caller": caller, "category": category, "estimate": estimate,
+                            "budget": budget})
+                denied = self._record(
                     connection, project_id, skill_id, caller, mode,
                     status="denied", permission_decision="allow", attempts=0,
                     max_attempts=max_attempts, estimate=estimate, reservation_id=None,
                     actual_cost=None, cost_receipt_id=None,
                     created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
+                return {**denied, "budget": budget}
             reservation_id = reservation["reservation_id"]
 
         # 3) Execute with the skill's retry policy.
