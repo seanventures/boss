@@ -29,6 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import workflow_capabilities as caps
+from .workflows import step_title
 
 
 class WorkflowExplainError(ValueError):
@@ -147,7 +148,10 @@ def explain_version(
         key = str(binding.get("capability") or "")
         step_key = str(binding.get("custom_step") or "")
         labels[str(step.get("id"))] = (
-            custom.get(step_key, {}).get("label")
+            # The name the operator gave this step on the canvas, when they gave one: the
+            # plan, the canvas and a run all call a step by one name (workflows.step_title).
+            step_title(step)
+            or custom.get(step_key, {}).get("label")
             or palette.get(key, {}).get("label")
             or str(step.get("id")))
 
