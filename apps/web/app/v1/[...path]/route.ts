@@ -56,7 +56,11 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
     );
   }
   const incoming = new URL(req.url);
-  const target = `${API_URL}/v1/${path.map(encodeURIComponent).join("/")}${incoming.search}`;
+  // The path EXACTLY as sent — its trailing slash and its encoding are the previewed app's,
+  // and rebuilding it from the decoded segments dropped the one and re-encoded the other.
+  const target = incoming.pathname.startsWith("/v1/")
+    ? `${API_URL}${incoming.pathname}${incoming.search}`
+    : `${API_URL}/v1/${path.map(encodeURIComponent).join("/")}${incoming.search}`;
   const method = req.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD" && method !== "DELETE";
   let upstream: Response;

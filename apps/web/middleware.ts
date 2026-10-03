@@ -40,7 +40,11 @@ export async function middleware(request: NextRequest) {
       (process.env.NODE_ENV === "development" && path.startsWith("/_next/webpack-hmr"))) {
     return NextResponse.next();
   }
-  const api = path.startsWith("/api/") || path.startsWith("/v1/");
+  // A preview PAGE opened in a new tab is a page, not an API call: a signed-out visitor goes to
+  // the login screen and comes back, rather than reading a JSON 401.
+  const previewPage = request.method === "GET" && /^\/v1\/previews\/[^/]+\/web(\/|$)/.test(path)
+    && (request.headers.get("accept") ?? "").includes("text/html");
+  const api = (path.startsWith("/api/") || path.startsWith("/v1/")) && !previewPage;
   if (!secureConsoleTransport(request)) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },
       { status: 426, headers: { "Cache-Control": "no-store" } });

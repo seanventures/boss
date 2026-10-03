@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2738,11 +2739,30 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
             f"<p style=\"color:#888;font-size:12px\">{e}</p></div>"
         ).encode(), {}
     location = response_headers.get("Location")
-    if location and location.startswith("/") and not location.startswith("//"):
-        response_headers["Location"] = f"/v1/previews/{preview_id}/web{location}"
+    if location:
+        response_headers["Location"] = _gateway_location(preview_id, location)
     if "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web")
     return status, ctype, data, response_headers
+
+
+def _gateway_location(preview_id: str, location: str) -> str:
+    """A previewed app's redirect, pointed back through the gateway.
+
+    The app is reached at 127.0.0.1:<port>, so a framework that builds ABSOLUTE redirects sends
+    `http://127.0.0.1:<port>/login` — which in the operator's browser is their own machine.
+    Root-relative and loopback-absolute redirects both become the gateway path; a redirect to
+    any other host (an OAuth provider) is the app's business and passes unchanged.
+    """
+    prefix = f"/v1/previews/{preview_id}/web"
+    if location.startswith("/") and not location.startswith("//"):
+        return f"{prefix}{location}"
+    parsed = urllib.parse.urlsplit(location)
+    if parsed.scheme in ("http", "https") and _is_loopback_url(location):
+        rest = parsed.path or "/"
+        return f"{prefix}{rest}" + (f"?{parsed.query}" if parsed.query else "") + (
+            f"#{parsed.fragment}" if parsed.fragment else "")
+    return location
 
 
 def smoke_test(
