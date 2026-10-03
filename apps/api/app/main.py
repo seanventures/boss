@@ -7772,6 +7772,11 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     for field in required:
         if not payload.get(field):
             raise HTTPException(status_code=422, detail=f"{field} is required")
+    if str(payload["target_kind"]).lower() == "stack":
+        raise HTTPException(
+            status_code=422,
+            detail="stack targets are created with POST /v1/deployments/stack/targets, "
+                   "which binds them to a fleet host")
     if connector_for({"target_kind": payload["target_kind"]}) is None:
         raise HTTPException(
             status_code=422,
@@ -8697,7 +8702,9 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
     """Every VM, with the apps riding on it and its last preflight verdict."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from boss_engine.services.deployment_fleet import direct_host_writes_allowed, list_hosts
+    from boss_engine.services.deployment_fleet import (
+        direct_host_writes_allowed, governed_stack_deploys_allowed, list_hosts,
+    )
 
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
@@ -8716,6 +8723,9 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
         "hosts": hosts,
         "preconditions": {
             "outward_ssh_allowed": outward_ssh,
+            # Register, mint a key and verify: always available. A stack deployment through
+            # its governed ChangeSet: available in every edition once outward SSH is allowed.
+            "stack_deploy_allowed": governed_stack_deploys_allowed(settings),
             "host_writes_allowed": host_writes_allowed,
             "host_write_blocker": None if host_writes_allowed else {
                 "message": (
@@ -9175,6 +9185,140 @@ def backfill_deployment_hosts_endpoint(payload: DeploymentHostBackfillBody):
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "task_create")
         return backfill_hosts_from_targets(connection, project_id=project_id)
+
+
+# ── Stack deployments: an app deployed from its own boss.deploy.yaml ─────────────────────────
+# Design: engine/boss_engine/services/stack_deploy.py. Plan records a ChangeSet, a budget
+# reservation and a decision; the console approves through the decisions API with the
+# deployment's decision_id; a worker job applies it and the console watches these rows.
+
+def _stack_error(exc) -> HTTPException:
+    return HTTPException(status_code=getattr(exc, "status_code", 422), detail=exc.to_dict())
+
+
+@app.post("/v1/deployments/stack/targets", status_code=201)
+def create_stack_target_endpoint(payload: open_bodies.StackTargetCreateBody):
+    """Where a stack deploys: a GitHub repository, on a verified fleet host."""
+    payload = payload.payload()
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.stack_deploy import StackDeployError, create_stack_target
+
+    project_id = str(payload.get("project_id") or "").strip()
+    host_id = str(payload.get("host_id") or "").strip()
+    repository = str(payload.get("repository") or "").strip()
+    if not (project_id and host_id and repository):
+        raise HTTPException(status_code=422,
+                            detail="project_id, host_id and repository are required")
+    with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, payload.get("actor"), "providerops_manage")
+        try:
+            return create_stack_target(
+                connection, project_id=project_id, host_id=host_id,
+                app_name=str(payload.get("app_name") or ""), repository=repository,
+                environment=str(payload.get("environment") or "production"),
+                manifest_path=payload.get("manifest_path"),
+                public_url=payload.get("public_url"), actor=actor)
+        except StackDeployError as exc:
+            raise _stack_error(exc)
+
+
+@app.post("/v1/deployments/stack/plan")
+def plan_stack_deployment_endpoint(payload: open_bodies.StackDeployPlanBody):
+    """Plan repository@ref (branch, tag, commit or pull/N) onto a stack target.
+
+    Reads the manifest AT the resolved commit and asks the host read-only questions; nothing is
+    written to the host until the returned decision is approved.
+    """
+    payload = payload.payload()
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.stack_deploy import StackDeployError, plan_stack_deploy
+
+    project_id = str(payload.get("project_id") or "").strip()
+    target_id = str(payload.get("target_id") or "").strip()
+    ref = str(payload.get("ref") or "").strip()
+    if not (project_id and target_id and ref):
+        raise HTTPException(status_code=422, detail="project_id, target_id and ref are required")
+    with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, payload.get("actor"), "providerops_manage")
+    try:
+        deployment = plan_stack_deploy(
+            engine, settings, project_id=project_id, target_id=target_id,
+            repository=(payload.get("repository") or None), ref=ref, actor=actor)
+    except StackDeployError as exc:
+        raise _stack_error(exc)
+    return {"deployment": deployment}
+
+
+@app.get("/v1/deployments/stack")
+def list_stack_deployments_endpoint(project_id: str, target_id: Optional[str] = None,
+                                    limit: int = 50):
+    """Stack deployments, newest first — what the console's deploy history reads."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.stack_deploy import list_stack_deployments
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        return {"items": list_stack_deployments(connection, project_id, target_id=target_id,
+                                                limit=limit)}
+
+
+@app.get("/v1/deployments/stack/{deployment_id}")
+def get_stack_deployment_endpoint(deployment_id: str):
+    """One deployment: its steps as they run, the redacted log tail, and the verdict."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.stack_deploy import get_stack_deployment
+
+    with begin(engine) as connection:
+        deployment = get_stack_deployment(connection, deployment_id)
+        if not deployment:
+            raise HTTPException(status_code=404, detail="no such stack deployment")
+        require_project_reader(connection, deployment["project_id"])
+    return {"deployment": deployment}
+
+
+@app.post("/v1/deployments/stack/{deployment_id}/rollback")
+def rollback_stack_deployment_endpoint(deployment_id: str,
+                                       payload: open_bodies.StackDeployRollbackBody):
+    """Plan a NEW governed deployment of the previous healthy commit on the same target."""
+    payload = payload.payload()
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.stack_deploy import (
+        StackDeployError, get_stack_deployment, rollback_stack_deploy,
+    )
+
+    with begin(engine) as connection:
+        current = get_stack_deployment(connection, deployment_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="no such stack deployment")
+        actor = require_project_write_actor(
+            connection, current["project_id"], payload.get("actor"), "providerops_manage")
+    try:
+        deployment = rollback_stack_deploy(engine, settings, deployment_id=deployment_id,
+                                           actor=actor)
+    except StackDeployError as exc:
+        raise _stack_error(exc)
+    return {"deployment": deployment}
+
+
+@app.post("/v1/deployments/stack/{deployment_id}/execute")
+def execute_stack_deployment_endpoint(deployment_id: str,
+                                      payload: open_bodies.StackDeployExecuteBody):
+    """The worker hands its leased `deployment.stack_apply` job here. Fenced by the lease; the
+    apply runs inside the approved ChangeSet (services/stack_deploy.py)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.stack_deploy import execute_stack_job
+
+    return execute_stack_job(engine, settings, deployment_id=deployment_id,
+                             job_id=payload.job_id, worker_id=payload.worker_id,
+                             lease_token=payload.lease_token)
 
 
 @app.post("/v1/deployment-targets/{target_id}/auto-deploy")

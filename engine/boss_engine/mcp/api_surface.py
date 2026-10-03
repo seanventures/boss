@@ -67,6 +67,9 @@ _EXCLUDED_EXACT = {
     # not an operator action. Held as `execute`, it answered the worker 409 and every Community
     # discovery sat queued until its job deadlettered.
     "/v1/discoveries/{run_id}/execute": "discovery_worker_lease_protocol",
+    # The worker hands its leased deployment.stack_apply job to the API, which applies the
+    # approved ChangeSet. Only the job's live lease may start it: a worker protocol.
+    "/v1/deployments/stack/{deployment_id}/execute": "stack_deploy_worker_lease_protocol",
     "/v1/github/code-sync-runs/{sync_run_id}/apply": "github_worker_lease_protocol",
     "/v1/github/resolution-plans/{plan_id}/apply": "github_worker_lease_protocol",
     "/v1/github/merge-authorizations/{authorization_id}/apply": "github_worker_lease_protocol",
@@ -124,6 +127,9 @@ _GOVERNED_EFFECT_ALLOWLIST = frozenset({
     ("POST", "/v1/workflow-runs/{run_id}/migrations/rollback"),
     # Despite its name, this endpoint only renders a standards text block.
     ("POST", "/v1/platform-standards/apply"),
+    # A stack rollback only PLANS a new deployment of the previous healthy commit: a ChangeSet
+    # held behind its own approval decision. Nothing reaches the host from this call.
+    ("POST", "/v1/deployments/stack/{deployment_id}/rollback"),
 })
 _OPERATOR_ONLY_PATTERNS = (
     r"^/v1/decisions/\{[^/]+\}/(approve|reject|revise|delegate|execute)$",

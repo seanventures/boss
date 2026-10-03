@@ -6207,3 +6207,71 @@ ALTER TABLE api_idempotency_keys
   ADD COLUMN IF NOT EXISTS response_headers JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_keys_expiry
   ON api_idempotency_keys (expires_at);
+
+-- APPLICATION STACKS, DEPLOYED FROM THEIR OWN boss.deploy.yaml (services/stack_deploy.py).
+--
+-- A stack target is a deployment_targets row with target_kind 'stack', bound to a fleet host.
+-- `manifest_path` overrides boss.deploy.yaml at the repository root; `public_url` is what
+-- {target.public_url} fills in and what the console opens after a healthy deploy.
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS manifest_path TEXT;
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS public_url TEXT;
+
+-- One row per planned deployment of a commit to a stack target. Governance lives where it
+-- always does (changesets, budget_reservations, resource_receipts, decisions); this row is what
+-- the console watches: the steps as they run, a redacted log tail, and the verdict in words.
+CREATE TABLE IF NOT EXISTS stack_deployments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  host_id TEXT REFERENCES deployment_hosts(id),
+  repository TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  -- The manifest's summary (names only, never a value) and the text it was parsed from, so the
+  -- apply runs exactly what was approved rather than re-reading a branch that has moved.
+  manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+  manifest_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planned',
+  decision_id TEXT REFERENCES decisions(id),
+  changeset_id TEXT REFERENCES changesets(id),
+  reservation_id TEXT,
+  job_id TEXT,
+  steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  log_tail TEXT NOT NULL DEFAULT '',
+  open_url TEXT,
+  error JSONB,
+  failure_reason TEXT,
+  preflight JSONB NOT NULL DEFAULT '{}'::jsonb,
+  workflow_run_id TEXT,
+  code_task_run_id TEXT,
+  rollback_of TEXT,
+  -- Set the moment an apply begins. A replayed job that finds it set stops instead of
+  -- installing twice.
+  apply_started_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  CONSTRAINT stack_deployments_status CHECK (
+    status IN ('planned', 'awaiting_approval', 'running', 'healthy', 'failed', 'rejected'))
+);
+CREATE INDEX IF NOT EXISTS idx_stack_deployments_target
+  ON stack_deployments (target_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stack_deployments_project
+  ON stack_deployments (project_id, status, created_at DESC);
+-- Where on the host the stack lives (the manifest's dir). Two targets on one host must never
+-- share it: each mints its own generated secrets, so the second would rewrite the first's
+-- deploy.env under a database initialised with another password. Checked at plan time; the
+-- apply also serialises on (host_id, deploy_dir).
+ALTER TABLE stack_deployments ADD COLUMN IF NOT EXISTS deploy_dir TEXT;
+-- The apply that owns this row right now. Progress and the verdict are written only by the
+-- request holding it, so a replay that failed the row cannot be overwritten by a stale apply.
+ALTER TABLE stack_deployments ADD COLUMN IF NOT EXISTS apply_token TEXT;
+-- Approved but queued behind another deployment writing the same host directory.
+ALTER TABLE stack_deployments ADD COLUMN IF NOT EXISTS waiting_on TEXT;
+CREATE INDEX IF NOT EXISTS idx_stack_deployments_host_dir
+  ON stack_deployments (host_id, deploy_dir);
+-- The same commit to the same target is ONE live deployment, however many clicks plan it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stack_deployments_live_commit
+  ON stack_deployments (target_id, commit_sha)
+  WHERE status IN ('planned', 'awaiting_approval', 'running');

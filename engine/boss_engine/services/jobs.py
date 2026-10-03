@@ -1275,6 +1275,11 @@ class JobLeaseService:
         )
         self._mark_related_code_task_failed(connection, row, error, actor=worker_id)
         self._mark_related_discovery_failed(connection, row, error, actor=worker_id)
+        if row.get("kind") == "deployment.stack_apply":
+            # A deployment whose apply job died must not sit at `running` forever.
+            from .stack_deploy import fail_for_deadlettered_job
+
+            fail_for_deadlettered_job(connection, dict(row), error, self.settings)
         return {
             "job_id": job_id,
             "status": "deadlettered",
@@ -1424,6 +1429,67 @@ class JobLeaseService:
                 connection, worker_id, job_id, lease_token
             )
         )
+
+    def defer_leased(
+        self,
+        connection: Connection,
+        worker_id: str,
+        job_id: str,
+        lease_token: str,
+        *,
+        delay_seconds: int,
+        reason: str,
+        message: str,
+    ) -> dict[str, Any]:
+        """Hand a leased job back to the queue WITHOUT spending an attempt.
+
+        For a job that is not failing but waiting on something it does not own — a target
+        another deployment is still writing. Retrying it as a failure would deadletter a
+        perfectly good job after a few backoffs, long before the thing it waits on finishes.
+        The attempt the lease took is given back, so waiting is free however long it lasts.
+        """
+        row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token)
+        run_after = now_utc() + timedelta(seconds=max(1, int(delay_seconds)))
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'queued',
+                    attempt = GREATEST(jobs.attempt - 1, 0),
+                    lease_owner = NULL,
+                    lease_token_hash = NULL,
+                    lease_expires_at = NULL,
+                    heartbeat_at = NULL,
+                    run_after = :run_after,
+                    last_error = CAST(:last_error AS JSONB),
+                    updated_at = now()
+                WHERE id = :job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "run_after": run_after,
+                "last_error": json.dumps({"code": reason, "message": message}),
+            },
+        )
+        self.work_orchestration.release_job_slot(
+            connection,
+            project_id=row["project_id"],
+            job_id=job_id,
+            allocation_id=row.get("allocation_id"),
+            resource_units=int(row.get("resource_units") or 1),
+            reason=reason,
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "job.deferred",
+            worker_id,
+            "job",
+            job_id,
+            {"reason": reason, "message": message, "run_after": run_after.isoformat()},
+        )
+        return {"job_id": job_id, "status": "queued", "run_after": run_after.isoformat()}
 
     def _finalize_success(
         self,

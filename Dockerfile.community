@@ -25,7 +25,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates git ffmpeg libavfilter-extra fonts-dejavu-core \
+       ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts \
