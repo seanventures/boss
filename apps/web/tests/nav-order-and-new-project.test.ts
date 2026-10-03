@@ -593,7 +593,10 @@ describe("deciding a release, and where it ships", () => {
     // whole rule (refuse expired, refuse loopback, else the API's /v1/previews/<id>/web/
     // proxy). Using it is the fix; writing another version of it is how this kept recurring.
     expect(DW3).toContain("operatorPreviewOpenHref(record)");
-    expect(DW3).toContain("href.startsWith(\"http\") ? href : `${PREVIEW_API}${href}`");
+    // ...and the gateway path stays on the console's own origin (lib/browser-links): prefixing it
+    // with the server's API address sent boss-1's operator to their own laptop's port 8000.
+    expect(DW3).toContain("browserHref(href)");
+    expect(DW3).not.toContain("PREVIEW_API");
     expect(DW3).not.toContain('str("live_preview_url")');
   });
 });

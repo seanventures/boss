@@ -76,7 +76,9 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
     );
   }
   const headers = new Headers();
-  for (const name of ["content-type", "cache-control", "etag", "content-disposition"]) {
+  // `location` too: a previewed app's redirect arrives already rewritten under
+  // /v1/previews/<id>/web by the API, and a 3xx without it strands the browser on a blank page.
+  for (const name of ["content-type", "cache-control", "etag", "content-disposition", "location"]) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
   }

@@ -21,10 +21,9 @@ import { approvePreviewAction, createPreviewFixtureAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 
 import { callAction } from "../lib/call-action";
-const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
-
+import { browserHref } from "../lib/browser-links";
 function resolveHref(href: string): string {
-  return href.startsWith("http") ? href : `${PREVIEW_API}${href}`;
+  return browserHref(href);
 }
 
 /**
