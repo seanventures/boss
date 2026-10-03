@@ -12,7 +12,7 @@ Runs tab draws. Only the model on the far side of an agent step is scripted (sup
 FOUND BY THIS FILE: an Approval gate placed from the editor's palette (a `decision` step) was
 never released. A person approved it, and the run sat `waiting` at that gate for ever, because
 the worker's tick released timers only and nothing else called `advance_run` for a product run.
-"Run another workflow" had the same hole. See `workflows.a_wait_is_over`.
+"Run another workflow" had the same hole. See `workflows._wait_outcome`, the one rule for both.
 """
 from __future__ import annotations
 
@@ -26,24 +26,17 @@ from apps.api.tests import workflow_management_support as wf
 
 def _build(client, engine, *, finish_approval: dict | None = None) -> dict:
     """Draft (an agent, scoped to one skill and one MCP server) → a person looks → Finish (the
-    same agent, a fixed task, its own approval setting)."""
+    same agent, a fixed task, "Needs approval") — EXACTLY as the web editor saves it
+    (`wf.editor_built`), plus what only the JSON tab writes today: the start form's required
+    field, and an approval's answer-within and on-timeout settings."""
     skill = wf.skills(client, 1)[0]
     agent = wf.new_agent(client, wf.key("writer"), holds=(skill,))
     server = wf.mcp_server(engine)
     wf.grant_mcp(client, agent, server)
-    spec = {
-        "entry_step": "draft",
-        "input_schema": wf.START_FORM,
-        "steps": [
-            wf.agent_step("draft", captain=agent, nxt=("look",),
-                          skills=[skill], mcp=[server["name"]]),
-            wf.gate_step("look", nxt=("finish",), question="Ship the draft?",
-                         guidance="Read it through once."),
-            {**wf.agent_step("finish", captain=agent,
-                             instructions={"value": "Write the release note."}),
-             "approval": finish_approval or {"mode": "auto"}},
-        ],
-    }
+    spec = wf.editor_built(agent=agent, skill=skill, mcp=server["name"])
+    spec["input_schema"] = wf.START_FORM
+    finish = next(s for s in spec["steps"] if s["id"] == "finish")
+    finish["approval"] = finish_approval or {"mode": "auto"}
     made = wf.published(client, spec)
     return {"agent": agent, "skill": skill, "server": server, "spec": spec,
             "definition_id": made["definition"]["id"],
@@ -95,7 +88,10 @@ def test_a_built_workflow_runs_to_the_end_through_its_agent_and_its_gates(
     assert (view["status"], view["version"], view["current_step"]) == ("running", 1, "draft")
     assert wf.statuses(view) == {"draft": "ready", "look": "pending", "finish": "pending"}
     assert {s: v["captain"] for s, v in wf.steps_of(view).items()} == {
-        "draft": agent, "look": "human", "finish": agent}
+        "draft": agent, "look": None, "finish": agent}, (
+        # The editor's gate names nobody (its palette default is `approver_role`, which the
+        # runtime does not read); the console draws a gate with no captain as "A person".
+        "the runs view does not name who runs what the editor saved")
 
     # The agent step runs as the agent the workflow names, limited to what the step allows.
     performed = wf.tick(client)
@@ -247,9 +243,8 @@ def test_skip_goes_on_without_the_failed_step_and_a_refused_gate_stops_the_run(
 # ── Run another workflow ──────────────────────────────────────────────────────────────────────
 
 
-def test_a_run_another_workflow_step_waits_for_the_child_and_goes_on_when_it_ends(
-        client, engine, monkeypatch):
-    model = wf.install_model(monkeypatch)
+def _parent_and_child(client, engine) -> tuple[dict, dict]:
+    """A parent whose "Run another workflow" step runs a one-step child, then wraps up."""
     skill = wf.skills(client, 1)[0]
     agent = wf.new_agent(client, wf.key("helper"), holds=(skill,))
     child = wf.published(client, {"entry_step": "help", "steps": [
@@ -263,6 +258,19 @@ def test_a_run_another_workflow_step_waits_for_the_child_and_goes_on_when_it_end
         {"id": "delegate", "kind": "subworkflow", "next": ["wrap"],
          "binding": {"workflow_version_id": version_id}},
         wf.agent_step("wrap", captain=agent, instructions={"value": "Wrap it up."})]})
+    return parent, child
+
+
+def _child_runs(client, child: dict) -> list[dict]:
+    return [r for r in client.get("/v1/delivery-workflows/runs", params={
+        "project_id": wf.PROJECT, "limit": 100}).json()["runs"]
+        if r["workflow_key"] == child["definition"]["workflow_key"]]
+
+
+def test_a_run_another_workflow_step_waits_for_the_child_and_goes_on_when_it_ends(
+        client, engine, monkeypatch):
+    model = wf.install_model(monkeypatch)
+    parent, child = _parent_and_child(client, engine)
 
     run_id = wf.started(client, parent["definition"]["workflow_key"], {})
     for _ in range(3):
@@ -271,13 +279,64 @@ def test_a_run_another_workflow_step_waits_for_the_child_and_goes_on_when_it_end
     assert view["status"] == "completed", view
     assert wf.statuses(view) == {"delegate": "succeeded", "wrap": "succeeded"}
     # The child ran as its own run, to the end, and only then did the parent go on.
-    child_runs = [r for r in client.get("/v1/delivery-workflows/runs", params={
-        "project_id": wf.PROJECT}).json()["runs"]
-        if r["workflow_key"] == child["definition"]["workflow_key"]]
-    assert [r["status"] for r in child_runs] == ["completed"]
+    assert [r["status"] for r in _child_runs(client, child)] == ["completed"]
     prompts = [c["prompt"] for c in model.calls]
     assert len(prompts) == 2
     assert "Help out." in prompts[0] and "Wrap it up." in prompts[1]
+
+
+def test_a_child_run_that_fails_or_is_stopped_blocks_its_parent(client, engine, monkeypatch):
+    """A child that ends any way but `completed` is over too. The parent must stop, saying
+    why, rather than sit `waiting` on a child that will never finish."""
+    model = wf.install_model(monkeypatch)
+    model.failing = "Help out."
+    parent, child = _parent_and_child(client, engine)
+
+    failed = wf.started(client, parent["definition"]["workflow_key"], {})
+    for _ in range(3):
+        wf.tick(client)
+    [ended] = _child_runs(client, child)
+    assert ended["status"] in ("failed", "deadlettered"), ended
+    view = wf.run_view(client, failed)
+    assert view["status"] == "blocked", view
+    assert "subworkflow" in view["blocked_reason"] and ended["status"] in view["blocked_reason"]
+    assert wf.statuses(view)["wrap"] == "pending", "the parent went on past a failed child"
+    assert not any("Wrap it up." in c["prompt"] for c in model.calls)
+
+    # Stopped by a person: the same.
+    model.failing = None
+    stopped = wf.started(client, parent["definition"]["workflow_key"], {})
+    # Starting the parent starts the child; it is stopped before the worker gets to it.
+    [child_run] = [r for r in _child_runs(client, child) if r["id"] != ended["id"]]
+    assert child_run["status"] == "running", child_run
+    # What the console's Stop sends.
+    cancelled = client.post(f"/v1/workflow-runs/{child_run['id']}/cancel", json={
+        "project_id": wf.PROJECT, "actor": "ceo", "reason": "Not needed."})
+    assert cancelled.status_code == 200, cancelled.text
+    wf.tick(client)
+    view = wf.run_view(client, stopped)
+    assert view["status"] == "blocked", view
+    assert "cancelled" in view["blocked_reason"]
+    assert wf.statuses(view)["wrap"] == "pending"
+
+
+def test_a_gate_nobody_answered_in_time_stops_the_run(client, engine, monkeypatch):
+    wf.install_model(monkeypatch)
+    built = _build(client, engine)
+    run_id, view = _drive_to_the_gate(client, built, "Draft it.")
+    gate = wf.steps_of(view)["look"]
+    with engine.begin() as c:
+        c.execute(text("UPDATE decisions SET deadline_at = now() - interval '1 minute' "
+                       "WHERE id = :d"), {"d": gate["decision_id"]})
+    # Reading the inbox is what expires an overdue decision.
+    inbox = client.get("/v1/decisions/inbox", params={"project_id": wf.PROJECT})
+    assert inbox.status_code == 200, inbox.text
+    assert client.get(f"/v1/decisions/{gate['decision_id']}").json()["status"] == "expired"
+    wf.tick(client)
+    view = wf.run_view(client, run_id)
+    assert view["status"] == "blocked", view
+    assert "expired" in view["blocked_reason"]
+    assert wf.statuses(view) == {"draft": "succeeded", "look": "failed", "finish": "pending"}
 
 
 # ── The agent's door ──────────────────────────────────────────────────────────────────────────
