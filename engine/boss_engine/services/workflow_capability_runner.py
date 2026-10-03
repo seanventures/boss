@@ -3482,19 +3482,15 @@ def tick(
                 connection, project_id=project_id, run_id=run_id, worker_id=worker_id
             ))
 
-            # A WAIT THAT HAS RUN OUT, ENDED. A timer step is woken by `advance_run`, and for a
-            # product run nothing called it except an answered gate — so Deprecation /
-            # Sunset's seven-day grace period never ended: the run sat `waiting` at `grace` for
-            # ever and the removal it exists to schedule never happened. Found by driving every
-            # catalogue template end to end (test_every_template_runs_end_to_end).
-            phase = "wake timers that are due"
-            due = connection.execute(
-                text("SELECT 1 FROM workflow_step_runs WHERE workflow_run_id = :r "
-                     "AND status = 'waiting' AND step_kind = 'timer' AND run_after <= now() "
-                     "LIMIT 1"),
-                {"r": run_id},
-            ).first()
-            if due:
+            # A WAIT THAT IS OVER, ENDED — whatever kind of wait it was. Timers, approval gates
+            # (`decision` steps) and "Run another workflow" steps are released by `advance_run`
+            # alone, and for a product run nothing called it but this tick. It used to ask about
+            # timers only (Deprecation / Sunset's grace period never ended), so an Approval gate
+            # placed from the editor's palette sat `waiting` after a person approved it, and a
+            # parent never left a child run that had finished. `workflows.a_wait_is_over` asks
+            # `workflows._wait_outcome`, the same rule `advance_run` acts on.
+            phase = "release waits that are over"
+            if workflows.a_wait_is_over(connection, run_id):
                 workflows.advance_run(connection, project_id, run_id)
 
             # Answered gates next, so a step approved a moment ago is released in the same
