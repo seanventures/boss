@@ -14,16 +14,16 @@
  * and the leave guard are the save flow's (`useSaveFlow`).
  */
 import { Plus } from "@phosphor-icons/react";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { CustomStepDef, PaletteItem, Spec, StepView } from "../../../lib/workflow-editor-types";
 import { TOAST_EVENT } from "../../../lib/api-write";
 import { deleteWorkflow, draftFromDescription, fetchSpec } from "../../../lib/workflow-api";
-import { useWorkflowEditor } from "../../../lib/workflow-editor-store";
+import { newMeta, useWorkflowEditor } from "../../../lib/workflow-editor-store";
 import { canRemove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
 import { newStepFor } from "../../../lib/step-view";
 import { FlowLane, type LaneZoom } from "../flow/flow-lane";
-import { laneGeometry, MIN_SCALE } from "../flow/geometry";
+import { laneGeometry, minScale } from "../flow/geometry";
 import { viewOf } from "../flow/node-facts";
 import { useTips } from "../flow/tip-layer";
 import { DefineStepModal } from "./define-step-modal";
@@ -40,6 +40,8 @@ import { NO_DELETE_TIP, TopBar } from "./top-bar";
 
 const PALETTE_W = 240;
 const RAIL_W = 48;
+/** What the lane loses to its column beyond the palette: the grid gap and the lane's border. */
+const LANE_CHROME = 12 + 2;
 const UNDO_TOAST_MS = 6000;
 const PALETTE_PREF = "wf:palette";
 
@@ -99,6 +101,9 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const readOnly = meta.readOnlyVersion != null;
 
   const [view, setView] = useState<"visual" | "json">("visual");
+  /** The JSON view's Changes diff, held here so ⋯ > Changes can open the view on it. */
+  const [jsonChanges, setJsonChanges] = useState(false);
+  const showChanges = useCallback(() => { setView("json"); setJsonChanges(true); }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [zoom, setZoom] = useState<LaneZoom>("fit");
   const [quick, setQuick] = useState<{ at: number; anchor: HTMLElement } | null>(null);
@@ -186,11 +191,25 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const autoRail = useMemo(() => {
     if (!bodyWidth || !spec.steps.length) return false;
     const types = new Map([...views].map(([id, v]) => [id, v.type] as [string, StepView["type"]]));
-    const compact = laneGeometry(layoutFlow(spec), types, "compact").width * MIN_SCALE;
-    return compact > bodyWidth - PALETTE_W && compact <= bodyWidth - RAIL_W;
+    const compact = laneGeometry(layoutFlow(spec), types, "compact").width * minScale("compact");
+    return compact > bodyWidth - PALETTE_W - LANE_CHROME && compact <= bodyWidth - RAIL_W - LANE_CHROME;
   }, [bodyWidth, spec, views]);
   const rail = pref ? pref === "rail" : autoRail;
   const togglePalette = () => { const next = rail ? "open" : "rail"; setPref(next); writePref(next); };
+
+  /* ── The drawer floats over the lane: how much of the lane's right edge it covers ── */
+  const inspectorOpen = !!palette && (!!state.selection || settingsOpen);
+  const [occluded, setOccluded] = useState(0);
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    const drawer = body?.querySelector<HTMLElement>(".wf-drawer");
+    const lane = body?.querySelector<HTMLElement>(".wf-stage .wf-lane-viewport");
+    if (!drawer || !lane || view !== "visual") { setOccluded(0); return; }
+    const d = drawer.getBoundingClientRect();
+    const l = lane.getBoundingClientRect();
+    const overlaps = d.top < l.bottom && d.bottom > l.top && d.left < l.right;
+    setOccluded(overlaps ? Math.round(l.right - d.left) : 0);
+  }, [inspectorOpen, view, bodyWidth, rail, loading]);
 
   /* ── Edits ── */
   const show = useCallback((message: string, undo = false) => setNote({ id: Date.now(), message, undo }), []);
@@ -279,20 +298,27 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     dispatch({ type: "SET_SPEC", spec: old });
   }, [spec, leaveVersion, dispatch]);
 
-  /* ── Duplicate: an unsaved copy, kept as a new workflow until Save ── */
+  /* ── Duplicate: an unsaved copy, kept as a new workflow until Save ──
+     Only a saved workflow has something to copy (the menu says "Not saved yet" otherwise). The
+     copy is held until the new, empty workflow has loaded, then lands as ONE load: its steps
+     and a fresh unsaved meta together, so it is not two undo steps and nothing of the source's
+     meta survives. A copy still held when the editor goes anywhere but "new" is dropped. */
   const pendingCopy = useRef<{ spec: Spec; name: string; from: string | null } | null>(null);
   const duplicate = useCallback(() => {
+    if (!meta.workflow_key) return;
     pendingCopy.current = { spec, name: `${meta.name} (copy)`,
                             from: meta.is_catalogue ? meta.workflow_key : meta.from_workflow_key };
     writeUrl({ wf: "new", step: null, v: null });
     setKey("new");
   }, [spec, meta]);
   useEffect(() => {
+    if (key !== "new") pendingCopy.current = null;
+  }, [key]);
+  useEffect(() => {
     const copy = pendingCopy.current;
     if (!copy || loading || key !== "new" || meta.workflow_key !== null) return;
     pendingCopy.current = null;
-    dispatch({ type: "SET_SPEC", spec: copy.spec });
-    dispatch({ type: "SET_META", patch: { name: copy.name, from_workflow_key: copy.from } });
+    dispatch({ type: "LOAD", spec: copy.spec, meta: newMeta({ name: copy.name, from_workflow_key: copy.from }) });
   }, [loading, key, meta.workflow_key, dispatch]);
 
   const deleteThis = useCallback(async () => {
@@ -363,7 +389,6 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     </div>;
   }
 
-  const inspectorOpen = !!palette && (!!state.selection || settingsOpen);
   const noSteps = !spec.steps.length;
 
   return (
@@ -391,8 +416,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onSave={() => void saveFlow.save()} saveLabel={saveFlow.label} saveRef={saveFlow.saveRef}
               saveBlocked={saveFlow.canSave ? null : saveFlow.saving ? "Saving…" : saveFlow.saveTip}
               saveTip={saveFlow.saveTip} saving={saveFlow.saving}
-              onDuplicate={duplicate} onUseFor={openSettings}
-              onChanges={() => { setView("json"); window.dispatchEvent(new CustomEvent("wf:show-changes")); }}
+              onDuplicate={duplicate} duplicateBlocked={meta.workflow_key ? null : "Not saved yet"}
+              onUseFor={openSettings} onChanges={showChanges}
               onDiscard={() => dispatch({ type: "LOAD", spec: state.loaded ?? { steps: [] }, meta: state.loadedMeta })}
               onDelete={() => void deleteThis()}
               deleteBlocked={meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
@@ -408,7 +433,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               <span className="wf-notice-sep" aria-hidden>·</span>
               <span>v{restore.publishedSince} was published since</span>
               <button type="button" className="wf-link" data-tip="Restore, then see the changes in JSON"
-                      onClick={() => { restore.apply(); setView("json"); window.dispatchEvent(new CustomEvent("wf:show-changes")); }}>
+                      onClick={() => { restore.apply(); showChanges(); }}>
                 Compare
               </button>
             </>
@@ -441,12 +466,13 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
                         selection={state.selection} problems={state.problems}
                         onSelect={(id) => { dispatch({ type: "SELECT", id }); if (id) setSettingsOpen(false); }}
                         onInsert={insert} onMove={move} renderGapAction={readOnly ? undefined : gapAction}
-                        zoom={zoom} onZoomChange={setZoom} />
+                        zoom={zoom} onZoomChange={setZoom} occludedRight={inspectorOpen ? occluded : 0} />
             </main>
           </>
         ) : (
           <main className="wf-stage wf-stage-json" aria-label="JSON">
-            <JsonView state={state} palette={palette} dispatch={dispatch} />
+            <JsonView state={state} palette={palette} dispatch={dispatch}
+                      changes={jsonChanges} onChanges={setJsonChanges} />
           </main>
         )}
         {inspectorOpen && palette ? (

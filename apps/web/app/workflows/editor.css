@@ -1,8 +1,12 @@
 /* Workflow Studio: editor. Classes are prefixed wf- and use only the base tokens. */
 
 /* ── Shell ─────────────────────────────────────────────────────────────────────
-   Bar, summary line, then palette | lane | inspector. The lane takes what is left and is
-   never wider than its column, so the page itself never scrolls sideways. */
+   Bar, summary line, then palette | lane, with the inspector floating over the lane's right edge.
+   The lane takes what is left and is never wider than its column, so the page never scrolls
+   sideways. The drawer is never a column of its own in the Visual view: a column would take its
+   380px from the lane every time a step is selected, so the lane would re-fit, change density
+   and move its nodes under the pointer. Floating, it leaves the lane's size alone, and the lane
+   scrolls the selected step out from under it (FlowLane occludedRight). */
 .wf-editor {
   position: relative;
   display: flex; flex-direction: column; gap: 10px;
@@ -20,33 +24,23 @@
 }
 .wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr); }
 .wf-editor[data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr); }
-.wf-editor[data-inspector="open"] .wf-body { grid-template-columns: 240px minmax(0, 1fr) 380px; }
-.wf-editor[data-inspector="open"] .wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr) 380px; }
-.wf-editor[data-inspector="open"][data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr) 380px; }
 .wf-stage { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .wf-drawer {
-  position: sticky; top: 64px;
+  position: absolute; top: 0; right: 0; z-index: 20;
+  width: min(380px, 100%);
   max-height: calc(100vh - 80px); overflow: auto;
   border: 1px solid var(--border); border-radius: var(--r-xl);
-  background: var(--surface);
+  background: var(--surface); box-shadow: var(--shadow);
 }
 
-/* Under 1280px the inspector floats over the lane instead of squeezing it. */
-@media (max-width: 1279px) {
-  .wf-editor[data-inspector="open"] .wf-body,
-  .wf-editor[data-inspector="open"] .wf-body[data-palette="rail"] { grid-template-columns: 240px minmax(0, 1fr); }
-  .wf-editor[data-inspector="open"] .wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr); }
-  .wf-editor[data-inspector="open"][data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr); }
-  .wf-drawer {
-    position: absolute; top: 0; right: 0; bottom: auto; z-index: 20;
-    width: min(380px, 100%); box-shadow: var(--shadow);
-  }
+/* JSON from 1280px: text, not a fitted drawing, so the inspector sits beside it. */
+@media (min-width: 1280px) {
+  .wf-editor[data-inspector="open"][data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr) 380px; }
+  .wf-editor[data-view="json"] .wf-drawer { position: sticky; top: 64px; width: auto; box-shadow: none; }
 }
 /* Under 720px: the palette is a sheet behind the + button, the inspector a bottom sheet. */
 @media (max-width: 719px) {
-  .wf-body, .wf-body[data-palette="rail"],
-  .wf-editor[data-inspector="open"] .wf-body,
-  .wf-editor[data-inspector="open"] .wf-body[data-palette="rail"] { grid-template-columns: minmax(0, 1fr); }
+  .wf-body, .wf-body[data-palette="rail"] { grid-template-columns: minmax(0, 1fr); }
   .wf-body > .wf-palette { display: none; }
   .wf-drawer {
     position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;

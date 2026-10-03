@@ -119,21 +119,21 @@ export function StepNode(p: {
                     ? `${plural(b.inputs, "input")} · ${unwired} not connected`
                     : plural(b.inputs, "input")}
                   aria-label={unwired ? `${b.inputs} inputs, ${unwired} not connected` : `${b.inputs} inputs`}>
-              <Plug size={12} weight="bold" aria-hidden />{b.inputs}
+              <Plug size={12} weight="bold" aria-hidden /><span className="wf-badge-n">{b.inputs}</span>
             </span>
           ) : null}
           {b.skills > 0 ? (
             <span className="wf-badge" data-kind="skills" data-testid="wf-badge-skills"
                   data-tip={detail?.skills?.length ? `Limited to: ${detail.skills.join(", ")}` : `Limited to ${plural(b.skills, "skill")}`}
                   aria-label={`${b.skills} skills`}>
-              <Sparkle size={12} weight="bold" aria-hidden />{b.skills}
+              <Sparkle size={12} weight="bold" aria-hidden /><span className="wf-badge-n">{b.skills}</span>
             </span>
           ) : null}
           {b.mcp > 0 ? (
             <span className="wf-badge" data-kind="mcp" data-testid="wf-badge-mcp"
                   data-tip={detail?.mcp?.length ? detail.mcp.join(", ") : plural(b.mcp, "MCP server")}
                   aria-label={`${b.mcp} MCP`}>
-              <HardDrives size={12} weight="bold" aria-hidden />{b.mcp}
+              <HardDrives size={12} weight="bold" aria-hidden /><span className="wf-badge-n">{b.mcp}</span>
             </span>
           ) : null}
           {b.lacks.length ? (

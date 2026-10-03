@@ -2,6 +2,7 @@
 
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCHED, linear, PALETTE, STRETCH } from "./_helpers/canvas-fixtures";
@@ -222,8 +223,27 @@ describe("dragging a step", () => {
     const caret = lane.querySelector<HTMLElement>('[data-testid="wf-caret"]')!;
     expect(caret.dataset.allowed).toBe("false");
     expect(caret.dataset.tip).toBe("Edit branches in JSON");
+    // The reason shows mid-drag, as the shared tooltip pinned to the caret: fixed on the page,
+    // placed inside the window, so the lane's clipping edge can never hide it.
+    const bubble = document.querySelector<HTMLElement>('.wf-tip[role="tooltip"]')!;
+    expect(bubble).not.toBeNull();
+    expect(bubble.hidden).toBe(false);
+    expect(bubble.textContent).toBe("Edit branches in JSON");
+    expect(bubble.parentElement).toBe(document.body);
+    const top = parseFloat(bubble.style.top);
+    const left = parseFloat(bubble.style.left);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(top).toBeLessThan(window.innerHeight);
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(left).toBeLessThan(window.innerWidth);
+    // Hovering something else mid-drag does not take it away; a drop target that is allowed does.
+    act(() => { node(lane, "research").dispatchEvent(new PointerEvent("pointerover", { bubbles: true })); });
+    expect(bubble.hidden).toBe(false);
     pointer("pointerup", document.body, far, start.y);
     expect(onMove).not.toHaveBeenCalled();
+    expect(bubble.hidden).toBe(true);
+    // And no label of the caret's own: a pseudo-element above it sat outside the lane and was clipped.
+    expect(readFileSync("app/workflows/flow.css", "utf8")).not.toMatch(/\.wf-drop-caret[^{]*::?(after|before)/);
   });
 
   it("scrolls the lane when the pointer nears its edge", async () => {

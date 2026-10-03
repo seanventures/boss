@@ -3,6 +3,7 @@
 
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { overBudget, paragraphs } from "./_helpers/copy-budget";
@@ -28,18 +29,20 @@ let api: FakeApi;
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 let bodyWidth = 0;
+let laneWidth = 4000;
 const realClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
 const onBack = vi.fn();
 const onStart = vi.fn();
 
 beforeEach(() => {
   bodyWidth = 0;
+  laneWidth = 4000;
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get() {
       const el = this as HTMLElement;
       if (el.classList?.contains("wf-body")) return bodyWidth;
-      return el.classList?.contains("wf-lane-viewport") ? 4000 : 0;
+      return el.classList?.contains("wf-lane-viewport") ? laneWidth : 0;
     },
   });
   window.history.replaceState(null, "", "/?area=delivery_workflows&wf=standard_product_delivery");
@@ -459,6 +462,87 @@ describe("starting and leaving", () => {
     expect(laneIds()).toEqual(["research", "meeting", "spec_review", "build"]);
     expect(new URLSearchParams(window.location.search).get("wf")).toBe("new");
     expect(nonChecks()).toEqual([]);
+    // One load, not an edit and then a rename: there is nothing to undo into.
+    expect(byTest("wf-undo").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("will not Duplicate a workflow that has never been saved, and says why", async () => {
+    await mount("new");
+    click(byTest("wf-more"));
+    const dup = byTest("wf-menu-duplicate");
+    expect(dup.getAttribute("aria-disabled")).toBe("true");
+    expect(dup.dataset.tip).toBe("Not saved yet");
+    click(dup);
+    await settle();
+    expect((byTest("wf-name") as HTMLInputElement).value).toBe("Untitled workflow");
+    expect(nonChecks()).toEqual([]);
+  });
+});
+
+describe("Changes", () => {
+  it("⋯ > Changes ends in the JSON view with the diff against the published version open", async () => {
+    await mount("my_flow");
+    key(node("research"), "ArrowRight", { altKey: true });
+    click(byTest("wf-more"));
+    click(byTest("wf-menu-changes"));
+    await settle();
+    expect(byTest("wf-view-json").getAttribute("aria-pressed")).toBe("true");
+    expect(byTest("wf-json-changes").getAttribute("aria-pressed")).toBe("true");
+    const diff = byTest("wf-json-diff");
+    expect(diff).not.toBeNull();
+    expect(diff.querySelector('.wf-diff-line[data-kind="add"]')).not.toBeNull();
+  });
+});
+
+describe("the inspector never reflows the lane", () => {
+  it("11 steps at 1440px: selecting one keeps the lane's density and scale, unscrolled, and brings the step clear of the drawer", async () => {
+    api.workflows[0].spec = linear(11);
+    bodyWidth = 1440 - 84 - 32;
+    // The palette folds to its rail (48px), and the grid gap and the lane's border come off.
+    laneWidth = bodyWidth - 48 - 12 - 2;
+    const laneLeft = bodyWidth - laneWidth;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function rect(this: Element) {
+      const el = this as HTMLElement;
+      const r = el.classList.contains("wf-drawer") ? { left: bodyWidth - 380, top: 0, width: 380, height: 640 }
+        : el.classList.contains("wf-lane-viewport") ? { left: laneLeft, top: 40, width: laneWidth, height: 160 }
+          : { left: 0, top: 0, width: 0, height: 0 };
+      return { ...r, x: r.left, y: r.top, right: r.left + r.width, bottom: r.top + r.height, toJSON() { return r; } } as DOMRect;
+    });
+    try {
+      await mount();
+      const lane = q('.wf-stage [data-testid="wf-lane"]');
+      const canvas = q(".wf-stage .wf-lane-canvas");
+      const before = { density: lane.dataset.density, scale: canvas.dataset.scale };
+      expect(lane.dataset.scrolls).toBeUndefined();
+
+      const last = laneIds().at(-1)!;
+      click(node(last));
+      await settle(2);
+      expect(byTest("wf-drawer")).not.toBeNull();
+      expect(lane.dataset.density).toBe(before.density);
+      expect(canvas.dataset.scale).toBe(before.scale);
+      expect(lane.dataset.scrolls).toBeUndefined();
+      expect(q('.wf-stage [data-testid="wf-minimap"]')).toBeNull();
+      // Brought out from under the drawer, which covers the lane's last 380px.
+      const viewport = q(".wf-stage .wf-lane-viewport");
+      const box = q(`.wf-slot[data-slot="${last}"]`);
+      const right = (parseFloat(box.style.left) + parseFloat(box.style.width)) * Number(before.scale) - viewport.scrollLeft;
+      expect(right).toBeLessThanOrEqual(laneWidth - 380);
+
+      click(q(".wf-drawer [aria-label='Close']"));
+      await settle(2);
+      expect(lane.dataset.density).toBe(before.density);
+      expect(canvas.dataset.scale).toBe(before.scale);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("gives the drawer no column of its own in the Visual view", () => {
+    const css = readFileSync("app/workflows/editor.css", "utf8");
+    for (const line of css.split("\n").filter((l) => /grid-template-columns:[^;]*380px/.test(l))) {
+      expect(line).toContain('[data-view="json"]');
+    }
   });
 });
 

@@ -23,8 +23,9 @@ const geometry = await import("../app/workflows/flow/geometry");
 const { layoutFlow } = await import("../lib/workflow-graph");
 
 /** The lane's width in the console at 1440px: the shell's icon rail (84px), the palette as a
- *  rail (48px) and the editor's gutters (2 × 16px) come off the window. */
-const LANE_AT_1440 = 1440 - 84 - 48 - 32;
+ *  rail (48px), the editor's gutters (2 × 16px), the grid gap (12px) and the lane's border
+ *  (2px) come off the window. */
+const LANE_AT_1440 = 1440 - 84 - 48 - 32 - 12 - 2;
 
 let laneWidth = LANE_AT_1440;
 let root: Root | null = null;
@@ -71,7 +72,7 @@ describe("the whole flow fits in one row", () => {
     expect(lane.dataset.scrolls).toBeUndefined();
     expect(h.querySelector('[data-testid="wf-minimap"]')).toBeNull();
     const scale = Number(h.querySelector<HTMLElement>(".wf-lane-canvas")!.dataset.scale);
-    expect(scale).toBeGreaterThanOrEqual(geometry.MIN_SCALE);
+    expect(scale).toBeGreaterThanOrEqual(geometry.minScale("compact"));
     // The sizer is what the viewport scrolls; at this scale it is no wider than the lane.
     expect(parseFloat(h.querySelector<HTMLElement>(".wf-lane-sizer")!.style.width)).toBeLessThanOrEqual(LANE_AT_1440);
   });
@@ -89,7 +90,7 @@ describe("the whole flow fits in one row", () => {
     const h = render(<FlowLane spec={linear(24)} palette={PALETTE} mode="design" />);
     const lane = h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!;
     expect(lane.dataset.scrolls).toBe("true");
-    expect(Number(h.querySelector<HTMLElement>(".wf-lane-canvas")!.dataset.scale)).toBe(geometry.MIN_SCALE);
+    expect(Number(h.querySelector<HTMLElement>(".wf-lane-canvas")!.dataset.scale)).toBe(geometry.minScale("compact"));
     const minimap = h.querySelector('[data-testid="wf-minimap"]')!;
     expect(minimap.querySelectorAll(".wf-minimap-dot")).toHaveLength(24);
     // Still one row.
@@ -231,14 +232,91 @@ describe("the geometry the lane is drawn from", () => {
   it("puts an 11-step flow inside 1440px at no less than the minimum scale", () => {
     const g = geometry.chooseDensity(layoutFlow(linear(11)), types, LANE_AT_1440);
     expect(g.density).toBe("compact");
-    const s = geometry.fitScale(g.width, LANE_AT_1440);
-    expect(s).toBeGreaterThanOrEqual(geometry.MIN_SCALE);
+    const s = geometry.fitScale(g.width, LANE_AT_1440, g.density);
+    expect(s).toBeGreaterThanOrEqual(geometry.minScale(g.density));
     expect(geometry.overflows(g.width, s, LANE_AT_1440)).toBe(false);
   });
 
   it("draws a Wait narrower than a step", () => {
     const g = geometry.laneGeometry(layoutFlow({ steps: [{ id: "w", kind: "timer" }] }), new Map([["w", "wait"]]), "comfortable");
     expect(g.boxes.get("w")!.w).toBe(geometry.WAIT_W.comfortable);
+  });
+});
+
+/* ── Readable text, as a checked rule ─────────────────────────────────────────── */
+
+/** Every rule in a stylesheet as [selector, declarations], out of any @media block. */
+function cssRules(css: string): [string, string][] {
+  const out: [string, string][] = [];
+  const walk = (src: string) => {
+    let i = 0;
+    while (i < src.length) {
+      const open = src.indexOf("{", i);
+      if (open < 0) break;
+      const head = src.slice(i, open).trim();
+      let depth = 1;
+      let j = open + 1;
+      for (; j < src.length && depth; j += 1) {
+        if (src[j] === "{") depth += 1;
+        else if (src[j] === "}") depth -= 1;
+      }
+      const body = src.slice(open + 1, j - 1);
+      if (head.startsWith("@media")) walk(body);
+      else if (!head.startsWith("@")) out.push([head, body]);
+      i = j;
+    }
+  };
+  walk(css.replace(/\/\*[\s\S]*?\*\//g, ""));
+  return out;
+}
+
+/** The font size a rule sets, in rem (16px = 1rem), from font-size or the font shorthand. */
+function fontRem(body: string): number | null {
+  const m = body.match(/font-size:\s*([\d.]+)(rem|px)/) ?? body.match(/(?:^|;|\s)font:\s[^;]*?([\d.]+)(rem|px)/);
+  if (!m) return null;
+  return m[2] === "px" ? Number(m[1]) / 16 : Number(m[1]);
+}
+
+/** Every piece of text drawn on the lane's canvas, which Fit scales with it. (The avatar's
+ *  initials are a picture of the agent, aria-hidden, the name being its tooltip.) */
+const CANVAS_TEXT = [".wf-node-title", ".wf-node-agent", ".wf-badge", ".wf-node-status", ".wf-flag", ".wf-edge-label"];
+
+describe("text on the lane is never smaller than 0.75rem, at any scale Fit picks", () => {
+  const rules = cssRules(readFileSync("app/workflows/flow.css", "utf8"))
+    .flatMap(([sel, body]) => sel.split(",").map((one) => [one.trim(), body] as [string, string]));
+  const sizes = (cls: string, compact: boolean) => rules
+    .filter(([sel]) => new RegExp(`${cls.replace(".", "\\.")}(?![\\w-])`).test(sel)
+                       && sel.includes('[data-density="compact"]') === compact)
+    .map(([, body]) => fontRem(body)).filter((n): n is number => n !== null);
+
+  it("sets every canvas text at least as large as geometry.ts says each density does", () => {
+    for (const cls of CANVAS_TEXT) {
+      expect(Math.min(...sizes(cls, false)), `${cls}, Comfortable`).toBeGreaterThanOrEqual(geometry.MIN_FONT_REM.comfortable);
+      const compact = sizes(cls, true);
+      expect(compact.length, `${cls} has a Compact size`).toBeGreaterThan(0);
+      expect(Math.min(...compact), `${cls}, Compact`).toBeGreaterThanOrEqual(geometry.MIN_FONT_REM.compact);
+    }
+    // Nothing else in Compact sets a smaller font either.
+    for (const [sel, body] of rules.filter(([sel]) => sel.includes('[data-density="compact"]'))) {
+      const rem = fontRem(body);
+      if (rem !== null) expect(rem, sel).toBeGreaterThanOrEqual(geometry.MIN_FONT_REM.compact);
+    }
+  });
+
+  it("never scales a density's smallest text under the minimum", () => {
+    for (const d of ["comfortable", "compact"] as const) {
+      expect(geometry.MIN_FONT_REM[d] * geometry.minScale(d)).toBeGreaterThanOrEqual(geometry.MIN_TEXT_REM - 1e-9);
+      expect(geometry.MIN_FONT_REM[d] * geometry.fitScale(100_000, 100, d)).toBeGreaterThanOrEqual(geometry.MIN_TEXT_REM - 1e-9);
+    }
+  });
+
+  it("fits 11 steps at 1440px by geometry: the smallest text, as drawn, is 0.75rem or more", () => {
+    const h = render(<FlowLane spec={linear(11)} palette={PALETTE} mode="design" />);
+    const lane = h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!;
+    const density = lane.dataset.density as "comfortable" | "compact";
+    const scale = Number(h.querySelector<HTMLElement>(".wf-lane-canvas")!.dataset.scale);
+    expect(lane.dataset.scrolls).toBeUndefined();
+    expect(geometry.MIN_FONT_REM[density] * scale).toBeGreaterThanOrEqual(geometry.MIN_TEXT_REM);
   });
 });
 

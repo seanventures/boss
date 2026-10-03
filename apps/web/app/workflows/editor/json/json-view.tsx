@@ -59,14 +59,20 @@ export function lineOfProblem(text: string, p: Problem): number | null {
  * anywhere else — the inspector, undo — the text is re-serialised and the caret stays on the
  * same step.
  */
-export function JsonView({ state, palette, dispatch }: {
+export function JsonView({ state, palette, dispatch, changes, onChanges }: {
   state: EditorState;
   palette: Palette | null;
   dispatch: Dispatch<EditorAction>;
+  /** Whether the Changes diff is open, when the editor holds it (its ⋯ > Changes opens this
+   *  view on the diff); otherwise the view keeps its own. */
+  changes?: boolean;
+  onChanges?(open: boolean): void;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLDivElement>(null);
-  const [showChanges, setShowChanges] = useState(false);
+  const [ownChanges, setOwnChanges] = useState(false);
+  const showChanges = changes ?? ownChanges;
+  const setShowChanges = (open: boolean) => { if (onChanges) onChanges(open); else setOwnChanges(open); };
   const [copied, setCopied] = useState(false);
 
   const derived = useMemo(() => pretty(state.spec), [state.spec]);
@@ -234,7 +240,7 @@ export function JsonView({ state, palette, dispatch }: {
         </button>
         <button type="button" className="wf-btn wf-btn-sm" aria-pressed={showChanges}
                 disabled={!state.loaded} title={state.loaded ? "Against the published version" : "Nothing published yet"}
-                onClick={() => setShowChanges((v) => !v)} data-testid="wf-json-changes">
+                onClick={() => setShowChanges(!showChanges)} data-testid="wf-json-changes">
           <GitDiff size={13} weight="bold" aria-hidden /> Changes
         </button>
         <span className="wf-spacer" />

@@ -9,8 +9,13 @@
  * `geometry.ts`, never measured.
  *
  * It fits itself: Comfortable nodes when the flow fits, Compact otherwise, and in Fit mode the
- * drawing scales down (never below MIN_SCALE) before it scrolls. When it still has to scroll,
- * it scrolls inside itself only, and a minimap appears beneath it.
+ * drawing scales down (never so far that its smallest text drops under 0.75rem, see
+ * `minScale`) before it scrolls. When it still has to scroll, it scrolls inside itself only, and
+ * a minimap appears beneath it.
+ *
+ * What covers it does not reflow it: the inspector drawer floats over the lane's right edge
+ * (`occludedRight`), so selecting a step never changes the density or the scale. The lane only
+ * gains room to scroll the selected step out from under the drawer.
  *
  * In design mode it is also the drop target for drags (`use-lane-drag.ts`) and handles the
  * flow's own keys: arrows move focus along the flow and between siblings, Alt+arrows move the
@@ -22,7 +27,7 @@ import type {
   FlowLayout, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
 } from "../../../lib/workflow-editor-types";
 import { canMove as modelCanMove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
-import { useTips } from "./tip-layer";
+import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from "./drag-plan";
 import { chooseDensity, fitScale, overflows, type LaneGeometry } from "./geometry";
 import { Minimap } from "./minimap";
@@ -124,6 +129,8 @@ export function FlowLane(p: {
   readOnly?: boolean;
   /** The lane's accessible name. */
   label?: string;
+  /** How much of the lane's right edge something floats over (the inspector drawer), in px. */
+  occludedRight?: number;
 }): React.JSX.Element {
   useTips();
   const { spec, palette, mode, selection = null, problems, runState, onSelect, onInsert, onMove,
@@ -172,8 +179,14 @@ export function FlowLane(p: {
   const setZoom = (z: LaneZoom) => { if (p.onZoomChange) p.onZoomChange(z); else setOwnZoom(z); };
   const geometry = useMemo(() => chooseDensity(layout, types, available,
     p.density === "compact" ? "compact" : undefined), [layout, types, available, p.density]);
-  const scale = zoom === "fit" ? fitScale(geometry.width, available) : 1;
+  const scale = zoom === "fit" ? fitScale(geometry.width, available, geometry.density) : 1;
   const scrolls = overflows(geometry.width, scale, available);
+  // Under a drawer: when the drawing reaches under it, give the lane that much more to scroll,
+  // so the last steps can be brought clear of it. Density and scale are untouched.
+  const cover = Math.max(0, Math.min(p.occludedRight ?? 0, available));
+  const drawn = geometry.width * scale;
+  const spare = cover > 0 && drawn > available - cover ? cover : 0;
+  const sizerW = drawn + spare;
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
 
@@ -218,14 +231,16 @@ export function FlowLane(p: {
       }
       const caret = caretRef.current;
       if (!caret) return;
-      if (gap === null) { caret.hidden = true; return; }
+      if (gap === null) { caret.hidden = true; unpinTip(); return; }
       const allowed = lp.gaps[gap].allowed;
       caret.hidden = false;
       caret.style.left = `${caretX(lp, gap) - 1.5}px`;
       caret.style.top = `${(lp.gaps[gap].y ?? geometry.midY) - geometry.node.h / 2}px`;
       caret.style.height = `${geometry.node.h}px`;
       caret.dataset.allowed = String(allowed);
-      if (allowed) caret.removeAttribute("data-tip"); else caret.dataset.tip = BRANCH_TIP;
+      // The reason a drop is refused is the shared tooltip, pinned to the caret: fixed on the
+      // page, so the lane's edge can never clip it, and shown although the pointer is mid-drag.
+      if (allowed) { caret.removeAttribute("data-tip"); unpinTip(); } else { caret.dataset.tip = BRANCH_TIP; pinTip(caret); }
     },
     drop: (source, gap: DropGap) => {
       if (source.kind === "node") {
@@ -243,6 +258,7 @@ export function FlowLane(p: {
         el.removeAttribute("data-origin");
       }
       if (caretRef.current) caretRef.current.hidden = true;
+      unpinTip();
     },
   } : null;
   const { pressNode } = useLaneDrag(lane);
@@ -291,16 +307,19 @@ export function FlowLane(p: {
     }
   };
 
-  // Keep the selected node in view when something else selects it (the JSON caret, a problem).
+  // Keep the selected node in view, and clear of the drawer: when something else selects it
+  // (the JSON caret, a problem, an insert) or the drawer opens over it.
   useEffect(() => {
     const v = viewportRef.current;
     const box = selection ? geometry.boxes.get(selection) : undefined;
-    if (!v || !box || !scrolls) return;
-    const left = box.x * scale;
-    const right = (box.x + box.w) * scale;
+    if (!v || !box || (!scrolls && !spare)) return;
+    const offset = Math.max(0, (available - sizerW) / 2);
+    const left = offset + box.x * scale;
+    const right = offset + (box.x + box.w) * scale;
+    const visible = available - cover;
     if (left < v.scrollLeft + 24) v.scrollLeft = Math.max(0, left - 48);
-    else if (right > v.scrollLeft + v.clientWidth - 24) v.scrollLeft = right - v.clientWidth + 48;
-  }, [selection, geometry, scale, scrolls]);
+    else if (right > v.scrollLeft + visible - 24) v.scrollLeft = right - visible + 48;
+  }, [selection, geometry, scale, scrolls, spare, cover, available, sizerW]);
 
   /* ── Drawing ── */
   const linear = layout.linear;
@@ -325,7 +344,7 @@ export function FlowLane(p: {
          data-linear={linear ? "true" : "false"} data-scrolls={scrolls ? "true" : undefined}
          data-testid="wf-lane">
       <div className="wf-lane-viewport" ref={viewportRef} id={viewportId}>
-        <div className="wf-lane-sizer" style={{ width: geometry.width * scale, height: geometry.height * scale }}>
+        <div className="wf-lane-sizer" style={{ width: sizerW, height: geometry.height * scale }}>
           <div className="wf-lane-canvas" ref={canvasRef} role="group" aria-label={p.label ?? "Workflow steps"}
                style={{ width: geometry.width, height: geometry.height,
                         transform: scale === 1 ? undefined : `scale(${scale})` }}

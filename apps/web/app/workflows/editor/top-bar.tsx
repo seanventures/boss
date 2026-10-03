@@ -66,7 +66,7 @@ export function TopBar(p: {
   onStart(): void; startBlocked?: string | null; startRef: RefObject<HTMLButtonElement | null>;
   onSave(): void; saveLabel: string; saveBlocked?: string | null; saveTip: string; saving: boolean;
   saveRef: RefObject<HTMLButtonElement | null>;
-  onDuplicate(): void; onUseFor(): void; onChanges(): void; onDiscard(): void; onDelete(): void;
+  onDuplicate(): void; duplicateBlocked?: string | null; onUseFor(): void; onChanges(): void; onDiscard(): void; onDelete(): void;
   deleteBlocked?: string | null;
   readOnly: boolean;
 }) {
@@ -239,7 +239,7 @@ export function TopBar(p: {
         ) : (
           <ul className="wf-menu" role="none">
             <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onDuplicate(); }}
-                                 blocked={p.readOnly && `Viewing v${viewing}`} testId="wf-menu-duplicate">Duplicate</Btn></li>
+                                 blocked={(p.readOnly && `Viewing v${viewing}`) || p.duplicateBlocked} testId="wf-menu-duplicate">Duplicate</Btn></li>
             <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onUseFor(); }}
                                  testId="wf-menu-use-for">Use for…</Btn></li>
             <li role="none"><Btn role="menuitem" className="wf-menu-item" blocked={!state.loaded && "Nothing published yet"}

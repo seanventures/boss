@@ -34,13 +34,14 @@ describe("who is on this app", () => {
   it("but it is not a runtime step: no duration, no status badge", () => {
     // A real step would mean editing all twelve catalogue workflows and adding something that
     // can execute, fail and block a run. This one does not run, and must not look like it did:
-    // it is not in the lane's steps at all (those are the run's own, from runSpec).
+    // it is not in the lane's steps at all (those are the definition's the run ran, or the
+    // run's own while that loads: runLaneSpec).
     const at = WORKFLOWS.indexOf('className="wf-chip wf-chip-btn" data-testid="dw-node-agents"');
     const chip = WORKFLOWS.slice(at, WORKFLOWS.indexOf("</button>", at));
     expect(chip).not.toContain("stepDuration");
     expect(chip).not.toContain("laneStateOf");
     expect(chip).toContain("auto-confirmed");
-    expect(WORKFLOWS).toContain("useMemo(() => runSpec(steps), [steps])");
+    expect(WORKFLOWS).toContain("useMemo(() => runLaneSpec(steps, definition.spec), [steps, definition.spec])");
   });
 
   it("and a finished run shows it as a record, not a setting", () => {
