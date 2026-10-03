@@ -59,7 +59,9 @@ describe("nothing is invented", () => {
     // a string, which forwarded the readiness OBJECT as `error` too. It now goes through the
     // shared helper, which keeps a sentence verbatim (and only a sentence) as `error`.
     expect(ROUTE).toContain("refusalFrom(r.status, parsed)");
-    expect(codeOnly("lib/start-refusal.ts")).toContain("if (flat) return { error: flat };");
+    // (A sentence keeps the editor's structured problems beside it — Workflow Studio.)
+    expect(codeOnly("lib/start-refusal.ts"))
+      .toContain("if (flat) return { error: flat, ...structured(body, d) };");
     // AND IN WORDS: the helper reads the detail through apiErrorText's reader (lib/api-error.ts),
     // so a validation array is "field: message", never "[object Object]" (console-b stream).
     expect(codeOnly("lib/start-refusal.ts")).toContain('import { detailText } from "./api-error";');

@@ -106,9 +106,13 @@ describe("a custom step can be changed", () => {
     // REWRITTEN (review of the readiness change): every proxy here now reads the API's refusal
     // through the one shared helper, which forwards a sentence verbatim and falls back to
     // "API returned <status>" only when there is none — the same rule, in one place.
-    expect(patch.slice(0, 1400)).toContain("refusalFrom(r.status, parsed)");
+    // REWRITTEN AGAIN (Workflow Studio): PATCH now also renames a workflow, and both of its
+    // writes go through the route's one PATCH/DELETE sender, which reads the refusal with it.
+    expect(patch.slice(0, 1600)).toContain("return proxyWrite(\"PATCH\"");
+    const sender = proxy.slice(proxy.indexOf("async function proxyWrite"));
+    expect(sender.slice(0, 1200)).toContain("refusalFrom(r.status, parsed)");
     const helper = readFileSync("lib/start-refusal.ts", "utf8");
-    expect(helper).toContain("if (flat) return { error: flat };");
+    expect(helper).toContain("if (flat) return { error: flat, ...structured(body, d) };");
     expect(helper).toContain("`API returned ${status}`");
     // AND IN WORDS: the helper reads the detail through apiErrorText's reader (lib/api-error.ts),
     // so a validation array is "field: message", never "[object Object]" (console-b stream).
