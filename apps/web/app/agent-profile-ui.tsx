@@ -8,7 +8,7 @@
  * agent half is two things in the Agents area:
  *
  *   - AgentProfile, a section of the agent's own page: the Studio definition for that role —
- *     its version, model policy and validation — and a Test that compiles it and proves its
+ *     its version, model policy and validation — and a Check that compiles it and proves its
  *     authority envelope without running a model;
  *   - PanelsView, the Agents area's Panels view: each panel, its members, and a Run.
  *
@@ -26,8 +26,6 @@ import { ClientRelativeTime } from "./client-relative-time";
 import { HelpTip } from "./help-tip";
 import { runStudioPanel, testStudioAgent, type StudioActionResult } from "./agent-studio-actions";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
-import type { Persona } from "../lib/agent-world-types";
-import { PassportTest } from "./agents/passport-test";
 
 const words = (value: unknown): string =>
   typeof value === "string" && value ? value.replaceAll("_", " ") : "—";
@@ -76,27 +74,27 @@ function RecentRuns({ runs }: { runs: StudioRun[] }) {
   );
 }
 
-/** The Profile section of an agent's page. Read-only; Test is the one action — the real one
- *  (a model call in its compiled voice, Agent World) above the Studio definition's compile check. */
-export function AgentProfile({ feed, roleKey, actor, draftPersona }: {
-  feed: AgentStudioFeed; roleKey: string; actor: string;
-  /** An unsaved voice from the Persona editor, so Test hears it before Save. */
-  draftPersona?: Persona | null;
+/** The Studio definitions of an agent's page: version, model policy, validation, and a Check
+ *  that compiles it without running a model. `bare` renders the rows inside the Passport's one
+ *  Profile section — whose Test is the real one — instead of a Profile section of its own. */
+export function AgentProfile({ feed, roleKey, actor, bare = false }: {
+  feed: AgentStudioFeed; roleKey: string; actor: string; bare?: boolean;
 }) {
   const profiles = profilesFor(feed, roleKey);
+  const rows = !feed.apiReachable ? (
+    <p className="detail" title={feed.blockedReason}>Unavailable</p>
+  ) : profiles.length === 0 ? (
+    <p className="detail" data-testid="agent-profile-none">No profile</p>
+  ) : profiles.map((agent) => (
+    <ProfileRow key={agent.id} agent={agent} feed={feed} actor={actor} />
+  ));
+  if (bare) return <div className="wf-ag-profiles" data-testid="agent-profile">{rows}</div>;
   return (
     <section className="ct-block" data-testid="agent-profile">
       <div className="ct-block-title">
         Profile <HelpTip label="Profile" text="Prompts and model settings for this agent" />
       </div>
-      <PassportTest projectId={feed.projectId} actor={actor} roleKey={roleKey} persona={draftPersona} />
-      {!feed.apiReachable ? (
-        <p className="detail" title={feed.blockedReason}>Unavailable</p>
-      ) : profiles.length === 0 ? (
-        <p className="detail" data-testid="agent-profile-none">No profile</p>
-      ) : profiles.map((agent) => (
-        <ProfileRow key={agent.id} agent={agent} feed={feed} actor={actor} />
-      ))}
+      {rows}
     </section>
   );
 }
@@ -117,7 +115,7 @@ function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: AgentStu
         </span>
         <span className="wf-tag" data-status={agent.status}>{words(agent.status)}</span>
         <button type="button" className="wf-btn wf-btn-sm" disabled={pending || !version}
-                data-testid={`agent-profile-test-${agent.agent_key}`}
+                data-testid={`agent-profile-check-${agent.agent_key}`}
                 title="Compile it and check what it may do. Runs no model."
                 onClick={() => {
                   if (!version) return;
@@ -126,7 +124,7 @@ function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: AgentStu
                     setResult(await callAction(testStudioAgent)(feed.projectId, version.id, actor));
                   });
                 }}>
-          <Flask size={12} aria-hidden /> {pending ? "Testing…" : "Test"}
+          <Flask size={12} aria-hidden /> {pending ? "Checking…" : "Check"}
         </button>
       </div>
       {version ? (

@@ -17,7 +17,7 @@ import { Copy, DotsThree, ShareNetwork } from "@phosphor-icons/react";
 
 import type { AvatarState, Passport } from "../../lib/agent-world-types";
 import {
-  bornDate, bornFromLabel, getAgentCard, humanise, identityOf, money, setLifecycle, toast,
+  bornDate, bornFromLabel, getAgentCard, humanise, identityOf, money, resolveAvatar, setLifecycle, toast,
   versionLine,
 } from "../../lib/agent-world";
 import { AgFace, AiBadge } from "./agent-face";
@@ -49,10 +49,29 @@ export function vitalsLine(v: Passport["vitals"]): string[] {
   return out;
 }
 
+/** What the agent page itself knows (`/api/agents/{role}`), for what a passport does not carry —
+ *  violations, the reporting line — and for the whole strip on an API with no passport. */
+export type DetailFacts = {
+  violations: number; reportsTo: string | null;
+  apps: number; spend: number; panels: number;
+  /** null for an unregistered agent: nothing governs it, so there is no trust to show. */
+  trust: number | null;
+};
+
+/** The strip from the agent page's own figures, when there is no passport to count them. */
+export function detailVitalsLine(f: DetailFacts): string[] {
+  const out: string[] = [];
+  if (f.trust != null) out.push(`Trust ${f.trust}`);
+  out.push(`${f.apps} app${f.apps === 1 ? "" : "s"}`);
+  if (f.spend > 0) out.push(`${money(f.spend)} spent`);
+  if (f.panels > 0) out.push(`${f.panels} panel${f.panels === 1 ? "" : "s"}`);
+  return out;
+}
+
 const LIFECYCLE_WORD = { active: "Active", paused: "Paused", retired: "Retired" } as const;
 
 export function PassportHeader({ projectId, actor, roleKey, name, passport, onAsk, onShare, onDelete,
-                                 onChanged, presenceState }: {
+                                 onChanged, presenceState, facts }: {
   projectId: string; actor: string; roleKey: string;
   /** The roster's name, for before the passport has loaded or on an API without one. */
   name: string;
@@ -62,6 +81,7 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
   onDelete: () => void;
   onChanged: (next: Passport) => void;
   presenceState?: AvatarState;
+  facts?: DetailFacts;
 }) {
   const who = identityOf(roleKey, name);
   const persona = passport?.persona;
@@ -71,8 +91,12 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
   const tagline = persona?.tagline || who.tagline;
   const about = persona?.about_me;
   const lifecycle = passport?.lifecycle ?? who.lifecycle;
-  const identity = passport && persona?.avatar
-    ? { ...who, name: display, callsign, avatar: persona.avatar, lifecycle } : { ...who, lifecycle };
+  // The face through the same resolver as every chip: the cast's (or seeded) face, with the
+  // passport's picked parts over it only when it has some.
+  const identity = passport
+    ? { ...who, name: display, callsign, lifecycle,
+        avatar: resolveAvatar(who.roleKey || roleKey, passport.agentId || who.agentId, persona?.avatar) }
+    : { ...who, lifecycle };
   const state: AvatarState = presenceState ?? passport?.presence.state ?? "idle";
 
   const [more, setMore] = useState(false);
@@ -102,6 +126,7 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
   };
 
   const sponsor = passport?.sponsor;
+  const reportsTo = passport?.reportsTo || facts?.reportsTo || null;
   const mayRetire = !sponsor || sponsor === actor;
   const steer = async (next: Passport["lifecycle"]) => {
     setMenu(false);
@@ -137,7 +162,8 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
       <div className="ag-passport-hero">
         <button type="button" className="ag-hero-face" data-wave={wave ? true : undefined}
                 onClick={poke} aria-label={`${title}, ${state === "idle" ? "Idle" : state}`}>
-          <AgFace roleKey={roleKey} identity={identity} size={96} state={state} hero decorative />
+          <AgFace roleKey={roleKey} identity={identity} size={96} state={state} decorative aiBadge={false}
+                  motion={wave ? "wave" : undefined} />
         </button>
         {wave ? <span className="ag-hero-bubble" role="status" data-user-text>{wave}</span> : null}
       </div>
@@ -223,14 +249,24 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
           <dt>Version</dt>
           <dd><code data-testid="ag-cert-version">{passport ? versionLine(passport.version, passport.fingerprint) : "—"}</code></dd>
         </div>
+        <div title="Who it answers to.">
+          <dt>Reports to</dt>
+          <dd data-testid="ag-cert-reports">{reportsTo ? identityOf(reportsTo).name : "—"}</dd>
+        </div>
         <div title="Per-agent tokens and policies come in a later release.">
           <dt>Identity</dt><dd>Local · tokens coming</dd>
         </div>
       </dl>
 
-      {passport ? (
+      {passport || facts ? (
         <div className="ag-vitals" data-testid="ag-vitals">
-          {vitalsLine(passport.vitals).map((v) => <span key={v}>{v}</span>)}
+          {(passport ? vitalsLine(passport.vitals) : detailVitalsLine(facts!)).map((v) => <span key={v}>{v}</span>)}
+          {/* Surfaced, not buried (console_v2_workforce): a policy violation is never folded away. */}
+          {facts && facts.violations > 0 ? (
+            <span data-tone="bad" data-testid="ag-violations" title="Policy violations on record">
+              {facts.violations} violation{facts.violations === 1 ? "" : "s"}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </header>

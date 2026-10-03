@@ -13,9 +13,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Play } from "@phosphor-icons/react";
 
-import type { OrgChart, OrgNode } from "../../lib/v2/workforce";
+import type { OrgChart } from "../../lib/v2/workforce";
 import type { AvatarState } from "../../lib/agent-world-types";
-import { getRunChain, identityOf, isLive, toast } from "../../lib/agent-world";
+import {
+  getRunChain, handedByRole, identityOf, isLive, listRecentRunIds, toast,
+} from "../../lib/agent-world";
 import type { LiveMap } from "../../lib/agents-live";
 import { AgFace } from "./agent-face";
 
@@ -83,14 +85,18 @@ export function replaySchedule(acts: { actId: string; roleKey: string | null; pa
 
 type Travel = { key: string; from: string; to: string };
 
-function newestRun(nodes: OrgNode[]): string | null {
-  let best: { run: string; at: number } | null = null;
-  for (const n of nodes) {
-    if (!n.run_id) continue;
-    const at = Date.parse(n.last_activity_at ?? "") || 0;
-    if (!best || at > best.at) best = { run: n.run_id, at };
+/** The newest workflow run that has handoffs to play, and its schedule. The org chart's
+ *  `run_id` is an agent-process run, not a workflow run, so it can never key a chain. */
+export async function lastRunReplay(projectId: string):
+  Promise<{ runId: string; plan: ReturnType<typeof replaySchedule> } | null> {
+  const runs = await listRecentRunIds(projectId);
+  if (!runs.ok) return null;
+  for (const runId of runs.data) {
+    const chain = await getRunChain(runId, projectId);
+    const plan = chain.ok ? replaySchedule(chain.data.acts) : [];
+    if (plan.length) return { runId, plan };
   }
-  return best?.run ?? null;
+  return null;
 }
 
 export function TeamSwarm({ projectId, chart, live }: { projectId: string; chart: OrgChart; live: LiveMap }) {
@@ -105,8 +111,13 @@ export function TeamSwarm({ projectId, chart, live }: { projectId: string; chart
   const prev = useRef<LiveMap>(new Map());
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const reduce = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; timers.current.forEach(clearTimeout); };
+  }, []);
 
+  const hasEdge = (from: string, to: string) => edges.some((e) => e.from === from && e.to === to);
   const send = (from: string, to: string) => {
     if (!at.has(from) || !at.has(to)) return;
     const key = `${from}>${to}:${Date.now()}:${Math.random()}`;
@@ -115,24 +126,25 @@ export function TeamSwarm({ projectId, chart, live }: { projectId: string; chart
     timers.current.push(setTimeout(() => setTravels((t) => t.filter((x) => x.key !== key)), 700));
   };
 
-  // LIVE: work landing on an agent sends a dot along its busiest incoming edge.
+  // LIVE: work landing on an agent sends a dot from whoever really handed it that work — the
+  // live act's own sender, read from the act. Unknown sender, or no such edge: nothing moves.
+  // TRUTHFUL EDGES (§2.3): the dot runs only along a from→to edge the chart has drawn.
   useEffect(() => {
     for (const [roleKey, p] of live) {
-      if (!isLive(p) || isLive(prev.current.get(roleKey))) continue;
-      const into = edges.filter((e) => e.to === roleKey).sort((a, b) => b.times - a.times)[0];
-      if (into) send(into.from, into.to);
+      if (!isLive(p) || isLive(prev.current.get(roleKey)) || !p.actId) continue;
+      void handedByRole(projectId, p.actId).then((from) => {
+        if (mounted.current && from && hasEdge(from, roleKey)) send(from, roleKey);
+      });
     }
     prev.current = live;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live]);
 
   const replay = async () => {
-    const run = newestRun(nodes);
-    if (!run) { toast("error", "No run to replay"); return; }
     setReplaying(true);
     setLit(new Set());
-    const r = await getRunChain(run, projectId);
-    const plan = r.ok ? replaySchedule(r.data.acts) : [];
+    const found = await lastRunReplay(projectId);
+    const plan = found?.plan ?? [];
     if (!plan.length) { setReplaying(false); toast("error", "No handoffs to replay"); return; }
     for (const hop of plan) timers.current.push(setTimeout(() => send(hop.from, hop.to), reduce ? 0 : hop.at));
     timers.current.push(setTimeout(() => setReplaying(false), (reduce ? 0 : plan[plan.length - 1].at) + 800));
@@ -168,7 +180,7 @@ export function TeamSwarm({ projectId, chart, live }: { projectId: string; chart
             const a = at.get(t.from)!;
             const b = at.get(t.to)!;
             return (
-              <circle key={t.key} r={5} className="ag-swarm-dot">
+              <circle key={t.key} r={5} className="ag-swarm-dot" data-edge={`${t.from}>${t.to}`}>
                 <animateMotion dur="0.6s" fill="freeze" path={curvePath(a, b)} />
               </circle>
             );

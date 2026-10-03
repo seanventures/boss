@@ -50,8 +50,12 @@ describe("every animation is defined, used, and named agav-", () => {
   it("turns every face's motion off under prefers-reduced-motion", () => {
     const reduced = /@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/.exec(ALL)?.[1] ?? "";
     expect(reduced).toMatch(/\.ag-av \*[^{]*\{\s*animation:\s*none !important/);
-    // Every rule that starts an animation targets something inside .ag-av / .ag-avatar.
+    // Every rule that animates a FACE (its parts, or the face itself) goes through .ag-av /
+    // .ag-avatar, so the kit's still above covers it. Chrome around a face — the presence pill
+    // fading in, a speech bubble, the birth certificate's stamp — is not a face, and has its own
+    // still in the Agents section.
     for (const m of ALL.matchAll(/([^{}]+)\{[^{}]*animation:\s*agav-/g)) {
+      if (!/\.av-|\.ag-face\b/.test(m[1])) continue;
       expect(m[1], m[1]).toMatch(/\.ag-av\b|\.ag-avatar\b/);
     }
   });

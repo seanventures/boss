@@ -171,7 +171,7 @@ describe("the presence pill and the crew", () => {
     await act(async () => { $('[data-testid="ag-crew-qa"]')!.click(); });
     // Until S-converse lands, the talk is the side dock addressed to that agent.
     const q = new URLSearchParams(window.location.search);
-    expect(q.get("dock_role")).toBe("QA");
+    expect(q.get("dock_role")).toBe("QA Lead");
     expect($('[data-testid="ag-crew"]')).toBeNull();
   });
 

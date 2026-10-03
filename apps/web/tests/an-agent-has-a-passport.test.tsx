@@ -103,7 +103,8 @@ describe("the passport says what the API says", () => {
   it("is still the agent's page on an API with no passport", async () => {
     installAgentWorldApi([(url) => (url.includes("/passport") ? Response.json({ detail: "Not Found" }, { status: 404 }) : undefined)]);
     await mount();
-    expect($('[data-testid="ag-passport-name"]')?.textContent).toBe("QA Lead");
+    // The kit's cast names qa: the same callsign a chip shows.
+    expect($('[data-testid="ag-passport-name"]')?.textContent).toBe("Vera");
     expect($('[data-testid="ag-cert-id"]')?.textContent).toBe("—");
     expect($('[data-testid="agent-used-in"]')).not.toBeNull();
   });

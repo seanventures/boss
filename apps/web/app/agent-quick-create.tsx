@@ -30,10 +30,14 @@ import { apiWrite } from "../lib/api-write";
 import { callAction } from "../lib/call-action";
 import { createStudioAgent, seedStudioCatalog } from "./agent-studio-actions";
 import { HelpTip } from "./help-tip";
-import type { AgentIdentity, Persona } from "../lib/agent-world-types";
+import type { AgentIdentity, AvatarSpec, Persona } from "../lib/agent-world-types";
 import {
-  ARCHETYPE_KEYS, CAST_KEYS, DISCLOSURE, askAgent, draftPersonaField, identityOf, newSeed, shortId, toast,
+  ARCHETYPE_KEYS, CAST_KEYS, DISCLOSURE, askAgent, draftPersonaField, identityOf, newSeed, resolveAvatar,
+  shortId, toast,
 } from "../lib/agent-world";
+import { seededSpec } from "../lib/agent-avatar";
+import { resolveRoleKey } from "../lib/agent-identity";
+import { FacePicker } from "./agents/face-picker";
 import type { BornFrom } from "../lib/agents";
 import { AgFace } from "./agents/agent-face";
 import { AgentBirth } from "./agents/agent-birth";
@@ -78,13 +82,15 @@ export function profileDraft(input: {
   };
 }
 
-/** The voice a new agent is born with: its face seed, and a callsign and tagline if given. */
-export function birthPersona(o: { seed: string; callsign?: string; tagline?: string; about?: string;
-                                  archetype?: string | null; base?: AgentIdentity }): Persona {
-  const p: Persona = {
-    version: 1, archetype: o.archetype ?? null,
-    avatar: { ...(o.base?.avatar ?? { kit: "boss-v1" }), kit: "boss-v1", seed: o.seed },
-  };
+/**
+ * The voice a new agent is born with: the face the operator chose (if any), and a callsign and
+ * tagline if they typed them. Never a cast member's callsign, tagline or hand-drawn parts — a new
+ * agent born from `qa` is not a second Vera (principle 2.1, one identity everywhere).
+ */
+export function birthPersona(o: { face?: AvatarSpec; callsign?: string; tagline?: string; about?: string;
+                                  archetype?: string | null }): Persona {
+  const p: Persona = { version: 1, archetype: o.archetype ?? null };
+  if (o.face) p.avatar = { ...o.face, kit: "boss-v1" };
   if (o.callsign?.trim()) p.callsign = o.callsign.trim();
   if (o.tagline?.trim()) p.tagline = o.tagline.trim();
   if (o.about?.trim()) p.about_me = o.about.trim();
@@ -110,8 +116,8 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   orphans?: StudioAgent[];
 }) {
   const [tab, setTab] = useState<"blank" | "template" | "archetype">("blank");
-  // FACE & VOICE: the face a new agent is born with (Reroll changes only its seed).
-  const [seed, setSeed] = useState(() => newSeed());
+  // FACE & VOICE: the face a new agent is born with (Reroll keeps picked parts, re-seeds the rest).
+  const [face, setFace] = useState<AvatarSpec>(() => seededSpec(newSeed()));
   const [callsign, setCallsign] = useState("");
   const [tagline, setTagline] = useState("");
   const [birth, setBirth] = useState<Birth | null>(null);
@@ -137,7 +143,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
     setBirth({
       roleKey, agentId,
       identity: { ...base, name: displayName, agentId: agentId || null, callsign: persona?.callsign,
-                  tagline: persona?.tagline, avatar: persona?.avatar ?? base.avatar },
+                  tagline: persona?.tagline, avatar: resolveAvatar(roleKey, agentId, persona?.avatar) },
     });
   };
   const afterBirth = () => {
@@ -186,6 +192,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
     if (!name.trim()) { setFailed("Name it first"); return; }
     if (taken) { setFailed(`“${key}” exists — pick another name`); return; }
     if (keyInvalid) { setFailed("Key: letters, digits, _ — start with a letter"); return; }
+    if (callsignTaken(callsign)) { setFailed(`Callsign “${callsign.trim()}” is taken`); return; }
     const mcpServers: McpGrant[] = Object.entries(servers)
       .map(([server_id, tools]) => ({ server_id, tools: parseToolList(tools) }));
     setBusy(true);
@@ -212,13 +219,13 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
         if (typeof createdKey === "string") setMade(createdKey);
         setBusy(false); setFailed(result.message); return;
       }
-      const persona = birthPersona({ seed, callsign, tagline });
+      const persona = birthPersona({ face, callsign, tagline });
       await updateAgent(projectId, actor, key, { ...(reportsTo ? { reports_to: reportsTo } : {}), persona });
       setBusy(false);
       born(key, "", name.trim(), persona);
       return;
     }
-    const persona = birthPersona({ seed, callsign, tagline });
+    const persona = birthPersona({ face, callsign, tagline });
     const r = await createAgent(projectId, actor, {
       name: name.trim(), purpose: purpose.trim(), skills, mcpServers, reportsTo: reportsTo || null,
       ...(nameMakesNoKey && key ? { roleKey: key } : {}),
@@ -298,7 +305,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
               </select>
             </label>
 
-            <FaceAndVoice roleKey={key || "new_agent"} name={name} seed={seed} onReroll={() => setSeed(newSeed())}
+            <FaceAndVoice name={name} face={face} onFace={setFace}
                           callsign={callsign} onCallsign={setCallsign} tagline={tagline} onTagline={setTagline} />
 
             {loadFailed ? (
@@ -429,7 +436,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
               <div>
                 <button type="button" className="wf-btn" onClick={onClose} disabled={busy}>Cancel</button>
                 <button type="submit" className="wf-btn wf-btn-primary"
-                        disabled={busy || !name.trim() || taken || keyInvalid} data-testid="aq-create">
+                        disabled={busy || !name.trim() || taken || keyInvalid || callsignTaken(callsign)} data-testid="aq-create">
                   {busy ? "Creating…" : "Create"}
                 </button>
               </div>
@@ -469,11 +476,12 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
    *  born — so a template agent has a passport like any other. */
   const ensureAgent = async (roleKey: string, name: string, purpose: string, templateKey: string): Promise<boolean> => {
     if (existing.has(roleKey)) { onCreated(roleKey); return true; }
-    const persona = birthPersona({ seed: newSeed(), base: identityOf(roleKey) });
+    // A template keeps its role's face as shipped (docs/cast): no new seed, no persona face. A
+    // role the cast does not know is seeded from its agent_id by the resolver, so it never drifts.
     const r = await createAgent(projectId, actor, { name, purpose, skills: [], mcpServers: [], roleKey,
-                                                     bornFrom: { kind: "template", template_key: templateKey }, persona });
+                                                     bornFrom: { kind: "template", template_key: templateKey } });
     if (!r.ok) { setFailed(r.error); return false; }
-    onBorn(roleKey, String(r.data.agent_id ?? ""), name, persona);
+    onBorn(roleKey, String(r.data.agent_id ?? ""), name);
     return true;
   };
 
@@ -558,29 +566,26 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
 }
 
 
-/** The Face & voice row: the face it will be born with, a Reroll, and the line that never changes. */
-function FaceAndVoice({ roleKey, name, seed, onReroll, callsign, onCallsign, tagline, onTagline }: {
-  roleKey: string; name: string; seed: string; onReroll: () => void;
+/** The Face & voice row: the kit's face picker, a callsign and tagline, and the line that never changes. */
+function FaceAndVoice({ name, face, onFace, callsign, onCallsign, tagline, onTagline }: {
+  name: string; face: AvatarSpec; onFace: (next: AvatarSpec) => void;
   callsign: string; onCallsign: (v: string) => void; tagline: string; onTagline: (v: string) => void;
 }) {
-  const identity: AgentIdentity = {
-    roleKey, agentId: null, name: name.trim() || "New agent", lifecycle: "active",
-    avatar: { kit: "boss-v1", seed },
-  };
+  const taken = callsignTaken(callsign);
   return (
     <fieldset className="aq-group ag-fv" data-testid="aq-face-voice">
       <legend>Face &amp; voice <HelpTip label="Face & voice" text="How it looks and speaks. Never what it may do." /></legend>
+      <FacePicker value={face} onChange={onFace} name={callsign.trim() || name.trim() || "New agent"} />
       <div className="ag-fv-row">
-        <AgFace roleKey={roleKey} identity={identity} size={48} decorative />
-        <button type="button" className="wf-btn" data-testid="aq-reroll" title="New face, same agent" onClick={onReroll}>Reroll</button>
         <label className="aw-field">
           <span>Callsign</span>
-          <input value={callsign} maxLength={16} placeholder="Vera" data-testid="aq-callsign"
+          <input value={callsign} maxLength={16} placeholder="Optional" data-testid="aq-callsign"
                  onChange={(e) => onCallsign(e.target.value)} />
+          {taken ? <small className="aq-bad">Taken</small> : null}
         </label>
         <label className="aw-field ag-grow">
           <span>Tagline</span>
-          <input value={tagline} maxLength={60} placeholder="Show me the test." data-testid="aq-tagline"
+          <input value={tagline} maxLength={60} placeholder="Optional" data-testid="aq-tagline"
                  onChange={(e) => onTagline(e.target.value)} />
         </label>
       </div>
@@ -589,8 +594,16 @@ function FaceAndVoice({ roleKey, name, seed, onReroll, callsign, onCallsign, tag
   );
 }
 
-/** From archetype: the fourteen shipped faces. A "thinks like" archetype is a way of thinking,
- *  never a person; a role face starts from that role's voice. */
+/** A callsign another agent (or a cast member) already answers to: names resolve by callsign,
+ *  so a second "Vera" would make `@Vera` ambiguous. */
+export function callsignTaken(callsign: string): boolean {
+  const c = callsign.trim();
+  return !!c && resolveRoleKey(c) !== null;
+}
+
+/** From archetype: the hand-drawn cast, the operator's crew first and the "thinks like"
+ *  archetypes last. A "thinks like" archetype is a way of thinking, never a person; a role starts
+ *  from that role's voice. The new agent gets its OWN face and name — never the cast member's. */
 function ArchetypePicker({ projectId, actor, existing, onBorn }: {
   projectId: string; actor: string; existing: Set<string>;
   onBorn: (roleKey: string, agentId: string, name: string, persona?: Persona) => void;
@@ -598,13 +611,15 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
   const [pick, setPick] = useState("");
   const [name, setName] = useState("");
   const [about, setAbout] = useState("");
-  const [seed, setSeed] = useState(() => newSeed());
+  const [face, setFace] = useState<AvatarSpec>(() => seededSpec(newSeed()));
+  const [callsign, setCallsign] = useState("");
   const [busy, setBusy] = useState("");
   const [failed, setFailed] = useState("");
   const base = pick ? identityOf(pick) : null;
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   const key = (slug && !/^[a-z]/.test(slug) ? `agent_${slug}` : slug).slice(0, 64);
   const taken = !!key && existing.has(key);
+  const callsignClash = callsignTaken(callsign);
 
   const choose = (k: string) => {
     setPick(k);
@@ -614,8 +629,8 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
     setFailed("");
   };
   const persona = () => birthPersona({
-    seed, callsign: base?.callsign, tagline: base?.tagline, about,
-    archetype: (ARCHETYPE_KEYS as readonly string[]).includes(pick) ? pick : null, base: base ?? undefined,
+    face, callsign, about,
+    archetype: (ARCHETYPE_KEYS as readonly string[]).includes(pick) ? pick : null,
   });
 
   const draft = async () => {
@@ -626,7 +641,7 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
     setAbout(r.data.slice(0, 280));
   };
   const create = async () => {
-    if (!pick || !name.trim() || taken || !isAgentKey(key)) return;
+    if (!pick || !name.trim() || taken || callsignClash || !isAgentKey(key)) return;
     setBusy("create"); setFailed("");
     const p = persona();
     const r = await createAgent(projectId, actor, {
@@ -659,15 +674,18 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
       </div>
       {pick ? (
         <div className="ag-arch-form">
+          <FacePicker value={face} onChange={setFace} name={callsign.trim() || name.trim() || "New agent"} />
           <div className="ag-fv-row">
-            <AgFace roleKey={pick} identity={{ ...(base as AgentIdentity), avatar: { ...(base as AgentIdentity).avatar, seed } }}
-                    size={48} decorative />
-            <button type="button" className="wf-btn" data-testid="aq-arch-reroll" title="New face, same agent"
-                    onClick={() => setSeed(newSeed())}>Reroll</button>
             <label className="aw-field ag-grow">
               <span>Name</span>
               <input value={name} data-testid="aq-arch-name" onChange={(e) => setName(e.target.value)} />
               {taken ? <small className="aq-bad">Taken</small> : null}
+            </label>
+            <label className="aw-field">
+              <span>Callsign</span>
+              <input value={callsign} maxLength={16} placeholder="Optional" data-testid="aq-arch-callsign"
+                     onChange={(e) => setCallsign(e.target.value)} />
+              {callsignClash ? <small className="aq-bad">Taken</small> : null}
             </label>
           </div>
           <label className="aw-field">
@@ -685,7 +703,7 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
           <footer className="aw-footer">
             <span />
             <button type="button" className="wf-btn wf-btn-primary" data-testid="aq-arch-create"
-                    disabled={!!busy || !name.trim() || taken || !isAgentKey(key)} onClick={() => void create()}>
+                    disabled={!!busy || !name.trim() || taken || callsignClash || !isAgentKey(key)} onClick={() => void create()}>
               {busy === "create" ? "Creating…" : "Create agent"}
             </button>
           </footer>

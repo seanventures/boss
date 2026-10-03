@@ -11,17 +11,17 @@
  * claims to be them. The footer line saying it is an AI cannot be edited.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowsClockwise, Sparkle, X } from "@phosphor-icons/react";
+import { Sparkle, X } from "@phosphor-icons/react";
 
-import type { AvatarState, Passport, Persona, Voice } from "../../lib/agent-world-types";
+import type { Passport, Persona, Voice } from "../../lib/agent-world-types";
 import {
-  ARCHETYPE_KEYS, DISCLOSURE, FACE_PARTS, VOICE_AXES, compactPersona, draftPersonaField, fullPersona,
-  humanise, identityOf, newSeed, savePersona, toast,
+  ARCHETYPE_KEYS, DISCLOSURE, VOICE_AXES, compactPersona, draftPersonaField, fullPersona,
+  identityOf, resolveAvatar, savePersona, toast,
 } from "../../lib/agent-world";
 import { AgFace } from "./agent-face";
+import { FacePicker } from "./face-picker";
 
 export const LIMITS = { callsign: 16, tagline: 60, about_me: 280, phrases: 3, never: 5 } as const;
-const PREVIEW_STATES: AvatarState[] = ["idle", "working", "needs_you"];
 
 /** Client-side bounds, the same the server enforces: said before Save, not after. */
 export function personaProblems(p: Persona): Record<string, string> {
@@ -72,8 +72,7 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
   /** The unsaved voice, so Test can be heard before Save. */
   onDraft?: (p: Persona | null) => void;
 }) {
-  const seed = passport?.agentId || roleKey;
-  const saved = useMemo(() => fullPersona(passport?.persona, seed), [passport, seed]);
+  const saved = useMemo(() => fullPersona(passport?.persona), [passport]);
   const [p, setP] = useState<Persona>(saved);
   const [busy, setBusy] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -85,10 +84,9 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
   const problems = personaProblems(p);
   const set = <K extends keyof Persona>(k: K, v: Persona[K]) => setP((x) => ({ ...x, [k]: v }));
   const setVoice = (k: keyof Voice, v: number) => setP((x) => ({ ...x, voice: { ...x.voice!, [k]: v } }));
-  const setFace = (k: "hat" | "emblem" | "palette", v: string) =>
-    setP((x) => ({ ...x, avatar: { ...x.avatar!, [k]: v || undefined } }));
   const who = identityOf(roleKey);
-  const faceIdentity = { ...who, avatar: p.avatar ?? who.avatar };
+  // The face as every chip draws it; the picker edits that, and only a change is saved.
+  const face = resolveAvatar(who.roleKey || roleKey, passport?.agentId || who.agentId, p.avatar);
 
   const draft = async () => {
     setBusy("draft");
@@ -196,36 +194,8 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
 
       <div className="ag-field" data-testid="ag-face-editor">
         <span className="ag-field-label">Face</span>
-        <div className="ag-face-edit">
-          <div className="ag-face-previews">
-            {PREVIEW_STATES.map((s) => (
-              <span key={s} className="ag-face-preview">
-                {([24, 48, 96] as const).map((size) => (
-                  <AgFace key={size} roleKey={roleKey} identity={faceIdentity} size={size} state={s}
-                          decorative={size !== 48} />
-                ))}
-              </span>
-            ))}
-          </div>
-          <div className="ag-face-pickers">
-            {(["hat", "emblem", "palette"] as const).map((k) => (
-              <label key={k} className="ag-field">
-                <span className="ag-field-label">{k === "hat" ? "Hat" : k === "emblem" ? "Emblem" : "Palette"}</span>
-                <select value={p.avatar?.[k] ?? ""} data-testid={`ag-face-${k}`}
-                        onChange={(e) => setFace(k, e.target.value)}>
-                  <option value="">Auto</option>
-                  {FACE_PARTS[k === "hat" ? "hats" : k === "emblem" ? "emblems" : "palettes"].map((id) => (
-                    <option key={id} value={id}>{humanise(id)}</option>
-                  ))}
-                </select>
-              </label>
-            ))}
-            <button type="button" className="ag-btn" data-testid="ag-reroll" title="New face, same agent"
-                    onClick={() => setP((x) => ({ ...x, avatar: { kit: "boss-v1", seed: newSeed() } }))}>
-              <ArrowsClockwise size={13} aria-hidden /> Reroll
-            </button>
-          </div>
-        </div>
+        <FacePicker value={face} name={who.callsign || who.name}
+                    onChange={(next) => set("avatar", next)} />
         {err("avatar")}
       </div>
 

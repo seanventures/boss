@@ -247,7 +247,13 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                             onAsk={() => askAgent(detail.role_key, detail.name, { from: "passport" })}
                             onShare={() => setSharing(true)}
                             onDelete={() => pick("settings")}
-                            onChanged={(next) => setPassport(next)} />
+                            onChanged={(next) => setPassport(next)}
+                            facts={{
+                              violations: detail.violations ?? 0, reportsTo: detail.reports_to ?? null,
+                              apps: detail.apps.length, panels: detail.panels.length,
+                              spend: detail.apps.reduce((sum, a) => sum + (a.spend_usd || 0), 0),
+                              trust: detail.registered ? detail.trust_score : null,
+                            }} />
             {/* An agent doing work with no registered role has nothing governing it. Said. */}
             {!detail.registered ? (
               <div className="ad-bad" data-testid="agent-unregistered"
@@ -272,15 +278,15 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
               <div className="ct-block-title">
                 Profile <HelpTip label="Profile" text="How it speaks and looks. Never what it may do." />
               </div>
+              {/* ONE Profile: the voice and face, the one Test (a real model call in that voice),
+                  then the Studio definition's rows. */}
               <PassportPersona projectId={projectId} actor={actor} roleKey={detail.role_key} passport={passport}
                                onDraft={setDraftPersona}
                                onSaved={(version, fingerprint, persona) => setPassport((p) => (p
                                  ? { ...p, version, fingerprint, persona } : p))} />
-              {!studio ? (
-                <PassportTest projectId={projectId} actor={actor} roleKey={detail.role_key} persona={draftPersona} />
-              ) : null}
+              <PassportTest projectId={projectId} actor={actor} roleKey={detail.role_key} persona={draftPersona} />
+              {studio ? <AgentProfile feed={studio} roleKey={detail.role_key} actor={actor} bare /> : null}
             </section>
-            {studio ? <AgentProfile feed={studio} roleKey={detail.role_key} actor={actor} draftPersona={draftPersona} /> : null}
 
             {/* WHERE IT IS PUT TO WORK: each workflow step naming it, opening on that step. */}
             <section className="ct-block" data-testid="agent-used-in" id="ag-sec-used">
