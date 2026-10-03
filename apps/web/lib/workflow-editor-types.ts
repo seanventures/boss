@@ -54,7 +54,10 @@ export type WorkflowSummary = { definition_id: string; workflow_key: string; nam
   is_catalogue: boolean; version: number | null; step_count: number;
   steps: { id: string; title: string; capability?: string; captain?: string; approval?: string }[];
   forked_from_workflow_key?: string | null; forked_from_name?: string | null; run_count: number;
-  last_run?: { status: string; at: string } | null; schedule?: unknown; used_for?: string[] };
+  last_run?: { status: string; at: string } | null; schedule?: unknown; used_for?: string[];
+  /** The running version's id: what a "Run another workflow" step is pinned to. Null when
+   *  nothing is published yet. */
+  active_version_id?: string | null };
 
 /* ── Problems / check / publish ───────────────────────────────────────────────────── */
 
@@ -125,7 +128,12 @@ export type EditorAction =
   | { type: "SET_INPUT_SCHEMA"; schema: Record<string, unknown> }
   | { type: "SELECT"; id: string | null }
   | { type: "SET_PROBLEMS"; result: CheckResult }
-  | { type: "UNDO" } | { type: "REDO" } | { type: "SAVED"; spec: Spec; meta: EditorMeta };
+  | { type: "UNDO" } | { type: "REDO" }
+  /** A save landed: `spec` and `meta` are what was published, the new baseline. Edits made
+   *  while the request was in flight are KEPT (the draft stays dirty with them): the spec is
+   *  never replaced, and a name or description that differs from `sent` (the meta the request
+   *  was made from; default the current meta) keeps the operator's newer value. */
+  | { type: "SAVED"; spec: Spec; meta: EditorMeta; sent?: EditorMeta };
 export type StepPatch = { title?: string; captain?: string | null;
   instructions?: { mode: "ask" | "fixed"; text?: string };
   skills?: string[]; mcp?: string[]; approval?: "auto" | "manual"; approvalMore?: Record<string, unknown>;
@@ -159,33 +167,17 @@ export {
 } from "./workflow-api";
 export { applyStepPatch, inputSourceOf, deepEqual, TITLE_MAX } from "./workflow-spec";
 
-// S2 · app/workflows/flow/*, app/workflows/editor/*
-export function StepNode(p: { view: StepView; mode: "design" | "run" | "dot"; selected?: boolean;
-  problem?: string;
-  run?: { phase: "done" | "moving" | "needs_you" | "failed" | "future" | "skipped"; meta: string };
-  onSelect?(): void }): JSX.Element {
-  return notImplemented("StepNode");
-}
-export function FlowLane(p: { spec: Spec; palette: Palette | null; mode: "design" | "run" | "preview";
-  density?: "auto" | "compact"; selection?: string | null; problems?: Problem[];
-  runState?: Record<string, { phase: string; meta: string }>; onSelect?(id: string | null): void;
-  onInsert?(at: number, item: PaletteItem): void; onMove?(id: string, to: number): void;
-  canMove?(id: string, to: number): boolean; renderGapAction?(at: number): ReactNode }): JSX.Element {
-  return notImplemented("FlowLane");
-}
-/** The library card rail. */
-export function MiniLane(p: { steps: WorkflowSummary["steps"] }): JSX.Element {
-  return notImplemented("MiniLane");
-}
-export function WorkflowEditor(p: { projectId: string; workflowKey: string | "new"; onBack(): void;
-  onStart(key: string): void }): JSX.Element {
-  return notImplemented("WorkflowEditor");
-}
+// S2 · the canvas, from its own modules. WorkflowEditor is imported from
+// app/workflows/editor/workflow-editor.tsx directly: it composes the inspector, which imports
+// this file, and a re-export here would make that a cycle.
+export { StepNode } from "../app/workflows/flow/step-node";
+export { FlowLane } from "../app/workflows/flow/flow-lane";
+export { MiniLane } from "../app/workflows/flow/mini-lane";
 
 // S3 · app/workflows/editor/inspector/*, json/*, save/*
 /** Step properties, or the workflow settings when nothing is selected. */
 export function Inspector(p: { state: EditorState; palette: Palette; dispatch: Dispatch<EditorAction>;
-  projectId: string; onClose(): void }): JSX.Element {
+  projectId: string; onClose(): void; refreshPalette(): Promise<void> }): JSX.Element {
   return notImplemented("Inspector");
 }
 export function JsonView(p: { state: EditorState; palette: Palette | null;

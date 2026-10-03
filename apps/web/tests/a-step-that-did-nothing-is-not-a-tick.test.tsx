@@ -77,12 +77,12 @@ describe("a step that did nothing does not read as work done", () => {
       expect(didNothing(s)).toBe(true);
       expect(phaseOf(s)).toBe("nothing");
       const html = view(runOf("completed", [s]));
-      expect(html).toContain('data-phase="nothing"');
-      expect(html).toContain('data-testid="dw-node-did-nothing"');
+      // REWRITTEN (Workflow Studio): the run is drawn by the shared lane. The step's own node
+      // is not done: it is drawn as a skip, says "nothing done", and its tooltip says what to do.
+      expect(html).not.toMatch(new RegExp(`data-phase="done"[^>]*data-step-id="${capability}"`));
+      expect(html).toMatch(new RegExp(`data-phase="skipped"[^>]*data-step-id="${capability}"`));
+      expect(html).toContain("nothing done");
       expect(html).toContain(DID_NOTHING);
-      // The step's own node — not the Agents node before it, which is always complete.
-      expect(html).not.toMatch(/<li class="dw-node" data-phase="done"[^>]*data-testid="dw-node"/);
-      expect(html).toMatch(/<li class="dw-node" data-phase="nothing"[^>]*data-testid="dw-node"/);
     });
   }
 

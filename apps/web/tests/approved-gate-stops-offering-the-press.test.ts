@@ -13,16 +13,14 @@
  * picked up. An approved gate is a decision already taken; the button that takes it does not
  * belong on screen any more.
  *
- * And the rail's first node had its label pushed to the far right of its own box: the marker
- * sat in row 1 and "auto-confirmed" in row 2 of the SAME grid column, so the column sized to
- * the word. `.dw-dot` spans both rows, which is why every other step is laid out correctly.
+ * And the rail's first node had its label pushed to the far right of its own box. That node is
+ * now a chip at the head of the run lane (see below).
  */
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
 
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
-const CSS = codeOnly("app/globals.css");
 
 describe("an approved gate stops offering the press that answers it", () => {
   it("Deploy now is withheld once the decision is approved", () => {
@@ -43,19 +41,18 @@ describe("an approved gate stops offering the press that answers it", () => {
   });
 });
 
-describe("the rail's first node is laid out like every other one", () => {
-  it("its marker spans both rows", () => {
-    // Without this the marker is in (1,1) and the meta in (2,1), so the first column sizes to
-    // "auto-confirmed" and the name is pushed to the right-hand edge of the node.
-    expect(UI).toContain('className="dw-dot dw-node-dot"');
-    const at = CSS.indexOf(".dw-dot {");
-    expect(CSS.slice(at, at + 120)).toContain("grid-row: 1 / 3");
+describe("who is on the run is not drawn as a step", () => {
+  // REWRITTEN (Workflow Studio): this was the rail's first node, whose label the layout pushed
+  // to the far edge. The run is now the shared lane, and who is on it is a chip at its head —
+  // so it cannot be laid out unlike a step, because it is not drawn as one.
+  it("is a chip at the head of the lane", () => {
+    expect(UI).toContain('className="wf-chip wf-chip-btn" data-testid="dw-node-agents"');
   });
 
-  it("and it is a marker, not a numbered step", () => {
-    // It does not run, so it must not carry the filled disc the runtime's own steps use.
-    const at = CSS.indexOf(".dw-node-agents .dw-dot");
-    expect(at).toBeGreaterThan(-1);
-    expect(CSS.slice(at, at + 200)).toContain("background: transparent");
+  it("and it carries no step glyph or number", () => {
+    const at = UI.indexOf('className="wf-chip wf-chip-btn" data-testid="dw-node-agents"');
+    const chip = UI.slice(at, UI.indexOf("</button>", at));
+    expect(chip).not.toContain("StepIcon");
+    expect(chip).not.toContain("index + 1");
   });
 });

@@ -201,7 +201,10 @@ describe("a step that failed while the run went on", () => {
 
   it("still lets the path continue past it", () => {
     // It is not a stopped run: the project carried on without it, and the rail should say so.
-    expect(DW).toContain('"failed_on"].includes(previous ?? "")');
+    // REWRITTEN for the shared lane: it is drawn failed, with words, and the line goes on.
+    expect(DW).toContain('case "failed_on": return { phase: "failed", meta: "failed — went on",');
+    expect(codeOnly("app/workflows/flow/flow-lane.tsx"))
+      .toContain('previous === "skipped" || previous === "failed"');
   });
 
   it("has its own colour rather than borrowing one", () => {

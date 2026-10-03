@@ -100,7 +100,7 @@ describe("the library", () => {
   it("reads the workflow list and draws each step by the step-view rule", async () => {
     upstream = () => ({ body: { items: [{
       id: "wfd_1", workflow_key: "mine", name: "Mine", is_catalogue: false, active_version: 3,
-      step_count: 3, forked_from_workflow_key: "minor_feature", forked_from_name: "Minor Feature",
+      active_version_id: "wfv_3", step_count: 3, forked_from_workflow_key: "minor_feature", forked_from_name: "Minor Feature",
       run_count: 2, last_run: { status: "completed", at: "2026-10-01T00:00:00Z" },
       steps: [
         { id: "build", label: "build", kind: "capability", captain: "", approval: "auto" },
@@ -109,7 +109,8 @@ describe("the library", () => {
       ] }] } });
     const [w] = await fetchLibrary("p1");
     expect(calls[0].path).toBe("/v1/delivery-workflows?project_id=p1");
-    expect(w).toMatchObject({ definition_id: "wfd_1", version: 3, run_count: 2,
+    // The running version's id: what a "Run another workflow" step is pinned to.
+    expect(w).toMatchObject({ definition_id: "wfd_1", version: 3, run_count: 2, active_version_id: "wfv_3",
                               forked_from_workflow_key: "minor_feature",
                               last_run: { status: "completed" } });
     expect(w.steps).toEqual([

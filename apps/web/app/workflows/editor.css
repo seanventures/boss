@@ -1,1 +1,269 @@
 /* Workflow Studio: editor. Classes are prefixed wf- and use only the base tokens. */
+
+/* ── Shell ─────────────────────────────────────────────────────────────────────
+   Bar, summary line, then palette | lane, with the inspector floating over the lane's right edge.
+   The lane takes what is left and is never wider than its column, so the page never scrolls
+   sideways. The drawer is never a column of its own in the Visual view: a column would take its
+   380px from the lane every time a step is selected, so the lane would re-fit, change density
+   and move its nodes under the pointer. Floating, it leaves the lane's size alone, and the lane
+   scrolls the selected step out from under it (FlowLane occludedRight). */
+.wf-editor {
+  position: relative;
+  display: flex; flex-direction: column; gap: 10px;
+  min-width: 0; max-width: 100%;
+  color: var(--ink); font-family: var(--sans);
+}
+.wf-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  min-height: 420px;
+  align-items: start;
+}
+.wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr); }
+.wf-editor[data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr); }
+.wf-stage { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.wf-drawer {
+  position: absolute; top: 0; right: 0; z-index: 20;
+  width: min(380px, 100%);
+  max-height: calc(100vh - 80px); overflow: auto;
+  border: 1px solid var(--border); border-radius: var(--r-xl);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+
+/* JSON from 1280px: text, not a fitted drawing, so the inspector sits beside it. */
+@media (min-width: 1280px) {
+  .wf-editor[data-inspector="open"][data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr) 380px; }
+  .wf-editor[data-view="json"] .wf-drawer { position: sticky; top: 64px; width: auto; box-shadow: none; }
+}
+/* Under 720px: the palette is a sheet behind the + button, the inspector a bottom sheet. */
+@media (max-width: 719px) {
+  .wf-body, .wf-body[data-palette="rail"] { grid-template-columns: minmax(0, 1fr); }
+  .wf-body > .wf-palette { display: none; }
+  .wf-drawer {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
+    max-height: 72vh; border-radius: var(--r-xl) var(--r-xl) 0 0; z-index: 40;
+  }
+}
+
+/* ── Top bar ── */
+.wf-topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 8px;
+  min-height: 56px; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-xl);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.wf-bar-group { display: inline-flex; gap: 2px; }
+.wf-name { position: relative; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.wf-name-input {
+  min-width: 8ch; width: clamp(12ch, 28vw, 40ch);
+  padding: 4px 6px; border: 1px solid transparent; border-radius: var(--r);
+  background: transparent; color: var(--ink);
+  font: 600 1.25rem/1.2 var(--display);
+  text-overflow: ellipsis;
+}
+.wf-name-input:hover { border-color: var(--border); }
+.wf-name-input:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.wf-name-pencil { color: var(--faint); opacity: 0; transition: opacity 120ms ease; }
+.wf-name:hover .wf-name-pencil { opacity: 1; }
+.wf-name[data-error="true"] .wf-name-input { border-color: var(--red); }
+.wf-name-error {
+  position: absolute; left: 6px; top: 100%; margin-top: 2px;
+  color: var(--red); font: 600 0.75rem/1.2 var(--sans); white-space: nowrap;
+}
+.wf-dirty { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; }
+
+/* Buttons: the shared controls (wf-btn, wf-icon-btn, wf-link, wf-seg) are in inspector.css.
+   These are the bar's own sizes, the two extra kinds it needs, and the unavailable state a
+   control keeps when its tooltip has to say why (aria-disabled, not disabled). */
+.wf-topbar .wf-btn { min-height: 32px; }
+.wf-topbar .wf-icon-btn { width: 32px; height: 32px; }
+.wf-btn.wf-btn-secondary { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.wf-btn.wf-btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.wf-btn.wf-btn-ghost:hover { color: var(--ink); border-color: var(--border); }
+.wf-btn[aria-disabled="true"], .wf-icon-btn[aria-disabled="true"], .wf-seg button[aria-disabled="true"],
+.wf-menu-item[aria-disabled="true"], .wf-menu-item:disabled {
+  opacity: 0.45; cursor: not-allowed; filter: none;
+}
+.wf-chip-btn:focus-visible, .wf-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Chips (base in inspector.css): the summary line's are taller, icon and number. */
+.wf-summary .wf-chip, .wf-starts .wf-chip, .wf-topbar .wf-chip, .wf-run-head .wf-chip {
+  min-height: 26px; padding: 3px 10px; gap: 6px; color: var(--muted); font-weight: 600;
+}
+.wf-chip-btn { cursor: pointer; font: inherit; font-size: 0.75rem; }
+.wf-chip-btn:hover { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.wf-chip[data-tone="accent"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.wf-chip[data-tone="amber"] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+.wf-chip[data-tone="red"] { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.wf-chip[data-tone="green"] { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+.wf-avatars { display: inline-flex; }
+.wf-avatars > * + * { margin-left: -6px; box-shadow: 0 0 0 2px var(--surface); }
+.wf-summary { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.wf-required-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+
+/* "Starts with". */
+.wf-starts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wf-starts-label { color: var(--muted); font: 600 0.75rem/1 var(--sans); text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* ── Palette ── */
+.wf-palette {
+  position: sticky; top: 64px;
+  display: flex; flex-direction: column; min-height: 0;
+  max-height: calc(100vh - 80px);
+  border: 1px solid var(--border); border-radius: var(--r-xl);
+  background: var(--surface);
+  overflow: hidden;
+}
+.wf-pal-top { display: flex; align-items: center; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
+.wf-palette[data-collapsed="true"] .wf-pal-top { justify-content: center; padding: 8px 0; }
+.wf-pal-search {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--bg); color: var(--faint);
+}
+.wf-pal-search:focus-within { border-color: var(--accent); }
+.wf-pal-search input {
+  flex: 1; min-width: 0; height: 30px; border: 0; outline: none;
+  background: transparent; color: var(--ink); font: 400 0.8125rem/1 var(--sans);
+}
+.wf-pal-scroll { overflow-y: auto; overflow-x: hidden; padding-bottom: 8px; }
+.wf-pal-heading {
+  position: sticky; top: 0; z-index: 1;
+  margin: 0; padding: 8px 12px 4px;
+  background: var(--surface); color: var(--faint);
+  font: 700 0.75rem/1 var(--sans); text-transform: uppercase; letter-spacing: 0.08em;
+}
+.wf-pal-list { list-style: none; margin: 0; padding: 0 4px; }
+.wf-pal-row { position: relative; display: flex; align-items: center; }
+.wf-pal-item {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 8px;
+  border: 0; border-radius: var(--r);
+  background: transparent; color: var(--ink);
+  font: 500 0.8125rem/1 var(--sans); text-align: left;
+  cursor: grab; touch-action: pan-y;
+}
+.wf-pal-item:hover, .wf-pal-item:focus-visible { background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
+.wf-pal-item[aria-disabled="true"] { color: var(--faint); cursor: not-allowed; }
+.wf-pal-new { color: var(--accent); cursor: pointer; }
+.wf-pal-icon {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.wf-pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-pal-lock { color: var(--amber); flex: none; }
+.wf-pal-warn { color: var(--amber); flex: none; }
+.wf-pal-edit {
+  position: absolute; right: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border: 0; border-radius: 6px;
+  background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0;
+}
+.wf-pal-row:hover .wf-pal-edit, .wf-pal-edit:focus-visible { opacity: 1; }
+.wf-palette[data-collapsed="true"] .wf-pal-list { padding: 0; }
+.wf-palette[data-collapsed="true"] .wf-pal-item { justify-content: center; padding: 0; }
+.wf-palette[data-collapsed="true"] .wf-pal-group + .wf-pal-group { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+
+/* ── Menus (the popover itself is inspector.css's .wf-pop) ── */
+.wf-menu { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.wf-menu-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  padding: 8px 10px; border: 0; border-radius: var(--r);
+  background: transparent; color: var(--ink); font: 500 0.8125rem/1 var(--sans); text-align: left; cursor: pointer;
+}
+.wf-menu-item:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.wf-menu-danger { color: var(--red); }
+.wf-menu-meta, .wf-menu-note { color: var(--muted); font-size: 0.75rem; }
+
+/* QuickAdd. */
+.wf-quick .wf-pal-search { margin-bottom: 6px; }
+.wf-quick-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.wf-quick-item {
+  display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px;
+  border-radius: var(--r); cursor: pointer; font: 500 0.8125rem/1 var(--sans);
+}
+.wf-quick-item[data-active="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.wf-quick-none { padding: 8px; color: var(--muted); font-size: 0.8125rem; }
+
+/* ── New workflow: three ways in ── */
+.wf-empty { display: grid; gap: 12px; justify-items: center; padding: 20px 0 4px; }
+.wf-empty-tiles { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+.wf-tile {
+  width: 220px; display: grid; gap: 8px; padding: 12px;
+  border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
+}
+.wf-tile[data-open="true"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.wf-tile-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px; border: 0; background: transparent; color: var(--ink);
+  font: 600 0.9375rem/1.2 var(--sans); text-align: left; cursor: pointer;
+}
+.wf-tile-head[data-static="true"] { cursor: default; }
+.wf-tile-head:disabled { color: var(--faint); cursor: not-allowed; }
+.wf-tile-head svg { color: var(--accent); }
+.wf-tile-body { display: grid; gap: 8px; }
+.wf-add-first {
+  height: 56px; border: 1.5px dashed color-mix(in srgb, var(--accent) 60%, var(--border)); border-radius: var(--r-xl);
+  background: transparent; color: var(--accent); font: 600 0.8125rem/1 var(--sans); cursor: pointer;
+}
+.wf-add-first:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.wf-standards {
+  list-style: none; margin: 0; padding: 4px 2px 8px;
+  display: flex; gap: 10px; max-width: 100%; overflow-x: auto;
+}
+.wf-standard {
+  display: grid; gap: 8px; width: 220px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-xl);
+  background: var(--bg); color: var(--ink); text-align: left; cursor: pointer;
+}
+.wf-standard:hover { border-color: var(--accent); }
+.wf-standard-name { display: flex; align-items: center; gap: 6px; font: 600 0.8125rem/1.2 var(--sans);
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-standard-loading { width: 220px; height: 64px; border-radius: var(--r-xl); background: var(--surface); }
+
+/* ── Toast, FAB, sheet, loading ── */
+.wf-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 10003;
+  display: inline-flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-xl);
+  background: var(--surface); color: var(--ink); box-shadow: var(--shadow);
+  font: 600 0.8125rem/1 var(--sans);
+}
+.wf-fab {
+  display: none;
+  position: fixed; right: 16px; bottom: 16px; z-index: 30;
+  width: 48px; height: 48px; border: 0; border-radius: 50%;
+  background: var(--accent); color: var(--ink); box-shadow: var(--shadow); cursor: pointer;
+  align-items: center; justify-content: center;
+}
+@media (max-width: 719px) { .wf-fab { display: inline-flex; } }
+.wf-sheet { position: fixed; inset: 0; z-index: 50; }
+.wf-sheet-scrim { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg) 60%, transparent); }
+.wf-sheet-card {
+  position: absolute; left: 0; right: 0; bottom: 0; max-height: 75vh;
+  display: flex; border-radius: var(--r-xl) var(--r-xl) 0 0; overflow: hidden; box-shadow: var(--shadow-lg);
+}
+.wf-sheet-card .wf-palette { position: static; flex: 1; max-height: 75vh; border-radius: inherit; }
+.wf-skeleton { border-radius: var(--r-xl); background: var(--surface); }
+.wf-editor[data-loading="true"] .wf-topbar { height: 56px; }
+.wf-editor[data-loading="true"] .wf-body { display: block; height: 320px; }
+.wf-stage-json { min-width: 0; }
+
+/* A one-line notice under the bar: the draft from an earlier visit, or a load that failed. */
+.wf-notice {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: var(--r-xl); background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  font: 600 0.8125rem/1.2 var(--sans);
+}
+.wf-notice[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 50%, var(--border));
+                               background: color-mix(in srgb, var(--red) 8%, var(--surface)); }
+.wf-notice-sep { color: var(--faint); }

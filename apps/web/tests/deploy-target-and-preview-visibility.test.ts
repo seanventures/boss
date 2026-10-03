@@ -9,7 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  verifiedHostsFrom, isDeployStep, isPreviewStep,
+  verifiedHostsFrom, isDeployStep, isPreviewStep, laneStateOf, type RunStep,
 } from "../app/delivery-workflows-ui";
 
 type Step = Parameters<typeof isPreviewStep>[0];
@@ -256,12 +256,17 @@ describe("a skipped step says why, instead of reading as a fault", () => {
     // status: not_applicable with a sentence saying why, and the chain threw that sentence
     // away and printed two words that sound like a defect.
     expect(SOURCE).not.toContain('phase === "skipped" ? "not run"');
-    expect(SOURCE).toContain('data-testid="dw-node-skipped"');
+    // REWRITTEN for the shared run lane: the node's words come from laneStateOf.
+    const skipped = { step_id: "research", kind: "capability", status: "skipped", capability: "research",
+                      output: { status: "not_applicable", note: "No research phase" } } as unknown as RunStep;
+    expect(laneStateOf(skipped).meta).toBe("skipped");
   });
 
   it("carries the recorded reason", () => {
     expect(SOURCE).toContain("function skipReason");
-    expect(SOURCE).toContain("title={skipReason(step)");
+    const skipped = { step_id: "research", kind: "capability", status: "skipped", capability: "research",
+                      output: { status: "not_applicable", note: "No research phase" } } as unknown as RunStep;
+    expect(laneStateOf(skipped).tip).toBe("No research phase");
   });
 });
 
