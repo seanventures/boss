@@ -105,7 +105,7 @@ def test_and_it_reports_what_will_actually_run():
     settings.code_agent_engine, which the pipeline layers with the project's choices first."""
     source = inspect.getsource(_tool("diagnose_setup").handler)
     assert "_applied(c, pid, ctx.settings)" in source
-    assert "chat_engine_for(c, effective, pid)" in source
+    assert "_choose_model(c, effective, pid).describe()" in source
 
 
 def test_and_does_not_hand_back_a_to_do_list_of_vendors():

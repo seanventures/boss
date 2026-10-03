@@ -62,9 +62,9 @@ class _OnlyComplete:
 
 
 def _route_with(monkeypatch, adapter):
-    from boss_engine.services import claude_cli_adapter
+    from boss_engine.services import claude_cli_adapter, model_routing  # noqa: F401
 
-    monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter", lambda _s: adapter)
+    monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: adapter)
     return agent_steps.choose_agent(None, Settings(), "p", instructions="publish the short",
                                     pool=[dict(a) for a in POOL])
 
@@ -104,10 +104,10 @@ def test_a_model_naming_somebody_outside_the_pool_is_not_obeyed(monkeypatch):
 
 
 def test_the_fallback_says_when_nothing_matched_and_is_stable(monkeypatch):
-    from boss_engine.services import claude_cli_adapter
+    from boss_engine.services import claude_cli_adapter, model_routing  # noqa: F401
 
-    monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter",
-                        lambda _s: _Answers(RuntimeError("offline")))
+    monkeypatch.setattr(model_routing, "project_chat_adapter",
+                        lambda *_a, **_k: _Answers(RuntimeError("offline")))
     pool = [{"role_key": "b_agent", "holds": ["x.one", "x.two"]},
             {"role_key": "a_agent", "holds": ["y.one"]}]
     first = agent_steps.choose_agent(None, Settings(), "p", instructions="zzz", pool=pool)
@@ -194,7 +194,9 @@ def project(eng):
     with eng.begin() as c:
         for table in ("workflow_step_runs", "workflow_runs", "workflow_custom_steps",
                       "workflow_mappings", "workflow_versions", "workflow_definitions",
-                      "project_skills", "mcp_servers", "decisions", "events", "receipts",
+                      "project_skills", "mcp_servers", "decisions", "events",
+                      # An agent turn is reserved and receipted (model_routing.governed).
+                      "cost_receipts", "budget_reservations", "policy_evaluations", "receipts",
                       "agent_runs", "role_skills", "roles", "skill_invocations",
                       "policy_evaluations", "deadletters"):
             try:
@@ -308,16 +310,16 @@ class _Loop:
 
 @pytest.fixture()
 def loop(monkeypatch):
-    from boss_engine.services import agent_loop, claude_cli_adapter
+    from boss_engine.services import agent_loop, claude_cli_adapter, model_routing  # noqa: F401
 
     model = _Loop()
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _s: model)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: model)
     monkeypatch.setattr(agent_loop.MCPClient, "list_tools",
                         lambda self, url: [{"name": "lookup", "description": "look it up",
                                             "inputSchema": {"type": "object"}}])
     # Routing defaults to "the model is down", so a test that wants a model pick says so.
-    monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter",
-                        lambda _s: _Answers(RuntimeError("no routing model in this test")))
+    monkeypatch.setattr(model_routing, "project_chat_adapter",
+                        lambda *_a, **_k: _Answers(RuntimeError("no routing model in this test")))
     return model
 
 
@@ -329,14 +331,14 @@ def _agent_step(step_id="work", **binding):
 
 def test_an_agent_step_naming_nobody_is_routed_by_the_model_and_says_so(eng, project, loop,
                                                                         monkeypatch):
-    from boss_engine.services import claude_cli_adapter
+    from boss_engine.services import claude_cli_adapter, model_routing  # noqa: F401
 
     with eng.begin() as c:
         first, second = _catalogue(c, project, 2)
         _agent(c, project, "editor", first, mission="edits")
         _agent(c, project, "poster", second, mission="posts")
         router = _Answers(json.dumps({"role_key": "poster", "why": "it posts things"}))
-        monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter", lambda _s: router)
+        monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: router)
         version = _publish(c, project, "route", [_agent_step()])
         run = _start_and_tick(c, eng, project, version)
         row = _step(c, run["id"], "work")
@@ -451,12 +453,12 @@ def test_an_agent_the_project_made_can_be_named_on_a_custom_step(eng, project, m
 
 
 def test_a_custom_step_with_two_holders_is_put_to_the_model(eng, project, monkeypatch):
-    from boss_engine.services import agent_loop, claude_cli_adapter
+    from boss_engine.services import agent_loop, claude_cli_adapter, model_routing  # noqa: F401
 
     monkeypatch.setattr(agent_loop, "_invoke_agent_skill",
                         lambda *a, **k: {"status": "succeeded", "result": {}})
     router = _Answers(json.dumps({"role_key": "second_holder", "why": "closer remit"}))
-    monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter", lambda _s: router)
+    monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: router)
     with eng.begin() as c:
         (skill,) = _catalogue(c, project, 1)
         _agent(c, project, "first_holder", skill)

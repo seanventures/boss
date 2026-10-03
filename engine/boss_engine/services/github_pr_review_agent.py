@@ -8,7 +8,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
-from .claude_cli_adapter import make_chat_adapter
+from . import model_routing
 from .code_agent import DIFF_REVIEW_SYSTEM_PROMPT
 from .core import create_blocking_decision
 from .github_adapter import GitHubAdapter
@@ -254,8 +254,8 @@ class GitHubPullRequestReviewAgent(GitHubCommunityAgentBase):
             data_boundary="internal",
         )
         try:
-            response, usage = make_chat_adapter(
-                self.settings
+            response, usage = model_routing.project_chat_adapter(
+                connection, self.settings, project_id
             ).create_chat_completion(
                 [
                     {"role": "system", "content": DIFF_REVIEW_SYSTEM_PROMPT},

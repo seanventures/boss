@@ -6428,7 +6428,11 @@ def decompose_prd_endpoint(payload: PrdDecomposeBody):
     from .services.prd_decomposition import decompose_prd_into_tasks, start_decomposed_build
     max_tasks = int(payload.get("max_tasks") or 6)
     if payload.get("plan_only"):
-        tasks = decompose_prd_into_tasks(settings, prd, max_tasks=max_tasks)
+        from boss_engine.services import model_routing
+
+        with begin(engine) as connection:
+            model = model_routing.project_chat_adapter(connection, settings, project_id)
+        tasks = decompose_prd_into_tasks(settings, prd, max_tasks=max_tasks, adapter=model)
         if not tasks:
             raise HTTPException(status_code=422, detail="could not decompose the PRD into tasks.")
         return {"plan_only": True, "total": len(tasks), "tasks": tasks}

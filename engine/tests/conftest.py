@@ -24,7 +24,7 @@ CREATE_ENTITLEMENT_SOURCES = (
     " project_id TEXT, source_id TEXT, provider TEXT, connection_status TEXT,"
     " credential_secret_ref_id TEXT, updated_at TIMESTAMP,"
     " cost_mode TEXT, limit_shape TEXT, observed_capacity TEXT,"
-    " supported_models TEXT, connection_metadata TEXT)"
+    " supported_models TEXT, connection_metadata TEXT, auth_method TEXT, status TEXT)"
 )
 
 CREATE_PROJECT_SETTINGS = (
@@ -32,9 +32,18 @@ CREATE_PROJECT_SETTINGS = (
 )
 
 
+#: The columns `credential_resolve.resolve_project_credential` reads: a project's stored keys.
+#: The router binds a lane's stored credential through it, so every routed test reaches it.
+CREATE_SECRET_REFS = (
+    "CREATE TABLE secret_refs (id TEXT, project_id TEXT, provider TEXT, status TEXT,"
+    " updated_at TIMESTAMP)"
+)
+
+
 def create_entitlement_tables(conn, *, with_settings: bool = True) -> None:
     """Build the stub schema connected_engines and its callers read."""
     conn.execute(text(CREATE_ENTITLEMENT_SOURCES))
+    conn.execute(text(CREATE_SECRET_REFS))
     if with_settings:
         conn.execute(text(CREATE_PROJECT_SETTINGS))
 

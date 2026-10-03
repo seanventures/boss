@@ -28,18 +28,27 @@ from boss_engine.services.claude_cli_adapter import FallingBackAdapter
 
 
 def test_the_panel_uses_the_engine_this_project_chose():
+    """Through the one router (model_routing), not a pasted copy of the resolution."""
     source = inspect.getsource(meeting_service.advance_meeting_run)
-    assert "chat_engine_for(c, settings, run[\"project_id\"])" in source
-    assert 'settings.model_copy(update={"chat_llm_engine": chosen_engine})' in source
+    assert 'model_routing.project_chat_adapter(c, settings, run["project_id"])' in source
+    assert "chat_engine_for" not in source.split("from . import model_routing")[1]
 
 
 def test_and_a_settings_lookup_cannot_end_a_meeting():
     """A panel that dies because a knob could not be read is worse than one that runs on the
-    deployment default."""
-    source = inspect.getsource(meeting_service.advance_meeting_run)
-    at = source.index("from .setup_service import chat_engine_for")
-    # The guard wraps the whole lookup: import, query and model_copy.
-    assert "except Exception" in source[at:at + 700]
+    deployment default. Behaviour: the router's choice survives a connection that cannot
+    answer a single query."""
+    from boss_engine.config import Settings
+    from boss_engine.services import model_routing
+
+    class _Broken:
+        def execute(self, *_a, **_k):
+            raise RuntimeError("settings table unreachable")
+
+    choice = model_routing.choose(_Broken(), Settings().model_copy(update={
+        "openai_api_key": "sk-test-not-real", "chat_llm_engine": "", "llm_engine": "auto"}),
+        "p")
+    assert choice.engine == "native" and choice.why == model_routing.ENVIRONMENT
 
 
 def test_the_fallback_wrapper_implements_what_a_meeting_calls():

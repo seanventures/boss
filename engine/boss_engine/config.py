@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     agent_router_budget_usd_micros: int = Field(
         default=100_000, alias="BOSS_AGENT_ROUTER_BUDGET_USD_MICROS", ge=1
     )
+    # What one agent-loop model turn on a METERED key reserves against the project budget
+    # before it is sent (model_routing.GovernedChatAdapter); settled with the turn's real cost.
+    # Subscriptions and local models reserve nothing and are still refused past the cap.
+    agent_turn_budget_usd_micros: int = Field(
+        default=20_000, alias="BOSS_AGENT_TURN_BUDGET_USD_MICROS", ge=1
+    )
     # Completion backend: auto (azure→openai) | openai | azure | claude_cli.
     # claude_cli drives BOSS's own loop but serves each completion via the
     # Claude Code CLI (`claude -p`) on a Max subscription instead of a paid API.

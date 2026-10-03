@@ -19,7 +19,7 @@ PROJECT = "boss-dogfood"
 
 
 class ScriptedModel:
-    """Stands in for `agent_loop.make_chat_adapter`. Answers "Done." and records what it was
+    """Stands in for `agent_loop.project_chat_adapter`. Answers "Done." and records what it was
     offered; while `failing` is set it raises, the way a provider outage reaches a step."""
 
     def __init__(self) -> None:
@@ -55,7 +55,7 @@ def install_model(monkeypatch) -> ScriptedModel:
     from boss_engine.services import agent_loop
 
     model = ScriptedModel()
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: model)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: model)
     monkeypatch.setattr(agent_loop, "MCPClient", UnreachableMcp)
     return model
 

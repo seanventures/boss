@@ -340,7 +340,7 @@ def test_a_bounded_agent_step_is_offered_exactly_its_granted_mcp_tools(
 
     recorder = _Recorder()
     monkeypatch.setattr(agent_loop, "MCPClient", _Mcp)
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _s: recorder)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: recorder)
     with engine.begin() as c:
         out = agent_steps.run(c, Settings(), PROJECT, instructions="Post the notes.",
                               role_key=key, actor="test")
