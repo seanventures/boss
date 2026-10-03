@@ -249,8 +249,12 @@ def record_turns(
     engine: Optional[str] = None,
     model: Optional[str] = None,
     prompt: Optional[str] = None,
+    act_id: Optional[str] = None,
 ) -> int:
     """Persist a captured conversation. Returns rows written; never raises.
+
+    `act_id` is the signed work these turns belong to (agent_acts), so an Act card can show what
+    the agent actually said while doing it.
 
     The prompt is stored as turn zero when given, because "what was it asked" is the first
     question anyone has about a transcript and it is not in the stream.
@@ -265,6 +269,7 @@ def record_turns(
             "id": f"turn_{uuid.uuid4().hex[:20]}",
             "project_id": project_id, "code_task_run_id": code_task_run_id,
             "stage": stage, "role_key": role_key, "engine": engine, "model": model,
+            "act_id": act_id,
             "turn_index": -1,          # sorts before the conversation it started
             "direction": "prompt", "tool_name": None,
             "content": content, "content_bytes": size, "truncated": clipped,
@@ -286,6 +291,7 @@ def record_turns(
             "code_task_run_id": code_task_run_id,
             "stage": stage,
             "role_key": role_key,
+            "act_id": act_id,
             "engine": engine,
             "model": str(turn.get("model") or model or "") or None,
             "turn_index": int(turn.get("turn_index") or 0),
@@ -303,18 +309,20 @@ def record_turns(
 
     if not rows:
         return 0
+    # Written only when there is an act, so a store without the column records as before.
+    signed = (", act_id", ", :act_id") if act_id else ("", "")
     try:
         connection.execute(
             text(
-                """
+                f"""
                 INSERT INTO agent_turns (
                     id, project_id, code_task_run_id, stage, role_key, engine, model,
                     turn_index, direction, tool_name, content, content_bytes, truncated,
-                    tokens, latency_ms, level, ok, error
+                    tokens, latency_ms, level, ok, error{signed[0]}
                 ) VALUES (
                     :id, :project_id, :code_task_run_id, :stage, :role_key, :engine, :model,
                     :turn_index, :direction, :tool_name, :content, :content_bytes, :truncated,
-                    :tokens, :latency_ms, :level, :ok, :error
+                    :tokens, :latency_ms, :level, :ok, :error{signed[1]}
                 )
                 """
             ),

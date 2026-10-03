@@ -671,6 +671,16 @@ class A2AService:
                 "trace_id": trace,
             },
         )
+        if sender_kind == "agent":
+            # AN AGENT ASKED AN AGENT, and this envelope is the proof. It is the only place the
+            # ledger may write `asked_by_agent` (agent_acts.record_handoff); everything else that
+            # moves work between agents is BOSS, a captain or a person, and is labelled so.
+            from . import agent_acts
+
+            agent_acts.quietly(
+                connection, "sign an agent's handoff", agent_acts.record_handoff,
+                project_id=project_id, envelope_id=message_id, sender_id=sender_id,
+                recipient=recipient, actor=actor, lineage=lineage, message_kind=message_kind)
         return self.get_message(connection, project_id, message_id)
 
     def dispatch(

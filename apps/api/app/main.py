@@ -11898,6 +11898,7 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
                 role=payload.role,
                 mode=payload.mode,
                 depth=payload.depth,
+                context=payload.context,
                 attachments=[
                     {"name": a.name, "media_type": a.media_type, "kind": a.kind,
                      "data": a.data}
@@ -27440,6 +27441,128 @@ app.include_router(
     )
 )
 mount_platform_routers(app)
+# --- agent world: acts ---
+# Signed work (spec §4.3, §5.4): an agent's acts and lineage, a run's chain, one act, who is live.
+# Registered BEFORE the agents router so `/v1/agents/live` is not read as an agent called "live".
+
+
+class ActsBackfillRequest(BaseModel):
+    project_id: str
+    actor: str = "executive_console"
+
+
+def _acts_reader(project_id: str):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    return project_id.strip()
+
+
+@app.get("/v1/agents/live")
+def agents_live(project_id: str, request: Request, response: Response):
+    """Who is working, in a panel, or waiting on you right now. ETag'd for a cheap 4s poll."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        live = agent_acts.live(connection, project_id)
+    if request.headers.get("if-none-match") == live["etag"]:
+        return Response(status_code=304, headers={"ETag": live["etag"]})
+    response.headers["ETag"] = live["etag"]
+    response.headers["Cache-Control"] = "no-cache"
+    return {"project_id": project_id, "items": live["items"]}
+
+
+@app.get("/v1/agents/{role_key}/acts")
+def agent_acts_feed(role_key: str, project_id: str, kind: Optional[str] = None, days: int = 30,
+                    cursor: Optional[str] = None, limit: int = 50) -> dict:
+    """An agent's signed work, newest first: each act with who handed it over and to whom."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return agent_acts.acts_for_agent(
+                connection, project_id, agent_acts.resolve_role(role_key) or role_key,
+                kind=kind or None, days=max(1, min(int(days), 365)), cursor=cursor,
+                limit=limit)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/agents/{role_key}/lineage")
+def agent_lineage(role_key: str, project_id: str, days: int = 30,
+                  mode: str = "observed") -> dict:
+    """Who hands this agent work and who it hands work to (observed), or its declared line."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return agent_acts.lineage(
+                connection, project_id, agent_acts.resolve_role(role_key) or role_key,
+                days=max(1, min(int(days), 365)), mode=mode)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/workflow-runs/{run_id}/chain")
+def workflow_run_chain(run_id: str, project_id: str) -> dict:
+    """A run's acts as one ordered tree, rooted at the person who started it, with Credits.
+
+    Synced from the run's rows first, so the chain is never a tick behind what the run shows."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        owner = connection.execute(
+            text("SELECT project_id FROM workflow_runs WHERE id = :r"), {"r": run_id}).scalar()
+        if owner != project_id:
+            raise HTTPException(status_code=404, detail="Workflow run not found.")
+        agent_acts.quietly(connection, "sign a run's work", agent_acts.sync_run, run_id,
+                           wait=False)
+        found = agent_acts.chain(connection, project_id, run_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="This run has no signed work.")
+    return found
+
+
+@app.get("/v1/acts/{act_id}")
+def get_signed_act(act_id: str, project_id: str) -> dict:
+    """One act: who, how, why, scope and cost, its last turns, receipt and children."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        found = agent_acts.get_act(connection, project_id, act_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Act not found.")
+    return found
+
+
+@app.post("/v1/acts/backfill")
+def backfill_signed_acts(payload: ActsBackfillRequest) -> dict:
+    """Reconstruct acts from work done before the ledger existed. Idempotent; every act it
+    writes is marked reconstructed."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(payload.project_id)
+    with begin(engine) as connection:
+        actor = require_project_write_actor(connection, project_id, payload.actor,
+                                            "workflow_manage")
+        written = agent_acts.backfill(connection, project_id)
+        emit_event(connection, project_id, "agent_acts.backfilled", actor, "project",
+                   project_id, {"acts": written})
+    return {"project_id": project_id, "reconstructed": written}
+
+
+# --- end agent world: acts ---
+
+
 # THE ONE AGENT MODEL: create/read/edit/delete an agent and its MCP grants (routers/agents.py).
 from .routers.agents import build_agents_router
 

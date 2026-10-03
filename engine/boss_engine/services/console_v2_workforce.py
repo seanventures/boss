@@ -181,6 +181,13 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     spend = _llm_work(connection, project_id, SCORE_WINDOW_HOURS)
     step_work = _step_work(connection, project_id, SCORE_WINDOW_HOURS)
     live = _live_work(connection, project_id)
+    # PRESENCE, FROM SIGNED WORK (agent_acts, spec §4.5): needs you > in a panel > working >
+    # idle, with a line built from the act's label. The one source the Roster zones, the
+    # presence pill and every face's ring agree on — and the first one that sees workflow steps.
+    presence = _presence(connection, project_id)
+    # Handoffs the acts recorded — workflow steps, build stages, seats — beside the legacy
+    # process handoffs above, so a workflow run shows on the Team chart for the first time.
+    handoffs = _with_observed_edges(connection, project_id, handoffs, hours)
     # AGENTS THAT WORK BUT ARE NOT REGISTERED ROLES.
     #
     # Found by the Hive having no edges: five of the seven role keys the process template
@@ -205,6 +212,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # seats (engineer, ux_designer, privacy_safety, operations) are in the second category.
     working = ({s["role_key"] for s in steps if s.get("role_key")}
                | set(spend) | set(step_work) | set(live)
+               | {k for k, p in presence.items() if p.get("state") != "idle"}
                | {h["source"] for h in handoffs if h.get("source")}
                | {h["target"] for h in handoffs if h.get("target")})
     for extra in sorted(working - registered):
@@ -251,10 +259,15 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             status = WORKING
             task = (f"{now_on['phase']} — {now_on['title']}" if now_on.get("title")
                     else now_on["phase"])
+        here = presence.get(key)
+        if here and here.get("state") in ("working", "in_panel", "needs_you") and status != WORKING:
+            status = GATED if here["state"] == "needs_you" else WORKING
+            task = here.get("line") or task
         if key not in working:
             status, task = IDLE, NO_WORK_YET
         (agents if key in working else roster).append({
             "id": key,
+            "presence": here or {"state": "idle", "line": ""},
             "name": role.get("display_name") or key,
             "role": _humanise(key),
             "status": status,
@@ -361,6 +374,33 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "be shown. Each project's spend is on its card in Factory, and the total is in Govern."
         ),
     }
+
+
+def _presence(connection, project_id: str) -> dict[str, dict]:
+    from . import agent_acts
+
+    return agent_acts.quietly(connection, "read presence", agent_acts.presence_map,
+                              project_id) or {}
+
+
+def _with_observed_edges(connection, project_id: str, handoffs: list[dict],
+                         hours: float) -> list[dict]:
+    """Legacy process handoffs ∪ agent→agent parent→child pairs from the acts."""
+    from . import agent_acts
+
+    observed = agent_acts.quietly(connection, "read observed handoffs",
+                                  agent_acts.observed_edges, project_id, hours=int(hours)) or []
+    merged = {(h["source"], h["target"]): dict(h) for h in handoffs}
+    for edge in observed:
+        held = merged.get((edge["source"], edge["target"]))
+        if held is None:
+            merged[(edge["source"], edge["target"])] = dict(edge)
+            continue
+        held["times"] = int(held["times"]) + int(edge["times"])
+        if edge.get("last_at") and (held.get("last_at") is None
+                                    or edge["last_at"] > held["last_at"]):
+            held["last_at"], held["last_action"] = edge["last_at"], edge.get("last_action")
+    return sorted(merged.values(), key=lambda h: -int(h["times"]))[:60]
 
 
 def _latest_activity(call_work: dict, step_work: dict) -> Optional[str]:
@@ -1002,6 +1042,9 @@ def agent_detail(connection, project_id: str, role_key: str, *,
             "knowledge": spec.get("knowledge") or "",
         },
         "owns_stages": stages,
+        # SIGNED WORK (agent_acts): what it actually did, newest first, with who handed each
+        # piece over — workflow steps, build stages, panel seats, chats, approvals.
+        **_signed_work(connection, project_id, role_key),
         "apps": apps,
         "panels": [{"id": p["id"], "subject": _meeting_title(p.get("title"), p.get("directive"))[:120],
                     "status": p["status"], "phase": p["phase"],
@@ -1023,6 +1066,26 @@ def agent_detail(connection, project_id: str, role_key: str, *,
         **_agent_model_extras(connection, project_id, role_key, registered=bool(role)),
         "window_hours": hours,
     }
+
+
+def _signed_work(connection, project_id: str, role_key: str) -> dict[str, Any]:
+    from . import agent_acts
+
+    def read(c) -> dict[str, Any]:
+        page = agent_acts.acts_for_agent(c, project_id, role_key, days=30, limit=20)
+        cost = c.execute(
+            sql("SELECT COALESCE(sum(cost_usd), 0) FROM agent_acts WHERE project_id = :p "
+                "AND role_key = :r AND started_at > now() - interval '7 days'"),
+            {"p": project_id, "r": role_key},
+        ).scalar()
+        return {"work": page["items"], "work_next": page["next"],
+                "presence": agent_acts.presence_map(c, project_id).get(
+                    role_key, {"state": "idle", "line": ""}),
+                "cost_7d_usd": round(float(cost or 0), 4)}
+
+    return agent_acts.quietly(connection, "read signed work", read) or {
+        "work": [], "work_next": None, "presence": {"state": "idle", "line": ""},
+        "cost_7d_usd": 0.0}
 
 
 def _agent_model_extras(connection, project_id: str, role_key: str, *,

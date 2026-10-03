@@ -798,6 +798,9 @@ class AgentChatRequest(BaseModel):
     #: a UI fault, and pasting six thousand lines of log into a chat box ruins the transcript
     #: for every later turn. Both arrive here instead.
     attachments: list["AgentAttachment"] = Field(default_factory=list)
+    #: WHAT THE DOCK WAS OPENED ABOUT (Agent World): {act_id} or {workflow_run_id, step_id}.
+    #: The turn is signed as work under it.
+    context: Optional[dict[str, Any]] = None
     #: HOW DEEP THIS TURN GOES. Unset, a question about a record is answered first in ONE
     #: tool-less call from that record, inside a hard budget (subject_answer.py — boss-1's
     #: 347 s "Ask the Qa"). "investigate" is the dock's "Investigate further" / "Do the fix":
@@ -893,6 +896,10 @@ class AgentChatResponse(BaseModel):
     #: {id, label, depth, message} for "Investigate further" and "Do the fix". Pressing one sends
     #: `message` with `depth`; nothing runs until then.
     next_steps: list[dict[str, Any]] = Field(default_factory=list)
+    #: THE SIGNED TURN (agent_acts) when an agent was asked, and the acts of its own work the
+    #: reply cited as [act:…]. Absent for BOSS-in-general, which is not an agent.
+    act_id: Optional[str] = None
+    cited_acts: list[str] = Field(default_factory=list)
 
 
 class MeetingProposeRequest(BaseModel):

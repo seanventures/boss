@@ -151,6 +151,8 @@ _EXPECTED_TOOLS: set[str] = {
     "describe_deployment_target",
     "retarget_app",
     "recall_role_experience",
+    # Agent World: an agent's own signed work, to cite as [act:…] (services/agent_acts.py).
+    "my_recent_work",
     "describe_role",
     "read_logs",
     "read_preview_log",
@@ -199,10 +201,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 111, (
+    assert len(reg.names()) == 112, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 62
+    assert len(read) == 63  # + my_recent_work (Agent World)
     assert len(write) == 49
     # the capabilities the user explicitly asked the agent to cover
     for name in (
