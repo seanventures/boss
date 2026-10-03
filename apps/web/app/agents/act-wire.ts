@@ -92,7 +92,10 @@ export function toChain(w: Wire): Chain {
     accountable: String(w.accountable ?? ""),
     totals: { steps: num(totals.steps), minutes: num(totals.minutes), cost: num(totals.cost) },
     credits: Array.isArray(w.credits)
-      ? (w.credits as Wire[]).map((c) => ({ roleKey: str(c.role_key ?? c.roleKey) ?? null, line: String(c.line ?? "") }))
+      ? (w.credits as Wire[]).map((c) => {
+        const personId = str(c.person_id ?? c.personId);
+        return { roleKey: str(c.role_key ?? c.roleKey) ?? null, line: String(c.line ?? ""), ...(personId ? { personId } : {}) };
+      })
       : [],
   };
 }

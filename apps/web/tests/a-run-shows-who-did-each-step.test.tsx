@@ -71,6 +71,20 @@ describe("the chain", () => {
       .toEqual(["backend_engineer", "adversarial_reviewer", 3]);
   });
 
+  it("keeps distinct steps that alternate between two faces: a loop is the same work coming back", () => {
+    // Built-ins run as You, so research → PRD → readiness → approve → deploy alternates You and
+    // the PM while doing five different things. None of it may fold into `You ↔ PM ×3`.
+    const root = wireAct({ act_id: "act_r", kind: "run", how: "started", handed_by_kind: "person", handed_by_id: "ceo",
+                           label: "Run · Ship it #182" });
+    const steps = [["research", null], ["prd", "pm"], ["readiness", null], ["approve", "pm"], ["deploy", null]]
+      .map(([id, role], i, all) => wireAct({ act_id: `act_${id}`, kind: "step", role_key: role, step_id: id,
+        parent_act_id: i === 0 ? "act_r" : `act_${all[i - 1][0]}`, how: role ? "named" : "run_actor",
+        label: `${id} · Ship it #182` }));
+    const items = chainItems(toChain({ acts: [root, ...steps], accountable: "ceo", totals: {}, credits: [] }), "ceo");
+    expect(items.map((it) => it.kind)).toEqual(["hop", "hop", "hop", "hop", "hop", "hop"]);
+    expect(items.slice(1).map((it) => it.acts[0].links.step_id)).toEqual(["research", "prd", "readiness", "approve", "deploy"]);
+  });
+
   it("draws that order, and opens the build's inner work on request", () => {
     const el = render(<RunChain chain={toChain(shipItChain())} viewer="ceo" />);
     const hops = [...el.querySelectorAll('[data-testid="ag-chain-strip"] > [data-testid="ag-chain-hop"]')]
@@ -134,6 +148,28 @@ describe("a run step's face", () => {
 
     el = render(<StepNode mode="run" view={VIEW("you")} run={{ phase: "done", meta: "" }} />);
     expect(el.querySelector(".wf-node-agent-name")?.textContent).toBe("You");
+  });
+
+  it("never gives the workflow, a gate's person or another person an agent's face", () => {
+    const runner = laneAgentOf({ ran_as: { agent: "workflow_runner", how: "workflow_runner" } }, null, "ceo");
+    expect(runner && [runner.roleKey, runner.variant]).toEqual([null, "boss"]);
+    const legacy = laneAgentOf({ ran_as: { agent: "workflow_runner", how: "legacy_workflow_runner" } }, null, "ceo");
+    expect(legacy && [legacy.roleKey, legacy.variant]).toEqual([null, "boss"]);
+    const gate = laneAgentOf({ ran_as: { agent: "human", how: "named" } }, null, "ceo");
+    expect(gate && [gate.roleKey, gate.variant]).toEqual([null, "person"]);
+    const theirs = laneAgentOf({ ran_as: { agent: "cto", how: "run_actor" } }, null, "ceo");
+    expect(theirs && [theirs.roleKey, theirs.variant]).toEqual([null, "person"]);
+
+    let el = render(<StepNode mode="run" view={VIEW("auto")} run={{ phase: "done", meta: "", agent: runner }} />);
+    expect(el.querySelector(".wf-node-agent-name")?.textContent).toBe("BOSS");
+    expect(el.querySelector('[data-morph="true"]')).toBeNull();
+    act(() => root?.unmount());
+    el = render(<StepNode mode="run" view={VIEW("you")} run={{ phase: "done", meta: "", agent: gate }} />);
+    expect(el.querySelector(".wf-node-agent-name")?.textContent).toBe("A person");
+    expect(el.querySelector(".ag-face")?.getAttribute("data-variant")).toBe("person");
+    act(() => root?.unmount());
+    el = render(<StepNode mode="run" view={VIEW("you")} run={{ phase: "done", meta: "", agent: theirs }} />);
+    expect(el.querySelector(".wf-node-agent-name")?.textContent).toBe("A person");
   });
 
   it("rings a named agent with its work's real state", () => {

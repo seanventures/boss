@@ -21,7 +21,11 @@ import { shortLabel } from "./chain-model";
 import { useActDetail } from "./run-acts";
 import { AiBadge, nameOf, RunFace, STATE_WORD } from "./run-face";
 
-/** The role key a dock is talking to: the key it was opened with, else its name resolved. */
+/**
+ * The role key a dock is talking to, as the turn sends it: the key it was opened with, else its
+ * name resolved by the kit. Never a guess — a key made up from a display name ("QA Lead" →
+ * `qa_lead`, while the agent is `qa`) would address an agent that does not exist.
+ */
 export function dockRoleKey(roleKey: string | undefined, roleName: string | undefined): string | null {
   const key = (roleKey ?? "").trim();
   if (key) return key;
@@ -30,9 +34,17 @@ export function dockRoleKey(roleKey: string | undefined, roleName: string | unde
   try {
     return agentIdentity(name).roleKey || null;
   } catch {
-    // Until the kit's resolver is mounted, a name that is already key-shaped is its own key.
-    return /^[a-z0-9_]+$/.test(name) ? name : name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || null;
+    return null;   // the kit's resolver is not mounted: no key, and the turn says so by omission
   }
+}
+
+/** The key the dock draws a face and a name from: the real key, else the name made key-shaped.
+ *  Local display only; it never leaves the console. */
+export function dockFaceKey(roleKey: string | undefined, roleName: string | undefined): string | null {
+  const real = dockRoleKey(roleKey, roleName);
+  if (real) return real;
+  const name = (roleName ?? "").trim();
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || null;
 }
 
 /** How long a face keeps speaking after the last chunk of words arrived (spec §7). */

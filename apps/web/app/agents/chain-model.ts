@@ -9,6 +9,7 @@
  * stands for (spec §9: edge_label() is the single source).
  */
 import type { Act, ActHow, AvatarState, AvatarVariant, Chain } from "../../lib/agent-world-types";
+import { BOSS_RAN_IT, HUMAN, NOT_AN_AGENT } from "../../lib/ran-as";
 
 const ACRONYMS: Record<string, string> = { qa: "QA", pm: "PM", sre: "SRE", ux: "UX", cto: "CTO", vp: "VP" };
 
@@ -92,9 +93,20 @@ function hopOf(acts: Act[], viewer: string, inside: ChainItem[] = [], insideCoun
   };
 }
 
+/** What work a hop did: its step, or for a stage/seat the step it is part of, else its label. */
+function workOf(h: Hop): string {
+  const a = h.acts[0];
+  return a.links.step_id ?? shortLabel(a.label);
+}
+
 /**
  * Collapse a back-and-forth between two agents into one item: implement, review, implement,
  * review, implement, review is `Forge ↔ Rook ×3`. Two rounds at least, single hops only.
+ *
+ * A LOOP IS THE SAME WORK COMING BACK, not two names taking turns. Built-in steps run as You, so
+ * research (You) → PRD (PM) → readiness (You) → approve (PM) → deploy (You) alternates between
+ * two faces while doing five different things; collapsing that hid five steps behind
+ * `You ↔ PM ×3`. Each hop must repeat both the agent and the work of the hop two before it.
  */
 export function collapseLoops(items: ChainItem[]): ChainItem[] {
   const out: ChainItem[] = [];
@@ -106,7 +118,8 @@ export function collapseLoops(items: ChainItem[]): ChainItem[] {
     const y = items[i + 1];
     if (single(x) && single(y) && key(x) !== key(y)) {
       let j = i + 2;
-      while (single(items[j]) && key(items[j] as Hop) === key((j - i) % 2 === 0 ? x : y)) j += 1;
+      while (single(items[j]) && key(items[j] as Hop) === key(items[j - 2] as Hop)
+             && workOf(items[j] as Hop) === workOf(items[j - 2] as Hop)) j += 1;
       const run = items.slice(i, j) as Hop[];
       if (run.length >= 4) {
         out.push({ kind: "loop", key: `loop:${run[0].key}`, a: x, b: y, rounds: Math.ceil(run.length / 2),
@@ -220,6 +233,10 @@ const RAN_AS_HOW: Record<string, ActHow> = {
 /**
  * Who ran a step, for its lane node: from its act when there is one, otherwise from `ran_as`.
  * Nothing before either exists — so an Auto step stays Auto until BOSS has actually picked.
+ *
+ * `ran_as` names more than agents (lib/ran-as.ts): the run's actor, a person answering a gate
+ * (`human`), the workflow itself or the decision model. None of those gets an agent's face —
+ * a person is You only when it is the viewer, and BOSS's own machinery is BOSS.
  */
 export function laneAgentOf(output: unknown, act: Act | null, viewer: string): LaneAgent | undefined {
   const ran = (output && typeof output === "object" ? (output as { ran_as?: RanAs }).ran_as : undefined);
@@ -230,9 +247,31 @@ export function laneAgentOf(output: unknown, act: Act | null, viewer: string): L
   }
   if (!ran || !ran.agent) return undefined;
   const how = RAN_AS_HOW[ran.how ?? ""] ?? ran.how ?? "";
-  const person = how === "run_actor";
-  return { roleKey: person ? null : ran.agent, variant: person ? "you" : "agent", how, edgeLabel: "",
-           state: "idle", considered: 0 };
+  const rawHow = ran.how ?? "";
+  if (NOT_AN_AGENT.includes(rawHow) || ran.agent === HUMAN) {
+    const variant: AvatarVariant = BOSS_RAN_IT.includes(rawHow) ? "boss"
+      : !!viewer && ran.agent === viewer ? "you" : "person";
+    return { roleKey: null, variant, how, edgeLabel: "", state: "idle", considered: 0 };
+  }
+  return { roleKey: ran.agent, variant: "agent", how, edgeLabel: "", state: "idle", considered: 0 };
+}
+
+/**
+ * Who a credit names. An agent by role key; a person is You only when that person is the viewer
+ * — the one the credit names (`personId`), else the run's accountable person. The Credits
+ * dialog, its copied text and the PNG all name people through this; the PNG passes no viewer,
+ * because an image is for other people and nobody on it is "You".
+ */
+export function creditWho(credit: Chain["credits"][number], accountable: string, viewer: string): Who {
+  if (credit.roleKey) return { roleKey: credit.roleKey, variant: "agent" };
+  const person = credit.personId || accountable || undefined;
+  const you = !!viewer && !!person && person === viewer;
+  return { roleKey: null, variant: you ? "you" : "person", ...(person ? { personId: person } : {}) };
+}
+
+/** A person as a credit names them. */
+export function personName(who: Who): string {
+  return who.variant === "you" ? "You" : "A person";
 }
 
 /** Distinct agents that did work in this chain (people are not counted as agents). */

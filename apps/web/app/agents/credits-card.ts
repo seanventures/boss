@@ -3,7 +3,7 @@
  * the image route and a test read the same card.
  */
 import { agentIdentity, avatarSvg, type Chain } from "../../lib/agent-world-types";
-import { costLabel, minutesLabel, roleWords } from "./chain-model";
+import { costLabel, creditWho, minutesLabel, personName, roleWords } from "./chain-model";
 
 /** Base colours (globals.css :root), spelled out: an image has no stylesheet. */
 export const CARD_COLOURS = { bg: "#090D17", surface: "#101A30", border: "#26365C", ink: "#EEF3FB", muted: "#B4C4E0",
@@ -21,8 +21,13 @@ function tone(key: string): string {
   return TONES[Math.abs(h) % TONES.length];
 }
 
-function face(roleKey: string | null, line: string): CreditFace {
-  if (!roleKey) return { roleKey, name: "A person", role: "A person", line, svg: null, initials: "", tone: C.faint };
+function face(credit: Chain["credits"][number], accountable: string): CreditFace {
+  const { roleKey, line } = credit;
+  if (!roleKey) {
+    // The same rule as the dialog (creditWho), with no viewer: nobody on a shared image is "You".
+    const name = personName(creditWho(credit, accountable, ""));
+    return { roleKey, name, role: name, line, svg: null, initials: "", tone: C.faint };
+  }
   let name = roleWords(roleKey);
   let role = name;
   let svg: string | null = null;
@@ -41,7 +46,7 @@ function face(roleKey: string | null, line: string): CreditFace {
 export function creditsCard(chain: Chain, title: string): CreditsCard {
   const credits = chain.credits.length ? chain.credits
     : [...new Set(chain.acts.map((a) => a.roleKey).filter((k): k is string => !!k))].map((roleKey) => ({ roleKey, line: "" }));
-  const faces = credits.map((c) => face(c.roleKey, c.line));
+  const faces = credits.map((c) => face(c, chain.accountable));
   return {
     title: title.slice(0, 80) || "This run",
     faces: faces.slice(0, 8),
