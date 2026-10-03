@@ -9,9 +9,11 @@
  * the Visual and JSON views can never drift and keys this console does not know survive a save.
  * That is why `Spec` and `SpecStep` are open records with a few known fields.
  *
- * The functions and components at the bottom are STUBS: their signatures are the contract and
- * each throws until its owning stream lands the real one in its own module (named beside it).
- * Nothing in the shipped console calls them yet.
+ * The model's functions (S1) are re-exported at the bottom from their own modules, so a stream
+ * may import them from here or from lib/workflow-graph.ts, lib/step-view.ts,
+ * lib/workflow-editor-store.ts and lib/workflow-api.ts directly. The components are STUBS:
+ * their signatures are the contract and each throws until its owning stream lands the real one
+ * in its own module (named beside it).
  */
 import type { Dispatch, JSX, ReactNode } from "react";
 
@@ -66,21 +68,8 @@ export type PublishResult =
   | { unchanged: true }
   | { definition: { id: string; workflow_key: string; name: string }; version: number; created: boolean };
 
-/** `publishSpec` on a 422: the server's problems, each pinned to a step and field where known. */
-export class ProblemsError extends Error {
-  constructor(public readonly problems: Problem[]) {
-    super(problems[0]?.message ?? "Workflow has problems");
-    this.name = "ProblemsError";
-  }
-}
-
-/** `publishSpec` (and rename) on a 409: an own workflow already has that name. */
-export class NameInUseError extends Error {
-  constructor(public readonly suggestedName?: string | null) {
-    super("Name in use");
-    this.name = "NameInUseError";
-  }
-}
+// ProblemsError (422, `problems: Problem[]`) and NameInUseError (409, `suggestedName`) live in
+// lib/workflow-api.ts, which throws them, and are re-exported below.
 
 /* ── Graph (S1 implements; S2 renders) ────────────────────────────────────────────── */
 
@@ -107,17 +96,27 @@ export type EditorMeta = { definition_id: string | null; workflow_key: string | 
   description: string; is_catalogue: boolean; from_workflow_key: string | null; version: number | null;
   copy?: { definition_id: string; workflow_key: string; name: string } | null;
   readOnlyVersion?: number | null };
+/** `loaded` is null for a workflow never saved (new, or an unsaved duplicate): any step makes it
+ *  dirty. `jsonText` is null unless someone is typing in the JSON view; the view shows
+ *  `specText(spec)` otherwise. `wired` names, per step, the inputs the editor wired itself
+ *  (the inspector's `auto` chip); setting one by hand removes it. */
 export type EditorState = { spec: Spec; loaded: Spec | null; meta: EditorMeta; loadedMeta: EditorMeta;
   selection: string | null; problems: Problem[]; summary: CheckResult["summary"] | null;
   past: Spec[]; future: Spec[]; jsonText: string | null;
-  jsonError: { line: number; message: string } | null };
+  jsonError: { line: number; column?: number; message: string } | null;
+  wired?: Record<string, string[]> };
 export type EditorAction =
   | { type: "LOAD"; spec: Spec; meta: EditorMeta }
   | { type: "SET_SPEC"; spec: Spec; fromJson?: boolean }
   | { type: "SET_JSON_TEXT"; text: string }
-  /** `at` is an index in linear order; -1 is the end. */
-  | { type: "INSERT"; at: number; step: SpecStep }
+  /** `at` is the index the new step will have in `linearOrder`; -1 is the end. With `palette`,
+   *  its required inputs are wired where it lands (useWorkflowEditor's dispatch adds it). */
+  | { type: "INSERT"; at: number; step: SpecStep; palette?: Palette }
+  /** `to` is the index the step is left at in `linearOrder` (array-move): Alt+→ is index + 1;
+   *  a drop on gap g of the order as drawn is `g > index ? g - 1 : g`. */
   | { type: "MOVE"; id: string; to: number }
+  /** Auto-wire: unset required inputs of `ids` (default every step), by the server's rule. */
+  | { type: "WIRE"; palette: Palette; ids?: string[] }
   | { type: "REMOVE"; id: string }
   | { type: "DUPLICATE"; id: string }
   | { type: "PATCH_STEP"; id: string; patch: StepPatch }
@@ -144,81 +143,21 @@ function notImplemented(name: string): never {
   throw new Error(`${name}: not implemented`);
 }
 
-// S1 · lib/workflow-graph.ts
-export function edgesOf(spec: Spec): GraphEdge[] { return notImplemented("edgesOf"); }
-/** Every step has ≤1 next, and there is no parallel/condition/join/loop/wait_for. */
-export function isLinear(spec: Spec): boolean { return notImplemented("isLinear"); }
-/** Longest-path ranks from entry_step, siblings stacked; ported from v2 WorkflowsScreen. */
-export function layoutFlow(spec: Spec): FlowLayout { return notImplemented("layoutFlow"); }
-/** Topological order used by index-based INSERT/MOVE. */
-export function linearOrder(spec: Spec): string[] { return notImplemented("linearOrder"); }
-export function upstreamOf(spec: Spec, id: string): string[] { return notImplemented("upstreamOf"); }
-/** Rewrites next, entry_step, from_step, wait_for, on_true/false, branches, join and body. */
-export function renameStepId(spec: Spec, from: string, to: string): Spec {
-  return notImplemented("renameStepId");
-}
-/** Mirrors builtin.py _wire_inputs: nearest upstream producer, else from_input when declared. */
-export function wireInputs(spec: Spec, palette: Palette, ids?: string[]):
-    { spec: Spec; wired: { step_id: string; input: string; source: InputSource }[] } {
-  return notImplemented("wireInputs");
-}
-/** Splices next; refuses (returns the same spec) across branch boundaries. */
-export function insertStep(spec: Spec, at: number, step: SpecStep): Spec {
-  return notImplemented("insertStep");
-}
-export function moveStep(spec: Spec, id: string, to: number): Spec { return notImplemented("moveStep"); }
-/** Reconnects predecessor → successor. */
-export function removeStep(spec: Spec, id: string): Spec { return notImplemented("removeStep"); }
-export function canMove(spec: Spec, id: string, to: number): boolean { return notImplemented("canMove"); }
-
-// S1 · lib/step-view.ts
-export function stepView(step: SpecStep, palette: Palette): StepView { return notImplemented("stepView"); }
-export function newStepFor(item: PaletteItem, spec: Spec, palette: Palette): SpecStep {
-  return notImplemented("newStepFor");
-}
-
-// S1 · lib/workflow-editor-store.ts
-export function editorReducer(s: EditorState, a: EditorAction): EditorState {
-  return notImplemented("editorReducer");
-}
-export function useWorkflowEditor(key: string | "new", projectId: string): {
-  state: EditorState; dispatch: (a: EditorAction) => void; palette: Palette | null; dirty: boolean;
-  loading: boolean;
-} {
-  return notImplemented("useWorkflowEditor");
-}
-export function lineOfStep(text: string, id: string): number | null { return notImplemented("lineOfStep"); }
-export function stepAtLine(text: string, line: number): string | null { return notImplemented("stepAtLine"); }
-
-// S1 · lib/workflow-api.ts (all through the /api/delivery-workflows proxy, which adds the actor)
-export function fetchPalette(projectId: string): Promise<Palette> { return notImplemented("fetchPalette"); }
-export function fetchLibrary(projectId: string): Promise<WorkflowSummary[]> {
-  return notImplemented("fetchLibrary");
-}
-export function fetchSpec(projectId: string, key: string, version?: number): Promise<{
-  spec: Spec; meta: EditorMeta; versions: { version: number; published_at: string; is_active: boolean }[];
-}> {
-  return notImplemented("fetchSpec");
-}
-export function checkSpec(projectId: string, spec: Spec, definitionId?: string | null): Promise<CheckResult> {
-  return notImplemented("checkSpec");
-}
-/** Throws ProblemsError on 422 and NameInUseError on 409. */
-export function publishSpec(projectId: string, req: PublishRequest): Promise<PublishResult> {
-  return notImplemented("publishSpec");
-}
-export function renameWorkflow(projectId: string, definitionId: string,
-                               patch: { name?: string; description?: string }): Promise<void> {
-  return notImplemented("renameWorkflow");
-}
-export function deleteWorkflow(projectId: string, definitionId: string):
-    Promise<{ outcome: "deleted" | "retired" }> {
-  return notImplemented("deleteWorkflow");
-}
-export function draftFromDescription(projectId: string, description: string):
-    Promise<{ name: string; spec: Spec }> {
-  return notImplemented("draftFromDescription");
-}
+// S1 · the model, from its own modules.
+export {
+  edgesOf, isLinear, layoutFlow, linearOrder, upstreamOf, renameStepId, wireInputs, insertStep,
+  moveStep, removeStep, canMove, canRemove, contractOf, declaredInputs,
+} from "./workflow-graph";
+export { stepView, newStepFor, stepTitle, stepType, freeStepId, TYPE_CHIPS } from "./step-view";
+export {
+  editorReducer, useWorkflowEditor, lineOfStep, stepAtLine, parseSpecText, specText, isDirty,
+  emptyEditorState, newMeta, type RestoreOffer,
+} from "./workflow-editor-store";
+export {
+  fetchPalette, fetchLibrary, fetchSpec, checkSpec, publishSpec, renameWorkflow, deleteWorkflow,
+  draftFromDescription, ProblemsError, NameInUseError,
+} from "./workflow-api";
+export { applyStepPatch, inputSourceOf, deepEqual, TITLE_MAX } from "./workflow-spec";
 
 // S2 · app/workflows/flow/*, app/workflows/editor/*
 export function StepNode(p: { view: StepView; mode: "design" | "run" | "dot"; selected?: boolean;
