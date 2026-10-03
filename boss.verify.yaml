@@ -1,0 +1,19 @@
+# How the code-task gate verifies a change to BOSS itself.
+# Contract: docs/community/DEPLOY_A_STACK.md. Commands run WITHOUT a shell, one per entry.
+#
+# Only the suites a change touches run, and in each only the tests that import or name a
+# changed file (a changed test always runs). The apps/api suite is not here on purpose: it
+# needs a live Postgres, which the code-task sandbox does not have.
+version: 1
+suites:
+  - name: engine
+    paths: ["engine/**"]
+    run: ["python3 -m pytest -q -p no:cacheprovider --rootdir . -o pythonpath=engine {tests}"]
+    select: {tests_glob: "engine/tests/test_*.py", by: imports}
+  - name: web
+    paths: ["apps/web/**", "packages/api-client/**"]
+    cwd: apps/web
+    setup: ["pnpm install --frozen-lockfile --filter boss-web..."]
+    run: ["npx vitest run {tests}"]
+    select: {tests_glob: "apps/web/tests/**/*.test.*", by: imports}
+timeout_seconds: 900

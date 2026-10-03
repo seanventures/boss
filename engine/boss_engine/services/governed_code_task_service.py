@@ -2505,22 +2505,73 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _fixture:
             _staged = stage_bakeoff_fixture(root, _fixture)
             logger.info("code_task.fixture_staged run=%s files=%s", run_id, len(_staged))
+        # THE REPO'S OWN DECLARATION, READ FROM THE CLONE. The target above was resolved before
+        # there was a checkout, so it could only guess from the task text. A monorepo that ships
+        # boss.verify.yaml (BOSS itself does) declares its suites; a pytest project gets pytest,
+        # not a unittest discover that collects nothing. Explicit test_commands still win.
+        _gate_plan0 = verification_target.resolve_gate_plan(spec, title, root, app_id=_app_id)
+        if _gate_plan0.source != "task":
+            verify_commands = list(_gate_plan0.commands)
+            test_cmd = ((verification_target.manifest_display(root)
+                         if _gate_plan0.from_manifest else " && ".join(verify_commands))
+                        or test_cmd)
         _web_verify = (
             verification_target.detect_kind(spec, title) == "web"
             or str(test_cmd or "").startswith("npm ")
             or bool(_app_id)
-        )
+        ) and not _gate_plan0.from_manifest
         last_verify_cwd = None
         last_verify_output = ""
+
+        def _changed_paths() -> list[str]:
+            """Every path this run has changed: what is checkpointed plus the live tree."""
+            paths = set(accumulated)
+            if not use_microvm:
+                try:
+                    paths.update(sandbox.diff_summary().paths)
+                except Exception:  # noqa: BLE001 — scope falls back to the whole suite
+                    pass
+            return sorted(paths)
+
+        def _run_manifest_verify(plan, *, record: bool):
+            """boss.verify.yaml: the affected suites, from the repo root, no scaffold repair."""
+            nonlocal last_verify_output
+            from .sandbox import CommandResult
+
+            if plan.error or not plan.commands:
+                # A manifest that does not validate fails closed with its own message. A valid
+                # one that no suite covers (a docs-only change) passes, and says so.
+                failed = bool(plan.error)
+                result = CommandResult(
+                    command="", argv=[], exit_code=1 if failed else 0, duration_ms=0,
+                    timed_out=False, stdout="" if failed else plan.description + "\n",
+                    stderr=plan.description if failed else "")
+                results = [result]
+            else:
+                results = verification_target.run_steps_until_failure(
+                    sandbox, plan.steps, timeout=plan.timeout_seconds)
+                result = results[-1]
+            output = (
+                f"[boss] {plan.description}\n"
+                + "".join(((item.stdout or "") + "\n" + (item.stderr or "") + "\n")
+                          for item in results)
+            )[-4000:]
+            if record:
+                last_verify_output = output
+            return result
 
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory."""
             nonlocal last_verify_cwd, last_verify_output
-            cwd = verification_target.resolve_verify_cwd(root, app_id=_app_id)
+            plan = verification_target.resolve_gate_plan(
+                spec, title, root, app_id=_app_id, changed=_changed_paths())
+            cwd = plan.cwd
             try:
                 last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
             except ValueError:
                 last_verify_cwd = str(cwd)
+            if plan.from_manifest:
+                return _run_manifest_verify(plan, record=record)
             try:
                 verification_target.ensure_verify_script(cwd)
             except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
@@ -2594,7 +2645,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 def run(self, command):
                     return sandbox.run(command, cwd=str(cwd))
 
-            results = verification_target.run_until_failure(_CwdSandbox(), verify_commands)
+            results = verification_target.run_until_failure(_CwdSandbox(), plan.commands)
             if not results:
                 from .sandbox import CommandResult
 

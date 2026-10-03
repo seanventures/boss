@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,10 @@ VERIFY_SCRIPT_STEPS = (
 )
 
 PYTHON_TEST_CMD = "python3 -m unittest discover -v"
+#: The Python default when the repo is a pytest project. ``unittest discover`` finds no tests in
+#: a suite of bare ``def test_...`` functions and exits 5 ("NO TESTS RAN") on most such repos —
+#: or worse, exits 0 having collected only the few TestCase classes.
+PYTEST_CMD = "python3 -m pytest -q"
 
 # SEPARATE COMMANDS, NOT A SHELL CHAIN.
 #
@@ -74,6 +79,17 @@ def run_until_failure(sandbox, commands):
     results = []
     for command in commands:
         result = sandbox.run(command)
+        results.append(result)
+        if not getattr(result, "ok", False):
+            break
+    return results
+
+
+def run_steps_until_failure(sandbox, steps, *, timeout=None):
+    """``run_until_failure`` for steps that each name their directory (a manifest plan)."""
+    results = []
+    for command, cwd in steps:
+        result = sandbox.run(command, cwd=str(cwd), timeout=timeout)
         results.append(result)
         if not getattr(result, "ok", False):
             break
@@ -173,6 +189,114 @@ def resolve_authoritative_test_commands(spec: dict[str, Any], title: str = "") -
     if isinstance(raw, (list, tuple)) and raw:
         return [str(item).strip() for item in raw if str(item).strip()]
     return list(default_test_commands(spec, title))
+
+
+def _mentions_pytest(path: Path) -> bool:
+    try:
+        return path.is_file() and "pytest" in path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def is_pytest_project(root: Path | str) -> bool:
+    """A repo whose tests are written for pytest: a conftest, a pytest.ini, or pytest named in
+    its pyproject/setup.cfg/tox.ini. A bare pyproject without pytest stays on unittest, which
+    is all such a repo can be assumed to have installed."""
+    base = Path(root)
+    if any((base / rel).is_file() for rel in ("conftest.py", "tests/conftest.py", "pytest.ini")):
+        return True
+    return any(_mentions_pytest(base / name) for name in ("pyproject.toml", "setup.cfg", "tox.ini"))
+
+
+@dataclass
+class GatePlan:
+    """What the authoritative verify runs, where, and why. One decision for every caller.
+
+    ``source`` is ``task`` (explicit test_commands), ``manifest`` (boss.verify.yaml),
+    ``manifest_error`` (a boss.verify.yaml that does not validate — the gate fails closed with
+    ``error``) or ``default`` (the project-type default).
+    """
+
+    commands: list[str]
+    cwd: Path
+    source: str
+    description: str
+    timeout_seconds: int | None = None
+    error: str | None = None
+    suites: list[dict[str, Any]] = field(default_factory=list)
+    #: Manifest plans only: (command, absolute directory) in order. Suites may run in
+    #: different directories, so one ``cwd`` cannot describe them.
+    steps: list[tuple[str, Path]] = field(default_factory=list)
+
+    @property
+    def from_manifest(self) -> bool:
+        return self.source in ("manifest", "manifest_error")
+
+
+def resolve_gate_plan(
+    spec: dict[str, Any],
+    title: str,
+    root: Path | str,
+    *,
+    app_id: str | None = None,
+    changed: list[str] | None = None,
+) -> GatePlan:
+    """The verify plan for a provisioned checkout.
+
+    Precedence: explicit task ``test_commands`` > the repo's ``boss.verify.yaml`` > the
+    project-type default (pytest for a pytest project). The manifest scopes by the changed
+    files and runs from the repo root, because its globs are root-relative. Everything else
+    runs where ``resolve_verify_cwd`` puts it, which now sees the changed files too: a change
+    under ``apps/web`` in a repo without an official app id verifies in ``apps/web``.
+    """
+    from . import verify_manifest
+
+    base = Path(root)
+
+    def _cwd(commands: list[str]) -> Path:
+        # resolve_verify_cwd looks for a package.json ancestor of the changed files, which
+        # only means something to npm. A Python command stays at the root it was written for.
+        npm = bool(commands) and commands[0].split(" ", 1)[0] in ("npm", "npx", "pnpm", "yarn")
+        return resolve_verify_cwd(base, app_id=app_id, changed=changed if npm else None)
+
+    raw = spec.get("test_commands")
+    if (isinstance(raw, str) and raw.strip()) or (isinstance(raw, (list, tuple)) and raw):
+        commands = resolve_authoritative_test_commands(spec, title)
+        return GatePlan(commands, _cwd(commands), "task", " && ".join(commands))
+    # An official/benchmark app is scaffolded and verified by its own package scripts; a
+    # sandbox monorepo's manifest is not its contract.
+    if not app_id:
+        try:
+            manifest = verify_manifest.load_verify_manifest(base)
+        except verify_manifest.VerifyManifestError as exc:
+            return GatePlan([], base, "manifest_error", str(exc), error=str(exc))
+        if manifest is not None:
+            plan = verify_manifest.plan_verify(manifest, base, changed)
+            return GatePlan(plan.commands, base, "manifest", plan.describe(),
+                            timeout_seconds=plan.timeout_seconds, suites=plan.suites,
+                            steps=[(c, base / d if d != "." else base) for c, d in plan.steps])
+    commands = default_test_commands(spec, title)
+    cwd = _cwd(commands)
+    if commands == [PYTHON_TEST_CMD] and is_pytest_project(cwd):
+        commands = [PYTEST_CMD]
+    return GatePlan(commands, cwd, "default", " && ".join(commands))
+
+
+def manifest_display(root: Path | str) -> str | None:
+    """How the agent should run the repo's declared checks, for prompts. None without one."""
+    from . import verify_manifest
+
+    try:
+        manifest = verify_manifest.load_verify_manifest(root)
+    except verify_manifest.VerifyManifestError as exc:
+        return f"(fix {verify_manifest.MANIFEST_NAME}: {exc})"
+    if manifest is None:
+        return None
+    runs = [
+        c.replace(verify_manifest.TESTS_PLACEHOLDER, "<affected test files>")
+        for suite in manifest.suites for c in suite.run
+    ]
+    return " ; ".join(runs)
 
 
 def verification_profile(spec: dict[str, Any], title: str = "") -> dict[str, Any]:
