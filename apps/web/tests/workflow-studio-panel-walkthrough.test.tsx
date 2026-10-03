@@ -26,6 +26,7 @@ const { placePopover } = await import("../app/workflows/editor/inspector/popover
 const { SaveCopyPopover } = await import("../app/workflows/editor/save/save-copy-popover");
 const { SummaryChips } = await import("../app/workflows/editor/summary-chips");
 const { useTips } = await import("../app/workflows/flow/tip-layer");
+const { StepPalette } = await import("../app/workflows/editor/palette");
 const { PALETTE, reducer, makeState, setValue, q } = await import("./_helpers/workflow-editor-fakes");
 
 /** A built-in step whose capability uses BOSS's own GitHub tools, beside an agent task. */
@@ -103,6 +104,86 @@ describe("6. the inspector header", () => {
     const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     await act(async () => { title.dispatchEvent(enter); });
     expect(enter.defaultPrevented).toBe(true);
+  });
+});
+
+/**
+ * A browser's layout, stood in for: the box's text wraps at `width / 9` characters a line, and
+ * `scrollHeight` counts the lines of its VALUE only (a browser leaves a placeholder out of it).
+ */
+function fakeLayout() {
+  const layout = { width: 300 };
+  const proto = HTMLTextAreaElement.prototype;
+  const lines = (el: HTMLTextAreaElement) => Math.max(1, Math.ceil(el.value.length / Math.floor(layout.width / 9)));
+  // Own properties on the textarea prototype, shadowing Element's, and deleted after.
+  Object.defineProperty(proto, "scrollHeight", { configurable: true,
+    get(this: HTMLTextAreaElement) { return lines(this) * 21 + 8; } });
+  Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => layout.width });
+  let observed: (() => void) | null = null;
+  const RO = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(cb: () => void) { observed = cb; }
+    observe() {} unobserve() {} disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  return {
+    layout,
+    resize(w: number) { layout.width = w; act(() => observed?.()); },
+    restore() {
+      delete (proto as { scrollHeight?: number }).scrollHeight;
+      delete (proto as { clientWidth?: number }).clientWidth;
+      globalThis.ResizeObserver = RO;
+    },
+  };
+}
+
+describe("6b. an untitled built-in step shows its whole label", () => {
+  const untitled = () => {
+    const spec: Spec = JSON.parse(JSON.stringify(SPEC));
+    delete spec.steps[0].title;
+    return render(<Drawer initial={{ ...makeState(spec), selection: "build" }} />);
+  };
+
+  it("sizes the box to the label it shows as a placeholder, so it wraps instead of being cut", async () => {
+    const fake = fakeLayout();
+    try {
+      const el = await untitled();
+      const title = q<HTMLTextAreaElement>(el, "wf-step-title")!;
+      expect(title.value).toBe("");
+      expect(title.placeholder).toBe("Build, review and open a pull request");
+      // 37 characters at 33 a line: two lines, not the one an empty value measures.
+      expect(title.style.height).toBe(`${2 * 21 + 8}px`);
+      expect(title.value).toBe("");
+    } finally { fake.restore(); }
+  });
+
+  it("re-fits when its width changes (the drawer goes full width on a narrow screen)", async () => {
+    const fake = fakeLayout();
+    try {
+      const el = await untitled();
+      const title = q<HTMLTextAreaElement>(el, "wf-step-title")!;
+      expect(title.style.height).toBe(`${2 * 21 + 8}px`);
+      fake.resize(600);
+      expect(title.style.height).toBe(`${21 + 8}px`);
+      fake.resize(200);
+      expect(title.style.height).toBe(`${2 * 21 + 8}px`);
+    } finally { fake.restore(); }
+  });
+});
+
+describe("8b. a disclosure that is open at rest keeps its tip", () => {
+  it("the palette's Hide steps toggle shows its tip while the palette is expanded", async () => {
+    function Pal() {
+      useTips();
+      return <StepPalette palette={PAL} onPick={() => {}} onNewStep={() => {}} onEditStep={() => {}}
+                          collapsed={false} onToggle={() => {}} />;
+    }
+    const el = await render(<Pal />);
+    const toggle = el.querySelector<HTMLButtonElement>(".wf-pal-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => { toggle.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    const bubble = document.getElementById("wf-tip")!;
+    expect(bubble.hidden).toBe(false);
+    expect(bubble.textContent).toBe("Hide steps");
   });
 });
 

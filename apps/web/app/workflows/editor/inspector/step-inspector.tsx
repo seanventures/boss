@@ -223,20 +223,51 @@ function useTitleDraft(step: SpecStep, dispatch: Dispatch<EditorAction>) {
 }
 
 /**
+ * Sizes a title box to the text it SHOWS: its value, or, for an untitled step, the label it
+ * shows as a placeholder. A browser leaves a wrapping placeholder out of `scrollHeight`, so the
+ * box is measured holding the label as its value for that moment, then given back its own.
+ */
+export function fitTitleBox(el: HTMLTextAreaElement): void {
+  const own = el.value;
+  const shown = own || el.placeholder;
+  if (shown !== own) el.value = shown;
+  el.style.height = "auto";
+  const height = el.scrollHeight;
+  if (shown !== own) el.value = own;
+  if (height) el.style.height = `${height}px`;
+}
+
+/**
  * The step's title, editable in place. A textarea, not an input, so a long title WRAPS onto a
- * second line instead of being cut off; it grows to fit, and the stylesheet clamps it at two
- * lines. It is still one line of text: Enter leaves the box, and a pasted line break is a space.
+ * second line instead of being cut off; it grows to fit (the built-in label of an untitled step
+ * too), and the stylesheet clamps it at two lines. It re-fits when its width changes: the drawer
+ * goes full width on a narrow screen. It is still one line of text: Enter leaves the box, and a
+ * pasted line break is a space.
  */
 function TitleBox({ value, placeholder, onChange, onBlur }: {
   value: string; placeholder: string; onChange(text: string): void; onBlur(): void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
+    if (box.current) fitTitleBox(box.current);
+  }, [value, placeholder]);
+  useEffect(() => {
     const el = box.current;
     if (!el) return;
-    el.style.height = "auto";
-    if (el.scrollHeight) el.style.height = `${el.scrollHeight}px`;
-  }, [value]);
+    let width = el.clientWidth;
+    const refit = () => {
+      if (el.clientWidth === width) return; // a height change of our own is not a reason
+      width = el.clientWidth;
+      fitTitleBox(el);
+    };
+    if (typeof ResizeObserver !== "undefined") {
+      const watch = new ResizeObserver(refit);
+      watch.observe(el);
+      return () => watch.disconnect();
+    }
+    window.addEventListener("resize", refit);
+    return () => window.removeEventListener("resize", refit);
+  }, []);
   return (
     <textarea ref={box} className="wf-insp-title" rows={1} value={value} placeholder={placeholder}
               maxLength={TITLE_MAX} aria-label="Step title" data-testid="wf-step-title" title={value || placeholder}
