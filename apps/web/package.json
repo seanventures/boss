@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next typegen && tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cast:export": "CAST_EXPORT=1 vitest run tests/the-cast-is-exported.test.ts"
   },
   "dependencies": {
     "@boss/api-client": "workspace:*",

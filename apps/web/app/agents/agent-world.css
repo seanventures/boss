@@ -4,6 +4,114 @@
 
 /* ── [kit] avatar + motion ─────────────────────────────────────────────────────── */
 
+/* The face. Sized by --ag-size, or by the wrapper a surface already had (.wf-avatar, the chip's
+   .mr-avatar), whichever is more specific. The SVG fills it. */
+.ag-avatar {
+  position: relative; display: inline-flex; flex: none; vertical-align: middle;
+  width: var(--ag-size, 24px); height: var(--ag-size, 24px); line-height: 0;
+}
+.ag-avatar-svg, .ag-avatar-svg > svg { display: block; width: 100%; height: 100%; }
+.mr-avatar.ag-face { background: transparent; color: inherit; padding: 0; overflow: visible; }
+.wf-avatar.ag-avatar { background: transparent; }
+
+/* AI badge: a dot and the letters, from 32px up. */
+.ag-ai {
+  position: absolute; left: -4px; bottom: -4px;
+  display: inline-flex; align-items: center; gap: 3px; padding: 0 4px 0 3px;
+  border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--ink); font: 700 0.75rem/1 var(--mono); letter-spacing: 0.02em;
+}
+.ag-ai::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--teal); }
+
+/* The state as a word beside the face: never colour or motion alone. */
+.ag-state-word { font-size: 0.75rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.ag-state-word[data-state="thinking"], .ag-state-word[data-state="speaking"],
+.ag-state-word[data-state="working"] { color: var(--teal); }
+.ag-state-word[data-state="needs_you"] { color: var(--amber); }
+.ag-state-word[data-state="done"] { color: var(--green); }
+.ag-state-word[data-state="stuck"] { color: var(--red); }
+
+/* Parts that move rotate and scale about themselves, not the SVG's origin. */
+.ag-av .av-ring, .ag-av .av-halo, .ag-av .av-eyes, .ag-av .av-bar,
+.ag-av .av-emblem, .ag-av .av-badge-glyph, .ag-av .av-torso, .ag-av .av-visor {
+  transform-box: fill-box; transform-origin: center;
+}
+.ag-av .av-body, .ag-av .av-hat { transform-box: fill-box; transform-origin: 50% 100%; }
+
+/* Motion carries state (spec §7). Each loop exists only for a real status. */
+.ag-av[data-state="thinking"] .av-ring { animation: boss-orbit 1.6s linear infinite; }
+.ag-av[data-state="thinking"] .av-eyes { animation: agav-glance 1.6s ease-in-out infinite; }
+.ag-av[data-state="speaking"] .av-bar { animation: agav-talk 0.42s ease-in-out infinite alternate; }
+.ag-av[data-state="speaking"] .av-bar-2 { animation-delay: -0.14s; }
+.ag-av[data-state="speaking"] .av-bar-3 { animation-delay: -0.28s; }
+.ag-av[data-state="working"] .av-ring { animation: agav-sweep 2.4s linear infinite; }
+.ag-av[data-state="needs_you"] .av-halo { animation: agav-halo 1s ease-in-out infinite alternate; }
+.ag-av[data-state="done"] .av-badge-glyph { animation: agav-stamp 0.6s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
+/* Idle moves only on the Passport hero and the share-size face; idle faces in lists are still. */
+.ag-av[data-state="idle"]:is([data-lod="96"], [data-lod="320"]) .av-body { animation: agav-breathe 4s ease-in-out infinite; }
+.ag-av[data-state="idle"]:is([data-lod="96"], [data-lod="320"]) .av-eyes {
+  animation: agav-blink var(--agav-blink, 6s) var(--agav-blink-delay, 0s) infinite;
+}
+/* Paused and retired: grey from 48px (no filters on small faces), dimmed at every size. */
+.ag-av:is([data-state="paused"], [data-state="retired"]):is([data-lod="48"], [data-lod="96"], [data-lod="320"]) .av-char {
+  filter: grayscale(1);
+}
+
+/* One-shot motion. The birth assembles head, visor, hat, then the emblem, in 900ms. */
+.ag-avatar[data-motion="birth"] .av-torso { animation: agav-assemble 0.4s ease-out both; }
+.ag-avatar[data-motion="birth"] .av-head { transform-box: fill-box; transform-origin: center; animation: agav-assemble 0.45s 0.1s ease-out both; }
+.ag-avatar[data-motion="birth"] .av-visor { animation: agav-assemble 0.3s 0.3s ease-out both; }
+.ag-avatar[data-motion="birth"] .av-hat { animation: agav-drop 0.4s 0.4s ease-out both; }
+.ag-avatar[data-motion="birth"] .av-emblem { animation: agav-pop 0.3s 0.6s ease-out both; }
+.ag-avatar[data-motion="wave"] .av-hat { animation: agav-wave 1.2s ease-in-out both; }
+
+/* Off screen or in a hidden tab, every loop holds still (use-avatar-motion.ts). */
+.ag-avatar[data-paused] .ag-av, .ag-avatar[data-paused] .ag-av * { animation-play-state: paused !important; }
+
+/* Face picker (Profile › Face, New agent › Face & voice). */
+.ag-face-picker { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
+.ag-face-previews {
+  display: flex; align-items: center; gap: 14px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2);
+}
+.ag-face-parts { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; min-width: 0; }
+.ag-face-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--muted); }
+.ag-face-field select {
+  min-width: 128px; padding: 6px 8px; border-radius: var(--r-sm); border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 0.82rem;
+}
+.ag-face-palette { flex-direction: row; flex-wrap: wrap; gap: 6px; border: 0; padding: 0; margin: 0; }
+.ag-face-palette legend { width: 100%; margin-bottom: 4px; padding: 0; }
+.ag-swatch { position: relative; display: inline-flex; cursor: pointer; }
+.ag-swatch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.ag-swatch span { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border-strong); }
+.ag-swatch input:checked + span { box-shadow: 0 0 0 2px var(--ink); }
+.ag-swatch input:focus-visible + span { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.ag-reroll {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+}
+.ag-reroll:hover { border-color: var(--accent-line); }
+
+@keyframes agav-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.02); } }
+@keyframes agav-blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
+@keyframes agav-glance { 0%, 100% { transform: translate(0, 0); } 35%, 75% { transform: translate(2px, -1.5px); } }
+@keyframes agav-talk { from { transform: scaleY(1); } to { transform: scaleY(2.4); } }
+@keyframes agav-sweep { to { transform: rotate(360deg); } }
+@keyframes agav-halo { from { opacity: 0.35; } to { opacity: 0.8; } }
+@keyframes agav-stamp { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes agav-assemble { from { transform: translateY(6px) scale(0.85); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes agav-drop { from { transform: translateY(-14px); opacity: 0; } 70% { transform: translateY(1.5px); opacity: 1; } to { transform: none; opacity: 1; } }
+@keyframes agav-pop { from { transform: scale(0); opacity: 0; } 70% { transform: scale(1.15); opacity: 1; } to { transform: scale(1); opacity: 1; } }
+@keyframes agav-wave { 0%, 100% { transform: rotate(0deg); } 20% { transform: rotate(-8deg); } 45% { transform: rotate(8deg); } 70% { transform: rotate(-6deg); } 85% { transform: rotate(4deg); } }
+
+/* Reduced motion: every face holds its still. The ring, halo, badge and word still say the state. */
+@media (prefers-reduced-motion: reduce) {
+  .ag-av, .ag-av *, .ag-avatar .ag-av * { animation: none !important; }
+}
+
+
 /* ── [agents] ag-passport / ag-roster / ag-team ────────────────────────────────── */
 
 /* Shared controls for the Agents surfaces. */
