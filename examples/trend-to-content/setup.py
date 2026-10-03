@@ -95,7 +95,8 @@ def main() -> None:
             "properties": {
                 "trend": {"title": "Trend", "description": "The trend you want assessed.",
                           "examples": ["Everyone is posting their AI coding setup"]},
-                "to": {"title": "Reviewer email", "description": "Who receives the script."},
+                "to": {"title": "Reviewer email", "format": "email",
+                       "description": "Who receives the script."},
                 "assess_brief": {"title": "Assessment brief", "format": "textarea",
                                  "description": "Optional; leave blank for the stored relevance brief.",
                                  "examples": [ASSESS_BRIEF]},

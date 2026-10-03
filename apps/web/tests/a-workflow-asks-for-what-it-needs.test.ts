@@ -3,9 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { blockingReason } from "../app/delivery-workflows-ui";
-import {
-  inputsWithTheDirective, missingRequired, suppliedInputs, workflowInputFields,
-} from "../lib/workflow-inputs";
+import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 
 const UI_SRC = readFileSync(
   new URL("../app/workflows/new-project-composer.tsx", import.meta.url), "utf8");
@@ -131,47 +129,13 @@ describe("a required input left blank", () => {
   });
 });
 
-describe("the directive stands in for a single blank prose input", () => {
-  const FIELDS = workflowInputFields({
-    required: ["instructions"],
-    properties: {
-      instructions: { title: "What you want done", format: "textarea" },
-      video_url: { title: "Video link" },
-    },
-  });
-
-  it("is used when the operator wrote it once, in the first box", () => {
-    const out = inputsWithTheDirective(FIELDS, {}, "Follow the prompt in this file and publish");
-    expect(out.instructions).toBe("Follow the prompt in this file and publish");
-  });
-
-  it("does not overwrite what the operator actually typed in the field", () => {
-    const out = inputsWithTheDirective(
-      FIELDS, { instructions: "Keep 3:42 to 4:50" }, "something else entirely");
-    expect(out.instructions).toBe("Keep 3:42 to 4:50");
-  });
-
-  it("declines when two required fields are blank, because it cannot tell which", () => {
-    const two = workflowInputFields({
-      required: ["instructions", "channel"],
-      properties: { instructions: { format: "textarea" }, channel: {} },
-    });
-    expect(inputsWithTheDirective(two, {}, "a directive")).toEqual({});
-  });
-
-  it("declines for a field that does not take prose", () => {
-    const numeric = workflowInputFields({
-      required: ["seconds"], properties: { seconds: { type: "number" } },
-    });
-    expect(inputsWithTheDirective(numeric, {}, "a directive")).toEqual({});
-  });
-
-  it("sends nothing extra when there is no directive", () => {
-    expect(inputsWithTheDirective(FIELDS, {}, "   ")).toEqual({});
-  });
-
+// "THE DIRECTIVE STANDS IN FOR A SINGLE BLANK PROSE INPUT" WAS RETIRED (2026-10-03). It patched
+// the double entry of a software brief box drawn in front of a workflow's own fields. The
+// composer no longer draws that box for a workflow whose start form is not the product brief —
+// its own fields are the first step (tests/the-start-form-is-the-workflows-own.test.tsx).
+describe("what gets sent is the declared fields", () => {
   it("is what gets sent, and what the review shows", () => {
-    expect(UI_SRC).toContain("...inputsToSend,");
+    expect(UI_SRC).toContain("const typed = typedInputs(o.fields, o.supplied);");
     expect(UI_SRC).toContain('data-testid="dw-review-inputs"');
   });
 });

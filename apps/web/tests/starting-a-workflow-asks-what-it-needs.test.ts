@@ -38,8 +38,9 @@ describe("a workflow that declares inputs opens the form", () => {
     // They pressed a button on that workflow's card; asking "which path?" again is asking a
     // question they have answered. A catalogue template's one required answer is its brief,
     // collected on the first step, so it opens there.
-    expect(UI).toContain("return isCatalogue || !composerFields(schema, isCatalogue).length ? 0 : 1;");
-    expect(UI).toContain("{ ...EMPTY_DRAFT, workflowKey: startWith,");
+    // Its start form is the first step (rendered: tests/the-start-form-is-the-workflows-own).
+    expect(UI).toContain('useState<StepId>("brief")');
+    expect(UI).toContain("{ ...EMPTY_DRAFT, workflowKey: startWith, inputs: defaultsFor(startWith),");
   });
 
   it("no Start fires a sample: an example is shown before it runs", () => {
@@ -66,10 +67,13 @@ describe("the brief is not demanded of a workflow that has its own inputs", () =
     expect(blockingReason(0, DRAFT, true)).toBe("");
   });
 
-  it("and the run is still named, so the button is never silently dead", () => {
-    // briefFrom() returns "" with no directive, and start() did `if (!text) return` — a press
-    // that does nothing at all, which is the worst possible answer to a press.
-    expect(UI).toContain('[chosen?.name ?? draft.workflowKey, supplied].filter(Boolean)');
+  it("and the button is never silently dead", () => {
+    // start() did `if (!text) return` when there was no brief — a press that does nothing at
+    // all. It now returns only when the same `blocked` that disables the button is set, and a
+    // workflow that is not a product brief sends its own fields, not a made-up run title (the
+    // video example's `title` is the YouTube title).
+    expect(UI).toContain("if (blocked || busy) return;");
+    expect(UI).toContain("if (!o.brief) return { ...typed, ...where };");
   });
 });
 

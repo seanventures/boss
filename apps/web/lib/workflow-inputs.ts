@@ -21,12 +21,20 @@ export type WorkflowInputField = {
   help: string;
   required: boolean;
   example: string;
-  /** Only to choose a sensible control; the value is sent as text either way. */
-  kind: "text" | "url" | "number" | "multiline";
+  /** The schema's `default`, as the form's starting value ("" when none). */
+  default: string;
+  /** The control to draw and the check to make. `number` and `boolean` are sent typed
+   *  (`typedInputs`); everything else as text. */
+  kind: "text" | "url" | "number" | "multiline" | "email" | "boolean";
 };
 
 const KIND_BY_FORMAT: Record<string, WorkflowInputField["kind"]> = {
   uri: "url", url: "url", "uri-reference": "url", textarea: "multiline", multiline: "multiline",
+  email: "email", "idn-email": "email",
+};
+
+const KIND_BY_TYPE: Record<string, WorkflowInputField["kind"]> = {
+  number: "number", integer: "number", boolean: "boolean",
 };
 
 //: An example longer than this is prose, and prose does not belong in a one-line box.
@@ -64,12 +72,12 @@ export function workflowInputFields(schema: unknown): WorkflowInputField[] {
         help: String(p.description ?? ""),
         required: required.has(name),
         example: examples.length ? String(examples[0]) : "",
+        default: p.default === undefined || p.default === null ? "" : String(p.default),
         kind: KIND_BY_FORMAT[format]
+          ?? KIND_BY_TYPE[String(p.type ?? "")]
           ?? (examples.length && String(examples[0]).length > PROSE_EXAMPLE_LENGTH
                 ? "multiline"
-                : p.type === "number" || p.type === "integer"
-                  ? "number"
-                  : "text"),
+                : "text"),
       };
     });
   }
@@ -82,8 +90,62 @@ export function workflowInputFields(schema: unknown): WorkflowInputField[] {
     help: "",
     required: false,
     example: "",
-    kind: String(raw[name]) === "number" ? "number" : "text",
+    default: "",
+    kind: KIND_BY_TYPE[String(raw[name])] ?? "text",
   }));
+}
+
+/**
+ * Whether this start form IS the product brief: it declares `directive`, as every catalogue
+ * template does (workflow_catalogue.input_schema_for) and every fork of one keeps. Only then
+ * does the composer ask the product questions; any other workflow is started from its own
+ * fields. No workflow chosen means "this project's usual path", which is a product brief too.
+ */
+export function startsFromABrief(schema: unknown, workflowChosen = true): boolean {
+  if (!workflowChosen) return true;
+  return workflowInputFields(schema).some((f) => f.name === "directive");
+}
+
+/** The starting values: each field's declared default, and "no" for a yes/no without one —
+ *  an unticked box is an answer. */
+export function defaultInputs(fields: WorkflowInputField[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const field of fields) {
+    if (field.default) out[field.name] = field.default;
+    else if (field.kind === "boolean") out[field.name] = "false";
+  }
+  return out;
+}
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Filled-in fields whose value is not what their kind needs, by label. A blank one is
+ *  `missingRequired`'s business, not this. */
+export function invalidInputs(
+  fields: WorkflowInputField[], values: Record<string, string>,
+): string[] {
+  return fields.filter((f) => {
+    const v = (values[f.name] ?? "").trim();
+    if (!v) return false;
+    if (f.kind === "email") return !EMAIL.test(v);
+    if (f.kind === "url") return !/^https?:\/\/\S+$/i.test(v);
+    if (f.kind === "number") return !Number.isFinite(Number(v));
+    return false;
+  }).map((f) => f.label);
+}
+
+/** The supplied values as the start API takes them: a number as a number, a yes/no as a
+ *  boolean, everything else as the text typed. Keys are the declared names, unchanged. */
+export function typedInputs(
+  fields: WorkflowInputField[], supplied: Record<string, string>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...supplied };
+  for (const f of fields) {
+    if (!(f.name in supplied)) continue;
+    if (f.kind === "number") out[f.name] = Number(supplied[f.name]);
+    if (f.kind === "boolean") out[f.name] = supplied[f.name] === "true";
+  }
+  return out;
 }
 
 /** Only the values actually filled in — a blank box is not an answer, and sending "" would
@@ -106,30 +168,4 @@ export function missingRequired(
   return fields
     .filter((f) => f.required && !(values[f.name] ?? "").trim())
     .map((f) => f.label);
-}
-
-/**
- * The directive standing in for a workflow's one prose input, when the operator left it blank.
- *
- * "Can you please follow the prompt in this file <link> and produce the outcome" went in the
- * Building box, and the run was refused: `this workflow needs 1 input(s) it was not given:
- * instructions`. The operator HAD said what they wanted. They said it in the box the form put
- * in front of them first, and were then asked to say it again in a field further in.
- *
- * That is the same double-entry that made `video_url` a required field — a link in one box and
- * the instruction in another, failing the start of a run that had said everything it needed.
- *
- * ONLY WHEN THERE IS NO AMBIGUITY: exactly one required field is still blank and it takes
- * prose. Two blank fields and there is no telling which the directive was meant for, so it asks.
- */
-export function inputsWithTheDirective(
-  fields: WorkflowInputField[], values: Record<string, string>, directive: string,
-): Record<string, string> {
-  const supplied = suppliedInputs(fields, values);
-  const blank = fields.filter((f) => f.required && !supplied[f.name]);
-  const text = directive.trim();
-  if (blank.length !== 1 || !text) return supplied;
-  const [only] = blank;
-  if (only.kind !== "multiline" && only.kind !== "text") return supplied;
-  return { ...supplied, [only.name]: text };
 }

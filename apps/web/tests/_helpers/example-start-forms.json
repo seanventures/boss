@@ -1,0 +1,265 @@
+{
+  "trend-to-content": {
+    "name": "Trend to content",
+    "description": "Give it a trend. BOSS researches the context, says honestly whether it is yours to talk about, and writes a script — which you read before anything is made.",
+    "input_schema": {
+      "required": [
+        "trend",
+        "to"
+      ],
+      "properties": {
+        "trend": {
+          "title": "Trend",
+          "description": "The trend you want assessed.",
+          "examples": [
+            "Everyone is posting their AI coding setup"
+          ]
+        },
+        "to": {
+          "title": "Reviewer email",
+          "format": "email",
+          "description": "Who receives the script."
+        },
+        "assess_brief": {
+          "title": "Assessment brief",
+          "format": "textarea",
+          "description": "Optional; leave blank for the stored relevance brief.",
+          "examples": [
+            "Decide whether this trend is worth us saying anything about. From the research below:\n  WHAT IT IS: two sentences, for somebody who has not seen it.\n  OURS OR NOT: say plainly whether we have standing to talk about this, and why.\n  THE ANGLE: what we could say that is not what everyone else is saying. If there is nothing, say 'no angle' — that is a useful answer and a generic take is not.\n  HOW LONG IT LASTS: is this a week or a day?\nDo not manufacture relevance. Most trends are not ours, and saying so saves a video."
+          ]
+        },
+        "script_brief": {
+          "title": "Script brief",
+          "format": "textarea",
+          "description": "Optional; leave blank for the stored script brief.",
+          "examples": [
+            "Write a script for a short vertical video, 45 seconds at most, from the angle below. Open with the thing that makes somebody stop scrolling — not a greeting, not the channel name. Plain spoken sentences, the way a person talks. Mark where a caption or a diagram would help as [ON SCREEN: ...]. End with one specific thing to do or think about, never 'like and subscribe'. If the assessment said there is no angle, write one line saying so instead of a script."
+          ]
+        }
+      }
+    },
+    "steps": [
+      {
+        "id": "research",
+        "kind": "capability",
+        "capability": "research"
+      },
+      {
+        "id": "assess",
+        "kind": "capability",
+        "capability": null
+      },
+      {
+        "id": "script",
+        "kind": "capability",
+        "capability": null
+      },
+      {
+        "id": "review",
+        "kind": "capability",
+        "capability": null
+      }
+    ]
+  },
+  "sales-signal": {
+    "name": "Sales signal",
+    "description": "Give it a company. BOSS researches them, scores the opportunity against what you sell, drafts an approach, and holds it for the salesperson to read.",
+    "input_schema": {
+      "required": [
+        "company",
+        "salesperson"
+      ],
+      "properties": {
+        "company": {
+          "title": "Company",
+          "description": "Name and website to research.",
+          "examples": [
+            "Acme Corp, acme.com"
+          ]
+        },
+        "salesperson": {
+          "title": "Salesperson email",
+          "format": "email",
+          "description": "Internal recipient for the assessment and draft."
+        },
+        "assess_brief": {
+          "title": "Assessment brief",
+          "format": "textarea",
+          "description": "Optional; leave blank for the stored scoring brief.",
+          "examples": [
+            "You are scoring a sales opportunity for a salesperson who will read this in thirty seconds. From the research below, write:\n  FIT: a score out of 10 and one sentence saying what it rests on.\n  WHY NOW: anything in the research that makes this a good moment, or 'nothing found'.\n  RISKS: what would make this a waste of their time.\n  UNKNOWNS: what the research did not establish.\nName the specific source-backed fact a first email could mention. Do not infer budget, headcount or intent that is not in the material. A confident guess is worse than a gap, because the salesperson will repeat it to the prospect."
+          ]
+        },
+        "draft_brief": {
+          "title": "Draft brief",
+          "format": "textarea",
+          "description": "Optional; leave blank for the stored draft brief.",
+          "examples": [
+            "Prepare one note for the salesperson with two labeled sections: ASSESSMENT and DRAFT TO EDIT. In ASSESSMENT, faithfully summarize the fit, why now, risks, and unknowns from the assessment below. In DRAFT TO EDIT, write a short first email to the company, grounded only in a specific fact named in that assessment. No flattery, no 'I hope this finds you well', no invented mutual connections. Four sentences at most, with a question they can answer in one line. If there is no specific fact, say why a personalized email cannot yet be drafted rather than writing a generic one."
+          ]
+        }
+      }
+    },
+    "steps": [
+      {
+        "id": "research",
+        "kind": "capability",
+        "capability": "research"
+      },
+      {
+        "id": "assess",
+        "kind": "capability",
+        "capability": null
+      },
+      {
+        "id": "draft",
+        "kind": "capability",
+        "capability": null
+      },
+      {
+        "id": "notify",
+        "kind": "capability",
+        "capability": null
+      }
+    ]
+  },
+  "weekly-newsletter": {
+    "name": "Weekly newsletter",
+    "description": "Research the sectors you care about, write them up as a newsletter, and email it once you have read it.",
+    "input_schema": {
+      "required": [
+        "sectors",
+        "to"
+      ],
+      "properties": {
+        "sectors": {
+          "title": "Sectors to research",
+          "format": "textarea",
+          "description": "Topics to cover, in the order you want them."
+        },
+        "brief": {
+          "title": "Writing brief",
+          "format": "textarea",
+          "description": "Optional; leave blank for the stored house brief.",
+          "examples": [
+            "Write a short weekly newsletter from the research below. One section per sector, in the order given. Three or four items per section, each a sentence or two, with the source named. Lead each section with whatever actually matters rather than whatever is newest. If a sector has thin material, say so in one line instead of padding it. Plain text, no markdown headers, no preamble about being an AI."
+          ]
+        },
+        "to": {
+          "title": "Recipient email",
+          "format": "email",
+          "description": "Who receives the approved newsletter."
+        },
+        "subject": {
+          "title": "Email subject",
+          "description": "Optional; defaults to Your weekly newsletter."
+        }
+      }
+    },
+    "steps": [
+      {
+        "id": "gather",
+        "kind": "capability",
+        "capability": "research"
+      },
+      {
+        "id": "write",
+        "kind": "capability",
+        "capability": null
+      },
+      {
+        "id": "send",
+        "kind": "capability",
+        "capability": null
+      }
+    ]
+  },
+  "meeting-to-tickets": {
+    "name": "Meeting to tickets",
+    "description": "Paste a meeting transcript. BOSS writes down what was decided and what somebody has to do, shows you the list, and creates the tickets once you approve.",
+    "input_schema": {
+      "required": [
+        "transcript"
+      ],
+      "properties": {
+        "transcript": {
+          "title": "Meeting transcript",
+          "format": "textarea",
+          "description": "Paste the notes or transcript to turn into actions."
+        },
+        "context": {
+          "title": "Meeting context",
+          "format": "textarea",
+          "description": "Optional team and project background."
+        }
+      }
+    },
+    "steps": [
+      {
+        "id": "extract",
+        "kind": "capability",
+        "capability": null
+      },
+      {
+        "id": "create-tickets",
+        "kind": "capability",
+        "capability": null
+      }
+    ]
+  },
+  "video-workflow": {
+    "name": "Video edit and publish",
+    "description": "Post a video link and say what you want done to it in plain English. A video agent does the editing with the skills it holds; a publishing agent waits for you before it uploads.",
+    "input_schema": {
+      "required": [
+        "instructions"
+      ],
+      "properties": {
+        "video_url": {
+          "title": "Video link",
+          "format": "uri",
+          "description": "Optional. Google Drive share link, or any direct HTTPS link. Leave it blank and write the link into your instructions; the agent fetches whatever you point it at either way.",
+          "examples": [
+            "https://drive.google.com/file/d/FILE_ID/view"
+          ]
+        },
+        "instructions": {
+          "title": "What you want done",
+          "format": "textarea",
+          "description": "Plain English — say it the way you would to a person. The agent picks its own operations and their order from the skills it holds, so you describe the RESULT, not the steps.\nIt can keep a section, cut bits out of the middle, reframe to portrait or square, burn on a caption, put a picture on screen, add a logo, and join a title card or ending slide.\nTimecodes: seconds, M:SS or HH:MM:SS. If your timecodes came off the original recording, say so — each operation applies to the result of the one before it.\nGoing landscape to portrait CROPS THE SIDES, so anything in a corner of the original — a channel badge, a logo — is cut off. To keep it, link the image above and say where it belongs.\nIf it needs something it was not given, it says so rather than guessing.",
+          "examples": [
+            "Keep 3:42 to 4:50. Convert it to portrait for phones, taking the centre of the frame. The channel badge is already in the top corner — keep it exactly as it is. Put the ending slide on the end."
+          ]
+        },
+        "asset_url": {
+          "title": "Picture or clip",
+          "format": "uri",
+          "description": "Optional. A link to a PICTURE or a short clip — ending slide, title card, logo, badge. Say in your instructions what it is for and the agent uses it accordingly: \"put the ending slide on the end\", \"keep the channel badge in the top-right corner\".\nWORTH KNOWING: converting landscape to portrait crops the sides, so a logo or badge sitting in a corner of the original is cut off. If you want it kept, link the image here and say where it goes — the agent fetches it and puts it back.",
+          "examples": [
+            "https://drive.google.com/file/d/FILE_ID/view"
+          ]
+        },
+        "title": {
+          "title": "YouTube title",
+          "description": "Optional. Leave blank if your instructions point at a brief that contains it. The upload is PRIVATE either way, and YouTube refuses a video with no title, so the agent writes one from the brief if you have not."
+        },
+        "description": {
+          "title": "YouTube description",
+          "description": "Optional. Written in the brief, typed here, or left out."
+        }
+      }
+    },
+    "steps": [
+      {
+        "id": "edit",
+        "kind": "capability",
+        "capability": null
+      },
+      {
+        "id": "publish",
+        "kind": "capability",
+        "capability": null
+      }
+    ]
+  }
+}

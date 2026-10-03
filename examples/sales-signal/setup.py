@@ -96,7 +96,7 @@ def main() -> None:
             "properties": {
                 "company": {"title": "Company", "description": "Name and website to research.",
                             "examples": ["Acme Corp, acme.com"]},
-                "salesperson": {"title": "Salesperson email",
+                "salesperson": {"title": "Salesperson email", "format": "email",
                                 "description": "Internal recipient for the assessment and draft."},
                 "assess_brief": {"title": "Assessment brief", "format": "textarea",
                                  "description": "Optional; leave blank for the stored scoring brief.",

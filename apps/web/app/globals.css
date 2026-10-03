@@ -7143,6 +7143,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .dw-new-head h3 { margin: 0 0 2px; font-size: 15px; }
 .dw-new-head .detail { margin: 0; }
+/* The selected workflow's description: one line, the rest in its tooltip. */
+.dw-new-head .dw-new-sub {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.dw-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
 /* ONE SURFACE. The field and its controls live inside a single bordered box that
    lights on focus, rather than three separate elements sharing a row. */
@@ -7186,6 +7191,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   color: var(--ink, #E8EEFC); font-weight: 600;
 }
 .dw-wiz-rail [data-state="done"] .dw-wiz-crumb { color: var(--accent-text, #2EC5C5); }
+/* Passed, but a required field on it is still blank: no tick. */
+.dw-wiz-rail [data-state="incomplete"] .dw-wiz-crumb { color: var(--warn, #E3B341); }
 .dw-wiz-num {
   display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
   font-size: 10px; font-weight: 700;
@@ -8645,8 +8652,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   .bx-dock-toggle { display: none; }
 }
 
-/* What a chosen workflow needs supplied before it can start. Absent for every workflow that
-   declares nothing, which is all twelve catalogue ones. */
+/* The chosen workflow's start form, drawn from its input_schema on the composer's first step. */
 .dw-wiz-inputs { display: grid; gap: 12px; margin-top: 18px; }
 .dw-wiz-input { display: grid; gap: 5px; }
 .dw-wiz-input input {
@@ -8655,6 +8661,11 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   border: 1px solid var(--border, #263149); font: inherit;
 }
 .dw-wiz-input input:focus { outline: 2px solid var(--accent, #5b8cff); border-color: transparent; }
+.dw-wiz-input textarea.dw-new-input {
+  padding: 9px 11px; border-radius: 8px; background: #101725;
+  border: 1px solid var(--border, #263149); min-height: 84px;
+}
+.dw-wiz-input input[type="checkbox"] { width: auto; padding: 0; }
 .dw-req { font-style: normal; font-size: .72rem; color: var(--amber, #d29922); margin-left: 6px; }
 
 /* ─── RUN REPORT ─────────────────────────────────────────────────────────────
