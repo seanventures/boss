@@ -5002,6 +5002,13 @@ def fail_step(
         raise WorkflowNotFoundError("Workflow step run not found.")
     if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
         raise WorkflowLeaseError("Workflow step is not leased by this worker.")
+    # A FAILURE NO RETRY CAN FIX, SAID AS ITS FIX — whichever kind of step raised it. Here,
+    # where every step failure is recorded, so no step path can miss it (model_failures).
+    from .model_failures import settled_failure
+
+    explained = settled_failure(error)
+    if explained is not None:
+        error, retryable = explained, False
     can_retry = retryable and int(row["attempt"]) < int(row["max_attempts"])
     status = "ready" if can_retry else "deadlettered"
     run_after = now_utc() + timedelta(seconds=max(0, int(retry_delay_seconds)))

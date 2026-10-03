@@ -16,7 +16,7 @@ from .github_adapter import GitHubAdapter
 from .mcp_client import MCPClient
 from .mcp_registry import list_mcp_servers
 from .role_governance import RoleGovernanceService
-from .claude_cli_adapter import make_chat_adapter
+from .model_routing import governed, project_chat_adapter
 from .openai_adapter import OpenAIAdapter, _usage_from_response  # noqa: F401
 from .pdf_render import pdf_page_count, render_markdown_pdf
 from .skill_executors import SkillExecutorContext
@@ -1829,7 +1829,17 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     finalize_ctx = run["finalize_ctx"] or {}
     step0 = int(run["step"] or 0)
 
-    adapter = make_chat_adapter(settings)
+    # THE MODEL THIS PROJECT CONNECTED. This was `make_chat_adapter(settings)` — the
+    # deployment's `llm_engine`, "auto", the OpenAI adapter — so every agent step on an install
+    # with a Claude or Codex subscription and no OpenAI key died at its first turn with
+    # "OPENAI_API_KEY is not configured" while readiness said a model was connected
+    # ("Video edit and publish", 2026-10-03). See services/model_routing.py.
+    #
+    # AND EVERY TURN IS SPENT THROUGH THE BUDGET. The turns made no reservation and left no
+    # receipt, so an agent step on a capped project spent past its cap and the cost was nowhere.
+    adapter = governed(project_chat_adapter(connection, settings, project_id),
+                       connection, settings, project_id,
+                       skill_id="model.agent_turn", ref=run_id)
     mcp = MCPClient(settings)
 
     # A BOUNDED RUN GETS NO NATIVE TOOLS AT ALL.

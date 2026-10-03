@@ -115,7 +115,18 @@ def _channel_need(value: str) -> Need:
         "mattermost:<channel id>.", None)
 
 
+def _provider_need(key: str) -> Need:
+    from .model_routing import requirement_for_need
+
+    req = requirement_for_need(key)
+    if req is None:
+        raise KeyError(key)
+    return Need(key, req.label, req.fix, "setup")
+
+
 def need_for(key: str) -> Need:
+    if key.startswith("provider:"):
+        return _provider_need(key)
     if key.startswith("role:"):
         return _role_need(key.split(":", 1)[1])
     if key.startswith("channel:"):
@@ -174,7 +185,48 @@ def skill_needs(skill_id: str, spec: Optional[Mapping[str, Any]]) -> set[str]:
         needed.add("work_tracker")
     if str(spec.get("kind") or "") in _MODEL_KINDS or skill_id.startswith("model."):
         needed.add("model")
+    needed.update(_provider_needs(skill_id, spec))
     return needed
+
+
+def _provider_needs(skill_id: str, spec: Optional[Mapping[str, Any]]) -> set[str]:
+    """What this skill declared it needs from ONE provider (image generation, speech-to-text),
+    beyond the chat model the project's routing already supplies. See model_routing."""
+    from . import skill_executors  # noqa: F401 — registering the executors is the declaration
+    from .model_routing import declared_requirements
+
+    return {r.need_key for r in declared_requirements(skill_id, dict(spec or {}))}
+
+
+def tool_provider_needs(tool_name: str) -> set[str]:
+    """What a built-in agent tool declared it needs beyond a chat model
+    (model_routing.TOOL_REQUIREMENTS), as readiness need keys."""
+    from .model_routing import TOOL_REQUIREMENTS, requirement
+
+    return {requirement(k).need_key for k in TOOL_REQUIREMENTS.get(tool_name.strip(), ())}
+
+
+def _agent_step_skills(step: Mapping[str, Any], connection: Optional[Connection],
+                       project_id: str) -> list[str]:
+    """The skills an agent step can reach: the ones it is scoped to, else what its agent holds."""
+    from .step_agents import step_scope
+
+    scoped, _mcp = step_scope(dict(step))
+    if scoped:
+        return scoped
+    binding = step.get("binding") or {}
+    agent = str(step.get("captain") or binding.get("agent") or "").strip()
+    if not agent or connection is None or not project_id:
+        return []
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(
+                text("SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": agent},
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 — no grants table means no grants
+        return []
+    return [str(r) for r in rows]
 
 
 def _specpack_root(settings: Any) -> str:
@@ -291,6 +343,8 @@ def requirements(
             needed.update(capability.requires_project)
             if capability.needs_model:
                 needed.add("model")
+            # THE TOOL IT RUNS MAY NEED ONE PROVIDER'S API (generate_image: OpenAI images).
+            needed.update(tool_provider_needs(str(getattr(capability, "tool", "") or "")))
             if key == "notify":
                 channel = _resolved_literal((binding.get("inputs") or {}).get("channel"),
                                             input_data)
@@ -303,6 +357,11 @@ def requirements(
                 needed.update(skill_needs(skill_id, skills.get(skill_id)))
         if binding.get("agent_work"):
             needed.add("model")
+            # A SKILL THE AGENT MAY CALL THAT NEEDS ONE PROVIDER'S API. The chat model is
+            # routed to whatever the project connected; image generation is not, and a run
+            # that reaches it without the key fails after it has spent on everything before.
+            for skill_id in _agent_step_skills(step, connection, project_id):
+                needed.update(_provider_needs(skill_id, skills.get(skill_id)))
             if not str(step.get("captain") or binding.get("agent") or "").strip():
                 needed.add("agent_pool")
         # AN APPROVER IS NEEDED ONLY WHERE SOMEONE APPROVES. The PRD approval (`spec_review`)
@@ -382,8 +441,12 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
                 return True, (f"pushes to {basics['repository']}" if basics.get("repository")
                               else "a repository is connected")
             return False, "no GitHub repository is connected to this project"
+        # THE ROUTER'S ANSWER, not a count of rows: the same `model_routing.choose` that picks
+        # the adapter a step will run on (connected_basics → model_done).
         if basics["model"]:
-            return True, "a model is connected"
+            from .model_routing import choose
+
+            return True, f"a model is connected: {choose(connection, settings, project_id).describe()}"
         return False, "no model is connected to this project"
     if key == "deployment_target":
         hosts = _scalar(connection, "SELECT count(*) FROM deployment_hosts WHERE project_id=:p "
@@ -451,6 +514,16 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
             False, f"there is no agent '{role}' on this project")
     if key.startswith("channel:"):
         return False, f"{key.split(':', 1)[1]!r} is not a channel BOSS can post to"
+    if key.startswith("provider:"):
+        from .model_routing import provider_connected, requirement_for_need
+
+        req = requirement_for_need(key)
+        if req is None:
+            return False, f"BOSS does not know the provider requirement {key!r}"
+        if provider_connected(connection, settings, project_id, req):
+            return True, f"an {req.provider} key is connected for {req.capability}"
+        return False, (f"no {req.provider} key is connected, and {req.capability} needs one — "
+                       f"a connected subscription does not do it")
     raise KeyError(f"no check for need {key!r}")
 
 

@@ -199,7 +199,7 @@ STEP_GATE = {"workflow_run_id": "wfr_t", "step_id": "s1"}
 
 def _agent_road(want: str, finalize_ctx: dict):
     def road(c, project, server_id, approved, monkeypatch):
-        monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _s: _Model(want))
+        monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: _Model(want))
         result = agent_loop.run_agent_loop(c, _settings(), project, "system", "File it",
                                            max_steps=2, finalize_ctx=finalize_ctx)
         run = agent_loop.load_agent_run(c, result["run_id"])
