@@ -67,12 +67,23 @@ export function areasToRender(input: {
 }
 
 /**
- * Whether a request is a full document load, from its headers. A router refresh or soft
- * navigation carries `RSC: 1`; a server action carries `Next-Action`. Both re-render the page
- * the operator already has open, so both must keep its areas.
+ * Whether a request is a full document load, from its headers. A router refresh, a soft
+ * navigation and a server action all re-render the page the operator already has open, so
+ * all of them must keep its areas.
+ *
+ * NOT FROM `RSC` / `Next-Router-State-Tree`. Next.js 15 deletes its flight headers before page
+ * code sees them (request-store `getHeaders` strips FLIGHT_HEADERS), so this used to answer
+ * "full document" for EVERY request: each refresh rendered only the requested area and dropped
+ * the rest, and every area switch on boss-1 waited 2-30s for a refetch (2026-10-03). The
+ * browser says what it is fetching: `Sec-Fetch-Dest: document` for a page load, `empty` for
+ * the router's fetch. A browser too old to send it falls back to `Accept`, which only a
+ * document load sets to text/html.
  */
 export function isFullDocumentRequest(header: (name: string) => string | null): boolean {
-  return !header("rsc") && !header("next-action") && !header("next-router-state-tree");
+  if (header("next-action") || header("rsc") || header("next-router-state-tree")) return false;
+  const dest = header("sec-fetch-dest");
+  if (dest) return dest === "document" || dest === "iframe";
+  return (header("accept") ?? "").includes("text/html");
 }
 
 /** Read the cookie value in the browser. */

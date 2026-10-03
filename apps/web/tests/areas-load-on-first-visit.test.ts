@@ -35,7 +35,15 @@ describe("which areas a render includes", () => {
   });
 
   it("a router refresh and a server action both count as not a browser load", () => {
-    expect(isFullDocumentRequest(headers({}))).toBe(true);
+    // What a browser really sends for a page load and for the router's refresh fetch.
+    expect(isFullDocumentRequest(headers({ "sec-fetch-dest": "document",
+                                           accept: "text/html,application/xhtml+xml" }))).toBe(true);
+    expect(isFullDocumentRequest(headers({ "sec-fetch-dest": "empty", accept: "*/*" }))).toBe(false);
+    // The router's own headers never reach page code: Next.js 15 strips RSC and
+    // Next-Router-State-Tree from headers(). Judging by them made EVERY request a "browser
+    // load", so each refresh dropped the areas on screen and every switch refetched (boss-1).
+    expect(isFullDocumentRequest(headers({ accept: "*/*" }))).toBe(false);
+    expect(isFullDocumentRequest(headers({ accept: "text/html" }))).toBe(true);
     expect(isFullDocumentRequest(headers({ rsc: "1" }))).toBe(false);
     // A server action re-renders the page the operator has open — dropping its areas would
     // unmount them under the button that was just pressed.
