@@ -1,0 +1,390 @@
+/**
+ * The Workflow Studio's one door to the API: every read and write the editor and library make,
+ * through the /api/delivery-workflows proxy (which adds the signed-in actor's credentials).
+ *
+ * Each function returns the editor's own shapes (lib/workflow-editor-types.ts), normalised here
+ * once, so no component parses a raw API row. Writes go through apiWrite, so a double press
+ * sends once (tests/every-write-goes-through-api-write.test.ts).
+ *
+ * A refusal is an Error carrying the API's own sentence. Two refusals are typed because the
+ * editor acts on them: 422 with problems → ProblemsError (each problem pinned to a step and a
+ * field), 409 name clash → NameInUseError (with the name the API suggests instead).
+ */
+import { apiWrite } from "./api-write";
+import type {
+  BlockDef, Capability, CheckResult, CustomStepDef, EditorMeta, Palette, Problem,
+  PublishRequest, PublishResult, RosterAgent, Spec, WorkflowSummary,
+} from "./workflow-editor-types";
+
+/** `publishSpec` (and `checkSpec`) on a 422: the problems, each pinned to a step and field. */
+export class ProblemsError extends Error {
+  constructor(public readonly problems: Problem[]) {
+    super(problems[0]?.message ?? "Workflow has problems");
+    this.name = "ProblemsError";
+  }
+}
+
+/** `publishSpec` or `renameWorkflow` on a 409: an own workflow already has that name. */
+export class NameInUseError extends Error {
+  constructor(public readonly suggestedName?: string | null) {
+    super("Name in use");
+    this.name = "NameInUseError";
+  }
+}
+
+const ROUTE = "/api/delivery-workflows";
+
+type Obj = Record<string, unknown>;
+
+const asObj = (value: unknown): Obj =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as Obj) : {};
+const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+const strings = (value: unknown): string[] => list(value).map(String).filter(Boolean);
+const str = (value: unknown): string => (typeof value === "string" ? value : "");
+
+/** The body of a response, whatever it is; a non-JSON body becomes `{error: text}`. */
+async function bodyOf(r: Response): Promise<Obj> {
+  const raw = await r.text();
+  try { return asObj(JSON.parse(raw)); } catch { return { error: raw }; }
+}
+
+/** The API's problems from a refusal: top level, or inside `detail`. */
+function problemsIn(body: Obj): Problem[] | null {
+  const raw = Array.isArray(body.problems) ? body.problems
+    : Array.isArray(asObj(body.detail).problems) ? asObj(body.detail).problems : null;
+  return raw ? (raw as unknown[]).map(toProblem) : null;
+}
+
+function toProblem(raw: unknown): Problem {
+  const p = asObj(raw);
+  return {
+    step_id: p.step_id == null || p.step_id === "" ? null : String(p.step_id),
+    field: p.field == null || p.field === "" ? null : String(p.field),
+    message: str(p.message) || String(raw ?? ""),
+  };
+}
+
+/** Turn a failed response into the error the editor acts on. */
+function refusal(status: number, body: Obj): Error {
+  const problems = problemsIn(body);
+  if (status === 422 && problems?.length) return new ProblemsError(problems);
+  const message = str(body.error) || str(body.detail) || `API returned ${status}`;
+  if (status === 409 && /name in use/i.test(message)) {
+    const suggested = body.suggested_name ?? asObj(body.detail).suggested_name;
+    return new NameInUseError(typeof suggested === "string" ? suggested : null);
+  }
+  const error = new Error(message);
+  (error as Error & { status?: number }).status = status;
+  return error;
+}
+
+async function getView(view: string, params: Record<string, string | undefined>): Promise<Obj> {
+  const query = new URLSearchParams({ view });
+  for (const [key, value] of Object.entries(params)) if (value) query.set(key, value);
+  const r = await fetch(`${ROUTE}?${query}`, { cache: "no-store" });
+  const body = await bodyOf(r);
+  if (!r.ok) throw refusal(r.status, body);
+  return body;
+}
+
+async function send(method: "POST" | "PATCH" | "DELETE", payload: Obj | null,
+                    query?: Record<string, string>): Promise<Obj> {
+  const url = query ? `${ROUTE}?${new URLSearchParams(query)}` : ROUTE;
+  const r = await apiWrite(url, {
+    method,
+    ...(payload ? { headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload) } : {}),
+  });
+  const body = await bodyOf(r);
+  if (!r.ok) throw refusal(r.status, body);
+  return body;
+}
+
+/* ── Palette ─────────────────────────────────────────────────────────────────────── */
+
+/** The inspector's words for each block setting (spec section 4), whatever the API calls them. */
+const SETTING_LABELS: Record<string, string> = {
+  question: "Question", guidance: "Guidance", approver_role: "Approver",
+  wait_seconds: "Wait", workflow_version_id: "Workflow",
+};
+const SETTING_RULES: Record<string, { required?: boolean; max?: number }> = {
+  question: { required: true, max: 400 }, guidance: { max: 1000 },
+  workflow_version_id: { required: true },
+};
+const PLACEABLE: BlockDef["kind"][] = ["decision", "timer", "subworkflow"];
+
+function toCapability(raw: unknown): Capability {
+  const c = asObj(raw);
+  return {
+    key: str(c.key), label: str(c.label) || str(c.key), summary: str(c.summary),
+    risk_tier: Number(c.risk_tier ?? 0),
+    required_inputs: strings(c.required_inputs), optional_inputs: strings(c.optional_inputs),
+    produces: strings(c.produces), skills: strings(c.skills),
+    ...(typeof c.typical_minutes === "number" ? { typical_minutes: c.typical_minutes } : {}),
+    is_gate: Boolean(c.is_gate), approval_forced_manual: Boolean(c.approval_forced_manual),
+    ...(str(c.captain) ? { captain: str(c.captain) } : {}),
+  };
+}
+
+function toCustomStep(raw: unknown): CustomStepDef {
+  const c = asObj(raw);
+  return {
+    step_key: str(c.step_key), label: str(c.label) || str(c.step_key),
+    ...(str(c.summary) ? { summary: str(c.summary) } : {}),
+    binding_kind: c.binding_kind === "mcp_tool" ? "mcp_tool" : "skill",
+    ...(str(c.skill_id) ? { skill_id: str(c.skill_id) } : {}),
+    ...(str(c.mcp_server_id) ? { mcp_server_id: str(c.mcp_server_id) } : {}),
+    ...(str(c.mcp_tool_name) ? { mcp_tool_name: str(c.mcp_tool_name) } : {}),
+    inputs: list(c.inputs).map((i) => {
+      const input = asObj(i);
+      return { name: str(input.name) || String(i), required: input.required !== false };
+    }).filter((i) => i.name),
+    produces: strings(c.produces), risk_tier: Number(c.risk_tier ?? 0),
+    usable: c.usable !== false,
+    ...(str(c.unusable_reason) ? { unusable_reason: str(c.unusable_reason) } : {}),
+    approval_forced_manual: Boolean(c.approval_forced_manual),
+  };
+}
+
+function toBlock(raw: unknown): BlockDef | null {
+  const b = asObj(raw);
+  const kind = str(b.kind) as BlockDef["kind"];
+  if (!PLACEABLE.includes(kind) || b.canvas_required) return null;
+  return {
+    kind, label: str(b.label), summary: str(b.summary), defaults: asObj(b.defaults),
+    configure: list(b.configure).map((f) => {
+      const field = asObj(f);
+      const key = str(field.key) || str(field.field);
+      return { key, label: SETTING_LABELS[key] ?? str(field.label), type: str(field.type) || "text",
+               ...SETTING_RULES[key] };
+    }).filter((f) => f.key),
+  };
+}
+
+/**
+ * What a step can be and who can run it: capabilities, the project's own steps, the flow
+ * blocks a canvas can place, and the roster with what each agent holds.
+ *
+ * The project's steps come from `view=custom_steps`, which also carries what a step can bind.
+ * That read needs the database; when it fails the palette still opens with the built-ins
+ * rather than refusing to open at all.
+ */
+export async function fetchPalette(projectId: string): Promise<Palette> {
+  const [capabilities, custom] = await Promise.all([
+    getView("capabilities", { project_id: projectId }),
+    getView("custom_steps", { project_id: projectId }).catch(() => null),
+  ]);
+  const bindable = asObj(custom?.bindable);
+  const customSteps = custom
+    ? list(custom.steps).filter((s) => asObj(s).enabled !== false)
+    : list(capabilities.custom_steps);
+  return {
+    capabilities: list(capabilities.capabilities).map(toCapability).filter((c) => c.key),
+    customSteps: customSteps.map(toCustomStep).filter((c) => c.step_key),
+    blocks: list(capabilities.blocks).map(toBlock).filter((b): b is BlockDef => b !== null),
+    agents: list(capabilities.agents).map((a): RosterAgent => {
+      const agent = asObj(a);
+      return { role_key: str(agent.role_key), name: str(agent.name) || str(agent.role_key),
+               skills: strings(agent.holds ?? agent.skills), mcp: strings(agent.mcp) };
+    }).filter((a) => a.role_key),
+    humanRole: str(capabilities.human_role) || "human",
+    riskFloor: Number(capabilities.manual_approval_risk_floor ?? 2),
+    bindable: {
+      skills: list(bindable.skills).map((s) => {
+        const skill = asObj(s);
+        const id = str(skill.skill_id) || str(skill.id);
+        return { id, name: str(skill.label) || str(skill.name) || id };
+      }).filter((s) => s.id),
+      mcp_servers: list(bindable.mcp_servers).map((m) => {
+        const server = asObj(m);
+        return { id: str(server.id), name: str(server.name) || str(server.id),
+                 tools: list(server.tools).map((t) => ({ name: str(asObj(t).name) }))
+                   .filter((t) => t.name) };
+      }).filter((m) => m.id),
+    },
+  };
+}
+
+/* ── Library ─────────────────────────────────────────────────────────────────────── */
+
+/** A library step's icon key, by the same rule as `stepView().icon`: the capability key of a
+ *  built-in step, else the step's type. */
+function outlineIcon(step: Obj): string {
+  if (step.agent_work) return "agent";
+  if (step.mine || step.custom_step) return "custom";
+  const kind = str(step.kind);
+  const byKind: Record<string, string> = {
+    decision: "gate", timer: "wait", subworkflow: "subworkflow", parallel: "parallel",
+    condition: "condition", join: "join", bounded_loop: "loop",
+  };
+  if (byKind[kind]) return byKind[kind];
+  // An API that predates `capability` on the outline labels a built-in step with its key.
+  return str(step.capability) || (kind === "capability" ? str(step.label) : "") || "other";
+}
+
+function toSummary(raw: unknown): WorkflowSummary {
+  const w = asObj(raw);
+  const steps = list(w.steps).map((s) => {
+    const step = asObj(s);
+    const capability = outlineIcon(step);
+    return {
+      id: str(step.id),
+      title: str(step.title) || str(step.label) || str(step.id),
+      ...(capability ? { capability } : {}),
+      ...(str(step.captain) ? { captain: str(step.captain) } : {}),
+      ...(str(step.approval) ? { approval: str(step.approval) } : {}),
+    };
+  });
+  const lastRun = asObj(w.last_run);
+  const version = w.active_version ?? w.version;
+  return {
+    definition_id: str(w.definition_id) || str(w.id),
+    workflow_key: str(w.workflow_key),
+    name: str(w.name) || str(w.workflow_key),
+    ...(str(w.description) ? { description: str(w.description) } : {}),
+    is_catalogue: Boolean(w.is_catalogue),
+    version: typeof version === "number" ? version : null,
+    step_count: typeof w.step_count === "number" ? w.step_count : steps.length,
+    steps,
+    forked_from_workflow_key: str(w.forked_from_workflow_key) || null,
+    forked_from_name: str(w.forked_from_name) || null,
+    run_count: Number(w.run_count ?? 0),
+    last_run: str(lastRun.status) ? { status: str(lastRun.status), at: str(lastRun.at) } : null,
+    ...(w.schedule !== undefined ? { schedule: w.schedule } : {}),
+    ...(Array.isArray(w.used_for) ? { used_for: strings(w.used_for) } : {}),
+  };
+}
+
+/** Every workflow in the project — its own and the standards — with what a card draws. */
+export async function fetchLibrary(projectId: string): Promise<WorkflowSummary[]> {
+  const body = await getView("library", { project_id: projectId });
+  return list(body.items).map(toSummary).filter((w) => w.workflow_key);
+}
+
+/* ── One workflow ────────────────────────────────────────────────────────────────── */
+
+/**
+ * A workflow's spec (its running version, or `version` read-only) and what the editor needs to
+ * know about it. On a standard, `meta.copy` is the operator's existing copy of it, so Save can
+ * default to updating that instead of making another.
+ */
+export async function fetchSpec(projectId: string, key: string, version?: number): Promise<{
+  spec: Spec; meta: EditorMeta;
+  versions: { version: number; published_at: string; is_active: boolean }[];
+}> {
+  const body = await getView("spec", {
+    project_id: projectId, key, version: version ? String(version) : undefined,
+  });
+  const raw = asObj(body.spec);
+  const spec = { ...raw, steps: Array.isArray(raw.steps) ? raw.steps : [] } as Spec;
+  const versions = list(body.versions).map((v) => {
+    const row = asObj(v);
+    return { version: Number(row.version), published_at: str(row.published_at),
+             is_active: Boolean(row.is_active) };
+  }).filter((v) => Number.isFinite(v.version));
+  const loadedVersion = typeof body.version === "number" ? body.version : null;
+  const active = versions.find((v) => v.is_active)?.version
+    ?? (typeof body.active_version === "number" ? body.active_version : null);
+  const isCatalogue = Boolean(body.is_catalogue);
+  let copy: EditorMeta["copy"] = null;
+  if ("copy" in body) {
+    const c = asObj(body.copy);
+    copy = str(c.workflow_key)
+      ? { definition_id: str(c.definition_id) || str(c.id), workflow_key: str(c.workflow_key),
+          name: str(c.name) }
+      : null;
+  } else if (isCatalogue) {
+    // Older API: find the copy in the library, newest first (the list is ordered that way).
+    const mine = (await fetchLibrary(projectId).catch(() => []))
+      .find((w) => !w.is_catalogue && w.forked_from_workflow_key === key);
+    copy = mine ? { definition_id: mine.definition_id, workflow_key: mine.workflow_key,
+                    name: mine.name } : null;
+  }
+  const forked = asObj(body.forked_from);
+  return {
+    spec,
+    versions,
+    meta: {
+      definition_id: str(body.definition_id) || null,
+      workflow_key: str(body.workflow_key) || key,
+      name: str(body.name) || key,
+      description: str(body.description),
+      is_catalogue: isCatalogue,
+      from_workflow_key: str(forked.workflow_key) || str(body.forked_from_workflow_key) || null,
+      version: loadedVersion,
+      copy,
+      // A version other than the one that runs opens read-only ("Viewing v2 · Restore").
+      readOnlyVersion: version !== undefined && version !== active ? version : null,
+    },
+  };
+}
+
+/** Every check Save runs, without saving. Writes nothing. */
+export async function checkSpec(projectId: string, spec: Spec,
+                                definitionId?: string | null): Promise<CheckResult> {
+  let body: Obj;
+  try {
+    body = await send("POST", { action: "check", project_id: projectId, spec,
+                                ...(definitionId ? { definition_id: definitionId } : {}) });
+  } catch (error) {
+    // A 422 from check is still an answer: these are the problems.
+    if (error instanceof ProblemsError) {
+      return { ok: false, problems: error.problems, summary: emptySummary(spec) };
+    }
+    throw error;
+  }
+  const summary = asObj(body.summary);
+  const problems = list(body.problems).map(toProblem);
+  return {
+    ok: body.ok === undefined ? !problems.length : Boolean(body.ok),
+    problems,
+    summary: {
+      steps: typeof summary.steps === "number" ? summary.steps : spec.steps.length,
+      agents: strings(summary.agents), approvals: strings(summary.approvals),
+      typical_minutes: typeof summary.typical_minutes === "number" ? summary.typical_minutes : null,
+      needs: strings(summary.needs),
+    },
+  };
+}
+
+const emptySummary = (spec: Spec): CheckResult["summary"] =>
+  ({ steps: spec.steps.length, agents: [], approvals: [], typical_minutes: null, needs: [] });
+
+/**
+ * Publish: the next version of your own workflow, or — for a new workflow or a standard — a
+ * new definition and its v1 in one transaction (`update_copy_id` publishes onto an existing
+ * copy instead). Throws ProblemsError on 422 and NameInUseError on 409.
+ */
+export async function publishSpec(projectId: string, req: PublishRequest): Promise<PublishResult> {
+  const body = await send("POST", { action: "publish", project_id: projectId, ...req });
+  if (body.unchanged) return { unchanged: true };
+  const definition = asObj(body.definition);
+  const version = body.version;
+  return {
+    definition: { id: str(definition.id), workflow_key: str(definition.workflow_key),
+                  name: str(definition.name) },
+    version: typeof version === "number" ? version : Number(asObj(version).version ?? 0),
+    created: Boolean(body.created),
+  };
+}
+
+/** Name and description change in place: no new version. */
+export async function renameWorkflow(projectId: string, definitionId: string,
+                                     patch: { name?: string; description?: string }): Promise<void> {
+  await send("PATCH", { project_id: projectId, definition_id: definitionId, ...patch });
+}
+
+/** Deleted, or retired when it has runs (their history keeps pointing at it). */
+export async function deleteWorkflow(projectId: string, definitionId: string):
+    Promise<{ outcome: "deleted" | "retired" }> {
+  const body = await send("DELETE", null, { project_id: projectId, definition_id: definitionId });
+  return { outcome: body.outcome === "retired" ? "retired" : "deleted" };
+}
+
+/** Steps drafted from a sentence. Writes nothing: they land on the canvas to be reviewed. */
+export async function draftFromDescription(projectId: string, description: string):
+    Promise<{ name: string; spec: Spec }> {
+  const body = await send("POST", { action: "draft", project_id: projectId, description });
+  const spec = asObj(body.spec);
+  return { name: str(body.name), spec: { ...spec, steps: list(spec.steps) } as Spec };
+}
