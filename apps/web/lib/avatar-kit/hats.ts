@@ -12,6 +12,7 @@
  * not more robot.
  */
 import { GLASS, type Palette } from "./palettes";
+import { dict } from "./dict";
 
 export type Hat = {
   id: string;
@@ -236,5 +237,5 @@ export const HATS: readonly Hat[] = [
   },
 ] as const;
 
-export const HAT_BY_ID: Record<string, Hat> = Object.fromEntries(HATS.map((h) => [h.id, h]));
+export const HAT_BY_ID: Readonly<Record<string, Hat>> = dict(HATS.map((h) => [h.id, h]));
 export const GENERIC_HATS = HATS.filter((h) => !h.cast);

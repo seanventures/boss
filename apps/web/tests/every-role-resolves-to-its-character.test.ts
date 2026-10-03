@@ -13,10 +13,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { specForRole } from "../lib/agent-avatar";
 import {
-  ALIASES, agentIdentity, hasKnownFace, loadIdentities, primeIdentities, resetIdentities, resolveRoleKey,
+  ALIASES, agentIdentity, hasKnownFace, loadIdentities, primeIdentities, refreshIdentities, resetIdentities,
+  resolveRoleKey,
 } from "../lib/agent-identity";
 import { agentIdentity as fromContract, avatarSvg as svgFromContract } from "../lib/agent-world-types";
-import { avatarSvg } from "../lib/agent-avatar";
+import { avatarSvg, resolveParts } from "../lib/agent-avatar";
 import { CAST, CAST_BY_KEY } from "../lib/avatar-kit/cast";
 
 const PY = readFileSync(resolve(__dirname, "../../../engine/boss_engine/services/agent_world_types.py"), "utf8");
@@ -143,5 +144,112 @@ describe("the install's own identities win once loaded", () => {
     resetIdentities();
     await loadIdentities("p2", (async () => { throw new Error("down"); }) as unknown as typeof fetch);
     expect(agentIdentity("pm").callsign).toBe("Juno");
+  });
+});
+
+describe("a name that happens to be a JavaScript built-in is just an unknown name", () => {
+  const BUILTINS = ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"];
+
+  it.each(BUILTINS)("role key %s gets its own seeded face, never a crash", (key) => {
+    expect(resolveRoleKey(key)).toBeNull();
+    expect(hasKnownFace(key)).toBe(false);
+    const who = agentIdentity(key);
+    expect(who.avatar).toEqual(specForRole(key));
+    expect(() => avatarSvg(who.avatar, { size: 48, state: "working" })).not.toThrow();
+  });
+
+  it.each(BUILTINS)("part id %s falls back to a seeded part", (id) => {
+    const spec = { kit: "boss-v1" as const, seed: "agt_x", hat: id, emblem: id, palette: id, visor: id };
+    expect(resolveParts(spec)).toEqual(resolveParts({ kit: "boss-v1", seed: "agt_x" }));
+    expect(avatarSvg(spec, { size: 96 })).toBe(avatarSvg({ kit: "boss-v1", seed: "agt_x" }, { size: 96 }));
+  });
+
+  it("survives built-in names from the API: role keys, aliases, avatar parts and states", () => {
+    primeIdentities(
+      [{ role_key: "toString", avatar: { kit: "boss-v1", seed: "s", hat: "constructor", visor: "__proto__" } }],
+      { valueOf: "qa" },
+    );
+    expect(agentIdentity("toString").avatar.seed).toBe("s");
+    expect(() => avatarSvg(agentIdentity("toString").avatar, { size: 48 })).not.toThrow();
+    expect(resolveRoleKey("valueOf")).toBe("qa");
+    expect(resolveRoleKey("hasOwnProperty")).toBeNull();
+    const bogus = avatarSvg(specForRole("qa"), { size: 48, state: "toString" as never });
+    expect(bogus).toBe(avatarSvg(specForRole("qa"), { size: 48 }));
+  });
+});
+
+describe("loading identities: retried after a failure, refreshed on save, scoped to one project", () => {
+  const ok = (items: unknown[]) => new Response(JSON.stringify({ items, aliases: {} }));
+  const deferred = () => {
+    let resolve!: (r: Response) => void;
+    const promise = new Promise<Response>((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+
+  it("retries a failed load on the next call instead of caching the failure", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(ok([{ role_key: "pm", callsign: "Jun" }]));
+    await loadIdentities("p1", fetcher as unknown as typeof fetch);
+    expect(agentIdentity("pm").callsign).toBe("Juno");
+    await loadIdentities("p1", fetcher as unknown as typeof fetch);
+    expect(agentIdentity("pm").callsign).toBe("Juno");
+    await loadIdentities("p1", fetcher as unknown as typeof fetch);
+    expect(agentIdentity("pm").callsign).toBe("Jun");
+    await loadIdentities("p1", fetcher as unknown as typeof fetch);
+    expect(fetcher).toHaveBeenCalledTimes(3); // a success is kept
+  });
+
+  it("shares one request between callers while it is in flight", async () => {
+    const d = deferred();
+    const fetcher = vi.fn(() => d.promise);
+    const a = loadIdentities("p1", fetcher as unknown as typeof fetch);
+    const b = loadIdentities("p1", fetcher as unknown as typeof fetch);
+    d.resolve(ok([]));
+    await Promise.all([a, b]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshIdentities picks up a saved callsign or face everywhere", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ok([{ role_key: "qa", callsign: "Vee" }]))
+      .mockResolvedValueOnce(ok([{ role_key: "qa", callsign: "Vix", avatar: { kit: "boss-v1", seed: "qa", palette: "purple" } }]));
+    await loadIdentities("p1", fetcher as unknown as typeof fetch);
+    expect(agentIdentity("qa").callsign).toBe("Vee");
+    await refreshIdentities("p1", fetcher as unknown as typeof fetch);
+    expect(agentIdentity("qa").callsign).toBe("Vix");
+    expect(agentIdentity("qa").avatar.palette).toBe("purple");
+  });
+
+  it("clears the old project's identities on a switch, even when the new load fails", async () => {
+    await loadIdentities("p1", (async () => ok([{ role_key: "qa", callsign: "Vee" }])) as unknown as typeof fetch);
+    expect(agentIdentity("qa").callsign).toBe("Vee");
+    await loadIdentities("p2", (async () => { throw new Error("down"); }) as unknown as typeof fetch);
+    expect(agentIdentity("qa").callsign).toBe("Vera");
+  });
+
+  it("drops a slow response for the previous project", async () => {
+    const slowA = deferred();
+    const fetcher = vi.fn((url: string) => url.includes("p1") ? slowA.promise
+      : Promise.resolve(ok([{ role_key: "qa", callsign: "Bee" }])));
+    const a = loadIdentities("p1", fetcher as unknown as typeof fetch);
+    await loadIdentities("p2", fetcher as unknown as typeof fetch);
+    expect(agentIdentity("qa").callsign).toBe("Bee");
+    slowA.resolve(ok([{ role_key: "qa", callsign: "Ayy" }]));
+    await a;
+    expect(agentIdentity("qa").callsign).toBe("Bee");
+  });
+
+  it("drops a response that a refresh has overtaken", async () => {
+    const first = deferred();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(ok([{ role_key: "qa", callsign: "New" }]));
+    const stale = loadIdentities("p1", fetcher as unknown as typeof fetch);
+    await refreshIdentities("p1", fetcher as unknown as typeof fetch);
+    first.resolve(ok([{ role_key: "qa", callsign: "Old" }]));
+    await stale;
+    expect(agentIdentity("qa").callsign).toBe("New");
   });
 });

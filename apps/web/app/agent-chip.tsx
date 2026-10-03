@@ -18,6 +18,8 @@ import React, { type ReactNode } from "react";
 
 import { agentIdentity } from "../lib/agent-identity";
 import type { AvatarSize, AvatarState } from "../lib/agent-world-types";
+import { withLifecycle } from "../lib/avatar-kit/states";
+import { own } from "../lib/avatar-kit/dict";
 import { AgentAvatar, AgentStateWord } from "./agent-avatar";
 
 /** Initials and a tone per agent. Deliberately the same palette the meeting room uses. */
@@ -64,9 +66,9 @@ const BY_DISPLAY: Record<string, { initials: string; tone: string }> = {
 
 /** Two letters that mean something, and a colour that is stable for this agent. */
 export function agentMeta(key: string, label?: string) {
-  const byKey = META[(key || "").trim().toLowerCase()];
+  const byKey = own(META, (key || "").trim().toLowerCase());
   if (byKey) return byKey;
-  const byName = BY_DISPLAY[(label || key || "").trim().toLowerCase()];
+  const byName = own(BY_DISPLAY, (label || key || "").trim().toLowerCase());
   if (byName) return byName;
   // A word-initial pair beats the first two letters: "Release Manager" is RM, not RE.
   const words = (label || key || "?").replace(/[_-]+/g, " ").trim().split(/\s+/);
@@ -97,14 +99,20 @@ export function AgentChip({ roleKey, label, note, children, href, size = 24, sta
   const identity = agentIdentity(roleKey || label || "");
   const name = label || identity.name;
   const callsign = identity.callsign && identity.callsign !== name ? ` · ${identity.callsign}` : "";
+  // One state for the face, its word and the chip: a paused or retired agent is paused or
+  // retired here whatever it was last doing (§2.5 truthful state).
+  const shown = withLifecycle(state ?? "idle", identity.lifecycle);
+  const sayState = Boolean(state) || shown !== "idle";
   return (
-    <span className="agent-chip" data-testid={`agent-chip-${roleKey}`} data-state={state}>
-      <AgentAvatar identity={identity} size={size} state={state} aiBadge={false}
+    <span className="agent-chip" data-testid={`agent-chip-${roleKey}`} data-state={sayState ? shown : undefined}>
+      <AgentAvatar identity={identity} size={size} state={shown} aiBadge={false}
                    className={`mr-avatar tone-${meta.tone} ag-face`} tip={`${name}${callsign} · AI agent`} />
       {href
         ? <a className="agent-chip-name" href={href}>{name}</a>
         : <span className="agent-chip-name">{name}</span>}
-      {state ? <AgentStateWord state={state} /> : null}
+      {/* The tooltip and badge are not read aloud; this is how a screen reader hears it is an AI. */}
+      <span className="ag-sr">, AI agent</span>
+      {sayState ? <AgentStateWord state={shown} /> : null}
       {note ? <span className="agent-chip-note">{note}</span> : null}
       {children}
     </span>

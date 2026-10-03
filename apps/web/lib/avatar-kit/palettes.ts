@@ -10,6 +10,7 @@
  * Hex values (not var()) because the same SVG is drawn by next/og and the cast export, where
  * no stylesheet exists. Where a value IS a token, the token is named beside it.
  */
+import { dict } from "./dict";
 
 export type Palette = { id: string; label: string; body: string; shade: string; disc: string; glow: string };
 
@@ -25,7 +26,7 @@ export const PALETTES: readonly Palette[] = [
   { id: "coral", label: "Coral", body: "#f2647a" /* --red */, shade: "#b7404f", disc: "#2b121a", glow: "#ffd9df" },
 ] as const;
 
-export const PALETTE_BY_ID: Record<string, Palette> = Object.fromEntries(PALETTES.map((p) => [p.id, p]));
+export const PALETTE_BY_ID: Readonly<Record<string, Palette>> = dict(PALETTES.map((p) => [p.id, p]));
 
 /** The visor glass, the neck and the badge plates: one near-black for every character. */
 export const GLASS = "#0a1122";

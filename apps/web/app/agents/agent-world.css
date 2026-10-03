@@ -4,14 +4,26 @@
 
 /* ── [kit] avatar + motion ─────────────────────────────────────────────────────── */
 
-/* The face. Sized by --ag-size, or by the wrapper a surface already had (.wf-avatar, the chip's
-   .mr-avatar), whichever is more specific. The SVG fills it. */
+/* The face. Always sized by --ag-size, which AgentAvatar sets from its `size` prop. The face
+   still wears the .mr-avatar class some surfaces size in globals.css (26px; 24px in a chip,
+   the meeting list and the Ask BOSS openers); each of those rules is restated here with
+   .ag-face added, one class more specific, so the prop wins. A test holds the two files in step. */
 .ag-avatar {
   position: relative; display: inline-flex; flex: none; vertical-align: middle;
   width: var(--ag-size, 24px); height: var(--ag-size, 24px); line-height: 0;
 }
+.mr-avatar.ag-face,
+.agent-chip .mr-avatar.ag-face,
+.mr-meeting-avatars .mr-avatar.ag-face,
+.askboss-opener .mr-avatar.ag-face { width: var(--ag-size, 24px); height: var(--ag-size, 24px); }
 .ag-avatar-svg, .ag-avatar-svg > svg { display: block; width: 100%; height: 100%; }
 .mr-avatar.ag-face { background: transparent; color: inherit; padding: 0; overflow: visible; }
+
+/* Read aloud, not shown: "AI agent" beside a chip's name. */
+.ag-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 .wf-avatar.ag-avatar { background: transparent; }
 
 /* AI badge: a dot and the letters, from 32px up. */
