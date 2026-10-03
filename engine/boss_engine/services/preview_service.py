@@ -578,8 +578,23 @@ def find_run_declaration(workdir: Path, changed: Optional[list[str]] = None
     return None
 
 
-def run_declared_command(rel_dir: str, command: str) -> list[str]:
-    """The argv for a declared command, run from the directory that declared it."""
+_INSTALLS = re.compile(r"\b(npm\s+(install|ci|i)\b|pnpm\s+(install|i)\b|yarn(\s+install)?\s*(&&|$))")
+
+
+def run_declared_command(rel_dir: str, command: str,
+                         workdir: Optional[Path] = None) -> list[str]:
+    """The argv for a declared command, run from the directory that declared it.
+
+    PREPARED THE SAME WAY AS EVERY OTHER RUN. A declared command is proven by the build in the
+    agent's workspace, where `node_modules` already exists, and then run by a preview from a
+    fresh clone, where it does not. docs-freshness-board declared `npm run build && node
+    server/dist/index.js`, passed its proof, and every preview of it died on "tsc: not found"
+    (2026-10-03). A Node app's dependencies are installed first — with NPM_INSTALL_CMD, the one
+    install BOSS runs everywhere — unless the declaration installs them itself.
+    """
+    base = workdir if rel_dir in ("", ".") or workdir is None else workdir / rel_dir
+    if workdir is not None and (base / "package.json").is_file() and not _INSTALLS.search(command):
+        command = f"{NPM_INSTALL_CMD} && {command}"
     if rel_dir in ("", "."):
         return ["sh", "-lc", command]
     return ["sh", "-lc", f"cd {shlex.quote(rel_dir)} && {command}"]
@@ -990,7 +1005,7 @@ def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional
     # build wrote the command and proved it served before it passed (find_run_declaration).
     run_declaration = find_run_declaration(workdir, changed)
     if run_declaration:
-        return AppRun(run_declared_command(*run_declaration), "declared",
+        return AppRun(run_declared_command(*run_declaration, workdir=workdir), "declared",
                       declared_in=run_declaration[0], declared_command=run_declaration[1])
 
     # WHAT THE BUILD DECLARED BEATS ANYTHING INFERRED LATER. The build knew which app it
