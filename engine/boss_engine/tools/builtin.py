@@ -5515,6 +5515,9 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
             "comms_contract": spec.get("comms_contract") or {},
             "skills": permissions.get("allowed_skills") or [],
             "forbidden_skills": permissions.get("forbidden_skills") or [],
+            # Agent World: who it is (callsign, tagline, voice) — how it speaks, never what it
+            # may do (services/agent_persona.py).
+            "persona": spec.get("persona") or {},
             "has_agent_definition": True,
             "definition_source": "spec",
             # Say it in the payload, because the model reads this before it answers and will

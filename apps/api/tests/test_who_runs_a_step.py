@@ -174,6 +174,7 @@ def _unheld_skill_nobody_may_call(client, engine) -> str:
     from sqlalchemy import text
 
     from boss_engine.services import step_agents
+    from boss_engine.services.workflow_readiness import skill_needs
 
     held = {a["skill_id"] for a in client.get(
         "/v1/role-skills", params={"project_id": PROJECT}).json()["assignments"]}
@@ -182,6 +183,11 @@ def _unheld_skill_nobody_may_call(client, engine) -> str:
         for item in client.get("/v1/skills", params={"project_id": PROJECT}).json()["items"]:
             skill = item["id"]
             if skill in held:
+                continue
+            # And one that needs nothing from the project (no SMTP, no channel): the test is
+            # about who may run it, not about setup. Which skills are left unheld moves as the
+            # shipped agents are given more (the Agent World cast holds the generic ones).
+            if skill_needs(skill, None):
                 continue
             callers = step_agents._allowed_callers(c, PROJECT, skill)
             if callers and not (callers & (roles | {"*", "workflow_runner"})):

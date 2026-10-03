@@ -600,6 +600,9 @@ REGISTERED_ROLES = frozenset({
     # that can put something in front of an audience should not be the one that assembled it,
     # and an editing mistake should be catchable by somebody who did not make it.
     "video_editor",
+    # THE AGENT WORLD CAST (agent-world spec §0.1): the engineers a build is staffed with and
+    # the two who keep it running. Installed by core_v1/core_v2 with a voice, skills and MCP.
+    "backend_engineer", "frontend_engineer", "operations_engineer", "sre", "docs_writer",
     # A PERSON. Not an agent BOSS runs — the one participant it cannot.
     #
     # A gate exists because somebody wants a human to look. With no way to SAY that, the only

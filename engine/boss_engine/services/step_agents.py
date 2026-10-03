@@ -214,7 +214,7 @@ def _agent_rows(connection: Connection, project_id: str) -> list[Any]:
     """THE LIST OF AGENTS: every `roles` row but the person. The step picker and the Agents
     roster both read it, so the roster cannot show five agents while the picker offers 34."""
     rows = connection.execute(
-        text("SELECT role_key, display_name, spec FROM roles WHERE project_id = :p "
+        text("SELECT role_key, display_name, spec, lifecycle FROM roles WHERE project_id = :p "
              "ORDER BY role_key"),
         {"p": project_id},
     ).mappings().all()
@@ -257,8 +257,40 @@ def project_agents(connection: Connection, project_id: str,
             # The MCP servers it holds (role_mcp_servers), by name and id.
             "mcp": list((held.get(role) or {}).get("mcp") or []),
             "mcp_ids": list((held.get(role) or {}).get("mcp_ids") or []),
+            # Agent World: a paused or retired agent is never picked (see `resolve`).
+            "lifecycle": str(_get(row, "lifecycle") or "active"),
+            "callsign": str(((spec or {}).get("persona") or {}).get("callsign") or "")
+            if isinstance((spec or {}).get("persona"), dict) else "",
         })
     return out
+
+
+def _get(row: Any, key: str) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _off_duty_name(agent: dict[str, Any]) -> str:
+    return str(agent.get("callsign") or agent.get("name") or agent.get("role_key"))
+
+
+def _on_duty(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The agents in `pool` Auto may pick: not paused, not retired.
+
+    When EVERY agent that could do the step is off duty, the step fails fast with
+    `<Name> is paused` rather than with "nobody holds this", which would send the operator to
+    grant a skill the agent already holds.
+    """
+    active = [a for a in pool if str(a.get("lifecycle") or "active") == "active"]
+    if pool and not active:
+        from .agent_identity import paused_message
+
+        first = pool[0]
+        raise StepAgentError(paused_message(_off_duty_name(first),
+                                            str(first.get("lifecycle") or "paused")))
+    return active
 
 
 def _listed(agents: Iterable[dict[str, Any]], limit: int = 8) -> str:
@@ -659,6 +691,26 @@ def _choose(connection: Connection, settings: Any, project_id: str,
                    [a["role_key"] for a in pool])
 
 
+def _lifecycle_of(connection: Connection, project_id: str,
+                  role_key: str) -> Optional[tuple[str, str]]:
+    """(lifecycle, name to show) for one agent, or None when it is not a roles row."""
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT lifecycle, display_name, spec FROM roles "
+                     "WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": role_key},
+            ).mappings().first()
+    except Exception:  # noqa: BLE001 — no connection or no lifecycle column: on duty
+        return None
+    if row is None:
+        return None
+    spec = row["spec"] if isinstance(row["spec"], dict) else {}
+    persona = spec.get("persona") if isinstance(spec.get("persona"), dict) else {}
+    return (str(row["lifecycle"] or "active"),
+            str(persona.get("callsign") or row["display_name"] or role_key))
+
+
 def resolve(
     connection: Connection,
     settings: Any,
@@ -676,11 +728,18 @@ def resolve(
     binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
     named = named_agent(step)
     if named:
+        # A PAUSED AGENT NAMED ON A STEP FAILS THE STEP FAST, with its name — it does not run,
+        # and nobody else is silently put in its place.
+        off = _lifecycle_of(connection, project_id, named)
+        if off and off[0] != "active":
+            from .agent_identity import paused_message
+
+            raise StepAgentError(paused_message(off[1], off[0]))
         return _record(named, "named", "named on the step", [named])
 
     if binding.get("agent_work"):
         agents = project_agents(connection, project_id)
-        pool = _agent_work_pool(step, agents)
+        pool = _on_duty(_agent_work_pool(step, agents))
         skills, mcp = step_scope(step)
         if not pool:
             raise StepAgentError(
@@ -704,6 +763,7 @@ def resolve(
                 f"this project has no custom step called '{binding['custom_step']}'.")
         agents = project_agents(connection, project_id)
         pool, basis, fallback = who_may_run(connection, project_id, definition, agents)
+        pool = _on_duty(pool)
         runs = custom_step_runs(definition, connection, project_id)
         brief = " ".join(str(x) for x in (definition.get("label"), definition.get("summary"),
                                           runs) if x)

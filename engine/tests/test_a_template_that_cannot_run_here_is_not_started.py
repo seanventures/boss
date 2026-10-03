@@ -70,6 +70,13 @@ def _catalogue_version(c, project_id: str, key: str) -> str:
     return version["id"]
 
 
+#: Every agent Standard Product Delivery names: its default step agents and its release approver.
+STANDARD_AGENTS = sorted(
+    {s["captain"] for s in next(e for e in wc.CATALOGUE
+                                if e["key"] == "standard_product_delivery")["steps"]
+     if s.get("captain")} | {"release_manager"})
+
+
 def _make_ready(c, project_id: str, roles: list[str]) -> None:
     """Everything a delivery template needs: a model, a repository, a host, its agents."""
     c.execute(text(
@@ -107,7 +114,10 @@ def test_a_template_on_a_bare_project_says_exactly_what_is_missing(eng, project)
     # approval, which the panel answers automatically — no person or agent acts on it — so
     # requiring the agent refused every delivery template for a step nobody performs (review of
     # the readiness change). The release approver, who does act, is still required.
-    assert "role:pm" not in missing
+    # Agent World: the catalogue now NAMES its agents (workflow_catalogue.DEFAULT_STEP_AGENTS),
+    # so 'pm' is needed again — as Juno, who runs the research and the panel — and still never
+    # as the PRD approver nobody acts on.
+    assert {n["step_id"] for n in missing["role:pm"]["needed_by"]} == {"research", "meeting"}
     assert missing["deployment_target"]["needed_by"][0]["step_id"] == "deploy"
     # The release is a person's gate, so the host can still be added while the run is going.
     assert missing["deployment_target"]["after_a_person"] is True
@@ -124,7 +134,7 @@ def test_start_is_refused_until_it_is_ready_and_then_it_is_not(eng, project):
         assert "cannot run here yet" in str(refused.value)
         assert "Somewhere to deploy" in str(refused.value)
 
-        _make_ready(c, project, ["pm", "release_manager"])
+        _make_ready(c, project, STANDARD_AGENTS)
         result = ready.refuse_unless_ready(c, Settings(), project, version_id=version_id)
         assert result["ready"] and result["missing"] == []
 
@@ -132,7 +142,7 @@ def test_start_is_refused_until_it_is_ready_and_then_it_is_not(eng, project):
 def test_starting_anyway_covers_only_what_the_operator_was_shown(eng, project):
     with eng.begin() as c:
         version_id = _catalogue_version(c, project, "standard_product_delivery")
-        _make_ready(c, project, ["pm", "release_manager"])
+        _make_ready(c, project, STANDARD_AGENTS)
         c.execute(text("DELETE FROM deployment_hosts WHERE project_id = :p"), {"p": project})
         # One thing missing, accepted by name: it starts, and the run says so on its record.
         result = ready.refuse_unless_ready(c, Settings(), project, version_id=version_id,

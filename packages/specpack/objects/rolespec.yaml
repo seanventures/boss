@@ -22,6 +22,10 @@ fields:
     fields:
       allowed_skills: { array: string }
       forbidden_skills: { array: string }
+      # The MCP servers the agent holds (role_mcp_servers), by server NAME, optionally limited
+      # to some tools (empty = every tool). Granted by the seed like allowed_skills; a grant an
+      # operator takes away stays away (seed_exclusions).
+      mcp_servers: { array: object, optional: true, item_fields: { server: string, tools: { array: string } } }
   comms_contract: object
   output_contracts: { array: string }
   eval_rubric: object
@@ -31,3 +35,24 @@ fields:
       level: integer
       upgrade_requires: { array: string }
       downgrade_triggers: { array: string }
+  # WHO THE AGENT IS, separate from what it may do (agent-world spec §4.2). Optional. Compiled
+  # into every prompt the agent gets (services/agent_persona.py), and it shapes HOW the agent
+  # speaks, never WHAT it may do: a persona mentioning a tool or skill, or saying "you may",
+  # "allowed to", "ignore previous" or "system prompt", is refused (422).
+  persona:
+    type: object
+    optional: true
+    fields:
+      version: integer                # 1
+      archetype: string               # first_principles_researcher | visionary_founder | relentless_operator | teacher_who_simplifies | null
+      callsign: string                # <=16; an invented word, never a real person's name
+      tagline: string                 # <=60
+      about_me: string                # <=280, first person
+      voice:                          # each 0-4
+        type: object
+        fields: { blunt: integer, thorough: integer, bold: integer, casual: integer }
+      phrases: { array: string }      # <=3
+      never: { array: string }        # <=5, appended to boundaries.must_not
+      avatar:
+        type: object
+        fields: { kit: string, seed: string, hat: string, emblem: string, palette: string, visor: string }
