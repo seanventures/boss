@@ -59,7 +59,11 @@ PYTEST_CMD = "python3 -m pytest -q"
 # populated tree is already close to a no-op. Keeping the install FIRST is what makes the
 # target self-sufficient on a fresh clone — without it `npm run build` exits 127 and the
 # failure reads as the task's fault when it is the environment's.
-NPM_INSTALL_CMD = "npm install --no-audit --no-fund --loglevel=error"
+# `--include=dev` because BOSS's own image sets NODE_ENV=production, and npm then skips
+# devDependencies — where tsc, vite and every other BUILD tool lives. docs-freshness-board's
+# preview died on "tsc: not found" (2026-10-03) for exactly that. Every install BOSS runs to
+# build or test an app is this one command; preview_service imports it rather than retyping it.
+NPM_INSTALL_CMD = "npm install --include=dev --no-audit --no-fund --loglevel=error"
 _WEB_STEPS = ["npm run build", "npm run typecheck", "npm run lint", "npm run test:e2e"]
 WEB_TEST_COMMANDS = [NPM_INSTALL_CMD, *_WEB_STEPS]
 #: Display only — the console shows the sequence as one line. Never execute this.

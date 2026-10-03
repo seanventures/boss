@@ -98,3 +98,14 @@ def test_only_node_build_step_writes_a_vite_build():
     outside = before + rest.split("\ndef command_for_entry", 1)[1]
     code = "\n".join(line for line in outside.splitlines() if not line.lstrip().startswith("#"))
     assert not re.search(r'"[^"\n]*npx vite build[^"\n]*"', code)
+
+
+def test_every_install_boss_runs_brings_the_build_tools():
+    """BOSS's image sets NODE_ENV=production, so a plain `npm install` skips devDependencies:
+    docs-freshness-board's preview died on "tsc: not found". One install command, with dev."""
+    from boss_engine.services.verification_target import NPM_INSTALL_CMD
+
+    assert "--include=dev" in NPM_INSTALL_CMD
+    source = Path(ps.__file__).read_text()
+    code = "\n".join(l for l in source.splitlines() if not l.lstrip().startswith("#"))
+    assert not re.search(r'"[^"\n]*npm install --no-audit', code), "retyped install command"

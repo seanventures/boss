@@ -32,6 +32,7 @@ from ..config import Settings
 from ..db import begin
 from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
+from .verification_target import NPM_INSTALL_CMD
 from .github_connections import github_token_for
 from .execution_substrate import ExecutionSubstrate, normalize_build_substrate
 from .sandbox_provider import MicroVMProvider
@@ -1122,12 +1123,12 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
             if scripts.get("start"):
                 return [
                     "sh", "-lc",
-                    "npm install --no-audit --no-fund --loglevel=error && "
+                    f"{NPM_INSTALL_CMD} && "
                     f"{build}npm start",
                 ]
             return [
                 "sh", "-lc",
-                "npm install --no-audit --no-fund --loglevel=error && "
+                f"{NPM_INSTALL_CMD} && "
                 f"{build}"
                 'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory dist',
             ]
@@ -1150,7 +1151,7 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
             build = "" if script == "dev" else "npm run build --if-present && "
             return [
                 "sh", "-lc",
-                "npm install --no-audit --no-fund --loglevel=error && "
+                f"{NPM_INSTALL_CMD} && "
                 f"{build}npm run {script}{suffix}",
             ]
     procfile = workdir / "Procfile"
@@ -1233,7 +1234,7 @@ def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str
         build = node_build_step(app_root, manifest if isinstance(manifest, dict) else {})
         return [
             "sh", "-lc",
-            f"{app_dir}npm install --no-audit --no-fund --loglevel=error && "
+            f"{app_dir}{NPM_INSTALL_CMD} && "
             f"{build}npm start",
         ]
     if kind == "py":
@@ -2091,7 +2092,7 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
         command = json.dumps(plan.declared_command)
         if (workdir / rel / "package.json").is_file():
             port = 3000
-            setup = "RUN npm install --no-audit --no-fund --loglevel=error\n"
+            setup = f"RUN {NPM_INSTALL_CMD}\n"
             base = "node:20-slim"
         else:
             port = 8000
@@ -2137,7 +2138,7 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
             "FROM node:20-slim\n"
             "COPY . /app\n"
             f"WORKDIR {app_workdir}\n"
-            "RUN npm install --no-audit --no-fund --loglevel=error\n"
+            f"RUN {NPM_INSTALL_CMD}\n"
             "RUN npm run build --if-present || true\n"
             f"ENV HOST=0.0.0.0 PORT={port}\nEXPOSE {port}\n"
             "CMD [\"npm\", \"run\", \"start\"]\n")
@@ -2146,7 +2147,7 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
         port = 3000
         existing.write_text(
             "FROM node:20-slim\nWORKDIR /app\nCOPY package*.json ./\n"
-            "RUN npm install --no-audit --no-fund --loglevel=error\nCOPY . .\n"
+            f"RUN {NPM_INSTALL_CMD}\nCOPY . .\n"
             "RUN npm run build --if-present || true\n"
             f"ENV HOST=0.0.0.0 PORT={port}\nEXPOSE {port}\nCMD [\"npm\", \"run\", \"start\"]\n")
         return port
