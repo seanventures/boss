@@ -67,9 +67,11 @@ Self-hosted SSO against an identity provider you run can be set up later.
 
 ### Other areas you will see
 
-- **Agent work** lists recent activity by role. After a first goal it may still be empty.
-- **Team structure** shows the planned role layout and observed handoffs. Changing the plan does not route tasks.
-- **Agent Studio** holds agent definitions you can test. Installing a starter template, or the five example workflows under `examples/`, only writes definitions you can change or delete. It does not start work.
+- **Workflows → Runs** lists the work in flight and what each run did. After a first goal it may still be empty.
+- **Workflows → Library** holds every workflow you can start, yours and the standards BOSS ships. Open one to edit it; a standard saves as your own copy.
+- **Agents → Roster** lists every agent and what it holds. An agent's page shows its **Profile**, which you can test.
+- **Agents → Team** shows the planned role layout and observed handoffs. Changing the plan does not route tasks.
+- **Agents → + New agent** makes an agent, blank or from a starter template. Installing a template, or the five example workflows under `examples/`, only writes definitions you can change or delete. It does not start work.
 
 ## Ask the terminal
 

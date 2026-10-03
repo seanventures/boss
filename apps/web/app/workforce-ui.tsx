@@ -402,7 +402,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
 
   if (!chartNow.apiReachable) {
     return <p className="detail" role="alert">
-      Team structure is unavailable{chartNow.blockedReason ? ` — ${chartNow.blockedReason}` : ""}.
+      The team is unavailable{chartNow.blockedReason ? ` — ${chartNow.blockedReason}` : ""}.
     </p>;
   }
 
@@ -410,7 +410,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
     <div className="org" data-declared={view === "planned" && placedCount > 0}
          data-view={view}>
       <div className="org-viewbar">
-        <div className="org-views" role="tablist" aria-label="Team structure views">
+        <div className="org-views" role="tablist" aria-label="Team views">
           <button type="button" role="tab" aria-selected={view === "planned"}
                   onClick={() => setView("planned")}>Planned roles</button>
           <button type="button" role="tab" aria-selected={view === "observed"}

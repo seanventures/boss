@@ -49,7 +49,7 @@ The default briefs set three rules:
 python3 examples/sales-signal/setup.py --api http://127.0.0.1:8000
 ```
 
-3. Open **Delivery → Workflows → "Sales signal" → Start one** and fill in:
+3. Open **Workflows → Library**, find "Sales signal", then **⋯ → Start** and fill in:
    - `company` — *"Acme Corp, acme.com"*
    - `salesperson` — the address that receives the summary
    - `assess_brief` / `draft_brief` — leave blank to use the defaults
@@ -74,10 +74,10 @@ eventually email the wrong one, so this one ends with a person.
 ## Build it by hand
 
 1. **Skills → Enable:** `model.generate_text`, `email.send_real_guarded`
-2. **Your steps →** define three: *Assess the opportunity* and *Draft the approach* (both
+2. **Workflows → Library → Steps → + New step:** define three: *Assess the opportunity* and *Draft the approach* (both
    `model.generate_text`, input `prompt`), and *Tell the salesperson*
    (`email.send_real_guarded`, inputs `to` and `body`).
-3. **Create a new workflow →** drag **Research** from the built-in palette, then your three steps.
+3. **Workflows → Library → + New workflow →** drag **Research** from the built-in palette, then your three steps.
 4. **Wire the inputs:**
 
    | Step | Input | Source |

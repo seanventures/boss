@@ -220,7 +220,7 @@ def main() -> None:
 
     print("""  Done.
 
-  Start a run: Delivery → Workflows → "Video edit and publish" → Start one.
+  Start a run: Workflows → Library → "Video edit and publish" → ⋯ → Start.
 
     video_url      a link to the video — Google Drive, or any direct HTTPS link
     instructions   what you want, in plain English. For example:

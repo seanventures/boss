@@ -134,7 +134,7 @@ def main() -> None:
 
     print(f"""  Done.
 
-  Start a run: Delivery → Workflows → "{NAME}" → Start one.
+  Start a run: Workflows → Library → "{NAME}" → ⋯ → Start.
 
     company         who to look into — "Acme Corp, acme.com"
     salesperson     the address that gets the summary

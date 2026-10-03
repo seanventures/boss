@@ -1792,6 +1792,12 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   const laneRef = useRef<HTMLDivElement | null>(null);
   const detailRef = useRef<HTMLDivElement | null>(null);
 
+  // WHO WORKS THIS RUN is a property of the app, not a stage of its delivery — so it is a chip
+  // on the run's bar, not a node in the lane the runtime never runs.
+  const [showAgents, setShowAgents] = useState(false);
+  const spec = useRunSpec(projectId, run, capabilities);
+  const laneState = useMemo(() => runLaneState(run), [run]);
+
   useEffect(() => {
     const place = () => {
       const lane = laneRef.current;
@@ -1813,15 +1819,28 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
       detail.style.setProperty("--dw-arrow-x", `${Math.round(clamped)}px`);
     };
     place();
+    // RE-MEASURED WHENEVER THE NODES MAY HAVE MOVED, not only when the window does. The notch
+    // was measured on a pick and a window resize, so it pointed at a stale x after the run's
+    // saved workflow replaced the fallback lane (branches drawn), after the Agents chip was
+    // toggled off (a fresh wrapper with no position), and after the lane refitted to a
+    // container that resized on its own (review of ws/ia, 2026-10-03). The dependencies cover
+    // the first two; the observers cover the lane reflowing for any reason.
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [picked, steps.length]);
-
-  // WHO WORKS THIS RUN is a property of the app, not a stage of its delivery — so it is a chip
-  // on the run's bar, not a node in the lane the runtime never runs.
-  const [showAgents, setShowAgents] = useState(false);
-  const spec = useRunSpec(projectId, run, capabilities);
-  const laneState = useMemo(() => runLaneState(run), [run]);
+    const lane = laneRef.current;
+    const detail = detailRef.current;
+    const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    const moved = typeof MutationObserver === "undefined" ? null : new MutationObserver(place);
+    if (lane) {
+      sized?.observe(lane);
+      moved?.observe(lane, { subtree: true, childList: true, attributes: true });
+    }
+    if (detail) sized?.observe(detail);
+    return () => {
+      window.removeEventListener("resize", place);
+      sized?.disconnect();
+      moved?.disconnect();
+    };
+  }, [picked, steps.length, spec, showAgents]);
 
   return (
     <div className="dw-path" data-testid="dw-path">

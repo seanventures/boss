@@ -88,7 +88,7 @@ def main() -> None:
 
     print("""  Done.
 
-  Start a run: Delivery → Workflows → "Meeting to tickets" → Start one.
+  Start a run: Workflows → Library → "Meeting to tickets" → ⋯ → Start.
 
     transcript   paste the meeting notes or transcript
     context      optional — who the team are, what the project is called
