@@ -524,11 +524,11 @@ describe("a customer can define their own step", () => {
 
   it("says what the binding costs before the step is created", () => {
     expect(FORM).toContain('data-testid="dw-define-risk"');
-    expect(FORM).toContain("This step will always stop for a person.");
+    expect(FORM).toContain('" · always needs a person"');
   });
 
   it("names an unclassified skill as unclassified rather than as tier 0", () => {
-    expect(FORM).toContain("nobody has classified this skill");
+    expect(FORM).toContain("nobody has classified this skill, so it counts as the floor");
   });
 
   it("warns that an untrusted binding will not publish", () => {
@@ -538,7 +538,7 @@ describe("a customer can define their own step", () => {
   it("says so when there is nothing to bind to, counting CHOICES not servers", () => {
     // A project with three registered MCP servers that are all unreachable has three empty
     // groups in the dropdown and nothing to pick. Counting servers would call that "fine".
-    expect(FORM).toContain("Nothing to bind a step to yet.");
+    expect(FORM).toContain("Nothing to bind yet");
     expect(FORM).toContain("bindable.mcp_servers.reduce((n, server) => n + server.tools.length, 0)");
     expect(FORM).toContain("|| choices === 0}");
   });

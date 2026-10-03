@@ -3,6 +3,8 @@
 import React, { useMemo, useState } from "react";
 
 import type { Bindable, CustomStep } from "../delivery-workflows-ui";
+import { HelpTip } from "../help-tip";
+import { ChipInput } from "./editor/inspector/chip-input";
 
 /** Defining a step: name it, choose what it runs, say what it needs.
  *
@@ -34,8 +36,12 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
           : `mcp:${(editing as { mcp_server_id?: string }).mcp_server_id ?? ""}:`
             + `${editing.mcp_tool_name ?? ""}`)
       : "");
-  const [inputs, setInputs] = useState(
-    (editing?.inputs ?? []).map((i) => i.name).join(", "));
+  // One chip per input name. A comma-separated box turned a trailing comma or a stray space
+  // into an input called "" that every workflow placing the step then had to wire.
+  const [inputs, setInputs] = useState<string[]>((editing?.inputs ?? []).map((i) => i.name));
+  // WHAT IT MAKES, so a later step can be wired to it. Without this the inspector could offer
+  // nothing from a custom step but "▸ …" and a free-text field name.
+  const [produces, setProduces] = useState<string[]>(editing?.produces ?? []);
   // WHAT THE STEP KNOWS. A binding says which tool runs; it says nothing about the standard
   // the step has to hold to, and that lived in the head of whoever defined it.
   const [knowledge, setKnowledge] = useState(editing?.knowledge ?? "");
@@ -93,7 +99,8 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
         label: label.trim(),
         summary: summary.trim(),
         binding_kind: kind === "skill" ? "skill" : "mcp_tool",
-        inputs: inputs.split(",").map((i) => i.trim()).filter(Boolean),
+        inputs,
+        produces,
         knowledge: knowledge.trim(),
       };
       if (kind === "skill") {
@@ -141,23 +148,27 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
           ))}
         </select>
       </label>
-      <label className="field">
+      <div className="field">
         <span>Needs</span>
-        <input className="input" value={inputs} data-testid="dw-define-inputs"
-               placeholder="ticket, severity"
-               onChange={(e) => setInputs(e.target.value)} />
-      </label>
+        <ChipInput value={inputs} onChange={setInputs} label="Needs" placeholder="ticket, severity"
+                   testId="dw-define-inputs" />
+      </div>
+      <div className="field">
+        <span>Makes</span>
+        <ChipInput value={produces} onChange={setProduces} label="Makes" placeholder="ticket_url"
+                   testId="dw-define-produces" />
+      </div>
       {/* WHAT THIS STEP KNOWS. Carried into every execution, so the step behaves the same on
           its hundredth run as on the one where somebody was watching. */}
       <label className="field">
-        <span>What should it know?</span>
-        <textarea className="textarea" rows={4} value={knowledge}
-                  data-testid="dw-step-knowledge"
-                  placeholder="House style, the clauses that matter, the internal doc that explains this system — anything the step must hold to that its tool does not already know."
-                  onChange={(e) => setKnowledge(e.target.value)} />
-        <span className="detail">
-          Optional. Handed to the skill or tool on every run as context.
+        <span>
+          What should it know?{" "}
+          <HelpTip label="What should it know?" text="Optional. Handed to the skill or tool on every run as context." />
         </span>
+        <textarea className="textarea" rows={3} value={knowledge}
+                  data-testid="dw-step-knowledge"
+                  placeholder="House style, key clauses, links"
+                  onChange={(e) => setKnowledge(e.target.value)} />
       </label>
       <label className="field">
         <span>What it does</span>
@@ -166,24 +177,24 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
       </label>
 
       {/* The consequence of the binding, stated before the step is created rather than at
-          publish time when the workflow is already drawn. */}
+          publish time when the workflow is already drawn. A line, with the why in a tip. */}
       {chosen ? (
-        <p className="detail dw-define-risk" data-testid="dw-define-risk">
-          Risk tier {chosen.risk}, from {chosen.what}
-          {chosen.unclassified ? " — nobody has classified this skill, so it is treated as "
-                                 + "the floor" : ""}
-          {chosen.risk >= riskFloor
-            ? ". This step will always stop for a person."
-            : ". This step can run automatically."}
-        </p>
+        <div className="detail dw-define-risk" data-testid="dw-define-risk">
+          Risk {chosen.risk} · {chosen.what}
+          {chosen.risk >= riskFloor ? " · always needs a person" : " · runs on its own"}
+          {chosen.unclassified ? (
+            <>{" "}<HelpTip label="Unclassified"
+                            text="Unclassified: nobody has classified this skill, so it counts as the floor." /></>
+          ) : null}
+        </div>
       ) : null}
       {blocked ? (
-        <p className="detail dw-define-blocked" data-testid="dw-define-blocked">
-          This is untrusted and at tier {chosen?.risk}. You can define it, but a workflow using
-          it will not publish until it has been reviewed.
-        </p>
+        <div className="detail dw-define-blocked" data-testid="dw-define-blocked"
+             title="A workflow using it won't publish until the binding is reviewed.">
+          Untrusted · won&apos;t publish until reviewed
+        </div>
       ) : null}
-      {failure ? <p className="detail dw-define-error" data-testid="dw-define-error">{failure}</p> : null}
+      {failure ? <div className="detail dw-define-error" role="alert" data-testid="dw-define-error">{failure}</div> : null}
 
       <div className="dw-define-actions">
         <button type="submit" className="cap-btn" data-testid="dw-define-save"
@@ -196,27 +207,22 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
         // Counted in CHOICES, not in servers. A project with three registered MCP servers that
         // are all unreachable has three empty groups in the dropdown and nothing to pick — and
         // saying nothing there reads as a broken control rather than an empty one.
-        <p className="detail dw-define-empty" data-testid="dw-define-empty">
-          Nothing to bind a step to yet.{" "}
-          {unreachable.length
-            ? `${unreachable.join(", ")} ${unreachable.length === 1 ? "is" : "are"} `
-              + "registered but not answering, so their tools cannot be listed. "
-            : ""}
-          Register a skill, or connect an MCP server, and it will appear here.
-        </p>
+        <div className="detail dw-define-empty" data-testid="dw-define-empty">
+          Nothing to bind yet{" "}
+          <HelpTip label="Nothing to bind yet"
+                   text={unreachable.length
+                     ? `${unreachable.join(", ")} registered but not answering. Fix them on Skills and MCP.`
+                     : "Register a skill, or connect an MCP server, on Skills and MCP."} />
+        </div>
       ) : unreachable.length ? (
-        // Said even when there is something else to pick. The API lists an unreachable
-        // server's LAST-KNOWN tools (marked "(unreachable)" in the picker), so this used to
-        // claim they were "not listed" right above a list of them (round-1 review). What is
-        // true: they are what it offered when last reached, and a step on one fails until it
-        // answers again.
-        <p className="detail dw-define-empty" data-testid="dw-define-unreachable">
-          {unreachable.join(", ")} {unreachable.length === 1 ? "is" : "are"} not answering.
-          Any tools shown under {unreachable.length === 1 ? "it" : "them"} are what
-          {unreachable.length === 1 ? " it" : " they"} offered when last reached, and a step
-          bound to one will fail until the server answers. Fix the URL or start the server on
-          the Skills and MCP page.
-        </p>
+        // Said even when there is something else to pick. An unreachable server's tools are its
+        // LAST-KNOWN ones (marked "(unreachable)" in the picker), and a step bound to one fails
+        // until it answers again.
+        <div className="detail dw-define-empty" data-testid="dw-define-unreachable">
+          {unreachable.join(", ")} not answering{" "}
+          <HelpTip label="Not answering"
+                   text="Registered but not answering: tools shown are from the last answer, and steps on them fail until it answers." />
+        </div>
       ) : null}
     </form>
   );

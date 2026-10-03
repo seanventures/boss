@@ -6,6 +6,30 @@ import { apiWrite } from "../../lib/api-write";
 import type { CustomStep, Draft } from "../delivery-workflows-ui";
 
 /**
+ * Give an agent a skill: the one grant write the workflow screens make.
+ *
+ * ONE FUNCTION FOR EVERY GRANT BUTTON. The builder row below and the inspector's `Grant` row
+ * both call this, so the body (and the signed-in actor it carries) cannot drift between them.
+ */
+export async function grantSkill({ projectId, actor, roleKey, skillId }: {
+  projectId: string; actor: string; roleKey: string; skillId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const r = await apiWrite("/api/skills", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "assign", project_id: projectId, role_key: roleKey,
+                             skill_id: skillId, actor }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: String(body?.error ?? `HTTP ${r.status}`) };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) };
+  }
+}
+
+/**
  * Whether the agent named on a step is permitted to run it, said in the row.
  *
  * WHY IT IS ITS OWN COMPONENT. It owns a request — granting the skill — and putting that state
@@ -45,21 +69,10 @@ export function CaptainCanRunIt({ projectId, actor, step, mine, holdings, onGran
   const grant = async () => {
     setBusy(true);
     setFailed("");
-    try {
-      const r = await apiWrite("/api/skills", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "assign", project_id: projectId, role_key: captain,
-                               skill_id: skillId, actor }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) { setFailed(String(body?.error ?? `HTTP ${r.status}`)); return; }
-      onGranted();
-    } catch (e) {
-      setFailed(String((e as Error)?.message ?? e));
-    } finally {
-      setBusy(false);
-    }
+    const result = await grantSkill({ projectId, actor, roleKey: captain, skillId });
+    setBusy(false);
+    if (!result.ok) { setFailed(result.error); return; }
+    onGranted();
   };
 
   return (
