@@ -51,6 +51,12 @@ function withNext(step: SpecStep, targets: string[]): SpecStep {
 }
 
 const BRANCH_KINDS = new Set(["parallel", "condition", "join", "bounded_loop"]);
+const BRANCH_KEYS = ["branches", "wait_for", "on_true", "on_false", "body"];
+
+/** A step that is (or carries) branch structure: only JSON may add or copy one. */
+function isBranchStructure(step: SpecStep): boolean {
+  return BRANCH_KINDS.has(step.kind) || BRANCH_KEYS.some((key) => key in step);
+}
 
 const stepsOf = (spec: Spec): SpecStep[] => (Array.isArray(spec?.steps) ? spec.steps : []);
 
@@ -102,8 +108,7 @@ export function isLinear(spec: Spec): boolean {
   if (!steps.length) return true;
   for (const step of steps) {
     if (BRANCH_KINDS.has(step.kind)) return false;
-    if ("wait_for" in step || "branches" in step || "on_true" in step || "on_false" in step
-        || "body" in step) return false;
+    if (BRANCH_KEYS.some((key) => key in step)) return false;
     if (nextOf(step).length > 1) return false;
   }
   const byId = new Map(steps.map((s) => [s.id, s]));
@@ -242,6 +247,35 @@ export function upstreamOf(spec: Spec, id: string): string[] {
 
 /* ── Rename ──────────────────────────────────────────────────────────────────────── */
 
+/**
+ * An expression (a condition's or a bounded loop's) with every `path` that reads `steps.<from>`
+ * pointed at `steps.<to>`, through `all`/`any`/`not`. The runtime looks the path up in the run's
+ * payload (workflows.py `_lookup_path`, which drops a leading `$`/`.`), so a typed decision or a
+ * loop's exit test that still named the old id would silently never match. The same object when
+ * nothing reads `from`.
+ */
+function renameInExpression(expression: unknown, from: string, to: string): unknown {
+  if (Array.isArray(expression)) {
+    const items = expression.map((item) => renameInExpression(item, from, to));
+    return items.some((item, i) => item !== expression[i]) ? items : expression;
+  }
+  if (!expression || typeof expression !== "object") return expression;
+  const node = expression as Obj;
+  let out: Obj | null = null;
+  for (const key of ["all", "any", "not"]) {
+    if (!(key in node)) continue;
+    const renamed = renameInExpression(node[key], from, to);
+    if (renamed !== node[key]) out = { ...(out ?? node), [key]: renamed };
+  }
+  if (typeof node.path === "string") {
+    const match = /^([$.]*)steps\.([^.]+)(\..*)?$/.exec(node.path);
+    if (match && match[2] === from) {
+      out = { ...(out ?? node), path: `${match[1]}steps.${to}${match[3] ?? ""}` };
+    }
+  }
+  return out ?? expression;
+}
+
 /** A step id renamed everywhere a spec can name it. Refused (same spec) when `to` is taken. */
 export function renameStepId(spec: Spec, from: string, to: string): Spec {
   const steps = stepsOf(spec);
@@ -260,6 +294,7 @@ export function renameStepId(spec: Spec, from: string, to: string): Spec {
     for (const key of ["branches", "wait_for"]) {
       if (Array.isArray(step[key])) step[key] = swapList(step[key]);
     }
+    if ("expression" in step) step.expression = renameInExpression(step.expression, from, to);
     const binding = asObj(step.binding);
     const inputs = asObj(binding.inputs);
     if (Object.values(inputs).some((v) => asObj(v).from_step === from)) {
@@ -399,11 +434,13 @@ function detach(spec: Spec, id: string): { spec: Spec; step: SpecStep } | null {
  * `step` placed at index `at` of `linearOrder(spec)` (-1 = the end), spliced into the `next`
  * chain. Refused (same spec) unless the gap is in a linear stretch: before the entry, after the
  * single last step, or between a step whose only `next` is its neighbour and a neighbour with no
- * other way in.
+ * other way in. Refused too for a step that is itself branch structure (a parallel, condition,
+ * join or loop, or anything carrying their keys): placing one would draw a branch, and branch
+ * structure is edited in JSON.
  */
 export function insertStep(spec: Spec, at: number, step: SpecStep): Spec {
   const steps = stepsOf(spec);
-  if (!step?.id || steps.some((s) => s.id === step.id)) return spec;
+  if (!step?.id || steps.some((s) => s.id === step.id) || isBranchStructure(step)) return spec;
   const order = linearOrder(spec);
   const index = at < 0 || at > order.length ? order.length : at;
   const byId = new Map(steps.map((s) => [s.id, s]));
@@ -448,6 +485,23 @@ export function insertStep(spec: Spec, at: number, step: SpecStep): Spec {
     if (prev && s.id === prev.id) out.push(placed);
   }
   return { ...spec, steps: out, ...(!prev ? { entry_step: placed.id } : {}) };
+}
+
+/** A copy of `id` under `copyId`, right after it in the flow. Refused (same spec) where
+ *  `insertStep` would refuse it: a branch construct, or a step outside a linear stretch. */
+export function duplicateStep(spec: Spec, id: string, copyId: string): Spec {
+  const original = stepsOf(spec).find((s) => s.id === id);
+  if (!original) return spec;
+  const copy = { ...structuredClone(original), id: copyId } as SpecStep;
+  return insertStep(spec, linearOrder(spec).indexOf(id) + 1, copy);
+}
+
+/** Whether `duplicateStep` would copy it, so Duplicate can be disabled where it would not. */
+export function canDuplicate(spec: Spec, id: string): boolean {
+  const ids = new Set(stepsOf(spec).map((s) => s.id));
+  let probe = `${id}_copy`;
+  while (ids.has(probe)) probe += "_";
+  return duplicateStep(spec, id, probe) !== spec;
 }
 
 /** The step left at index `to` of the flow. Refused (same spec) across a branch boundary. */

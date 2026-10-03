@@ -8,7 +8,9 @@
  * WHO RUNS IT (the agent rule, in order):
  *   1. `captain: "human"`              → A person
  *   2. any other captain               → that agent, by its display name
- *   3. an approval gate                → A person
+ *   3. an approval gate                → A person (a decision step, or a built-in step whose
+ *                                        capability `is_gate`s, e.g. "UX sign-off": the engine's
+ *                                        workflow_run_actions.is_gate, the one test)
  *   4. an agent task or your own step  → Auto (BOSS picks), or "Auto · <name>" when exactly one
  *                                        agent holds every skill the step needs
  *   5. a built-in step                 → You (it runs as whoever starts the workflow)
@@ -109,6 +111,16 @@ function neededMcp(step: SpecStep, palette: Palette): string[] {
   return [];
 }
 
+/** Whether a person answers this step: the engine's one test (workflow_run_actions.is_gate) —
+ *  a decision step, or a built-in step whose capability is declared a gate. */
+export function isGateStep(step: SpecStep, palette: Palette | null): boolean {
+  const type = stepType(step);
+  if (type === "gate") return true;
+  if (type !== "builtin") return false;
+  const key = asObj(step.binding).capability;
+  return Boolean(palette?.capabilities.find((c) => c.key === key)?.is_gate);
+}
+
 function agentOf(step: SpecStep, type: StepView["type"], palette: Palette): StepView["agent"] {
   const human = palette.humanRole || "human";
   const captain = typeof step.captain === "string" ? step.captain.trim() : "";
@@ -118,7 +130,7 @@ function agentOf(step: SpecStep, type: StepView["type"], palette: Palette): Step
     return { kind: "named", role_key: captain, label: agent?.name || captain,
              tip: "Named by this workflow." };
   }
-  if (type === "gate") return { kind: "person", label: "A person", tip: "Waits for a person to answer." };
+  if (isGateStep(step, palette)) return { kind: "person", label: "A person", tip: "Waits for a person to answer." };
   if (type === "agent" || type === "custom") {
     const skills = neededSkills(step, palette);
     const mcp = neededMcp(step, palette);
@@ -174,7 +186,7 @@ export function stepView(step: SpecStep, palette: Palette): StepView {
     icon: type === "builtin" ? String(binding.capability) : type,
     agent,
     badges: {
-      approval: type === "gate" || forced || approval.mode === "manual",
+      approval: isGateStep(step, palette) || forced || approval.mode === "manual",
       forced,
       inputs: new Set([...Object.keys(inputs), ...required]).size,
       unwired: required.filter(unset),

@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  canMove, canRemove, edgesOf, insertStep, isLinear, layoutFlow, linearOrder, moveStep,
+  canDuplicate, canMove, canRemove, duplicateStep, edgesOf, insertStep, isLinear, layoutFlow, linearOrder, moveStep,
   removeStep, renameStepId, upstreamOf, wireInputs,
 } from "../lib/workflow-graph";
 import type { Spec, SpecStep } from "../lib/workflow-editor-types";
@@ -142,6 +142,35 @@ describe("renaming a step rewrites every reference to it", () => {
     expect(step(b, "poll").body).toBe("ping");
   });
 
+  it("expression paths, so a loop's exit test still reads its body", () => {
+    const b = renameStepId(BRANCHES, "probe", "ping");
+    expect(step(b, "poll").expression).toEqual({ path: "steps.ping.output.ok", equals: false });
+    // A path that does not read the renamed step is the same object.
+    expect(step(b, "check").expression).toBe(step(BRANCHES, "check").expression);
+  });
+
+  it("a typed decision's routing, through all/any/not and the $ prefix", () => {
+    const spec: Spec = { entry_step: "route", steps: [
+      { id: "route", kind: "capability", next: ["pick"],
+        binding: { typed_decision: { question: "Which team?", options: ["billing", "tech"] },
+                   inputs: {} } },
+      { id: "pick", kind: "condition", on_true: "bill", on_false: "tech", next: [],
+        expression: { all: [
+          { path: "steps.route.output.answer", op: "eq", value: "billing" },
+          { not: { any: [{ path: "$.steps.route.output.confident", op: "eq", value: false },
+                         { path: "steps.router.output.x" }, { path: "input.route" }] } },
+        ] } },
+      fresh("bill"), fresh("tech"),
+    ] };
+    const renamed = renameStepId(spec, "route", "triage");
+    expect(step(renamed, "pick").expression).toEqual({ all: [
+      { path: "steps.triage.output.answer", op: "eq", value: "billing" },
+      { not: { any: [{ path: "$.steps.triage.output.confident", op: "eq", value: false },
+                     { path: "steps.router.output.x" }, { path: "input.route" }] } },
+    ] });
+    expect(step(renamed, "triage").next).toEqual(["pick"]);
+  });
+
   it("refuses a name another step has, and leaves the spec as it was", () => {
     expect(renameStepId(LINEAR, "research", "build")).toBe(LINEAR);
   });
@@ -221,6 +250,29 @@ describe("inserting", () => {
 
   it("refuses an id the spec already has", () => {
     expect(insertStep(LINEAR, 0, fresh("build"))).toBe(LINEAR);
+  });
+});
+
+describe("branch structure is never placed or copied visually", () => {
+  it("insert refuses a parallel, condition, join or loop, or a step carrying their keys", () => {
+    for (const extra of [{ kind: "parallel", branches: [] }, { kind: "condition" },
+                         { kind: "join", wait_for: ["build"] }, { kind: "bounded_loop" },
+                         { body: "build" }, { on_true: "build" }, { wait_for: [] }]) {
+      expect(insertStep(LINEAR, -1, fresh("x", extra as Partial<SpecStep>))).toBe(LINEAR);
+    }
+    expect(insertStep({ steps: [] }, 0, fresh("x", { kind: "parallel" }))).toEqual({ steps: [] });
+  });
+
+  it("a step in a linear stretch duplicates; a branch construct does not", () => {
+    const copied = duplicateStep(PARALLEL, "review_a", "review_a_2");
+    expect(linearOrder(copied).slice(2, 5)).toEqual(["review_a", "review_a_2", "review_a2"]);
+    expect(canDuplicate(PARALLEL, "review_a")).toBe(true);
+    for (const id of ["fan", "merge"]) {
+      expect(duplicateStep(PARALLEL, id, `${id}_2`)).toBe(PARALLEL);
+      expect(canDuplicate(PARALLEL, id)).toBe(false);
+    }
+    for (const id of ["check", "poll"]) expect(canDuplicate(BRANCHES, id)).toBe(false);
+    expect(duplicateStep(LINEAR, "ghost", "ghost_2")).toBe(LINEAR);
   });
 });
 

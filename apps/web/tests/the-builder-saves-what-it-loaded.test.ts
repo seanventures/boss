@@ -240,6 +240,32 @@ describe("the editor still owns what it edits", () => {
       .toEqual({ from_input: "instructions" });
   });
 
+  it("a block setting can never rewrite the step's identity or structure", () => {
+    const s = load(VIDEO);
+    const before = step(s.spec, "gate");
+    const after = apply(s, { type: "PATCH_STEP", id: "gate", patch: { config: {
+      id: "b", kind: "timer", next: ["zzz"], branches: ["x"], wait_for: ["x"], on_true: "x",
+      on_false: "x", body: "x", join: "x", binding: {}, captain: "x", title: "x",
+      approval: { mode: "manual" }, max_attempts: 9, question: "Ship it?",
+    } } });
+    expect(step(after.spec, "gate")).toEqual({ ...before, question: "Ship it?" });
+    // An emptied setting is removed, not saved as "".
+    const cleared = apply(after, { type: "PATCH_STEP", id: "gate", patch: { config: { guidance: "" } } });
+    expect("guidance" in step(cleared.spec, "gate")).toBe(false);
+  });
+
+  it("renaming a step keeps every route that reads its output", () => {
+    for (const [from, to] of [["probe", "ping"], ["judge", "verdict"]] as const) {
+      const flow: Spec = from === "probe" ? BRANCHES : { ...VIDEO, steps: VIDEO.steps.map((st) =>
+        st.id === "gate" ? { id: "gate", kind: "condition", on_true: "publish", on_false: "edit",
+          expression: { path: "steps.judge.output.answer", op: "eq", value: "yes" }, next: [] }
+          : st) };
+      const renamed = apply(load(flow), { type: "RENAME_ID", from, to }).spec;
+      expect(specText(renamed)).not.toContain(`steps.${from}.`);
+      expect(specText(renamed)).toContain(`steps.${to}.output`);
+    }
+  });
+
   it("a title is capped at 80 characters, and an empty one is removed", () => {
     const long = apply(load(VIDEO), { type: "PATCH_STEP", id: "fetch", patch: { title: "x".repeat(90) } });
     expect(step(long.spec, "fetch").title).toHaveLength(80);
