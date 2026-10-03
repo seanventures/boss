@@ -57,9 +57,15 @@ REPLY_RESERVE_MICROS = 60_000
 #: A summary or a proposal reads the whole transcript and writes structure: more.
 SYNTHESIS_RESERVE_MICROS = 150_000
 BUDGET_CATEGORY = "agent_conversation"
-#: A turn left 'streaming' longer than this was cut off (a crashed worker, a closed tab that
-#: killed the request); it no longer blocks the next turn.
+#: THE FLOOR. One stream speaks in a conversation at a time. The request that is allowed to
+#: speak claims the floor in the same transaction that checked it was free (so two sends a
+#: moment apart cannot both pass), renews the claim as each seat begins, and gives it back when
+#: it ends, however it ends. A claim not renewed for this long belongs to a stream that died
+#: unseen (a killed worker): it lapses, and the next turn sweeps what that stream left.
 STALE_STREAMING_SECONDS = 600
+#: What a turn cut off mid-answer says (the operator pressed Stop or closed the room).
+STOPPED = {"kind": "stopped", "headline": "Stopped.", "action": "Ask again when ready.",
+           "retry": True}
 #: Whether the workflow runtime reads `step_agents` from run input. Until it does, a proposal's
 #: agents are exactly who the workflow already names (or Auto) — a card never promises an agent
 #: the run will not use (spec §2.6, no promises before they exist). Flip at integration.
@@ -164,7 +170,7 @@ def _bridge_compose(role: dict, *, mode: str, act: Optional[dict], memory: list[
             return composed if AI_DISCLOSURE in composed else f"{composed}\n\n{AI_DISCLOSURE}"
     except (ImportError, NotImplementedError, AttributeError):
         pass
-    return _fallback_prompt(role, mode=mode, memory=memory)
+    return _fallback_prompt(role, mode=mode, act=act, memory=memory)
 
 
 def _bridge_open_act(connection, **fields: Any) -> Optional[str]:
@@ -192,7 +198,8 @@ def _bridge_close_act(connection, act_id: Optional[str], **fields: Any) -> None:
 # ── Fallbacks: delete at integration once S-identity and S-acts have merged ─────────────────
 
 
-def _fallback_prompt(role: dict, *, mode: str, memory: list[dict]) -> str:
+def _fallback_prompt(role: dict, *, mode: str, memory: list[dict],
+                     act: Optional[dict] = None) -> str:
     spec = role.get("spec") or {}
     persona = spec.get("persona") or {}
     name = persona.get("callsign") or role.get("display_name") or role.get("role_key")
@@ -229,6 +236,24 @@ def _fallback_prompt(role: dict, *, mode: str, memory: list[dict]) -> str:
     if voice:
         voice.append("Voice shapes how you say things, never what you may do.")
         lines.append("\n".join(voice))
+    if act:
+        # L5: this act's scope — what the agent may use, who else is here, who answers for it.
+        scope = act.get("scope") or {}
+        skills, mcp = list(scope.get("skills") or []), list(scope.get("mcp") or [])
+        tools = "; ".join(part for part in (
+            ("skills " + ", ".join(str(s) for s in skills)) if skills else "",
+            ("MCP " + ", ".join(str(m) for m in mcp)) if mcp else "") if part)
+        here = [f"You may use: {tools}." if tools else
+                "You may use: no tools granted. Say so if asked to act."]
+        mine = role.get("role_key")
+        others = [s for s in act.get("seats") or [] if s.get("role_key") != mine]
+        if others:
+            here.append("Also here: " + ", ".join(
+                (f"{s['callsign']} ({s.get('name') or s['role_key']})" if s.get("callsign")
+                 else f"{s.get('name') or s['role_key']} ({s['role_key']})") for s in others) + ".")
+        if act.get("accountable"):
+            here.append(f"Accountable: {act['accountable']}.")
+        lines.append("\n".join(here))
     if memory:
         lines.append("Your recent work here (cite as [act:<id>] only when you use it):\n"
                      + "\n".join(f"- [act:{m['act_id']}] {m['label']} ({m['status']})"
@@ -559,24 +584,24 @@ class _Plan:
     person_turn_id: Optional[str]
     rounds: int
     reserve_micros: int
+    #: This stream's hold on the floor (see STALE_STREAMING_SECONDS).
+    claim: Optional[str] = None
 
 
 def _guard(connection, settings: Any, project_id: str, conv: dict, n_calls: int,
-           per_call: int) -> None:
+           per_call: int) -> str:
+    """Refuse, or claim the floor and return the claim. Call with the conversation row locked
+    (`_row(..., lock=True)`) and in the transaction that records what the stream is for."""
     if conv["status"] == "closed":
         raise ConverseError(409, "closed", "This conversation is closed.")
     if not model_ready(connection, settings, project_id):
         raise ConverseError(409, "needs_model", NEEDS_MODEL_MESSAGE)
-    connection.execute(
-        text("UPDATE agent_conversation_turns SET status = 'error' "
-             "WHERE conversation_id = :c AND status = 'streaming' "
-             "AND created_at < now() - make_interval(secs => :s)"),
-        {"c": conv["conversation_id"], "s": STALE_STREAMING_SECONDS},
-    )
-    if connection.execute(
-            text("SELECT 1 FROM agent_conversation_turns WHERE conversation_id = :c "
-                 "AND status = 'streaming'"), {"c": conv["conversation_id"]}).first():
+    held = connection.execute(
+        text("SELECT streaming_until > now() FROM agent_conversations "
+             "WHERE conversation_id = :c"), {"c": conv["conversation_id"]}).scalar()
+    if held:
         raise ConverseError(409, "busy", "An agent is still answering.")
+    _sweep(connection, settings, project_id, conv["conversation_id"])
     from .budget import BudgetGovernor
 
     quote = BudgetGovernor(settings).quote(connection, project_id, BUDGET_CATEGORY,
@@ -584,6 +609,61 @@ def _guard(connection, settings: Any, project_id: str, conv: dict, n_calls: int,
     if not quote.get("allowed", True):
         raise ConverseError(409, "budget", "The budget refused this conversation.",
                             href="/?area=budget")
+    claim = make_id("flr")
+    connection.execute(
+        text("UPDATE agent_conversations SET streaming_claim = :t, "
+             "streaming_until = now() + make_interval(secs => :s) WHERE conversation_id = :c"),
+        {"t": claim, "s": STALE_STREAMING_SECONDS, "c": conv["conversation_id"]})
+    return claim
+
+
+def _settle_cut_off(connection, settings: Any, project_id: str, turn_id: str,
+                    act_id: Optional[str], reservation_id: Optional[str], failure: dict) -> None:
+    """A turn that will never finish: say why, give back its budget, close its act."""
+    from .budget import BudgetGovernor
+
+    connection.execute(
+        text("UPDATE agent_conversation_turns SET status = 'error', kind = 'error', "
+             "payload = CAST(:p AS JSONB) WHERE turn_id = :t AND status = 'streaming'"),
+        {"p": json.dumps(failure), "t": turn_id})
+    if reservation_id:
+        BudgetGovernor(settings).release(connection, project_id, reservation_id,
+                                         "conversation turn did not finish")
+    _bridge_close_act(connection, act_id, status="error")
+
+
+def _sweep(connection, settings: Any, project_id: str, conversation_id: str) -> None:
+    """With the floor free, a turn still 'streaming' belongs to a stream that died unseen."""
+    rows = connection.execute(
+        text("SELECT turn_id, act_id, payload FROM agent_conversation_turns "
+             "WHERE conversation_id = :c AND status = 'streaming'"),
+        {"c": conversation_id}).mappings().all()
+    for r in rows:
+        held = _jsonish(r["payload"], {}).get("reservation_id")
+        _settle_cut_off(connection, settings, project_id, r["turn_id"], r["act_id"], held,
+                        STOPPED)
+
+
+def _hold_floor(engine, plan: "_Plan") -> bool:
+    """Renew this stream's claim. False when it lost the floor (it lapsed and was retaken)."""
+    from ..db import begin
+
+    if not plan.claim:
+        return True
+    with begin(engine) as c:
+        return c.execute(
+            text("UPDATE agent_conversations SET streaming_until = now() + "
+                 "make_interval(secs => :s) WHERE conversation_id = :c AND streaming_claim = :t"),
+            {"s": STALE_STREAMING_SECONDS, "c": plan.conversation_id, "t": plan.claim},
+        ).rowcount == 1
+
+
+def _yield_floor(connection, plan: "_Plan") -> None:
+    if plan.claim:
+        connection.execute(
+            text("UPDATE agent_conversations SET streaming_claim = NULL, streaming_until = NULL "
+                 "WHERE conversation_id = :c AND streaming_claim = :t"),
+            {"c": plan.conversation_id, "t": plan.claim})
 
 
 def _next_seq(connection, conversation_id: str) -> int:
@@ -661,7 +741,7 @@ def take_turn(engine, *, project_id: str, conversation_id: str, actor: str, mess
         else:
             speakers = [_Speaker(conv["seats"][0], "asked_by_person")]
             rounds = 1
-        _guard(c, settings, project_id, conv, len(speakers), REPLY_RESERVE_MICROS)
+        claim = _guard(c, settings, project_id, conv, len(speakers), REPLY_RESERVE_MICROS)
         person_turn_id = None
         if not greeting:
             person_turn_id = _insert_turn(
@@ -678,7 +758,7 @@ def take_turn(engine, *, project_id: str, conversation_id: str, actor: str, mess
                                "WHERE conversation_id = :c"),
                           {"t": _title_from(said), "c": conversation_id})
     plan = _Plan(project_id, conversation_id, actor, "reply", speakers, person_turn_id, rounds,
-                 REPLY_RESERVE_MICROS)
+                 REPLY_RESERVE_MICROS, claim)
     return _run(engine, settings, plan)
 
 
@@ -702,11 +782,11 @@ def summarize_room(engine, *, project_id: str, conversation_id: str, actor: str,
                               "AND speaker_kind = 'agent' AND status = 'complete'"),
                          {"c": conversation_id}).first():
             raise _invalid("nobody has spoken yet")
-        _guard(c, settings, project_id, conv, 1, SYNTHESIS_RESERVE_MICROS)
+        claim = _guard(c, settings, project_id, conv, 1, SYNTHESIS_RESERVE_MICROS)
     lead = conv.get("lead_role_key") or conv["seats"][0]
     return _run(engine, settings, _Plan(project_id, conversation_id, actor, "summary",
                                         [_Speaker(lead, "asked_by_person")], None, 1,
-                                        SYNTHESIS_RESERVE_MICROS))
+                                        SYNTHESIS_RESERVE_MICROS, claim))
 
 
 def propose_start(engine, *, project_id: str, conversation_id: str, actor: str,
@@ -723,11 +803,11 @@ def propose_start(engine, *, project_id: str, conversation_id: str, actor: str,
         if not c.execute(text("SELECT 1 FROM agent_conversation_turns WHERE conversation_id = :c "
                               "AND speaker_kind = 'person'"), {"c": conversation_id}).first():
             raise _invalid("say what you want to start first")
-        _guard(c, settings, project_id, conv, 1, SYNTHESIS_RESERVE_MICROS)
+        claim = _guard(c, settings, project_id, conv, 1, SYNTHESIS_RESERVE_MICROS)
     lead = conv.get("lead_role_key") or conv["seats"][0]
     return _run(engine, settings, _Plan(project_id, conversation_id, actor, "proposal",
                                         [_Speaker(lead, "asked_by_person")], None, 1,
-                                        SYNTHESIS_RESERVE_MICROS))
+                                        SYNTHESIS_RESERVE_MICROS, claim))
 
 
 # ── Running a plan: one governed model call per speaker ──────────────────────────────────────
@@ -738,33 +818,60 @@ def _run(engine, settings: Any, plan: _Plan) -> Iterator[dict]:
     speaker sends error and the room moves on; done closes it with the conversation summary."""
     from ..db import begin
 
-    round_turns: dict[str, str] = {}   # role_key → its turn in round 1 (for round 2 replies)
-    for speaker in plan.speakers:
-        if speaker.round == 2:
-            # Answer the seat that spoke just before you in round 1 — or, if you spoke first,
-            # the last one: everyone answers someone, and nobody answers themselves.
-            order = [s.role_key for s in plan.speakers if s.round == 1]
-            i = order.index(speaker.role_key)
-            target = order[i - 1] if i > 0 else order[-1]
-            speaker.reply_to_turn_id = round_turns.get(target)
-            speaker.reply_to_role = target
-            if not speaker.reply_to_turn_id:
-                continue
-        try:
-            for event in _speak(engine, settings, plan, speaker):
-                if event["type"] == "turn_end" and event.get("status") == "complete":
-                    if speaker.round == 1:
-                        round_turns[speaker.role_key] = event["turn_id"]
-                yield event
-        except Exception as error:  # noqa: BLE001 — one seat failing never ends the room
-            log.exception("converse speaker %s failed", speaker.role_key)
-            from .model_failures import explain
+    try:
+        round_turns: dict[str, str] = {}   # role_key → its turn in round 1 (for round 2 replies)
+        for speaker in plan.speakers:
+            if speaker.round == 2:
+                # Answer the seat that spoke just before you in round 1 — or, if you spoke
+                # first, the last one: everyone answers someone, and nobody answers themselves.
+                order = [s.role_key for s in plan.speakers if s.round == 1]
+                i = order.index(speaker.role_key)
+                target = order[i - 1] if i > 0 else order[-1]
+                speaker.reply_to_turn_id = round_turns.get(target)
+                speaker.reply_to_role = target
+                if not speaker.reply_to_turn_id:
+                    continue
+            if not _hold_floor(engine, plan):
+                break   # the claim lapsed and another stream took the floor: stop here
+            started: Optional[str] = None
+            speaking = _speak(engine, settings, plan, speaker)
+            try:
+                for event in speaking:
+                    if event["type"] == "turn_start":
+                        started = event["turn_id"]
+                    if event["type"] == "turn_end" and event.get("status") == "complete":
+                        if speaker.round == 1:
+                            round_turns[speaker.role_key] = event["turn_id"]
+                    yield event
+            except Exception as error:  # noqa: BLE001 — one seat failing never ends the room
+                log.exception("converse speaker %s failed", speaker.role_key)
+                from .model_failures import explain
 
-            yield {"type": "error", "error": explain(error)}
-    with begin(engine) as c:
-        conv = _row(c, plan.project_id, plan.conversation_id)
-        summary = _shape(c, conv, with_turns=False)
-    yield {"type": "done", "conversation": summary}
+                # _speak has already settled its turn; say which one failed.
+                if started:
+                    yield {"type": "error", "turn_id": started, "error": explain(error)}
+                    yield {"type": "turn_end", "turn_id": started, "status": "error",
+                           "tokens_in": 0, "tokens_out": 0, "cost_usd": 0, "cited_acts": []}
+                else:
+                    yield {"type": "error", "error": explain(error)}
+            finally:
+                # Closing the stream (Stop, a closed tab) closes the seat speaking with it, now,
+                # so its turn is settled before the floor is given back below.
+                speaking.close()
+        with begin(engine) as c:
+            # Give the floor back BEFORE `done`: the console sends its next turn on `done`.
+            _yield_floor(c, plan)
+            conv = _row(c, plan.project_id, plan.conversation_id)
+            summary = _shape(c, conv, with_turns=False)
+        yield {"type": "done", "conversation": summary}
+    finally:
+        # However the stream ended — done, Stop, a closed tab, an error — the floor is free.
+        # Nothing is said to the remaining seats: a stopped room skips them.
+        try:
+            with begin(engine) as c:
+                _yield_floor(c, plan)
+        except Exception:  # noqa: BLE001 — the claim lapses by itself if this cannot run
+            log.exception("could not give back the floor of %s", plan.conversation_id)
 
 
 def _transcript(connection, conv: dict, roles: dict[str, dict]) -> str:
@@ -1053,6 +1160,11 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                              {"a": parent}).scalar()
         is_room = conv["kind"] == "room"
         scope = _scope(c, plan.project_id, speaker.role_key)
+        reservation = budget.reserve(c, plan.project_id, BUDGET_CATEGORY, plan.reserve_micros,
+                                     f"conversation {plan.conversation_id}",
+                                     expires_in_minutes=15)
+        held = reservation.get("reservation_id") if reservation.get("status") == "reserved" \
+            else None
         label_kind = {"talk": "Talk", "plan": "Plan", "room": "Room"}[conv["kind"]]
         act_id = _bridge_open_act(
             c, project_id=plan.project_id, kind="seat" if is_room else "chat",
@@ -1074,10 +1186,10 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                             role_key=speaker.role_key, reply_to_turn_id=speaker.reply_to_turn_id,
                             kind={"summary": "summary", "proposal": "proposal"}.get(
                                 plan.mode, "message"),
-                            status="streaming", act_id=act_id, fingerprint=role.get("fingerprint"))
-        reservation = budget.reserve(c, plan.project_id, BUDGET_CATEGORY, plan.reserve_micros,
-                                     f"conversation {plan.conversation_id}",
-                                     expires_in_minutes=15)
+                            status="streaming", act_id=act_id, fingerprint=role.get("fingerprint"),
+                            # Until it finishes, the turn carries its reservation, so whoever
+                            # finds it cut off can give the budget back (_sweep).
+                            payload={"reservation_id": held} if held else {})
         system_prompt = _bridge_compose(
             role, mode="panel" if is_room else "chat",
             act={"act_id": act_id, "label": f"{label_kind} · {conv['title']}",
@@ -1089,123 +1201,158 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
         adapter = make_adapter(c, settings, plan.project_id)
         engine_name = _engine_name(c, settings, plan.project_id)
     turn_id = turn["turn_id"]
-    yield {"type": "turn_start", "turn_id": turn_id, "seq": turn["seq"], "speaker_kind": "agent",
-           "role_key": speaker.role_key, "act_id": act_id,
-           **({"reply_to_turn_id": speaker.reply_to_turn_id} if speaker.reply_to_turn_id else {})}
+    # Once the turn exists it is settled exactly once, whatever happens next: completed below,
+    # failed with a reason (`fail`), or — if the stream is closed mid-answer (Stop, a closed
+    # tab: GeneratorExit) or anything after this point raises — stopped by the `except` at the
+    # end. Never left 'streaming' with its act open and its budget held.
+    finished = False
 
     def fail(error: Any) -> Iterator[dict]:
+        nonlocal finished
         failure = explain(error)
         with begin(engine) as c2:
-            c2.execute(text("UPDATE agent_conversation_turns SET status = 'error', kind = 'error', "
-                            "payload = CAST(:p AS JSONB) WHERE turn_id = :t"),
-                       {"p": json.dumps(failure), "t": turn_id})
-            if reservation.get("reservation_id"):
-                budget.release(c2, plan.project_id, reservation["reservation_id"],
-                               "conversation turn failed")
-            _bridge_close_act(c2, act_id, status="error")
+            _settle_cut_off(c2, settings, plan.project_id, turn_id, act_id, held, failure)
+        finished = True
         yield {"type": "error", "turn_id": turn_id, "error": failure}
         yield {"type": "turn_end", "turn_id": turn_id, "status": "error", "tokens_in": 0,
                "tokens_out": 0, "cost_usd": 0, "cited_acts": []}
 
-    if reservation.get("status") != "reserved":
-        yield from fail(f"budget reservation denied: {reservation.get('message')}")
-        return
-
-    prompt_parts = [p for p in (
-        about,
-        f"The conversation so far:\n\n{transcript}" if transcript else "",
-        "Your task now: " + _instruction(plan, conv, speaker, roles, greeting, catalogue),
-    ) if p]
-    prompt = "\n\n".join(prompt_parts)
-    set_llm_context(db_engine=engine, project_id=plan.project_id, stage="converse",
-                    act_id=act_id, role_key=speaker.role_key, settings=settings)
-    started = time.monotonic()
-    full, usage = "", {}
-    structured = plan.mode in ("summary", "proposal")
-    try:
-        for kind, value in _call(adapter, system_prompt, prompt):
-            if kind == "chunk" and not structured:
-                yield {"type": "token", "turn_id": turn_id, "text": value}
-            elif kind == "done":
-                full, usage = value
-                usage = usage or {}
-                if not structured and not getattr(adapter, "stream_text_response", None):
-                    for piece in _reveal(full):
-                        yield {"type": "token", "turn_id": turn_id, "text": piece}
-    except Exception as error:  # noqa: BLE001 — explained to the operator, never raised
-        record_llm_call(engine_name=engine_name, usage={}, ok=False,
-                        error=str(error), stage="converse",
-                        latency_ms=int((time.monotonic() - started) * 1000))
-        set_llm_context(act_id=None, role_key=None)
-        yield from fail(error)
-        return
-    cost = estimate_cost_usd_micros(usage) if usage else 0
-    record_llm_call(engine_name=engine_name, usage=usage, cost_usd_micros=cost,
-                    latency_ms=int((time.monotonic() - started) * 1000), stage="converse")
-    set_llm_context(act_id=None, role_key=None)
-
-    payload: dict = {}
-    content = full.strip()
-    extra_events: list[dict] = []
-    if structured:
+    def record(**call: Any) -> None:
+        # Attribution is set in the SAME generator step as the write. A streamed response
+        # drives each step on a fresh copy of the request's context, so a value set before a
+        # yield is gone after it.
+        set_llm_context(db_engine=engine, project_id=plan.project_id, stage="converse",
+                        act_id=act_id, role_key=speaker.role_key, settings=settings)
         try:
-            with begin(engine) as c:
-                parsed = _only_json(full)
-                if plan.mode == "proposal":
-                    proposal = validate_proposal(c, settings, plan.project_id, parsed, catalogue)
-                    _supersede(c, plan.conversation_id)
-                    payload = proposal
-                    content = str(parsed.get("message") or proposal["why"] or "Here is a plan.")
-                    extra_events.append({"type": "proposal", "turn_id": turn_id,
-                                         "proposal": proposal})
-                else:
-                    summary = _validate_summary(c, settings, plan.project_id, parsed, conv,
-                                                speaker.role_key, catalogue)
-                    payload = summary
-                    content = summary["text"]
-                    extra_events.append({"type": "summary", "turn_id": turn_id,
-                                         "summary": summary})
-        except (ValueError, KeyError, TypeError) as error:
-            yield from fail(f"failed: {error}")
+            record_llm_call(engine_name=engine_name, stage="converse",
+                            latency_ms=int((time.monotonic() - started) * 1000), **call)
+        finally:
+            set_llm_context(act_id=None, role_key=None)
+
+    try:
+        yield {"type": "turn_start", "turn_id": turn_id, "seq": turn["seq"],
+               "speaker_kind": "agent", "role_key": speaker.role_key, "act_id": act_id,
+               **({"reply_to_turn_id": speaker.reply_to_turn_id}
+                  if speaker.reply_to_turn_id else {})}
+
+        if not held:
+            yield from fail(f"budget reservation denied: {reservation.get('message')}")
             return
-        for piece in _reveal(content):
-            yield {"type": "token", "turn_id": turn_id, "text": piece}
-    offered = {m["act_id"] for m in memory}
-    cited = [a for a in dict.fromkeys(_CITE.findall(content)) if a in offered]
-    tokens_in = int(usage.get("prompt_tokens") or 0)
-    tokens_out = int(usage.get("completion_tokens") or 0)
-    with begin(engine) as c:
+
+        prompt_parts = [p for p in (
+            about,
+            f"The conversation so far:\n\n{transcript}" if transcript else "",
+            "Your task now: " + _instruction(plan, conv, speaker, roles, greeting, catalogue),
+        ) if p]
+        prompt = "\n\n".join(prompt_parts)
+        started = time.monotonic()
+        full, usage = "", {}
+        structured = plan.mode in ("summary", "proposal")
+        try:
+            # An adapter that reads the context (provider-capacity, a streaming adapter) sees
+            # this call's attribution too.
+            set_llm_context(db_engine=engine, project_id=plan.project_id, stage="converse",
+                            act_id=act_id, role_key=speaker.role_key, settings=settings)
+            for kind, value in _call(adapter, system_prompt, prompt):
+                if kind == "chunk" and not structured:
+                    yield {"type": "token", "turn_id": turn_id, "text": value}
+                elif kind == "done":
+                    full, usage = value
+                    usage = usage or {}
+        except Exception as error:  # noqa: BLE001 — explained to the operator, never raised
+            record(usage={}, ok=False, error=str(error))
+            yield from fail(error)
+            return
+        cost = estimate_cost_usd_micros(usage) if usage else 0
+        record(usage=usage, cost_usd_micros=cost)
+        if not structured and not getattr(adapter, "stream_text_response", None):
+            for piece in _reveal(full):
+                yield {"type": "token", "turn_id": turn_id, "text": piece}
+
+        payload: dict = {}
+        content = full.strip()
+        extra_events: list[dict] = []
+        if structured:
+            try:
+                with begin(engine) as c:
+                    parsed = _only_json(full)
+                    if plan.mode == "proposal":
+                        proposal = validate_proposal(c, settings, plan.project_id, parsed,
+                                                     catalogue)
+                        _supersede(c, plan.conversation_id)
+                        payload = proposal
+                        content = str(parsed.get("message") or proposal["why"]
+                                      or "Here is a plan.")
+                        extra_events.append({"type": "proposal", "turn_id": turn_id,
+                                             "proposal": proposal})
+                    else:
+                        summary = _validate_summary(c, settings, plan.project_id, parsed, conv,
+                                                    speaker.role_key, catalogue)
+                        payload = summary
+                        content = summary["text"]
+                        extra_events.append({"type": "summary", "turn_id": turn_id,
+                                             "summary": summary})
+            except (ValueError, KeyError, TypeError) as error:
+                yield from fail(f"failed: {error}")
+                return
+            for piece in _reveal(content):
+                yield {"type": "token", "turn_id": turn_id, "text": piece}
+        offered = {m["act_id"] for m in memory}
+        cited = [a for a in dict.fromkeys(_CITE.findall(content)) if a in offered]
+        tokens_in = int(usage.get("prompt_tokens") or 0)
+        tokens_out = int(usage.get("completion_tokens") or 0)
         receipt_id = None
-        if reservation.get("reservation_id"):
+        with begin(engine) as c:
+            # Only a turn still streaming completes. One already settled as cut off (this
+            # stream outlived its claim and the next turn swept it) stays settled: its budget
+            # was given back and its act closed, so this answer is not recorded twice.
+            if not c.execute(text(
+                    "UPDATE agent_conversation_turns SET status = 'complete' "
+                    "WHERE turn_id = :t AND status = 'streaming'"), {"t": turn_id}).rowcount:
+                finished = True
+                return
             receipt_id = _receipt(c, plan.project_id, turn_id,
                                   {"conversation_id": plan.conversation_id, "turn_id": turn_id,
                                    "role_key": speaker.role_key, "act_id": act_id},
                                   {"tokens_in": tokens_in, "tokens_out": tokens_out,
                                    "cost_usd_micros": cost, "model": usage.get("model")})
-            budget.consume(c, plan.project_id, reservation["reservation_id"],
-                           receipt_id=receipt_id, category=BUDGET_CATEGORY,
+            budget.consume(c, plan.project_id, held, receipt_id=receipt_id,
+                           category=BUDGET_CATEGORY,
                            skill_or_model_id=f"converse:{usage.get('model') or 'model'}",
                            estimated_usd_micros=plan.reserve_micros, actual_usd_micros=cost,
                            actor=plan.actor)
-        c.execute(text("""
-            UPDATE agent_conversation_turns SET status = 'complete', content = :content,
-                   payload = CAST(:payload AS JSONB), cited_acts = CAST(:cited AS JSONB),
-                   tokens_in = :ti, tokens_out = :to, cost_usd = :cost, receipt_id = :r
-             WHERE turn_id = :t
-        """), {"content": content, "payload": json.dumps(payload), "cited": json.dumps(cited),
-               "ti": tokens_in, "to": tokens_out, "cost": cost / 1_000_000, "r": receipt_id,
-               "t": turn_id})
-        if plan.mode == "summary":
-            c.execute(text("UPDATE agent_conversations SET summary = CAST(:s AS JSONB), "
-                           "status = 'summarized', updated_at = now() WHERE conversation_id = :c"),
-                      {"s": json.dumps(payload), "c": plan.conversation_id})
-        _bridge_close_act(c, act_id, status="complete",
-                          artifacts=[{"kind": "receipt", "ref": receipt_id}] if receipt_id else [],
-                          tokens_in=tokens_in, tokens_out=tokens_out, cost_usd=cost / 1_000_000)
-    yield from extra_events
-    yield {"type": "turn_end", "turn_id": turn_id, "status": "complete", "tokens_in": tokens_in,
-           "tokens_out": tokens_out, "cost_usd": cost / 1_000_000,
-           **({"receipt_id": receipt_id} if receipt_id else {}), "cited_acts": cited}
+            c.execute(text("""
+                UPDATE agent_conversation_turns SET content = :content,
+                       payload = CAST(:payload AS JSONB), cited_acts = CAST(:cited AS JSONB),
+                       tokens_in = :ti, tokens_out = :to, cost_usd = :cost, receipt_id = :r
+                 WHERE turn_id = :t
+            """), {"content": content, "payload": json.dumps(payload),
+                   "cited": json.dumps(cited), "ti": tokens_in, "to": tokens_out,
+                   "cost": cost / 1_000_000, "r": receipt_id, "t": turn_id})
+            if plan.mode == "summary":
+                c.execute(text("UPDATE agent_conversations SET summary = CAST(:s AS JSONB), "
+                               "status = 'summarized', updated_at = now() "
+                               "WHERE conversation_id = :c"),
+                          {"s": json.dumps(payload), "c": plan.conversation_id})
+            _bridge_close_act(c, act_id, status="complete",
+                              artifacts=[{"kind": "receipt", "ref": receipt_id}],
+                              tokens_in=tokens_in, tokens_out=tokens_out,
+                              cost_usd=cost / 1_000_000)
+        finished = True
+        yield from extra_events
+        yield {"type": "turn_end", "turn_id": turn_id, "status": "complete",
+               "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost / 1_000_000,
+               "receipt_id": receipt_id, "cited_acts": cited}
+    except BaseException as error:
+        if not finished:
+            try:
+                with begin(engine) as c2:
+                    _settle_cut_off(c2, settings, plan.project_id, turn_id, act_id, held,
+                                    STOPPED if isinstance(error, GeneratorExit)
+                                    else explain(error))
+            except Exception:  # noqa: BLE001 — the next turn's sweep settles it instead
+                log.exception("could not settle the cut-off turn %s", turn_id)
+        raise
 
 
 # ── Proposals and summaries ──────────────────────────────────────────────────────────────────
@@ -1351,6 +1498,39 @@ def _find_proposal(connection, conversation_id: str, proposal_id: str
     raise ConverseError(404, "not_found", "No such proposal.")
 
 
+def _latest_summary_turn(connection, conversation_id: str) -> Optional[str]:
+    return connection.execute(
+        text("SELECT turn_id FROM agent_conversation_turns WHERE conversation_id = :c "
+             "AND kind = 'summary' AND status = 'complete' ORDER BY seq DESC LIMIT 1"),
+        {"c": conversation_id}).scalar()
+
+
+def _patch_action(connection, conversation_id: str, turn_id: str, index: int,
+                  fields: dict) -> None:
+    """Set fields on ONE next action of ONE summary turn. A next action is addressed by
+    (summary turn, index), and lives in that turn's payload; the conversation's `summary` is a
+    copy of the latest summary, so it gets the same fields only when this turn IS the latest —
+    merged into what is there, never replaced by an older summary."""
+    summary = _jsonish(connection.execute(
+        text("SELECT payload FROM agent_conversation_turns WHERE turn_id = :t"),
+        {"t": turn_id}).scalar(), {})
+    summary["next_actions"][index].update(fields)
+    connection.execute(
+        text("UPDATE agent_conversation_turns SET payload = CAST(:p AS JSONB) WHERE turn_id = :t"),
+        {"p": json.dumps(summary), "t": turn_id})
+    if _latest_summary_turn(connection, conversation_id) != turn_id:
+        return
+    current = _jsonish(connection.execute(
+        text("SELECT summary FROM agent_conversations WHERE conversation_id = :c"),
+        {"c": conversation_id}).scalar(), None) or summary
+    actions = current.get("next_actions") or []
+    if 0 <= index < len(actions):
+        actions[index].update(fields)
+    connection.execute(
+        text("UPDATE agent_conversations SET summary = CAST(:p AS JSONB), updated_at = now() "
+             "WHERE conversation_id = :c"), {"p": json.dumps(current), "c": conversation_id})
+
+
 def _save_proposal(connection, conversation_id: str, turn_id: str, proposal: dict,
                    index: Optional[int]) -> None:
     if index is None:
@@ -1358,16 +1538,7 @@ def _save_proposal(connection, conversation_id: str, turn_id: str, proposal: dic
             text("UPDATE agent_conversation_turns SET payload = CAST(:p AS JSONB) "
                  "WHERE turn_id = :t"), {"p": json.dumps(proposal), "t": turn_id})
         return
-    summary = _jsonish(connection.execute(
-        text("SELECT payload FROM agent_conversation_turns WHERE turn_id = :t"),
-        {"t": turn_id}).scalar(), {})
-    summary["next_actions"][index]["proposal"] = proposal
-    connection.execute(
-        text("UPDATE agent_conversation_turns SET payload = CAST(:p AS JSONB) WHERE turn_id = :t"),
-        {"p": json.dumps(summary), "t": turn_id})
-    connection.execute(
-        text("UPDATE agent_conversations SET summary = CAST(:p AS JSONB) "
-             "WHERE conversation_id = :c"), {"p": json.dumps(summary), "c": conversation_id})
+    _patch_action(connection, conversation_id, turn_id, index, {"proposal": proposal})
 
 
 def dismiss_proposal(connection, *, project_id: str, conversation_id: str, actor: str,
@@ -1432,14 +1603,24 @@ def start_from_proposal(connection, *, project_id: str, conversation_id: str, ac
 
 
 def open_decision(connection, *, project_id: str, conversation_id: str, actor: str,
-                  index: int) -> dict:
-    """A room's `decision` next action, opened as a real decision for the operator."""
+                  index: int, turn_id: Optional[str] = None) -> dict:
+    """A room summary's `decision` next action, opened as a real decision for the operator.
+
+    The action is (summary turn, index): every summary card in the transcript opens its own
+    action. Without `turn_id`, the latest summary's."""
     from .core import create_blocking_decision
 
     conv = _row(connection, project_id, conversation_id, lock=True)
     if conv["actor"] != actor:
         raise ConverseError(404, "not_found", "No such conversation.")
-    summary = conv.get("summary") or {}
+    turn_id = turn_id or _latest_summary_turn(connection, conversation_id)
+    row = connection.execute(
+        text("SELECT payload FROM agent_conversation_turns WHERE turn_id = :t "
+             "AND conversation_id = :c AND kind = 'summary' AND status = 'complete'"),
+        {"t": turn_id, "c": conversation_id}).first() if turn_id else None
+    if not row:
+        raise _invalid("no such summary")
+    summary = _jsonish(row[0], {})
     actions = summary.get("next_actions") or []
     if not 0 <= int(index) < len(actions):
         raise _invalid("no such next action")
@@ -1447,23 +1628,30 @@ def open_decision(connection, *, project_id: str, conversation_id: str, actor: s
     if action.get("decision_id"):
         return {"decision_id": action["decision_id"],
                 "conversation": get_conversation(connection, project_id, conversation_id)}
+    if action.get("kind") != "decision":
+        raise _invalid("that next action is not a decision")
     decision_id = create_blocking_decision(
         connection, project_id, None, action["text"][:300],
-        {"action": "decide", "from_conversation": conversation_id,
+        {"action": "decide", "from_conversation": conversation_id, "from_turn": turn_id,
          "owner_role_key": action.get("owner_role_key"), "context": summary.get("text")},
         {}, "agent_room", risk_tier=1)
-    action["decision_id"] = decision_id
-    connection.execute(
-        text("UPDATE agent_conversations SET summary = CAST(:s AS JSONB), updated_at = now() "
-             "WHERE conversation_id = :c"), {"s": json.dumps(summary), "c": conversation_id})
+    _patch_action(connection, conversation_id, turn_id, int(index), {"decision_id": decision_id})
     emit_event(connection, project_id, "conversation.decision_opened", actor, "conversation",
-               conversation_id, {"decision_id": decision_id})
+               conversation_id, {"decision_id": decision_id, "turn_id": turn_id})
     return {"decision_id": decision_id,
             "conversation": get_conversation(connection, project_id, conversation_id)}
 
 
 def sse(events: Iterator[dict]) -> Iterator[str]:
-    """`event: <type>` + `data: <json of the rest>` per event — the ConverseEvent wire."""
-    for event in events:
-        body = {k: v for k, v in event.items() if k != "type"}
-        yield f"event: {event['type']}\ndata: {json.dumps(body, default=str)}\n\n"
+    """`event: <type>` + `data: <json of the rest>` per event — the ConverseEvent wire.
+
+    Closing this (the client went away) closes the conversation stream at once, so the seat
+    speaking is settled and the floor given back now, not whenever the collector gets to it."""
+    try:
+        for event in events:
+            body = {k: v for k, v in event.items() if k != "type"}
+            yield f"event: {event['type']}\ndata: {json.dumps(body, default=str)}\n\n"
+    finally:
+        close = getattr(events, "close", None)
+        if callable(close):
+            close()

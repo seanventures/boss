@@ -23,14 +23,15 @@ from sqlalchemy import text
 
 log = logging.getLogger("boss.llm_telemetry")
 
-# {db_engine (sqlalchemy), project_id, run_id, stage}
+# {db_engine (sqlalchemy), project_id, run_id, stage, act_id, role_key, settings}
 _llm_ctx: ContextVar[dict] = ContextVar("llm_call_context", default={})
 
 
 def set_llm_context(**kwargs) -> None:
     """Merge fields into the current thread's LLM-call context. Recognised keys:
-    ``db_engine`` (SQLAlchemy engine for the insert), ``project_id``, ``run_id``, ``stage``.
-    Pass a key as None to clear it."""
+    ``db_engine`` (SQLAlchemy engine for the insert), ``project_id``, ``run_id``, ``stage``,
+    ``act_id`` and ``role_key`` (the agent making the call; role_for_stage() is only the
+    fallback when no role_key is set). Pass a key as None to clear it."""
     ctx = dict(_llm_ctx.get())
     for k, v in kwargs.items():
         if v is None:
@@ -117,6 +118,8 @@ def record_llm_call(
         if u.get("cost_usd_micros") is None and cost_usd_micros:
             _, _, known = price_for_model(model)
             price_estimated = not known
+        # act_id is named only when the call has one, so a store that predates the column
+        # (an old sqlite fixture, a not-yet-converged database) still records the call.
         with begin(ctx.get("db_engine")) as c:
             c.execute(
                 text("""
@@ -124,16 +127,19 @@ def record_llm_call(
                         id, project_id, code_task_run_id, stage, engine, model, role,
                         prompt_tokens, completion_tokens, total_tokens,
                         cache_read_tokens, cache_write_tokens, cost_usd_micros,
-                        price_estimated, latency_ms, retries, turns, ok, error)
+                        price_estimated, latency_ms, retries, turns, ok, error{act_col})
                     VALUES (:id, :p, :run, :stage, :eng, :model, :role, :pt, :ct, :tt,
-                            :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err)
-                """),
+                            :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err{act_val})
+                """.format(act_col=", act_id" if ctx.get("act_id") else "",
+                           act_val=", :act" if ctx.get("act_id") else "")),
                 {
                     "id": f"llmc_{uuid4().hex[:20]}",
                     "p": ctx.get("project_id"),
                     "run": ctx.get("run_id"),
                     "stage": stage or ctx.get("stage"),
-                    "role": role_for_stage(stage or ctx.get("stage")),
+                    "role": (canonical_role(ctx.get("role_key"))
+                             or role_for_stage(stage or ctx.get("stage"))),
+                    "act": ctx.get("act_id"),
                     "eng": engine_name,
                     "model": model or None,
                     "pt": int(u.get("prompt_tokens") or 0),

@@ -6356,6 +6356,8 @@ CREATE TABLE IF NOT EXISTS agent_conversations (
   agent_thread_id TEXT,                      -- talk only: the dock thread that carries tool use, if any
   root_act_id TEXT,                          -- the first agent turn's act; every later turn shares its root
   started_run_id TEXT,                       -- set when the operator presses Start on a proposal
+  streaming_claim TEXT,                      -- the stream that holds the floor (one at a time); NULL = free
+  streaming_until TIMESTAMPTZ,               -- when that claim lapses if its stream died unseen; renewed per speaker
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
