@@ -12,7 +12,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import yaml
 from sqlalchemy import bindparam, text
@@ -20,6 +20,7 @@ from sqlalchemy.engine import Connection
 
 from .core import create_blocking_decision, emit_event, json_hash, make_id, now_utc
 from .workflow_custom_steps import (
+    optional_inputs as custom_step_optional_inputs,
     validate_step as defined_step_problems,
     validate_step_fields as defined_step_field_problems,
 )
@@ -723,13 +724,33 @@ def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
     return before
 
 
-def binding_order_problems(normalized: dict[str, Any]) -> list[dict[str, Any]]:
-    """A step that reads another step's output must come after it, on every path.
+def _capability_optional_inputs(step: dict[str, Any]) -> frozenset[str]:
+    """A capability step's optional inputs, the set the runner's `_resolve_inputs` is given."""
+    from .workflow_capabilities import CAPABILITIES
+
+    capability = CAPABILITIES.get(str((step.get("binding") or {}).get("capability") or ""))
+    return frozenset(capability.optional_inputs or ()) if capability else frozenset()
+
+
+def binding_order_problems(
+    normalized: dict[str, Any],
+    optional_inputs: Optional[Callable[[dict[str, Any]], frozenset[str]]] = None,
+) -> list[dict[str, Any]]:
+    """A step that reads another step's output must come after it, on every path it needs it.
 
     Dragging Preview above Build left Preview reading Build's run id: Check said Ready and Save
     would publish a workflow whose second step waits on output that cannot exist yet. One
     problem per input, on the step that reads it and the input that is wired wrong.
+
+    AN OPTIONAL INPUT MAY READ FROM A STEP THAT DOES NOT ALWAYS RUN. The runner leaves it out
+    when its source did not run (`_resolve_inputs`) — the panel reading research that sits
+    behind "do we have research?". Only a required input is refused for that. Reading a step
+    that runs after it, or one not in the workflow, is wrong whatever the input is.
+
+    `optional_inputs(step)` is the step's optional set — the same one the runner uses. Without
+    it, capability steps use the catalogue's and every other input counts as required.
     """
+    optional_for = optional_inputs or _capability_optional_inputs
     steps = _step_map(normalized)
     before = _runs_before(normalized)
     found: list[dict[str, Any]] = []
@@ -753,6 +774,8 @@ def binding_order_problems(normalized: dict[str, Any]) -> list[dict[str, Any]]:
             elif sid in before.get(source, set()):
                 label = _step_label(steps[source], source)
                 detail = f"step '{sid}' gets {name} from “{label}”, which runs after it."
+            elif str(name) in optional_for(step):
+                continue  # left out at run time when its source did not run
             else:
                 label = _step_label(steps[source], source)
                 detail = (f"step '{sid}' gets {name} from “{label}”, "
@@ -828,7 +851,13 @@ def spec_problems(
     # A step reading output from one that has not run yet. Here, in the one collector, so Check
     # shows it and Save refuses it with the same words.
     said = {(p["step_id"], p["field"]) for p in shape}
-    shape = shape + [p for p in binding_order_problems(normalized)
+    def optional_for(step: dict[str, Any]) -> frozenset[str]:
+        custom = (step.get("binding") or {}).get("custom_step")
+        if custom:
+            return custom_step_optional_inputs(connection, project_id, str(custom))
+        return _capability_optional_inputs(step)
+
+    shape = shape + [p for p in binding_order_problems(normalized, optional_for)
                      if (p["step_id"], p["field"]) not in said]
     steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict) and s.get("id")]
     flagged = {p["step_id"] for p in shape if p["step_id"]}
