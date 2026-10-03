@@ -47,7 +47,9 @@ const KNOWN_AGENT_WRITERS = [
   "app/agent-studio-ui.tsx",
   "app/api/agent/route.ts",
   "app/api/skills/route.ts",
-  "app/delivery-workflows-ui.tsx",
+  // The 'Give <skill> to <captain>' grant on a workflow step row (moved out of
+  // delivery-workflows-ui.tsx, which no longer writes agents itself).
+  "app/workflows/captain-can-run-it.tsx",
   // The shared MCP panel (skills-mcp stream): removing a server an agent holds releases that
   // agent's grant through /api/skills, so it is an agent writer too — reviewed at integration.
   "app/mcp-servers-ui.tsx",
@@ -62,11 +64,7 @@ const BODY_BUILDERS = ["lib/agent-wizard.ts"];
 
 /** Files that write agents AND other things owned elsewhere. Only their agent write sites are
  *  held to this rule here; the rest of the file belongs to its own area's checks. */
-const SHARED: Record<string, string> = {
-  "app/delivery-workflows-ui.tsx":
-    "the workflow builder; its agent write is the 'Give <skill> to <captain>' grant on a step "
-    + "row. Its deployment writes are the Infra area's.",
-};
+const SHARED: Record<string, string> = {};
 
 /** A literal identity in place of the signed-in one, in any of the shapes it has taken. */
 const LITERAL_ACTOR = [

@@ -17,6 +17,8 @@ import { codeOnly } from "./_helpers/source";
 (globalThis as Record<string, unknown>).React = React;
 
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
+/** The define/edit step form, moved out of the workflow screen into its own file. */
+const FORM = codeOnly("app/workflows/define-step-form.tsx");
 const ROUTE = codeOnly("app/api/delivery-workflows/route.ts");
 const SHELL = codeOnly("app/ConsoleShell.tsx");
 const EDITION = codeOnly("lib/edition.ts");
@@ -504,42 +506,43 @@ describe("build your own actually lets you build one", () => {
 describe("a customer can define their own step", () => {
   it("offers the form from the builder palette", () => {
     expect(UI).toContain('data-testid="dw-define-step"');
-    expect(UI).toContain('data-testid="dw-define-form"');
+    expect(FORM).toContain('data-testid="dw-define-form"');
   });
 
   it("NEVER offers a risk field", () => {
     // The whole design rests on this. A customer who could type their own tier would have a
     // documented way past every approval gate in the product, so the form must not have the
     // control at all — not a disabled one, not a hidden one.
-    const form = UI.slice(UI.indexOf("function DefineStepForm"), UI.indexOf("function BuilderView"));
+    const form = FORM;
+    expect(form).toContain("export function DefineStepForm(");
     expect(form).not.toContain("setRiskTier");
     expect(form).not.toContain('name="risk_tier"');
     expect(form).not.toContain("risk_tier:");
   });
 
   it("says what the binding costs before the step is created", () => {
-    expect(UI).toContain('data-testid="dw-define-risk"');
-    expect(UI).toContain("This step will always stop for a person.");
+    expect(FORM).toContain('data-testid="dw-define-risk"');
+    expect(FORM).toContain("This step will always stop for a person.");
   });
 
   it("names an unclassified skill as unclassified rather than as tier 0", () => {
-    expect(UI).toContain("nobody has classified this skill");
+    expect(FORM).toContain("nobody has classified this skill");
   });
 
   it("warns that an untrusted binding will not publish", () => {
-    expect(UI).toContain('data-testid="dw-define-blocked"');
+    expect(FORM).toContain('data-testid="dw-define-blocked"');
   });
 
   it("says so when there is nothing to bind to, counting CHOICES not servers", () => {
     // A project with three registered MCP servers that are all unreachable has three empty
     // groups in the dropdown and nothing to pick. Counting servers would call that "fine".
-    expect(UI).toContain("Nothing to bind a step to yet.");
-    expect(UI).toContain("bindable.mcp_servers.reduce((n, server) => n + server.tools.length, 0)");
-    expect(UI).toContain("|| choices === 0}");
+    expect(FORM).toContain("Nothing to bind a step to yet.");
+    expect(FORM).toContain("bindable.mcp_servers.reduce((n, server) => n + server.tools.length, 0)");
+    expect(FORM).toContain("|| choices === 0}");
   });
 
   it("names the unreachable servers rather than leaving an empty dropdown unexplained", () => {
-    expect(UI).toContain("registered but not answering");
+    expect(FORM).toContain("registered but not answering");
   });
 });
 

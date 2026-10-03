@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 import { draftFromSpecStep, specFromDraft, type DraftStep } from "../lib/workflow-spec";
 
 const ui = readFileSync(join(__dirname, "../app/delivery-workflows-ui.tsx"), "utf8");
+/** The define/edit step form, moved out of the workflow screen into its own file. */
+const form = readFileSync(join(__dirname, "../app/workflows/define-step-form.tsx"), "utf8");
 /** What the builder knows about steps, for the save tests below. */
 const CTX = {
   capabilities: [{ key: "notify", required_inputs: ["message"] }],
@@ -76,14 +78,14 @@ describe("a custom step can be changed", () => {
   it("uses ONE form for defining and editing", () => {
     // An edit form that drifted from the define form would accept fields the other rejects,
     // and the operator would meet two sets of rules for the same object.
-    expect(ui).toContain("editing?: CustomStep | null;");
-    expect(ui).toContain('{editing ? "Save changes" : "Define"}');
+    expect(form).toContain("editing?: CustomStep | null;");
+    expect(form).toContain('{editing ? "Save changes" : "Define"}');
   });
 
   it("repopulates the form from the step being edited", () => {
-    expect(ui).toContain('useState(editing?.label ?? "")');
-    expect(ui).toContain('useState(editing?.knowledge ?? "")');
-    expect(ui).toContain("(editing?.inputs ?? []).map((i) => i.name).join");
+    expect(form).toContain('useState(editing?.label ?? "")');
+    expect(form).toContain('useState(editing?.knowledge ?? "")');
+    expect(form).toContain("(editing?.inputs ?? []).map((i) => i.name).join");
   });
 
   it("rebuilds the form when a different step is picked", () => {

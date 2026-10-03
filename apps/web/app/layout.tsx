@@ -3,6 +3,11 @@ import "./design-system.css";
 // Command Center, area loading, approval guidance and action results — kept out of globals.css
 // so these screens do not churn the stylesheet every console change touches.
 import "./command-center.css";
+// Workflow Studio (library, editor, lane, inspector), one file per surface.
+import "./workflows/flow.css";
+import "./workflows/editor.css";
+import "./workflows/inspector.css";
+import "./workflows/library.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 
