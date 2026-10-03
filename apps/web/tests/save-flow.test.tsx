@@ -20,10 +20,8 @@ import type {
 
 vi.mock("../lib/workflow-editor-types", async (orig) => {
   const real = await orig<typeof import("../lib/workflow-editor-types")>();
-  const f = await import("./_helpers/workflow-editor-fakes");
   return {
     ...real,
-    stepView: f.fakeStepView, lineOfStep: f.fakeLineOfStep, stepAtLine: f.fakeStepAtLine,
     checkSpec: vi.fn(), publishSpec: vi.fn(),
   };
 });
@@ -33,7 +31,7 @@ vi.mock("../lib/workflow-editor-types", async (orig) => {
 const { useSaveFlow } = await import("../app/workflows/editor/save/use-save-flow");
 const { useAutoCheck, AUTO_CHECK_MS } = await import("../app/workflows/editor/save/use-auto-check");
 const types = await import("../lib/workflow-editor-types");
-const { fakeReducer, makeState, q } = await import("./_helpers/workflow-editor-fakes");
+const { reducer, makeState, q } = await import("./_helpers/workflow-editor-fakes");
 const { TOAST_EVENT } = await import("../lib/api-write");
 
 const checkSpec = vi.mocked(types.checkSpec);
@@ -63,7 +61,7 @@ const toasts: string[] = [];
 const onToast = (e: Event) => toasts.push((e as CustomEvent<{ message: string }>).detail.message);
 
 function Harness({ initial, usedFor }: { initial: EditorState; usedFor?: string[] }) {
-  const [state, dispatch] = useReducer(fakeReducer, initial);
+  const [state, dispatch] = useReducer(reducer, initial);
   box.state = state;
   box.dispatch = dispatch;
   const flow = useSaveFlow({
@@ -215,6 +213,42 @@ describe("saving your own workflow", () => {
     expect(q<HTMLButtonElement>(el, "save")!.disabled).toBe(true);
   });
 
+  it("an edit made while the publish is in flight is kept, unsaved — the save does not swallow it", async () => {
+    let finish: (r: PublishResult) => void = () => {};
+    publishSpec.mockImplementation(() => new Promise((r) => { finish = r; }));
+    const el = await mount(SPEC);
+    await edit();
+    await press("save");
+    expect(publishSpec).toHaveBeenCalledTimes(1);
+    const sent = published()[0].spec;
+    // The editor stays live during a save: retitle a step and rename the workflow meanwhile.
+    await act(async () => {
+      box.dispatch!({ type: "PATCH_STEP", id: "gate", patch: { title: "Ship it" } });
+      box.dispatch!({ type: "SET_META", patch: { name: "Renamed meanwhile" } });
+    });
+    await act(async () => { finish(created("def_own", "my_flow", "My flow", 4)); });
+    await settle();
+    expect(toasts).toContain("Saved · v4");
+    // What was published is the new baseline...
+    expect(box.state!.loaded).toEqual(sent);
+    expect(box.state!.loadedMeta).toMatchObject({ name: "My flow", version: 4 });
+    // ...and the later edits are still on screen, waiting for the next Save.
+    expect(box.state!.spec.steps.find((s) => s.id === "gate")!.title).toBe("Ship it");
+    expect(box.state!.spec.steps.find((s) => s.id === "build")!.captain).toBe("dev");
+    expect(box.state!.meta).toMatchObject({ name: "Renamed meanwhile", version: 4 });
+    expect(types.isDirty(box.state!)).toBe(true);
+    expect(q<HTMLButtonElement>(el, "save")!.disabled).toBe(false);
+  });
+
+  it("with no edit in flight the saved state is clean, and takes the server's name", async () => {
+    publishSpec.mockResolvedValue(created("def_own", "my_flow", "My flow", 4));
+    await mount(SPEC);
+    await edit();
+    await press("save");
+    expect(types.isDirty(box.state!)).toBe(false);
+    expect(box.state!.meta.version).toBe(4);
+  });
+
   it("an unchanged answer says No changes", async () => {
     publishSpec.mockResolvedValue({ unchanged: true });
     await mount(SPEC);
@@ -289,6 +323,16 @@ describe("start and leave", () => {
     expect(started).toEqual(["my_flow", "my_flow"]);
   });
 
+  it("leaving with broken JSON asks first, even when the workflow itself is unchanged", async () => {
+    // The text being typed is the unsaved change: leaving silently would throw it away.
+    await mount(SPEC);
+    await act(async () => { box.dispatch!({ type: "SET_JSON_TEXT", text: "{ \"steps\": [" }); });
+    expect(box.state!.jsonError).not.toBeNull();
+    await press("back");
+    expect(navigated).toEqual([]);
+    expect(document.querySelector('[data-testid="wf-leave-confirm"]')).not.toBeNull();
+  });
+
   it("leaving with unsaved changes asks first", async () => {
     await mount(SPEC);
     await press("back");
@@ -304,7 +348,7 @@ describe("start and leave", () => {
 
 describe("auto-check", () => {
   function AutoHarness({ initial }: { initial: EditorState }) {
-    const [state, dispatch] = useReducer(fakeReducer, initial);
+    const [state, dispatch] = useReducer(reducer, initial);
     box.state = state;
     box.dispatch = dispatch;
     useAutoCheck(state, dispatch, "p1");

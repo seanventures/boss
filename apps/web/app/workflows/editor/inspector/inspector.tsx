@@ -1,26 +1,38 @@
 "use client";
 
-import React, { useCallback, useMemo, useState, type Dispatch } from "react";
+import React, { type Dispatch } from "react";
 
 import type { EditorAction, EditorState, Palette } from "../../../../lib/workflow-editor-types";
+import { jsonGate } from "../json/json-view";
+import { LockProvider } from "./editable";
 import { StepInspector } from "./step-inspector";
 import { WorkflowSettings } from "./workflow-settings";
+
+/** Why nothing in the drawer can be edited right now, or null when it can. */
+export function lockReason(state: EditorState): string | null {
+  if (state.meta.readOnlyVersion != null) return `Viewing v${state.meta.readOnlyVersion}`;
+  const gate = jsonGate(state);
+  return gate.blocked ? gate.tip : null;
+}
 
 /**
  * The right-hand drawer: the selected step's properties, or the workflow's settings when nothing
  * is selected. Closes with × or Esc (an open popover takes its own Esc first).
  *
- * TWO PIECES OF STATE LIVE HERE, NOT IN THE STORE, because neither is part of the workflow:
- *  - grants made from this drawer, laid over the palette's holdings until the palette is next
- *    fetched, so `Lacks <skill>` disappears the moment Grant succeeds;
- *  - which inputs the editor wired (`auto` chips), per step.
+ * IT KEEPS NO WORKFLOW STATE OF ITS OWN. Which inputs the editor wired is the store's `wired`;
+ * what each agent holds is the host's palette, refetched after a Grant — so the node, the agent
+ * picker and the Grant row read one source and cannot disagree.
  */
-export function Inspector({ state, palette, dispatch, projectId, onClose, actor, usedFor, onSchedule }: {
+export function Inspector({ state, palette, dispatch, projectId, onClose, refreshPalette, actor, usedFor,
+                            onSchedule }: {
   state: EditorState;
   palette: Palette;
   dispatch: Dispatch<EditorAction>;
   projectId: string;
   onClose(): void;
+  /** Refetch the palette (useWorkflowEditor's `refreshPalette`): after a Grant, what the agent
+   *  holds changed everywhere the editor draws it. */
+  refreshPalette(): Promise<void>;
   /** The signed-in member, for Grant and Used for. Grant is disabled without one. */
   actor?: string;
   /** The work classes this workflow is mapped to, when the host knows them. */
@@ -28,26 +40,12 @@ export function Inspector({ state, palette, dispatch, projectId, onClose, actor,
   /** Opens the host's schedule popover for this workflow. The row is hidden without it. */
   onSchedule?(workflowKey: string): void;
 }) {
-  const [grants, setGrants] = useState<Record<string, string[]>>({});
-  const [autoWired, setAutoWired] = useState<Record<string, string[]>>({});
-
-  const effective = useMemo<Palette>(() => (Object.keys(grants).length ? {
-    ...palette,
-    agents: palette.agents.map((a) => (grants[a.role_key]
-      ? { ...a, skills: [...new Set([...a.skills, ...grants[a.role_key]])] } : a)),
-  } : palette), [palette, grants]);
-
-  const onGranted = useCallback((roleKey: string, skillId: string) =>
-    setGrants((g) => ({ ...g, [roleKey]: [...(g[roleKey] ?? []), skillId] })), []);
-  const onAutoWired = useCallback((stepId: string, names: string[] | ((was: string[]) => string[])) =>
-    setAutoWired((w) => ({ ...w, [stepId]: typeof names === "function" ? names(w[stepId] ?? []) : names })), []);
-
   const step = state.selection ? state.spec.steps.find((s) => s.id === state.selection) : undefined;
-  const readOnly = state.meta.readOnlyVersion != null;
+  const locked = lockReason(state);
 
   return (
     <aside className="wf-inspector" aria-label={step ? "Step" : "Workflow settings"}
-           data-testid="wf-inspector"
+           data-testid="wf-inspector" data-locked={locked !== null || undefined}
            onKeyDown={(e) => {
              // A popover's Esc never arrives here (it stops it at the document), and an inline
              // editor that cancels on Esc stops its own; anything else closes the drawer.
@@ -55,16 +53,18 @@ export function Inspector({ state, palette, dispatch, projectId, onClose, actor,
              e.preventDefault();
              onClose();
            }}>
-      <fieldset className="wf-insp-body" disabled={readOnly}>
-        {step ? (
-          <StepInspector key={step.id} state={state} step={step} palette={effective} dispatch={dispatch}
-                         projectId={projectId} actor={actor} autoWired={autoWired[step.id] ?? []}
-                         onAutoWired={onAutoWired} onGranted={onGranted} onClose={onClose} />
-        ) : (
-          <WorkflowSettings state={state} dispatch={dispatch} projectId={projectId} actor={actor}
-                            usedFor={usedFor} onSchedule={onSchedule} onClose={onClose} />
-        )}
-      </fieldset>
+      <LockProvider value={locked}>
+        <div className="wf-insp-body">
+          {step ? (
+            <StepInspector key={step.id} state={state} step={step} palette={palette} dispatch={dispatch}
+                           projectId={projectId} actor={actor} refreshPalette={refreshPalette}
+                           onClose={onClose} />
+          ) : (
+            <WorkflowSettings state={state} dispatch={dispatch} projectId={projectId} actor={actor}
+                              usedFor={usedFor} onSchedule={onSchedule} onClose={onClose} />
+          )}
+        </div>
+      </LockProvider>
     </aside>
   );
 }

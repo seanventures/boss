@@ -20,7 +20,9 @@ export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGrante
   roleKey: string;
   agentName: string;
   lacks: string[];
-  onGranted(roleKey: string, skillId: string): void;
+  /** Refresh what agents hold (the host's palette). Awaited before the row reports success, so
+   *  `Lacks` goes because the agent now holds the skill, not because this row remembers a click. */
+  onGranted(): Promise<void>;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<Record<string, string>>({});
@@ -31,14 +33,14 @@ export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGrante
     setBusy(skillId);
     setFailed((f) => ({ ...f, [skillId]: "" }));
     const result = await grantSkill({ projectId, actor, roleKey, skillId });
+    if (!result.ok) { setBusy(null); setFailed((f) => ({ ...f, [skillId]: result.error })); return; }
+    await onGranted().catch(() => undefined);
     setBusy(null);
-    if (!result.ok) { setFailed((f) => ({ ...f, [skillId]: result.error })); return; }
     try {
       window.dispatchEvent(new CustomEvent(TOAST_EVENT, {
         detail: { type: "success", message: `Granted ${skillId} to ${agentName}` },
       }));
     } catch { /* no window */ }
-    onGranted(roleKey, skillId);
   };
 
   return (

@@ -22,8 +22,7 @@ vi.mock("../lib/workflow-editor-types", async (orig) => {
   const f = await import("./_helpers/workflow-editor-fakes");
   return {
     ...real,
-    stepView: f.fakeStepView, upstreamOf: f.fakeUpstreamOf, wireInputs: f.fakeWireInputs,
-    lineOfStep: f.fakeLineOfStep, stepAtLine: f.fakeStepAtLine, FlowLane: f.FakeFlowLane,
+    FlowLane: f.FakeFlowLane,
     fetchLibrary: vi.fn(async () => []),
   };
 });
@@ -96,7 +95,8 @@ describe("the inspector says it in six words or fewer", () => {
     it(label, async () => {
       const el = await render(<Inspector state={state(selection, {
         problems: [{ step_id: "gate", field: "question", message: "Question is required" }],
-      })} palette={PALETTE} dispatch={() => {}} projectId="p1" actor="ceo" onClose={() => {}} />);
+      })} palette={PALETTE} dispatch={() => {}} projectId="p1" actor="ceo" onClose={() => {}}
+                                    refreshPalette={async () => {}} />);
       expect(overBudget(el)).toEqual([]);
       expect(paragraphs(el)).toEqual([]);
     });

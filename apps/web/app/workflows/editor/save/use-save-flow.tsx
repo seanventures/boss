@@ -3,14 +3,15 @@
 import React, { useCallback, useEffect, useRef, useState, type Dispatch, type ReactNode, type RefObject } from "react";
 
 import { TOAST_EVENT } from "../../../../lib/api-write";
-import { NameInUseError, ProblemsError, checkSpec, publishSpec } from "../../../../lib/workflow-editor-types";
+import {
+  NameInUseError, ProblemsError, checkSpec, isDirty, publishSpec,
+} from "../../../../lib/workflow-editor-types";
 import type {
   CheckResult, EditorAction, EditorMeta, EditorState, Problem, PublishRequest, Spec,
 } from "../../../../lib/workflow-editor-types";
 import { applyWorkClass, workClassLabel } from "../inspector/workflow-settings";
 import { Popover } from "../inspector/popover";
 import { jsonGate } from "../json/json-view";
-import { isDirty } from "./dirty";
 import { SaveCopyPopover, type CopyChoice } from "./save-copy-popover";
 
 export const SAVE_TIP = "Publish as the next version (Ctrl+S)";
@@ -97,14 +98,6 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
     : standard ? "Shipped with BOSS. Saving makes your own copy."
     : SAVE_TIP;
 
-  // Leaving with unsaved changes: the browser's own guard for a closed tab or a reload.
-  useEffect(() => {
-    if (!dirty) return;
-    const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
-    window.addEventListener("beforeunload", guard);
-    return () => window.removeEventListener("beforeunload", guard);
-  }, [dirty]);
-
   // A copy just saved from a standard that is mapped to a class of work: say the copy is not
   // routed until chosen. Kept across the URL change to the copy's key.
   useEffect(() => {
@@ -178,7 +171,7 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
         // Updating a copy that already says exactly this: go to the copy, as a save would.
         const target = m.is_catalogue && req.update_copy_id ? m.copy!.workflow_key : m.workflow_key;
         if (target !== m.workflow_key) onNavigate(target!);
-        else dispatch({ type: "SAVED", spec: s.spec, meta: m });
+        else dispatch({ type: "SAVED", spec: s.spec, meta: m, sent: m });
         if (startAfter.current && target) onStart?.(target);
         return;
       }
@@ -193,7 +186,9 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
         copy: null,
         readOnlyVersion: null,
       };
-      dispatch({ type: "SAVED", spec: s.spec, meta: next });
+      // `s` is the snapshot that was published: it becomes the baseline, and anything edited
+      // since (the editor stays live during a save) is kept as the next unsaved change.
+      dispatch({ type: "SAVED", spec: s.spec, meta: next, sent: m });
       toast("success", m.is_catalogue ? `Saved as your copy · v${result.version}` : `Saved · v${result.version}`);
       const used = m.is_catalogue ? standardUsedFor?.[0] : undefined;
       if (used) {

@@ -249,6 +249,7 @@ function toSummary(raw: unknown): WorkflowSummary {
     forked_from_workflow_key: str(w.forked_from_workflow_key) || null,
     forked_from_name: str(w.forked_from_name) || null,
     run_count: Number(w.run_count ?? 0),
+    active_version_id: str(w.active_version_id) || null,
     last_run: str(lastRun.status) ? { status: str(lastRun.status), at: str(lastRun.at) } : null,
     ...(w.schedule !== undefined ? { schedule: w.schedule } : {}),
     ...(Array.isArray(w.used_for) ? { used_for: strings(w.used_for) } : {}),
