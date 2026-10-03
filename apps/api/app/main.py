@@ -23358,6 +23358,39 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
 
         _actions = _run_actions.actions_for(connection, project_id, ids)
 
+        # A DEPLOY STEP THAT SHIPS TO A STACK TARGET IS THAT DEPLOYMENT'S APPROVAL.
+        #
+        # Its gate is the stack deployment's own decision (see the runner's `_gate_subject`),
+        # so the console renders the deployment — plan, Approve/Reject from its `actions`,
+        # progress, Open app — instead of the per-app "Where it ships / Set target" flow.
+        # Asked of the same function the runner uses, so the page and the run cannot disagree.
+        from boss_engine.services.workflow_capability_runner import (
+            stack_deploy_for_step as _stack_deploy_for_step,
+        )
+
+        _stack: dict[tuple[str, str], dict] = {}
+        _specs_by_run = {
+            r["id"]: {str(s.get("id")): s
+                      for s in ((r["spec"] if isinstance(r["spec"], dict) else {})
+                                .get("steps") or [])}
+            for r in runs
+        }
+        _owner = str(getattr(settings, "target_github_owner", "") or "")
+        for _s in steps:
+            _spec_step = _specs_by_run.get(_s["workflow_run_id"], {}).get(_s["step_id"]) or {}
+            if ((_spec_step.get("binding") or {}).get("capability") != "deploy"
+                    or _s["step_kind"] != "capability"):
+                continue
+            try:
+                _found = _stack_deploy_for_step(
+                    connection, project_id, run_id=_s["workflow_run_id"],
+                    spec_step=_spec_step, status=str(_s["status"] or ""),
+                    output=_s["output"], default_owner=_owner)
+            except Exception:  # noqa: BLE001 — the page renders without it
+                _found = None
+            if _found:
+                _stack[(_s["workflow_run_id"], _s["step_id"])] = _found
+
     # THE ORDER THE STEPS RUN IN, NOT THE ORDER THEY WERE INSERTED.
     #
     # Step rows are created as the run advances and as branches are expanded, so `created_at`
@@ -23430,6 +23463,8 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             # to. Re-checked on read, because that is the moment the operator is deciding
             # whether pressing retry is worth anything.
             "blocker": _blockers.get((step["workflow_run_id"], step["step_id"])),
+            # Present only on a deploy step that ships to a stack target.
+            "stack_deploy": _stack.get((step["workflow_run_id"], step["step_id"])),
             "decision_status": step["decision_status"],
             "decision_approved_at": (step["decision_approved_at"].isoformat()
                                      if step["decision_approved_at"] else None),
