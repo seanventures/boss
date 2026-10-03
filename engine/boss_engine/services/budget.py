@@ -18,6 +18,16 @@ from .core import (
 )
 
 
+def burst_retry_after_seconds(frees_in: object) -> int:
+    """Seconds until the per-minute window has room again: when its oldest reservation ages
+    out. Never below 5 (a tight loop of refusals helps nobody) nor above 60 (the window)."""
+    try:
+        seconds = int(float(frees_in)) + 1  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        seconds = 60
+    return max(5, min(60, seconds))
+
+
 class BudgetGovernor:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -490,6 +500,8 @@ class BudgetGovernor:
                         "utilization_ratio": snapshot.get("utilization_ratio")})
             return {
                 "status": "denied",
+                "refusal": "tier2_frozen",
+                "transient": False,
                 "decision_id": decision_id,
                 "budget_state": snapshot["budget_state"],
                 "message": "Tier-2+ work is frozen at this budget utilization. Decision created.",
@@ -532,31 +544,54 @@ class BudgetGovernor:
                         "budget_state": snapshot["budget_state"], "decision_id": decision_id})
             return {
                 "status": "denied",
+                "refusal": "cap_exceeded",
+                "transient": False,
                 "decision_id": decision_id,
                 "budget_state": snapshot["budget_state"],
                 "message": "Budget cap exceeded. Decision created.",
             }
 
         # Burst cap: limit $/min to absorb sudden spikes (spec §22.4 cost-anomaly controls).
+        #
+        # IT LIMITS THE RATE, SO IT NEVER REFUSES FOR EVER. The cap sums the last minute's
+        # reservations, and a single reservation larger than the cap used to be refused even
+        # with nothing else spent in the minute — every time, because waiting never shrinks
+        # it. Callers patched that one at a time (discovery and the connection proof clamp
+        # their estimate to the cap), and every caller that did not was unservable on a
+        # project whose per-minute cap is below its estimate. Here, once: with the window
+        # empty, one reservation of any size is let through, and the cap applies to what comes
+        # after it. The daily and monthly caps above still govern its size.
+        #
+        # A refusal here CLEARS BY ITSELF, so it says so: `transient` and `retry_after_seconds`
+        # tell the caller to wait and try again rather than fail or ask a person.
         burst_cap = self._burst_cap(connection, project_id)
         if burst_cap:
-            recent = connection.execute(
+            window = connection.execute(
                 text(
-                    "SELECT COALESCE(SUM(amount_usd_micros), 0) FROM budget_reservations "
+                    "SELECT COALESCE(SUM(amount_usd_micros), 0) AS recent, "
+                    "       EXTRACT(EPOCH FROM (MIN(created_at) + interval '60 seconds' - now())) "
+                    "         AS frees_in "
+                    "FROM budget_reservations "
                     "WHERE project_id = :p AND created_at >= now() - interval '60 seconds' "
                     "AND status IN ('active', 'consumed')"
                 ),
                 {"p": project_id},
-            ).scalar() or 0
-            if int(recent) + amount_usd_micros > burst_cap:
+            ).mappings().one()
+            recent = int(window["recent"] or 0)
+            if recent > 0 and recent + amount_usd_micros > burst_cap:
+                retry_after = burst_retry_after_seconds(window["frees_in"])
                 record_policy_eval(
                     connection, project_id, "budget.reserve", "deny", action=category,
                     reason="burst cap exceeded ($/min)",
                     detail={"burst_cap_usd_micros_per_min": burst_cap,
-                            "recent_60s_usd_micros": int(recent),
-                            "requested_usd_micros": amount_usd_micros})
+                            "recent_60s_usd_micros": recent,
+                            "requested_usd_micros": amount_usd_micros,
+                            "retry_after_seconds": retry_after})
                 return {
                     "status": "denied",
+                    "refusal": "burst",
+                    "transient": True,
+                    "retry_after_seconds": retry_after,
                     "decision_id": None,
                     "budget_state": snapshot["budget_state"],
                     "message": "Burst cap exceeded ($/min). Retry shortly.",
@@ -598,6 +633,8 @@ class BudgetGovernor:
                 )
                 return {
                     "status": "denied",
+                    "refusal": "allocation_exceeded",
+                    "transient": False,
                     "decision_id": decision_id,
                     "budget_state": snapshot["budget_state"],
                     "message": "Budget allocation exceeded. Decision created.",

@@ -52,7 +52,59 @@ _KEY = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
 class CustomStepError(RuntimeError):
-    """Something about the definition is wrong. The message is shown to the customer."""
+    """Something about the definition is wrong. The message is shown to the customer.
+
+    `settled` marks a refusal that running it again cannot change — only a person can (a
+    budget cap that has to be raised). The runner stops the step once, with Retry / Skip,
+    instead of retrying into the same refusal."""
+
+    def __init__(self, message: str, *, settled: bool = False):
+        super().__init__(message)
+        self.settled = settled
+
+
+class CustomStepWait(CustomStepError):
+    """The step could not start YET, for a reason that clears by itself (the per-minute
+    budget). The runner puts it back to wait `wait_seconds` and tries again — it is not a
+    failed attempt and never stops the run."""
+
+    def __init__(self, message: str, *, wait_seconds: int, kind: str = "budget_wait"):
+        super().__init__(message)
+        self.wait_seconds = int(wait_seconds)
+        self.kind = kind
+
+
+def raise_for_budget(label: str, result: dict[str, Any]) -> None:
+    """THE ONE READING of a skill or tool that the budget refused, for a step.
+
+    A refusal that clears by itself (the per-minute cap) WAITS; one that needs a person
+    STOPS the step with the sentence and the action every other surface uses
+    (model_failures.explain). It used to be "'Read the meeting' was denied: budget denied:
+    denied" for both, and the step was retried into the same minute and dead-lettered."""
+    budget = result.get("budget")
+    if str(result.get("status")) != "denied" or not isinstance(budget, dict):
+        return
+    from .model_failures import explain
+
+    said = explain(budget.get("message") or "budget cap")
+    if said.get("kind") not in {"budget_wait", "budget_refused"}:
+        said = explain("budget cap")
+    if budget.get("transient"):
+        raise CustomStepWait(said["headline"],
+                             wait_seconds=int(budget.get("retry_after_seconds") or 30))
+    # In plain words, not the governor's message: that ends "Decision created.", and the
+    # decision it created is rolled back with the step's own work.
+    why = _BUDGET_REFUSALS.get(str(budget.get("refusal") or ""), "it was refused")
+    raise CustomStepError(
+        f"'{label}' could not start: {said['headline'].rstrip('.')} — {why}. {said['action']}",
+        settled=True)
+
+
+_BUDGET_REFUSALS = {
+    "cap_exceeded": "it would take the project past its budget cap",
+    "tier2_frozen": "tier-2 work is frozen at this budget utilization",
+    "allocation_exceeded": "its budget allocation is used up",
+}
 
 
 def _key_from(label: str, taken: set[str]) -> str:
@@ -745,6 +797,7 @@ def execute(
                if legacy and _skill_server(connection, project_id, str(row["skill_id"]))
                else {}),
         )
+        raise_for_budget(str(row["label"]), result)
         if str(result.get("status")) == "denied":
             # The runtime denies rather than raises, so a denial would otherwise be recorded as
             # a successful step whose output happens to say "denied".
@@ -784,6 +837,7 @@ def execute(
         caller=caller, approved_by=approved_by,
         approval_about=approval_about, mcp_reach=mcp_reach,
     )
+    raise_for_budget(str(row["label"]), result)
     if str(result.get("status")) in ("denied", "failed"):
         raise CustomStepError(
             f"'{row['label']}' {result.get('status')}: "
