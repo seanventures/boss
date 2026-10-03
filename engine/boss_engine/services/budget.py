@@ -28,6 +28,17 @@ def burst_retry_after_seconds(frees_in: object) -> int:
     return max(5, min(60, seconds))
 
 
+#: A reservation refused only because OTHER work's active reservations fill the cap. Those are
+#: consumed or released when that work ends, so the refusal clears by itself; how soon is not
+#: knowable here, so the caller looks again in a minute. Read by model_failures.explain.
+HEADROOM_MESSAGE = "Budget headroom is held by other work's active reservations. Retry shortly."
+HEADROOM_RETRY_AFTER_SECONDS = 60
+
+#: Taken (try-only) by a reservation larger than the per-minute cap that the empty-window rule
+#: is about to let through. See BudgetGovernor.reserve.
+_OVERSIZE_LOCK = "budget-burst-oversize:"
+
+
 class BudgetGovernor:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -511,6 +522,33 @@ class BudgetGovernor:
         )
 
         if snapshot["cap_usd_micros"] and total_after > snapshot["cap_usd_micros"]:
+            # OTHER WORK'S RESERVATIONS ARE A MOMENT, NOT A CAP. `reserved` is what active
+            # reservations hold right now — a governed code task alone holds $2 while it runs —
+            # and it is consumed or released when that work ends. Five runs started together
+            # can fill the cap with holds while the money actually spent is far under it ($7.03
+            # of $10 free in the incident). Refusing that as `cap_exceeded` opened a blocking
+            # decision and told a person to "raise the daily or monthly cap" for something that
+            # clears by itself. Only a request the cap refuses on ACTUAL spend needs a person.
+            if (snapshot["reserved_usd_micros"] > 0
+                    and snapshot["actual_usd_micros"] + amount_usd_micros
+                    <= snapshot["cap_usd_micros"]):
+                record_policy_eval(
+                    connection, project_id, "budget.reserve", "deny", action=category,
+                    reason="budget headroom held by active reservations",
+                    detail={"requested_usd_micros": amount_usd_micros,
+                            "reserved_usd_micros": snapshot["reserved_usd_micros"],
+                            "actual_usd_micros": snapshot["actual_usd_micros"],
+                            "cap_usd_micros": snapshot["cap_usd_micros"],
+                            "retry_after_seconds": HEADROOM_RETRY_AFTER_SECONDS})
+                return {
+                    "status": "denied",
+                    "refusal": "headroom",
+                    "transient": True,
+                    "retry_after_seconds": HEADROOM_RETRY_AFTER_SECONDS,
+                    "decision_id": None,
+                    "budget_state": snapshot["budget_state"],
+                    "message": HEADROOM_MESSAGE,
+                }
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
@@ -578,6 +616,21 @@ class BudgetGovernor:
                 {"p": project_id},
             ).mappings().one()
             recent = int(window["recent"] or 0)
+            # THE EMPTY-WINDOW ALLOWANCE IS ONE RESERVATION, NOT ONE PER RACER. The window is
+            # read with a plain SELECT, so two reservers in separate transactions (two worker
+            # processes, the API and a worker) each see an empty minute; each would be granted
+            # a reservation of ANY size, and the §22.4 cost-anomaly control would overshoot by
+            # the sum of them. A reservation larger than the cap therefore takes a per-project
+            # advisory lock first, held until its transaction ends — by which time its row is
+            # visible and the window is no longer empty. TRY-only, never blocking: a tick runs
+            # its steps (model calls, minutes) inside one transaction, and a blocking project
+            # lock would stall every other reservation on the project behind it. A racer that
+            # cannot take it is refused as burst — transient, it looks again shortly. Ordinary
+            # reservations never take it, so they keep the bound they always had.
+            if recent == 0 and amount_usd_micros > burst_cap and not connection.execute(
+                    text("SELECT pg_try_advisory_xact_lock(hashtext(:k))"),
+                    {"k": _OVERSIZE_LOCK + project_id}).scalar():
+                recent = burst_cap  # another oversize grant is in flight: the minute is taken
             if recent > 0 and recent + amount_usd_micros > burst_cap:
                 retry_after = burst_retry_after_seconds(window["frees_in"])
                 record_policy_eval(

@@ -1605,6 +1605,56 @@ def _fail(
             "failure_class": failure_class, "reason_code": reason_code}
 
 
+def refused_reservation(engine, jobs, *, run_id: str, project_id: str, reservation: dict,
+                        fencing_token: Optional[str]) -> dict:
+    """THE ONE READING of a code task's refused budget reservation.
+
+    It used to format the refusal from the reservation's STATUS and block every refusal as
+    needing a person — "Budget reservation denied: denied", blocked as needing a person, and explained by model_failures as "Raise the
+    daily or monthly cap". A code task holds $2 while it runs; started in the same minute as
+    other reserved work, its refusal is the per-minute cap or other work's held headroom, and
+    both clear by themselves (`transient`, `retry_after_seconds` from BudgetGovernor.reserve).
+
+    * A refusal only a person can lift blocks the run, in the governor's own words.
+    * A transient one hands the job back to the queue for `retry_after_seconds` WITHOUT
+      spending an attempt (JobLeaseService.defer_leased) and leaves the run `running`; the
+      worker neither completes nor fails a deferred job.
+    * Transient with no lease to hand back (not run by a worker): the attempt fails retryably
+      and the run is left running, so the job's own retry reserves again.
+    """
+    message = str(reservation.get("message") or "Budget reservation denied.")
+    if not reservation.get("transient"):
+        with _transaction(engine) as c:
+            return _fail(c, run_id, project_id, f"The budget refused this code task: {message}",
+                         status="blocked", failure_class="needs_human",
+                         reason_code="budget_denied")
+    wait = int(reservation.get("retry_after_seconds") or 30)
+    if fencing_token and hasattr(jobs, "defer_leased"):
+        import hashlib
+
+        try:
+            with _transaction(engine) as c:
+                job = c.execute(
+                    sql("SELECT id, lease_owner FROM jobs WHERE kind = 'code.task' "
+                        "AND payload->>'run_id' = :run_id AND lease_token_hash = :h "
+                        "AND status IN ('leased', 'running') LIMIT 1"),
+                    {"run_id": run_id,
+                     "h": hashlib.sha256(fencing_token.encode("utf-8")).hexdigest()},
+                ).mappings().first()
+                if job is not None:
+                    jobs.defer_leased(c, job["lease_owner"], job["id"], fencing_token,
+                                      delay_seconds=wait, reason="budget_wait", message=message)
+                    emit_event(c, project_id, "code_task.budget_wait", "boss", "code_task_run",
+                               run_id, {"message": message, "refusal": reservation.get("refusal"),
+                                        "retry_after_seconds": wait, "job_id": job["id"]})
+                    return {"status": "running", "done": False, "job_deferred": True,
+                            "retry_after_seconds": wait, "error": message}
+        except Exception:  # noqa: BLE001 — fall through to a retryable attempt
+            logger.exception("could not defer code task %s for the budget", run_id)
+    return {"status": "failed", "done": False, "retryable": True, "error": message,
+            "reason_code": "budget_wait", "retry_after_seconds": wait}
+
+
 # --------------------------------------------------------------------------- #
 #  The job handler                                                            #
 # --------------------------------------------------------------------------- #
@@ -1690,10 +1740,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
             expires_in_minutes=30, job_id=fctx.get("created_by_job_id"),
         )
     if reservation.get("status") != "reserved":
-        with _transaction(engine) as c:
-            return _fail(c, run_id, project_id,
-                         f"Budget reservation denied: {reservation.get('status')}", status="blocked",
-                         failure_class="needs_human", reason_code="budget_denied")
+        return refused_reservation(engine, jobs, run_id=run_id, project_id=project_id,
+                                   reservation=reservation, fencing_token=fencing_token)
     reservation_id = reservation["reservation_id"]
     with _transaction(engine) as c:
         c.execute(sql("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),

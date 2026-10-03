@@ -100,6 +100,29 @@ def _as_wait(error: CapabilityExecutionError) -> Optional[CapabilityWaitError]:
     return CapabilityWaitError(said["headline"], wait_seconds=30)
 
 
+def _as_settled(error: CapabilityExecutionError) -> CapabilityExecutionError:
+    """The error as it should be FAILED: settled when only a person can lift it.
+
+    The other half of `_as_wait`, read by the same classifier. A budget refusal a person must
+    lift — the cap, a tier-2 freeze, a used-up allocation — reaches the runner from more than
+    one door: a custom step says so itself (raise_for_budget), but a typed decision's
+    reservation, or a model gateway's `ModelCapacityDeniedError('Budget cap exceeded. Decision
+    created.')`, arrived as a plain retryable error. fail_step then retried it with no delay up
+    to max_attempts, each retry reserving again and opening ANOTHER blocking "Budget
+    reservation denied" decision, and the step dead-lettered instead of stopping once with
+    what to do. Classified here, once, every kind of step stops the same way."""
+    if isinstance(error, SettledCapabilityError):
+        return error
+    from .model_failures import explain
+
+    said = explain(str(error))
+    if said.get("kind") != "budget_refused":
+        return error
+    detail = str(error).strip().rstrip(".")
+    return SettledCapabilityError(
+        f"{said['headline'].rstrip('.')}: {detail}. {said['action']}")
+
+
 #: Where `_resolve_inputs` records the explicit marker for each optional input whose source step
 #: was skipped. Kept on the step's CONTEXT, not among its inputs, so no tool ever receives it as
 #: an argument; `execute_step` writes it onto the step's output as `skipped_inputs`.
@@ -3765,6 +3788,7 @@ def tick(
                         "waiting_for": wait.kind, "error": str(wait),
                     })
                 else:
+                    error = _as_settled(error)
                     workflows.fail_step(
                         connection, project_id=project_id, step_run_id=claimed["id"],
                         worker_id=worker_id, error=str(error),

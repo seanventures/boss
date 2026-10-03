@@ -319,3 +319,233 @@ def test_a_skill_refused_by_the_budget_says_which_refusal_to_any_caller(eng, pro
     assert result["status"] == "denied"
     assert result["reason"] == "budget refused: Burst cap exceeded ($/min). Retry shortly."
     assert result["budget"]["transient"] is True and result["budget"]["refusal"] == "burst"
+
+
+# ── Review of f59c9676: the same class, at the doors that commit missed ─────────────────────
+
+def _held_by_another_run(c, project_id: str, amount: int) -> str:
+    """Another run's ACTIVE reservation, made long enough ago to be outside the burst window —
+    a governed code task holds $2 like this for as long as it runs."""
+    rid = f"res_{uuid.uuid4().hex[:12]}"
+    c.execute(
+        text("INSERT INTO budget_reservations (id, project_id, category, amount_usd_micros, "
+             "reason, status, expires_at, created_at) VALUES (:i, :p, 'code_task', :a, "
+             "'another run', 'active', now() + interval '30 minutes', "
+             "now() - interval '5 minutes')"),
+        {"i": rid, "p": project_id, "a": amount},
+    )
+    return rid
+
+
+def _decisions(c, project_id: str) -> int:
+    return c.execute(text("SELECT count(*) FROM decisions WHERE project_id = :p"),
+                     {"p": project_id}).scalar_one()
+
+
+def test_a_cap_filled_only_by_other_runs_reservations_waits_and_asks_nobody(eng, project):
+    """Five runs started together: their holds fill the cap while the money spent is far under
+    it. That clears by itself when they finish, so it is no decision and no 'raise the cap'."""
+    from boss_engine.services.budget import HEADROOM_MESSAGE
+
+    with eng.begin() as c:
+        _policy(c, project, daily=1_000_000, burst=10_000_000)
+        _held_by_another_run(c, project, 995_000)
+        refused = BudgetGovernor(Settings()).reserve(
+            c, project, category="model", amount_usd_micros=10_000, reason="sixth run",
+            expires_in_minutes=5)
+        decisions = _decisions(c, project)
+    assert refused["status"] == "denied"
+    assert refused["refusal"] == "headroom" and refused["transient"] is True, refused
+    assert refused["retry_after_seconds"] and refused["decision_id"] is None
+    assert decisions == 0, "a refusal that clears by itself asks nobody to decide anything"
+    assert refused["message"] == HEADROOM_MESSAGE
+    assert explain(refused["message"])["kind"] == "budget_wait"
+    assert "cap" not in explain(refused["message"])["headline"].lower()
+
+
+def test_a_request_the_cap_refuses_on_its_own_still_needs_a_person(eng, project):
+    """Reservations present, but the request alone is over the cap: waiting will not help."""
+    with eng.begin() as c:
+        _policy(c, project, daily=1_000_000, burst=10_000_000)
+        _held_by_another_run(c, project, 10_000)
+        refused = BudgetGovernor(Settings()).reserve(
+            c, project, category="model", amount_usd_micros=2_000_000, reason="too big",
+            expires_in_minutes=5)
+    assert refused["refusal"] == "cap_exceeded" and refused["transient"] is False
+
+
+def test_a_step_refused_because_other_runs_hold_the_budget_waits_then_completes(
+        eng, project, governed_skill):
+    with eng.begin() as c:
+        _policy(c, project, daily=1_000_000, burst=10_000_000)
+        held = _held_by_another_run(c, project, 1_000_000)   # the whole cap, held
+        run = _meeting_run(c, project, max_attempts=1)
+        runner.tick(c, Ctx(eng), project_id=project)
+        waiting = _state(c, run["id"])
+        decisions = _decisions(c, project)
+
+    assert governed_skill == []
+    assert waiting["step"]["status"] == "ready", waiting
+    assert waiting["step"]["output"]["waiting"]["kind"] == "budget_wait"
+    assert waiting["run"]["status"] == "waiting"
+    assert "other work" in (waiting["run"]["blocked_reason"] or ""), waiting["run"]
+    assert decisions == 0
+
+    with eng.begin() as c:
+        c.execute(text("UPDATE budget_reservations SET status = 'released' WHERE id = :i"),
+                  {"i": held})
+        c.execute(text("UPDATE workflow_step_runs SET run_after = now() "
+                       "WHERE workflow_run_id = :r AND status = 'ready'"), {"r": run["id"]})
+        runner.tick(c, Ctx(eng), project_id=project)
+        done = _state(c, run["id"])
+    assert len(governed_skill) == 1
+    assert done["step"]["status"] == "succeeded", done
+    assert done["run"]["blocked_reason"] is None
+
+
+def test_the_wait_bound_stops_the_step_and_a_retry_starts_the_waits_afresh(
+        eng, project, governed_skill):
+    """MAX_STEP_WAITS stops a step that never gets room. The person's Try again must give it
+    the full allowance again — not fail it at the very next wait with '... after 30 tries'."""
+    with eng.begin() as c:
+        _policy(c, project, daily=10_000_000, burst=100_000)
+        _spent_this_minute(c, project, 100_000)
+        run = _meeting_run(c, project, max_attempts=1)
+        runner.tick(c, Ctx(eng), project_id=project)
+        assert _state(c, run["id"])["step"]["status"] == "ready"
+        # The step has waited as often as it may.
+        c.execute(
+            text("UPDATE workflow_step_runs SET run_after = now(), output = jsonb_set(output, "
+                 "'{waiting,count}', to_jsonb(CAST(:n AS int))) WHERE workflow_run_id = :r"),
+            {"n": workflows.MAX_STEP_WAITS, "r": run["id"]})
+        runner.tick(c, Ctx(eng), project_id=project)
+        stopped = _state(c, run["id"])
+    assert stopped["step"]["status"] in workflows.STOPPED_STEP_STATES, stopped
+    assert f"still not started after {workflows.MAX_STEP_WAITS} tries" in (
+        stopped["step"]["last_error"] or "")
+
+    with eng.begin() as c:
+        workflows.retry_failed_step(c, project_id=project, run_id=run["id"],
+                                    step_id="extract", actor="test")
+        runner.tick(c, Ctx(eng), project_id=project)   # the minute is still spent
+        again = _state(c, run["id"])
+    assert again["step"]["status"] == "ready", again
+    assert again["step"]["output"]["waiting"]["count"] == 1, "the waits start afresh"
+    assert governed_skill == []
+
+
+def test_only_one_reservation_larger_than_the_cap_is_granted_to_concurrent_reservers(
+        eng, project):
+    """Two reservers in separate transactions both see an empty minute. The empty-window
+    allowance is ONE reservation, so the second must wait — not be granted a second of any
+    size, which would let the burst control overshoot by the sum of them."""
+    with eng.begin() as c:
+        _policy(c, project, daily=100_000_000, burst=1_000)
+    governor = BudgetGovernor(Settings())
+    first_conn = eng.connect()
+    first_tx = first_conn.begin()
+    try:
+        first = governor.reserve(first_conn, project, category="model",
+                                 amount_usd_micros=500_000, reason="racer one",
+                                 expires_in_minutes=5)
+        with eng.begin() as c:
+            second = governor.reserve(c, project, category="model",
+                                      amount_usd_micros=500_000, reason="racer two",
+                                      expires_in_minutes=5)
+    finally:
+        first_tx.rollback()
+        first_conn.close()
+    assert first["status"] == "reserved", first
+    assert second["status"] == "denied", second
+    assert second["refusal"] == "burst" and second["transient"] is True
+
+
+def test_a_typed_decision_refused_by_the_cap_stops_once_with_one_decision(
+        eng, project, monkeypatch):
+    """A refusal only a person can lift, reaching the runner from a typed decision rather than
+    a custom step: it used to be retried with no delay up to max_attempts, each retry opening
+    another blocking 'Budget reservation denied' decision, then dead-lettered."""
+    from types import SimpleNamespace
+
+    from boss_engine.services import typed_decision_spend
+
+    monkeypatch.setattr(typed_decision_spend, "governed_decider",
+                        lambda settings, role: SimpleNamespace(backend="test", source_id=None))
+    with eng.begin() as c:
+        _policy(c, project, daily=100, burst=100_000)      # below the typed decision's estimate
+        definition = workflows.create_definition(
+            c, project_id=project, workflow_key="route_ticket", name="Route a ticket",
+            description=None, actor="test", namespace="product")
+        version = workflows.publish_version(
+            c, project_id=project, definition_id=definition["id"], actor="test",
+            spec={"entry_step": "route", "steps": [{
+                "id": "route", "kind": "capability", "next": [], "max_attempts": 3,
+                "approval": {"mode": "auto"},
+                "binding": {"typed_decision": {
+                    "question": "Which team handles this ticket?",
+                    "options": {"billing": "Payments", "technical": "Bugs"}},
+                    "inputs": {"state": {"from_input": "ticket"}}}}]})
+        run = workflows.start_run(c, project_id=project, actor="test",
+                                  input_data={"ticket": "charged twice"},
+                                  dedupe_key=f"dk_{uuid.uuid4().hex[:10]}",
+                                  workflow_version_id=version["id"])
+    for _ in range(3):
+        with eng.begin() as c:
+            runner.tick(c, Ctx(eng), project_id=project)
+            c.execute(text("UPDATE workflow_step_runs SET run_after = now() "
+                           "WHERE workflow_run_id = :r AND status = 'ready'"), {"r": run["id"]})
+    with eng.begin() as c:
+        state = _state(c, run["id"])
+        # A repeated refusal is folded into the open decision as another occurrence.
+        refusals = c.execute(
+            text("SELECT COALESCE(SUM(COALESCE((recommendation->>'occurrences')::int, 1)), 0) "
+                 "FROM decisions WHERE project_id = :p "
+                 "AND question = 'Budget reservation denied'"), {"p": project}).scalar_one()
+    assert state["step"]["status"] in workflows.STOPPED_STEP_STATES, state
+    assert state["step"]["attempt"] == 1, "stopped once, not retried"
+    assert refusals == 1, "one refusal, one decision"
+    error = state["step"]["last_error"] or ""
+    assert error.startswith("The budget refused this work"), error
+    assert "Raise the daily or monthly cap in Budget" in error
+
+
+def test_a_code_task_refused_for_a_moment_is_handed_back_to_the_queue_not_blocked(eng, project):
+    """A governed code task holds $2; started with other reserved work it meets a refusal that
+    clears by itself. It used to be blocked as needing a person: 'Budget reservation denied:
+    denied'. Now its job goes back to the queue for the wait, without spending an attempt."""
+    from apps.api.app import main as api_main
+    from boss_engine.services.code_task_service import refused_reservation
+    from boss_engine.services.jobs import JobLeaseService, enqueue_job
+
+    jobs = JobLeaseService(api_main.settings)
+    run_id = f"crun_{uuid.uuid4().hex[:10]}"
+    with eng.begin() as c:
+        job = enqueue_job(c, project, "code.task", {"run_id": run_id},
+                          dedupe_key=f"budget-wait:{uuid.uuid4().hex}")
+        lease = jobs.lease_owned_job(c, project_id=project, job_id=job["id"], worker_id="w1",
+                                     lease_ttl_seconds=300)
+        before = c.execute(text("SELECT attempt FROM jobs WHERE id = :j"),
+                           {"j": job["id"]}).scalar_one()
+    try:
+        result = refused_reservation(
+            eng, jobs, run_id=run_id, project_id=project, fencing_token=lease["lease_token"],
+            reservation={"status": "denied", "refusal": "burst", "transient": True,
+                         "retry_after_seconds": 40,
+                         "message": "Burst cap exceeded ($/min). Retry shortly."})
+        with eng.begin() as c:
+            row = c.execute(text("SELECT status, attempt, run_after > now() AS later "
+                                 "FROM jobs WHERE id = :j"), {"j": job["id"]}).mappings().one()
+        assert result["job_deferred"] is True and result["status"] != "blocked", result
+        assert row["status"] == "queued" and row["later"], row
+        assert row["attempt"] == before - 1, "a wait is not an attempt"
+
+        stopped = refused_reservation(
+            eng, jobs, run_id=run_id, project_id=project, fencing_token=None,
+            reservation={"status": "denied", "refusal": "cap_exceeded", "transient": False,
+                         "message": "Budget cap exceeded. Decision created."})
+        assert stopped["status"] == "blocked" and stopped["failure_class"] == "needs_human"
+        assert "denied: denied" not in stopped["error"]
+        assert "Budget cap exceeded" in stopped["error"]
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM jobs WHERE id = :j"), {"j": job["id"]})
