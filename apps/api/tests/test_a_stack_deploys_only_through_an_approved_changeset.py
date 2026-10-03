@@ -397,6 +397,36 @@ def test_rollback_plans_the_previous_healthy_commit_through_the_same_path(
     assert rollback["rollback_of"] == second["deployment"]["id"]
 
 
+def test_each_deployment_carries_the_actions_the_engine_allows_and_rollback_obeys_them(
+        client, engine, stack):
+    first = _plan(client, stack, "main")
+    assert first["actions"] == ["approve", "reject"]
+    first_done, _ = _approve_and_execute(client, engine, first)
+    first_now = client.get(f"/v1/deployments/stack/{first['id']}").json()["deployment"]
+    assert first_now["status"] == "healthy"
+    # Healthy with an address, but no earlier healthy commit to go back to.
+    assert first_now["actions"] == ["open"]
+    refused = client.post(f"/v1/deployments/stack/{first['id']}/rollback", json={"actor": "ceo"})
+    assert refused.status_code == 409, refused.text
+
+    second, _ = _approve_and_execute(client, engine, _plan(client, stack, "next"))
+    items = {d["id"]: d for d in client.get(
+        f"/v1/deployments/stack?project_id={HOME}&target_id={stack['target']['id']}"
+    ).json()["items"]}
+    live = items[second["deployment"]["id"]]
+    assert live["actions"] == ["rollback", "open"]
+    assert live["rollback_commit"] == "a" * 40
+    # The older healthy record is not the live release: no rollback, and the route agrees.
+    assert items[first["id"]]["actions"] == ["open"]
+    older = client.post(f"/v1/deployments/stack/{first['id']}/rollback", json={"actor": "ceo"})
+    assert older.status_code == 409, older.text
+    # A decided decision offers no approve, even if the record were still awaiting.
+    with engine.begin() as connection:
+        decided = connection.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                                     {"d": first["decision_id"]}).scalar_one()
+    assert decided != "pending"
+
+
 def test_a_manifest_error_refuses_the_plan_with_a_headline_and_an_action(client, stack):
     stack["github"].read_file = lambda *a: "version: 1\nname: shop\ninstall: ['{oops}']\n"
     response = client.post("/v1/deployments/stack/plan", json={

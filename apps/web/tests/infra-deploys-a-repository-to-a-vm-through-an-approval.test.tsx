@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StackDeployPanel, StackDeploymentView } from "../app/stack-deploy-ui";
 import {
-  canHostStack, deployFormProblem, isStackTarget, stackActions, targetFormProblem,
+  canHostStack, deployFormProblem, deploymentActions, isStackTarget, targetFormProblem,
   targetManifestPath, targetPublicUrl, targetRepository, type StackDeployment,
 } from "../lib/stack-deploy";
 
@@ -39,14 +39,10 @@ const VM = {
 const UNREACHED = { ...VM, id: "host_2", name: "fresh", status: "registered", last_preflight: null };
 
 const TARGET = {
-  id: "deptgt_1", app_name: "boss", environment: "production", repo: "boss", host_id: "host_1",
-  target_ref: "ubuntu@203.0.113.7:22", status: "active",
-  required_resources: [
-    { kind: "repo_owner", name: "seanventures" },
-    { kind: "deploy_kind", name: "stack" },
-    { kind: "manifest_path", name: "boss.deploy.yaml" },
-    { kind: "public_url", name: "https://boss.example.com" },
-  ],
+  id: "deptgt_1", app_name: "boss", environment: "production", repo: "seanventures/boss",
+  host_id: "host_1", target_kind: "stack", target_ref: "ubuntu@203.0.113.7:22", status: "active",
+  manifest_path: "boss.deploy.yaml", public_url: "https://boss.example.com",
+  required_resources: [{ kind: "repo_owner", name: "seanventures" }],
 };
 const PER_APP_TARGET = { id: "deptgt_2", app_name: "todo", environment: "staging", repo: "todo",
   target_kind: "ssh", status: "active", required_resources: [] };
@@ -64,33 +60,28 @@ function deployment(over: Partial<StackDeployment> = {}): StackDeployment {
     status: "awaiting_approval", decision_id: "dec_1", changeset_id: "cs_1",
     steps: [], log_tail: null, open_url: null, error: null,
     created_at: "2026-10-03T10:00:00Z", updated_at: "2026-10-03T10:00:00Z",
+    // What the API offers a plan waiting on its decision; every other record says its own.
+    actions: over.status && over.status !== "awaiting_approval" ? [] : ["approve", "reject"],
     ...over,
   };
 }
 
 /**
- * What POST /v1/deployment-targets STORES, mirrored from apps/api/app/main.py and
- * engine/boss_engine/services/stack_targets.py (pinned there by
- * apps/api/tests/test_a_stack_target_is_stored_and_pointed_at_its_vm_in_one_write.py): stack facts
- * become `required_resources` entries, an `owner/name` repo is split, and `host_id` derives the
- * address. The list then answers with what was stored — never with the console's own request
- * echoed back, which is how a dropped field once passed here and failed against the real API.
+ * What POST /v1/deployments/stack/targets STORES and returns, mirrored from
+ * engine/boss_engine/services/stack_deploy.py `create_stack_target`: the canonical target row,
+ * `target_kind: "stack"`, `repo` as owner/name, `manifest_path` and `public_url` columns, and the
+ * address derived from the host. The list then answers with what was stored — never with the
+ * console's own request echoed back.
  */
 function storedTarget(body: Record<string, unknown>, hosts: Array<typeof VM>) {
-  const resources: Array<{ kind: string; name: string }> = [{ kind: "container_runtime", name: "docker" }];
-  const [owner, repo] = String(body.repo).includes("/") ? String(body.repo).split("/") : ["", String(body.repo)];
-  if (owner) resources.push({ kind: "repo_owner", name: owner });
-  for (const kind of ["deploy_kind", "manifest_path", "public_url"]) {
-    const v = body[kind];
-    if (typeof v === "string" && v.trim()) resources.push({ kind, name: v.trim() });
-  }
-  const h = hosts.find((x) => x.id === body.host_id);
+  const repository = String(body.repository);
+  const h = hosts.find((x) => x.id === body.host_id)!;
   return {
     id: `deptgt_${String(body.app_name)}`, project_id: body.project_id, app_name: body.app_name,
-    environment: body.environment, repo, target_kind: "ssh", status: "active",
-    host_id: h ? h.id : null,
-    target_ref: h ? `${h.ssh_user}@${h.address}:${h.ssh_port}` : body.target_ref,
-    required_resources: resources,
+    environment: body.environment, repo: repository, target_kind: "stack", status: "active",
+    host_id: h.id, target_ref: `${h.ssh_user}@${h.address}:${h.ssh_port}`,
+    manifest_path: body.manifest_path ?? null, public_url: body.public_url ?? null,
+    required_resources: [{ kind: "repo_owner", name: repository.split("/")[0] }],
   };
 }
 
@@ -133,16 +124,10 @@ function installFetch(script: Script = {}) {
       const next = reads.length > 1 ? reads.shift()! : reads[0];
       return next ? json({ deployment: next }) : json({ detail: "no such deployment" }, 404);
     }
-    if (method === "POST" && url === "/v1/deployment-targets") {
+    if (method === "POST" && url === "/v1/deployments/stack/targets") {
       const stored = storedTarget(body ?? {}, hosts);
       targets.push(stored);
       return json(stored, 201);
-    }
-    if (method === "POST" && url.endsWith("/attach")) {
-      const hostId = url.split("/").at(-2);
-      const t = targets.find((x) => x.id === body?.target_id);
-      if (t) t.host_id = hostId;
-      return json({ target_id: body?.target_id, host_id: hostId });
     }
     if (method === "POST" && url === "/v1/deployments/stack/plan") {
       const plan = script.plan ?? { status: 200, body: { deployment: deployment() } };
@@ -204,38 +189,40 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-describe("a deployment offers only the buttons its status allows", () => {
-  it("approve and reject only while a named decision waits", () => {
-    expect(stackActions({ status: "awaiting_approval", decision_id: "dec_1" })).toEqual(["approve", "reject"]);
-    expect(stackActions({ status: "awaiting_approval", decision_id: null })).toEqual([]);
+describe("a deployment offers exactly the buttons the API names in `actions`", () => {
+  it("renders the API's actions and decides none itself", () => {
+    expect(deploymentActions({ actions: ["approve", "reject"] })).toEqual(["approve", "reject"]);
+    expect(deploymentActions({ actions: ["rollback", "open"] })).toEqual(["rollback", "open"]);
   });
-  it("nothing while it is planned or running — it is still moving", () => {
-    expect(stackActions({ status: "planned", decision_id: "dec_1" })).toEqual([]);
-    expect(stackActions({ status: "running", decision_id: "dec_1", open_url: "https://x" })).toEqual([]);
+  it("a record without actions offers nothing, whatever its status", () => {
+    expect(deploymentActions({ actions: [] })).toEqual([]);
+    expect(deploymentActions({})).toEqual([]);
+    expect(deploymentActions({ actions: null })).toEqual([]);
   });
-  it("open once healthy; roll back only when the API says this record can", () => {
-    expect(stackActions({ status: "healthy", open_url: "https://boss.example.com", rollback_available: true }))
-      .toEqual(["open", "rollback"]);
-    expect(stackActions({ status: "failed", rollback_available: true })).toEqual(["rollback"]);
-    expect(stackActions({ status: "rejected", decision_id: "dec_1" })).toEqual([]);
+  it("ignores an action it does not know how to render", () => {
+    expect(deploymentActions({ actions: ["approve", "teardown"] })).toEqual(["approve"]);
   });
-  it("no roll back on an older healthy record, or on a failure that never reached the host", () => {
-    // An older record in the recent list: rolling it back would deploy past the live release.
-    expect(stackActions({ status: "healthy", open_url: "https://boss.example.com", rollback_available: false }))
-      .toEqual(["open"]);
-    // Refused at preflight: nothing on the host changed, so there is nothing to roll back.
-    expect(stackActions({ status: "failed", rollback_available: false })).toEqual([]);
-    // A record from an API that does not say: never guessed from the status.
-    expect(stackActions({ status: "failed" })).toEqual([]);
+  it("an awaiting record with no approve in actions shows no Approve", async () => {
+    installFetch();
+    await act(async () => {
+      root.render(<StackDeploymentView deploymentId="sdep_1" actor="ceo"
+        initial={deployment({ status: "awaiting_approval", actions: [] })} />);
+    });
+    expect(buttons()).not.toContain("Approve");
+    expect(buttons()).not.toContain("Reject");
   });
 });
 
 describe("a stack target is read from the shape the API stores", () => {
-  it("required_resources, and nothing else", () => {
+  it("the canonical target row: target_kind, manifest_path, public_url", () => {
     expect(isStackTarget(TARGET)).toBe(true);
     expect(isStackTarget(PER_APP_TARGET)).toBe(false);
     expect(targetManifestPath(TARGET)).toBe("boss.deploy.yaml");
     expect(targetManifestPath({ id: "a", app_name: "a", environment: "p" })).toBe("boss.deploy.yaml");
+    expect(targetManifestPath({ ...TARGET, manifest_path: null })).toBe("boss.deploy.yaml");
+    // The console's old required_resources spelling is not a stack target any more.
+    expect(isStackTarget({ id: "x", app_name: "x", environment: "p", target_kind: "ssh",
+      required_resources: [{ kind: "deploy_kind", name: "stack" }] })).toBe(false);
     expect(targetPublicUrl(TARGET)).toBe("https://boss.example.com");
     expect(targetRepository(TARGET)).toBe("seanventures/boss");
   });
@@ -294,13 +281,14 @@ describe("Infra → Deploy a repository", () => {
     await submit(form);
     await settle(() => host.querySelectorAll('[data-testid="stack-target"]').length === 1, "target listed");
 
-    const created = calls.filter((c) => c.method === "POST" && c.url === "/v1/deployment-targets");
+    const created = calls.filter((c) => c.method === "POST" && c.url === "/v1/deployments/stack/targets");
     expect(created).toHaveLength(1);
     expect(created[0].body).toEqual({
-      project_id: "project_1", actor: "ceo", app_name: "boss", environment: "production",
-      repo: "seanventures/boss", host_id: "host_1",
-      deploy_kind: "stack", manifest_path: "boss.deploy.yaml", public_url: "https://boss.example.com",
+      project_id: "project_1", actor: "ceo", host_id: "host_1", repository: "seanventures/boss",
+      app_name: "boss", environment: "production",
+      manifest_path: "boss.deploy.yaml", public_url: "https://boss.example.com",
     });
+    expect(calls.some((c) => c.url === "/v1/deployment-targets" && c.method === "POST")).toBe(false);
     // Where it runs is part of the same write: no second call can fail and leave an orphan.
     expect(calls.some((c) => c.url.endsWith("/attach"))).toBe(false);
     const card = host.querySelector('[data-testid="stack-target"]')!;
@@ -310,22 +298,18 @@ describe("Infra → Deploy a repository", () => {
     expect(host.querySelector('[data-testid="stack-deploy-form"]')).not.toBeNull();
   });
 
-  it("a stack target with no VM offers Point at a VM, never Deploy", async () => {
+  it("a stack target with no VM offers no Deploy", async () => {
     const orphan = { ...TARGET, id: "deptgt_orphan", host_id: null, target_ref: "typed@198.51.100.9:22" };
     installFetch({ targets: [orphan] });
     await renderPanel();
     const card = host.querySelector('[data-testid="stack-target"]')!;
-    expect(card.textContent).toContain("not on a VM yet");
+    expect(card.textContent).toContain("Not on a VM");
     expect(card.textContent).not.toContain("198.51.100.9");
     expect(card.querySelector('[data-testid="stack-target-deploy"]')).toBeNull();
     // Nor can a plan be raised against it from the form.
     expect(host.querySelector('[data-testid="stack-deploy-form"]')).toBeNull();
-
-    await act(async () => { button("Point at a VM", card).click(); });
-    await settle(() => !!host.querySelector('[data-testid="stack-target-deploy"]'), "attached");
-    const attach = calls.find((c) => c.url.endsWith("/attach"));
-    expect(attach?.url).toBe("/v1/deployment-hosts/host_1/attach");
-    expect(attach?.body).toEqual({ target_id: "deptgt_orphan", actor: "ceo" });
+    // No second write path: a stack target is only ever created bound to its VM.
+    expect(buttons()).not.toContain("Point at a VM");
   });
 
   it("refuses a bad stack name without sending anything", async () => {
@@ -397,7 +381,7 @@ describe("a deployment view follows the record", () => {
       deployment({ status: "running", steps: [{ name: "fetch", status: "succeeded" }, { name: "install", status: "running" }],
                    log_tail: "Step 3/9: building api" }),
       deployment({ status: "healthy", open_url: "https://boss.example.com",
-                   rollback_available: true, rollback_commit: "fedcba9876543210",
+                   actions: ["rollback", "open"], rollback_commit: "fedcba9876543210",
                    steps: [{ name: "fetch", status: "succeeded" }, { name: "install", status: "succeeded" },
                            { name: "health", status: "succeeded" }] }),
     ] });
@@ -438,7 +422,7 @@ describe("a deployment view follows the record", () => {
     installFetch();
     await act(async () => {
       root.render(<StackDeploymentView deploymentId="sdep_1" actor="ceo"
-        initial={deployment({ status: "failed", rollback_available: false,
+        initial={deployment({ status: "failed", actions: [],
           error: { headline: "docker is not installed on boss-vm.", action: "Install docker, then plan again." } })} />);
     });
     expect(host.querySelector('[data-testid="stack-failure"]')?.textContent).toContain("plan again");
@@ -451,7 +435,7 @@ describe("a deployment view follows the record", () => {
     await act(async () => {
       root.render(<StackDeploymentView deploymentId="sdep_1" actor="ceo" onOpened={(d) => opened.push(d)}
         initial={deployment({ status: "failed", log_tail: "ERROR: port 443 already in use",
-          rollback_available: true, rollback_commit: "0000aaaa1111",
+          actions: ["rollback"], rollback_commit: "0000aaaa1111",
           error: { headline: "The health check never answered 200.", action: "Free port 443 on the VM, then deploy again." } })} />);
     });
     const failure = host.querySelector('[data-testid="stack-failure"]')!;

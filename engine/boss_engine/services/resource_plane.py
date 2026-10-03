@@ -2123,7 +2123,8 @@ class ResourcePlaneService:
             text(
                 """
                 SELECT id, project_id, app_name, repo, environment, provider_account_id,
-                       target_kind, target_ref, host_id, domains, required_resources,
+                       target_kind, target_ref, host_id, manifest_path, public_url,
+                       domains, required_resources,
                        secret_refs, health_checks, rollback_points, status,
                        created_by, created_at, updated_at
                 FROM deployment_targets
@@ -5160,7 +5161,8 @@ class ResourcePlaneService:
             text(
                 """
                 SELECT id, project_id, app_name, repo, environment, provider_account_id,
-                       target_kind, target_ref, host_id, domains, required_resources,
+                       target_kind, target_ref, host_id, manifest_path, public_url,
+                       domains, required_resources,
                        secret_refs, health_checks, rollback_points, status, created_by,
                        created_at, updated_at
                 FROM deployment_targets

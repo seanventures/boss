@@ -685,9 +685,85 @@ def _row(connection: Connection, deployment_id: str, *, lock: bool = False):
         {"i": deployment_id}).mappings().first()
 
 
+# ── What an operator may do next: decided here, rendered by the console ─────────────────────
+#
+# The console once derived its buttons from a record's status alone, and offered Roll back on
+# every finished record — an OLDER healthy one planned a commit older than the release before
+# the live one, and one that failed at plan or preflight never touched the host, so "rolling it
+# back" redeployed whatever was already running. Each deployment now carries `actions`, and
+# the console renders exactly those; the rollback route refuses what `actions` does not offer.
+
+ACTIONS = ("approve", "reject", "rollback", "open")
+
+
+def rollback_option(row: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, Any]:
+    """Whether THIS deployment offers Roll back, and the commit that would deploy.
+
+    `row` and `history` are `stack_deployments` rows for one target, carrying `id`, `status`,
+    `commit_sha`, `apply_started_at` and `created_at`. Available only when `row` is the
+    target's LATEST deployment that applied a ChangeSet (apply_started_at set), has finished
+    healthy or failed, and an earlier healthy commit different from its own exists.
+    """
+    none = {"rollback_available": False, "rollback_commit": None}
+    if row.get("status") not in ("healthy", "failed") or row.get("apply_started_at") is None:
+        return none
+    applied = [h for h in history if h.get("apply_started_at") is not None]
+    latest = max(applied, key=lambda h: h["created_at"], default=None)
+    if latest is None or latest.get("id") != row.get("id"):
+        return none
+    earlier = [h for h in history
+               if h.get("status") == "healthy" and h.get("commit_sha")
+               and h.get("commit_sha") != row.get("commit_sha")
+               and h["created_at"] < row["created_at"]]
+    if not earlier:
+        return none
+    return {"rollback_available": True,
+            "rollback_commit": max(earlier, key=lambda h: h["created_at"])["commit_sha"]}
+
+
+def deployment_actions(row: dict[str, Any], history: list[dict[str, Any]],
+                       decision_status: Optional[str]) -> list[str]:
+    """The operator actions valid on this deployment right now, in display order."""
+    actions: list[str] = []
+    if (row.get("status") == "awaiting_approval" and row.get("decision_id")
+            and decision_status == "pending"):
+        actions += ["approve", "reject"]
+    if rollback_option(row, history)["rollback_available"]:
+        actions.append("rollback")
+    if row.get("status") == "healthy" and row.get("open_url"):
+        actions.append("open")
+    return actions
+
+
+def _describe(connection: Connection, rows: list[Any]) -> list[dict[str, Any]]:
+    """serialize() plus the engine-decided `actions` and the rollback commit."""
+    rows = [dict(r) for r in rows if r]
+    if not rows:
+        return []
+    target_ids = sorted({r["target_id"] for r in rows})
+    history: dict[str, list[dict[str, Any]]] = {t: [] for t in target_ids}
+    for h in connection.execute(
+            text("SELECT id, target_id, status, commit_sha, apply_started_at, created_at "
+                 "FROM stack_deployments WHERE target_id = ANY(:t)"),
+            {"t": target_ids}).mappings().all():
+        history[h["target_id"]].append(dict(h))
+    decision_ids = sorted({r["decision_id"] for r in rows if r.get("decision_id")})
+    decisions = {d["id"]: d["status"] for d in connection.execute(
+        text("SELECT id, status FROM decisions WHERE id = ANY(:d)"),
+        {"d": decision_ids}).mappings().all()} if decision_ids else {}
+    out = []
+    for r in rows:
+        option = rollback_option(r, history[r["target_id"]])
+        out.append({**serialize(r),
+                    "actions": deployment_actions(r, history[r["target_id"]],
+                                                  decisions.get(r.get("decision_id"))),
+                    "rollback_commit": option["rollback_commit"]})
+    return out
+
+
 def get_stack_deployment(connection: Connection, deployment_id: str) -> Optional[dict]:
     row = _row(connection, deployment_id)
-    return serialize(row) if row else None
+    return _describe(connection, [row])[0] if row else None
 
 
 def list_stack_deployments(connection: Connection, project_id: str, *,
@@ -697,7 +773,7 @@ def list_stack_deployments(connection: Connection, project_id: str, *,
              "AND (CAST(:t AS TEXT) IS NULL OR target_id = :t) "
              "ORDER BY created_at DESC LIMIT :n"),
         {"p": project_id, "t": target_id, "n": max(1, min(int(limit), 200))}).mappings().all()
-    return [serialize(r) for r in rows]
+    return _describe(connection, list(rows))
 
 
 def _set(connection: Connection, deployment_id: str, **fields: Any) -> None:
@@ -985,7 +1061,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         if running:
             # The same commit to the same place is ONE deployment. A second click, a retried
             # workflow step or two operators at once must not queue a second install.
-            return {**serialize(running), "reused": True}
+            return {**get_stack_deployment(connection, running["id"]), "reused": True}
 
     path = str(target.get("manifest_path") or DEFAULT_MANIFEST_PATH)
     manifest_text = github.read_file(owner, repo, path, commit)
@@ -1030,7 +1106,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                            {"k": _lock_key("stack-plan", target_id)})
         running = _live_deployment(connection, target_id, commit)
         if running:
-            return {**serialize(running), "reused": True}
+            return {**get_stack_deployment(connection, running["id"]), "reused": True}
         clash = connection.execute(
             text("SELECT d.id, d.target_id, t.app_name, t.environment FROM stack_deployments d "
                  "JOIN deployment_targets t ON t.id = d.target_id "
@@ -1126,7 +1202,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                    {"target_id": target_id, "repository": f"{owner}/{repo}", "ref": ref,
                     "commit": commit, "changeset_id": changeset["id"],
                     "decision_id": decision_id, "workflow_run_id": workflow_run_id})
-        return serialize(_row(connection, deployment_id))
+        return get_stack_deployment(connection, deployment_id)
 
 
 def rollback_stack_deploy(engine, settings: Settings, *, deployment_id: str,
@@ -1137,18 +1213,18 @@ def rollback_stack_deploy(engine, settings: Settings, *, deployment_id: str,
         if not row:
             raise StackDeployError("No such deployment.", "Pick one from the target's list.",
                                    status_code=404)
-        previous = connection.execute(
-            text("SELECT commit_sha FROM stack_deployments WHERE target_id = :t "
-                 "AND status = 'healthy' AND commit_sha <> :c AND created_at < :at "
-                 "ORDER BY created_at DESC LIMIT 1"),
-            {"t": row["target_id"], "c": row["commit_sha"], "at": row["created_at"]}).first()
-    if not previous:
+        current = get_stack_deployment(connection, deployment_id) or {}
+    # The same rule that decides whether the console shows the button: one source of truth.
+    if "rollback" not in (current.get("actions") or []):
         raise StackDeployError(
-            "There is no earlier healthy commit on this target to roll back to.",
-            "Fix forward: deploy a commit that works.")
+            "This deployment cannot be rolled back.",
+            "Roll back is offered only on a target's latest applied deployment, once it has "
+            "finished and an earlier healthy commit exists; otherwise deploy a commit that "
+            "works.", status_code=409)
     return plan_stack_deploy(engine, settings, project_id=row["project_id"],
                              target_id=row["target_id"], repository=row["repository"],
-                             ref=str(previous[0]), actor=actor, rollback_of=deployment_id)
+                             ref=str(current["rollback_commit"]), actor=actor,
+                             rollback_of=deployment_id)
 
 
 # ── Approval (DecisionService follow-on) ─────────────────────────────────────────────────────

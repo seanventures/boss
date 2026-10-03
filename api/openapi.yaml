@@ -38645,21 +38645,6 @@ components:
           - type: string
           - type: 'null'
           title: Host Id
-        deploy_kind:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Deploy Kind
-        manifest_path:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Manifest Path
-        public_url:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Public Url
       additionalProperties: true
       type: object
       required:
@@ -38814,6 +38799,16 @@ components:
           - type: string
           - type: 'null'
           title: Host Id
+        manifest_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Manifest Path
+        public_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Public Url
         domains:
           items:
             type: string
@@ -38984,21 +38979,6 @@ components:
             type: array
           - type: 'null'
           title: Publishable Ports
-        deploy_kind:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Deploy Kind
-        manifest_path:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Manifest Path
-        public_url:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Public Url
       additionalProperties: true
       type: object
       required:
