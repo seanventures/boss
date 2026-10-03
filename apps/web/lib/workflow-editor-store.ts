@@ -225,7 +225,7 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
         ? s : { ...s, selection: a.id };
 
     case "SET_PROBLEMS":
-      return { ...s, problems: a.result.problems, summary: a.result.summary };
+      return { ...s, problems: a.result.problems, summary: a.result.summary, checkedSpec: a.spec ?? s.spec };
 
     case "UNDO":
       // With broken JSON on screen, the first undo puts the text back to the spec it shows.

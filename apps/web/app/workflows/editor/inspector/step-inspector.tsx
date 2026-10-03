@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode } from "react";
+import React, {
+  useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode,
+} from "react";
 import {
   Clock, DotsThree, GitBranch, GitFork, GitMerge, Lock, PencilSimple, PuzzlePiece, Repeat, Robot,
   SealCheck, Stack, X,
@@ -220,6 +222,61 @@ function useTitleDraft(step: SpecStep, dispatch: Dispatch<EditorAction>) {
   };
 }
 
+/**
+ * Sizes a title box to the text it SHOWS: its value, or, for an untitled step, the label it
+ * shows as a placeholder. A browser leaves a wrapping placeholder out of `scrollHeight`, so the
+ * box is measured holding the label as its value for that moment, then given back its own.
+ */
+export function fitTitleBox(el: HTMLTextAreaElement): void {
+  const own = el.value;
+  const shown = own || el.placeholder;
+  if (shown !== own) el.value = shown;
+  el.style.height = "auto";
+  const height = el.scrollHeight;
+  if (shown !== own) el.value = own;
+  if (height) el.style.height = `${height}px`;
+}
+
+/**
+ * The step's title, editable in place. A textarea, not an input, so a long title WRAPS onto a
+ * second line instead of being cut off; it grows to fit (the built-in label of an untitled step
+ * too), and the stylesheet clamps it at two lines. It re-fits when its width changes: the drawer
+ * goes full width on a narrow screen. It is still one line of text: Enter leaves the box, and a
+ * pasted line break is a space.
+ */
+function TitleBox({ value, placeholder, onChange, onBlur }: {
+  value: string; placeholder: string; onChange(text: string): void; onBlur(): void;
+}) {
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    if (box.current) fitTitleBox(box.current);
+  }, [value, placeholder]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const refit = () => {
+      if (el.clientWidth === width) return; // a height change of our own is not a reason
+      width = el.clientWidth;
+      fitTitleBox(el);
+    };
+    if (typeof ResizeObserver !== "undefined") {
+      const watch = new ResizeObserver(refit);
+      watch.observe(el);
+      return () => watch.disconnect();
+    }
+    window.addEventListener("resize", refit);
+    return () => window.removeEventListener("resize", refit);
+  }, []);
+  return (
+    <textarea ref={box} className="wf-insp-title" rows={1} value={value} placeholder={placeholder}
+              maxLength={TITLE_MAX} aria-label="Step title" data-testid="wf-step-title" title={value || placeholder}
+              onChange={(e) => onChange(e.target.value.replace(/[\r\n]+/g, " "))}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
+              onBlur={onBlur} />
+  );
+}
+
 function StepHeader({ step, view, state, dispatch, problems, onClose }: {
   step: SpecStep; view: StepView; state: EditorState; dispatch: Dispatch<EditorAction>;
   problems: Problem[]; onClose(): void;
@@ -246,9 +303,8 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
       <span className="wf-insp-icon" data-type={view.type}><TypeIcon view={view} /></span>
       <div className="wf-insp-names">
         <Editable>
-          <input className="wf-insp-title" value={title.value} placeholder={view.title} maxLength={TITLE_MAX}
-                 aria-label="Step title" data-testid="wf-step-title"
-                 onChange={(e) => title.change(e.target.value)} onBlur={title.settle} />
+          <TitleBox value={title.value} placeholder={view.title}
+                    onChange={title.change} onBlur={title.settle} />
         </Editable>
         <span className="wf-insp-id">
           <Editable inline>
@@ -273,12 +329,13 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
           )}
           </Editable>
           {editingId ? null : <HelpTip label="Step id" text="Used in JSON and run history" />}
+          {/* The type rides the id line, so the title has the whole row. */}
+          <span className="wf-chip wf-type-chip" data-testid="wf-step-type">{TYPE_LABEL[view.type]}</span>
           {idError ? <span className="wf-field-error" role="alert">{idError}</span> : null}
         </span>
         <FieldError problems={problems} field="title" />
         <FieldError problems={problems} field="id" />
       </div>
-      <span className="wf-chip wf-type-chip">{TYPE_LABEL[view.type]}</span>
       <Editable inline>
         <button ref={menuBtn} type="button" className="wf-icon-btn" aria-label="Step actions"
                 aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>

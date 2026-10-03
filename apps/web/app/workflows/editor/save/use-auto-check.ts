@@ -5,10 +5,10 @@ import { useEffect, useRef, type Dispatch } from "react";
 import { checkSpec } from "../../../../lib/workflow-editor-types";
 import type { EditorAction, EditorState, Spec } from "../../../../lib/workflow-editor-types";
 
-export const AUTO_CHECK_MS = 800;
+export const AUTO_CHECK_MS = 600;
 
 /**
- * Re-check the draft 800ms after the last edit, so problems appear on the nodes while the
+ * Re-check the draft 600ms after the last edit, so problems appear on the nodes while the
  * operator works rather than only when they press Save.
  *
  * Writes nothing (`/check` is read-only on the server). Skipped while the JSON is broken, for an
@@ -30,7 +30,7 @@ export function useAutoCheck(state: EditorState, dispatch: Dispatch<EditorAction
     const timer = setTimeout(() => {
       lastChecked.current = spec;
       checkSpec(projectId, spec, definitionId).then((result) => {
-        if (latest.current === spec) dispatch({ type: "SET_PROBLEMS", result });
+        if (latest.current === spec) dispatch({ type: "SET_PROBLEMS", result, spec });
       }, () => {
         // A failed background check says nothing: Save runs its own and reports there.
         lastChecked.current = null;

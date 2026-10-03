@@ -122,15 +122,6 @@ export function producesOf(step: SpecStep, palette: Palette): string[] {
   return strings(bindingOf(step).produces);
 }
 
-/** The skills this step needs its agent to hold: an agent task's scope, a custom step's skill,
- *  a built-in's skills. For display (`✓ has …`); what is LACKING is stepView's to say. */
-export function neededSkills(step: SpecStep, palette: Palette): string[] {
-  if (isAgentTask(step)) return scopedSkills(step);
-  const mine = customStepOf(step, palette);
-  if (mine) return mine.binding_kind === "skill" && mine.skill_id ? [mine.skill_id] : [];
-  return capabilityOf(step, palette)?.skills ?? [];
-}
-
 /** What a non-agent step is fixed to use, for the read-only `Uses` row. */
 export function usesOf(step: SpecStep, palette: Palette): string[] {
   const cap = capabilityOf(step, palette);
