@@ -244,6 +244,98 @@ def test_a_name_already_in_use_is_refused_with_one_that_is_free(client, engine):
     assert _own_definitions(engine) == before
 
 
+def test_update_my_copy_keeps_the_copys_name_and_no_copy_takes_a_standards(client, engine):
+    """The editor titles a standard with the standard's name and sent it back on "Update my
+    copy" — which renamed the copy to the standard's name, so the library listed the two under
+    one name. Only standards were left out of the name check, so nothing refused it."""
+    standard = _standard(client)
+    mine = _name()
+    made = _post(client, "publish", definition_id=standard["definition_id"], name=mine,
+                 spec=standard["spec"], from_workflow_key=STANDARD).json()
+    copy_id = made["definition"]["id"]
+
+    for round_, title in enumerate(("Once", "Twice"), start=2):
+        changed = copy.deepcopy(standard["spec"])
+        changed["steps"][0]["title"] = title
+        saved = _post(client, "publish", definition_id=standard["definition_id"],
+                      name=standard["name"], spec=changed, from_workflow_key=STANDARD,
+                      update_copy_id=copy_id)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["definition"]["name"] == mine, "the copy took the standard's name"
+        assert saved.json()["version"] == round_ and saved.json()["created"] is False
+
+    # Named on purpose, a standard's name is refused like any other name in use — on a new
+    # copy and on a rename — offering the name the editor suggests for a copy.
+    before = _own_definitions(engine)
+    clash = _post(client, "publish", definition_id=standard["definition_id"],
+                  name=standard["name"].upper(), spec=standard["spec"],
+                  from_workflow_key=STANDARD)
+    assert clash.status_code == 409, clash.text
+    assert clash.json() == {"detail": "Name in use",
+                            "suggested_name": f"{standard['name'].upper()} (mine)"}
+    assert _own_definitions(engine) == before
+    renamed = client.patch(f"/v1/delivery-workflows/{copy_id}", json={
+        "project_id": PROJECT, "actor": "ceo", "name": standard["name"]})
+    assert renamed.status_code == 409 and renamed.json()["detail"] == "Name in use"
+
+    # A different name on "Update my copy" is a rename, and it sticks.
+    other = _name()
+    again = _post(client, "publish", definition_id=standard["definition_id"], name=other,
+                  spec=standard["spec"], from_workflow_key=STANDARD, update_copy_id=copy_id)
+    assert again.status_code == 200, again.text
+    assert again.json()["definition"]["name"] == other
+
+
+@pytest.mark.parametrize("second, outcome", [
+    ("!", "the next free key"),     # a different name, the same key: race_x and race_x
+    (".", "name in use"),           # the very same name
+])
+def test_two_saves_at_once_are_taken_in_turn(engine, second, outcome):
+    """The name check and the key choice read the table and then insert, with nothing held:
+    two saves that derive one key got 200 and a 409 "workflow key 'race_x' already exists",
+    which the console shows as "Name in use" for a name nobody uses — and two saves of one
+    name could both pass the check. The second save now waits for the first and then sees it.
+    """
+    import threading
+
+    from boss_engine.services import workflows as runtime
+
+    stem = f"Race {uuid4().hex[:6]}"
+    first = engine.connect()
+    transaction = first.begin()
+    made = runtime.publish_from_editor(first, project_id=PROJECT, actor="ceo",
+                                       name=f"{stem}.", spec=_media_spec())
+    result: dict = {}
+
+    def save_the_second():
+        try:
+            with engine.begin() as connection:
+                result["saved"] = runtime.publish_from_editor(
+                    connection, project_id=PROJECT, actor="ceo", name=f"{stem}{second}",
+                    spec=_media_spec())
+        except Exception as error:  # noqa: BLE001 — the assertion below names it
+            result["error"] = error
+
+    racer = threading.Thread(target=save_the_second)
+    racer.start()
+    racer.join(timeout=1.0)
+    try:
+        assert racer.is_alive(), f"the second save did not wait for the first: {result}"
+    finally:
+        transaction.commit()
+        first.close()
+        racer.join(timeout=30)
+    assert not racer.is_alive()
+
+    key = made["definition"]["workflow_key"]
+    if outcome == "the next free key":
+        assert "error" not in result, result
+        assert result["saved"]["definition"]["workflow_key"] == f"{key}_2"
+    else:
+        assert isinstance(result.get("error"), runtime.WorkflowNameInUseError), result
+        assert result["error"].suggested_name == f"{stem}. 2"
+
+
 def test_a_title_round_trips_and_names_the_step_everywhere(client):
     name = _name()
     saved = _post(client, "publish", definition_id=None, name=name,

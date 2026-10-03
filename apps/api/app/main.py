@@ -23966,6 +23966,11 @@ def publish_delivery_workflow(payload: WorkflowPublishBody):
 
     One transaction. A refused save writes nothing; a save of a standard makes ONE copy, and
     `update_copy_id` publishes onto the copy already made instead of making another.
+
+    Names are unique across the library, standards included: 409 {"Name in use",
+    suggested_name} (`<name> (mine)` for a standard's name). On `update_copy_id`, sending the
+    standard's own name keeps the copy's name; any other name renames the copy. Concurrent
+    saves in one project are taken in turn, so a 409 here is always a real name clash.
     """
     payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
