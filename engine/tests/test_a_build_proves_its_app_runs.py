@@ -19,6 +19,7 @@ remains for undeclared repos judges a Python file by what it does, not what it i
 
 from __future__ import annotations
 
+from boss_engine.services.verification_target import NPM_INSTALL_CMD
 import ast
 import inspect
 import json
@@ -222,8 +223,9 @@ def test_the_run_declaration_beats_every_heuristic(tmp_path):
 def test_a_declaration_in_an_app_directory_runs_from_that_directory(tmp_path):
     root = _write(tmp_path, {"inbox/package.json": json.dumps(
         {"scripts": {"start": "node s.js"}, "boss": {"preview": {"command": "node s.js"}}})})
+    # ...with its dependencies installed first: a fresh preview clone has no node_modules.
     assert ps._detect_command(root, ["inbox/package.json"]) == [
-        "sh", "-lc", "cd inbox && node s.js"]
+        "sh", "-lc", f"cd inbox && {NPM_INSTALL_CMD} && node s.js"]
 
 
 def test_another_apps_root_declaration_does_not_hijack_this_build(tmp_path):

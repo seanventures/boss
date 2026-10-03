@@ -109,3 +109,21 @@ def test_every_install_boss_runs_brings_the_build_tools():
     source = Path(ps.__file__).read_text()
     code = "\n".join(l for l in source.splitlines() if not l.lstrip().startswith("#"))
     assert not re.search(r'"[^"\n]*npm install --no-audit', code), "retyped install command"
+
+
+def test_a_declared_command_runs_with_its_dependencies_installed(tmp_path):
+    """docs-freshness-board declared `npm run build && node server/dist/index.js`; proven in the
+    agent's prepared workspace, it died on "tsc: not found" in every fresh preview clone."""
+    app = tmp_path / "board"
+    _app(app, {"build": FRESHNESS_BUILD, "start": "node server/dist/index.js"})
+    (app / "boss.preview.command").write_text("npm run build && node server/dist/index.js\n")
+    command = " ".join(ps.run_declared_command("board", "npm run build && node server/dist/index.js",
+                                               workdir=tmp_path))
+    assert re.search(r"cd board && npm install --include=dev [^&]*&& npm run build", command), command
+
+
+def test_a_declared_command_that_installs_for_itself_is_left_alone(tmp_path):
+    _app(tmp_path / "board", {"start": "node s.js"})
+    for declared in ("npm ci && npm start", "npm install && npm start", "pnpm install && pnpm start"):
+        command = ps.run_declared_command("board", declared, workdir=tmp_path)[2]
+        assert command == f"cd board && {declared}", command
