@@ -886,7 +886,8 @@ export function TargetControls({ target, shipped, onChanged, communityEdition = 
                 }); }} />
       <TeardownControls />
       {communityEdition && <span className="detail">
-        Community deployment is paused until approval and recovery steps are ready.
+        This per-app container deploy stays paused in Community. Deploy a repository with a
+        boss.deploy.yaml from “Deploy a repository” instead — it runs through your approval.
       </span>}
       {msg && <span className="detail" role="alert" style={{ color: "#f85149" }}>{msg}</span>}
     </div>
