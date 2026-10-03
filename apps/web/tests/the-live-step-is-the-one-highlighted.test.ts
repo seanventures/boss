@@ -57,13 +57,13 @@ describe("a gate that has not been answered is the only way to ship", () => {
     // It POSTs the deploy directly, with no decision — the one thing a manual gate exists to
     // prevent. It also read as proof the step was done: two primary buttons saying the app is
     // deployed, above a line asking for approval to deploy it.
-    const at = UI.indexOf("isDeployStep(step, capability) && shippedTo && buildRunId");
+    const at = UI.indexOf("isDeployStep(step, capability) && !stackDeploy && shippedTo && buildRunId");
     expect(UI.slice(at, at + 200)).toContain("!needsYou(step)");
   });
 
   it("and comes back once the decision has been taken", () => {
     // The re-ship case it was added for: a failed or wrongly-"succeeded" deploy.
-    const at = UI.indexOf("isDeployStep(step, capability) && shippedTo && buildRunId");
+    const at = UI.indexOf("isDeployStep(step, capability) && !stackDeploy && shippedTo && buildRunId");
     expect(UI.slice(at, at + 240)).toContain('decidedButNotMoved(step) !== "approved"');
   });
 });

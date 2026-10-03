@@ -28,6 +28,7 @@ import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 import { draftFromSpecStep, specFromDraft } from "../lib/workflow-spec";
 import { AgentStepScope, RanAs, StepAgentPicker, stepAgentChip } from "./step-agents-ui";
 import { browserHref } from "../lib/browser-links";
+import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
 
 
 /**
@@ -218,6 +219,9 @@ export type RunStep = {
   decision_approved_at?: string | null;
   /** Whether this step's RECORDED blocker still holds, re-tested when the run was read. */
   blocker?: { cleared?: boolean; checkable?: boolean; reason?: string; missing?: string } | null;
+  /** Set only on a deploy step that ships to a STACK target: that deployment (and where it
+   *  goes). Its decision is the step's only approval — see workflow-stack-deploy-step.tsx. */
+  stack_deploy?: StepStackDeploy | null;
   /** The preview running RIGHT NOW for this run's build, resolved when the runs are read.
    *  The one recorded in `output` was live when the step ran, and previews expire. The whole
    *  record, because turning one into an openable link is a rule the console already owns. */
@@ -3187,6 +3191,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           hosts={hosts}
           runInput={run.input ?? {}}
           actions={stepActions(run, current.step_id)}
+          actor={actor}
           onRetry={() => onRetryStep(current.step_id)}
           onSkip={(reason) => onSkipStep(current.step_id, reason)}
           onSetTarget={(targetId) => onSetTarget(targetId)}
@@ -3912,10 +3917,12 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
 }
 
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
-                     actions,
+                     actions, actor = "",
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      workflowRunId, previewStarting, busy }: {
   projectId: string;
+  /** Who is acting — what a stack deployment's Approve/Reject is recorded as. */
+  actor?: string;
   /** The workflow run this step belongs to — what "Ask about this step" is about. */
   workflowRunId?: string;
   /** This step's Try again / Skip, from the run's server-decided `actions`. */
@@ -3938,6 +3945,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   busy: string | null;
 }) {
   const phase = phaseOf(step);
+  // A DEPLOY THAT SHIPS TO A STACK TARGET. Its deployment's decision is the step's only
+  // approval, so none of the per-app container flow below applies to it: no Set target, no
+  // "Approve the release", no Ship now.
+  const stackDeploy = isDeployStep(step, capability) ? stackDeployOf(step) : null;
   // HAS ANYONE SHIPPED FROM THIS PROJECT? — not "has this browser".
   //
   // Keying only on localStorage was wrong in the one case that matters: an operator who has
@@ -4034,7 +4045,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   }, [buildRunId, step, capability, runInput]);
 
   const liveAppUrl = (() => {
-    if (!isDeployStep(step, capability)) return "";
+    if (!isDeployStep(step, capability) || stackDeploy) return "";
     if (lastDeploy?.status !== "succeeded") return "";
     const domain = (shippedTo?.domains ?? []).find((d: string) => !!d);
     if (!domain) return "";
@@ -4218,7 +4229,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           primary buttons saying the app is deployed, above a line asking for approval to
           deploy it. While there is an answerable gate, the gate IS the way to ship; the button
           comes back once the decision has been taken, for the re-ship case it was added for. */}
-      {isDeployStep(step, capability) && shippedTo && buildRunId
+      {isDeployStep(step, capability) && !stackDeploy && shippedTo && buildRunId
         && !needsYou(step)
         && decidedButNotMoved(step) !== "approved" ? (
         <ShipNow projectId={projectId} buildRunId={buildRunId} target={shippedTo}
@@ -4285,7 +4296,15 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           one button is scaffolding left standing after the building is up. Before that, the
           numbers are the whole point — the reported bug was pressing Review and decide without
           setting a target — so they stay until they have done their job. */}
-      {isDeployStep(step, capability) && shippedTo ? (
+      {stackDeploy ? (
+        <>
+          <StackDeployStep stack={stackDeploy} actor={actor} onChanged={onBound} />
+          {/* A gate opened before stack deploys stopped being gated (a run already waiting at
+              it when BOSS was upgraded) is still answerable — through the Approvals page, the
+              way it was raised. New runs never have one. */}
+          {needsYou(step) ? <ReviewAndDecide step={step} /> : null}
+        </>
+      ) : isDeployStep(step, capability) && shippedTo ? (
         <div className="dw-ship-single" data-testid="dw-ship-single">
           {targetControl}
           {needsYou(step) ? (
