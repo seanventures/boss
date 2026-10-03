@@ -69,6 +69,16 @@ class SettledCapabilityError(CapabilityExecutionError):
 #: an argument; `execute_step` writes it onto the step's output as `skipped_inputs`.
 SKIPPED_INPUTS = "skipped_inputs"
 
+#: On a failed step's output: the approval this step depended on was REFUSED by a person (a
+#: stack deployment's decision is its deploy step's gate). Such a step is an approval for the
+#: purposes of Skip — see `workflow_run_actions.is_refused_approval`.
+REJECTED_BY_APPROVER = "rejected_by_approver"
+
+#: On a deploy step's binding snapshot: the stack target the step's gate was waived for,
+#: because that stack deployment's own decision is the approval. Execution may ship there and
+#: nowhere else without an approval.
+STACK_GATE_TARGET = "stack_gate_target_id"
+
 
 def _resolve_inputs(
     inputs: dict[str, Any], context: dict[str, Any],
@@ -1894,7 +1904,32 @@ def _perform_capability(
             connection, project_id, inputs,
             default_owner=str(getattr(getattr(ctx, "settings", None), "target_github_owner", "")
                               or ""))
+        approved = bool(context.get("approval_decision_id"))
+        waived_for = str(context.get(STACK_GATE_TARGET) or "")
+        if waived_for and not approved and (
+                stack_target is None or str(stack_target.get("id")) != waived_for):
+            # THE GATE WAS WAIVED FOR ONE STACK TARGET; EXECUTION MUST SHIP THERE OR NOWHERE.
+            # Between the waiver and this call the target can be deactivated, a second stack
+            # target added for the repository, or its host changed — and falling through would
+            # run the per-app deploy with no approval at all.
+            # Settled, not retried: the operator decides, and Try again re-asks the gate.
+            raise SettledCapabilityError(
+                f"this step's approval was to come from a stack deployment to target "
+                f"{waived_for}, but the build no longer resolves to that target, so nothing "
+                "was deployed. Check the repository's stack targets in Infra, then Try again — "
+                "BOSS will ask for the approval that fits.")
         if stack_target is not None:
+            refusal = _assignment_refusal(
+                connection, project_id, context.get("input") or {},
+                str((step.get("approval") or {}).get("approver_role") or ""))
+            if refusal:
+                emit_event(connection, project_id, "workflow.assignment_refused", actor,
+                           "workflow_run", str(context.get("run_id") or ""),
+                           {"approver_role": refusal["approver_role"], "app": refusal["app"],
+                            "assigned": refusal["assigned"], "step_id": step.get("id")})
+                # Settled, exactly as `_open_gate` fails the step: retrying cannot change who
+                # is assigned.
+                raise SettledCapabilityError(refusal["reason"])
             return plan_for_workflow_step(
                 ctx.engine, getattr(ctx, "settings", None), project_id=project_id,
                 actor=actor, target=stack_target, inputs=inputs,
@@ -2602,7 +2637,11 @@ def resume_awaited(
                        if why else f"the {kind} it started finished as '{status}'"),
                 output={"status": "failed", "awaited_status": status,
                         "reached_before_failing": _evidence_quietly(
-                            connection, kind, awaited_id)},
+                            connection, kind, awaited_id),
+                        # A person said no. `workflow_run_actions` reads this and never offers
+                        # "Skip and proceed" on it: skipping would turn the refusal into a yes.
+                        **({REJECTED_BY_APPROVER: True}
+                           if kind == "stack_deployment" and status == "rejected" else {})},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "failed", "awaited": kind, "awaited_status": status,
@@ -2846,8 +2885,12 @@ def _gate_subject(
     context: Optional[dict[str, Any]] = None,
     *,
     default_owner: str = "",
+    waived: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
     """What a person has to approve before this step, or None if it just runs.
+
+    `waived`, when given, receives `{STACK_GATE_TARGET: id}` when the gate is waived because
+    the step ships to a stack target whose deployment decision is the approval.
 
     TWO DIFFERENT THINGS END UP WAITING HERE, and the difference is `completes_step`:
 
@@ -2914,8 +2957,12 @@ def _gate_subject(
     key = str(binding.get("capability") or "")
     if key not in CAPABILITY_KEYS:
         return None
-    if key == "deploy" and stack_target_for_step(
-            connection, project_id, spec_step, context, default_owner=default_owner):
+    stack_target = (stack_target_for_step(connection, project_id, spec_step, context,
+                                          default_owner=default_owner)
+                     if key == "deploy" else None)
+    if stack_target:
+        if waived is not None:
+            waived[STACK_GATE_TARGET] = stack_target.get("id")
         # ONE APPROVAL FOR A STACK DEPLOY: THE DEPLOYMENT'S OWN.
         #
         # Observed on boss-1 (wfr_79c63a78b34546a3b927): the deploy step of a repository with
@@ -2963,6 +3010,34 @@ def _gate_subject(
     return None
 
 
+def _assignment_refusal(
+    connection: Connection, project_id: str, run_input: Any, approver_role: str,
+) -> Optional[dict[str, Any]]:
+    """Why this approver may not answer for this run's app, or None when they may.
+
+    ONE CHECK FOR EVERY KIND OF GATE: `_open_gate` asks it before raising a gate, and a stack
+    deploy — whose gate is its deployment's decision — asks it before planning, so waiving the
+    workflow gate never waives the assignment rule with it.
+    """
+    run_input = run_input if isinstance(run_input, dict) else {}
+    approver = str(approver_role or "").strip()
+    app_name = str(run_input.get("title") or run_input.get("directive") or "").strip()
+    if not approver or not app_name:
+        return None
+    try:
+        from . import agent_assignment
+        verdict = agent_assignment.may_act(
+            connection, project_id=project_id, app_name=app_name, role_key=approver)
+    except Exception as error:  # noqa: BLE001 — an unreadable table must not stop a gate
+        log.warning("assignment check failed for %s: %s", approver, error)
+        return None
+    if verdict.get("allowed"):
+        return None
+    return {"reason": verdict.get("reason") or f"{approver} is not assigned to this app.",
+            "approver_role": approver, "app": app_name,
+            "assigned": verdict.get("assigned") or []}
+
+
 def _open_gate(
     connection: Connection, project_id: str, run: dict[str, Any], step_row: dict[str, Any]
 ) -> None:
@@ -2992,31 +3067,21 @@ def _open_gate(
     # assignment at all passes: enforcement should stop work that goes against somebody's
     # choice, not work on something nobody has chosen about yet, or every app that predates the
     # table becomes unrunnable.
-    approver = str(approval.get("approver_role") or "").strip()
-    app_name = str((run.get("input") or {}).get("title")
-                   or (run.get("input") or {}).get("directive") or "").strip()
-    if approver and app_name:
-        try:
-            from . import agent_assignment
-            verdict = agent_assignment.may_act(
-                connection, project_id=project_id, app_name=app_name, role_key=approver)
-        except Exception as error:  # noqa: BLE001 — an unreadable table must not stop a gate
-            log.warning("assignment check failed for %s: %s", approver, error)
-            verdict = {"allowed": True}
-        if not verdict.get("allowed"):
-            connection.execute(
-                text("UPDATE workflow_step_runs SET status='failed', "
-                     "last_error=:e, updated_at=now() WHERE id=:i"),
-                {"e": verdict.get("reason") or f"{approver} is not assigned to this app.",
-                 "i": step_row["id"]},
-            )
-            emit_event(
-                connection, project_id, "workflow.assignment_refused",
-                run.get("actor") or "workflow", "workflow_step_run", step_row["id"],
-                {"approver_role": approver, "app": app_name,
-                 "assigned": verdict.get("assigned") or []},
-            )
-            return
+    refusal = _assignment_refusal(connection, project_id, run.get("input") or {},
+                                  str(approval.get("approver_role") or ""))
+    if refusal:
+        connection.execute(
+            text("UPDATE workflow_step_runs SET status='failed', "
+                 "last_error=:e, updated_at=now() WHERE id=:i"),
+            {"e": refusal["reason"], "i": step_row["id"]},
+        )
+        emit_event(
+            connection, project_id, "workflow.assignment_refused",
+            run.get("actor") or "workflow", "workflow_step_run", step_row["id"],
+            {"approver_role": refusal["approver_role"], "app": refusal["app"],
+             "assigned": refusal["assigned"]},
+        )
+        return
     # Matches core.create_blocking_decision exactly: it takes a question and a recommendation,
     # returns the decision id, and defaults to HOLD — which is the behaviour a gate wants. A
     # gate that defaulted to "proceed" would be a gate in name only.
@@ -3461,10 +3526,23 @@ def tick(
                 phase = f"decide whether {row['step_id']} needs approval"
                 gate_point = connection.begin_nested()
                 try:
+                    waived: dict[str, Any] = {}
                     subject = _gate_subject(
                         connection, project_id, spec_step, _run_context(connection, run_id),
-                        default_owner=_github_owner(ctx),
+                        default_owner=_github_owner(ctx), waived=waived,
                     )
+                    if subject is None and (
+                            (spec_step.get("binding") or {}).get("capability") == "deploy"):
+                        # WHAT THE GATE WAS WAIVED FOR, written where execution reads it: the
+                        # step may ship to this stack target without a gate, and nowhere else.
+                        # Cleared when no gate was waived, so a stale pin cannot linger.
+                        connection.execute(
+                            text("UPDATE workflow_step_runs SET binding_snapshot = "
+                                 "(COALESCE(binding_snapshot, '{}'::jsonb) - :k) "
+                                 "|| CAST(:patch AS JSONB), updated_at = now() WHERE id = :i"),
+                            {"i": row["id"], "k": STACK_GATE_TARGET,
+                             "patch": json.dumps(waived)},
+                        )
                     if subject is not None:
                         phase = f"open the approval gate for {row['step_id']}"
                         _open_gate(
@@ -3530,6 +3608,9 @@ def tick(
                             # Set only on a step a gate released (_resume_answered_gates keeps
                             # decision_id on the row); read by a custom step's MCP effect.
                             "approval_decision_id": claimed.get("decision_id"),
+                            # The stack target this step's gate was waived for, if any.
+                            STACK_GATE_TARGET: (claimed.get("binding_snapshot") or {}).get(
+                                STACK_GATE_TARGET),
                         },
                     )
                 except BaseException:
