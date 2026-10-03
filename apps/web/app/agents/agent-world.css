@@ -1,0 +1,11 @@
+/* Agent World: avatars, motion, Passport, Roster, Chain, Act card, dock, conversations.
+ * Classes are prefixed ag-, keyframes agav-, and use only the base tokens. Every animation has
+ * a still under prefers-reduced-motion. One section per owning stream; add only to your own. */
+
+/* ── [kit] avatar + motion ─────────────────────────────────────────────────────── */
+
+/* ── [agents] ag-passport / ag-roster / ag-team ────────────────────────────────── */
+
+/* ── [runs] ag-chain / ag-act / ag-dock ────────────────────────────────────────── */
+
+/* ── [converse] ag-talk / ag-room / ag-proposal ────────────────────────────────── */
