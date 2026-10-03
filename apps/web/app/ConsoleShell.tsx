@@ -518,7 +518,7 @@ export default function ConsoleShell({
   // rather than remount. Every later click on it is the pure reveal below.
   const loadedRef = useRef<string[] | undefined>(loadedAreas);
   loadedRef.current = loadedAreas;
-  const [, startAreaLoad] = useTransition();
+  const [areaLoadPending, startAreaLoad] = useTransition();
   const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
   const ensureLoaded = useCallback((id: string) => {
     const loaded = loadedRef.current;
@@ -538,6 +538,24 @@ export default function ConsoleShell({
     // through go(): the same fetch, once.
     if (activeLoading && areaLoadAsked?.id !== active) ensureLoaded(active);
   }, [activeLoading, active, areaLoadAsked, ensureLoaded]);
+  // A REFRESH THAT CAME BACK WITHOUT THE AREA IS ASKED AGAIN AT ONCE.
+  //
+  // The area-load refresh can settle without the area in it (it raced another refresh in
+  // flight), and nothing asked again until the background refresh 20s+ later — so every
+  // first click on an area sat on "Loading …" for 10-30 seconds on boss-1 (2026-10-03),
+  // while the server answered in under a second. Ask again, a few times, then let the
+  // "taking longer than usual" note speak.
+  const areaRetries = useRef<{ id: string; n: number }>({ id: "", n: 0 });
+  useEffect(() => {
+    if (!activeLoading || areaLoadPending || areaLoadAsked?.id !== active) return;
+    if (areaRetries.current.id !== active) areaRetries.current = { id: active, n: 0 };
+    if (areaRetries.current.n >= 5) return;
+    const t = window.setTimeout(() => {
+      areaRetries.current.n += 1;
+      setAreaLoadAsked(null);  // the effect above sees an area not yet asked for, and asks
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [activeLoading, areaLoadPending, areaLoadAsked, active]);
   const [loadSlow, setLoadSlow] = useState(false);
   useEffect(() => {
     setLoadSlow(false);
