@@ -62,7 +62,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "href": "/?area=budget", "retry": True,
         }
     if any(term in lowered for term in ("budget cap", "daily cap", "monthly cap",
-                                        "budget reservation denied", "insufficient")):
+                                        "budget reservation denied", "insufficient",
+                                        "budget allocation", "frozen at this budget")):
         return {
             "kind": "budget_refused",
             "headline": "The budget refused this work.",

@@ -3905,6 +3905,29 @@ def _step_label(template: dict[str, Any], step_id: str) -> str:
     return step_id
 
 
+def _named_step(connection: Connection, project_id: str, template: dict[str, Any],
+                step_id: str) -> str:
+    """`_step_label`, and for a customer's own step the label they gave it.
+
+    A custom step's spec carries only its key (`binding.custom_step`), so a step with no title
+    of its own was named by its id on the run card — "Stopped at extract" for a step the
+    workflow calls "Read the meeting". The label lives on the custom step's row."""
+    label = step_title(template) or str(template.get("label") or "").strip()
+    key = str((template.get("binding") or {}).get("custom_step") or "")
+    if not label and key:
+        try:
+            with connection.begin_nested():
+                found = connection.execute(
+                    text("SELECT label FROM workflow_custom_steps "
+                         "WHERE project_id = :p AND step_key = :k"),
+                    {"p": project_id, "k": key}).scalar()
+        except Exception:  # noqa: BLE001 — a name is never worth failing a stop over
+            found = None
+        if found:
+            return str(found)
+    return _step_label(template, step_id)
+
+
 #: Output key stamped on a failed branch that a `success_policy: any` join went on without.
 TOLERATED_BY_JOIN = "tolerated_by_join"
 
@@ -4022,7 +4045,8 @@ def _stop_run_at(connection: Connection, run_id: str, row: Any) -> None:
     # offer what the button would refuse.
     choices = ("Reopen it with Try again, or leave the run as it is."
                if _is_gate_step(template) else "Try it again, or skip it and carry on.")
-    sentence = f"Stopped at {_step_label(template, str(row['step_id']))}: {why}. {choices}"
+    named = _named_step(connection, run["project_id"], template, str(row["step_id"]))
+    sentence = f"Stopped at {named}: {why}. {choices}"
     status = "deadlettered" if row["status"] == "deadlettered" else "failed"
     connection.execute(
         text(
@@ -4349,6 +4373,16 @@ def claim_step(
              "WHERE id=:id AND status IN ('running','waiting')"),
         {"id": run_id},
     )
+    waited = (_json(row["output"], {}) or {}).get("waiting")
+    if isinstance(waited, dict) and waited.get("sentence"):
+        # THE WAIT IS OVER, SO ITS SENTENCE GOES. `wait_step` put "… Waiting for the
+        # per-minute budget" on the run's card; the step being claimed again is the end of
+        # that wait. Only that exact sentence is cleared — never a stop's, never another's.
+        connection.execute(
+            text("UPDATE workflow_runs SET blocked_reason=NULL, updated_at=now() "
+                 "WHERE id=:id AND blocked_reason=:sentence"),
+            {"id": run_id, "sentence": str(waited["sentence"])[:1000]},
+        )
     _emit_step_event(
         connection,
         run,
@@ -4972,6 +5006,89 @@ def complete_step(
         row["step_id"],
         int(row["iteration"]),
     )
+    return _serialize_step(updated)
+
+
+#: How many times one step waits for something that clears by itself before it stops and asks
+#: a person. At a wait of up to a minute each, half an hour of a project's per-minute budget
+#: never having room is not "busy" any more: something else is spending it continuously.
+MAX_STEP_WAITS = 30
+
+
+def wait_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    worker_id: str,
+    reason: str,
+    wait_seconds: int,
+    kind: str = "budget_wait",
+) -> dict[str, Any]:
+    """Put a leased step back to try again after `wait_seconds`: NOT a failure, NOT an attempt.
+
+    For a step that could not start yet for a reason that clears by itself — the per-minute
+    budget, spent by the runs started a few seconds earlier. Those used to fail the step, and a
+    one-attempt step dead-lettered its run at step one ("'Read the meeting' was denied: budget
+    denied: denied") while the budget had dollars to spare.
+
+    The step returns to `ready` with `run_after` in the future, so the ordinary claim takes it
+    again when the wait is over; the attempt it was claimed with is handed back, so waiting
+    never uses up the retries a real failure is owed. The run is `waiting`, and its card says
+    what for (`blocked_reason`), until a claim moves it again (`claim_step` clears it).
+
+    Bounded: after MAX_STEP_WAITS waits the step fails, settled, with the reason — something is
+    spending the budget continuously, and that is for a person to look at.
+    """
+    row = connection.execute(
+        text("SELECT * FROM workflow_step_runs WHERE id=:id AND project_id=:project_id "
+             "FOR UPDATE"),
+        {"id": step_run_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow step run not found.")
+    if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
+        raise WorkflowLeaseError("Workflow step is not leased by this worker.")
+    earlier = (_json(row["output"], {}) or {}).get("waiting") or {}
+    waits = int(earlier.get("count") or 0) + 1 if isinstance(earlier, dict) else 1
+    if waits > MAX_STEP_WAITS:
+        return fail_step(
+            connection, project_id=project_id, step_run_id=step_run_id, worker_id=worker_id,
+            error=(f"{reason.rstrip('.')} — still not started after {MAX_STEP_WAITS} tries. "
+                   "Raise the per-minute cap in Budget, then try it again."),
+            retryable=False)
+    delay = max(1, int(wait_seconds))
+    wake_at = now_utc() + timedelta(seconds=delay)
+    template = _step_map(_run_spec(connection, row["workflow_run_id"])).get(
+        str(row["step_id"])) or {}
+    sentence = (f"{_named_step(connection, project_id, template, str(row['step_id']))}: "
+                f"{reason.rstrip('.')}. It resumes by itself — nothing to do.")[:1000]
+    waiting = {"kind": kind, "reason": reason, "until": wake_at.isoformat(), "count": waits,
+               "sentence": sentence}
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='ready', attempt=GREATEST(attempt - 1, 0), run_after=:wake_at,
+                lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                output = COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB),
+                updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {"id": row["id"], "wake_at": wake_at,
+         "output": json.dumps({"waiting": waiting})},
+    ).mappings().one()
+    run = _run_row(connection, row["workflow_run_id"])
+    connection.execute(
+        text("UPDATE workflow_runs SET status='waiting', blocked_reason=:sentence, "
+             "updated_at=now() WHERE id=:id AND status IN ('running','waiting')"),
+        {"id": row["workflow_run_id"], "sentence": sentence},
+    )
+    _emit_step_event(connection, run, "workflow.step_waiting", updated,
+                     {"waiting_for": kind, "reason": reason, "until": wake_at.isoformat(),
+                      "count": waits})
+    _refresh_frontier(connection, row["workflow_run_id"])
     return _serialize_step(updated)
 
 
