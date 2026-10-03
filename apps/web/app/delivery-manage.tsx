@@ -32,6 +32,7 @@ import {
 } from "./deploy-ui";
 
 import { callAction } from "../lib/call-action";
+import { notifyChanged } from "./changed";
 type Secret = {
   secret_ref_id: string; name: string; backend: string; secret_kind: string;
   status: string; fingerprint: string | null; last4: string | null;
@@ -764,6 +765,10 @@ function useBusyAction(onChanged?: () => void | Promise<void>) {
       // the server refresh alone left a deleted target on screen until a manual reload.
       router.refresh();
       await onChanged?.();
+      // ...and the client panels that fetch for themselves (the stack-deploy panel) are not
+      // fed by the server render at all: a VM verified here stayed "not verified" there until
+      // a manual reload, so "Add a stack target" refused a VM shown VERIFIED right above it.
+      notifyChanged("delivery");
     }
   };
   return { busy, run };
