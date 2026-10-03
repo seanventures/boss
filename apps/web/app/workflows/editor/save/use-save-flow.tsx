@@ -111,7 +111,8 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
 
   const showProblems = useCallback((problems: Problem[]) => {
     const s = live.current;
-    dispatch({ type: "SET_PROBLEMS", result: { ok: false, problems, summary: s.summary ?? EMPTY_SUMMARY } });
+    dispatch({ type: "SET_PROBLEMS", result: { ok: false, problems, summary: s.summary ?? EMPTY_SUMMARY },
+               spec: s.spec });
     const first = firstBadStep(s.spec, problems);
     if (first) dispatch({ type: "SELECT", id: first });
     setPop("issues");
@@ -123,7 +124,7 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
     if (local.length) { showProblems(local); return false; }
     const definitionId = s.meta.is_catalogue ? (s.meta.copy?.definition_id ?? null) : s.meta.definition_id;
     const result = await checkSpec(projectId, s.spec, definitionId);
-    dispatch({ type: "SET_PROBLEMS", result });
+    dispatch({ type: "SET_PROBLEMS", result, spec: s.spec });
     if (!result.ok || result.problems.length) {
       const first = firstBadStep(s.spec, result.problems);
       if (first) dispatch({ type: "SELECT", id: first });

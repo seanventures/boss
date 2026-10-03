@@ -4,10 +4,10 @@ import React, { useId, useMemo, useRef, useState } from "react";
 import { Sparkle, User, Warning } from "@phosphor-icons/react";
 
 import { agentMeta } from "../../../agent-chip";
+import { stepNeeds } from "../../../../lib/step-view";
 import { stepView } from "../../../../lib/workflow-editor-types";
 import type { Palette, SpecStep, StepView } from "../../../../lib/workflow-editor-types";
 import { Popover } from "./popover";
-import { neededSkills as needsOf } from "./step-facts";
 
 /** The value the store writes for "nobody named": the captain key is removed. */
 export type CaptainChoice = string | null;
@@ -78,20 +78,24 @@ export function AgentCombobox({ step, view, palette, onChange }: {
   const options = useMemo<Option[]>(() => {
     const out: Option[] = [defaultOption(view.type)];
     const agents = palette.agents.filter((a) => a.role_key !== palette.humanRole && a.role_key !== "human");
+    // What THIS step needs its agent to hold. Empty for a built-in step (BOSS's own tools, no
+    // grant), and then no option claims anything: a `✓ has` there would be about nothing.
+    const needs = stepNeeds(step, palette);
     for (const agent of agents) {
       const lacks = stepView({ ...step, captain: agent.role_key }, palette).badges.lacks;
-      const needs = needsOf(step, palette);
+      const more = (list: string[]) => (list.length > 1 ? ` +${list.length - 1}` : "");
       const status = lacks.length
-        ? { ok: false, text: `✗ missing ${lacks[0]}${lacks.length > 1 ? ` +${lacks.length - 1}` : ""}` }
+        ? { ok: false, text: `✗ missing ${lacks[0]}${more(lacks)}` }
         : needs.length
-          ? { ok: true, text: `✓ has ${needs[0]}${needs.length > 1 ? ` +${needs.length - 1}` : ""}` }
-          : agent.skills.length === 0 && view.type === "agent"
+          ? { ok: true, text: `✓ has ${needs[0]}${more(needs)}` }
+          : view.type === "agent" && agent.skills.length === 0 && agent.mcp.length === 0
             ? { ok: false, text: "✗ no skills" }
             : undefined;
       out.push({
         value: agent.role_key, label: agent.name || agent.role_key,
         count: `${agent.skills.length} skill${agent.skills.length === 1 ? "" : "s"}`,
-        status, tip: agent.role_key, kind: "agent",
+        status, kind: "agent",
+        tip: agent.name && agent.name !== agent.role_key ? `${agent.name} · ${agent.role_key}` : agent.role_key,
       });
     }
     // A NAME THE PROJECT DOES NOT HAVE stays visible rather than silently becoming "Auto": the
@@ -141,7 +145,7 @@ export function AgentCombobox({ step, view, palette, onChange }: {
         <span className="wf-caret" aria-hidden>▾</span>
       </button>
       <Popover anchor={trigger} open={open} onClose={() => { setOpen(false); setQuery(""); }}
-               label="Choose an agent" width={340} testId="wf-agent-pop">
+               label="Choose an agent" width={360} matchAnchor testId="wf-agent-pop">
         <input className="wf-pop-search" autoFocus placeholder="Find an agent" value={query}
                aria-label="Find an agent" aria-controls={listId}
                aria-activedescendant={shown[active] ? `${listId}-${active}` : undefined}
@@ -161,11 +165,18 @@ export function AgentCombobox({ step, view, palette, onChange }: {
                 onPointerEnter={() => setActive(i)}
                 onClick={() => choose(option)}>
               <Avatar value={option.value} label={option.label} />
-              <span className="wf-combo-name">{option.label}</span>
-              {option.count ? <span className="wf-faint">{option.count}</span> : null}
-              {option.status ? (
-                <span className={option.status.ok ? "wf-combo-ok" : "wf-combo-miss"}>{option.status.text}</span>
-              ) : null}
+              <span className="wf-combo-text">
+                <span className="wf-combo-name" data-testid="wf-agent-option-name">{option.label}</span>
+                {option.count || option.status ? (
+                  <span className="wf-combo-meta">
+                    {option.count ? <span className="wf-faint">{option.count}</span> : null}
+                    {option.status ? (
+                      <span className={option.status.ok ? "wf-combo-ok" : "wf-combo-miss"}
+                            data-testid="wf-agent-option-status">{option.status.text}</span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </span>
             </li>
           ))}
           {shown.length === 0 ? <li className="wf-faint wf-combo-none">No match</li> : null}

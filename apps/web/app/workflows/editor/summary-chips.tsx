@@ -7,7 +7,7 @@
  * Read from the draft (and the last check's summary), never from the published version, so the
  * line always describes what Save would publish.
  */
-import { CheckCircle, Clock, Gear, Lock, Stack, Textbox, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircle, CircleDashed, Clock, Gear, Lock, Stack, Textbox, WarningCircle } from "@phosphor-icons/react";
 import React, { useMemo } from "react";
 
 import type { EditorState, StepView } from "../../../lib/workflow-editor-types";
@@ -51,6 +51,10 @@ export function SummaryChips({ state, views, typicalMinutes, onSettings, onIssue
   const fields = workflowInputFields(state.spec.input_schema);
   const minutes = state.summary?.typical_minutes ?? typicalMinutes ?? null;
   const issues = state.problems.length;
+  // READY ONLY FOR THE DRAFT ON SCREEN. A check answers for the spec it was sent; after any
+  // edit that answer is about an older draft, and a green Ready would vouch for steps nobody
+  // has checked. The auto-check re-checks the new draft and this turns green (or red) again.
+  const fresh = Boolean(state.summary) && state.checkedSpec === state.spec;
 
   return (
     <div className="wf-summary" role="group" aria-label="Summary" data-testid="wf-summary">
@@ -89,9 +93,14 @@ export function SummaryChips({ state, views, typicalMinutes, onSettings, onIssue
                 data-tip={state.problems[0]?.message} data-testid="wf-chip-issues">
           <WarningCircle size={14} weight="fill" aria-hidden />{count(issues, "issue")}
         </button>
-      ) : state.summary ? (
+      ) : fresh ? (
         <span className="wf-chip" data-tone="green" data-tip="Every check passes" data-testid="wf-chip-ready">
           <CheckCircle size={14} weight="fill" aria-hidden />Ready
+        </span>
+      ) : steps.length ? (
+        <span className="wf-chip" data-tip="Changed since the last check. Checking…"
+              data-testid="wf-chip-unchecked">
+          <CircleDashed size={14} weight="bold" aria-hidden />Not checked
         </span>
       ) : null}
     </div>

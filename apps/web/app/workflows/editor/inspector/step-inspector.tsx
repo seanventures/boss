@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode } from "react";
+import React, {
+  useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode,
+} from "react";
 import {
   Clock, DotsThree, GitBranch, GitFork, GitMerge, Lock, PencilSimple, PuzzlePiece, Repeat, Robot,
   SealCheck, Stack, X,
@@ -220,6 +222,30 @@ function useTitleDraft(step: SpecStep, dispatch: Dispatch<EditorAction>) {
   };
 }
 
+/**
+ * The step's title, editable in place. A textarea, not an input, so a long title WRAPS onto a
+ * second line instead of being cut off; it grows to fit, and the stylesheet clamps it at two
+ * lines. It is still one line of text: Enter leaves the box, and a pasted line break is a space.
+ */
+function TitleBox({ value, placeholder, onChange, onBlur }: {
+  value: string; placeholder: string; onChange(text: string): void; onBlur(): void;
+}) {
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    if (el.scrollHeight) el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+  return (
+    <textarea ref={box} className="wf-insp-title" rows={1} value={value} placeholder={placeholder}
+              maxLength={TITLE_MAX} aria-label="Step title" data-testid="wf-step-title" title={value || placeholder}
+              onChange={(e) => onChange(e.target.value.replace(/[\r\n]+/g, " "))}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
+              onBlur={onBlur} />
+  );
+}
+
 function StepHeader({ step, view, state, dispatch, problems, onClose }: {
   step: SpecStep; view: StepView; state: EditorState; dispatch: Dispatch<EditorAction>;
   problems: Problem[]; onClose(): void;
@@ -246,9 +272,8 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
       <span className="wf-insp-icon" data-type={view.type}><TypeIcon view={view} /></span>
       <div className="wf-insp-names">
         <Editable>
-          <input className="wf-insp-title" value={title.value} placeholder={view.title} maxLength={TITLE_MAX}
-                 aria-label="Step title" data-testid="wf-step-title"
-                 onChange={(e) => title.change(e.target.value)} onBlur={title.settle} />
+          <TitleBox value={title.value} placeholder={view.title}
+                    onChange={title.change} onBlur={title.settle} />
         </Editable>
         <span className="wf-insp-id">
           <Editable inline>
@@ -273,12 +298,13 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
           )}
           </Editable>
           {editingId ? null : <HelpTip label="Step id" text="Used in JSON and run history" />}
+          {/* The type rides the id line, so the title has the whole row. */}
+          <span className="wf-chip wf-type-chip" data-testid="wf-step-type">{TYPE_LABEL[view.type]}</span>
           {idError ? <span className="wf-field-error" role="alert">{idError}</span> : null}
         </span>
         <FieldError problems={problems} field="title" />
         <FieldError problems={problems} field="id" />
       </div>
-      <span className="wf-chip wf-type-chip">{TYPE_LABEL[view.type]}</span>
       <Editable inline>
         <button ref={menuBtn} type="button" className="wf-icon-btn" aria-label="Step actions"
                 aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
