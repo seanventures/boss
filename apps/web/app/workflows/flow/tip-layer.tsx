@@ -28,9 +28,9 @@ let pinned = false;
 function tipTarget(node: EventTarget | null): HTMLElement | null {
   if (!(node instanceof Element)) return null;
   const el = node.closest<HTMLElement>("[data-tip]");
-  // A trigger whose popover is open says nothing: its tip would sit over that popover.
-  const opened = el?.hasAttribute("data-pop-open") || el?.getAttribute("aria-expanded") === "true";
-  return el && el.dataset.tip && !opened ? el : null;
+  // A trigger whose popover is open (Popover marks it) says nothing: its tip would sit over that
+  // popover. Not every expanded thing: a disclosure such as "Hide steps" is expanded at rest.
+  return el && el.dataset.tip && !el.hasAttribute("data-pop-open") ? el : null;
 }
 
 /** What a tip must never cover: an open popover, or a modal dialog. */
