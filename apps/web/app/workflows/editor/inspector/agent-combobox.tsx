@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useId, useMemo, useRef, useState } from "react";
-import { Sparkle, User, Warning } from "@phosphor-icons/react";
+import { Warning } from "@phosphor-icons/react";
 
+import { AgentAvatar } from "../../../agent-avatar";
 import { agentMeta } from "../../../agent-chip";
 import { stepNeeds } from "../../../../lib/step-view";
 import { stepView } from "../../../../lib/workflow-editor-types";
@@ -38,16 +39,14 @@ function defaultOption(type: StepView["type"]): Option {
            kind: "default" };
 }
 
+/** The option's face: the agent's kit character, or the Auto / You / A person glyph. */
 export function Avatar({ value, label, size = 22 }: { value: CaptainChoice; label: string; size?: number }) {
   if (value === null || value === "human") {
-    const Icon = label === "Auto" || label.startsWith("Auto ·") ? Sparkle : User;
-    return <span className="wf-avatar wf-avatar-plain" style={{ width: size, height: size }} aria-hidden>
-      <Icon size={Math.round(size * 0.6)} weight="bold" />
-    </span>;
+    const variant = label === "Auto" || label.startsWith("Auto ·") ? "auto" : label === "You" ? "you" : "person";
+    return <AgentAvatar variant={variant} size={size} className="wf-avatar" />;
   }
   const meta = agentMeta(value, label);
-  return <span className={`mr-avatar tone-${meta.tone} wf-avatar`} style={{ width: size, height: size }}
-               aria-hidden>{meta.initials}</span>;
+  return <AgentAvatar agent={value} size={size} aiBadge={false} className={`mr-avatar tone-${meta.tone} wf-avatar ag-face`} />;
 }
 
 /**
