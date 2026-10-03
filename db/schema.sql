@@ -6259,3 +6259,19 @@ CREATE INDEX IF NOT EXISTS idx_stack_deployments_target
   ON stack_deployments (target_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stack_deployments_project
   ON stack_deployments (project_id, status, created_at DESC);
+-- Where on the host the stack lives (the manifest's dir). Two targets on one host must never
+-- share it: each mints its own generated secrets, so the second would rewrite the first's
+-- deploy.env under a database initialised with another password. Checked at plan time; the
+-- apply also serialises on (host_id, deploy_dir).
+ALTER TABLE stack_deployments ADD COLUMN IF NOT EXISTS deploy_dir TEXT;
+-- The apply that owns this row right now. Progress and the verdict are written only by the
+-- request holding it, so a replay that failed the row cannot be overwritten by a stale apply.
+ALTER TABLE stack_deployments ADD COLUMN IF NOT EXISTS apply_token TEXT;
+-- Approved but queued behind another deployment writing the same host directory.
+ALTER TABLE stack_deployments ADD COLUMN IF NOT EXISTS waiting_on TEXT;
+CREATE INDEX IF NOT EXISTS idx_stack_deployments_host_dir
+  ON stack_deployments (host_id, deploy_dir);
+-- The same commit to the same target is ONE live deployment, however many clicks plan it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stack_deployments_live_commit
+  ON stack_deployments (target_id, commit_sha)
+  WHERE status IN ('planned', 'awaiting_approval', 'running');

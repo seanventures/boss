@@ -817,9 +817,9 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             "deployment_id": job.payload["deployment_id"], "job_id": job.id,
             "worker_id": client.worker_id, "lease_token": job.lease_token,
         })
-        if result.get("retry"):
-            # Another deployment is still running on the same target: try again later.
-            raise RetryableJobError(result.get("error") or "Stack deployment must wait.")
+        # Waiting on the target (another deployment is writing it) is not a failure: the API
+        # has already handed the job back to the queue without spending an attempt, so there
+        # is nothing to complete or fail here (see the job_deferred check after execution).
         return result
     if job.kind == "investigation.run":
         # A long one by design: a real debugging session reads the code, the database and the
@@ -1318,6 +1318,13 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 hb_client.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    if isinstance(result, dict) and result.get("job_deferred"):
+        # The control plane re-queued this job itself (JobLeaseService.defer_leased): our
+        # lease is gone, and completing it would fail or, worse, mark waiting work done.
+        LOGGER.info("job_deferred_by_api worker_id=%s job_id=%s reason=%s",
+                    settings.worker_id, job.id, result.get("error"))
+        return True
 
     # Reconciliation owns its bounded retry/deadletter transition in the same
     # transaction that records provider-read Receipts and observations.

@@ -77,7 +77,10 @@ def test_the_summary_the_console_shows_carries_names_and_never_values():
     summary = load_manifest(FULL).summary()
     assert summary["env_keys"] == ["PUBLIC_URL", "RELEASE", "PORT", "DEBUG", "DB_PASSWORD",
                                    "SIGNING_KEY", "GITHUB_TOKEN"]
-    assert "github-token" not in str(summary)
+    # The NAME of the BOSS secret each key reads is shown, so an approver sees which secret
+    # leaves for the host; no env value (a literal, a placeholder) is.
+    assert summary["secret_env"] == {"GITHUB_TOKEN": "github-token"}
+    assert "{commit}" not in str(summary)
     assert summary["steps"]["install"] == ["install 1", "start"]
 
 

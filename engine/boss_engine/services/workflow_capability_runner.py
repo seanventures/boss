@@ -1781,7 +1781,10 @@ def _perform_capability(
     if key == "deploy":
         from .stack_deploy import plan_for_workflow_step, stack_target_for_deploy
 
-        stack_target = stack_target_for_deploy(connection, project_id, inputs)
+        stack_target = stack_target_for_deploy(
+            connection, project_id, inputs,
+            default_owner=str(getattr(getattr(ctx, "settings", None), "target_github_owner", "")
+                              or ""))
         if stack_target is not None:
             return plan_for_workflow_step(
                 ctx.engine, getattr(ctx, "settings", None), project_id=project_id,
