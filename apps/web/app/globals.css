@@ -932,7 +932,11 @@ h1, h2, h3, h4, h5, h6 {
 
 /* AIR BETWEEN CARDS. Ten pixels is a gap between rows of a table; these are cards, one of which
    can be two hundred lines tall. */
-.dw-runs { display: grid; gap: 16px; }
+.dw-runs { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+/* A RUN NEVER WIDENS THE PAGE. The column was `auto`, so a run whose lane is wider than the
+   screen (11 steps) sized the whole column to the lane and the operator scrolled the entire
+   console sideways (boss-1, 2026-10-03). The lane scrolls inside itself instead. */
+.dw-runs > * { min-width: 0; }
 .dw-runs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .dw-run {
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1);
@@ -6880,6 +6884,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
      yet, which is also what a printed page gets. */
   position: relative; margin-top: 10px;
 }
+.dw-detail[data-arrow="off"]::before, .dw-detail[data-arrow="off"]::after { display: none; }
 .dw-detail::before, .dw-detail::after {
   content: ""; position: absolute; bottom: 100%;
   left: var(--dw-arrow-x, 50%); transform: translateX(-50%);
