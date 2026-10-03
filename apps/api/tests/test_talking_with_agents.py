@@ -178,6 +178,14 @@ def test_a_talk_greets_in_character_streams_and_signs_every_reply(client, engine
     assert acts[1]["root_act_id"] == acts[0]["root_act_id"] == acts[0]["act_id"]
     # Never asked_by_agent from a conversation.
     assert not [a for a in acts if a["how"] == "asked_by_agent"]
+    # One llm_calls row per reply, attributed to this project, the seat and its act — the
+    # write happens a generator step after the call, on a fresh copy of the request context.
+    with engine.begin() as c:
+        calls = c.execute(text("SELECT project_id, role, stage, act_id FROM llm_calls "
+                               "WHERE act_id = ANY(:a) ORDER BY act_id"),
+                          {"a": [a["act_id"] for a in acts]}).all()
+    assert sorted(tuple(r) for r in calls) == sorted(
+        (PROJECT, "qa", "converse", a["act_id"]) for a in acts)
     with engine.begin() as c:
         receipts = c.execute(text("SELECT count(*) FROM receipts WHERE effect_kind = "
                                   "'model.converse_turn' AND dedupe_key LIKE 'converse:%'")).scalar()
@@ -433,12 +441,15 @@ def test_refusals_say_what_to_do(client, engine, model, seated, monkeypatch):
     assert turns == []
 
     with engine.begin() as c:
-        c.execute(text("INSERT INTO agent_conversation_turns (turn_id, conversation_id, seq, "
-                       "speaker_kind, role_key, status) VALUES ('trn_busy', :c, 1, 'agent', "
-                       "'qa', 'streaming')"), {"c": cid})
+        c.execute(text("UPDATE agent_conversations SET streaming_claim = 'flr_other', "
+                       "streaming_until = now() + interval '5 minutes' "
+                       "WHERE conversation_id = :c"), {"c": cid})
     busy = client.post(f"/v1/conversations/{cid}/turns", json={
         "project_id": PROJECT, "actor": ACTOR, "message": "hi"})
     assert busy.status_code == 409 and busy.json()["detail"]["code"] == "busy"
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_conversations SET streaming_claim = NULL, "
+                       "streaming_until = NULL WHERE conversation_id = :c"), {"c": cid})
 
     other = client.get(f"/v1/conversations/{cid}",
                        params={"project_id": "some-other-project", "actor": ACTOR})
@@ -464,3 +475,183 @@ def test_presets_name_what_the_project_lacks_and_list_who_can_be_seated(client, 
     assert {"pm", "qa", "security_reviewer"} <= {a["role_key"] for a in body["agents"]}
     listed = client.get("/v1/conversations", params={"project_id": PROJECT, "actor": ACTOR})
     assert listed.status_code == 200 and isinstance(listed.json()["items"], list)
+
+
+# ── A stream cut off, a floor held, a summary's actions, an agent's scope ──────────────────
+
+
+def _turn_stream(engine, cid, message, **extra):
+    from boss_engine.services import agent_converse
+
+    return agent_converse.take_turn(engine, project_id=PROJECT, conversation_id=cid,
+                                    actor=ACTOR, message=message, **extra)
+
+
+def _reservations(engine, conversation_id):
+    with engine.begin() as c:
+        return [r[0] for r in c.execute(text(
+            "SELECT status FROM budget_reservations WHERE reason = :r"),
+            {"r": f"conversation {conversation_id}"})]
+
+
+def test_an_answer_cut_off_mid_stream_is_stopped_settled_and_frees_the_room(
+        client, engine, model, seated):
+    """Stop, or closing the room mid-answer, closes the stream (GeneratorExit). The turn says
+    Stopped, its act closes, its budget comes back, and the very next turn is answered."""
+    conv = _open(client, "room", ["pm", "qa"])
+    cid = conv["conversation_id"]
+    stream = _turn_stream(engine, cid, "Is the plan safe?")
+    first = next(stream)
+    assert first["type"] == "turn_start" and first["role_key"] == "pm"
+    stream.close()
+
+    after = client.get(f"/v1/conversations/{cid}",
+                       params={"project_id": PROJECT, "actor": ACTOR}).json()
+    agent = [t for t in after["turns"] if t["speaker_kind"] == "agent"]
+    # The seat speaking is stopped; the seat after it never began.
+    assert [(t["role_key"], t["status"]) for t in agent] == [("pm", "error")]
+    assert agent[0]["payload"]["headline"] == "Stopped."
+    assert [a["status"] for a in _acts(engine, cid)] == ["error"]
+    assert _reservations(engine, cid) == ["released"]
+    assert len(model.calls) == 0
+
+    again = _say(client, cid, "Then tell me now.")
+    assert [e["type"] for e in again][-1] == "done"
+    assert sorted(e["status"] for e in again if e["type"] == "turn_end") == [
+        "complete", "complete"]
+
+
+def test_a_failure_after_the_answer_settles_its_turn_and_names_it(
+        client, engine, model, seated, monkeypatch):
+    from boss_engine.services import agent_converse
+
+    conv = _open(client, "talk", ["qa"])
+    cid = conv["conversation_id"]
+    real = agent_converse._receipt
+    monkeypatch.setattr(agent_converse, "_receipt",
+                        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ledger down")))
+    events = _say(client, cid, "What would you test?")
+    start = next(e for e in events if e["type"] == "turn_start")
+    error = next(e for e in events if e["type"] == "error")
+    assert error["turn_id"] == start["turn_id"]
+    assert next(e for e in events if e["type"] == "turn_end")["status"] == "error"
+    assert [a["status"] for a in _acts(engine, cid)] == ["error"]
+    assert _reservations(engine, cid) == ["released"]
+    monkeypatch.setattr(agent_converse, "_receipt", real)
+    assert _say(client, cid, "And now?")[-1]["type"] == "done"
+
+
+def test_a_turn_left_streaming_by_a_dead_stream_is_swept_by_the_next(
+        client, engine, model, seated):
+    conv = _open(client, "talk", ["qa"])
+    cid = conv["conversation_id"]
+    stream = _turn_stream(engine, cid, "First?")
+    assert next(stream)["type"] == "turn_start"
+    # The worker hung: nothing settled, and its claim lapsed.
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_conversations SET streaming_until = now() - interval '1 s' "
+                       "WHERE conversation_id = :c"), {"c": cid})
+    assert _say(client, cid, "Second?")[-1]["type"] == "done"
+    turns = client.get(f"/v1/conversations/{cid}",
+                       params={"project_id": PROJECT, "actor": ACTOR}).json()["turns"]
+    assert [t["status"] for t in turns if t["speaker_kind"] == "agent"] == ["error", "complete"]
+    assert [a["status"] for a in _acts(engine, cid)] == ["error", "complete"]
+    assert sorted(_reservations(engine, cid)) == ["consumed", "released"]
+    # The hung stream, should it wake, finds its turn settled: it records nothing twice.
+    rest = list(stream)
+    assert [e["type"] for e in rest if e["type"] in ("turn_start", "turn_end")] == []
+    turns = client.get(f"/v1/conversations/{cid}",
+                       params={"project_id": PROJECT, "actor": ACTOR}).json()["turns"]
+    assert [t["status"] for t in turns if t["speaker_kind"] == "agent"] == ["error", "complete"]
+    assert sorted(_reservations(engine, cid)) == ["consumed", "released"]
+
+
+def test_two_sends_a_moment_apart_cannot_both_take_the_floor(client, engine, model, seated):
+    from boss_engine.services.agent_converse import ConverseError
+
+    conv = _open(client, "room", ["pm", "qa"])
+    cid = conv["conversation_id"]
+    first = _turn_stream(engine, cid, "One?")
+    with pytest.raises(ConverseError) as refused:
+        _turn_stream(engine, cid, "Two?")
+    assert refused.value.code == "busy"
+    events = list(first)
+    assert [e["type"] for e in events][-1] == "done"
+    # Only the first send was recorded; the floor is free again once it is done.
+    turns = client.get(f"/v1/conversations/{cid}",
+                       params={"project_id": PROJECT, "actor": ACTOR}).json()["turns"]
+    assert [t["content"] for t in turns if t["speaker_kind"] == "person"] == ["One?"]
+    assert _say(client, cid, "Three?")[-1]["type"] == "done"
+
+
+def test_each_summary_card_opens_its_own_decision_and_starting_one_keeps_the_others(
+        client, engine, model, seated):
+    workflow_key = _workflow(client, "Two summaries")
+    conv = _open(client, "room", ["pm", "qa"])
+    cid = conv["conversation_id"]
+    _say(client, cid, "Ship it?")
+
+    def summed(decision: str) -> str:
+        model.summary = {"text": f"About {decision}.", "decisions": [], "next_actions": [
+            {"text": decision, "owner_role_key": "pm", "kind": "decision"},
+            {"text": "Build it", "kind": "start", "proposal": {
+                "workflow_key": workflow_key, "directive": "Build it.",
+                "inputs": {"instructions": "Build it."}}}]}
+        events = _events(client.post(f"/v1/conversations/{cid}/summary",
+                                     json={"project_id": PROJECT, "actor": ACTOR}))
+        return next(e for e in events if e["type"] == "summary")["turn_id"]
+
+    older = summed("Choose the date")
+    newer = summed("Choose the owner")
+
+    def decide(turn_id):
+        r = client.post(f"/v1/conversations/{cid}/decisions", json={
+            "project_id": PROJECT, "actor": ACTOR, "turn_id": turn_id, "index": 0})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    # The older card opens ITS action, not the latest summary's.
+    old_id = decide(older)["decision_id"]
+    with engine.begin() as c:
+        assert c.execute(text("SELECT question FROM decisions WHERE id = :d"),
+                         {"d": old_id}).scalar().startswith("Choose the date")
+    new_id = decide(newer)["decision_id"]
+    assert new_id != old_id
+
+    # Starting the older card's proposal patches only that proposal: the opened decisions stay
+    # opened, and the latest summary stays the latest.
+    with engine.begin() as c:
+        old_card = c.execute(text("SELECT payload FROM agent_conversation_turns "
+                                  "WHERE turn_id = :t"), {"t": older}).scalar()
+    started = client.post(f"/v1/conversations/{cid}/start", json={
+        "project_id": PROJECT, "actor": ACTOR,
+        "proposal_id": old_card["next_actions"][1]["proposal"]["proposal_id"],
+        "start_anyway": ["model"]})
+    assert started.status_code == 200, started.text
+    after = started.json()["conversation"]
+    assert after["summary"]["text"] == "About Choose the owner."
+    assert after["summary"]["next_actions"][0]["decision_id"] == new_id
+    by_turn = {t["turn_id"]: t["payload"] for t in after["turns"]}
+    assert by_turn[older]["next_actions"][0]["decision_id"] == old_id
+    assert by_turn[older]["next_actions"][1]["proposal"]["status"] == "started"
+    assert by_turn[newer]["next_actions"][0]["decision_id"] == new_id
+    # Pressing again opens nothing new.
+    assert decide(older)["decision_id"] == old_id
+    with engine.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM decisions WHERE id = ANY(:d)"),
+                         {"d": [old_id, new_id]}).scalar() == 2
+
+
+def test_an_agent_is_told_what_it_may_use_who_else_is_here_and_who_is_accountable(
+        client, engine, model, seated):
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO role_skills (id, project_id, role_key, skill_id) "
+                       "VALUES ('rsk_converse_scope', :p, 'qa', 'release-checklist') "
+                       "ON CONFLICT DO NOTHING"), {"p": PROJECT})
+    conv = _open(client, "room", ["pm", "qa"])
+    _say(client, conv["conversation_id"], "Who checks the release?")
+    pm, qa = model.calls[0]["system"], model.calls[1]["system"]
+    granted = re.search(r"You may use: skills ([^;\n]+)", qa)
+    assert granted and "release-checklist" in granted.group(1).rstrip(".").split(", ")
+    assert "Also here: QA Lead (qa)." in pm and "Also here: Product Manager (pm)." in qa
+    assert f"Accountable: {ACTOR}." in qa and f"Accountable: {ACTOR}." in pm

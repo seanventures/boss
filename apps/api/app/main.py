@@ -27483,6 +27483,8 @@ class ConversationStartBody(open_bodies.ProjectBody):
 
 
 class ConversationDecisionBody(open_bodies.ProjectBody):
+    #: The summary turn the next action belongs to (every summary card opens its own).
+    turn_id: str | None = None
     index: int | None = None
 
 
@@ -27646,7 +27648,8 @@ def conversation_decision_endpoint(conversation_id: str,
             return _converse.open_decision(connection, project_id=project_id,
                                            conversation_id=conversation_id, actor=actor,
                                            index=int(payload.index if payload.index is not None
-                                                     else -1))
+                                                     else -1),
+                                           turn_id=payload.turn_id)
         except _converse.ConverseError as error:
             raise _converse_refused(error) from error
 
