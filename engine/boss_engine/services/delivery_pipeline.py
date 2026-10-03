@@ -160,6 +160,24 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     """
     from ..db import begin
 
+    # A STACK TARGET deploys from its own boss.deploy.yaml, through stack_deploy's governed
+    # plan — never through the one-container path below, which knows nothing of its services.
+    from .stack_deploy import plan_for_workflow_step, stack_target_for_deploy
+
+    with begin(engine) as c:
+        stack_target = stack_target_for_deploy(
+            c, project_id, {"target_id": target_id, "run_id": run_id,
+                            "environment": environment if target_id else ""})
+    if stack_target is not None:
+        planned = plan_for_workflow_step(engine, settings, project_id=project_id, actor=actor,
+                                         target=stack_target, inputs={"run_id": run_id},
+                                         workflow_run_id=None)
+        if planned.get("status") == "failed":
+            return {"status": "failed", "reason": planned.get("error")}
+        return {"status": "planned", "stack_deployment_id": planned["stack_deployment_id"],
+                "decision_id": planned.get("decision_id"), "commit": planned.get("commit"),
+                "reason": planned.get("note")}
+
     with begin(engine) as c:
         run = c.execute(
             # finalize_ctx WAS NEVER SELECTED, so the app-name lookup below silently fell

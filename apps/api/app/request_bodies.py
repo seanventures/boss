@@ -991,3 +991,42 @@ class CloudUnlinkBody(OpenRequestBody):
     project_id: SkipValidation[str | None] = None
     actor: SkipValidation[str | None] = None
     reason: SkipValidation[str | None] = None
+
+
+class StackTargetCreateBody(OpenProjectBody):
+    """Where a stack is deployed: a repository, on a fleet host, for an environment."""
+
+    model_config = ConfigDict(json_schema_extra={
+        "required": ["project_id", "host_id", "repository", "actor"]
+    })
+
+    host_id: SkipValidation[str | None] = None
+    repository: SkipValidation[str | None] = None
+    app_name: SkipValidation[str | None] = None
+    environment: SkipValidation[str | None] = None
+    manifest_path: SkipValidation[str | None] = None
+    public_url: SkipValidation[str | None] = None
+
+
+class StackDeployPlanBody(OpenProjectBody):
+    """Plan repository@ref onto a stack target; held for approval by a decision."""
+
+    model_config = ConfigDict(json_schema_extra={
+        "required": ["project_id", "target_id", "ref"]
+    })
+
+    target_id: SkipValidation[str | None] = None
+    repository: SkipValidation[str | None] = None
+    ref: SkipValidation[str | None] = None
+
+
+class StackDeployRollbackBody(OpenRequestBody):
+    actor: SkipValidation[str | None] = None
+
+
+class StackDeployExecuteBody(BaseModel):
+    """The worker's lease of a deployment.stack_apply job. All three are required: the apply
+    writes to a host, and only the job's current lease may start it."""
+    job_id: str = Field(min_length=1)
+    worker_id: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)

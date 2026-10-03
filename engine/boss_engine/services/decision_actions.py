@@ -83,6 +83,8 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "self_improvement.begin_canary",
     "self_improvement.rollout",
     "role.autonomy_change",
+    # Approving a planned stack deployment approves its ChangeSet and queues the apply.
+    "deploy_stack",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

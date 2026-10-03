@@ -363,6 +363,10 @@ def capabilities() -> list[str]:
         "investigation.run",
         # Governed Discovery research: each stage reserves, leases and receipts its own spend.
         "discovery.run",
+        # An approved stack deployment (boss.deploy.yaml): the API applies its ChangeSet under
+        # this job's lease. Declared here or the worker never leases it and the deploy sits
+        # `running` at step one.
+        "deployment.stack_apply",
         "docs.update",
         "agent.resume",
         "software_factory.propose_pr",
@@ -806,6 +810,16 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         if result.get("status") == "failed" and result.get("retry"):
             # A stage failed outright; the next attempt replays the stages already paid for.
             raise RuntimeError(result.get("error") or "Discovery stage failed.")
+        return result
+    if job.kind == "deployment.stack_apply":
+        # A deploy of a whole stack takes minutes; the API owns it and the lease fences it.
+        result = client.run_stack_deploy({
+            "deployment_id": job.payload["deployment_id"], "job_id": job.id,
+            "worker_id": client.worker_id, "lease_token": job.lease_token,
+        })
+        if result.get("retry"):
+            # Another deployment is still running on the same target: try again later.
+            raise RetryableJobError(result.get("error") or "Stack deployment must wait.")
         return result
     if job.kind == "investigation.run":
         # A long one by design: a real debugging session reads the code, the database and the

@@ -151,6 +151,9 @@ SUPPORTED_PROVIDERS = {
             "ssh_host.workload.health_check",
             "ssh_host.workload.teardown",
             "ssh_host.job.run",
+            # A whole application stack from its own boss.deploy.yaml, on a fleet host, with
+            # that host's key. See services/stack_deploy.py.
+            "ssh_host.stack.deploy",
         ],
     },
 }
@@ -5783,6 +5786,11 @@ class ResourcePlaneService:
     ) -> dict[str, Any]:
         skill_id = operation["skill_id"]
         provider = self._provider_from_skill(skill_id)
+        if skill_id == "ssh_host.stack.deploy":
+            # The credential is the fleet HOST's own key, bound to the host row — not a
+            # ProviderAccount. One key per machine is the fleet's design; routing this through
+            # an account would mean one shared key for every host again.
+            return self._ssh_host_stack_deploy(connection, operation)
         if not account:
             raise ProviderAdapterError("Provider write operation requires a ProviderAccount.")
         if account["provider"] != provider:
@@ -7210,6 +7218,27 @@ class ResourcePlaneService:
             "container_id": result.container_id,
             "ports": result.ports,
         }
+
+    def _ssh_host_stack_deploy(
+        self, connection: Connection, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Apply one approved stack deployment. Runs INSIDE apply_changeset, so the ChangeSet
+        is `applying`, its reservation exists and this operation's receipt is already written
+        when the first byte reaches the host — stack_deploy re-checks all three before it
+        writes anything."""
+        from .stack_deploy import apply_stack_operation
+
+        return apply_stack_operation(
+            connection,
+            self.settings,
+            operation,
+            receipt_dedupe_key=self._operation_dedupe_key(
+                str(operation.get("changeset_id") or ""),
+                int(operation.get("operation_index") or 0),
+                dict(operation),
+            ),
+            adapter=self.ssh_host,
+        )
 
     def _ssh_host_workload_teardown(self, operation: dict[str, Any]) -> dict[str, Any]:
         _desired, host, workload, user, port = self._ssh_host_desired(operation)

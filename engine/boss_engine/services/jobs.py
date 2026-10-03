@@ -1275,6 +1275,11 @@ class JobLeaseService:
         )
         self._mark_related_code_task_failed(connection, row, error, actor=worker_id)
         self._mark_related_discovery_failed(connection, row, error, actor=worker_id)
+        if row.get("kind") == "deployment.stack_apply":
+            # A deployment whose apply job died must not sit at `running` forever.
+            from .stack_deploy import fail_for_deadlettered_job
+
+            fail_for_deadlettered_job(connection, dict(row), error)
         return {
             "job_id": job_id,
             "status": "deadlettered",

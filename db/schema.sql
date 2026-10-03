@@ -6207,3 +6207,55 @@ ALTER TABLE api_idempotency_keys
   ADD COLUMN IF NOT EXISTS response_headers JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_keys_expiry
   ON api_idempotency_keys (expires_at);
+
+-- APPLICATION STACKS, DEPLOYED FROM THEIR OWN boss.deploy.yaml (services/stack_deploy.py).
+--
+-- A stack target is a deployment_targets row with target_kind 'stack', bound to a fleet host.
+-- `manifest_path` overrides boss.deploy.yaml at the repository root; `public_url` is what
+-- {target.public_url} fills in and what the console opens after a healthy deploy.
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS manifest_path TEXT;
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS public_url TEXT;
+
+-- One row per planned deployment of a commit to a stack target. Governance lives where it
+-- always does (changesets, budget_reservations, resource_receipts, decisions); this row is what
+-- the console watches: the steps as they run, a redacted log tail, and the verdict in words.
+CREATE TABLE IF NOT EXISTS stack_deployments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  host_id TEXT REFERENCES deployment_hosts(id),
+  repository TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  -- The manifest's summary (names only, never a value) and the text it was parsed from, so the
+  -- apply runs exactly what was approved rather than re-reading a branch that has moved.
+  manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+  manifest_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planned',
+  decision_id TEXT REFERENCES decisions(id),
+  changeset_id TEXT REFERENCES changesets(id),
+  reservation_id TEXT,
+  job_id TEXT,
+  steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  log_tail TEXT NOT NULL DEFAULT '',
+  open_url TEXT,
+  error JSONB,
+  failure_reason TEXT,
+  preflight JSONB NOT NULL DEFAULT '{}'::jsonb,
+  workflow_run_id TEXT,
+  code_task_run_id TEXT,
+  rollback_of TEXT,
+  -- Set the moment an apply begins. A replayed job that finds it set stops instead of
+  -- installing twice.
+  apply_started_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  CONSTRAINT stack_deployments_status CHECK (
+    status IN ('planned', 'awaiting_approval', 'running', 'healthy', 'failed', 'rejected'))
+);
+CREATE INDEX IF NOT EXISTS idx_stack_deployments_target
+  ON stack_deployments (target_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stack_deployments_project
+  ON stack_deployments (project_id, status, created_at DESC);

@@ -5220,6 +5220,189 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/deployments/stack/targets:
+    post:
+      summary: Create Stack Target Endpoint
+      description: 'Where a stack deploys: a GitHub repository, on a verified fleet
+        host.'
+      operationId: post_v1_deployments_stack_targets_351147a0
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StackTargetCreateBody'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/deployments/stack/plan:
+    post:
+      summary: Plan Stack Deployment Endpoint
+      description: 'Plan repository@ref (branch, tag, commit or pull/N) onto a stack
+        target.
+
+
+        Reads the manifest AT the resolved commit and asks the host read-only questions;
+        nothing is
+
+        written to the host until the returned decision is approved.'
+      operationId: post_v1_deployments_stack_plan_4251fe93
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StackDeployPlanBody'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/deployments/stack:
+    get:
+      summary: List Stack Deployments Endpoint
+      description: Stack deployments, newest first — what the console's deploy history
+        reads.
+      operationId: get_v1_deployments_stack_c937913c
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: target_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/deployments/stack/{deployment_id}:
+    get:
+      summary: Get Stack Deployment Endpoint
+      description: 'One deployment: its steps as they run, the redacted log tail,
+        and the verdict.'
+      operationId: get_v1_deployments_stack_deployment_id_c981331e
+      parameters:
+      - name: deployment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Deployment Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/deployments/stack/{deployment_id}/rollback:
+    post:
+      summary: Rollback Stack Deployment Endpoint
+      description: Plan a NEW governed deployment of the previous healthy commit on
+        the same target.
+      operationId: post_v1_deployments_stack_deployment_id_rollback_696f2f3d
+      parameters:
+      - name: deployment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Deployment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StackDeployRollbackBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/deployments/stack/{deployment_id}/execute:
+    post:
+      summary: Execute Stack Deployment Endpoint
+      description: 'The worker hands its leased `deployment.stack_apply` job here.
+        Fenced by the lease; the
+
+        apply runs inside the approved ChangeSet (services/stack_deploy.py).'
+      operationId: post_v1_deployments_stack_deployment_id_execute_eed6768b
+      parameters:
+      - name: deployment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Deployment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StackDeployExecuteBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/deployment-targets/{target_id}/auto-deploy:
     post:
       summary: Set Auto Deploy Endpoint
@@ -58692,6 +58875,126 @@ components:
       - persona
       - body
       title: SlackRenderRequest
+    StackDeployExecuteBody:
+      properties:
+        job_id:
+          type: string
+          minLength: 1
+          title: Job Id
+        worker_id:
+          type: string
+          minLength: 1
+          title: Worker Id
+        lease_token:
+          type: string
+          minLength: 1
+          title: Lease Token
+      type: object
+      required:
+      - job_id
+      - worker_id
+      - lease_token
+      title: StackDeployExecuteBody
+      description: 'The worker''s lease of a deployment.stack_apply job. All three are
+        required: the apply
+
+        writes to a host, and only the job''s current lease may start it.'
+    StackDeployPlanBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        target_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Id
+        repository:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repository
+        ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ref
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - target_id
+      - ref
+      title: StackDeployPlanBody
+      description: Plan repository@ref onto a stack target; held for approval by a decision.
+    StackDeployRollbackBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: true
+      type: object
+      title: StackDeployRollbackBody
+    StackTargetCreateBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        host_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Host Id
+        repository:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repository
+        app_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: App Name
+        environment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Environment
+        manifest_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Manifest Path
+        public_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Public Url
+      additionalProperties: true
+      type: object
+      required:
+      - project_id
+      - host_id
+      - repository
+      - actor
+      title: StackTargetCreateBody
+      description: 'Where a stack is deployed: a repository, on a fleet host, for an environment.'
     StandupMeetingRequest:
       properties:
         project_id:
