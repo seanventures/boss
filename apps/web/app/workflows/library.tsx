@@ -23,6 +23,7 @@ import {
   Play, Plus, PuzzlePiece, Sparkle, Trash, Warning,
 } from "@phosphor-icons/react";
 
+import { AgentAvatar } from "../agent-avatar";
 import { agentMeta } from "../agent-chip";
 import { onChanged } from "../changed";
 import { formatDateTime } from "../../lib/datetime";
@@ -608,7 +609,7 @@ function LibraryCard(p: CardProps) {
           <span className="wf-card-agents" title={agents.map((a) => a.replace(/_/g, " ")).join(", ")}>
             {agents.slice(0, 3).map((a) => {
               const m = agentMeta(a);
-              return <span key={a} className={`mr-avatar tone-${m.tone} wf-avatar`} aria-hidden>{m.initials}</span>;
+              return <AgentAvatar key={a} agent={a} size={20} aiBadge={false} className={`mr-avatar tone-${m.tone} wf-avatar ag-face`} />;
             })}
             {agents.length > 3 ? <em>+{agents.length - 3}</em> : null}
           </span>
