@@ -211,6 +211,9 @@ def test_the_planning_step_asks_which_engine_this_project_chose():
 
     from boss_engine.services import skill_executors
 
+    # One resolver for every model-using skill now: see model_routing and
+    # test_every_model_call_goes_through_the_router, which checks every executor by behaviour
+    # of its calls rather than this one by its text.
     source = inspect.getsource(skill_executors.execute_video_plan_edit)
-    assert "chat_engine_for" in source, "the step must resolve the project's engine"
-    assert "make_agent_chat_adapter(settings)" in source, "and hand the resolved one over"
+    assert "project_chat_adapter(context.connection, context.settings, context.project_id)" \
+        in source, "the step must take the project's model from the router"

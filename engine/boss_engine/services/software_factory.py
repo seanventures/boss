@@ -28,7 +28,7 @@ from .github_adapter import (
     PullRequestValidationResult,
 )
 from .agent_loop import load_agent_run, run_agent_loop
-from .claude_cli_adapter import make_chat_adapter
+from . import model_routing
 from .openai_adapter import OpenAIAdapter, estimate_cost_usd_micros  # noqa: F401
 from .pipeline_adapter import make_pipeline_adapter
 from .receipts import ReceiptService
@@ -138,7 +138,9 @@ class SoftwareFactoryService:
         # do not.
         self.github = GitHubAdapter(settings, owner=owner, repo=repo)
         self.pipeline = make_pipeline_adapter(settings, github=self.github)
-        self.openai = make_chat_adapter(settings)
+        #: A fixed adapter, when a caller (a test) supplies one. Otherwise each model call asks
+        #: model_routing for the PROJECT's model at the time it is made.
+        self.openai = None
         self.entitlements = entitlement_port or resolved_ports.entitlement
         self.events = event_sink or resolved_ports.events
         self.decisions = decision_sink or resolved_ports.decisions
@@ -1642,7 +1644,9 @@ class SoftwareFactoryService:
             ),
         )
         try:
-            _ref, text, _usage = self.openai.create_text_response(
+            model = self.openai or model_routing.project_chat_adapter(
+                connection, self.settings, project_id)
+            _ref, text, _usage = model.create_text_response(
                 prompt, system, model_id
             )
             if str(text or "").strip():

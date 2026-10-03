@@ -70,7 +70,9 @@ class TestTheChatAgentHasItsOwnBrain:
         from boss_engine.services import intent_router
 
         body = inspect.getsource(intent_router)
-        assert "adapter=make_agent_chat_adapter(self.settings)" in body
+        # The project's routed model (services/model_routing.py), chosen per turn.
+        assert "model_routing.project_chat_adapter(" in body
+        assert "adapter=(self._answer_adapter" in body
 
     def test_the_agent_accepts_the_choice(self):
         body = inspect.getsource(

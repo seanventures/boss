@@ -75,8 +75,10 @@ def _make_ready(c, project_id: str, roles: list[str]) -> None:
     c.execute(text(
         "INSERT INTO entitlement_sources (id, project_id, provider, source_id, source_kind, "
         "entitlement_kind, owner_type, owner_id, connection_status) VALUES "
-        "(:i, :p, 'openai', :s, 'api', 'api_key', 'project', :p, 'connected')"),
-        {"i": f"ent_{uuid.uuid4().hex[:8]}", "p": project_id, "s": f"src_{uuid.uuid4().hex[:6]}"})
+        "(:i, :p, 'anthropic', :s, 'api', 'api_key', 'project', :p, 'connected')"),
+        # A source the router can drive (model_routing.choose): a connected Claude Code
+        # subscription. A connected row nothing can build an adapter for is not a model.
+        {"i": f"ent_{uuid.uuid4().hex[:8]}", "p": project_id, "s": "anthropic_claude_code"})
     connection_id = f"ghc_{uuid.uuid4().hex[:8]}"
     c.execute(text(
         "INSERT INTO github_connections (id, project_id, connection_label, auth_method, "

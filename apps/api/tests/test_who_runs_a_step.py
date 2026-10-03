@@ -126,7 +126,7 @@ def test_a_step_left_to_boss_runs_as_the_agent_holding_its_skills_and_the_run_sa
                      "raw": {"role": "assistant", "content": "done"}},
                     {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
 
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _s: _Model())
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: _Model())
 
     skills = [s["id"] for s in client.get(
         "/v1/skills", params={"project_id": PROJECT}).json()["items"]]
@@ -147,7 +147,7 @@ def test_a_step_left_to_boss_runs_as_the_agent_holding_its_skills_and_the_run_sa
     started = client.post("/v1/delivery-workflows/start", json={
         "project_id": PROJECT, "actor": "ceo", "workflow_key": workflow_key,
         "input": {"instructions": "list what is there"},
-        # The model is scripted here (make_chat_adapter above); the project has none connected,
+        # The model is scripted here (project_chat_adapter above); the project has none connected,
         # so the templates stream's start check is told to go ahead without one.
         "start_anyway": ["model"]})
     assert started.status_code == 200, started.text

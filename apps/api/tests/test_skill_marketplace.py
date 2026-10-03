@@ -274,7 +274,7 @@ def test_high_risk_mcp_tool_override_is_deferred(engine, monkeypatch):
         "provenance": {"trusted": True},
         "tool_risk_overrides": {"destroy": 3},
     }
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: adapter)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: adapter)
     monkeypatch.setattr(
         agent_loop, "list_mcp_servers", lambda *_args, **_kwargs: [server]
     )
@@ -371,7 +371,7 @@ def test_on_demand_skill_lazily_attaches_for_remainder_of_run(engine, monkeypatc
         ]
     )
     invoked: list[str] = []
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: adapter)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: adapter)
     monkeypatch.setattr(agent_loop, "list_mcp_servers", lambda *_args, **_kwargs: [])
 
     def fake_invoke(_service, _connection, _project_id, skill_id, *_args, **_kwargs):
@@ -443,7 +443,7 @@ def test_role_change_is_rechecked_and_violation_recorded_on_hot_path(
             adapter, "create_chat_completion", mutate_then_complete
         )
         monkeypatch.setattr(
-            agent_loop, "make_chat_adapter", lambda _settings: adapter
+            agent_loop, "project_chat_adapter", lambda *_a, **_k: adapter
         )
         monkeypatch.setattr(
             agent_loop, "list_mcp_servers", lambda *_args, **_kwargs: []

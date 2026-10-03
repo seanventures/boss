@@ -436,17 +436,9 @@ def choose_agent(
 def _ask_the_model(connection: Connection, settings: Settings, project_id: str,
                    prompt: str) -> str:
     """One routing question to the project's chat model. Raises whatever the adapter raises."""
-    from .claude_cli_adapter import make_agent_chat_adapter
-    from .setup_service import chat_engine_for
+    from .model_routing import project_chat_adapter
 
-    resolved = settings
-    try:
-        engine = chat_engine_for(connection, settings, project_id)
-    except Exception:  # noqa: BLE001 — no project setting means the install default
-        engine = None
-    if engine:
-        resolved = settings.model_copy(update={"chat_llm_engine": engine})
-    adapter = make_agent_chat_adapter(resolved)
+    adapter = project_chat_adapter(connection, settings, project_id)
     reply = adapter.create_text_response(
         prompt,
         system_prompt="You route work to the agent that can do it. You output JSON only.",

@@ -406,7 +406,7 @@ def test_a_bounded_run_is_offered_the_granted_skills_AND_NOTHING_ELSE(db, monkey
                              skill_id=skill)
 
     recorder = _Recorder()
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: recorder)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: recorder)
 
     result = agent_steps.run(db, Settings(), PROJECT,
                              instructions="Do whatever you can with what you hold.",
@@ -445,7 +445,7 @@ def test_the_facts_from_earlier_steps_reach_the_agent_verbatim(db, monkeypatch):
     assign_skill_to_role(db, project_id=PROJECT, actor="test", role_key="qa", skill_id=one)
 
     recorder = _Recorder()
-    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: recorder)
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: recorder)
 
     agent_steps.run(db, Settings(), PROJECT, instructions="Trim it.", role_key="qa",
                     actor="test",

@@ -323,6 +323,8 @@ class EngineAgent:
         #: Opus while everything else keeps the engine-wide default — a distinction that has to
         #: be made per consumer, because the worker image has no Claude CLI to run.
         self._adapter = adapter
+        #: The project of the turn in flight; the routed model is this project's.
+        self._project_id: Optional[str] = None
         #: The operator's own words for the turn in flight. Read by the escalation guard: only
         #: the operator can license `force`, so the guard has to see what they actually wrote.
         self._operator_text = ""
@@ -331,10 +333,19 @@ class EngineAgent:
         #: Values every tool call gets whether the model asked for them or not — see invoke.
         self.ambient: dict[str, Any] = {}
 
-    def _adapter_obj(self):
+    def _adapter_obj(self, project_id: Optional[str] = None):
         if self._adapter is None:
-            cli = services_module("claude_cli_adapter")
-            self._adapter = cli.make_chat_adapter(self.ctx.settings)
+            # THE PROJECT'S MODEL, from the one router (services/model_routing.py). This was
+            # `make_chat_adapter(settings)` — the deployment's `llm_engine`, "auto", the OpenAI
+            # adapter — which on a subscription-only install answered nothing.
+            routing = services_module("model_routing")
+            project_id = project_id or self._project_id
+            if project_id and getattr(self.ctx, "engine", None) is not None:
+                with self.ctx.begin() as connection:
+                    self._adapter = routing.project_chat_adapter(
+                        connection, self.ctx.settings, project_id)
+            else:
+                self._adapter = routing.project_chat_adapter(None, self.ctx.settings, None)
         return self._adapter
 
     def chat(
@@ -365,6 +376,7 @@ class EngineAgent:
         write actions that were held for confirmation. `system` overrides the
         default system prompt (the router's answer path passes its own
         discuss-don't-claim-you-started framing)."""
+        self._project_id = project_id or self._project_id
         # THE WORDS, WHATEVER SHAPE THE MESSAGE ARRIVED IN. `_operator_text` is matched against
         # regexes all over this class; a list of content blocks reaching one of them turns a
         # screenshot into a TypeError.

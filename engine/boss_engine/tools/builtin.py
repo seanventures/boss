@@ -2174,7 +2174,6 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         pid = args.get("project_id") or project_id
         from ..services.setup_service import (
             build_engine_for,
-            chat_engine_for,
             connected_engines,
             list_coding_agents,
             setup_status,
@@ -2217,7 +2216,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 from ..services.project_settings import applied as _applied
 
                 effective = _applied(c, pid, ctx.settings)
-                out["chat_model"] = chat_engine_for(c, effective, pid) or "(the API key)"
+                # The router's own answer — the source a step's model calls will go to.
+                from ..services.model_routing import choose as _choose_model
+
+                out["chat_model"] = _choose_model(c, effective, pid).describe()
                 out["build_model"] = build_engine_for(c, effective, pid)
                 out["role_models"] = {
                     "implementer": effective.code_agent_engine,
@@ -5756,12 +5758,23 @@ def _register_image_tools(reg: ToolRegistry) -> None:
         if _community_raw_sql_disabled(settings):
             return {"ok": False, "error": "Community image generation is paused until "
                     "provider spend has a budget reservation and receipt."}
-        base = str(getattr(settings, "openai_base_url", "") or "").rstrip("/")
-        key = str(getattr(settings, "openai_api_key", "") or "")
-        if not base or not key:
-            return {"ok": False,
-                    "error": "no image provider configured: OPENAI_BASE_URL and "
-                             "OPENAI_API_KEY must both be set"}
+        # THE DECLARED REQUIREMENT, READ THE ONE WAY (services/model_routing.py). This read
+        # OPENAI_API_KEY from the environment, so a key stored through the console was invisible
+        # to it and the failure said "OPENAI_BASE_URL and OPENAI_API_KEY must both be set" — a
+        # sentence about env vars, on an install configured through the console.
+        from types import SimpleNamespace
+
+        from ..services import model_routing
+
+        try:
+            with ctx.begin() as c:
+                key = model_routing.provider_credential(
+                    SimpleNamespace(connection=c, project_id=project_id, settings=settings),
+                    model_routing.tool_requirement_id("generate_image"), "openai_images")
+        except model_routing.ProviderRequirementMissing as exc:
+            return {"ok": False, "error": str(exc), "needs": exc.requirement.need_key}
+        base = (str(getattr(settings, "openai_base_url", "") or "").strip()
+                or "https://api.openai.com/v1").rstrip("/")
 
         prompt = str(args.get("prompt") or "").strip()
         if not prompt:

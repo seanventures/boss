@@ -163,7 +163,7 @@ def test_the_router_resolves_it_once_per_turn():
     assert "self._use_project_chat_model(connection, project_id)" in turn
 
     apply = inspect.getsource(intent_router.IntentRouter._use_project_chat_model)
-    assert "chat_engine_for" in apply
+    assert "model_routing.choose(" in apply
     assert "self._answer_agent_obj = None" in apply
 
 

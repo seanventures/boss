@@ -27,7 +27,6 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from ..db import begin
-from .claude_cli_adapter import make_agent_chat_adapter
 from .jobs import JOB_PRIORITY_INTERACTIVE
 from .core import stable_dedupe_key, create_artifact, create_blocking_decision, emit_event, make_id
 from .mcp_registry import (
@@ -963,18 +962,13 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
     # "OPENAI_API_KEY is not configured" — the exact failure the comment above describes,
     # arriving through the one path nobody had layered the project onto.
     #
-    # `chat_engine_for` is the same resolution the console chat uses: the project's choice,
-    # then the deployment's, then a subscription that is actually connected.
-    try:
-        from .setup_service import chat_engine_for
+    # The resolution is model_routing's, the one every model call uses: the project's choice,
+    # then the deployment's, then a subscription or stored key that is actually connected —
+    # built on that source's own credential. This was the sixth pasted copy of it.
+    from . import model_routing
 
-        with begin(engine) as c:
-            chosen_engine = chat_engine_for(c, settings, run["project_id"])
-        if chosen_engine:
-            settings = settings.model_copy(update={"chat_llm_engine": chosen_engine})
-    except Exception:  # noqa: BLE001 — a settings lookup must not end a meeting
-        pass
-    adapter = make_agent_chat_adapter(settings)
+    with begin(engine) as c:
+        adapter = model_routing.project_chat_adapter(c, settings, run["project_id"])
     add_cost = 0
     model = (run["usage"] or {}).get("model")
 

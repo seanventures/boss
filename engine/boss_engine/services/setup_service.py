@@ -337,7 +337,13 @@ def connected_engines(
         # — needs to be able to tell them apart. Recorded by provider_limits from the one
         # place every engine reports through.
         from .provider_limits import is_available
-        capacity = row["observed_capacity"] if isinstance(row["observed_capacity"], dict) else {}
+        capacity = row["observed_capacity"]
+        if isinstance(capacity, str):
+            try:
+                capacity = json.loads(capacity)
+            except ValueError:
+                capacity = {}
+        capacity = capacity if isinstance(capacity, dict) else {}
         offer(engine, "subscription" if connected else "api key",
               source_id=source_id,
               plan={"cost_mode": row["cost_mode"] or "",
@@ -464,28 +470,14 @@ def chat_engine_for(
          run on a key keeps running on it,
       4. nothing, which is the OpenAI adapter and its own error message.
 
-    Returns a name from `project_settings.CHAT_ENGINES`, or "" to leave the choice alone.
+    Returns the engine `model_routing.choose` picked, or "" when the deployment's own
+    environment decides (or nothing can) — "leave the choice alone". The decision itself lives
+    in model_routing, so this, readiness and the adapter cannot disagree.
     """
-    from .project_settings import CHAT_ENGINES, effective
+    from .model_routing import ENVIRONMENT, choose
 
-    try:
-        chosen = (effective(connection, project_id, settings, "chat_llm_engine") or "").strip()
-    except Exception:  # noqa: BLE001 — an unreachable settings table is not an answer
-        chosen = (getattr(settings, "chat_llm_engine", "") or "").strip()
-    if chosen:
-        return chosen.lower()
-    # An API key IS a configured chat model, and the adapter has always used it. Overriding
-    # that with a CLI would move the conversation of every install that already worked.
-    if str(getattr(settings, "openai_api_key", "") or "").strip():
-        return ""
-    try:
-        connected = connected_engines(connection, settings, project_id)
-    except Exception:  # noqa: BLE001
-        return ""
-    for candidate in CHAT_ENGINES:
-        if candidate in connected:
-            return candidate
-    return ""
+    picked = choose(connection, settings, project_id)
+    return "" if picked.why == ENVIRONMENT else picked.engine
 
 
 def with_recorded_connections(
@@ -1146,13 +1138,12 @@ def _connection_counts(connection: Connection, settings: Settings, project_id: s
              "WHERE project_id = :p AND status IN ('configured', 'active')"),
         {"p": project_id},
     ).scalar() or 0
-    models = connection.execute(
-        text("SELECT count(*) FROM entitlement_sources "
-             "WHERE project_id = :p AND (credential_secret_ref_id IS NOT NULL "
-             "                           OR connection_status = 'connected')"),
-        {"p": project_id},
-    ).scalar() or 0
-    env_model = bool(str(getattr(settings, "openai_api_key", "") or "").strip())
+    # A MODEL IS CONNECTED WHEN THE ROUTER CAN BUILD ONE. This counted every entitlement row
+    # holding a key, while the adapter could reach three engines — so a stored Gemini key was
+    # "connected" here and every step died with "OPENAI_API_KEY is not configured".
+    from .model_routing import choose
+
+    model_ready = choose(connection, settings, project_id).runnable
     env_repo = str(getattr(settings, "target_github_repo", "") or "").strip()
     env_owner = str(getattr(settings, "target_github_owner", "") or "").strip()
     env_github = bool(str(getattr(settings, "github_token", "") or "").strip()
@@ -1167,7 +1158,7 @@ def _connection_counts(connection: Connection, settings: Settings, project_id: s
         ).scalar()
     return {
         "github_done": bool((connections and repos) or env_github),
-        "model_done": bool(models or env_model),
+        "model_done": bool(model_ready),
         "repository": primary or (f"{env_owner}/{env_repo}" if env_github else None),
     }
 

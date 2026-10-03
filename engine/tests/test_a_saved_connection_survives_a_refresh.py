@@ -33,17 +33,15 @@ class _Settings:
 
 
 @pytest.fixture()
-def connection():
+def connection(entitlement_tables):
+    # The shared stub (conftest): "a model is connected" is now the router's answer
+    # (model_routing.choose → connected_engines), which reads the table's capacity columns.
     engine = create_engine("sqlite+pysqlite:///:memory:")
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE github_repository_bindings "
                           "(project_id TEXT, status TEXT)"))
         conn.execute(text("CREATE TABLE github_connections (project_id TEXT, status TEXT)"))
-        conn.execute(text(
-            "CREATE TABLE entitlement_sources ("
-            " project_id TEXT, source_id TEXT, provider TEXT, auth_method TEXT,"
-            " connection_status TEXT, status TEXT, credential_secret_ref_id TEXT,"
-            " connection_metadata TEXT, updated_at TIMESTAMP)"))
+        entitlement_tables(conn)
     with engine.begin() as conn:
         yield conn
 

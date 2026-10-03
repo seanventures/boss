@@ -98,8 +98,17 @@ _EXECUTORS: dict[str, RegisteredExecutor] = {}
 def register_executor(
     skill_id: str,
     executor: Optional[RegisteredExecutor] = None,
+    *,
+    requires: Any = (),
 ) -> Callable[[RegisteredExecutor], RegisteredExecutor] | RegisteredExecutor:
-    """Register an executor directly or as ``@register_executor(skill_id)``."""
+    """Register an executor directly or as ``@register_executor(skill_id)``.
+
+    A skill that calls a model gets it from `model_routing.project_chat_adapter` — the model
+    this project connected. `requires` is ONLY for what no chat model can do (image generation,
+    speech-to-text): name the `model_routing.PROVIDER_REQUIREMENTS` key, readiness checks it
+    before a run starts, and the executor reads the key with `model_routing.provider_credential`.
+    """
+    from . import model_routing
 
     normalized = skill_id.strip()
     if not normalized:
@@ -108,6 +117,7 @@ def register_executor(
     def decorator(handler: RegisteredExecutor) -> RegisteredExecutor:
         if normalized in _EXECUTORS and _EXECUTORS[normalized] is not handler:
             raise ValueError(f"Executor already registered for '{normalized}'.")
+        model_routing.declare(normalized, requires)
         _EXECUTORS[normalized] = handler
         return handler
 
@@ -485,8 +495,8 @@ def execute_model_generate_code(
     plan, per the SkillSpec output schema. It never touches a repo — the patch
     is an artifact for the software-factory gates to validate. Receipt-backed
     so the budget reservation settles with the real token cost."""
-    from .claude_cli_adapter import make_chat_adapter
     from .core import create_artifact
+    from .model_routing import project_chat_adapter
     from .openai_adapter import estimate_cost_usd_micros
 
     task_spec = _required_text(inputs, "task_spec")
@@ -537,7 +547,11 @@ def execute_model_generate_code(
         user_prompt += f"\nREPOSITORY CONTEXT:\n{repo_context}\n"
 
     try:
-        message, usage = make_chat_adapter(context.settings).create_chat_completion(
+        # THE PROJECT'S MODEL. Building the adapter from the bare deployment settings read
+        # `llm_engine` ("auto" = OpenAI) and failed on a subscription-only install.
+        message, usage = project_chat_adapter(
+            context.connection, context.settings, context.project_id,
+        ).create_chat_completion(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -1375,20 +1389,11 @@ def execute_model_generate_text(
     to draft, summarise or write anything had to bring its own skill; the one general-purpose
     writing step in the catalogue could not run.
     """
-    from .claude_cli_adapter import make_agent_chat_adapter
-    from .setup_service import chat_engine_for
+    from .model_routing import project_chat_adapter
 
     prompt = str(inputs.get("prompt") or inputs.get("message") or "").strip()
     if not prompt:
         raise ValueError("prompt is required — say what should be written")
-
-    settings = context.settings
-    try:
-        engine = chat_engine_for(context.connection, settings, context.project_id)
-        if engine:
-            settings = settings.model_copy(update={"chat_llm_engine": engine})
-    except Exception:  # noqa: BLE001 — a settings read must not fail the step
-        pass
 
     # MATERIAL FROM AN EARLIER STEP, appended rather than interpolated.
     #
@@ -1406,8 +1411,9 @@ def execute_model_generate_text(
         prompt = f"{prompt}\n\n--- material ---\n{material}"
 
     system = str(inputs.get("system") or inputs.get("instructions") or "").strip()
-    _ref, text_out, usage = make_agent_chat_adapter(settings).create_text_response(
-        prompt, system_prompt=system)
+    _ref, text_out, usage = project_chat_adapter(
+        context.connection, context.settings, context.project_id,
+    ).create_text_response(prompt, system_prompt=system)
     body = str(text_out or "").strip()
     if not body:
         raise ValueError("the model returned nothing to write")
@@ -1464,26 +1470,18 @@ def execute_meeting_extract_actions(
     into tickets other people will see — the same split as planning an edit before rendering it.
     """
     from .meeting_actions import extract
-    from .claude_cli_adapter import make_agent_chat_adapter
-    from .setup_service import chat_engine_for
+    from .model_routing import project_chat_adapter
 
     transcript = str(inputs.get("transcript") or inputs.get("notes") or "").strip()
     if not transcript:
         raise ValueError(
             "transcript is required — paste the meeting notes or transcript")
 
-    # The engine THIS PROJECT chose. Without it the adapter falls through to OpenAI and an
-    # install running on a Claude subscription fails with "OPENAI_API_KEY is not configured".
-    settings = context.settings
-    try:
-        engine = chat_engine_for(context.connection, settings, context.project_id)
-        if engine:
-            settings = settings.model_copy(update={"chat_llm_engine": engine})
-    except Exception:  # noqa: BLE001 — a settings read must not fail the step
-        pass
-
+    # The model THIS PROJECT connected (model_routing). Without it the adapter falls through to
+    # OpenAI and an install on a Claude subscription fails with "OPENAI_API_KEY is not
+    # configured".
     result = extract(
-        make_agent_chat_adapter(settings),
+        project_chat_adapter(context.connection, context.settings, context.project_id),
         transcript=transcript,
         context=str(inputs.get("context") or ""),
     )
@@ -1885,26 +1883,12 @@ def execute_video_plan_edit(
     assets = inputs.get("assets") if isinstance(inputs.get("assets"), dict) else {}
     assets = {str(k): str(v) for k, v in assets.items() if str(v).strip()}
 
-    # THE ENGINE THIS PROJECT CHOSE, not whatever the bare Settings object defaults to.
-    #
-    # `chat_llm_engine` is a PROJECT setting; it is not on Settings unless a caller puts it
-    # there. Without this the adapter falls through to `llm_engine` = "auto" = OpenAI, and an
-    # install running happily on a Claude subscription fails with "OPENAI_API_KEY is not
-    # configured" — true, and useless, which is the exact sentence chat_engine_for was written
-    # to stop. It had stopped it for the chat and not for anything built afterwards.
-    from .claude_cli_adapter import make_agent_chat_adapter
-    from .setup_service import chat_engine_for
-
-    settings = context.settings
-    try:
-        engine = chat_engine_for(context.connection, settings, context.project_id)
-        if engine:
-            settings = settings.model_copy(update={"chat_llm_engine": engine})
-    except Exception:  # noqa: BLE001 — a settings lookup must not fail the step on its own
-        pass
+    # THE MODEL THIS PROJECT CONNECTED, not whatever the bare Settings object defaults to —
+    # resolved by model_routing, the one place every model-using skill gets its model.
+    from .model_routing import project_chat_adapter
 
     result = plan_from_instructions(
-        make_agent_chat_adapter(settings),
+        project_chat_adapter(context.connection, context.settings, context.project_id),
         instructions=instructions,
         house_style=str(inputs.get("house_style")
                         or house_style_for(context.connection, context.project_id)),

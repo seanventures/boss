@@ -610,17 +610,9 @@ def model_connected(connection: Connection, settings: Any, project_id: str) -> b
 
 def _ask_model(connection: Connection, settings: Any, project_id: str, prompt: str) -> str:
     """One drafting question to the project's chat model. Raises whatever the adapter raises."""
-    from .claude_cli_adapter import make_agent_chat_adapter
-    from .setup_service import chat_engine_for
+    from . import model_routing
 
-    resolved = settings
-    try:
-        engine = chat_engine_for(connection, settings, project_id)
-    except Exception:  # noqa: BLE001 — no project setting means the install default
-        engine = None
-    if engine:
-        resolved = settings.model_copy(update={"chat_llm_engine": engine})
-    reply = make_agent_chat_adapter(resolved).create_text_response(
+    reply = model_routing.project_chat_adapter(connection, settings, project_id).create_text_response(
         prompt,
         system_prompt="You design delivery workflows as a list of steps. You output JSON only.",
     )
