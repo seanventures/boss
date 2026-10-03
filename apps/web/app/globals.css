@@ -6209,6 +6209,32 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   background: var(--surface-2, #0F1830);
   border: 1px solid var(--border, #1C2740);
 }
+/* The public key and the one line that authorises it — shown before the push command. */
+.fleet-key { display: grid; gap: 6px; }
+.fleet-step[data-state="failed"] { color: var(--red, #F87171); font-weight: 600; }
+
+/* Infra → Deploy a repository (app/stack-deploy-ui.tsx). */
+.sd-panel { gap: 12px; }
+.sd-targets { display: grid; gap: 10px; }
+.sd-target, .sd-deployment { display: grid; gap: 8px; }
+.sd-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.sd-row code { overflow-wrap: anywhere; }
+.sd-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sd-link {
+  background: none; border: 0; padding: 2px 0; color: inherit; font: inherit;
+  cursor: pointer; text-align: left;
+}
+.sd-link:hover { text-decoration: underline; }
+.sd-form { display: grid; gap: 8px; }
+.sd-steps { margin: 6px 0; padding-left: 20px; display: grid; gap: 2px; }
+.sd-steps code { overflow-wrap: anywhere; }
+.sd-chip { margin-right: 6px; }
+.sd-health { padding-left: 18px; }
+.sd-log { max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.sd-failure {
+  display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--r, 8px);
+  border: 1px solid var(--red, #F87171); background: var(--red-soft, rgba(248, 113, 113, .08));
+}
 
 /* ---- Card overflow menu ------------------------------------------------
    The action row had five same-weight buttons, so the common action (see the app)

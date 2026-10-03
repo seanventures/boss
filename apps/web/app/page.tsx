@@ -4920,13 +4920,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="eyebrow">Infra</span>
               <h2>
                 {deliveryPipeline && !deliveryPipeline.error && !deliveryPipeline.configured
-                  ? "No deployment targets yet — register an app destination."
-                  : "Deployment destinations and history — host execution is paused."}
+                  ? "Nothing deploys yet — add a VM, then deploy a repository to it."
+                  : "VMs, stack targets, and governed deployments from your repositories."}
               </h2>
             </div>
           </div>
           <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
-                            deployments={recentDeployments} communityEdition />
+                            deployments={recentDeployments} communityEdition
+                            actor={activeActorId} />
         </section>
         ) : null}
 
