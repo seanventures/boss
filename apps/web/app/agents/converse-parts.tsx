@@ -345,9 +345,11 @@ function ToChip({ roleKey }: { roleKey: string }) {
 
 /** A text box that sends on Enter (Shift+Enter for a new line), with an @-mention menu when
  *  there are seats to mention. */
-export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocus }: {
+export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocus, onStop }: {
   placeholder: string; disabled?: boolean; onSend: (message: string) => void;
   seats?: SeatInfo[]; extra?: React.ReactNode; autoFocus?: boolean;
+  /** While an answer streams: Send becomes Stop. */
+  onStop?: () => void;
 }) {
   const [value, setValue] = useState("");
   const [menu, setMenu] = useState<SeatInfo[]>([]);
@@ -419,10 +421,20 @@ export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocu
       <div className="ag-composer-row">
         {extra}
         <span className="ag-spacer" />
-        <button type="button" className="ag-btn ag-btn-primary" disabled={disabled || !value.trim()}
-                data-testid="ag-send" onClick={send}>Send</button>
+        {onStop ? <StopButton onStop={onStop} /> : (
+          <button type="button" className="ag-btn ag-btn-primary" disabled={disabled || !value.trim()}
+                  data-testid="ag-send" onClick={send}>Send</button>
+        )}
       </div>
     </div>
+  );
+}
+
+/** Cut the answering off now: the seat speaking stops, the seats after it do not speak. */
+export function StopButton({ onStop }: { onStop: () => void }) {
+  return (
+    <button type="button" className="ag-btn" data-testid="ag-stop" title="Stop answering now"
+            onClick={onStop}>Stop</button>
   );
 }
 
