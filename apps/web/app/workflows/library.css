@@ -235,7 +235,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wf-card-chips { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; }
+/* Chips never wrap under the name ("Standard" / "v2" on two lines): the NAME truncates first,
+   then the "from …" chip, which carries its full text as a tooltip. */
+.wf-card-chips { display: inline-flex; flex-wrap: nowrap; justify-content: flex-end; gap: 4px; min-width: 0; flex: 0 1 auto; }
+.wf-card-chips > .wf-tag { flex: none; white-space: nowrap; }
+.wf-card-chips > .wf-tag[data-kind="from"] { flex: 0 1 auto; min-width: 4ch; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
 .wf-card-rename { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .wf-card-rename input {
   font: 600 1rem var(--sans);
@@ -343,7 +347,15 @@
 .wf-menu button:hover:not(:disabled) { background: var(--bg); }
 .wf-menu button:disabled { color: var(--faint); cursor: not-allowed; }
 .wf-menu button[data-tone="danger"] { color: var(--red); }
-.wf-confirm { flex-direction: row; align-items: center; gap: 10px; white-space: nowrap; }
+/* The card's delete confirm. Its own class: `.wf-confirm` is the editor's modal dialog
+   (inspector.css), and sharing the name stretched this into a borderless full-width box.
+   A popover over a card must read as above it, not as part of it: same surface, so the lift
+   comes from a stronger edge and the large shadow. */
+.wf-card-confirm { flex-direction: row; align-items: center; gap: 10px; white-space: nowrap; }
+.wf-card .wf-pop {
+  border-color: color-mix(in srgb, var(--ink) 22%, transparent);
+  box-shadow: var(--shadow-lg);
+}
 .wf-usefor .wf-link { text-align: left; display: inline-flex; gap: 4px; align-items: center; }
 .wf-pop-label {
   color: var(--faint);
