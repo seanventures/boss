@@ -171,6 +171,13 @@ def is_gate(kind: Any, capability: Any) -> bool:
     return key in CAPABILITY_KEYS and bool(get_capability(key).is_gate)
 
 
+def is_refused_approval(step: dict[str, Any]) -> bool:
+    """A failed step whose APPROVAL a person refused — a stack deploy whose deployment decision
+    was rejected. Not a gate by kind, but skipping it turns the same no into a yes, so Skip
+    treats it exactly like one. Retry stays: it plans afresh and asks again."""
+    return bool(_output(step).get("rejected_by_approver"))
+
+
 def _verdict(key: str, label: str, state: str, reason: Optional[str] = None,
              step_id: Optional[str] = None, **extra: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"key": key, "label": label, "state": state,
@@ -467,7 +474,8 @@ def _verdicts(
                             "nothing to skip.")
         elif closed:
             skip = (ABSENT, f"this run is {status}, so there is nothing to proceed to.")
-        elif is_gate(_step_kind(step), step_capability(step)):
+        elif (is_gate(_step_kind(step), step_capability(step))
+              or is_refused_approval(step)):
             skip = (ABSENT, f"'{step_id}' is an approval. It did not fail — somebody answered "
                             "no — and skipping it would turn that answer into a yes. Reopen "
                             "it with Try again instead.")

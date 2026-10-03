@@ -65,9 +65,12 @@ NEEDS: dict[str, Need] = {
         "Connect a model in Repo and model — an API key or a subscription you already pay "
         "for.", "setup"),
     "deployment_target": Need(
-        "deployment_target", "Somewhere to deploy: a verified deployment host",
-        "Add and verify a host in Infra → Where apps install. The release step then puts the "
-        "app on it; until there is one, the deploy step cannot run.", "delivery"),
+        "deployment_target",
+        "Somewhere to deploy: a verified deployment host or a stack target",
+        "Add and verify a host in Infra → Where apps install, or create a stack target for a "
+        "repository that ships a boss.deploy.yaml (Infra → Deploy a repository). The release "
+        "step then puts the app there; until there is one, the deploy step cannot run.",
+        "delivery"),
     # The fix names a console form, not an API call. The review of the first version found the
     # only instruction was "POST /v1/email/config", which a person without a terminal cannot
     # follow, and there was no SMTP screen. The form lives in Repo and model and is drawn
@@ -382,9 +385,19 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
                                     "AND status IN ('verified','ready','active')", p) or 0
         targets = _scalar(connection, "SELECT count(*) FROM deployment_targets "
                                       "WHERE project_id=:p AND status='active'", p) or 0
+        # A STACK TARGET IS A DESTINATION. A repository that ships a boss.deploy.yaml deploys
+        # through its stack target and needs nothing else, so it counts — and is named, so the
+        # checklist says WHERE such a run will go rather than only that something exists.
+        stacks = _scalar(connection, "SELECT count(*) FROM deployment_targets "
+                                     "WHERE project_id=:p AND status='active' "
+                                     "AND target_kind='stack'", p) or 0
         if hosts or targets:
-            return True, f"{hosts} verified host(s), {targets} active target(s)"
-        return False, "this project has no verified deployment host and no active target"
+            found = f"{hosts} verified host(s), {targets} active target(s)"
+            if stacks:
+                found += f", {stacks} of them stack target(s) deploying a boss.deploy.yaml"
+            return True, found
+        return False, ("this project has no verified deployment host, no active target and no "
+                       "stack target")
     if key == "email":
         from .email_config import settings_for
 
