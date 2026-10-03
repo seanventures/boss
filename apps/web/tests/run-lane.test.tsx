@@ -139,7 +139,7 @@ describe("the run is one row", () => {
 describe("who is on the run", () => {
   it("is a chip above the lane, not a step in it", () => {
     const html = view(STEPS);
-    const chip = html.indexOf('data-testid="dw-node-agents"');
+    const chip = html.indexOf('data-testid="dw-run-agents"');
     expect(chip).toBeGreaterThan(-1);
     expect(chip).toBeLessThan(html.indexOf('data-testid="wf-lane"'));
     expect(html).not.toContain('data-step-id="__agents__"');

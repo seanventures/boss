@@ -43,14 +43,14 @@ describe("an approved gate stops offering the press that answers it", () => {
 
 describe("who is on the run is not drawn as a step", () => {
   // REWRITTEN (Workflow Studio): this was the rail's first node, whose label the layout pushed
-  // to the far edge. The run is now the shared lane, and who is on it is a chip at its head —
-  // so it cannot be laid out unlike a step, because it is not drawn as one.
-  it("is a chip at the head of the lane", () => {
-    expect(UI).toContain('className="wf-chip wf-chip-btn" data-testid="dw-node-agents"');
+  // to the far edge. The run is now the shared lane, and who is on it is a chip on the run's
+  // bar — so it cannot be laid out unlike a step, because it is not drawn as one.
+  it("is a chip on the run's bar", () => {
+    expect(UI).toContain('data-testid="dw-run-agents"');
   });
 
   it("and it carries no step glyph or number", () => {
-    const at = UI.indexOf('className="wf-chip wf-chip-btn" data-testid="dw-node-agents"');
+    const at = UI.indexOf('data-testid="dw-run-agents"');
     const chip = UI.slice(at, UI.indexOf("</button>", at));
     expect(chip).not.toContain("StepIcon");
     expect(chip).not.toContain("index + 1");

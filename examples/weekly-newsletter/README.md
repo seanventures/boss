@@ -64,7 +64,7 @@ python3 examples/weekly-newsletter/setup.py --api http://127.0.0.1:8000 \
     --to reader@example.com
 ```
 
-3. To run it once by hand, open **Delivery → Workflows → "Weekly newsletter" → Start one** and
+3. To run it once by hand, open **Workflows → Library**, find "Weekly newsletter", then **⋯ → Start** and
    fill in:
    - `sectors` — one line: *"UK politics, Premier League football, Chennai local news, AI industry moves"*
    - `brief` — how to write it (the script sets a sensible house brief)
@@ -81,8 +81,8 @@ in it, so the newsletter keeps its hour across daylight-saving changes instead o
 a year.
 
 `--schedule` requires both `--sectors` and `--to` before it changes anything; they become the
-inputs for each Monday run. To change the topics or recipient later, use **edit inputs** on the
-schedule line in Delivery → **Yours** (see [Build it by hand](#build-it-by-hand), step 5), or
+inputs for each Monday run. To change the topics or recipient later, use **Edit** on the
+schedule line under the workflow's **⋯ → Schedule…** in **Workflows → Library** (see [Build it by hand](#build-it-by-hand), step 5), or
 remove the schedule there and run the setup command again. The send step still waits for your
 approval.
 
@@ -108,14 +108,14 @@ and real sending stays off until `BOSS_EMAIL_REAL_SEND_ALLOWED` is `true`.
 
 1. **Enable the skills.** **Skills → Enable:** `model.generate_text`, `email.send_real_guarded`
 
-2. **Define two steps.**
+2. **Define two steps.** **Workflows → Library → Steps → + New step.**
 
    | Name | Skill | Inputs |
    |---|---|---|
    | Write the newsletter | `model.generate_text` | `prompt` |
    | Email the newsletter | `email.send_real_guarded` | `to`, `body` |
 
-3. **Create the workflow.** Drag **Research** (from the built-in palette) plus your two steps, in
+3. **Create the workflow.** **Workflows → Library → + New workflow**, then drag **Research** (from the built-in palette) plus your two steps, in
    that order.
 
 4. **Wire the inputs.**
@@ -134,13 +134,13 @@ and real sending stays off until `BOSS_EMAIL_REAL_SEND_ALLOWED` is `true`.
    `prompt`, the research is `context`, and the step joins them.
 
 5. **Schedule it.** Use the setup command above with `--schedule`, `--sectors` and `--to`, or
-   Delivery → **Yours** → **Schedule**. The button asks for the time zone and for `sectors`,
-   `brief`, `to`, and `subject`. Required values are stored on the schedule. **edit inputs**
+   **Workflows → Library** → the workflow's **⋯ → Schedule…**. The form asks for the time zone and for `sectors`,
+   `brief`, `to`, and `subject`. Required values are stored on the schedule. **Edit**
    replaces them without creating a second Monday run. The API is the same
    `POST /v1/delivery-workflows/schedules`: send `schedule_id` to edit, and omit it to create. A
    save without the required inputs is refused.
 
-   Pause, resume and remove are on the schedule line in Delivery → **Yours**. Resuming recomputes
+   Pause, resume and remove are on the schedule line under **⋯ → Schedule…**. Resuming recomputes
    the next run, so a schedule paused for a month does not fire the moment you bring it back.
 
 ---
@@ -160,7 +160,7 @@ and real sending stays off until `BOSS_EMAIL_REAL_SEND_ALLOWED` is `true`.
 ## Customize
 
 Change `brief` to set the voice and structure, or `sectors` to change what is researched — per
-run, or on the schedule with **edit inputs**.
+run, or on the schedule with **Edit**.
 
 **BOSS ships** the `research` capability, `model.generate_text`, `email.send_real_guarded`, and
 the scheduler. **The workflow itself is not part of BOSS** — it is data in your project.

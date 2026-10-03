@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
-import { needsYou } from "../app/delivery-workflows-ui";
+import { laneStateOf, needsYou, type RunStep } from "../app/delivery-workflows-ui";
+import { runPalette, runSpec } from "../app/workflows/flow/run-lane";
+import { stepView } from "../lib/step-view";
 
 /**
  * The Run group opens with the place work is DONE, and a project can be started from anywhere.
@@ -13,6 +15,13 @@ import { needsYou } from "../app/delivery-workflows-ui";
  * because the only "New" button lived on that page.
  */
 const SHELL = codeOnly("app/ConsoleShell.tsx");
+
+/** One run step, with only what a test sets. */
+const step = (over: Partial<RunStep>): RunStep => ({
+  step_id: "s", kind: "capability", status: "pending", capability: null, output: {},
+  evidence: [], error: null, approval: {}, due_at: null, timeout_applied: null, attempt: 1,
+  started_at: null, completed_at: null, decision_id: null, ...over,
+} as RunStep);
 const CT = codeOnly("app/code-tasks-ui.tsx");
 const CSS = codeOnly("app/globals.css");
 
@@ -22,15 +31,17 @@ const runOrder = (): string[] =>
 
 describe("the Run group order", () => {
   it("opens with the place work is done, then the path it follows", () => {
-    expect(runOrder().slice(0, 7)).toEqual([
+    // Workflows and Agents are one row each now: Team structure and Agent Studio are views of
+    // Agents, and their old links redirect (tests/legacy-areas.test.ts).
+    expect(runOrder().slice(0, 5)).toEqual([
       "code_tasks",          // Factory / Projects
-      "delivery_workflows",  // Workflow
+      "delivery_workflows",  // Workflows
       "workforce",           // Agents
-      "org_chart",
-      "studio",              // Agent definitions
       "decisions",           // Approvals
       "delivery",            // Infra
     ]);
+    expect(runOrder()).not.toContain("org_chart");
+    expect(runOrder()).not.toContain("studio");
   });
 
   it("keeps Discovery and Meetings as AREAS, off the rail", () => {
@@ -55,9 +66,9 @@ describe("the Run group order", () => {
 
 describe("the renamed areas", () => {
   it.each([
-    ["workforce", "Agent work"],
+    ["workforce", "Agents"],
     ["delivery", "Infra"],
-    ["delivery_workflows", "Workflow"],
+    ["delivery_workflows", "Workflows"],
     ["code_tasks", "Projects"],
   ])("%s is labelled %s", (id, label) => {
     expect(SHELL).toMatch(new RegExp(`id: "${id}", label: "${label}"`));
@@ -88,7 +99,8 @@ describe("New project, from anywhere", () => {
   it("is answered by the area that watches the work", () => {
     // Starting work and watching it belong together now that the workflow drives: the press
     // creates a RUN, and the run is what the operator then needs to see.
-    const DWN = codeOnly("app/delivery-workflows-ui.tsx");
+    const DWN = codeOnly("app/delivery-workflows-ui.tsx")
+      + codeOnly("app/workflows/new-project-composer.tsx");
     expect(DWN).toContain("readNewProjectIntent(window.location.search)");
     expect(DWN).toContain('data-testid="dw-new-project"');
     expect(DWN).toContain('data-testid="dw-new-start"');
@@ -177,7 +189,7 @@ describe("choosing the workflow", () => {
     // Two different questions: "what should THIS work follow" and "what should new projects
     // follow from now on". The first now lives in two places, each next to the work it
     // governs: the Workflow composer for a new project, the Iterate panel for a change.
-    const DWP = codeOnly("app/delivery-workflows-ui.tsx");
+    const DWP = codeOnly("app/workflows/new-project-composer.tsx");
     // It is a step in the New Project wizard now rather than a dropdown beside the box: one
     // card per path, each carrying the description and the gates, because those are the whole
     // reason one path is right and another is not — and a <select> hides them.
@@ -294,17 +306,16 @@ describe("a phase that never happened", () => {
 
   it("reads as skipped with its reason, not as a success", () => {
     // A project started directly has no research phase and no panel. The runtime records those
-    // steps as not applicable rather than commissioning research for something already built —
-    // and showing them as plain successes would claim work nobody did.
-    //
-    // The wording moved from "not run" to "skipped" plus the recorded reason. An operator who
-    // had watched Research run for four minutes on another run read "not run" as a defect and
-    // reported it as one; the sentence explaining the skip was in the step the whole time.
+    // steps as not applicable — and showing them as plain successes would claim work nobody
+    // did. On the lane they are `skipped`; an operator's skip says who skipped it.
     expect(DW).toContain("function notApplicable");
     expect(DW).toContain('"dw-step-na"');
     expect(DW).toContain("function skipReason");
-    // On the run lane the reason is the skipped node's tooltip (REWRITTEN for the shared lane).
+    // On the run lane it is `skipped`, and the reason is the skipped node's tooltip.
     expect(DW).toContain('tip: skipReason(step) || "this step did not apply to this run"');
+    expect(laneStateOf(step({ step_id: "research", status: "succeeded", output: { status: "not_applicable" } })).phase)
+      .toBe("skipped");
+    expect(laneStateOf(step({ step_id: "panel", status: "skipped" }))).toMatchObject({ phase: "skipped", meta: "skipped" });
   });
 
   it("says why", () => {
@@ -340,12 +351,24 @@ describe("the workflow drawn as a path", () => {
   const NODE = codeOnly("app/workflows/flow/step-node.tsx");
   const FLOW_CSS = codeOnly("app/workflows/flow.css");
 
-  it("draws a rail of steps, not a stack of rows", () => {
-    // A pipeline is a shape. Nine rows of identical text made an operator read nine statuses
-    // and assemble the shape in their head.
+  it("draws the run on the same lane the editor draws, in run mode", () => {
+    // A pipeline is a shape. The run's lane is the editor's FlowLane, so a workflow looks the
+    // same being built and being run (its drawing is pinned in tests/flow-lane.test.tsx).
     expect(DW).toContain("function StepPath");
-    expect(DW).toContain('mode="run" runState={laneState}');
+    expect(DW).toContain('<FlowLane spec={laneSpec} palette={lanePalette} mode="run"');
+    expect(DW).toContain("runState={laneState}");
     expect(FLOW_CSS).toContain(".wf-lane-viewport {");
+  });
+
+  it("tells the lane which step is in flight, which waits on you, and which failed", () => {
+    const lane = (s: RunStep) => laneStateOf(s);
+    expect(lane(step({ step_id: "a", status: "succeeded", started_at: "2026-10-01T10:00:00Z",
+                       completed_at: "2026-10-01T10:04:20Z" }))).toEqual({ phase: "done", meta: "4m 20s" });
+    expect(lane(step({ step_id: "b", status: "running" })).phase).toBe("moving");
+    expect(lane(step({ step_id: "c", status: "waiting", decision_id: "dec_1", decision_status: "pending" })))
+      .toEqual({ phase: "needs_you", meta: "needs you" });
+    expect(lane(step({ step_id: "d", status: "failed" })).phase).toBe("failed");
+    expect(lane(step({ step_id: "e", status: "pending" }))).toEqual({ phase: "future", meta: "pending" });
   });
 
   it("animates the segment the work is crossing right now", () => {
@@ -373,15 +396,20 @@ describe("the workflow drawn as a path", () => {
   it("opens on the step that wants attention", () => {
     // Landing on "research succeeded" while a gate three steps along waits for you is the
     // wrong answer to "what is happening".
-    // A step the run STOPPED at comes straight after an open approval: it is the other thing
-    // on this page waiting on a person (see `stoppedStep`).
     expect(DW).toContain(
       "steps.find(needsYou) ?? stoppedStep(run) ?? steps.find((s) => phaseOf(s) === \"now\")");
   });
 
   it("names a step by what it IS, from the engine's registry", () => {
-    // `spec_review` is a step id; "Approve the spec" is what it does.
-    expect(DW).toContain("capability?.label ?? step.capability ?? step.step_id");
+    // `spec_review` is a step id; "Approve the spec" is what it does. The run's lane names a
+    // step exactly as the editor does (stepView), from the run's own steps until the definition
+    // it ran has loaded.
+    const spec = runSpec([{ step_id: "spec_review", kind: "capability", capability: "approve_spec" },
+                          { step_id: "odd", kind: "capability", capability: null }]);
+    const palette = runPalette([{ key: "approve_spec", label: "Approve the spec" } as never], []);
+    expect(stepView(spec.steps[0], palette).title).toBe("Approve the spec");
+    expect(spec.steps[0].next).toEqual(["odd"]);
+    expect(spec.entry_step).toBe("spec_review");
   });
 
   it("shows the whole story of one step in one place", () => {
@@ -636,7 +664,6 @@ describe("Build starts the workflow, not a panel", () => {
     // Arriving from Build, the run may not be in the list yet — an empty list reads as
     // "nothing happened".
     expect(DW_WAIT).toContain('data-testid="dw-awaiting"');
-    expect(DW_WAIT).toContain("the run appears here the moment it is created");
   });
 });
 

@@ -71,7 +71,9 @@ def test_area_id_union_still_includes_hidden_community_areas():
         # when the BOSS Agent absorbed it, and the visibility rule is now generated from AREAS,
         # so an AreaId with no AREAS entry is a blank screen
         # (apps/web/tests/every-area-is-actually-visible.test.ts forbids it).
-        "studio",
+        # "studio" was dropped too (Workflow Studio, 2026-10-03): Agent Studio became the
+        # Profile section of an agent's page and the Panels view of Agents, and `?area=studio`
+        # links redirect there (apps/web/app/legacy-areas.ts, tests/legacy-areas.test.ts).
         "sandboxes",
         "github",
         "ops",

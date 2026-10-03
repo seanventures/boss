@@ -1,10 +1,13 @@
 import React from "react";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The lane and the editor are other tests' business; they get stand-ins here.
+vi.mock("../app/workflows/studio-parts", () => import("./_helpers/studio-parts-stub"));
 
 import {
-  DID_NOTHING, RunsView, bucketOf, didNothing, phaseOf, runIsLive, stoppedStep,
+  DID_NOTHING, RunsView, bucketOf, didNothing, laneStateOf, phaseOf, runIsLive, stoppedStep,
   type RunStep,
 } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
@@ -77,12 +80,13 @@ describe("a step that did nothing does not read as work done", () => {
       expect(didNothing(s)).toBe(true);
       expect(phaseOf(s)).toBe("nothing");
       const html = view(runOf("completed", [s]));
-      // REWRITTEN (Workflow Studio): the run is drawn by the shared lane. The step's own node
-      // is not done: it is drawn as a skip, says "nothing done", and its tooltip says what to do.
-      expect(html).not.toMatch(new RegExp(`data-phase="done"[^>]*data-step-id="${capability}"`));
-      expect(html).toMatch(new RegExp(`data-phase="skipped"[^>]*data-step-id="${capability}"`));
-      expect(html).toContain("nothing done");
+      // Its detail says so, in its own words.
+      expect(html).toContain('data-phase="nothing"');
       expect(html).toContain(DID_NOTHING);
+      // And the run's lane is never told it is done: it is drawn skipped, saying nothing was
+      // done, with the same words as its tooltip.
+      expect(laneStateOf(s)).toEqual({ phase: "skipped", meta: "nothing done", tip: DID_NOTHING });
+      expect(html).toMatch(new RegExp(`data-step-id="${capability}"[^>]*data-phase="skipped"`));
     });
   }
 

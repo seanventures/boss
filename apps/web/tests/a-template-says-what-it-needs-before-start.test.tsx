@@ -20,7 +20,8 @@ import { codeOnly } from "./_helpers/source";
  * the form drawing that answer, with the fix for each thing, before anything is pressed.
  */
 
-const UI = codeOnly("app/delivery-workflows-ui.tsx");
+// The Runs composer lives in its own module since the Workflows area became Runs + Library.
+const UI = codeOnly("app/workflows/new-project-composer.tsx");
 const ROUTE = codeOnly("app/api/delivery-workflows/route.ts");
 const TRACKERS = codeOnly("app/work-orchestration-ui.tsx");
 

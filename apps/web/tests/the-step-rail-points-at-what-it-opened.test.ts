@@ -19,25 +19,13 @@ describe("the step rail", () => {
   it("never wraps: the run is one row that scrolls inside itself", () => {
     // REWRITTEN (Workflow Studio). The rail wrapped to a second row, so a step's place in the
     // flow depended on the window width. The run is now the shared lane: one row, placed by
-    // geometry, that fits itself and scrolls sideways inside its own box only.
+    // geometry, that fits itself and scrolls sideways inside its own box only. Its node size and
+    // two-line titles are pinned in tests/flow-lane.test.tsx.
     const FLOW_CSS = cssOnly("app/workflows/flow.css");
     const rule = FLOW_CSS.slice(FLOW_CSS.indexOf(".wf-lane-viewport {"), FLOW_CSS.indexOf(".wf-lane-viewport {") + 200);
     expect(rule).toContain("overflow-x: auto");
     // Every step is placed absolutely from computed columns, so there is nothing to wrap.
     expect(FLOW_CSS).toContain(".wf-slot { position: absolute;");
-  });
-
-  it("draws every step the same size, so the row reads as a sequence", () => {
-    const rule = CSS.slice(CSS.indexOf(".dw-node-btn {"), CSS.indexOf(".dw-node-btn {") + 500);
-    expect(rule).toContain("width: 178px");
-    expect(rule).not.toContain("max-width: 190px");
-  });
-
-  it("gives a long step name a second line instead of an ellipsis", () => {
-    // "Production launch readiness" rendered as "Production launch re…", which names nothing —
-    // and it is the step whose whole job is what nobody thinks about before launch.
-    const rule = CSS.slice(CSS.indexOf(".dw-node-name {"), CSS.indexOf(".dw-node-name {") + 400);
-    expect(rule).toContain("-webkit-line-clamp: 2");
   });
 });
 
@@ -61,7 +49,8 @@ describe("the detail reads as a callout", () => {
   it("points at the step that was clicked, measured rather than computed", () => {
     // A position computed from an index is right until a label wraps to two lines or the rail
     // reflows — and then it points at the wrong box while looking just as confident.
-    expect(UI).toContain(".wf-node[data-selected=\"true\"], [data-testid=\"dw-node-agents\"][data-picked=\"true\"]");
+    // Found by the step's own id in the lane, not by an index.
+    expect(UI).toContain("lane.querySelector<HTMLElement>(`[data-step-id=\"${CSS.escape(picked)}\"]`)");
     expect(UI).toContain("--dw-arrow-x");
   });
 
@@ -83,7 +72,8 @@ describe("the detail reads as a callout", () => {
   it("re-measures when the rail reflows, or scrolls inside itself", () => {
     expect(UI).toContain('window.addEventListener("resize", place)');
     expect(UI).toContain('window.removeEventListener("resize", place)');
-    expect(UI).toContain('lane?.addEventListener("scroll", place, { passive: true })');
+    expect(UI).toContain('viewport?.addEventListener("scroll", place, { passive: true })');
+    expect(UI).toContain('viewport?.removeEventListener("scroll", place)');
   });
 
   it("centres the notch when nothing has been measured", () => {
@@ -125,16 +115,7 @@ describe("Settings names the page for what is in it", () => {
 });
 
 
-describe("the rail reads as boxes", () => {
-  it("draws the step box against the card it sits on, not the same shade as it", () => {
-    // --border is #1C2740 and the open run card is #0F1830: about two percent of luminance
-    // between them, so the boxes were outlines in name only.
-    const at = CSS.indexOf(".dw-node-btn {");
-    const rule = CSS.slice(at, at + 900);
-    expect(rule).toContain("var(--border-strong");
-    expect(rule).not.toMatch(/border: 1px solid var\(--border,/);
-  });
-
+describe("the lane reads as a chain", () => {
   it("connects the first step to the node before it", () => {
     // Agents and Research were the only pair in the rail with no line between them, because
     // "no earlier step" was treated as "nothing has flowed". On the shared lane the first

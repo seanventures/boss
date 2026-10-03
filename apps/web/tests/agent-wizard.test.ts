@@ -14,16 +14,16 @@ import {
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-describe("Agent Studio creation wizard", () => {
-  it("offers an explicit starter catalog when a project library is empty", () => {
-    const studio = readFileSync(resolve(__dirname, "../app/agent-studio-ui.tsx"), "utf8");
-    const actions = readFileSync(resolve(__dirname, "../app/agent-studio-actions.ts"), "utf8");
+/** New agent (app/agent-quick-create.tsx) is the one door; the wizard's runtime fields are its
+ *  Advanced section and its submission is still built by lib/agent-wizard (tested below). */
+const DIALOG = () => readFileSync(resolve(__dirname, "../app/agent-quick-create.tsx"), "utf8");
 
-    expect(studio).toContain("Install BOSS starter catalog");
-    expect(studio).toContain("The reviewed starter catalog adds agent definitions, panels, and workflows to this project.");
-    expect(studio).toContain("as-first-run");
-    expect(studio).toContain("Add your first agents");
-    expect(studio).toContain("It does not start a run or spend budget.");
+describe("Agent creation (New agent, with the wizard's submission)", () => {
+  it("offers the starter set explicitly, saying it starts nothing", () => {
+    const actions = readFileSync(resolve(__dirname, "../app/agent-studio-actions.ts"), "utf8");
+    expect(DIALOG()).toContain('data-testid="aq-seed"');
+    expect(DIALOG()).toContain("Adds the reviewed starter agents and panels. Starts nothing, spends nothing.");
+    expect(DIALOG()).toContain("callAction(seedStudioCatalog)(projectId, actor)");
     expect(actions).toContain('post("/v1/agent-studio/catalog/seed"');
     expect(actions).toContain("role_review authority");
   });
@@ -175,8 +175,9 @@ describe("Agent Studio creation wizard", () => {
     expect(retry.version.role_key).toBe("release_auditor");
     const actions = readFileSync(resolve(__dirname, "../app/agent-studio-actions.ts"), "utf8");
     expect(actions).toContain("agent_created: submission.agent.roleKey");
-    const wizard = readFileSync(resolve(__dirname, "../app/agent-creation-wizard.tsx"), "utf8");
-    expect(wizard).toContain("adoptCreatedAgent(current, made)");
+    // New agent keeps the agent the failed attempt made, and the next press adopts it.
+    expect(DIALOG()).toContain("const createdKey = result.item?.agent_created;");
+    expect(DIALOG()).toContain("made === key ? adoptCreatedAgent(fresh, made) : fresh");
   });
 
   it("live-model Studio runs are refused before publish, with what to do instead", () => {

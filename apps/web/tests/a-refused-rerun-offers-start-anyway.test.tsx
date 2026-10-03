@@ -4,6 +4,9 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The lane and the editor are other tests' business; they get stand-ins here.
+vi.mock("../app/workflows/studio-parts", () => import("./_helpers/studio-parts-stub"));
+
 /**
  * A re-run the project cannot finish is refused WITH the checklist and "Re-run anyway" — and
  * "Stop and run again" never stops the run it was going to replace when the start is refused.

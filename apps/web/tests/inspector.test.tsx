@@ -186,6 +186,26 @@ describe("the agent", () => {
     expect(pop.textContent).toContain("Manage agents ↗");
   });
 
+  it("keeps a name the project no longer has, or a person on a step that is not a gate, and says why", async () => {
+    // Moved here from the retired builder picker (tests/a-step-says-who-ran-it.test.tsx): a
+    // loaded captain the editor cannot offer stays visible rather than silently becoming Auto,
+    // because Save would refuse it and the operator should see why first.
+    const stale = (captain: string): Spec => ({ ...SPEC, steps: SPEC.steps.map((s) =>
+      (s.id === "write" ? { ...s, captain } : s)) });
+    let el = await mount("write", {}, stale("engineering_captain"));
+    let trigger = q(el, "wf-agent-trigger")!;
+    expect(trigger.textContent).toContain("engineering_captain");
+    expect(trigger.getAttribute("data-stale")).toBe("true");
+    await click(trigger);
+    expect(document.querySelector('[data-testid="wf-agent-pop"]')!.textContent).toContain("✗ not on this project");
+    act(() => root?.unmount()); host?.remove();
+    el = await mount("write", {}, stale("human"));
+    trigger = q(el, "wf-agent-trigger")!;
+    expect(trigger.getAttribute("data-stale")).toBe("true");
+    await click(trigger);
+    expect(document.querySelector('[data-testid="wf-agent-pop"]')!.textContent).toContain("✗ only a gate");
+  });
+
   it("a built-in step's default is You; a gate's is A person", async () => {
     let el = await mount("build");
     expect(q(el, "wf-agent-trigger")!.textContent).toContain("You");

@@ -107,7 +107,7 @@ Give BOSS an outcome in **Command Center**. It drafts a plan, reserves budget be
 
 ### Mission Control
 
-The web console for your whole team: **Command Center** for goals, **Approvals** for decisions, **Activity log** for every receipt and failure, and **Agent Studio** for testing agent definitions. [Console access](CONSOLE_AUTH.md)
+The web console for your whole team: **Command Center** for goals, **Approvals** for decisions, **Activity log** for every receipt and failure, **Workflows** for runs and the library, and **Agents** for the roster, team and panels. [Console access](CONSOLE_AUTH.md)
 
 </div>
 

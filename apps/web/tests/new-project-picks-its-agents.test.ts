@@ -13,7 +13,8 @@ import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
 
-const UI = codeOnly("app/delivery-workflows-ui.tsx");
+// The Runs composer lives in its own module since the Workflows area became Runs + Library.
+const UI = codeOnly("app/workflows/new-project-composer.tsx");
 
 describe("choosing who builds it", () => {
   it("the draft carries agents", () => {

@@ -314,12 +314,29 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   useEffect(() => {
     if (key !== "new") pendingCopy.current = null;
   }, [key]);
+  /* The Library's Duplicate opens `&wf=new&from=<key>`: the same unsaved copy, read from the
+     source's running version. Reading it writes nothing. */
+  const [copied, setCopied] = useState(0);
+  useEffect(() => {
+    let from: string | null = null;
+    try { from = new URLSearchParams(window.location.search).get("from"); } catch { /* not in a browser */ }
+    if (workflowKey !== "new" || !from) return;
+    let live = true;
+    fetchSpec(projectId, from).then((got) => {
+      if (!live) return;
+      pendingCopy.current = { spec: got.spec, name: `${got.meta.name} (copy)`,
+                              from: got.meta.is_catalogue ? got.meta.workflow_key : got.meta.from_workflow_key };
+      writeUrl({ from: null });
+      setCopied((n) => n + 1);
+    }, (e) => { if (live) toast("error", String((e as Error)?.message ?? e)); });
+    return () => { live = false; };
+  }, [workflowKey, projectId]);
   useEffect(() => {
     const copy = pendingCopy.current;
     if (!copy || loading || key !== "new" || meta.workflow_key !== null) return;
     pendingCopy.current = null;
     dispatch({ type: "LOAD", spec: copy.spec, meta: newMeta({ name: copy.name, from_workflow_key: copy.from }) });
-  }, [loading, key, meta.workflow_key, dispatch]);
+  }, [loading, key, meta.workflow_key, dispatch, copied]);
 
   const deleteThis = useCallback(async () => {
     if (!meta.definition_id) return;

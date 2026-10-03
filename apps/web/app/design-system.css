@@ -674,7 +674,7 @@ select.input:focus,
   color: var(--amber);
 }
 
-.wf-dot,
+.wf-board-dot,
 .ct-flow-dot,
 .ct-test-dot {
   box-shadow: none;

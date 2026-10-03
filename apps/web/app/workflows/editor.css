@@ -92,7 +92,7 @@
 .wf-chip-btn:focus-visible, .wf-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Chips (base in inspector.css): the summary line's are taller, icon and number. */
-.wf-summary .wf-chip, .wf-starts .wf-chip, .wf-topbar .wf-chip, .wf-run-head .wf-chip {
+.wf-summary .wf-chip, .wf-starts .wf-chip, .wf-topbar .wf-chip {
   min-height: 26px; padding: 3px 10px; gap: 6px; color: var(--muted); font-weight: 600;
 }
 .wf-chip-btn { cursor: pointer; font: inherit; font-size: 0.75rem; }

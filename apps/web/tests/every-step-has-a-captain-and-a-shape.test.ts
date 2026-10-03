@@ -94,27 +94,3 @@ describe("every step has its own shape", () => {
   });
 });
 
-describe("a step that is working looks like it", () => {
-  it("the dot breathes and the node sweeps", () => {
-    expect(CSS).toContain('.dw-node[data-phase="now"] .dw-dot {');
-    expect(CSS).toContain("animation: dw-dot-breathe");
-    expect(CSS).toContain("animation: dw-node-sweep");
-  });
-
-  it("and neither animation moves the layout", () => {
-    // A run takes eighteen minutes; anything that reflows would jitter for all of it.
-    const at = CSS.indexOf("@keyframes dw-dot-breathe");
-    const block = CSS.slice(at, at + 300);
-    expect(block).toContain("box-shadow");
-    expect(block).not.toContain("width");
-    expect(block).not.toContain("margin");
-  });
-
-  it("motion off still leaves a visible busy signal", () => {
-    const reduced = CSS.split("@media (prefers-reduced-motion: reduce)").slice(1).join("\n");
-    expect(reduced).toContain('.dw-node[data-phase="now"] .dw-node-btn');
-    expect(reduced).toContain("animation: none");
-    // Still marked, because a busy signal that vanishes says nothing is happening.
-    expect(reduced).toContain("--live");
-  });
-});

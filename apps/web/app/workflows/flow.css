@@ -328,6 +328,3 @@
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
 
-/* The Runs rail when it is this lane: the header chip that opens who is on the run. */
-.wf-run-path { display: grid; gap: 10px; min-width: 0; }
-.wf-run-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

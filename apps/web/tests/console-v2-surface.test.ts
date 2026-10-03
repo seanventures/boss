@@ -29,6 +29,9 @@ function pages(dir = V2_DIR, acc: string[] = []): string[] {
 }
 
 const ALL_PAGES = pages();
+/** The pages that draw a screen. A retired screen's page only redirects to the console area
+ *  that replaced it (app/legacy-areas.ts), so it has no shell to be consistent with. */
+const SCREEN_PAGES = ALL_PAGES.filter((p) => !readFileSync(p, "utf8").includes("redirect(resolveLegacyRoute"));
 const ALL_COMPONENTS = readdirSync(COMPONENTS)
   .filter((f) => f.endsWith(".tsx"))
   .map((f) => resolve(COMPONENTS, f));
@@ -82,7 +85,8 @@ describe("no screen can be read as a confident nothing", () => {
 
 describe("the shell is consistent", () => {
   it("every screen renders inside it, so the org and the toggle are never lost", () => {
-    for (const path of ALL_PAGES) {
+    expect(SCREEN_PAGES.length).toBeGreaterThan(4);
+    for (const path of SCREEN_PAGES) {
       const src = readFileSync(path, "utf8");
       expect(src, path.split("/app/")[1]).toContain("<Shell");
     }
@@ -91,7 +95,7 @@ describe("the shell is consistent", () => {
   it("every page passes the org through", () => {
     // Losing the org mid-navigation throws the operator into another company or back to the
     // picker — the "console resets" bug.
-    for (const path of ALL_PAGES) {
+    for (const path of SCREEN_PAGES) {
       const src = readFileSync(path, "utf8");
       expect(src, path.split("/app/")[1]).toMatch(/orgId=\{selected\?\.org_id\}/);
     }
@@ -100,7 +104,7 @@ describe("the shell is consistent", () => {
   it("every page marks itself dynamic, so nothing is served from a build-time cache", () => {
     // A cached control plane view is a stale one, and stale operational data is worse than
     // slow operational data.
-    for (const path of ALL_PAGES) {
+    for (const path of SCREEN_PAGES) {
       expect(readFileSync(path, "utf8"), path.split("/app/")[1])
         .toContain('export const dynamic = "force-dynamic"');
     }
@@ -108,7 +112,7 @@ describe("the shell is consistent", () => {
 
   it("the active nav id on each page is a real nav id", () => {
     const ids = new Set<string>(V2_NAV.map((n) => n.id));
-    for (const path of ALL_PAGES) {
+    for (const path of SCREEN_PAGES) {
       const src = readFileSync(path, "utf8");
       const match = src.match(/<Shell\s+active="([^"]+)"/);
       expect(match, path.split("/app/")[1]).toBeTruthy();

@@ -4,7 +4,8 @@
  * The operator: "lots of text — make it tooltip / info, no one reads details, keep it concise".
  * Walks every element's own visible text under a root and returns each run longer than the
  * budget. Text inside a tooltip (`[data-tip]`, `[role=tooltip]`, `[title]`), a text box, or
- * screen-reader-only text is not counted: that is where explanations belong.
+ * screen-reader-only text is not counted: that is where explanations belong. Neither is text the
+ * operator wrote (`[data-user-text]`): a workflow's name or description is theirs, not copy.
  *
  * One walker for the whole Workflow Studio, used by tests/workflow-copy-budget.test.tsx and the
  * editor's own render tests, so every surface is held to the same rule.
@@ -13,7 +14,7 @@
 export const MAX_WORDS = 6;
 
 const SKIP = "[data-tip], [role='tooltip'], [title], textarea, script, style, option, datalist, "
-  + "[hidden], [aria-hidden='true'], .wf-sr";
+  + "[hidden], [aria-hidden='true'], .wf-sr, [data-user-text]";
 
 /** Visible text runs (an element's own text) over the budget. */
 export function overBudget(root: Element, budget = MAX_WORDS): string[] {

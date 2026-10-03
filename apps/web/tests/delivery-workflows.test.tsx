@@ -2,21 +2,26 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { DeliveryWorkflows } from "../app/delivery-workflows-ui";
-import { draftFromSpecStep, specFromDraft } from "../lib/workflow-spec";
+import { DeliveryWorkflows, readAreaUrl } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
 
 /**
- * Delivery workflows in the console: pick a path, watch it, build your own.
+ * The Workflows area: Runs and Library, and the editor full width on `&wf=`.
  *
  * The screen must never invent a capability, a risk tier or an approval rule. Everything it
- * draws comes from the engine's registry, so the palette, the validation and the gates are the
- * same ones the runner enforces — a builder that disagreed with the runtime would let a
- * customer save a workflow that cannot run, and find out at 2am.
+ * draws comes from the engine's registry, so the gates are the ones the runner enforces.
+ *
+ * REWRITTEN for Workflow Studio. The builder (BuilderView), the plan panel, the Yours and
+ * Catalogue tabs and the Design tab are gone; what this file pinned about them now lives with
+ * their replacements — the store round-trip (tests/workflow-editor-store.test.ts), the lane and
+ * palette (tests/flow-lane.test.tsx, tests/workflow-editor.test.tsx), the inspector
+ * (tests/inspector.test.tsx) and the Library (tests/workflow-library.test.tsx). What is kept
+ * here is the area itself: its states, its runs, its tabs, and the custom-step form.
  */
 (globalThis as Record<string, unknown>).React = React;
 
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
+const LIBRARY = codeOnly("app/workflows/library.tsx");
 /** The define/edit step form, moved out of the workflow screen into its own file. */
 const FORM = codeOnly("app/workflows/define-step-form.tsx");
 const ROUTE = codeOnly("app/api/delivery-workflows/route.ts");
@@ -28,7 +33,7 @@ describe("the screen never claims an empty project", () => {
   it("says it is loading before it has asked", () => {
     const html = renderToStaticMarkup(
       <DeliveryWorkflows projectId="boss-dogfood" actor="ceo" />);
-    expect(html).toContain("Loading delivery workflows");
+    expect(html).toContain("Loading workflows");
   });
 
   it("has three states, not two", () => {
@@ -36,7 +41,34 @@ describe("the screen never claims an empty project", () => {
   });
 
   it("shows the reason it failed", () => {
-    expect(UI).toContain("Could not load delivery workflows — {error}");
+    expect(UI).toContain("Could not load workflows — {error}");
+  });
+});
+
+describe("two tabs, synced to the URL, and the editor is not a tab", () => {
+  it("reads Runs unless the URL says Library", () => {
+    expect(readAreaUrl("")).toEqual({ tab: "runs", wf: null });
+    expect(readAreaUrl("?area=delivery_workflows&tab=library")).toEqual({ tab: "library", wf: null });
+    // A retired tab id is rewritten before this reads it (app/legacy-areas.ts); on its own it
+    // is not a tab.
+    expect(readAreaUrl("?tab=design")).toEqual({ tab: "runs", wf: null });
+  });
+
+  it("opens the editor on &wf=, including a new one", () => {
+    expect(readAreaUrl("?tab=library&wf=video_short")).toEqual({ tab: "library", wf: "video_short" });
+    expect(readAreaUrl("?wf=new")).toEqual({ tab: "runs", wf: "new" });
+    expect(readAreaUrl("?wf=%20")).toEqual({ tab: "runs", wf: null });
+  });
+
+  it("has no builder left in it", () => {
+    for (const gone of ["function BuilderView", "function WorkflowPlanPanel", "function YoursView",
+                        "function CatalogueView", "Design a workflow", "Fork to edit", "setBuilderTarget"]) {
+      expect(UI).not.toContain(gone);
+    }
+  });
+
+  it("stays small enough to read", () => {
+    expect(UI.split("\n").length).toBeLessThan(4000);
   });
 });
 
@@ -66,75 +98,6 @@ describe("nothing is invented", () => {
     // so a validation array is "field: message", never "[object Object]" (console-b stream).
     expect(codeOnly("lib/start-refusal.ts")).toContain('import { detailText } from "./api-error";');
     expect(UI).toContain("result.error");
-  });
-});
-
-describe("the risk floor is visible before a step is placed", () => {
-  it("marks forced-manual capabilities in the palette", () => {
-    // Finding out at save time that a step can never be automatic is finding out too late.
-    expect(UI).toContain("c.approval_forced_manual");
-    expect(UI).toContain("always approved");
-  });
-
-  it("locks the approval control on a step that cannot be automatic", () => {
-    // A control block has no approval of its own either — only capability steps do.
-    expect(UI).toContain('disabled={step.kind !== "capability"');
-    // Both kinds of step: a built-in capability above the floor, and a custom step whose
-    // resolved tier is above it. Either one must refuse to be switched back to auto.
-    expect(UI).toContain("|| capability?.approval_forced_manual");
-    expect(UI).toContain("|| mine?.approval_forced_manual}");
-  });
-
-  it("states the rule in words", () => {
-    expect(UI).toContain("always requires a person. That is not");
-  });
-});
-
-describe("the builder cannot produce something the runtime will refuse", () => {
-  it("gives every dropped step a unique id", () => {
-    // Adding "build" twice with one id is rejected by the runtime — at save time, with a
-    // message about duplicates, after the customer has laid out a whole workflow.
-    // One id generator for both capabilities and control blocks, and it checks what is
-    // already taken rather than counting — counting collides after a delete.
-    expect(UI).toContain("const nextId = (current: Draft[], stem: string)");
-    expect(UI).toContain("while (taken.has(`${stem}_${n}`)) n += 1;");
-  });
-
-  // REWRITTEN AS BEHAVIOUR: the save moved to lib/workflow-spec.ts as a merge over the loaded
-  // spec, so these run it instead of reading the builder's source.
-  it("wires each step to the next one", () => {
-    const saved = specFromDraft(
-      [{ id: "a", kind: "capability", capability: "notify" },
-       { id: "b", kind: "timer", config: { wait_seconds: 60 } }],
-      { capabilities: [{ key: "notify", required_inputs: ["message"] }], customSteps: [] });
-    expect((saved.steps as { next: string[] }[]).map((s) => s.next)).toEqual([["b"], []]);
-    expect(saved.entry_step).toBe("a");
-  });
-
-  it("reads required inputs from the run's input instead of inventing values", () => {
-    // A workflow that hard-codes the thing being built only works once.
-    const saved = specFromDraft([{ id: "a", kind: "capability", capability: "notify" }],
-      { capabilities: [{ key: "notify", required_inputs: ["message"] }], customSteps: [] });
-    expect((saved.steps as { binding: { inputs: unknown } }[])[0].binding.inputs)
-      .toEqual({ message: { from_input: "message" } });
-  });
-
-  it("only offers a customer's own workflows for editing", () => {
-    // Offering a catalogue workflow and refusing on save is a control that lies about what it
-    // does.
-    expect(UI).toContain("installed.filter((i) => !i.is_catalogue)");
-  });
-});
-
-describe("reordering is reachable without a pointer", () => {
-  it("supports drag", () => {
-    expect(UI).toContain("onDragStart");
-    expect(UI).toContain("onDrop");
-  });
-
-  it("and buttons, because a drag-only builder excludes half its operators", () => {
-    expect(UI).toContain("Move ${step.id} earlier");
-    expect(UI).toContain("Move ${step.id} later");
   });
 });
 
@@ -189,9 +152,8 @@ describe("status is never colour alone", () => {
 
 describe("where it lives", () => {
   it("is a first-class area in the console", () => {
-    expect(SHELL).toContain('id: "delivery_workflows"');
-    // Labelled "Workflow" since the nav reorder; the AREA id is what must not drift.
-    expect(SHELL).toContain('id: "delivery_workflows"');
+    // One entry, "Workflows": built, run and watched in one area (Workflow Studio spec 2.1).
+    expect(SHELL).toContain('{ id: "delivery_workflows", label: "Workflows"');
   });
 
   it("is available to self-hosted operators", () => {
@@ -211,303 +173,10 @@ describe("the route handler refuses what it does not know", () => {
   });
 });
 
-describe("an action's outcome reaches the person who caused it", () => {
-  it("counts only standard workflows against the catalogue total", () => {
-    // Counting the customer's own forks too read "14 of 12 installed in this project" — a
-    // number that cannot be true, which makes a reader doubt everything else on the card.
-    expect(UI).toContain("installed.filter((i) => i.is_catalogue)");
-  });
-
-  it("gives every fork a key that is not already taken", () => {
-    // `${key}_custom` collided the second time anyone forked the same workflow, and a 409
-    // whose notice is scrolled off the top of a long page is indistinguishable from a button
-    // that does nothing.
-    expect(UI).toContain("for (let n = 2; taken.has(candidate); n += 1)");
-  });
-
-  it("lands the operator in the editor, because the button says 'fork to edit'", () => {
-    // On success the only visible change was one line of text at the top of a page the
-    // operator had scrolled away from; the new workflow appeared in a dropdown on a tab they
-    // were not looking at.
-    // The tab is called `design` now — it holds BOTH ways to author a workflow, because
-    // describing it to BOSS and drawing it are the same intent arrived at differently.
-    expect(UI).toContain('setTab("design")');
-    expect(UI).toContain("setBuilderTarget(created.id)");
-  });
-
-  it("keeps the notice on screen while the page scrolls", () => {
-    const rule = CSS.slice(CSS.indexOf(".dw-notice {"), CSS.indexOf(".dw-empty"));
-    expect(rule).toContain("position: sticky");
-  });
-});
-
-describe("the builder opens with what is already there", () => {
-  it("loads the selected workflow's current steps", () => {
-    // It opened empty, so changing one step of a ten-step workflow meant rebuilding the other
-    // nine from memory — and saving would have replaced the workflow with the partial thing.
-    expect(UI).toContain('view: "spec"');
-    expect(UI).toContain("setDraft(toDraft(body.spec.steps))");
-  });
-
-  it("distinguishes 'still reading' from 'genuinely empty'", () => {
-    expect(UI).toContain('data-testid="dw-canvas-loading"');
-    // Reworded when "New workflow" arrived: an empty canvas now belongs to something the
-    // customer just created, so it says what to do rather than describing a state.
-    expect(UI).toContain("No steps yet — add them from the left");
-  });
-
-  it("keeps configuration it does not understand", () => {
-    // wait_seconds, question, guidance — and anything else. Dropping them on load would
-    // silently reset one step while the customer edited another. REWRITTEN to load and save.
-    const loaded = { entry_step: "pause", steps: [
-      { id: "pause", kind: "timer", wait_seconds: 900, house_note: "kept", binding: {},
-        next: [] }] };
-    const saved = specFromDraft(loaded.steps.map(draftFromSpecStep),
-                                { loaded, capabilities: [], customSteps: [] });
-    expect(saved).toEqual(loaded);
-  });
-});
-
-describe("resetting to the standard", () => {
-  it("is offered only when there is something to reset to", () => {
-    // A fork records what it came from; a workflow written from scratch has no original, and
-    // the control would be a lie on it.
-    expect(UI).toContain("loaded?.forked_from ? (");
-    expect(UI).toContain('data-testid="dw-reset"');
-  });
-
-  it("restores the original's steps rather than clearing the canvas", () => {
-    expect(UI).toContain("setDraft(toDraft(loaded.forked_from.spec.steps))");
-  });
-});
-
-describe("the flow blocks the runtime always had", () => {
-  it("offers the ones that work in a linear canvas", () => {
-    expect(UI).toContain('data-testid={`dw-block-${b.kind}`}');
-    expect(UI).toContain("blocks.filter((b) => !b.canvas_required)");
-  });
-
-  it("does not offer ones that would produce a spec the runtime rejects", () => {
-    // A palette entry that cannot be saved is a promise the product cannot keep.
-    expect(UI).toContain("blocks.filter((b) => b.canvas_required)");
-    expect(UI).toContain("once the canvas can draw");
-  });
-
-  it("emits a control block in the shape the runtime reads", () => {
-    // REWRITTEN. This asserted that wait_seconds AND workflow_version_id were written at the
-    // top level; the validator reads `binding.workflow_version_id`, so "Run another workflow"
-    // could never be saved from the builder. wait_seconds and a gate's question stay at the
-    // top level, where the runtime reads them.
-    const saved = specFromDraft([
-      { id: "pause", kind: "timer", config: { wait_seconds: 60 } },
-      { id: "child", kind: "subworkflow", config: { workflow_version_id: "wfv_1" } },
-      // AND ITS CAPTAIN. An Approval gate is a control block, and it is the one step where
-      // naming who answers is the entire point; the save used to drop it.
-      { id: "gate", kind: "decision", captain: "human", config: { question: "Ship?" } },
-    ], { capabilities: [], customSteps: [] });
-    const [pause, child, gate] = saved.steps as Record<string, unknown>[];
-    expect(pause).toMatchObject({ kind: "timer", wait_seconds: 60, binding: {} });
-    expect(child).toMatchObject({ kind: "subworkflow",
-                                  binding: { workflow_version_id: "wfv_1" } });
-    expect(gate).toMatchObject({ kind: "decision", question: "Ship?", captain: "human" });
-  });
-});
-
-describe("the canvas reads as a sequence", () => {
-  it("joins each step to the next", () => {
-    // Evenly-spaced identical boxes read as an unordered list, which is the wrong mental
-    // model for a thing whose order is its meaning.
-    const rule = CSS.slice(CSS.indexOf(".dw-draft-step:not(:last-child)::after"));
-    expect(rule.slice(0, 200)).toContain("height: 14px");
-    expect(CSS).toContain(".dw-draft-step:not(:last-child)::before");
-  });
-
-  it("shows where a dragged step will land", () => {
-    expect(UI).toContain('data-drop={dragging !== null && dragging !== index');
-    expect(CSS).toContain('.dw-draft-step[data-drop="true"]');
-  });
-});
-
-describe("the catalogue card is scannable across twelve of them", () => {
-  it("draws the steps as a connected sequence, not a wrapped set of chips", () => {
-    // Order is the whole meaning of a workflow. A wrapped list of chips says the steps are an
-    // unordered set, which is the one thing they are not.
-    expect(UI).toContain('className="dw-rail"');
-    expect(UI).toContain('className="dw-rail-link"');
-    expect(CSS).toContain(".dw-rail-step[data-gate] .dw-rail-dot");
-  });
-
-  it("gives every card the same shape so a grid of them lines up", () => {
-    // Ragged action rows are what made the grid read as unfinished.
-    const rule = CSS.slice(CSS.indexOf(".dw-card {"), CSS.indexOf(".dw-card::before"));
-    expect(rule).toContain("grid-template-rows: auto auto 1fr auto auto auto");
-  });
-
-  it("labels the numbers a customer chooses on", () => {
-    // "10 · ~112 min · 2" is unreadable.
-    expect(UI).toContain("<dt>Approvals</dt>");
-    expect(CSS).toContain(".dw-stats div[data-emphasis] dd");
-  });
-
-  it("colours the class chip to match the card's stripe", () => {
-    // Two readings of the same fact, so one card is never visibly unlabelled beside another.
-    for (const cls of ["project.new", "bugfix", "feature.minor", "feature.major"]) {
-      expect(CSS).toContain(`.dw-class[data-class="${cls}"]`);
-    }
-  });
-
-  it("says when a workflow needs nothing set up first", () => {
-    // A reason to pick that one, and blank space says nothing.
-    expect(UI).toContain("Nothing to set up first");
-  });
-
-  it("has one primary action, not three equal ones", () => {
-    const actions = UI.slice(UI.indexOf('className="dw-card-actions"'));
-    expect(actions.slice(0, 700)).toContain('className="cap-btn primary"');
-  });
-
-  it("turns motion off when the reader asked for that", () => {
-    const reduced = CSS.slice(CSS.indexOf(".dw-card, .dw-tab { transition: none; }"));
-    expect(reduced.slice(0, 160)).toContain(".dw-card:hover { transform: none; }");
-  });
-});
-
-describe("build your own actually lets you build one", () => {
-  it("offers a way to author one, not only to fork", () => {
-    // The tab was called "Build your own" and the only way in was to fork something, so a
-    // screen that promised authorship offered only editing. It is now the FIRST tab: somebody
-    // who opens "Build your own" is usually here to build one, and editing is the return trip.
-    expect(UI).toContain('data-testid="dw-tab-new"');
-    expect(UI).toContain("Create a new workflow");
-    expect(UI.indexOf('data-testid="dw-tab-new"'))
-      .toBeLessThan(UI.indexOf('data-testid="dw-tab-edit"'));
-  });
-
-  it("authors steps on their own page, and only PLACES them in the palette", () => {
-    // The define control lived in the palette, beneath however many steps already existed —
-    // so with eleven of them the way to make one was the thing you had to scroll to find, on
-    // a panel whose job is placing steps rather than authoring them.
-    //
-    // A step is also a durable object of its own: it names a skill, carries a risk tier, and
-    // can be placed in several workflows or none. Managing it inside the editor for ONE
-    // workflow made it look like a property of that workflow.
-    expect(UI).toContain("function StepsView");
-    expect(UI).toContain('data-testid="dw-steps"');
-    // The palette keeps listing them, because that is where you place one...
-    expect(UI).toContain("dw-palette-heading-row");
-    // ...and sends you to the page that authors them.
-    expect(UI).toContain("onClick={onManageSteps}");
-  });
-
-  it("the palette cannot delete a step from the project", () => {
-    // The × on a palette item read as "take this off the canvas" and actually deleted the
-    // step from the PROJECT — a destructive act in the shape of a dismissal. Removing one is
-    // on the steps page, where the row is about the step rather than about placing it.
-    expect(UI).not.toContain("dw-palette-remove");
-    expect(UI).toContain('data-testid={`dw-step-remove-${c.step_key}`}');
-  });
-
-  it("a step that cannot run says so where it is managed", () => {
-    // Bound to a skill that no longer exists, it sits in the palette looking placeable and
-    // fails the run that places it. Buried in a list it is invisible.
-    expect(UI).toContain('data-testid="dw-steps-unusable"');
-    expect(UI).toContain("customSteps.filter((c) => !c.usable)");
-  });
-
-  it("makes authoring a mode you are IN, not a button among buttons", () => {
-    // Flat and evenly weighted, the row gave "+ New workflow" the same presence as "Reset to
-    // the standard" — so the one control that STARTS something read as the least important
-    // thing on the line. Tinting it helped; being a tab settles it, because a tab also says
-    // which mode you are currently in, which a button never did.
-    expect(UI).toContain('role="tablist"');
-    expect(UI).toContain("aria-selected={creating}");
-    expect(UI).toContain("aria-selected={!creating}");
-    expect(CSS).toContain(".dw-mode-tab");
-    expect(CSS).toContain('.dw-mode-tab[aria-selected="true"]');
-  });
-
-  it("keeps a single solid button, so two do not compete", () => {
-    // Accent-tinted, not solid: prominent without turning the header into two primary buttons
-    // arguing about which one the operator meant. Asserted on the SHAPE — a mix of accent into
-    // transparency — rather than on the exact percentage, which is a taste that will move.
-    const cta = CSS.slice(CSS.indexOf(".dw-new-cta {"));
-    expect(cta.slice(0, cta.indexOf("}"))).toMatch(
-      /background: color-mix\(in srgb, var\(--accent\) \d+%, transparent\)/);
-    expect(cta.slice(0, cta.indexOf("}"))).not.toContain("background: var(--accent)");
-  });
-
-  it("separates 'edit that one' from 'start a new one'", () => {
-    // They are two jobs. Sharing one header, "Editing: X" sat beside "Start from: Y" and the
-    // operator had to work out which of the two workflows the controls acted on — which is how
-    // a project ends up with 54 definitions named "(copy)" and "(copy 2)".
-    expect(UI).toContain('data-testid="dw-tab-edit"');
-    expect(UI).toContain('data-testid="dw-tab-new"');
-    expect(UI).toContain('<div className="dw-head-left">');
-  });
-
-  it("switching tabs uses the mode changes that already existed", () => {
-    // beginCreating stashes the canvas, cancelCreating restores it. The tabs must drive THOSE,
-    // not a second, parallel notion of which mode the screen is in.
-    const tabs = UI.slice(UI.indexOf('role="tablist"'), UI.indexOf('dw-canvas-head'));
-    expect(tabs).toContain("cancelCreating()");
-    expect(tabs).toContain("beginCreating()");
-  });
-
-  it("does not act when you press the tab you are already on", () => {
-    // Re-entering create would blank a canvas the operator is part way through.
-    const tabs = UI.slice(UI.indexOf('role="tablist"'), UI.indexOf('dw-canvas-head'));
-    expect(tabs).toContain("if (creating) cancelCreating()");
-    expect(tabs).toContain("if (!creating) beginCreating()");
-  });
-
-  it("can start from an existing workflow, including a standard", () => {
-    // "Work on top of it" is the common case, so the list is every workflow in the project
-    // rather than only the customer's own.
-    expect(UI).toContain('data-testid="dw-new-from"');
-    expect(UI).toContain('Nothing — an empty workflow');
-    expect(UI).toContain('{i.is_catalogue ? " (standard)" : ""}');
-  });
-
-  it("still records where imported steps came from", () => {
-    // Import no longer forks on the spot, but the lineage it used to create is what makes
-    // "Reset to the standard" mean anything — so Create forks when there was a source.
-    expect(UI).toContain('act(`Create ${name}`, "fork", { workflow_key: fromKey, new_name: name })');
-    expect(UI).toContain('act(`Create ${name}`, "create", { name })');
-  });
-
-  it("writes the edited steps, not only the ones it copied", () => {
-    // Fork stores the SOURCE's steps. Whatever was changed on the canvas before Create has to
-    // be written straight after, or the operator's edits are silently dropped.
-    expect(UI).toContain('act(`Save ${name}`, "save", { definition_id: created.id, spec })');
-  });
-
-  it("selects what was just created", () => {
-    // Creating something and leaving the operator to find it in a dropdown is the failure
-    // "fork to edit" already had.
-    const create = UI.slice(UI.indexOf("onCreate={async (name, spec, fromKey)"));
-    expect(create.slice(0, 1600)).toContain("setBuilderTarget(created.id)");
-  });
-
-  it("does not make a customer invent an identifier", () => {
-    // The key is derived server-side, in ONE place, for create and import both — two callers
-    // deriving keys their own way is how one 409s on a collision the other avoided.
-    const api = codeOnly("../../apps/api/app/main.py");
-    expect(api).toContain("def _free_workflow_key");
-    expect(api).toContain("resolved_key = new_key or _free_workflow_key(");
-  });
-
-  it("opens a workflow that has no version yet", () => {
-    // A workflow created from scratch has no published version until its first save, and an
-    // inner join turned that into a 404 — the builder would refuse to open the very thing the
-    // New workflow button had just made.
-    const api = codeOnly("../../apps/api/app/main.py");
-    expect(api).toContain("LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id");
-  });
-});
-
 describe("a customer can define their own step", () => {
-  it("offers the form from the builder palette", () => {
-    expect(UI).toContain('data-testid="dw-define-step"');
+  it("offers the form from the Library's Steps view", () => {
+    expect(LIBRARY).toContain('data-testid="wf-lib-new-step"');
+    expect(LIBRARY).toContain("<DefineStepModal");
     expect(FORM).toContain('data-testid="dw-define-form"');
   });
 
@@ -548,45 +217,6 @@ describe("a customer can define their own step", () => {
   });
 });
 
-describe("a customer's own steps are first-class in the palette", () => {
-  it("lists them beside the built-in ones", () => {
-    expect(UI).toContain('dw-palette-custom-${c.step_key}');
-    expect(UI).toContain("Your steps");
-  });
-
-  it("shows what a step RUNS, not only what it was called", () => {
-    // A step called "Cleanup" bound to a tier-3 tool must not read as harmless.
-    expect(UI).toContain("runs ${c.risk_source}");
-  });
-
-  it("cannot place a step whose binding is gone", () => {
-    expect(UI).toContain("disabled={!!busy || !c.usable}");
-    expect(UI).toContain("c.unusable_reason");
-  });
-
-  it("arrives on the canvas already manual when the tier forces it", () => {
-    expect(UI).toContain("approval: step.approval_forced_manual ?");
-  });
-
-  it("will not let the approval be switched back to auto", () => {
-    expect(UI).toContain("|| mine?.approval_forced_manual");
-  });
-
-  // REWRITTEN to run the save and the load instead of reading the builder's source.
-  it("emits the binding the runtime reads", () => {
-    const saved = specFromDraft([{ id: "s", kind: "capability", customStep: "file_issue",
-                                   inputs: {} }], { capabilities: [], customSteps: [] });
-    expect((saved.steps as { binding: unknown }[])[0].binding)
-      .toEqual({ custom_step: "file_issue", inputs: {} });
-  });
-
-  it("reads one back off a saved spec, so editing does not drop it", () => {
-    expect(draftFromSpecStep({ id: "s", kind: "capability",
-                               binding: { custom_step: "file_issue" } }).customStep)
-      .toBe("file_issue");
-  });
-});
-
 describe("the custom-step endpoints exist on both sides", () => {
   it("the route proxies them", () => {
     expect(ROUTE).toContain("custom_steps:");
@@ -604,275 +234,5 @@ describe("the custom-step endpoints exist on both sides", () => {
       api.indexOf("def delete_delivery_custom_step"),
     );
     expect(create).not.toContain('payload.get("risk_tier")');
-  });
-});
-
-describe("the builder header asks one question at a time", () => {
-  it("hides 'Editing' while a new workflow is being named", () => {
-    // "Editing: Standard Product Delivery" beside "Start from: Backend Service Setup" asks the
-    // operator to hold two workflows in mind, and says nothing about which the buttons act on.
-    expect(UI).toContain("{!creating ? (");
-    expect(UI).toContain('data-mode={creating ? "creating" : "editing"}');
-  });
-
-  it("hides the controls that would act on the OTHER workflow", () => {
-    // Reset and Save apply to the one in the dropdown that is no longer on screen. Leaving
-    // them visible is not merely noisy — clicking either does something to a workflow the
-    // operator is not looking at.
-    expect(UI).toContain('<span className="dw-canvas-actions" hidden={creating}>');
-    expect(UI).toContain("{!creating && loaded?.forked_from ? (");
-  });
-
-  it("labels the name field, because it took the labelled slot", () => {
-    // An unlabelled box beside a labelled dropdown reads as part of the dropdown.
-    expect(UI).toContain('<span><WfIcon id="edit" /> Name</span>');
-    expect(UI).toContain('<span><WfIcon id="importIn" /> Start from</span>');
-  });
-
-  it("makes creating LOOK like a different mode", () => {
-    // The same flat row with different contents left an operator unsure whether they were
-    // editing the workflow in the dropdown or making a new one.
-    expect(CSS).toContain('.dw-canvas-head[data-mode="creating"]');
-  });
-});
-
-describe("importing does not need a name typed first", () => {
-  it("falls back to a name derived from what it copies", () => {
-    // Import was disabled until a name was typed, and a disabled button that does not say it
-    // is disabled reads as broken — which is how it was reported. Copying something has an
-    // obvious name available.
-    expect(UI).toContain("const name = newName.trim() || defaultImportName;");
-    expect(UI).toContain("uniqueWorkflowName(source.name, installed.map((i) => i.name))");
-  });
-
-  it("puts no bookkeeping in the name", () => {
-    // Forking appended "(yours)", copying appended "(copy)", and doing both produced
-    // "Standard Product Delivery (yours) (copy)" — three words of bookkeeping in the one
-    // string an operator reads, none of which said anything the row did not already show.
-    // The rule itself, including compounding and collisions, is tested in workflow-names.
-    expect(UI).not.toContain("(yours)");
-    expect(UI).not.toContain("(copy)`");
-    expect(UI).toContain("uniqueWorkflowName");
-  });
-
-  it("uses the same rule when forking as when importing", () => {
-    // Two mint sites with two rules is how the two suffixes came to be combinable.
-    const forkAt = UI.indexOf("new_name:");
-    expect(UI.slice(forkAt, forkAt + 120)).toContain("uniqueWorkflowName");
-  });
-});
-
-describe("creating something says so, where the person is looking", () => {
-  it("confirms on the canvas that changed", () => {
-    // Import created the workflow, copied its steps and selected it — then showed a toolbar
-    // identical to the one before the click, so it read as "went back to editing". That is how
-    // a working feature got reported as broken.
-    expect(UI).toContain('data-testid="dw-made"');
-    expect(UI).toContain("You are editing it now");
-  });
-
-  it("names what it copied from, and how much came across", () => {
-    expect(UI).toContain("step${draft.length === 1 ? \"\" : \"s\"} copied");
-  });
-
-  it("only shows it for the workflow actually on screen", () => {
-    // Switching to another workflow must not leave a confirmation about a different one.
-    expect(UI).toContain("justMade && justMade.id === target ?");
-  });
-
-  it("can be dismissed", () => {
-    expect(UI).toContain("onClick={onDismissJustMade}");
-  });
-
-  it("shows that name before the button is pressed", () => {
-    // As the placeholder, so the operator can see what the workflow will be called.
-    expect(UI).toContain('placeholder={defaultImportName || "Name it"}');
-  });
-
-  it("says why, in the one case it IS still disabled", () => {
-    expect(UI).toContain('data-testid="dw-new-hint"');
-    expect(UI).toContain("Name it, or pick something to start from.");
-  });
-});
-
-describe("the header carries a fact, not just controls", () => {
-  it("says how big the workflow is and where it came from", () => {
-    // The dead gap in the middle of the row is now the one place on the screen that says
-    // whether "Reset to the standard" beside it means anything.
-    expect(UI).toContain('data-testid="dw-head-meta"');
-    expect(UI).toContain("written from scratch");
-  });
-
-  it("keeps the two actions together instead of flinging them apart", () => {
-    expect(CSS).toContain(".dw-canvas-actions { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }");
-  });
-});
-
-
-describe("Import fills the canvas; only Create writes anything", () => {
-  it("does not create a workflow when Import is pressed", () => {
-    // Import used to fork server-side on the spot, so a workflow appeared in the project
-    // before the operator had decided anything and the screen jumped into editing it.
-    expect(UI).toContain('data-testid="dw-import-steps"');
-    expect(UI).toContain("const importSteps = useCallback(async () => {");
-    // It reads the spec. It does not post.
-    const fn = UI.slice(UI.indexOf("const importSteps = useCallback"));
-    const body = fn.slice(0, fn.indexOf("}, [importFrom"));
-    expect(body).toContain('view: "spec"');
-    expect(body).not.toContain("post(");
-  });
-
-  it("stays in the new-workflow panel afterwards", () => {
-    // The whole point: the operator is not moved somewhere else.
-    const fn = UI.slice(UI.indexOf("const importSteps = useCallback"));
-    expect(fn.slice(0, fn.indexOf("}, [importFrom"))).not.toContain("setCreating(false)");
-  });
-
-  it("says what landed on the canvas, in the panel", () => {
-    expect(UI).toContain('data-testid="dw-imported"');
-    expect(UI).toContain("nothing is saved until you do");
-  });
-
-  it("can be pressed again with a different source", () => {
-    // Safe precisely because nothing was written the first time.
-    expect(UI).toContain('importedFrom ? "Import again" : "Import steps"');
-  });
-
-  it("starts the new workflow on an EMPTY canvas", () => {
-    // Otherwise the steps of the workflow being edited look like the new one's.
-    expect(UI).toContain("const beginCreating = useCallback(() => {");
-    expect(UI).toContain("setStashed(draft);");
-  });
-
-  it("does not load the selected workflow's steps over the new ones", () => {
-    expect(UI).toContain("if (creating) return;");
-  });
-
-  it("puts the previous canvas back on Cancel", () => {
-    // Abandoning the idea must leave the operator exactly where they were.
-    expect(UI).toContain("if (stashed) setDraft(stashed);");
-  });
-});
-
-
-describe("the builder has icons, and they mean something", () => {
-  it("draws them inline rather than pulling in an icon package", () => {
-    // A whole library for eleven glyphs is a lot of bytes for eleven glyphs, and the nav
-    // already settled this question.
-    expect(UI).toContain("const WF_ICONS: Record<string, React.ReactNode>");
-    expect(UI).toContain('stroke="currentColor"');
-  });
-
-  it("uses currentColor so a glyph dims with its label", () => {
-    // Otherwise every disabled and hover state needs a second rule for the icon.
-    expect(CSS).toContain(".dw-icon");
-    expect(UI).not.toContain('stroke="#');
-  });
-
-  it("renders nothing for an unknown id", () => {
-    // An empty square beside a label reads as a broken image; the label alone reads as a
-    // control without an icon, which is what it is.
-    expect(UI).toContain("if (!d) return null;");
-  });
-
-  it("keeps the words", () => {
-    // An icon-only control in a builder is a guessing game.
-    expect(UI).toContain('<WfIcon id="check" /> Create');
-    expect(UI).toContain('<WfIcon id="x" /> Cancel');
-    expect(UI).toContain('<WfIcon id="reset" /> Reset to the standard');
-  });
-
-  it("swaps the import glyph once something has been imported", () => {
-    // "Import again" is a repeat, not a first import, and the arrow says so.
-    expect(UI).toContain('<WfIcon id={importedFrom ? "again" : "importIn"} />');
-  });
-
-  it("gives the empty canvas a shape rather than a lone sentence", () => {
-    // A centred line on a large blank panel reads as a page that failed to load.
-    expect(UI).toContain('data-testid="dw-canvas-empty"');
-    expect(CSS).toContain(".dw-empty-mark");
-  });
-});
-
-describe("the panel's buttons wrap as a group", () => {
-  it("keeps Import, Create and Cancel together", () => {
-    // Loose, they broke apart at the console's width and Cancel dropped onto a line of its
-    // own, which reads as a layout fault rather than a wrap.
-    expect(UI).toContain('<span className="dw-new-actions">');
-    expect(CSS).toContain(".dw-new-actions { display: inline-flex;");
-  });
-
-  it("does not let a label break mid-button", () => {
-    expect(CSS).toContain(".dw-canvas-head .cap-btn, .dw-new .cap-btn { white-space: nowrap; }");
-  });
-});
-
-/**
- * The workflow area, reorganised around what an operator is trying to do.
- *
- * "I dont like the workflow management page — it's not coming in flow, Build your Own, Design
- * one with BOSS all should come in one page and it's hard to find. Workflow step should be
- * separate page."
- *
- * The agent was hard to find for a structural reason: it sat IN the tab bar without being a
- * tab, so it looked like one, behaved like an action, and was neither. And the two ways to
- * author a workflow were split across a tab and that button, when they are the same intent
- * arrived at differently.
- */
-describe("the workflow area is organised around intent", () => {
-  it("has a tab per thing an operator does", () => {
-    // `yours` was added when the operator's own workflows moved off the Catalogue tab. They
-    // had been filed beneath the twelve BOSS ships, which reads as an afterthought and gets
-    // worse the moment somebody installs the examples.
-    expect(UI).toContain(
-      'const TABS = ["running", "yours", "catalogue", "design", "steps"] as const;');
-  });
-
-  it("both ways to author a workflow are on the same page", () => {
-    // Describing it is offered first because it is the easier path for most people — but AS A
-    // CHOICE, because an operator who knows the shape they want should not have to negotiate
-    // it in prose.
-    expect(UI).toContain('data-testid="dw-design-ways"');
-    const ways = UI.slice(UI.indexOf('data-testid="dw-design-ways"'));
-    expect(ways.slice(0, 2000)).toContain("Describe it");
-    expect(ways.slice(0, 2000)).toContain("Draw it");
-    expect(ways.slice(0, 2000)).toContain('data-testid="dw-workflow-agent"');
-  });
-
-  it("and the agent is no longer a button pretending to be a tab", () => {
-    const tablist = UI.slice(UI.indexOf('role="tablist"'));
-    const bar = tablist.slice(0, tablist.indexOf("</div>"));
-    expect(bar).not.toContain("dw-workflow-agent");
-  });
-
-  it("every tab label says what is behind it", () => {
-    // A count is the difference between a tab you might open and one you know to skip.
-    expect(UI).toContain("`Running (${runs.length})`");
-    expect(UI).toContain("`Your steps (${customSteps.length})`");
-  });
-
-  it("each tab counts what is actually on it", () => {
-    // ORIGINALLY: Catalogue counted shipped entries only while the screen underneath also
-    // rendered the operator's own, so authoring a workflow left the number at 12 — reading as
-    // "it was not saved". The fix then was to add them together.
-    //
-    // NOW they are separate screens, and adding them together would be the same bug pointing
-    // the other way: a Catalogue count that grows when you build something that is not in the
-    // catalogue. Each tab counts its own contents.
-    expect(UI).toContain("`Catalogue (${catalogue.length})`");
-    expect(UI).toContain("`Yours (${ownWorkflows(installed).length})`");
-  });
-
-  it("decides 'mine' in one place, so the count and the grid cannot disagree", () => {
-    // The predicate was inline in the grid and absent from the tab, which is how they drifted.
-    expect(UI).toContain("function ownWorkflows(");
-    expect(UI).toContain("useMemo(() => ownWorkflows(installed), [installed])");
-  });
-
-  it("opens on making one, which is what the tab order already promises", () => {
-    // The tabs read "Create a new workflow" then "Edit an existing workflow", but the state
-    // behind them opened on Edit — the first tab was where the eye landed and the second was
-    // the one selected.
-    expect(UI).toContain("const [creating, setCreating] = useState(true)");
   });
 });

@@ -44,10 +44,15 @@ const actionsSource = readFileSync(
 );
 
 describe("Focused agents island", () => {
-  it("mounts the builder on Agent Studio", () => {
-    expect(pageSource).toContain('import { FocusedAgents } from "./focused-agents-ui"');
-    expect(pageSource).toContain("<FocusedAgents");
-    expect(pageSource).toContain('data-area="studio"');
+  it("mounts the builder under Agents, as the roster's On duty filter", () => {
+    // Moved with Agent Studio's retirement: on-duty automations are agents, so they are a
+    // filter of the Agents roster rather than a <details> under a Studio that is gone.
+    const workforce = readFileSync(resolve(process.cwd(), "app", "workforce-ui.tsx"), "utf8");
+    expect(workforce).toContain('import { FocusedAgents } from "./focused-agents-ui"');
+    expect(workforce).toContain('filter === "duty" ? (');
+    expect(workforce).toContain("<FocusedAgents projectId={workforce.project_id} actor={actor} />");
+    expect(pageSource).toContain('data-area="workforce"');
+    expect(pageSource).not.toContain('data-area="studio"');
   });
 
   it("renders builder fields and always-on copy", () => {

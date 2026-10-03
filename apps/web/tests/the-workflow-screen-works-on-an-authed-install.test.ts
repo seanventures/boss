@@ -61,8 +61,12 @@ describe("the operator's 'move things along' button", () => {
 
 describe("names, not role keys", () => {
   it("points at the area the rail actually has", () => {
+    // The builder's "Open it in Agent work" left with the builder; whatever this area says
+    // about agents names the area the rail has now — Agents — and never a retired one.
     expect(UI).not.toContain("Agents page");
-    expect(UI).toContain("Open it in Agent work");
+    for (const retired of ["Agent work", "Agent Studio", "Team structure"]) {
+      expect(UI).not.toContain(retired);
+    }
   });
 
   it("a run waiting on a role says the role's name", () => {
@@ -70,7 +74,10 @@ describe("names, not role keys", () => {
   });
 });
 
-it("the empty Running tab says how to start, without jargon", () => {
+it("the empty Runs tab says how to start, without jargon", () => {
+  // REWRITTEN for Workflow Studio: with no runs the composer is already open above it, so the
+  // empty line is short and the how-to is its tooltip (labels, not paragraphs).
   expect(UI).not.toContain("apply a workflow to a class of work");
-  expect(UI).toContain("press Build");
+  expect(UI).toContain("composerOpen || runs.length === 0 ? (");
+  expect(UI).toContain('title="Describe what you want above, or press Start on a workflow in the Library"');
 });
