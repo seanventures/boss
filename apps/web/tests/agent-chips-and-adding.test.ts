@@ -23,7 +23,8 @@ import { codeOnly } from "./_helpers/source";
 const CHIP = codeOnly("app/agent-chip.tsx");
 const PANEL = codeOnly("app/agents-on-this.tsx");
 const PICKER = codeOnly("app/default-agent-picker.tsx");
-const WIZARD = codeOnly("app/delivery-workflows-ui.tsx");
+// The Runs composer (the "wizard") lives in its own module since Workflows became Runs + Library.
+const WIZARD = codeOnly("app/workflows/new-project-composer.tsx");
 const CSS = codeOnly("app/globals.css");
 
 describe("an agent has a face", () => {

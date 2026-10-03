@@ -112,7 +112,8 @@ describe("only the requested area is fetched", () => {
       ["fetchHealthSnapshotFeed", "ops"],
       ["fetchDiscoveriesFeed", "discovery"],
       ["fetchSandboxFeed", "sandboxes"],
-      ["fetchAgentStudioFeed", "studio"],
+      // Read by the Agents area now (Profile, Panels, New agent templates); Studio is gone.
+      ["fetchAgentStudioFeed", "workforce"],
       ["fetchWorkOrchestrationFeed", "portfolio"],
       ["fetchAuditSummary", "ops"],
     ];

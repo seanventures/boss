@@ -31,15 +31,28 @@ const detail = (over: Record<string, unknown> = {}) => ({
 }) as never;
 
 describe("creating an agent is one screen that grants what it holds", () => {
-  it("asks for name, purpose, reports-to, skills and MCP servers — and nothing else", () => {
+  it("asks for name, purpose, reports-to, skills and MCP servers — the rest is Advanced", () => {
     const html = render(<AgentQuickCreate projectId="p" actor="ceo" onClose={() => {}}
-                                          onCreated={() => {}} onOpenStudio={() => {}} />);
+                                          onCreated={() => {}} />);
     for (const id of ["aq-name", "aq-purpose", "aq-reports-to", "aq-skills", "aq-mcp", "aq-create"]) {
       expect(html).toContain(`data-testid="${id}"`);
     }
-    // The prompts-and-rules envelope is still one press away, not mandatory.
-    expect(html).toContain("full Studio wizard");
-    expect(html).not.toContain("System prompt");
+    // The prompts-and-rules envelope (the retired wizard's runtime fields) is a closed
+    // disclosure on the same screen, never mandatory.
+    expect(html).toContain('data-testid="aq-advanced"');
+    expect(html).not.toMatch(/<details[^>]*open=""[^>]*data-testid="aq-advanced"/);
+    // And templates are the other tab of the same dialog.
+    expect(html).toContain('data-testid="aq-tab-template"');
+  });
+
+  it("an untouched Advanced section makes no profile; a prompt makes one", async () => {
+    const { wantsProfile } = await import("../app/agent-quick-create");
+    const blank = { systemPrompt: "", jobPrompt: "", rulesText: "", selectionMode: "router",
+                    pinnedModel: "", dataBoundary: "internal", maxSteps: 8, maxCalls: 8,
+                    timeoutSeconds: 300, maxRetries: 2 } as const;
+    expect(wantsProfile(blank)).toBe(false);
+    expect(wantsProfile({ ...blank, systemPrompt: "You audit releases." })).toBe(true);
+    expect(wantsProfile({ ...blank, rulesText: "Never deploy." })).toBe(true);
   });
 
   it("a name with no English letters gets a key field instead of an empty-key refusal", async () => {

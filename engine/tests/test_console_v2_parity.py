@@ -98,9 +98,10 @@ def test_the_core_areas_say_what_would_be_lost():
 
 def test_no_v2_screen_is_left_with_nothing_to_show():
     """A screen in the nav that nothing maps to renders an empty page, which reads as broken.
-    Settings and Hive may legitimately be new, so they are exempt."""
+    Settings and Hive may legitimately be new, so they are exempt. So is Team structure: v1
+    folded it into Agents (a view, not an area), and /v2/org redirects to that view."""
     targets = {e["to"] for e in _entries(_map()).values() if e["to"]}
-    orphans = _v2_screens() - targets - {"settings", "hive"}
+    orphans = _v2_screens() - targets - {"settings", "hive", "org"}
     assert not orphans, f"v2 screens nothing maps to: {sorted(orphans)}"
 
 

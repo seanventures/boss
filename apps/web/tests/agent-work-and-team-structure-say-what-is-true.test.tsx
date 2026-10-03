@@ -30,7 +30,9 @@ describe("Agent work", () => {
       handoffs: [],
     } as unknown as Workforce;
     const out = renderToStaticMarkup(<WorkforceArea workforce={workforce} actor="ceo" />);
-    expect(out).toContain("3 roles · 1 with recorded work");
+    // The roster counts every role; "Has done work" counts the ones with recorded work.
+    expect(out).toContain("Roster <em data-testid=\"wf-roster-count\">(3)</em>");
+    expect(out).toContain("Has done work 1");
   });
 
   it("the spend note names the screens the rail has", () => {

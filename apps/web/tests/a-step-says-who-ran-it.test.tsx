@@ -10,7 +10,10 @@
  */
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The lane and the editor are other tests' business; they get stand-ins here.
+vi.mock("../app/workflows/studio-parts", () => import("./_helpers/studio-parts-stub"));
 
 import {
   AgentStepScope,
@@ -157,10 +160,7 @@ describe("a step's MCP list narrows what its agent holds, and never grants", () 
     expect(html).toContain("may use every MCP server its agent holds");
     expect(html).not.toContain("no MCP servers");
   });
-
-  it("offers only the servers an agent holds", () => {
-    const ui = codeOnly("app/delivery-workflows-ui.tsx");
-    expect(ui).toContain("? (mcpHoldings[step.captain] ?? [])");
-    expect(ui).toContain(": Object.values(mcpHoldings).flat()).includes(s.name)");
-  });
+  // (Which MCP servers a step may reach is chosen in the inspector now, from what the step's
+  // agent holds — tests/inspector.test.tsx.)
+;
 });

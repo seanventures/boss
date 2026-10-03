@@ -1,74 +1,85 @@
-/**
- * A customer's own workflows sat under the twelve BOSS ships, on a tab called Catalogue — so
- * the thing somebody built was filed beneath the things they did not, and the tab's count was
- * the two added together. Examples make that worse: install three and your own work is below
- * a list you did not write.
- */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const ui = readFileSync(join(__dirname, "../app/delivery-workflows-ui.tsx"), "utf8");
+import { groupLibrary, scheduleDraftFor } from "../app/workflows/library";
+import type { WorkflowSummary } from "../lib/workflow-editor-types";
+
+/**
+ * A customer's own workflows sat under the twelve BOSS ships, so the thing somebody built was
+ * filed beneath the things they did not. REWRITTEN for Workflow Studio: there are no Yours and
+ * Catalogue tabs any more — the Library puts yours first and the standards under a divider, and
+ * a schedule is set from a card's ⋯ menu. The behaviour is pinned in
+ * tests/workflow-library.test.tsx; this keeps the rules that are not about clicks.
+ */
+const library = readFileSync(join(__dirname, "../app/workflows/library.tsx"), "utf8");
+const area = readFileSync(join(__dirname, "../app/delivery-workflows-ui.tsx"), "utf8");
 const proxy = readFileSync(join(__dirname, "../app/api/delivery-workflows/route.ts"), "utf8");
 
-describe("your workflows have their own tab", () => {
-  it("adds the tab", () => {
-    expect(ui).toContain('const TABS = ["running", "yours", "catalogue", "design", "steps"]');
-    expect(ui).toContain("function YoursView(");
+const wf = (over: Partial<WorkflowSummary>): WorkflowSummary => ({
+  definition_id: `def_${over.workflow_key}`, workflow_key: "k", name: "K", is_catalogue: false,
+  version: 1, step_count: 1, steps: [], run_count: 0, ...over,
+});
+
+describe("your workflows come first", () => {
+  it("and copies piling up behind one source collapse onto it", () => {
+    const { yours, standards } = groupLibrary([
+      wf({ workflow_key: "spd", name: "SPD", is_catalogue: true }),
+      wf({ workflow_key: "spd_copy", name: "SPD (copy)", forked_from_workflow_key: "spd" }),
+      wf({ workflow_key: "spd_copy_2", name: "SPD (copy) (copy)", forked_from_workflow_key: "spd" }),
+      wf({ workflow_key: "mine", name: "Mine" }),
+    ]);
+    expect(yours.map((e) => e.item.workflow_key)).toEqual(["mine"]);
+    expect(standards[0].copies.map((c) => c.workflow_key)).toEqual(["spd_copy", "spd_copy_2"]);
   });
 
-  it("counts only what BOSS ships on the Catalogue tab", () => {
-    // It added the customer's own to the total, so the number answered no question anybody had.
-    expect(ui).toContain("`Catalogue (${catalogue.length})`");
-    expect(ui).toContain("`Yours (${ownWorkflows(installed).length})`");
-  });
-
-  it("no longer renders your workflows inside the catalogue", () => {
-    const catalogue = ui.slice(ui.indexOf("function CatalogueView("));
-    expect(catalogue).not.toContain('data-testid="dw-mine"');
+  it("but your ONE copy of a standard stays yours", () => {
+    const { yours, standards } = groupLibrary([
+      wf({ workflow_key: "spd", name: "SPD", is_catalogue: true }),
+      wf({ workflow_key: "spd_mine", name: "SPD (mine)", forked_from_workflow_key: "spd" }),
+    ]);
+    expect(yours.map((e) => e.item.workflow_key)).toEqual(["spd_mine"]);
+    expect(standards[0].copies).toEqual([]);
   });
 });
 
 describe("a workflow of your own can be scheduled", () => {
-  it("offers Schedule on the card", () => {
-    expect(ui).toContain("dw-schedule-");
-  });
-
   it("only once there is a published version to run", () => {
-    // The API refuses a schedule pointing at a workflow with no version, and offering the
-    // button is how somebody meets that refusal for no reason.
-    const yours = ui.slice(ui.indexOf("function YoursView("));
-    const button = yours.slice(yours.indexOf("dw-schedule-") - 400, yours.indexOf("dw-schedule-"));
-    expect(button).toContain("item.active_version ? (");
+    // The API refuses a schedule pointing at a workflow with no version.
+    expect(library).toContain('disabled={!w.version}');
+    expect(library).toContain('onClick={() => pop.setOpen("schedule")}>Schedule…</button>');
   });
 
-  it("asks for the time zone rather than guessing", () => {
-    // A report arriving at 3am because the browser's zone was used and nobody said so.
-    expect(ui).toContain("in which time zone?");
-    expect(ui).toContain("resolvedOptions().timeZone");
-    expect(ui).not.toContain("window.prompt");
+  it("asks for the time zone rather than guessing, starting from the browser's", () => {
+    const draft = scheduleDraftFor({ workflow_key: "k", name: "K" });
+    expect(draft.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    expect(library).toContain('data-testid="wf-schedule-zone"');
+    expect(library).not.toContain("window.prompt");
   });
 
-  it("stores declared inputs with the schedule and can edit them", () => {
-    // The button used to post a time zone and nothing else, so a workflow that
-    // requires sectors and a recipient could be scheduled without either.
-    expect(ui).toContain("REQUIRED INPUTS ARE STORED WITH THE SCHEDULE");
-    expect(ui).toContain("workflowInputFields(chosen?.input_schema)");
-    expect(ui).toContain("missingRequired(fields, draft.values)");
-    expect(ui).toContain("input: suppliedInputs(fields, draft.values)");
-    expect(ui).toContain("schedule_id: draft.scheduleId");
-    expect(ui).toContain("dw-sched-draft-form");
-    expect(ui).toContain("edit inputs");
+  it("an existing schedule is edited with what it was saved with", () => {
+    const draft = scheduleDraftFor({ workflow_key: "k", name: "K" }, {
+      id: "s1", workflow_key: "k", name: "K weekly", describes: "Mondays 08:00",
+      enabled: true, next_run_at: null, last_run_at: null, last_error: null,
+      timezone: "Asia/Kolkata", input: { sectors: "fintech", count: 3 }, start_anyway: ["host"],
+    });
+    expect(draft).toMatchObject({
+      scheduleId: "s1", name: "K weekly", timezone: "Asia/Kolkata",
+      values: { sectors: "fintech", count: "3" }, startAnyway: ["host"],
+    });
   });
 
-  it("shows the schedule in the API's own words", () => {
-    // So the console cannot word a schedule differently from the thing that fires it.
-    expect(ui).toContain("{s.describes}");
-    expect(ui).toContain("dw-sched-toggle-");
+  it("stores declared inputs with the schedule", () => {
+    // The button used to post a time zone and nothing else.
+    expect(area).toContain("REQUIRED INPUTS ARE STORED WITH THE SCHEDULE");
+    expect(area).toContain("missingRequired(fields, draft.values)");
+    expect(area).toContain("input: suppliedInputs(fields, draft.values)");
+    expect(area).toContain("schedule_id: draft.scheduleId");
   });
 
-  it("surfaces a schedule that has been failing", () => {
-    expect(ui).toContain("last run failed");
+  it("shows the schedule in the API's own words, and a failing one says so", () => {
+    expect(library).toContain("{s.describes}");
+    expect(library).toContain("Last run failed: ${s.last_error}");
   });
 
   it("routes pause, resume and remove through the proxy", () => {
@@ -78,7 +89,6 @@ describe("a workflow of your own can be scheduled", () => {
   });
 
   it("does not fail the whole screen when schedules cannot be read", () => {
-    // An install whose schedule table predates this feature must still show its workflows.
-    expect(ui).toContain("SCHEDULES ARE NOT LOAD-BEARING");
+    expect(area).toContain("SCHEDULES ARE NOT LOAD-BEARING");
   });
 });

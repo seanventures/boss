@@ -22,7 +22,6 @@ import { describe, expect, it } from "vitest";
 import { codeOnly } from "./_helpers/source";
 
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
-const CSS = codeOnly("app/globals.css");
 
 describe("an approved gate stops offering the press that answers it", () => {
   it("Deploy now is withheld once the decision is approved", () => {
@@ -43,19 +42,3 @@ describe("an approved gate stops offering the press that answers it", () => {
   });
 });
 
-describe("the rail's first node is laid out like every other one", () => {
-  it("its marker spans both rows", () => {
-    // Without this the marker is in (1,1) and the meta in (2,1), so the first column sizes to
-    // "auto-confirmed" and the name is pushed to the right-hand edge of the node.
-    expect(UI).toContain('className="dw-dot dw-node-dot"');
-    const at = CSS.indexOf(".dw-dot {");
-    expect(CSS.slice(at, at + 120)).toContain("grid-row: 1 / 3");
-  });
-
-  it("and it is a marker, not a numbered step", () => {
-    // It does not run, so it must not carry the filled disc the runtime's own steps use.
-    const at = CSS.indexOf(".dw-node-agents .dw-dot");
-    expect(at).toBeGreaterThan(-1);
-    expect(CSS.slice(at, at + 200)).toContain("background: transparent");
-  });
-});

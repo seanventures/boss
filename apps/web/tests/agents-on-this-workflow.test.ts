@@ -19,26 +19,28 @@ const WORKFLOWS = codeOnly("app/delivery-workflows-ui.tsx");
 const CSS = codeOnly("app/globals.css");
 
 describe("who is on this app", () => {
-  it("assignment is the FIRST node in the step rail", () => {
-    // It began as a block above the rail and could not be found — "where when creating a new
-    // project do we have the option to assign the agents?" A panel over the chain is something
-    // you have to notice; a node in the chain is where a reader of the steps already is.
-    expect(WORKFLOWS).toContain('data-testid="dw-node-agents"');
-    const node = WORKFLOWS.indexOf('data-testid="dw-node-agents"');
-    const realSteps = WORKFLOWS.indexOf("{steps.map((step, index) => {");
-    expect(node).toBeGreaterThan(-1);
-    expect(node).toBeLessThan(realSteps);
+  it("assignment is a chip on the run's own bar, above its lane", () => {
+    // It began as a block above the rail and could not be found, then became the rail's first
+    // node — a node the runtime never runs, sitting in a chain of steps that do. Workflow
+    // Studio draws the run on the editor's lane, which holds only real steps, so who is on the
+    // app is the run's "Agents" chip: in the run's header, where a reader of the steps is.
+    expect(WORKFLOWS).toContain('data-testid="dw-run-agents"');
+    const chip = WORKFLOWS.indexOf('data-testid="dw-run-agents"');
+    expect(chip).toBeLessThan(WORKFLOWS.indexOf("<FlowLane spec={spec}"));
+    expect(WORKFLOWS).toContain("{showAgents ? (");
     expect(WORKFLOWS).toContain("<AgentsOnThis");
   });
 
-  it("but it is not a runtime step: no duration, no status badge", () => {
+  it("but it is not a runtime step: the lane is never told about it", () => {
     // A real step would mean editing all twelve catalogue workflows and adding something that
-    // can execute, fail and block a run. This one does not run, and must not look like it did.
-    const at = WORKFLOWS.indexOf('data-testid="dw-node-agents"');
-    const node = WORKFLOWS.slice(at, at + 700);
-    expect(node).not.toContain("stepDuration");
-    expect(node).not.toContain("dw-node-you");
-    expect(node).toContain("auto-confirmed");
+    // can execute, fail and block a run. The lane's spec is the run's own steps.
+    expect(WORKFLOWS).not.toContain("__agents__");
+    expect(WORKFLOWS).toContain("const spec = useRunSpec(projectId, run, capabilities);");
+  });
+
+  it("and the run's header opens the workflow it follows", () => {
+    expect(WORKFLOWS).toContain('data-testid="dw-run-open-workflow"');
+    expect(WORKFLOWS).toContain("onOpenWorkflow(run.workflow_key)");
   });
 
   it("and a finished run shows it as a record, not a setting", () => {

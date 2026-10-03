@@ -28,7 +28,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
+import type { AgentStudioFeed } from "../lib/agent-studio";
 import { formatDate } from "../lib/datetime";
+import { AgentProfile } from "./agent-profile-ui";
+import { HelpTip } from "./help-tip";
 import {
   deleteAgent, grantMcp, grantSkill, loadGrantable, parseToolList, repointMapping, revokeMcp,
   revokeSkill, updateAgent, type AgentSummary,
@@ -120,8 +123,27 @@ type Detail = {
 
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`);
 
-export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted }: {
+/** The steps that name this agent, once each, newest version first: where "Used in" links. */
+export function usedIn(named: NamedOn[] | undefined): Array<{ workflow_key: string; workflow: string;
+                                                          step_id: string; step: string; href: string }> {
+  const seen = new Set<string>();
+  const out = [];
+  const order = (n: NamedOn) => (n.because === "active" ? 0 : n.because === "live run" ? 1 : 2);
+  for (const n of [...(named ?? [])].sort((a, b) => order(a) - order(b) || b.version - a.version)) {
+    const id = `${n.workflow_key}\u0000${n.step_id}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const q = new URLSearchParams({ area: "delivery_workflows", wf: n.workflow_key, step: n.step_id });
+    out.push({ workflow_key: n.workflow_key, workflow: n.workflow, step_id: n.step_id, step: n.step,
+               href: `?${q}` });
+  }
+  return out;
+}
+
+export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, studio }: {
   projectId: string; roleKey: string;
+  /** The Studio catalog, for this agent's Profile. */
+  studio?: AgentStudioFeed;
   /** The signed-in actor every change on this page is made as — never a literal. */
   actor: string;
   onClose: () => void;
@@ -221,6 +243,24 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted }: {
               </div>
             </div>
 
+            {/* WHERE IT IS PUT TO WORK: each workflow step naming it, opening on that step. */}
+            <section className="ct-block" data-testid="agent-used-in">
+              <div className="ct-block-title">
+                Used in <HelpTip label="Used in" text="Workflow steps this agent runs" />
+              </div>
+              {usedIn(detail.named_on_steps).length ? (
+                <ul className="ad-list">
+                  {usedIn(detail.named_on_steps).map((u) => (
+                    <li key={`${u.workflow_key}:${u.step_id}`}>
+                      <a href={u.href} data-testid={`agent-used-in-${u.workflow_key}-${u.step_id}`}>
+                        {u.workflow} · {u.step}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="detail">No workflow step names it</p>}
+            </section>
+
             {/* WHAT IT HAS ACTUALLY WORKED ON. Attributed through the same stage→role map BOSS
                 uses for the cost ledger, so this page and the spend figures cannot disagree
                 about who did what. */}
@@ -314,6 +354,8 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted }: {
               <AgentMcp projectId={projectId} roleKey={detail.role_key} actor={actor}
                         panel={detail.mcp} onChanged={load} />
             ) : null}
+
+            {studio ? <AgentProfile feed={studio} roleKey={detail.role_key} actor={actor} /> : null}
 
             {detail.registered ? (
               <AgentEdit projectId={projectId} actor={actor} detail={detail} onChanged={load} />

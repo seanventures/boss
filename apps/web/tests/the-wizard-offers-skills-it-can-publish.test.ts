@@ -38,20 +38,19 @@ describe("the skill list is scoped to the project", () => {
   });
 });
 
-describe("both doors into the commission wizard offer the same skills", () => {
-  it("the Agents page no longer passes an empty list", () => {
-    // It passed `skills={[]}`, so the identical dialog opened from Agents always said "No
-    // installed skills are available to request" while Agent Studio offered them.
-    expect(WORKFORCE).not.toContain("skills={[]}");
-    expect(WORKFORCE).toContain("skills={skills}");
+describe("the one New agent door offers the project's skills", () => {
+  // REWRITTEN: there were two doors into the commission wizard (Agents and Agent Studio) and the
+  // Agents one passed `skills={[]}`. There is one door now, New agent, and it reads what THIS
+  // project's agents may be given, scoped server-side.
+  const DIALOG = codeOnly("app/agent-quick-create.tsx");
+
+  it("reads the grantable skills for the active project", () => {
+    expect(DIALOG).toContain("loadGrantable(projectId)");
+    expect(codeOnly("lib/agents.ts")).toContain("/v1/agents/grantable?project_id=${enc(projectId)}");
   });
 
-  it("and the page hands them down", () => {
-    // Against the RAW file. `codeOnly` mangles this region of page.tsx — a pre-existing quirk
-    // of its block-comment stripping, not something this change introduced — and the wiring is
-    // typed anyway, so a missing prop fails the typecheck rather than slipping past.
-    const raw = readFileSync("app/page.tsx", "utf8");
-    const area = raw.slice(raw.indexOf("<WorkforceArea"));
-    expect(area.slice(0, area.indexOf("/>"))).toContain("skills={skills.items}");
+  it("and nothing hands it an empty list", () => {
+    expect(WORKFORCE).not.toContain("skills={[]}");
+    expect(WORKFORCE).toContain("<AgentQuickCreate projectId={workforce.project_id}");
   });
 });

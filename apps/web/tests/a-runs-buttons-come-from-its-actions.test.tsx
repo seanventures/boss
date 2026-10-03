@@ -1,7 +1,7 @@
 import React from "react";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   FailedStepActions, RUN_ACTION_KEYS, RunActionsBar, RunsView, STEP_ACTION_KEYS, stepActions,
@@ -36,6 +36,8 @@ import { join } from "node:path";
  * rendered with an empty list to prove nothing appears that the server did not send.
  */
 (globalThis as Record<string, unknown>).React = React;
+// The lane is not what this file is about; it gets a stand-in that draws one node per step.
+vi.mock("../app/workflows/studio-parts", () => import("./_helpers/studio-parts-stub"));
 
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
 const ENGINE = readFileSync("../../engine/boss_engine/services/workflow_run_actions.py", "utf8");

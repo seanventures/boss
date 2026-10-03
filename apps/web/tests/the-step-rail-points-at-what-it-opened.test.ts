@@ -15,29 +15,8 @@ import { codeOnly, cssOnly } from "./_helpers/source";
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
 const CSS = cssOnly("app/globals.css");
 
-describe("the step rail", () => {
-  it("wraps on purpose rather than by cascade accident", () => {
-    // The later .dw-rail rule set `overflow-x: auto` and no `flex-wrap`, so the earlier rule's
-    // `flex-wrap: wrap` was left standing: the rail wrapped AND carried a scroll container
-    // that could never scroll.
-    const rule = CSS.slice(CSS.lastIndexOf(".dw-rail {"), CSS.lastIndexOf(".dw-rail {") + 400);
-    expect(rule).toContain("flex-wrap: wrap");
-    expect(rule).not.toContain("overflow-x: auto");
-  });
-
-  it("draws every step the same size, so the row reads as a sequence", () => {
-    const rule = CSS.slice(CSS.indexOf(".dw-node-btn {"), CSS.indexOf(".dw-node-btn {") + 500);
-    expect(rule).toContain("width: 178px");
-    expect(rule).not.toContain("max-width: 190px");
-  });
-
-  it("gives a long step name a second line instead of an ellipsis", () => {
-    // "Production launch readiness" rendered as "Production launch re…", which names nothing —
-    // and it is the step whose whole job is what nobody thinks about before launch.
-    const rule = CSS.slice(CSS.indexOf(".dw-node-name {"), CSS.indexOf(".dw-node-name {") + 400);
-    expect(rule).toContain("-webkit-line-clamp: 2");
-  });
-});
+// The rail's own geometry (fixed node width, two-line names, no wrapping) belongs to the lane
+// now — the run is drawn by the editor's FlowLane in run mode; see tests/flow-lane.test.tsx.
 
 describe("the detail reads as a callout", () => {
   it("draws a notch above the panel", () => {
@@ -59,7 +38,8 @@ describe("the detail reads as a callout", () => {
   it("points at the step that was clicked, measured rather than computed", () => {
     // A position computed from an index is right until a label wraps to two lines or the rail
     // reflows — and then it points at the wrong box while looking just as confident.
-    expect(UI).toContain('rail.querySelector<HTMLElement>(\'[data-picked="true"] .dw-node-btn\')');
+    // Found by the step's own id in the lane, not by an index.
+    expect(UI).toContain("lane.querySelector<HTMLElement>(`[data-step-id=\"${CSS.escape(picked)}\"]`)");
     expect(UI).toContain("--dw-arrow-x");
   });
 
@@ -121,24 +101,6 @@ describe("Settings names the page for what is in it", () => {
   });
 });
 
-
-describe("the rail reads as boxes", () => {
-  it("draws the step box against the card it sits on, not the same shade as it", () => {
-    // --border is #1C2740 and the open run card is #0F1830: about two percent of luminance
-    // between them, so the boxes were outlines in name only.
-    const at = CSS.indexOf(".dw-node-btn {");
-    const rule = CSS.slice(at, at + 900);
-    expect(rule).toContain("var(--border-strong");
-    expect(rule).not.toMatch(/border: 1px solid var\(--border,/);
-  });
-
-  it("connects the first step to the node before it", () => {
-    // Agents and Research were the only pair in the rail with no line between them, because
-    // "no earlier step" was treated as "nothing has flowed".
-    expect(UI).toContain('const previous = index > 0 ? phaseOf(steps[index - 1]) : "done";');
-    expect(UI).not.toContain("{index > 0 ? (");
-  });
-});
 
 describe("the opened step reads as one region", () => {
   it("gives the step's detail a body of its own", () => {

@@ -66,13 +66,8 @@ describe("every step has its own shape", () => {
     // A shared icon would be worse than none: it asserts a similarity that does not exist.
     expect(ICONS).toContain("export function hasStepIcon");
     expect(UI).toContain('hasStepIcon(step.capability ?? undefined)');
-    expect(UI).toContain('phase === "done" ? "✓" : index + 1');
-  });
-
-  it("a failure keeps its mark, which an icon must never hide", () => {
-    const at = UI.indexOf('<span className="dw-dot" data-phase={phase}');
-    const block = UI.slice(at, at + 600);
-    expect(block.indexOf('phase === "failed" ? "!"')).toBeLessThan(block.indexOf("hasStepIcon"));
+    // (The run's lane is the editor's FlowLane now; its node glyphs, failure marks and the
+    // motion of a step in flight are pinned in tests/flow-lane.test.tsx.)
   });
 
   it("the card wears the same glyph as its rail node", () => {
@@ -80,27 +75,3 @@ describe("every step has its own shape", () => {
   });
 });
 
-describe("a step that is working looks like it", () => {
-  it("the dot breathes and the node sweeps", () => {
-    expect(CSS).toContain('.dw-node[data-phase="now"] .dw-dot {');
-    expect(CSS).toContain("animation: dw-dot-breathe");
-    expect(CSS).toContain("animation: dw-node-sweep");
-  });
-
-  it("and neither animation moves the layout", () => {
-    // A run takes eighteen minutes; anything that reflows would jitter for all of it.
-    const at = CSS.indexOf("@keyframes dw-dot-breathe");
-    const block = CSS.slice(at, at + 300);
-    expect(block).toContain("box-shadow");
-    expect(block).not.toContain("width");
-    expect(block).not.toContain("margin");
-  });
-
-  it("motion off still leaves a visible busy signal", () => {
-    const reduced = CSS.split("@media (prefers-reduced-motion: reduce)").slice(1).join("\n");
-    expect(reduced).toContain('.dw-node[data-phase="now"] .dw-node-btn');
-    expect(reduced).toContain("animation: none");
-    // Still marked, because a busy signal that vanishes says nothing is happening.
-    expect(reduced).toContain("--live");
-  });
-});

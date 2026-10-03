@@ -1,14 +1,19 @@
 /**
- * Agent Studio edits the operator's own workflows, writes as the operator, and shows its runs.
+ * The console edits only the operator's own workflows, writes as the operator, and shows runs.
  *
  * Three findings from boss-1:
- *   - Flows listed every workflow_definitions row, BOSS's 32 system workflows included, with a
- *     raw JSON editor and "Publish version" — one paste could replace the governed coding
- *     pipeline that reviews every build.
+ *   - Agent Studio's Flows listed every workflow_definitions row, BOSS's 32 system workflows
+ *     included, with a raw JSON editor and "Publish version" — one paste could replace the
+ *     governed coding pipeline that reviews every build.
  *   - Every Studio write hard-coded its actor ('vp_agents', 'ceo'); with API auth on, the
- *     console key's principal is `ceo`, so Create agent failed with 403 after leaving an orphan
- *     role behind.
+ *     console key's principal is `ceo`, so Create agent failed with 403.
  *   - Agent and panel runs had no visible result anywhere.
+ *
+ * REWRITTEN for Workflow Studio. Flows is gone: the one JSON editor is the Workflow editor's,
+ * which saves through POST /v1/delivery-workflows/publish — a standard is saved as the
+ * operator's copy and a system workflow is refused (tests/save-flow.test.tsx and the API's
+ * publish tests). What is pinned here: nothing in the console writes a workflow any other way,
+ * Studio's remaining actions write as the operator, and their runs are shown.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -16,25 +21,20 @@ import { describe, expect, it } from "vitest";
 import { codeOnly } from "./_helpers/source";
 
 const ACTIONS = codeOnly("app/agent-studio-actions.ts");
-const UI = codeOnly("app/agent-studio-ui.tsx");
+const PROFILE = codeOnly("app/agent-profile-ui.tsx");
 
-describe("workflows go through the customer's door", () => {
-  it("publish and create use the product endpoints, never the generic one", () => {
-    expect(ACTIONS).toContain('"/v1/delivery-workflows/save"');
-    expect(ACTIONS).toContain('"/v1/delivery-workflows/create"');
-    expect(ACTIONS).not.toMatch(/\/v1\/workflows\/\$\{/);
-    expect(ACTIONS).not.toContain('post("/v1/workflows"');
+describe("workflows go through the customer's door, and only that one", () => {
+  it("Studio's actions no longer create, publish, validate or run a workflow", () => {
+    for (const gone of ["createStudioWorkflow", "publishStudioWorkflowVersion",
+                        "validateStudioWorkflow", "runStudioWorkflow"]) {
+      expect(ACTIONS).not.toContain(gone);
+    }
+    expect(ACTIONS).not.toContain("/v1/delivery-workflows/");
+    expect(ACTIONS).not.toContain('"/v1/workflow-runs"');
+    expect(ACTIONS).not.toMatch(/\/v1\/workflows\b/);
   });
 
-  it("Flows says what it holds and where BOSS's own workflows are changed", () => {
-    expect(UI).toContain('data-testid="as-flows-scope"');
-    // REWRITTEN: this pinned "fork it in Workflow &gt; Catalogue", advice that could not be
-    // followed: the catalogue lists product templates, not BOSS's own workflows.
-    expect(UI).toContain("are not editable from the console");
-    expect(UI).not.toMatch(/to change one, fork it/);
-  });
-
-  it("the API only hands Studio product workflows, and refuses publishes over BOSS's", () => {
+  it("the API still refuses an operator publish over BOSS's own workflows", () => {
     const api = readFileSync("../api/app/main.py", "utf8");
     const catalog = api.slice(api.indexOf('@app.get("/v1/agent-studio/catalog")'),
                               api.indexOf('@app.post("/v1/agent-studio/catalog-smoke")'));
@@ -48,61 +48,31 @@ describe("Studio writes as the signed-in operator", () => {
     expect(ACTIONS).not.toMatch(/actor:\s*"(vp_agents|ceo|operator)"/);
   });
 
-  // REWRITTEN AT INTEGRATION. The console-a and agents streams fixed the same 403 ("'ceo' is
-  // not allowed to act as 'vp_agents'") two ways; the agents stream's is kept: the actor is
-  // REQUIRED (no "executive_console" default to fall back to), and the wizard builds its
-  // submission with the operator in it. tests/agent-writes-carry-the-signed-in-actor.test.ts
-  // enforces the class across every agent writer.
   it("every exported Studio action takes the actor, and none may leave it out", () => {
     const exported = [...ACTIONS.matchAll(/export async function (\w+)\(([^)]*)\)/g)];
-    expect(exported.length).toBeGreaterThanOrEqual(10);
+    expect(exported.length).toBeGreaterThanOrEqual(5);
     for (const [, name, params] of exported) {
       if (name === "createStudioAgent") continue; // carries it in the submission, below
       expect(params, name).toMatch(/\bactor: string/);
     }
   });
 
-  it("the wizard's own submission is made as the operator", () => {
+  it("New agent's profile submission is made as the operator", () => {
     expect(ACTIONS).toContain("const actor = submission.actor;");
-    expect(codeOnly("app/agent-creation-wizard.tsx"))
+    expect(codeOnly("app/agent-quick-create.tsx"))
       .toContain("buildAgentWizardSubmission(projectId, draft, actor)");
-  });
-
-  it("both pages hand the operator to Studio and to Agent work's wizard", () => {
-    // The Community tree has one page: the private repo's page-community.tsx IS this page.tsx
-  // (the export's page_export_rewrite), so the console-a stream's two-page loop reads one here.
-  for (const page of ["app/page.tsx"]) {
-      const src = readFileSync(page, "utf8");
-      expect(src).toMatch(/<AgentStudio[\s\S]{0,200}actor=\{activeActorId\}/);
-      expect(src).toMatch(/<WorkforceArea[^>]*actor=\{activeActorId\}/);
-    }
-    expect(codeOnly("app/workforce-ui.tsx"))
-      .toMatch(/<AgentCreationWizard[^>]*actor=\{actor\}/);
   });
 });
 
 describe("what happened to a run", () => {
-  it("lists the selected agent's or panel's recent runs with their outcome", () => {
-    expect(UI).toContain("<StudioRuns selection={selection} feed={feed} />");
-    expect(UI).toContain('data-testid="as-run-row"');
-    expect(UI).toContain("Finished — no summary was recorded.");
+  it("an agent's Profile and each panel list their recent runs with their outcome", () => {
+    expect(PROFILE).toContain("feed.agentRuns.filter((r) => r.agent_key === agent.agent_key)");
+    expect(PROFILE).toContain("feed.panelRuns.filter((r) => r.panel_key === panel.panel_key)");
+    expect(PROFILE).toContain('data-testid="wf-ag-runs"');
   });
 
-  it("a started workflow run links to itself in Workflow", () => {
-    expect(UI).toContain('data-testid="as-open-run"');
-    expect(UI).toContain("?area=delivery_workflows&wfr=");
-  });
-});
-
-describe("plain words", () => {
-  it("no storage-engine jargon, no 'objects'", () => {
-    expect(UI).not.toContain("Redis cursors");
-    expect(UI).not.toMatch(/\{" "\}\s*objects/);
-  });
-
-  it("a Definition link for a role with no agent prefills the wizard", () => {
-    expect(UI).toContain("initialRoleKey={requestedRole || undefined}");
-    const wizard = codeOnly("app/agent-creation-wizard.tsx");
-    expect(wizard).toContain("roles.find((r) => r.roleKey === initialRoleKey)");
+  it("a refused panel run draws the checklist, like every other start", () => {
+    expect(PROFILE).toContain("asReadiness(next.readiness)");
+    expect(PROFILE).toContain("<StartRefusal");
   });
 });

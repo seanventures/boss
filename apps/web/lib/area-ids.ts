@@ -10,7 +10,6 @@
  */
 export const AREA_IDS = [
   "workforce",
-  "org_chart",
   "agent",
   "dashboard",
   "overview",
@@ -35,7 +34,6 @@ export const AREA_IDS = [
   "github",
   "infra",
   "capabilities",
-  "studio",
   "sandboxes",
   "foundations",
   "components",
