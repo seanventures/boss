@@ -80,12 +80,17 @@ describe("a chart that cannot be drawn is refused before it is stored", () => {
 describe("you can say something to an agent", () => {
   const WF = codeOnly("app/workforce-ui.tsx");
   const CHAT = codeOnly("app/agent-ui.tsx");
+  // Agent World: Ask carries the ROLE KEY to the 1:1 talk (lib/agent-world.ts askAgent), which
+  // falls back to this same side dock, addressed to that agent, until the talk is there.
+  const ASK = codeOnly("lib/agent-world.ts");
+  const ROSTER = codeOnly("app/agents/roster-zones.tsx");
 
   it("every agent card offers it", () => {
     // The page listed what every agent had done and offered no way to say anything to any of
     // them — read-only, on a screen about a workforce.
-    expect(WF).toContain('data-testid={`wf-ask-${a.id}`}');
+    expect(ROSTER).toContain('data-testid={`wf-ask-${a.id}`}');
     expect(WF).toContain("function askAgent");
+    expect(WF).toContain("talkTo(roleKey, agentName");
   });
 
   it("opens the side dock in place rather than leaving the page", () => {
@@ -94,13 +99,13 @@ describe("you can say something to an agent", () => {
     // as a run id.
     // Through the one door helper, which edits the current URL and fires the popstate the
     // shell listens for (lib/dock-subject.ts).
-    expect(WF).toContain("openDockAbout({ subject: null, role: agentName");
+    expect(ASK).toContain("openDockAbout({ subject: null, role: name || roleKey");
   });
 
   it("addresses the question to that agent, not to BOSS in general", () => {
     // The name used to be prose in a prefilled box, so the answer came from BOSS itself with
     // no lens, no remit and no memory of what that role had argued.
-    expect(WF).toContain("`@${agentName}: `");
+    expect(ASK).toContain("`@${name || roleKey}: `");
     expect(CHAT).toContain('fd.set("role", roleName)');
   });
 

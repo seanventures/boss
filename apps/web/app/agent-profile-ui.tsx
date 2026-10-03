@@ -26,6 +26,8 @@ import { ClientRelativeTime } from "./client-relative-time";
 import { HelpTip } from "./help-tip";
 import { runStudioPanel, testStudioAgent, type StudioActionResult } from "./agent-studio-actions";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
+import type { Persona } from "../lib/agent-world-types";
+import { PassportTest } from "./agents/passport-test";
 
 const words = (value: unknown): string =>
   typeof value === "string" && value ? value.replaceAll("_", " ") : "—";
@@ -74,9 +76,12 @@ function RecentRuns({ runs }: { runs: StudioRun[] }) {
   );
 }
 
-/** The Profile section of an agent's page. Read-only; Test is the one action. */
-export function AgentProfile({ feed, roleKey, actor }: {
+/** The Profile section of an agent's page. Read-only; Test is the one action — the real one
+ *  (a model call in its compiled voice, Agent World) above the Studio definition's compile check. */
+export function AgentProfile({ feed, roleKey, actor, draftPersona }: {
   feed: AgentStudioFeed; roleKey: string; actor: string;
+  /** An unsaved voice from the Persona editor, so Test hears it before Save. */
+  draftPersona?: Persona | null;
 }) {
   const profiles = profilesFor(feed, roleKey);
   return (
@@ -84,6 +89,7 @@ export function AgentProfile({ feed, roleKey, actor }: {
       <div className="ct-block-title">
         Profile <HelpTip label="Profile" text="Prompts and model settings for this agent" />
       </div>
+      <PassportTest projectId={feed.projectId} actor={actor} roleKey={roleKey} persona={draftPersona} />
       {!feed.apiReachable ? (
         <p className="detail" title={feed.blockedReason}>Unavailable</p>
       ) : profiles.length === 0 ? (
@@ -189,7 +195,7 @@ function PanelCard({ panel, feed, actor }: { panel: StudioPanel; feed: AgentStud
       <div className="wf-ag-members">
         {members.map((m) => (
           <span key={m.member_key} title={m.perspective || (m.required ? "Required" : `Weight ${m.weight}`)}>
-            <AgentChip roleKey={m.role_key} label={m.agent_name} />
+            <AgentChip roleKey={m.role_key} label={m.agent_name} size={24} />
           </span>
         ))}
         {members.length === 0 ? <span className="detail">No members</span> : null}
