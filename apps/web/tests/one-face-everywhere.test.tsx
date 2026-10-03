@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { AgentAvatar } from "../app/agent-avatar";
 import { AgentChip } from "../app/agent-chip";
+import { ROLE_ORDER, SeatAvatar } from "../app/meeting-room-ui";
 import { Avatar as InspectorAvatar } from "../app/workflows/editor/inspector/agent-combobox";
 import { StepNode } from "../app/workflows/flow/step-node";
 import { avatarSvg, specForRole } from "../lib/agent-avatar";
@@ -79,11 +80,21 @@ describe("one agent, one face, on every surface", () => {
     expect(node(named, "run", "done")).toContain('data-state="done"');
   });
 
-  it("a face beside a name is hidden from screen readers; a standalone face says who and what", () => {
+  it("a face beside a name is hidden from screen readers; a standalone face says who, that it is an AI, and what", () => {
     expect(renderToStaticMarkup(<AgentAvatar agent="qa" />)).toContain('aria-hidden="true"');
     const alone = renderToStaticMarkup(<AgentAvatar agent="qa" standalone state="needs_you" size={48} />);
     expect(alone).toContain('role="img"');
-    expect(alone).toContain('aria-label="QA Lead, Needs you"');
+    expect(alone).toContain('aria-label="QA Lead, AI agent, Needs you"');
+    // The system faces are not agents and do not claim to be.
+    expect(renderToStaticMarkup(<AgentAvatar variant="you" standalone />)).toContain('aria-label="You, Idle"');
+  });
+
+  it("a chip tells a screen reader the agent is an AI, at every size", () => {
+    for (const size of [16, 24, 48] as const) {
+      const html = renderToStaticMarkup(<AgentChip roleKey="qa" size={size} />);
+      // A sibling of the name, outside the aria-hidden face: the badge and tooltip are not read aloud.
+      expect(html, String(size)).toContain('<span class="agent-chip-name">QA Lead</span><span class="ag-sr">, AI agent</span>');
+    }
   });
 
   it("shows the AI badge from 32px, and says AI agent in the chip's tooltip below that", () => {
@@ -97,9 +108,34 @@ describe("one agent, one face, on every surface", () => {
     const { primeIdentities, resetIdentities } = await import("../lib/agent-identity");
     primeIdentities([{ role_key: "qa", lifecycle: "paused" }]);
     try {
-      expect(renderToStaticMarkup(<AgentChip roleKey="qa" state="working" />)).toContain('data-state="paused"');
+      const chip = renderToStaticMarkup(<AgentChip roleKey="qa" state="working" />);
+      // The face, the chip and the word agree: one state, never "paused" beside "Working".
+      expect(chip).toContain('class="agent-chip" data-testid="agent-chip-qa" data-state="paused"');
+      expect(chip).toContain('<span class="ag-state-word" data-state="paused">Paused</span>');
+      expect(chip).not.toContain("Working");
+      expect(chip).not.toContain('data-state="working"');
+      // Paused is said even when the caller passed no state at all.
+      expect(renderToStaticMarkup(<AgentChip roleKey="qa" />)).toContain(">Paused</span>");
     } finally {
       resetIdentities();
     }
+  });
+
+  it("seats every default panel role as its own face, while each keeps its agent's hat and palette", async () => {
+    const { agentIdentity } = await import("../lib/agent-identity");
+    expect(ROLE_ORDER).toHaveLength(10);
+    for (const size of [24, 26, 48]) {
+      const faces = ROLE_ORDER.map((seat) => svgOf(renderToStaticMarkup(<SeatAvatar role={seat} size={size} />)));
+      expect(new Set(faces).size, `${size}px`).toBe(ROLE_ORDER.length);
+    }
+    // Growth is still the PM's crew: Juno's hat and palette, its own emblem and visor.
+    const growth = renderToStaticMarkup(<SeatAvatar role="Growth / Marketing" />);
+    expect(growth).toContain('data-role-key="pm"');
+    const pm = agentIdentity("pm").avatar;
+    const { seatAvatar } = await import("../lib/agent-identity");
+    expect(seatAvatar("Growth / Marketing")).toMatchObject({ hat: pm.hat, palette: pm.palette });
+    expect(seatAvatar("growth")).toEqual(seatAvatar("Growth / Marketing"));
+    // A seat with an agent of its own is exactly that agent's face.
+    expect(svgOf(renderToStaticMarkup(<SeatAvatar role="QA / Test" size={24} />))).toBe(expected);
   });
 });

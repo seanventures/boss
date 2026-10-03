@@ -5,6 +5,7 @@
  * the renderer. Lines are strokes (`s`), solid shapes are fills (`f`). Original drawings, no icon
  * set copied, so the kit stays Apache-2.0 with no attribution chain.
  */
+import { dict } from "./dict";
 
 export type Emblem = { id: string; label: string; s?: string; f?: string };
 
@@ -43,4 +44,4 @@ export const EMBLEMS: readonly Emblem[] = [
   { id: "chalk", label: "Chalk", s: "M-7 5 L3 -5 L6 -2 L-4 8 Z M-8 -6 H-1 M-8 -2.5 H-4" },
 ] as const;
 
-export const EMBLEM_BY_ID: Record<string, Emblem> = Object.fromEntries(EMBLEMS.map((e) => [e.id, e]));
+export const EMBLEM_BY_ID: Readonly<Record<string, Emblem>> = dict(EMBLEMS.map((e) => [e.id, e]));

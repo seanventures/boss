@@ -20,6 +20,7 @@ import { CAST, CAST_BY_KEY } from "./avatar-kit/cast";
 import { EMBLEMS, EMBLEM_BY_ID, type Emblem } from "./avatar-kit/emblems";
 import { GENERIC_HATS, HAT_BY_ID, type Hat } from "./avatar-kit/hats";
 import { GLASS, OUTLINE, PALETTES, PALETTE_BY_ID, STATE_COLOURS, type Palette } from "./avatar-kit/palettes";
+import { own } from "./avatar-kit/dict";
 import { STATE_WORDS } from "./avatar-kit/states";
 import { VISORS, VISOR_BY_ID, eyeBars, mouthBars, type Visor } from "./avatar-kit/visors";
 
@@ -60,15 +61,16 @@ export type Parts = { hat: Hat; emblem: Emblem; palette: Palette; visor: Visor }
 export function resolveParts(spec: AvatarSpec): Parts {
   const seed = spec.seed || "boss";
   const pick = <T,>(list: readonly T[], salt: number) => list[cyrb53(seed, salt) % list.length];
+  const named = own(HAT_BY_ID, spec.hat);
   const parts = {
-    hat: (spec.hat && HAT_BY_ID[spec.hat]) || pick(GENERIC_HATS, 1),
-    emblem: (spec.emblem && EMBLEM_BY_ID[spec.emblem]) || pick(EMBLEMS, 2),
-    palette: (spec.palette && PALETTE_BY_ID[spec.palette]) || pick(PALETTES, 3),
-    visor: (spec.visor && VISOR_BY_ID[spec.visor]) || pick(VISORS, 4),
+    hat: named || pick(GENERIC_HATS, 1),
+    emblem: own(EMBLEM_BY_ID, spec.emblem) || pick(EMBLEMS, 2),
+    palette: own(PALETTE_BY_ID, spec.palette) || pick(PALETTES, 3),
+    visor: own(VISOR_BY_ID, spec.visor) || pick(VISORS, 4),
   };
   // A seeded face must never land exactly on a shipped role's face: a custom agent that looks
   // like the CTO is one agent wearing another's identity. Re-pick the hat until it doesn't.
-  if (!spec.hat) {
+  if (!named) {
     for (let salt = 11; CAST_FACES.has(faceKey(parts)) && salt < 40; salt++) parts.hat = pick(GENERIC_HATS, salt);
   }
   return parts;
@@ -211,7 +213,7 @@ const MEMO = new Map<string, string>();
 /** The face, as an SVG string. Pure and memoised: same inputs, same bytes, on every surface. */
 export function avatarSvg(spec: AvatarSpec, o: { size: number; state?: AvatarState; variant?: AvatarVariant }): string {
   const lod = lodFor(o.size);
-  const state: AvatarState = o.state && STATE_WORDS[o.state] ? o.state : "idle";
+  const state: AvatarState = own(STATE_WORDS, o.state) ? o.state! : "idle";
   const variant: AvatarVariant = o.variant ?? "agent";
   const key = `${variant}|${spec.seed}|${spec.hat ?? ""}|${spec.emblem ?? ""}|${spec.palette ?? ""}|${spec.visor ?? ""}|${o.size}|${state}`;
   const hit = MEMO.get(key);

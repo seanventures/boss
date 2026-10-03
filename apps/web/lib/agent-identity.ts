@@ -15,7 +15,8 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import type { AgentIdentity, AvatarSpec, Lifecycle } from "./agent-world-types";
-import { CAST, CAST_BY_KEY } from "./avatar-kit/cast";
+import { CAST, CAST_BY_KEY, SEAT_LOOKS } from "./avatar-kit/cast";
+import { dict, own } from "./avatar-kit/dict";
 import { seededSpec } from "./agent-avatar";
 
 /** Mirror of engine/boss_engine/services/agent_world_types.py ALIASES (tested for equality). */
@@ -54,12 +55,16 @@ type Wire = {
 // ── The store: identities the API returned, keyed by role key ─────────────────────────────
 
 let loaded = new Map<string, AgentIdentity>();
-let serverAliases: Record<string, string> = {};
+let serverAliases: Readonly<Record<string, string>> = dict([]);
 let byName = new Map<string, string>();
 let version = 0;
 const listeners = new Set<() => void>();
+// Loading: which project the store holds (or is fetching), whether that load succeeded, and a
+// generation that a reset, a refresh or a project switch bumps so a late response is dropped.
 let loadedFor: string | null = null;
+let loadedOk = false;
 let inflight: Promise<void> | null = null;
+let generation = 0;
 
 function rebuildNames() {
   byName = new Map();
@@ -79,6 +84,7 @@ function bump() {
   for (const l of listeners) l();
 }
 
+const AVATAR_FIELDS = new Set(["seed", "hat", "emblem", "palette", "visor"]);
 const LIFECYCLES: readonly Lifecycle[] = ["active", "paused", "retired"];
 
 /** Load the install's identities (what `/v1/agents/identities` returns). Also the test seam. */
@@ -90,28 +96,34 @@ export function primeIdentities(items: Wire[], aliases: Record<string, string> =
     next.set(roleKey, fromWire(roleKey, w));
   }
   loaded = next;
-  serverAliases = Object.fromEntries(Object.entries(aliases).map(([k, v]) => [k.trim().toLowerCase(), v]));
+  serverAliases = dict(Object.entries(aliases).map(([k, v]) => [k.trim().toLowerCase(), v] as const));
   rebuildNames();
   bump();
 }
 
 /** Forget what was loaded (tests; a project switch). */
 export function resetIdentities(): void {
-  loaded = new Map();
-  serverAliases = {};
+  generation++;
   loadedFor = null;
+  loadedOk = false;
   inflight = null;
+  clearStore();
+}
+
+function clearStore() {
+  loaded = new Map();
+  serverAliases = dict([]);
   rebuildNames();
   bump();
 }
 
 function fromWire(roleKey: string, w: Wire): AgentIdentity {
-  const cast = CAST_BY_KEY[roleKey];
+  const cast = own(CAST_BY_KEY, roleKey);
   // A shipped role keeps its hand-drawn parts unless the operator picked others; a custom agent
   // is seeded from its agent_id, which never changes, so its face never drifts.
   const avatar: AvatarSpec = {
     ...(cast?.avatar ?? seededSpec(w.agent_id || roleKey)),
-    ...Object.fromEntries(Object.entries(w.avatar ?? {}).filter(([k, v]) => v && k !== "kit")),
+    ...Object.fromEntries(Object.entries(w.avatar ?? {}).filter(([k, v]) => AVATAR_FIELDS.has(k) && v && typeof v === "string")),
     kit: "boss-v1",
   } as AvatarSpec;
   if (cast && w.avatar?.seed && !w.avatar.hat && !w.avatar.emblem && !w.avatar.palette && !w.avatar.visor) {
@@ -137,14 +149,15 @@ function humanise(key: string): string {
 export function resolveRoleKey(keyOrTitle: string): string | null {
   const raw = (keyOrTitle ?? "").trim();
   if (!raw) return null;
-  if (loaded.has(raw) || CAST_BY_KEY[raw]) return raw;
+  const known = (k: string) => loaded.has(k) || own(CAST_BY_KEY, k) !== undefined;
+  if (known(raw)) return raw;
   const low = raw.toLowerCase();
-  if (loaded.has(low) || CAST_BY_KEY[low]) return low;
-  const aliased = serverAliases[low] ?? ALIASES[low] ?? byName.get(low);
+  if (known(low)) return low;
+  const aliased = own(serverAliases, low) ?? own(ALIASES, low) ?? byName.get(low);
   if (aliased) return aliased;
   const snake = low.replace(/[\s/&-]+/g, "_").replace(/_+/g, "_");
-  if (loaded.has(snake) || CAST_BY_KEY[snake]) return snake;
-  return ALIASES[snake] ?? null;
+  if (known(snake)) return snake;
+  return own(ALIASES, snake) ?? null;
 }
 
 /** Any name → one identity. Never throws and never returns a blank face. */
@@ -153,7 +166,7 @@ export function agentIdentity(keyOrTitle: string): AgentIdentity {
   if (roleKey) {
     const hit = loaded.get(roleKey);
     if (hit) return hit;
-    const cast = CAST_BY_KEY[roleKey];
+    const cast = own(CAST_BY_KEY, roleKey);
     if (cast) {
       return {
         roleKey, agentId: null, name: cast.name,
@@ -167,10 +180,21 @@ export function agentIdentity(keyOrTitle: string): AgentIdentity {
   return { roleKey: roleKey ?? key, agentId: null, name: humanise(key), archetype: null, avatar: seededSpec(key), lifecycle: "active" };
 }
 
+/**
+ * A panel seat's face: its agent's face, plus the seat's own emblem and visor when the seat shares
+ * that agent with another seat (SEAT_LOOKS). Every seat in a meeting is then a distinct face,
+ * while the agent behind it stays the one identity.
+ */
+export function seatAvatar(seatTitle: string): AvatarSpec {
+  const base = agentIdentity(seatTitle).avatar;
+  const look = own(SEAT_LOOKS, (seatTitle ?? "").trim().toLowerCase());
+  return look ? { ...base, ...look, seed: `${base.seed}#${look.emblem}` } : base;
+}
+
 /** True when the kit or the install knows this agent (a test asks it of every alias). */
 export function hasKnownFace(keyOrTitle: string): boolean {
   const k = resolveRoleKey(keyOrTitle);
-  return Boolean(k && (loaded.has(k) || CAST_BY_KEY[k]));
+  return Boolean(k && (loaded.has(k) || own(CAST_BY_KEY, k)));
 }
 
 function subscribe(l: () => void) {
@@ -184,24 +208,52 @@ export function useIdentityVersion(): number {
   return useSyncExternalStore(subscribe, snapshot, () => 0);
 }
 
-/** Fetch the install's identities once per project. Fails soft: the cast still draws every face. */
+/**
+ * Fetch the install's identities for a project. A load that succeeded is kept until
+ * `refreshIdentities`; one that failed is retried on the next call. Switching project clears the
+ * old project's identities first, and a response that lands after a switch or a refresh is
+ * dropped. Fails soft: the cast still draws every face.
+ */
 export function loadIdentities(projectId: string, fetcher: typeof fetch = fetch): Promise<void> {
   if (!projectId) return Promise.resolve();
-  if (loadedFor === projectId && inflight) return inflight;
-  loadedFor = projectId;
-  inflight = (async () => {
+  if (loadedFor === projectId) {
+    if (inflight) return inflight;
+    if (loadedOk) return Promise.resolve();
+  } else {
+    generation++;
+    loadedFor = projectId;
+    loadedOk = false;
+    inflight = null;
+    if (loaded.size || Object.keys(serverAliases).length) clearStore(); // never show A's faces on B
+  }
+  const mine = generation;
+  const p: Promise<void> = (async () => {
     try {
       const r = await fetcher(`/v1/agents/identities?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
       if (!r.ok) return;
       const data = await r.json() as unknown;
+      if (mine !== generation) return; // a switch or refresh came after this request
       const d = data as { items?: Wire[]; identities?: Wire[]; aliases?: Record<string, string> } | Wire[];
       const items = Array.isArray(d) ? d : (d.items ?? d.identities ?? []);
       primeIdentities(Array.isArray(items) ? items : [], Array.isArray(d) ? {} : (d.aliases ?? {}));
+      loadedOk = true;
     } catch {
-      // The API is down or older than Agent World: the shipped cast is the answer.
+      // The API is down or older than Agent World: the shipped cast is the answer until a retry.
     }
   })();
-  return inflight;
+  inflight = p;
+  void p.then(() => { if (inflight === p) inflight = null; });
+  return p;
+}
+
+/** Load a project's identities again, after a persona or face is saved (the Passport calls it). */
+export function refreshIdentities(projectId: string, fetcher: typeof fetch = fetch): Promise<void> {
+  if (loadedFor === projectId) {
+    generation++;
+    loadedOk = false;
+    inflight = null;
+  }
+  return loadIdentities(projectId, fetcher);
 }
 
 /** The identities for a project, loading them on first use. */

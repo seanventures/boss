@@ -8,9 +8,10 @@
  * through lib/agent-identity.ts and draws through lib/agent-avatar.ts, the same pure function
  * the share card and the README cast use, so a face is identical on every surface.
  *
- * Next to a name the face is decorative (aria-hidden, the name says who). Standalone it is
- * `role="img"` with "<name>, <state>". The AI badge shows from 32px; below that the caller's
- * tooltip carries "AI agent" (AgentChip does).
+ * Next to a name the face is decorative (aria-hidden, the name says who; AgentChip adds a
+ * visually hidden "AI agent"). Standalone it is `role="img"` with "<name>, AI agent, <state>",
+ * so a screen reader always hears that an agent is an AI. The AI badge shows from 32px; below
+ * that the caller's tooltip carries "AI agent" (AgentChip does).
  */
 import React, { useRef } from "react";
 
@@ -62,8 +63,9 @@ export function AgentAvatar({ size = 24, state = "idle", motion, standalone = fa
   const face = resolveFace(input, size, state);
   const live = LIVE_STATES.has(face.state) || (face.state === "idle" && size >= 96) || Boolean(motion);
   useAvatarMotion(ref, live);
-  const label = `${face.name}, ${STATE_WORDS[face.state]}`;
-  const showAi = (aiBadge ?? true) && (input.variant ?? "agent") === "agent" && size >= 32;
+  const isAgent = (input.variant ?? "agent") === "agent";
+  const label = `${face.name}${isAgent ? ", AI agent" : ""}, ${STATE_WORDS[face.state]}`;
+  const showAi = (aiBadge ?? true) && isAgent && size >= 32;
   return (
     <span ref={ref} className={`ag-avatar${className ? ` ${className}` : ""}`}
           style={{ ["--ag-size" as string]: `${size}px` }}

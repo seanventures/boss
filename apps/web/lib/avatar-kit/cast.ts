@@ -11,6 +11,7 @@
  * and the source for the README cast, so keep the two in step when a persona changes.
  */
 import type { AvatarSpec } from "../agent-world-types";
+import { dict } from "./dict";
 
 export type CastMember = {
   roleKey: string;
@@ -73,4 +74,21 @@ export const CAST: readonly CastMember[] = [
   picked("secrets_steward", "Secrets Steward", ["dome", "key", "amber", "shield"]),
 ];
 
-export const CAST_BY_KEY: Record<string, CastMember> = Object.fromEntries(CAST.map((c) => [c.roleKey, c]));
+export const CAST_BY_KEY: Readonly<Record<string, CastMember>> = dict(CAST.map((c) => [c.roleKey, c]));
+
+/**
+ * Panel seats that share a character. Growth and Data resolve to the PM, Customer Advocate to the
+ * Design Critic, Privacy & Safety to the Security Reviewer: right for persona and lineage, but a
+ * meeting would seat three identical Junos. A seat look keeps the role's hat and palette (whose
+ * crew it is) and gives the seat its own emblem and visor. Keyed by every name a panel uses.
+ */
+type SeatLook = Pick<AvatarSpec, "emblem" | "visor">;
+const SEATS: readonly [readonly string[], SeatLook][] = [
+  // The visor is the part that still reads at 24px (the emblem drops out below 32px), so each is
+  // one whose glass differs from its agent's at the smallest size: band vs slit vs lens vs shield.
+  [["growth", "growth / marketing"], { emblem: "bolt", visor: "slit" }],
+  [["data", "data / analytics"], { emblem: "chart", visor: "lens" }],
+  [["customer_advocate", "customer advocate"], { emblem: "people", visor: "slit" }],
+  [["privacy_safety", "privacy & safety"], { emblem: "key", visor: "lens" }],
+];
+export const SEAT_LOOKS: Readonly<Record<string, SeatLook>> = dict(SEATS.flatMap(([names, look]) => names.map((n) => [n, look] as const)));

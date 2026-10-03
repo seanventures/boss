@@ -8,6 +8,7 @@
  * as plain bars and the mouth; "full" (≥48px) draws each visor's own eye shape and details.
  */
 import { GLASS, type Palette } from "./palettes";
+import { dict } from "./dict";
 
 export type VisorLod = "band" | "bars" | "full";
 
@@ -103,7 +104,7 @@ export const VISORS: readonly Visor[] = [
   },
 ] as const;
 
-export const VISOR_BY_ID: Record<string, Visor> = Object.fromEntries(VISORS.map((v) => [v.id, v]));
+export const VISOR_BY_ID: Readonly<Record<string, Visor>> = dict(VISORS.map((v) => [v.id, v]));
 
 /** Plain eye bars for 32px: the same for every visor, so a small face stays calm and legible. */
 export function eyeBars(v: Visor, p: Palette): string {
