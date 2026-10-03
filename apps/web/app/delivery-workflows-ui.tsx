@@ -1143,7 +1143,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       }
       // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
       // always requires a person" is the whole value of the validation.
-      setNotice(result.ok ? `${label} — done.` : `${label} — ${result.error}`);
+      // A START IS NOT A FINISH. start_preview answers "starting" in a second and the app
+      // serves a minute later; "Starting a preview — done." told the operator nothing would
+      // follow. Where the engine says what happens next, say that instead.
+      const next = result.ok && action === "start_preview"
+        ? (result.data as { message?: unknown } | undefined)?.message : undefined;
+      setNotice(result.ok ? (typeof next === "string" && next ? `${label}: ${next}` : `${label} — done.`)
+                          : `${label} — ${result.error}`);
       // The Factory card and the deployment panels render the same rows this just changed.
       if (result.ok) notifyChanged("workflows", { action });
       // RELOAD WHILE STILL BUSY. `busy` was cleared BEFORE this, so every action ended the
@@ -4064,7 +4070,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const visibleLinks = links.filter((l) => l.label !== "open the preview");
   // Asked for on THIS build and not yet serving. The URL is the finish line; a POST returning
   // is not — which is why the old busy flag cleared a second after the click.
-  const starting = !!previewStarting && previewStarting === buildRunId && !previewHref;
+  // A FRESH ONE IS ON ITS WAY UNTIL A DIFFERENT LINK ARRIVES. This used to require "no link
+  // yet", so "Start a fresh one" — pressed exactly when a link already exists — ended its own
+  // starting state the moment it began: no "Starting…", the old link unchanged, and a click
+  // that looked dead for the minute the new preview took (boss-1, 2026-10-03).
+  const [freshFrom, setFreshFrom] = useState<string | null | undefined>(undefined);
+  const asked = !!previewStarting && previewStarting === buildRunId;
+  useEffect(() => { if (!asked) setFreshFrom(undefined); }, [asked]);
+  const starting = asked && (freshFrom !== undefined ? previewHref === freshFrom : !previewHref);
   const approval = step.approval as { mode?: string; approver_role?: string };
   // A manual gate that has not been answered. The one condition under which "waiting" and
   // "gate · <role>" are the same sentence twice.
@@ -4519,7 +4532,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           {buildRunId ? (
             <button type="button" className="cap-btn"
                     disabled={!!busy || starting}
-                    data-testid="dw-preview-run" onClick={() => onRunPreview(buildRunId)}>
+                    data-testid="dw-preview-run"
+                    onClick={() => { setFreshFrom(previewHref); onRunPreview(buildRunId); }}>
               {starting ? "Starting…"
                 : previewHref ? "Start a fresh one" : "Run preview"}
             </button>

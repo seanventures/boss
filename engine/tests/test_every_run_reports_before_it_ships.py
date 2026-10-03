@@ -52,7 +52,7 @@ def test_everything_that_does_work_has_happened_by_then(workflow):
     builds, previews, reviews readiness or changes code must precede it."""
     ids = _ids(workflow)
     at = ids.index("report")
-    for step in ("build", "preview", "preview_final", "plrr", "ux_review", "security_review"):
+    for step in ("build", "preview", "plrr", "ux_review", "security_review"):
         if step in ids:
             assert ids.index(step) < at, f"{step} runs after the report that describes it"
 
@@ -61,7 +61,8 @@ def test_the_full_delivery_path_reads_in_the_order_it_was_asked_for():
     """The operator's own sequence, spelled out: readiness, then its preview, then the
     report."""
     ids = _ids(next(w for w in CATALOGUE if w["key"] == "standard_product_delivery"))
-    assert ids.index("plrr") < ids.index("preview_final") < ids.index("report")
+    assert ids.index("plrr") < ids.index("report")
+    assert "preview_final" not in ids
 
 
 @pytest.mark.parametrize("workflow", SHIPPING, ids=lambda w: w["key"])

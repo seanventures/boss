@@ -70,7 +70,8 @@ class TestReadinessHasItsOwnStep:
         """PLRR writes code. Deploying straight after would ship something nobody looked at,
         which voids the gate the first preview exists to be."""
         steps = [s["id"] for s in _standard()["steps"]]
-        assert steps.index("plrr") < steps.index("preview_final") < steps.index("deploy")
+        assert steps.index("plrr") < steps.index("deploy")
+        assert "preview_final" not in steps
 
     def test_it_awaits_a_code_task_like_build_does(self):
         from boss_engine.services.workflow_capability_runner import _AWAIT_KINDS
