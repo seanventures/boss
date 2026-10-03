@@ -7,6 +7,10 @@
  * what it is set up with (design) or where it has got to (run). Every explanation is a
  * `data-tip`, so the node stays a glance and the reason is one hover away.
  *
+ * WHO RUNS IT IS ON EVERY NODE, AT EVERY DENSITY AND IN EVERY MODE: the agent's face (initials
+ * and colour, or the Auto / You / A person glyph) and its name when it fits. Where the name is
+ * cut, the row's tooltip leads with it.
+ *
  * The title is never the raw step id when a label exists: `stepView` resolves the step's own
  * title, then its custom-step or built-in label.
  */
@@ -47,6 +51,11 @@ const PHASE_MARK: Partial<Record<RunPhase, React.ComponentType<{ size?: number; 
 
 /** Flow blocks the runtime steps through itself: no agent runs them, so no agent row. */
 const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", "loop"]);
+
+/** Who runs it, then why: the name leads, because a narrow node may only have room for the face. */
+export function agentTip(agent: StepView["agent"]): string {
+  return agent.tip ? `${agent.label}\n${agent.tip}` : agent.label;
+}
 
 function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
@@ -90,13 +99,13 @@ export function StepNode(p: {
               from a colour alone, or from a glyph that only says what kind of step it is. */}
           {Mark ? <span className="wf-node-mark" data-phase={phase} data-testid="wf-node-mark"><Mark size={9} weight="bold" /></span> : null}
         </span>
-        <span className="wf-node-title">{view.title}</span>
+        <span className="wf-node-title" data-tip={view.title} data-tip-when="cut">{view.title}</span>
         {mode === "run" ? <span className="wf-sr">{PHASE_WORDS[phase]}</span> : null}
       </span>
       {BLOCK_TYPES.has(view.type) ? null : view.type === "wait" ? (
         <span className="wf-node-agent wf-node-wait" data-testid="wf-node-wait">{detail?.duration ?? ""}</span>
       ) : (
-        <span className="wf-node-agent" data-kind={view.agent.kind} data-tip={view.agent.tip || undefined}
+        <span className="wf-node-agent" data-kind={view.agent.kind} data-tip={agentTip(view.agent)}
               data-testid="wf-node-agent">
           <AgentAvatar agent={view.agent} />
           <span className="wf-node-agent-name">{view.agent.label}</span>

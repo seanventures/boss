@@ -101,6 +101,60 @@ function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
 const publishes = () => api.writes.filter((w) => w.action === "publish");
 const nonChecks = () => api.writes.filter((w) => w.action !== "check");
 
+describe("the bar stays one row", () => {
+  const css = () => readFileSync("app/workflows/editor.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("holds every control in one row that does not wrap at a 1100px bar or wider", async () => {
+    await mount();
+    const row = byTest("wf-topbar-row");
+    for (const id of ["wf-back", "wf-name", "wf-version", "wf-kind", "wf-undo", "wf-view-visual", "wf-describe",
+                      "wf-check", "wf-start", "wf-save", "wf-more"]) {
+      expect(row.contains(byTest(id)), id).toBe(true);
+    }
+    const sheet = css();
+    expect(sheet).toMatch(/\.wf-topbar-row \{[^}]*flex-wrap: nowrap;/);
+    // Nothing on the bar's row wraps outside the narrow-bar container query.
+    const outside = sheet.replace(/@container[^{]*\{[^}]*\{[^}]*\}\s*\}/g, "");
+    expect(outside).not.toMatch(/\.wf-topbar-row[^{]*\{[^}]*flex-wrap: wrap/);
+    // The query is strict: a bar of exactly 1100px (its padding 2 × 12px and border 2 × 1px off,
+    // 1074px of content) never matches it. `max-width: 1074px` would.
+    const q = sheet.match(/@container wf-topbar \(([^)]*)\)/)![1];
+    expect(q).toMatch(/^width < \d+px$/);
+    expect(Number(q.match(/\d+/)![0])).toBeLessThanOrEqual(1100 - 26);
+    expect(sheet).toMatch(/\.wf-topbar \{[^}]*container: wf-topbar \/ inline-size;/);
+  });
+
+  it("wraps by group, never item by item: the actions move as one block and ⋯ stays with Save", async () => {
+    await mount();
+    const row = byTest("wf-topbar-row");
+    const groups = [...row.children] as HTMLElement[];
+    expect(groups.map((g) => g.dataset.testid)).toEqual(["wf-bar-identity", "wf-bar-actions"]);
+    const identity = byTest("wf-bar-identity");
+    for (const id of ["wf-back", "wf-name", "wf-version", "wf-kind"]) expect(identity.contains(byTest(id)), id).toBe(true);
+    const actions = byTest("wf-bar-actions");
+    for (const id of ["wf-undo", "wf-redo", "wf-view-visual", "wf-describe", "wf-check", "wf-start", "wf-save", "wf-more"]) {
+      expect(actions.contains(byTest(id)), id).toBe(true);
+    }
+    // ⋯ shares its unbreakable group with Save, Start and Check, so no width leaves it alone.
+    const commit = byTest("wf-bar-commit");
+    expect(commit.contains(byTest("wf-more")) && commit.contains(byTest("wf-save"))).toBe(true);
+    const sheet = css();
+    expect(sheet).toMatch(/\.wf-bar-tools, \.wf-bar-commit \{[^}]*flex: none; flex-wrap: nowrap;/);
+    expect(sheet).toMatch(/\.wf-bar-actions \{[^}]*justify-content: flex-end;[^}]*margin-left: auto;/);
+  });
+
+  it("gives way at the name first: it is cut with an ellipsis and the whole name is its tooltip", async () => {
+    await mount();
+    const name = byTest("wf-name");
+    expect(name.dataset.tip).toBe("Standard Product Delivery");
+    expect(name.dataset.tipWhen).toBe("cut");
+    const sheet = css();
+    expect(sheet).toMatch(/\.wf-bar-identity > \* \{ flex: none; white-space: nowrap; \}/);
+    expect(sheet).toMatch(/\.wf-bar-identity > \.wf-name \{ flex: 0 1 [^;]+; min-width: [^;]+; \}/);
+    expect(sheet).toMatch(/\.wf-name-input \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
+  });
+});
+
 describe("the bar and the summary", () => {
   it("says what is open: name, version, Standard, and Save as my copy", async () => {
     await mount();
@@ -494,12 +548,12 @@ describe("Changes", () => {
   });
 });
 
-describe("the inspector never reflows the lane", () => {
-  it("11 steps at 1440px: selecting one keeps the lane's density and scale, unscrolled, and brings the step clear of the drawer", async () => {
+describe("the inspector never hides the flow", () => {
+  it("under 1280px it floats over the lane, which keeps its density and scale and brings the selected step clear of it", async () => {
     api.workflows[0].spec = linear(11);
-    bodyWidth = 1440 - 84 - 32;
-    // The palette folds to its rail (48px), and the grid gap and the lane's border come off.
-    laneWidth = bodyWidth - 48 - 12 - 2;
+    bodyWidth = 1200 - 84 - 32;
+    // The palette stays open (240px); the grid gap and the lane's border come off.
+    laneWidth = bodyWidth - 240 - 12 - 2;
     const laneLeft = bodyWidth - laneWidth;
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function rect(this: Element) {
       const el = this as HTMLElement;
@@ -513,7 +567,6 @@ describe("the inspector never reflows the lane", () => {
       const lane = q('.wf-stage [data-testid="wf-lane"]');
       const canvas = q(".wf-stage .wf-lane-canvas");
       const before = { density: lane.dataset.density, scale: canvas.dataset.scale };
-      expect(lane.dataset.scrolls).toBeUndefined();
 
       const last = laneIds().at(-1)!;
       click(node(last));
@@ -521,8 +574,6 @@ describe("the inspector never reflows the lane", () => {
       expect(byTest("wf-drawer")).not.toBeNull();
       expect(lane.dataset.density).toBe(before.density);
       expect(canvas.dataset.scale).toBe(before.scale);
-      expect(lane.dataset.scrolls).toBeUndefined();
-      expect(q('.wf-stage [data-testid="wf-minimap"]')).toBeNull();
       // Brought out from under the drawer, which covers the lane's last 380px.
       const viewport = q(".wf-stage .wf-lane-viewport");
       const box = q(`.wf-slot[data-slot="${last}"]`);
@@ -538,10 +589,42 @@ describe("the inspector never reflows the lane", () => {
     }
   });
 
-  it("gives the drawer no column of its own in the Visual view", () => {
-    const css = readFileSync("app/workflows/editor.css", "utf8");
-    for (const line of css.split("\n").filter((l) => /grid-template-columns:[^;]*380px/.test(l))) {
-      expect(line).toContain('[data-view="json"]');
+  it("from 1280px gives the drawer a column beside the lane in both views, so the lane refits instead of being covered", () => {
+    const css = readFileSync("app/workflows/editor.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const wide = css.slice(css.indexOf("@media (min-width: 1280px)"));
+    const block = wide.slice(0, wide.indexOf("\n}") + 2);
+    // Visual, with the palette open and folded.
+    expect(block).toMatch(/\.wf-editor\[data-inspector="open"\] \.wf-body \{ grid-template-columns: 240px minmax\(0, 1fr\) 380px;/);
+    expect(block).toMatch(/\.wf-editor\[data-inspector="open"\] \.wf-body\[data-palette="rail"\] \{ grid-template-columns: 48px minmax\(0, 1fr\) 380px;/);
+    expect(block).toMatch(/\[data-view="json"\] \.wf-body \{ grid-template-columns: minmax\(0, 1fr\) 380px;/);
+    // In its column, not floating over the lane, in either view.
+    expect(block).toMatch(/\n  \.wf-drawer \{ position: sticky;/);
+    // Under 1280px it floats.
+    expect(css.slice(0, css.indexOf("@media"))).toMatch(/\.wf-drawer \{\s*position: absolute;/);
+  });
+
+  it("from 1280px the drawer sits beside the lane: the lane gets no room to scroll under it", async () => {
+    api.workflows[0].spec = linear(4);
+    bodyWidth = 1440 - 84 - 32;
+    laneWidth = bodyWidth - 240 - 12 - 380 - 12 - 2;
+    const laneLeft = 252;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function rect(this: Element) {
+      const el = this as HTMLElement;
+      const r = el.classList.contains("wf-drawer") ? { left: laneLeft + laneWidth + 14, top: 0, width: 380, height: 640 }
+        : el.classList.contains("wf-lane-viewport") ? { left: laneLeft, top: 40, width: laneWidth, height: 160 }
+          : { left: 0, top: 0, width: 0, height: 0 };
+      return { ...r, x: r.left, y: r.top, right: r.left + r.width, bottom: r.top + r.height, toJSON() { return r; } } as DOMRect;
+    });
+    try {
+      await mount();
+      const sizer = q(".wf-stage .wf-lane-sizer");
+      const before = sizer.style.width;
+      click(node(laneIds().at(-1)!));
+      await settle(2);
+      expect(byTest("wf-drawer")).not.toBeNull();
+      expect(sizer.style.width).toBe(before);
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 });

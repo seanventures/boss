@@ -1,12 +1,13 @@
 /* Workflow Studio: editor. Classes are prefixed wf- and use only the base tokens. */
 
 /* ── Shell ─────────────────────────────────────────────────────────────────────
-   Bar, summary line, then palette | lane, with the inspector floating over the lane's right edge.
-   The lane takes what is left and is never wider than its column, so the page never scrolls
-   sideways. The drawer is never a column of its own in the Visual view: a column would take its
-   380px from the lane every time a step is selected, so the lane would re-fit, change density
-   and move its nodes under the pointer. Floating, it leaves the lane's size alone, and the lane
-   scrolls the selected step out from under it (FlowLane occludedRight). */
+   Bar, summary line, then palette | lane | inspector. The lane takes what is left and is never
+   wider than its column, so the page never scrolls sideways.
+   From 1280px the inspector is a column beside the lane, never over it: covering the lane hid
+   the right half of the flow, so the lane refits into the width that is left (it may go
+   Compact, or scroll with its minimap) and keeps the selected step in view. Under 1280px there
+   is no room for both, so the drawer floats over the lane's right edge and the lane scrolls the
+   selected step out from under it (FlowLane occludedRight). */
 .wf-editor {
   position: relative;
   display: flex; flex-direction: column; gap: 10px;
@@ -25,6 +26,7 @@
 .wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr); }
 .wf-editor[data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr); }
 .wf-stage { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.wf-body > .wf-palette, .wf-drawer { align-self: start; }
 .wf-drawer {
   position: absolute; top: 0; right: 0; z-index: 20;
   width: min(380px, 100%);
@@ -33,10 +35,12 @@
   background: var(--surface); box-shadow: var(--shadow);
 }
 
-/* JSON from 1280px: text, not a fitted drawing, so the inspector sits beside it. */
+/* From 1280px the inspector sits beside the lane (or the JSON), in a column of its own. */
 @media (min-width: 1280px) {
+  .wf-editor[data-inspector="open"] .wf-body { grid-template-columns: 240px minmax(0, 1fr) 380px; }
+  .wf-editor[data-inspector="open"] .wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr) 380px; }
   .wf-editor[data-inspector="open"][data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr) 380px; }
-  .wf-editor[data-view="json"] .wf-drawer { position: sticky; top: 64px; width: auto; box-shadow: none; }
+  .wf-drawer { position: sticky; top: 64px; width: auto; box-shadow: none; }
 }
 /* Under 720px: the palette is a sheet behind the + button, the inspector a bottom sheet. */
 @media (max-width: 719px) {
@@ -49,18 +53,46 @@
 }
 
 /* ── Top bar ── */
+/* Two groups: who this is (Library, name, chips, the unsaved dot) and what you can do (undo
+   through ⋯). ONE ROW: the name gives way first (cut with an ellipsis, the whole name is its
+   tooltip), then the copy chip; the actions never move. Only a bar under 1100px (measured on the
+   bar, a container query, not the window) wraps, and then by group: the actions go to their own
+   line, aligned right, as one block. On a phone the actions split once more, Check · Start ·
+   Save · ⋯ staying together, so ⋯ is never left alone on a line. */
 .wf-topbar {
   position: sticky; top: 0; z-index: 10;
-  display: flex; align-items: center; gap: 8px;
+  container: wf-topbar / inline-size;
   min-height: 56px; padding: 8px 12px;
   border: 1px solid var(--border); border-radius: var(--r-xl);
   background: var(--surface);
+}
+.wf-topbar-row {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 38px; min-width: 0;
+  flex-wrap: nowrap;
+}
+.wf-bar-identity {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1 1 auto; min-width: 0;
+}
+.wf-bar-identity > * { flex: none; white-space: nowrap; }
+.wf-bar-identity > .wf-name { flex: 0 1 40ch; min-width: 7ch; }
+.wf-bar-identity > .wf-open-copy { flex: 0 1 auto; min-width: 7ch; overflow: hidden; }
+.wf-bar-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  flex: none; max-width: 100%; margin-left: auto;
   flex-wrap: wrap;
 }
+.wf-bar-tools, .wf-bar-commit { display: flex; align-items: center; gap: 8px; flex: none; flex-wrap: nowrap; }
+.wf-bar-tools > *, .wf-bar-commit > * { flex: none; white-space: nowrap; }
+@container wf-topbar (width < 1074px) {
+  .wf-topbar-row { flex-wrap: wrap; row-gap: 6px; }
+}
 .wf-bar-group { display: inline-flex; gap: 2px; }
+.wf-cut { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-name { position: relative; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .wf-name-input {
-  min-width: 8ch; width: clamp(12ch, 28vw, 40ch);
+  flex: 1 1 auto; min-width: 0; width: 100%;
   padding: 4px 6px; border: 1px solid transparent; border-radius: var(--r);
   background: transparent; color: var(--ink);
   font: 600 1.25rem/1.2 var(--display);
