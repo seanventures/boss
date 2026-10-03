@@ -688,8 +688,7 @@ def refuse_operator_edit_of_boss_workflow(definition: dict[str, Any], workflow_r
         raise WorkflowNamespaceError(
             f"'{key}' is one of BOSS's own workflows and is not editable from the console — a "
             "change to it changes how BOSS itself works. To make something like it, start your "
-            "own workflow in Workflow > Design a workflow, or fork a template from Workflow > "
-            "Catalogue."
+            "own in Workflows > Library > + New workflow, or open a standard and Save as my copy."
         )
 
 

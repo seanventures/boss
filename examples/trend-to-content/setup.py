@@ -130,7 +130,7 @@ def main() -> None:
 
     print(f"""  Done.
 
-  Start a run: Delivery → Workflows → "{NAME}" → Start one.
+  Start a run: Workflows → Library → "{NAME}" → ⋯ → Start.
 
     trend          what is happening — "everyone is posting their AI coding setup"
     to             who reads the script

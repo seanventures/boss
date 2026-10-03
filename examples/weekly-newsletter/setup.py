@@ -142,7 +142,7 @@ def main() -> None:
 
     print(f"""  Done.
 
-  Start a run: Delivery → Workflows → "{NAME}" → Start one.
+  Start a run: Workflows → Library → "{NAME}" → ⋯ → Start.
 
     sectors   what to research, as one line — "UK politics, Premier League football,
               Chennai local news, AI industry moves"
@@ -177,7 +177,7 @@ def find_schedule(api, args) -> dict | None:
             and inputs.get("to") == args.to)
     if not same:
         die("a Monday newsletter schedule already exists with different inputs or timing. "
-            "Remove it in Delivery → Yours, then run this setup again.")
+            "Remove it in Workflows → Library → ⋯ → Schedule…, then run this setup again.")
     return existing
 
 

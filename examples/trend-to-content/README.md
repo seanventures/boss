@@ -42,7 +42,7 @@ saying so saves a video."*
 python3 examples/trend-to-content/setup.py --api http://127.0.0.1:8000
 ```
 
-3. Open **Delivery → Workflows → "Trend to content" → Start one** and fill in:
+3. Open **Workflows → Library**, find "Trend to content", then **⋯ → Start** and fill in:
    - `trend` — *"everyone is posting their AI coding setup"*
    - `to` — who reads the script
    - `assess_brief` / `script_brief` — leave blank to use the defaults
@@ -66,9 +66,10 @@ is published; turning the script into a video is a separate workflow with its ow
 ## Build it by hand
 
 1. **Skills → Enable:** `model.generate_text`, `email.send_real_guarded`
-2. **Your steps →** *Assess the trend* and *Write the script* (`model.generate_text`, input
+2. **Workflows → Library → Steps → + New step:** *Assess the trend* and *Write the script* (`model.generate_text`, input
    `prompt`), and *Send it for review* (`email.send_real_guarded`, inputs `to`, `body`).
-3. **Wire the inputs:**
+3. **Workflows → Library → + New workflow →** drag **Research** from the built-in palette, then your three steps.
+4. **Wire the inputs:**
 
    | Step | Input | Source |
    |---|---|---|

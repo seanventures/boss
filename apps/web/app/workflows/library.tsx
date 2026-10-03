@@ -167,10 +167,29 @@ function onScreen(el: HTMLElement | null): boolean {
   return !area || !active || area === active;
 }
 
-/** Closes on Escape or a press outside, like every other popover in the console. */
+/**
+ * Closes on Escape or a press outside, like every other popover in the console.
+ *
+ * FOCUS GOES IN WHEN IT OPENS. Picking Schedule…, Use for… or Delete from the menu unmounted
+ * the focused menu button, so the card's actions lost :focus-within and the open form faded out
+ * the moment the pointer left the card, still clickable while invisible (review of ws/ia,
+ * 2026-10-03). The container also says it is open (`data-open`), which the stylesheet keeps
+ * visible; focus moving in is what a keyboard needs.
+ */
 function usePopover<T extends string>() {
   const [open, setOpen] = useState<T | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const panel = ref.current?.querySelector<HTMLElement>(".wf-pop");
+    if (panel && !panel.contains(document.activeElement)) {
+      // A menu's first live item; a form's first field; a confirm itself, never its Delete.
+      const first = panel.querySelector<HTMLElement>(
+        '[role="menuitem"]:not(:disabled), input, select, textarea');
+      if (!first && !panel.hasAttribute("tabindex")) panel.setAttribute("tabindex", "-1");
+      (first ?? panel).focus({ preventScroll: true });
+    }
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const outside = (e: PointerEvent) => {
@@ -486,6 +505,12 @@ function LibraryCard(p: CardProps) {
   const [nameError, setNameError] = useState("");
   const [showCopies, setShowCopies] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // A PRESS THAT DISMISSES DOES NOTHING ELSE. The outside press closes a popover (or blurs the
+  // rename field) on pointerdown, and React commits that before the click, so the card's own
+  // "is anything open?" check was already false and a click meant to dismiss the menu opened
+  // the editor instead (review of ws/ia, 2026-10-03). What was open is read when the press
+  // BEGINS, in the capture phase, before anything closes.
+  const pressDismisses = useRef(false);
   const retire = w.run_count > 0;
   const schedules = p.schedules.filter((s) => s.workflow_key === w.workflow_key);
   const agents = [...new Set(w.steps.map((s) => s.captain).filter(Boolean) as string[])];
@@ -511,7 +536,12 @@ function LibraryCard(p: CardProps) {
     <article className="wf-card" data-mine={mine || undefined} data-nested={nested || undefined}
              data-selected={p.selected.has(w.definition_id) || undefined}
              data-testid={`wf-card-${w.workflow_key}`}
-             onClick={() => { if (!renaming && !pop.open) p.onOpen(w.workflow_key); }}>
+             onPointerDownCapture={() => { pressDismisses.current = renaming || pop.open !== null; }}
+             onClick={() => {
+               const dismissing = pressDismisses.current;
+               pressDismisses.current = false;
+               if (!dismissing && !renaming && !pop.open) p.onOpen(w.workflow_key);
+             }}>
       {mine ? (
         <label className="wf-card-check" title="Select" onClick={stop}>
           <input type="checkbox" checked={p.selected.has(w.definition_id)}
@@ -601,7 +631,7 @@ function LibraryCard(p: CardProps) {
         ) : null}
       </footer>
 
-      <div className="wf-card-actions" onClick={stop} ref={pop.ref}>
+      <div className="wf-card-actions" onClick={stop} ref={pop.ref} data-open={pop.open ?? undefined}>
         <button type="button" className="wf-btn wf-btn-sm" data-testid={`wf-card-start-${w.workflow_key}`}
                 disabled={!w.version} title={w.version ? "Start a run" : "Save a version first"}
                 onClick={() => p.onStart(w.workflow_key)}>

@@ -218,7 +218,7 @@ def ensure_agents(api: Api, agents: list[str], pack: str, args) -> None:
             code, _ = api("GET", f"/v1/roles/{agent}?project_id={api.project}")
             if code != 200:
                 die(f"installed the {pack} pack but '{agent}' is still not on this project. "
-                    f"Register it in Agent Studio and run this again.")
+                    f"Add it in Agents (+ New agent) and run this again.")
             print(f"    {agent:26} added (from the {pack} pack)")
     print()
 

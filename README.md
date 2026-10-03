@@ -189,7 +189,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 
 ## What's inside
 
-**Mission Control.** Start in **Command Center**. **Approvals** is where people decide, **Activity log** shows every receipt and failure, and **Agent work** groups recent runs by role. **Team structure** lays out your planned roles next to the handoffs that actually happened, and **Agent Studio** lets you inspect and test agent definitions before they do anything.
+**Mission Control.** Start in **Command Center**. **Approvals** is where people decide, **Activity log** shows every receipt and failure, **Workflows** holds your runs (**Runs**) and what they follow (**Library**), and **Agents** holds who does the work: the **Roster**, the planned **Team** and decision **Panels**. Add one with **+ New agent**; an agent's page shows its **Profile**, which you can test before it does anything.
 
 **Software Factory.** Turn an outcome into a governed code task, from spec and architecture through implementation and tests to a pull request with evidence attached. Each run stops for the approvals, budget checks, and receipts it needs along the way.
 

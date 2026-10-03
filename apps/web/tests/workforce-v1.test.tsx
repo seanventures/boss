@@ -192,7 +192,7 @@ describe("v1 Org Chart", () => {
     const out = renderToStaticMarkup(
       <OrgChartArea chart={chart({ apiReachable: false, blockedReason: "API returned 503" })}
         projectId="p" actor="ceo" />);
-    expect(out).toContain("Team structure is unavailable");
+    expect(out).toContain("The team is unavailable");
     expect(out).not.toContain("No planned roles yet.");
   });
 

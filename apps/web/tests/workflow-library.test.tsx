@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkflowSummary } from "../lib/workflow-editor-types";
+import { cssOnly } from "./_helpers/source";
 
 /**
  * The Library, mounted and pressed (Workflow Studio spec 2.2 and 3.6).
@@ -213,6 +214,82 @@ describe("a card's presses", () => {
     await settle();
     expect(stub.renameWorkflow).toHaveBeenLastCalledWith("p1", "def_video", { name: "Family video (cut)" });
     expect($('[data-testid="wf-card-name-input-video"]')).toBeNull();
+  });
+});
+
+/**
+ * Dismissing is not opening, and an open popover stays on screen (review of ws/ia, 2026-10-03).
+ *
+ * A real press is pointerdown then click: the outside pointerdown closed the menu before the
+ * click reached the card, so clicking the card body to dismiss the ⋯ menu opened the editor.
+ * And the popovers live in the hover-revealed actions, which faded out once the menu button that
+ * held focus was unmounted by picking Schedule…, Use for… or Delete.
+ */
+describe("a card's popovers", () => {
+  const press = async (el: HTMLElement | null) => {
+    expect(el).not.toBeNull();
+    // Two acts, as a browser does it: React commits the discrete pointerdown's update before
+    // the click is dispatched.
+    await act(async () => { el!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+    await act(async () => { el!.click(); });
+    await settle();
+  };
+
+  it("a press on the card body that dismisses the menu does not open the editor", async () => {
+    await mount();
+    await click($('[data-testid="wf-card-more-video"]'));
+    expect($('[data-testid="wf-card-menu-video"]')).not.toBeNull();
+    await press($('[data-testid="wf-card-video"] .wf-card-desc'));
+    expect($('[data-testid="wf-card-menu-video"]')).toBeNull();
+    expect(p.onOpen).not.toHaveBeenCalled();
+    // The next press is an ordinary one and opens it.
+    await press($('[data-testid="wf-card-video"] .wf-card-desc'));
+    expect(p.onOpen).toHaveBeenCalledWith("video");
+  });
+
+  it("a press on the card body that dismisses the rename field does not open the editor", async () => {
+    await mount();
+    await click($('[data-testid="wf-card-more-video"]'));
+    await click(menuItem("Rename"));
+    const input = $('[data-testid="wf-card-name-input-video"]') as HTMLInputElement;
+    const desc = $('[data-testid="wf-card-video"] .wf-card-desc')!;
+    // The browser's own default for a pointerdown elsewhere: the field loses focus, which saves
+    // and closes it, before the click.
+    await act(async () => {
+      desc.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      input.blur();
+    });
+    await settle();
+    expect($('[data-testid="wf-card-name-input-video"]')).toBeNull();
+    await act(async () => { desc.click(); });
+    await settle();
+    expect(p.onOpen).not.toHaveBeenCalled();
+  });
+
+  it("an open popover keeps the card's actions shown and takes focus", async () => {
+    await mount();
+    const actions = () => $('[data-testid="wf-card-video"] > .wf-card-actions');
+    expect(actions()?.hasAttribute("data-open")).toBe(false);
+    await click($('[data-testid="wf-card-more-video"]'));
+    expect(actions()?.dataset.open).toBe("menu");
+    expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+
+    await click(menuItem("Delete"));
+    const confirm = $('[data-testid="wf-card-confirm-video"]');
+    expect(actions()?.dataset.open).toBe("delete");
+    // Focus is on the confirm itself, never on its destructive button.
+    expect(document.activeElement).toBe(confirm);
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await settle();
+    expect(actions()?.hasAttribute("data-open")).toBe(false);
+  });
+
+  it("the stylesheet shows the actions while a popover is open", () => {
+    expect(cssOnly("app/workflows/library.css")).toMatch(
+      /\.wf-card-actions\[data-open\][^{]*\{\s*opacity:\s*1;/);
   });
 });
 

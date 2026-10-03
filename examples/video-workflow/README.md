@@ -94,7 +94,7 @@ python3 examples/video-workflow/setup.py \
 Each option can also come from the environment: `BOSS_API`, `BOSS_API_KEY`, `BOSS_PROJECT`,
 `BOSS_ACTOR`.
 
-3. Open **Delivery → Workflows → "Video edit and publish" → Start one** and fill in:
+3. Open **Workflows → Library**, find "Video edit and publish", then **⋯ → Start** and fill in:
 
 | Field | What to put in it |
 |---|---|
@@ -172,7 +172,7 @@ the page says so.
 
 ### 4. Define the publishing step
 
-**Delivery → Build your own → Your steps → Define a step.** Give it a name, choose **Skill**, pick
+**Workflows → Library → Steps → + New step.** Give it a name, choose **Skill**, pick
 the skill, and list its inputs.
 
 | Name | Skill | Inputs |
@@ -184,7 +184,7 @@ off. The editing step needs no definition; see the next section.
 
 ### 5. Create the workflow with the agent step first
 
-**Create a new workflow** → name it → then, from the palette:
+**Workflows → Library → + New workflow** → name it → then, from the palette:
 
 1. **Let an agent work it out** — the first entry in the palette. It binds nothing.
 2. **Publish to YouTube** (your step)

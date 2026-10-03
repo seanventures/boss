@@ -120,8 +120,8 @@ python3 examples/setup_all.py --schedule Europe/London \
 ```
 
 The scheduled run prepares a newsletter every Monday; email delivery still waits for your
-approval. In the console, the **Schedule** button asks for the time zone and for every input the
-workflow declares, and required inputs are saved with the schedule. **edit inputs** on the
+approval. In the console, **Workflows → Library → ⋯ → Schedule…** asks for the time zone and for every input the
+workflow declares, and required inputs are saved with the schedule. **Edit** on the
 schedule line replaces those values, and the API refuses a save that drops a required one. The
 API equivalent is `POST /v1/delivery-workflows/schedules` with the existing `schedule_id` and a
 complete `input` object. Timing stays as it was unless the time zone changes.

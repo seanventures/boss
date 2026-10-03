@@ -80,7 +80,7 @@ boss password
 
 Without the `boss` command, run `python3 scripts/install/console_password.py show` from the install directory.
 
-After you sign in, open **Command Center**. On a new install, the planned layout in **Team structure** is empty, and **Agent Studio** contains starter definitions. Installing a definition does not start any work. For session details and remote access, see [Sign in to Mission Control](CONSOLE_AUTH.md).
+After you sign in, open **Command Center**. On a new install, the planned layout in **Agents → Team** is empty, and **Agents → + New agent → From template** offers the starter definitions. Installing a definition does not start any work. For session details and remote access, see [Sign in to Mission Control](CONSOLE_AUTH.md).
 
 ## Create your first task
 

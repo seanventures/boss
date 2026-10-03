@@ -93,8 +93,8 @@ NEEDS: dict[str, Need] = {
         "Connect your Google account in Skills and MCP → Channels.", "skills"),
     "agent_pool": Need(
         "agent_pool", "An agent that holds at least one skill",
-        "Give an agent a skill in Agent Studio. A step that lets BOSS pick the agent can only "
-        "pick from agents that hold something to work with.", "studio"),
+        "Give an agent a skill in Agents. A step that lets BOSS pick the agent can only "
+        "pick from agents that hold something to work with.", "workforce"),
 }
 
 
@@ -102,9 +102,10 @@ def _role_need(role_key: str) -> Need:
     return Need(
         f"role:{role_key}", f"The agent '{role_key}'",
         f"This workflow names the agent '{role_key}', and this project does not have it. "
-        f"Install the pack that ships it (POST /v1/packs/install), register it in Agent "
-        f"Studio, or re-run the example's setup script, which creates the agents it names.",
-        "studio")
+        f"Install the pack that ships it (POST /v1/packs/install), add it in Agents "
+        f"(+ New agent), or re-run the example's setup script, which creates the agents it "
+        f"names.",
+        "workforce")
 
 
 def _channel_need(value: str) -> Need:
