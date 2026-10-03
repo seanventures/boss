@@ -1018,7 +1018,9 @@ def _deployment_ctx(target: dict, host: dict, commit: str, ref: str) -> dict[str
 def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id: str,
                       repository: Optional[str], ref: str, actor: str,
                       run_id: Optional[str] = None, workflow_run_id: Optional[str] = None,
-                      rollback_of: Optional[str] = None) -> dict[str, Any]:
+                      rollback_of: Optional[str] = None,
+                      approver_role: Optional[str] = None,
+                      workflow_step_id: Optional[str] = None) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
 
     Touches the host only to ASK (one read-only ssh session). Raises StackDeployError with a
@@ -1167,7 +1169,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
              "env_keys": summary["env_keys"],
              # Which BOSS secret each key carries to the host: the approver sees the names.
              "env_secrets": dict(rendered["env_secrets"]),
-             "generated_env_keys": summary["generated_env_keys"]},
+             "generated_env_keys": summary["generated_env_keys"],
+             # A workflow's deploy step has no gate of its own when it ships to a stack: THIS
+             # decision is that gate. So it carries the step's approver and where it came
+             # from, and approving it here is approving the release (one approval, not two).
+             **({"approver_role": approver_role} if approver_role else {}),
+             **({"workflow_run_id": workflow_run_id, "step_id": workflow_step_id}
+                if workflow_run_id else {})},
             {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
              "cost_confidence": "no_provider_spend"},
             "stack_deploy_requires_approval", risk_tier=2, default_action="hold")
@@ -1730,11 +1738,18 @@ def stack_target_for_deploy(connection: Connection, project_id: str,
 
 def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor: str,
                            target: dict, inputs: dict[str, Any],
-                           workflow_run_id: Optional[str]) -> dict[str, Any]:
+                           workflow_run_id: Optional[str],
+                           approver_role: Optional[str] = None,
+                           step_id: Optional[str] = None) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
 
     No preview is required: the manifest declares how the stack runs and the health checks
     prove it, and a platform like BOSS cannot be previewed as one container anyway.
+
+    ONE APPROVAL. The step is not held at a gate of its own first (see the runner's
+    `_gate_subject`): the deployment's decision is the step's gate, raised for the step's
+    `approver_role`, and the step waits on the deployment until it is healthy, failed or
+    rejected.
     """
     run_id = str(inputs.get("run_id") or "").strip()
     with engine.begin() as connection:
@@ -1763,7 +1778,8 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target["id"],
             repository=repository, ref=f"pull/{int(run['pull_request_number'])}", actor=actor,
-            run_id=run_id, workflow_run_id=workflow_run_id)
+            run_id=run_id, workflow_run_id=workflow_run_id, approver_role=approver_role,
+            workflow_step_id=step_id)
     except StackDeployError as exc:
         return {"capability": "deploy", "tool": None, "status": "failed",
                 "error": f"{exc.headline} {exc.action}"}
@@ -1773,6 +1789,12 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
         "stack_deployment_id": deployment["id"],
         "decision_id": deployment.get("decision_id"),
         "commit": deployment.get("commit"),
+        # Where it ships, for the console's deploy step — never `target_id`, which the
+        # per-app container path reads as ITS bound target.
+        "stack_target_id": target.get("id"),
+        "stack_target_name": target.get("app_name"),
+        "stack_host": (deployment.get("preflight") or {}).get("host"),
+        **({"approver_role": approver_role} if approver_role else {}),
         "note": (f"Planned {deployment['repository']}@{str(deployment.get('commit'))[:12]} "
                  f"onto {target.get('app_name')}; it runs once the deployment decision is "
                  "approved."),

@@ -58,9 +58,9 @@ describe("the picker is not gated on anything else", () => {
     // Two layouts now — a numbered plan while no target is bound, one action once it is — and
     // NEITHER is gated on the step's status. That was the bug this file was written for: each
     // version of the condition excluded the state the operator's run happened to be in.
-    expect(UI).toContain("{isDeployStep(step, capability) && shippedTo ? (");
+    expect(UI).toContain(") : isDeployStep(step, capability) && shippedTo ? (");
     expect(UI).toContain(") : isDeployStep(step, capability) ? (");
-    const at = UI.indexOf("{isDeployStep(step, capability) && shippedTo ? (");
+    const at = UI.indexOf(") : isDeployStep(step, capability) && shippedTo ? (");
     const block = UI.slice(at, at + 300);
     expect(block).not.toContain('"succeeded"');
   });
