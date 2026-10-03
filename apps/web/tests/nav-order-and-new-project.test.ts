@@ -303,7 +303,8 @@ describe("a phase that never happened", () => {
     expect(DW).toContain("function notApplicable");
     expect(DW).toContain('"dw-step-na"');
     expect(DW).toContain("function skipReason");
-    expect(DW).toContain('"dw-node-skipped"');
+    // On the run lane the reason is the skipped node's tooltip (REWRITTEN for the shared lane).
+    expect(DW).toContain('tip: skipReason(step) || "this step did not apply to this run"');
   });
 
   it("says why", () => {
@@ -334,24 +335,28 @@ describe("what review and test actually found", () => {
 describe("the workflow drawn as a path", () => {
   const DW = codeOnly("app/delivery-workflows-ui.tsx");
   const CSS_P = codeOnly("app/globals.css");
+  // REWRITTEN (Workflow Studio): the path is the shared lane (app/workflows/flow), in run mode.
+  const LANE = codeOnly("app/workflows/flow/flow-lane.tsx");
+  const NODE = codeOnly("app/workflows/flow/step-node.tsx");
+  const FLOW_CSS = codeOnly("app/workflows/flow.css");
 
   it("draws a rail of steps, not a stack of rows", () => {
     // A pipeline is a shape. Nine rows of identical text made an operator read nine statuses
     // and assemble the shape in their head.
     expect(DW).toContain("function StepPath");
-    expect(DW).toContain('data-testid="dw-node"');
-    expect(CSS_P).toContain(".dw-rail {");
+    expect(DW).toContain('mode="run" runState={laneState}');
+    expect(FLOW_CSS).toContain(".wf-lane-viewport {");
   });
 
   it("animates the segment the work is crossing right now", () => {
-    expect(CSS_P).toContain("@keyframes dw-flow");
-    expect(CSS_P).toContain('.dw-link[data-flow="moving"]');
-    expect(DW).toContain('phase === "now" ? "moving" : "past"');
+    expect(FLOW_CSS).toContain("@keyframes wf-flow");
+    expect(FLOW_CSS).toContain('.wf-conn[data-flow="moving"]');
+    expect(LANE).toContain('return next === "moving" || next === "needs_you" ? "moving"');
   });
 
   it("highlights the step in flight", () => {
-    expect(CSS_P).toContain("@keyframes dw-pulse");
-    expect(DW).toContain('aria-current={phase === "now" ? "step" : undefined}');
+    expect(FLOW_CSS).toContain("@keyframes wf-pulse");
+    expect(NODE).toContain('aria-current={mode === "run" && run?.phase === "moving" ? "step" : undefined}');
   });
 
   it("respects a request for less motion", () => {
@@ -362,7 +367,7 @@ describe("the workflow drawn as a path", () => {
   });
 
   it("draws a phase that never happened as dashed, not green", () => {
-    expect(CSS_P).toContain('.dw-node[data-phase="skipped"] .dw-node-btn { border-style: dashed;');
+    expect(FLOW_CSS).toMatch(/\.wf-node\[data-phase="skipped"\] \{[^}]*border-style: dashed;/);
   });
 
   it("opens on the step that wants attention", () => {

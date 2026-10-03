@@ -19,26 +19,29 @@ const WORKFLOWS = codeOnly("app/delivery-workflows-ui.tsx");
 const CSS = codeOnly("app/globals.css");
 
 describe("who is on this app", () => {
-  it("assignment is the FIRST node in the step rail", () => {
+  it("assignment opens from the head of the step lane", () => {
     // It began as a block above the rail and could not be found — "where when creating a new
-    // project do we have the option to assign the agents?" A panel over the chain is something
-    // you have to notice; a node in the chain is where a reader of the steps already is.
-    expect(WORKFLOWS).toContain('data-testid="dw-node-agents"');
-    const node = WORKFLOWS.indexOf('data-testid="dw-node-agents"');
-    const realSteps = WORKFLOWS.indexOf("{steps.map((step, index) => {");
-    expect(node).toBeGreaterThan(-1);
-    expect(node).toBeLessThan(realSteps);
+    // project do we have the option to assign the agents?" It stays where a reader of the
+    // steps already is: REWRITTEN (Workflow Studio) from a pseudo-node in the chain to the chip
+    // at the head of the shared run lane, the spec's run-header chip.
+    const chip = WORKFLOWS.indexOf('className="wf-chip wf-chip-btn" data-testid="dw-node-agents"');
+    const lane = WORKFLOWS.indexOf('<FlowLane spec={laneSpec}');
+    expect(chip).toBeGreaterThan(-1);
+    expect(chip).toBeLessThan(lane);
     expect(WORKFLOWS).toContain("<AgentsOnThis");
   });
 
   it("but it is not a runtime step: no duration, no status badge", () => {
     // A real step would mean editing all twelve catalogue workflows and adding something that
-    // can execute, fail and block a run. This one does not run, and must not look like it did.
-    const at = WORKFLOWS.indexOf('data-testid="dw-node-agents"');
-    const node = WORKFLOWS.slice(at, at + 700);
-    expect(node).not.toContain("stepDuration");
-    expect(node).not.toContain("dw-node-you");
-    expect(node).toContain("auto-confirmed");
+    // can execute, fail and block a run. This one does not run, and must not look like it did:
+    // it is not in the lane's steps at all (those are the definition's the run ran, or the
+    // run's own while that loads: runLaneSpec).
+    const at = WORKFLOWS.indexOf('className="wf-chip wf-chip-btn" data-testid="dw-node-agents"');
+    const chip = WORKFLOWS.slice(at, WORKFLOWS.indexOf("</button>", at));
+    expect(chip).not.toContain("stepDuration");
+    expect(chip).not.toContain("laneStateOf");
+    expect(chip).toContain("auto-confirmed");
+    expect(WORKFLOWS).toContain("useMemo(() => runLaneSpec(steps, definition.spec), [steps, definition.spec])");
   });
 
   it("and a finished run shows it as a record, not a setting", () => {
