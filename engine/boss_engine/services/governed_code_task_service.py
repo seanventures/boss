@@ -43,6 +43,7 @@ from .code_agent import make_code_agent
 from .model_rate_limiter import get_rate_limiter, provider_of, is_rate_limit_error
 from .code_task_service import (
     _fail,
+    refused_reservation,
     _engine_ports,
     _persist_sandbox_id,
     _release,
@@ -1821,10 +1822,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             reason=f"governed code task: {title[:64]}", expires_in_minutes=45, job_id=job_id,
             risk_tier=spec.get("risk_tier"))
     if reservation.get("status") != "reserved":
-        with _transaction(engine) as c:
-            return _fail(c, run_id, project_id,
-                         f"Budget reservation denied: {reservation.get('status')}", status="blocked",
-                         failure_class="needs_human", reason_code="budget_denied")
+        return refused_reservation(engine, jobs, run_id=run_id, project_id=project_id,
+                                   reservation=reservation, fencing_token=fencing_token)
     reservation_id = reservation["reservation_id"]
     with _transaction(engine) as c:
         c.execute(sql("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),

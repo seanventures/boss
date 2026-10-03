@@ -191,7 +191,7 @@ class DiscoveryStageSpend:
         if reserved.get("status") != "reserved":
             message = reserved.get("message") or "Budget reservation denied."
             # The per-minute cap clears within a minute: retry, and no decision for a person.
-            transient = "burst cap" in message.lower()
+            transient = bool(reserved.get("transient"))
             if not transient:
                 self._decision(connection, f"Budget refused Discovery {self.run_id} stage {stage}",
                                "budget_denied", {"stage": stage, "message": message})

@@ -53,6 +53,17 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                        "`claude setup-token` and paste the long sk-ant-… value it prints."),
             "href": SETUP_HREF, "retry": False,
         }
+    # Before the cap below: the governor's headroom refusal mentions the budget too, and it
+    # clears by itself when the work holding the reservations finishes (BudgetGovernor.reserve).
+    if ("held by other work" in lowered
+            or "waiting for other work to release the budget" in lowered):
+        return {
+            "kind": "budget_wait",
+            "headline": "Waiting for other work to release the budget it is holding.",
+            "action": "Nothing to do — it resumes by itself when the work holding the budget "
+                      "finishes. Raise the daily or monthly cap in Budget if this happens often.",
+            "href": "/?area=budget", "retry": True,
+        }
     if "burst cap" in lowered or "waiting for the per-minute budget" in lowered:
         return {
             "kind": "budget_wait",
@@ -62,7 +73,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "href": "/?area=budget", "retry": True,
         }
     if any(term in lowered for term in ("budget cap", "daily cap", "monthly cap",
-                                        "budget reservation denied", "insufficient")):
+                                        "budget reservation denied", "insufficient",
+                                        "budget allocation", "frozen at this budget")):
         return {
             "kind": "budget_refused",
             "headline": "The budget refused this work.",
