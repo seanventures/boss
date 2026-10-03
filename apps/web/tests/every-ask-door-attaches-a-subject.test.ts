@@ -131,6 +131,8 @@ describe("the subject travels as the thread's scope", () => {
   it("opening the dock sets the subject, the question and the role together", () => {
     expect(dockParams({ subject: step, question: "Why did it fail?", role: "Qa" })).toEqual({
       agent: "workflow_step:wfr_9c78:preview", dock_ask: "Why did it fail?", dock_role: "Qa",
+      // Cleared, never inherited: a door that names no agent key or work must not keep the last.
+      dock_role_key: null, dock_act: null,
       dock_mode: null, dock_fresh: null,
     });
   });
