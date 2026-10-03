@@ -40,7 +40,8 @@ export type StackDeployment = {
   manifest?: {
     name?: string;
     kind?: string;
-    steps?: ManifestStep[];
+    // The engine groups them by phase: {install: [...], update: [...], teardown: [...]}.
+    steps?: ManifestStep[] | Record<string, ManifestStep[]>;
     /** NAMES only. Values — generated, secret, or literal — never leave the API. */
     env_keys?: string[];
     health?: Array<{ url?: string; expect?: number; timeout_seconds?: number }>;

@@ -13,6 +13,7 @@
  * record's own `actions`, decided by the API — never a guess from status or what was last pressed.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { onChanged } from "./changed";
 
 import { browserHref } from "../lib/browser-links";
 import { formatDateTime } from "../lib/datetime";
@@ -62,6 +63,10 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
     void reload().finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [reload]);
+
+  // A host added or verified in the Hosts card, a repository connected in Setup, a decision
+  // approved elsewhere: this panel fetches for itself, so it must hear about them.
+  useEffect(() => onChanged(() => { void reload(); }, "stack-deploy"), [reload]);
 
   const verified = hosts.filter(canHostStack);
   const hostName = (id?: string | null) => hosts.find((h) => h.id === id)?.name ?? "";
@@ -436,11 +441,11 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
         <summary className="detail">
           What the manifest will do{manifest.kind ? ` (${manifest.kind})` : ""}
         </summary>
-        {(manifest.steps ?? []).length ? (
+        {planSteps(manifest.steps).length ? (
           <ol className="sd-steps">
-            {(manifest.steps ?? []).map((s, i) => <li key={i}><code>{stepText(s)}</code></li>)}
+            {planSteps(manifest.steps).map((s, i) => <li key={i}><code>{s}</code></li>)}
           </ol>
-        ) : <p className="detail">No steps recorded.</p>}
+        ) : null}
         {(manifest.env_keys ?? []).length ? (
           <p className="detail" data-testid="stack-env-keys" style={{ margin: 0 }}>
             Environment (names only):{" "}
@@ -514,4 +519,15 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
       ) : null}
     </article>
   );
+}
+
+/** The plan's steps as lines. The engine groups them by phase — {install: [...], update: [...]}
+ *  — and this read them as a flat list, so every plan said "No steps recorded". */
+export function planSteps(steps: unknown): string[] {
+  if (Array.isArray(steps)) return steps.map((s) => stepText(s as never));
+  if (steps && typeof steps === "object") {
+    return Object.entries(steps as Record<string, unknown>).flatMap(([phase, list]) =>
+      (Array.isArray(list) ? list : []).map((s) => `${phase}: ${stepText(s as never)}`));
+  }
+  return [];
 }

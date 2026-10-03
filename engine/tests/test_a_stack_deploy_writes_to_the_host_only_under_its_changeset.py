@@ -221,3 +221,17 @@ def test_community_keeps_the_ungoverned_one_container_ssh_deploy_closed(edition)
     assert "stack target" in blocked["problems"][0]
     with pytest.raises(PermissionError, match="ChangeSet"):
         deploy_ssh(object(), settings, "crun", host="203.0.113.9")
+
+
+def test_install_and_update_steps_run_in_the_releases_own_directory_not_through_current():
+    """Through the `current` symlink every path a tool resolved matched the last release, so
+    `docker compose up` recreated nothing: stack-demo v2 reported healthy while v1 still served."""
+    adapter = FakeAdapter()
+    applier, _ = _applier(adapter)
+    applier.run()
+    steps = [c["command"] for c in adapter.calls if "./install.sh" in c["command"]
+             or "./seed.sh" in c["command"]]
+    assert steps
+    for command in steps:
+        assert f"/releases/{COMMIT} && " in command, command
+        assert "/current &&" not in command, command

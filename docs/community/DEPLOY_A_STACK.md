@@ -51,7 +51,7 @@ requires: {sudo: false, docker: true}
 
 **Placeholders.** Steps, env values and `open` may use `{dir}`, `{commit}`, `{ref}`, `{target.host}`, `{target.public_url}` and `{target.user}`. Any other `{name}` is a manifest error, so write shell variables as `$NAME`, not `${NAME}`.
 
-**On the host.** Each commit is extracted from a `git archive` into `<dir>/releases/<commit>`. `<dir>/current` switches to it only after extraction completes. Every step runs from `<dir>/current` with `deploy.env` exported, under a time limit. Its output goes to the deployment log, with secret values redacted. Health URLs are probed on the host itself, so a service bound to `127.0.0.1` can be checked. The last three releases are kept. The GitHub token that fetches the code never reaches the host.
+**On the host.** Each commit is extracted from a `git archive` into `<dir>/releases/<commit>`. `<dir>/current` switches to it only after extraction completes. Every step runs from the release's own directory, `<dir>/releases/<commit>` (not through the `current` link, so tools such as Docker Compose see that the release changed and recreate what changed), with `deploy.env` exported, under a time limit. Its output goes to the deployment log, with secret values redacted. Health URLs are probed on the host itself, so a service bound to `127.0.0.1` can be checked. The last three releases are kept. The GitHub token that fetches the code never reaches the host.
 
 **Generated secrets** are created on the first deploy and stored in BOSS's secret store. Later deploys reuse them. They are never logged or returned by the API.
 

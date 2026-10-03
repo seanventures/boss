@@ -568,12 +568,18 @@ class StackApplier:
             timeout=60, ok_marker="BOSS_SWITCHED")
         self._finish("switch", "succeeded")
 
+        # Steps run in the release's REAL directory, never through the `current` symlink.
+        # Through the symlink every path a tool resolved was the same string as last release's,
+        # so `docker compose up` saw an unchanged configuration and recreated nothing: stack-demo
+        # version 2 reported healthy on boss-1 (2026-10-03) while nginx still served version 1
+        # from the old release it had mounted.
+        release = f"{d}/releases/{shlex.quote(self.commit)}"
         for command in commands:
             name = f"{self.mode}: {command['name']}"
             self._start(name)
             limit = int(command["timeout_seconds"])
             self._write(name, (
-                f"cd {d}/current && set -a && . {env_path} && set +a && "
+                f"cd {release} && set -a && . {env_path} && set +a && "
                 f"timeout {limit} bash -lc {shlex.quote(command['run'])}"),
                 timeout=limit + 60)
             self._finish(name, "succeeded")
