@@ -1,0 +1,67 @@
+{
+  "entry_step": "draft",
+  "steps": [
+    {
+      "id": "draft",
+      "kind": "capability",
+      "next": [
+        "look"
+      ],
+      "approval": {
+        "mode": "auto"
+      },
+      "captain": "{agent}",
+      "binding": {
+        "agent_work": true,
+        "inputs": {
+          "instructions": {
+            "from_input": "instructions"
+          }
+        },
+        "skills": [
+          "{skill}"
+        ],
+        "mcp": [
+          "{mcp}"
+        ]
+      }
+    },
+    {
+      "id": "look",
+      "kind": "decision",
+      "next": [
+        "finish"
+      ],
+      "approver_role": "human",
+      "question": "Ship the draft?",
+      "guidance": "Read it through once.",
+      "binding": {}
+    },
+    {
+      "id": "finish",
+      "kind": "capability",
+      "next": [],
+      "approval": {
+        "mode": "manual"
+      },
+      "captain": "{agent}",
+      "binding": {
+        "agent_work": true,
+        "inputs": {
+          "instructions": {
+            "value": "Write the release note."
+          }
+        }
+      }
+    }
+  ],
+  "input_schema": {
+    "properties": {
+      "instructions": {
+        "type": "string",
+        "title": "Instructions",
+        "format": "textarea"
+      }
+    }
+  }
+}
