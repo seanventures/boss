@@ -7,11 +7,16 @@
 version: 1
 name: boss
 kind: commands
+# The install builds every image and Playwright's browser: well over the 30-minute default step
+# limit on a small VM, and a step killed mid-build leaves a half-installed host. So the
+# install/update steps carry their own limit.
 install:
-  - bash scripts/deploy/boss_stack.sh install --dir {dir}/current --commit {commit} --state {dir}/.boss/boss --origin {target.public_url}
+  - run: bash scripts/deploy/boss_stack.sh install --dir {dir}/current --commit {commit} --state {dir}/.boss/boss --origin {target.public_url}
+    timeout_seconds: 5400
   - bash scripts/deploy/boss_stack.sh https --origin {target.public_url}
 update:
-  - bash scripts/deploy/boss_stack.sh update --dir {dir}/current --commit {commit} --state {dir}/.boss/boss --origin {target.public_url}
+  - run: bash scripts/deploy/boss_stack.sh update --dir {dir}/current --commit {commit} --state {dir}/.boss/boss --origin {target.public_url}
+    timeout_seconds: 5400
   - bash scripts/deploy/boss_stack.sh https --origin {target.public_url}
 health:
   - {url: "http://127.0.0.1:8000/health", expect: 200, timeout_seconds: 600}

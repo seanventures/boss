@@ -17,6 +17,8 @@ WORKDIR /app
 
 # The official Node image supplies Node 20 and npm for coding CLIs and project
 # verification. Debian's nodejs package can lag the CLI minimum Node version.
+# pnpm is here too, at the web image's version: the code-task gate runs a pnpm
+# workspace's verify (BOSS's own boss.verify.yaml) in THIS image, not the web one.
 COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/lib/node_modules /usr/local/lib/node_modules
 # Keep the Node distribution's license alongside its binary in the API/worker image.
@@ -32,6 +34,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && chown -R boss:boss /home/boss /var/lib/boss/artifacts \
     && chmod 700 /home/boss/.codex /home/boss/.claude \
     && npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
+       pnpm@9.15.0 \
     && npm cache clean --force \
     && rm -rf /home/boss/.npm /home/boss/.cache /var/lib/apt/lists/*
 

@@ -8,6 +8,7 @@ covers and how to pick the affected tests; these tests hold the gate to it.
 """
 from __future__ import annotations
 
+import re
 import types
 from pathlib import Path
 
@@ -124,12 +125,122 @@ def test_a_touched_suite_with_no_referencing_test_falls_back_only_when_it_says_s
     skip = vm.plan_verify(vm.load_verify_manifest(repo), repo,
                           ["engine/boss_engine/services/gamma.py"])
     assert skip.steps == []
+    assert skip.uncovered == ["engine/boss_engine/services/gamma.py"]
 
     text = MANIFEST.replace("by: imports}", "by: imports, fallback: all}", 1)
     _write(repo, "boss.verify.yaml", text)
     whole = vm.plan_verify(vm.load_verify_manifest(repo), repo,
                            ["engine/boss_engine/services/gamma.py"])
     assert whole.commands[-1].count("engine/tests/test_") == 4
+
+
+# ------------------------------------------------- zero tests is no evidence, not a pass
+def test_a_docs_only_change_passes_with_nothing_to_run(repo):
+    _write(repo, "docs/guide/setup.md")
+    plan = vm.plan_verify(vm.load_verify_manifest(repo), repo,
+                          ["README.md", "docs/guide/setup.md"])
+
+    assert plan.steps == [] and plan.uncovered == []
+
+
+def test_changed_code_outside_every_suite_is_reported_uncovered(repo):
+    _write(repo, "apps/api/app/main.py", "app = None\n")
+
+    plan = vm.plan_verify(vm.load_verify_manifest(repo), repo, ["apps/api/app/main.py"])
+
+    assert plan.steps == []
+    assert plan.uncovered == ["apps/api/app/main.py"]
+    assert "no test covers apps/api/app/main.py" in plan.describe()
+
+
+def test_a_module_no_test_imports_is_uncovered_even_when_its_suite_runs(repo):
+    """A planted bug in an unselected module must not ride on its neighbours' green tests."""
+    _write(repo, "engine/boss_engine/services/gamma.py")
+
+    plan = vm.plan_verify(vm.load_verify_manifest(repo), repo,
+                          ["engine/boss_engine/services/alpha.py",
+                           "engine/boss_engine/services/gamma.py"])
+
+    assert "engine/tests/test_alpha.py" in plan.commands[-1]
+    assert plan.uncovered == ["engine/boss_engine/services/gamma.py"]
+
+
+def test_a_deleted_file_needs_no_test_of_its_own(repo):
+    plan = vm.plan_verify(vm.load_verify_manifest(repo), repo,
+                          ["engine/boss_engine/services/removed.py"])
+
+    assert plan.uncovered == []
+
+
+def test_a_workspace_package_import_selects_the_tests_of_a_change_to_that_package(repo):
+    text = MANIFEST.replace('paths: ["apps/web/**"]',
+                            'paths: ["apps/web/**", "packages/api-client/**"]')
+    _write(repo, "boss.verify.yaml", text)
+    _write(repo, "packages/api-client/package.json", '{"name": "@boss/api-client"}')
+    _write(repo, "packages/api-client/src/community.ts", "export const c = 1;\n")
+    _write(repo, "apps/web/tests/client.test.ts",
+           'import { c } from "@boss/api-client";\n')
+    _write(repo, "apps/web/tests/sub.test.ts",
+           'import type { X } from "@boss/api-client/src/community";\n')
+
+    plan = vm.plan_verify(vm.load_verify_manifest(repo), repo,
+                          ["packages/api-client/src/community.ts"])
+
+    assert plan.commands[-1] == "npx vitest run tests/client.test.ts tests/sub.test.ts"
+    assert plan.uncovered == []
+
+
+def test_the_gate_fails_a_plan_that_leaves_changed_code_uncovered():
+    from boss_engine.services import governed_code_task_service as g
+
+    src = " ".join(code_only(g).split())
+    assert "if result.ok and plan.uncovered:" in src
+    assert "exit_code=1, duration_ms=0, timed_out=False, stdout=\"\", stderr=message" in src
+
+
+# ------------------------------------------- the gate verifies with the base commit's manifest
+def test_a_run_that_edits_the_verify_file_still_verifies_with_the_base_manifest(repo):
+    pinned = vt.pin_verify_manifest(repo)
+    _write(repo, "boss.verify.yaml", MANIFEST.replace('paths: ["engine/**"]',
+                                                      'paths: ["nothing/**"]'))
+
+    plan = vt.resolve_gate_plan({}, "t", repo, pinned=pinned,
+                                changed=["engine/boss_engine/services/alpha.py"])
+
+    assert [s["name"] for s in plan.suites] == ["engine"]
+    assert "engine/tests/test_alpha.py" in plan.commands[-1]
+
+
+@pytest.mark.parametrize("change, word", [
+    (lambda root: _write(root, "boss.verify.yaml", "version: 1\nsuites: []\n"), "modified"),
+    (lambda root: (root / "boss.verify.yaml").unlink(), "deleted"),
+])
+def test_changing_the_verify_file_in_a_run_is_tampering(repo, change, word):
+    pinned = vt.pin_verify_manifest(repo)
+    assert vt.verify_manifest_tampered(pinned, repo) is None
+
+    change(repo)
+
+    reason = vt.verify_manifest_tampered(pinned, repo)
+    assert reason and word in reason and "boss.verify.yaml" in reason
+
+
+def test_adding_a_verify_file_in_a_run_is_tampering(tmp_path):
+    pinned = vt.pin_verify_manifest(tmp_path)
+    _write(tmp_path, "boss.verify.yaml", MANIFEST)
+
+    assert "created" in vt.verify_manifest_tampered(pinned, tmp_path)
+
+
+def test_the_gate_pins_the_manifest_before_any_agent_and_refuses_a_changed_one():
+    from boss_engine.services import governed_code_task_service as g
+
+    src = " ".join(code_only(g).split())
+    pin = src.index("_pinned_manifest = verification_target.pin_verify_manifest(root)")
+    # The pin precedes every agent stage of the run.
+    assert pin < src.index("a.run_role(")
+    assert "verify_manifest_tampered( _pinned_manifest, root)" in src
+    assert "manifest_display(root, _pinned_manifest)" in src
 
 
 def test_unknown_changed_files_run_every_suite_whole(repo):
@@ -221,8 +332,8 @@ def test_the_governed_gate_scopes_every_verify_by_the_runs_changed_files():
     from boss_engine.services import governed_code_task_service as g
 
     src = " ".join(code_only(g).split())
-    assert ("resolve_gate_plan( spec, title, root, app_id=_app_id, changed=_changed_paths())"
-            in src)
+    assert ("resolve_gate_plan( spec, title, root, app_id=_app_id, changed=_changed_paths(), "
+            "pinned=_pinned_manifest)" in src)
     assert "if plan.from_manifest: return _run_manifest_verify(plan, record=record)" in src
     assert "run_until_failure(_CwdSandbox(), plan.commands)" in src
     # A manifest-declared repo is not a scaffolded web app: its root package.json is a
@@ -266,3 +377,48 @@ def test_a_change_to_the_verify_target_selects_its_own_tests_in_boss():
     assert "engine/tests/test_verification_target.py" in plan.commands[-1]
     assert "engine/tests/test_a_monorepo_verifies_only_the_suites_its_change_touches.py" in (
         plan.commands[-1])
+
+
+def test_a_change_to_the_api_client_selects_the_console_tests_that_import_it_in_boss():
+    plan = vm.plan_verify(_boss_manifest(), REPO, ["packages/api-client/src/community.ts"])
+
+    assert [s["name"] for s in plan.suites] == ["web"]
+    for test in ("tests/api-client-community.test.ts", "tests/infrastructure.test.ts",
+                 "tests/mission-operations.test.tsx"):
+        assert test in plan.commands[-1]
+    assert plan.uncovered == []
+
+
+def test_an_api_change_in_boss_is_uncovered_not_passed():
+    plan = vm.plan_verify(_boss_manifest(), REPO, ["apps/api/app/main.py"])
+
+    assert plan.steps == []
+    assert plan.uncovered == ["apps/api/app/main.py"]
+
+
+def _runtime_stage_executables() -> set[str]:
+    """Executables the API/worker image (Dockerfile.community's python-runtime stage, where the
+    code-task gate runs) puts on PATH: the python base image's, the symlinks it creates, and the
+    bins of the npm packages it installs globally."""
+    text = (REPO / "Dockerfile.community").read_text(encoding="utf-8")
+    stage = text.split(" AS python-runtime", 1)[1].split("\nFROM ", 1)[0]
+    provided = {"python", "python3", "pip", "pip3", "node"}
+    provided.update(re.findall(r"ln -s \S+ /usr/local/bin/([\w.-]+)", stage))
+    joined = stage.replace("\\\n", " ")
+    for line in re.findall(r"npm install (?:-g|--global) ([^&\n]+)", joined):
+        for package in line.split():
+            name = package.rsplit("@", 1)[0] if package.count("@") > (package[0] == "@") else package
+            if not name.startswith("@"):
+                provided.add(name)
+    return provided
+
+
+def test_every_command_boss_declares_exists_where_the_gate_runs_it():
+    """The allowlist says the sandbox MAY run pnpm; only the image says it CAN. A setup step
+    whose executable is missing fails every console change as a test failure."""
+    manifest = _boss_manifest()
+    commands = [*manifest.setup, *(c for s in manifest.suites for c in (*s.setup, *s.run))]
+    provided = _runtime_stage_executables()
+
+    for command in commands:
+        assert command.split()[0] in provided, command

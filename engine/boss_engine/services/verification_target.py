@@ -208,6 +208,58 @@ def is_pytest_project(root: Path | str) -> bool:
     return any(_mentions_pytest(base / name) for name in ("pyproject.toml", "setup.cfg", "tox.ini"))
 
 
+@dataclass(frozen=True)
+class PinnedVerifyManifest:
+    """The repo's ``boss.verify.yaml`` as it stood BEFORE any agent touched the checkout.
+
+    The gate must not take its instructions from the tree it is judging: the implementer edits
+    that tree, and a manifest re-read from it can be narrowed (``paths: ["nothing/**"]``), have
+    its suite deleted or its ``run`` pointed at a no-op — and the gate then passes on the
+    agent's own terms. So the manifest is read once, right after the clone, and every verify of
+    the run plans from this copy. ``text`` is None when the repo declares none.
+    """
+
+    text: str | None
+    manifest: Any = None
+    error: str | None = None
+
+
+def pin_verify_manifest(root: Path | str) -> PinnedVerifyManifest:
+    """Read and parse the manifest of a freshly provisioned checkout. Call before any agent."""
+    from . import verify_manifest
+
+    path = Path(root) / verify_manifest.MANIFEST_NAME
+    if not path.is_file():
+        return PinnedVerifyManifest(None)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        return PinnedVerifyManifest(text, verify_manifest.parse_verify_manifest(text))
+    except verify_manifest.VerifyManifestError as exc:
+        return PinnedVerifyManifest(text, error=str(exc))
+
+
+def verify_manifest_tampered(pinned: PinnedVerifyManifest, root: Path | str) -> str | None:
+    """Why the run's checkout no longer carries the pinned manifest, or None when it does.
+
+    Like a frozen test, the verify declaration is the bar, not part of the change: creating,
+    editing or deleting it in a code task is tampering, whatever the gate would have made of it.
+    """
+    from . import verify_manifest
+
+    path = Path(root) / verify_manifest.MANIFEST_NAME
+    try:
+        now = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+    except OSError:
+        now = None
+    if now == pinned.text:
+        return None
+    what = ("created" if pinned.text is None else "deleted" if now is None else "modified")
+    return (f"This run {what} {verify_manifest.MANIFEST_NAME}. It declares how the change is "
+            "verified, so a code task may not change it: the gate keeps verifying with the base "
+            f"commit's version. Restore {verify_manifest.MANIFEST_NAME} exactly as it was; a "
+            "change to the verify declaration is its own reviewed pull request.")
+
+
 @dataclass
 class GatePlan:
     """What the authoritative verify runs, where, and why. One decision for every caller.
@@ -227,6 +279,8 @@ class GatePlan:
     #: Manifest plans only: (command, absolute directory) in order. Suites may run in
     #: different directories, so one ``cwd`` cannot describe them.
     steps: list[tuple[str, Path]] = field(default_factory=list)
+    #: Manifest plans only: changed code files no planned test covers. The gate fails on them.
+    uncovered: list[str] = field(default_factory=list)
 
     @property
     def from_manifest(self) -> bool:
@@ -240,6 +294,7 @@ def resolve_gate_plan(
     *,
     app_id: str | None = None,
     changed: list[str] | None = None,
+    pinned: PinnedVerifyManifest | None = None,
 ) -> GatePlan:
     """The verify plan for a provisioned checkout.
 
@@ -248,6 +303,10 @@ def resolve_gate_plan(
     files and runs from the repo root, because its globs are root-relative. Everything else
     runs where ``resolve_verify_cwd`` puts it, which now sees the changed files too: a change
     under ``apps/web`` in a repo without an official app id verifies in ``apps/web``.
+
+    ``pinned`` is the manifest read before any agent ran (``pin_verify_manifest``). The gate
+    always passes it; without it the manifest is read from ``root`` now, which is right only
+    for a checkout no agent has touched.
     """
     from . import verify_manifest
 
@@ -266,15 +325,16 @@ def resolve_gate_plan(
     # An official/benchmark app is scaffolded and verified by its own package scripts; a
     # sandbox monorepo's manifest is not its contract.
     if not app_id:
-        try:
-            manifest = verify_manifest.load_verify_manifest(base)
-        except verify_manifest.VerifyManifestError as exc:
-            return GatePlan([], base, "manifest_error", str(exc), error=str(exc))
-        if manifest is not None:
-            plan = verify_manifest.plan_verify(manifest, base, changed)
+        if pinned is None:
+            pinned = pin_verify_manifest(base)
+        if pinned.error:
+            return GatePlan([], base, "manifest_error", pinned.error, error=pinned.error)
+        if pinned.manifest is not None:
+            plan = verify_manifest.plan_verify(pinned.manifest, base, changed)
             return GatePlan(plan.commands, base, "manifest", plan.describe(),
                             timeout_seconds=plan.timeout_seconds, suites=plan.suites,
-                            steps=[(c, base / d if d != "." else base) for c, d in plan.steps])
+                            steps=[(c, base / d if d != "." else base) for c, d in plan.steps],
+                            uncovered=list(plan.uncovered))
     commands = default_test_commands(spec, title)
     cwd = _cwd(commands)
     if commands == [PYTHON_TEST_CMD] and is_pytest_project(cwd):
@@ -282,14 +342,15 @@ def resolve_gate_plan(
     return GatePlan(commands, cwd, "default", " && ".join(commands))
 
 
-def manifest_display(root: Path | str) -> str | None:
+def manifest_display(root: Path | str, pinned: PinnedVerifyManifest | None = None) -> str | None:
     """How the agent should run the repo's declared checks, for prompts. None without one."""
     from . import verify_manifest
 
-    try:
-        manifest = verify_manifest.load_verify_manifest(root)
-    except verify_manifest.VerifyManifestError as exc:
-        return f"(fix {verify_manifest.MANIFEST_NAME}: {exc})"
+    if pinned is None:
+        pinned = pin_verify_manifest(root)
+    if pinned.error:
+        return f"(the base commit's {verify_manifest.MANIFEST_NAME} is invalid: {pinned.error})"
+    manifest = pinned.manifest
     if manifest is None:
         return None
     runs = [
