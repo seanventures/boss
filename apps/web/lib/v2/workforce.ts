@@ -75,7 +75,11 @@ export type V2Handoff = {
 export type Workforce = {
   project_id: string;
   window_hours: number;
+  /** Who did work in the window: what the Hive and the chart draw. */
   agents: V2Agent[];
+  /** EVERY AGENT: each one a step's agent picker offers (with work where there is some) plus
+   *  unregistered ones doing work. What the Agents roster lists and counts. */
+  roster?: V2Agent[];
   handoffs: V2Handoff[];
   counts: Record<string, number>;
   /** Agents doing work with no registered role. A governance gap, not a display detail. */

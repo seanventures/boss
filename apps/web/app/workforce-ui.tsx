@@ -51,6 +51,10 @@ function askAgent(agentName: string): void {
 
 export type AgentsView = "roster" | "team" | "panels";
 
+/** What "N unregistered" means, and what pressing it does. */
+export const UNREGISTERED_TIP =
+  "Doing work with no registered role, so nothing governs it: no trust score, no limits. Show them to register.";
+
 /** The view the URL names. `view` is shared with other areas (the workflow editor uses
  *  visual|json), so anything this area does not know is the roster. */
 export function readAgentsView(search: string): AgentsView {
@@ -77,7 +81,7 @@ export function WorkforceArea(
   },
 ) {
   const [view, setViewState] = useState<AgentsView>("roster");
-  const [filter, setFilter] = useState<"all" | "working" | "worked" | "duty">("all");
+  const [filter, setFilter] = useState<"all" | "working" | "worked" | "duty" | "unregistered">("all");
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
   // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
@@ -102,7 +106,8 @@ export function WorkforceArea(
       window.history.pushState(null, "", url.toString());
     } catch { /* non-browser */ }
   };
-  const [creating, setCreating] = useState(false);
+  // `true` for a blank agent; a name to register an agent that works with no registered role.
+  const [creating, setCreating] = useState<boolean | string>(false);
 
   const closeAgent = useCallback(() => {
     setOpenRole("");
@@ -117,12 +122,16 @@ export function WorkforceArea(
   // DELETED HERE, GONE HERE. The roster is server data refreshed on an interval; without this a
   // just-deleted agent stays on screen and opening it says it does not exist.
   const [deleted, setDeleted] = useState<Set<string>>(new Set());
-  const everyone = useMemo(() => (workforce.agents ?? []).filter((a) => !deleted.has(a.id)),
-                           [workforce.agents, deleted]);
+  // THE ROSTER, NOT THE WORK FEED: every agent a step's picker offers, plus unregistered ones
+  // doing work. `agents` alone is who worked, which said "All 5" beside a picker of 34.
+  const everyone = useMemo(
+    () => (workforce.roster ?? workforce.agents ?? []).filter((a) => !deleted.has(a.id)),
+    [workforce.roster, workforce.agents, deleted]);
   const agents = useMemo(() => {
     const scoped = filter === "working"
       ? everyone.filter((a) => a.status === "WORKING" || a.status === "STUCK")
-      : filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0) : everyone;
+      : filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0)
+      : filter === "unregistered" ? everyone.filter((a) => !a.registered) : everyone;
     const query = search.trim().toLowerCase();
     return query ? scoped.filter((a) => `${a.name} ${a.role} ${a.task}`.toLowerCase().includes(query)) : scoped;
   }, [everyone, filter, search]);
@@ -131,6 +140,10 @@ export function WorkforceArea(
   // COUNTED, NOT ASSUMED: roles idle all window have recorded no work.
   const workedCount = everyone.filter((a) => volumeOf(a) > 0).length;
   const unregisteredCount = everyone.filter((agent) => !agent.registered).length;
+  // Once the last one is registered, the "unregistered" view has nothing left to show.
+  useEffect(() => {
+    if (filter === "unregistered" && unregisteredCount === 0) setFilter("all");
+  }, [filter, unregisteredCount]);
   const shownAgents = filter === "all" && !search.trim() && !showAll ? agents.slice(0, 12) : agents;
   const panels = studio?.panels ?? [];
   const orphans = useMemo(() => studio ? orphanProfiles(studio, everyone.map((a) => a.id)) : [],
@@ -175,6 +188,7 @@ export function WorkforceArea(
 
       {creating ? (
         <AgentQuickCreate projectId={workforce.project_id} actor={actor} orphans={orphans}
+                          initialName={typeof creating === "string" ? creating : ""}
                           onClose={() => setCreating(false)}
                           onCreated={(roleKey) => { setCreating(false); openAgent(roleKey); }} />
       ) : null}
@@ -198,12 +212,14 @@ export function WorkforceArea(
               ))}
             </span>
             {/* Governance gap, said once: an agent running work without a registered role has
-                no trust score, no autonomy level and no violation tracking. */}
+                no trust score, no autonomy level and no violation tracking. Pressed, it shows
+                those agents, each with Register. */}
             {unregisteredCount > 0 ? (
-              <span className="detail roster-ungoverned" data-testid="roster-ungoverned"
-                    title="Work by roles nothing governs. Review their authority before another run.">
+              <button type="button" className="cap-btn roster-ungoverned" data-testid="roster-ungoverned"
+                      data-active={filter === "unregistered"} title={UNREGISTERED_TIP}
+                      onClick={() => setFilter(filter === "unregistered" ? "all" : "unregistered")}>
                 {unregisteredCount} unregistered
-              </span>
+              </button>
             ) : null}
           </div>
 
@@ -233,6 +249,11 @@ export function WorkforceArea(
                             data-testid={`wf-open-${a.id}`}>Details</button>
                     <button type="button" className="roster-ask" onClick={() => askAgent(a.name)}
                             data-testid={`wf-ask-${a.id}`}>Ask</button>
+                    {!a.registered ? (
+                      <button type="button" className="roster-open" onClick={() => setCreating(a.name)}
+                              title="Make it an agent: skills, limits and a trust score"
+                              data-testid={`wf-register-${a.id}`}>Register</button>
+                    ) : null}
                   </div>
                 </article>
               ))}
