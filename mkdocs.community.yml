@@ -63,6 +63,7 @@ nav:
       - Getting started: GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Deploy: hostname.md
+      - Deploy an app: DEPLOY_A_STACK.md
       - Sign in: CONSOLE_AUTH.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md

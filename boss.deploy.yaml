@@ -1,0 +1,27 @@
+# How BOSS deploys BOSS: Infra -> a VM target -> Deploy this repository at a ref.
+# Contract: docs/community/DEPLOY_A_STACK.md.
+#
+# The host needs a fresh Ubuntu 22.04/24.04 or Debian 12/13 VM and an SSH user with
+# passwordless sudo: install.sh installs Docker itself, so Docker is not a precondition.
+# The target's public URL must be https (the console origin, README.md "Deploy").
+version: 1
+name: boss
+kind: commands
+# The install builds every image and Playwright's browser: well over the 30-minute default step
+# limit on a small VM, and a step killed mid-build leaves a half-installed host. So the
+# install/update steps carry their own limit.
+install:
+  - run: bash scripts/deploy/boss_stack.sh install --dir {dir}/current --commit {commit} --state {dir}/.boss/boss --origin {target.public_url}
+    timeout_seconds: 5400
+  - bash scripts/deploy/boss_stack.sh https --origin {target.public_url}
+update:
+  - run: bash scripts/deploy/boss_stack.sh update --dir {dir}/current --commit {commit} --state {dir}/.boss/boss --origin {target.public_url}
+    timeout_seconds: 5400
+  - bash scripts/deploy/boss_stack.sh https --origin {target.public_url}
+health:
+  - {url: "http://127.0.0.1:8000/health", expect: 200, timeout_seconds: 600}
+  - {url: "http://127.0.0.1:3000/login", expect: 200, timeout_seconds: 600}
+open: {url: "{target.public_url}"}
+teardown:
+  - bash scripts/deploy/boss_stack.sh teardown --dir {dir}/current
+requires: {sudo: true, docker: false}
