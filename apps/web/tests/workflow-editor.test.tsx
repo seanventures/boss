@@ -126,8 +126,9 @@ describe("the bar and the summary", () => {
     await mount();
     expect(byTest("wf-chip-steps").textContent).toBe("10 steps");
     expect(byTest("wf-chip-agents").textContent).toContain("1 agent");
-    expect(byTest("wf-chip-approvals").textContent).toBe("1 approval");
-    expect(byTest("wf-chip-approvals").dataset.tip).toBe("Deploy");
+    // The PRD sign-off is a gate (its capability is_gate), Deploy is forced to ask.
+    expect(byTest("wf-chip-approvals").textContent).toBe("2 approvals");
+    expect(byTest("wf-chip-approvals").dataset.tip).toBe("PRD approval, Deploy");
     expect(byTest("wf-chip-inputs").textContent).toBe("2 inputs");
     expect(byTest("wf-chip-inputs").dataset.tip).toBe("Asked for when someone starts a run");
     expect(byTest("wf-starts-with").textContent).toContain("Repo");
