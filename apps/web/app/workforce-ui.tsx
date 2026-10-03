@@ -10,6 +10,7 @@ import { FocusedAgents } from "./focused-agents-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
 import { openDockAbout } from "../lib/dock-subject";
+import { openRoom, openTalk } from "../lib/agent-converse";
 
 /**
  * The Agents area: Roster, Team and Panels, in v1's own styling.
@@ -42,11 +43,12 @@ function openAgent(roleKey: string): void {
   } catch { /* non-browser */ }
 }
 
-/** Open the console's side dock, addressed to this member of the workforce: same page, the
- *  panel on the right with the agent's name in its head. `dock_role` is what makes the reply
- *  come from that role's lens and its own past arguments. */
-function askAgent(agentName: string): void {
-  openDockAbout({ subject: null, role: agentName, question: `@${agentName}: ` });
+/** Talk to this agent, 1:1, in its own voice (agents/talk-sheet.tsx). By role_key: the name
+ *  is a display string, and two agents can share one. An agent with no registered role has no
+ *  voice to talk in yet, so it keeps the dock, addressed by name. */
+function askAgent(agent: V2Agent): void {
+  if (agent.registered) openTalk(agent.id, { from: "roster" });
+  else openDockAbout({ subject: null, role: agent.name, question: `@${agent.name}: ` });
 }
 
 export type AgentsView = "roster" | "team" | "panels";
@@ -182,6 +184,8 @@ export function WorkforceArea(
                    value={search} onChange={(event) => setSearch(event.target.value)} />
           </label>
         ) : null}
+        <button type="button" className="wf-btn" data-testid="wf-open-room"
+                title="Ask 2-5 agents at once" onClick={() => openRoom()}>Room</button>
         <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-new-agent"
                 onClick={() => setCreating(true)}>+ New agent</button>
       </header>
@@ -247,7 +251,7 @@ export function WorkforceArea(
                   <div className="roster-actions">
                     <button type="button" className="roster-open" onClick={() => openAgent(a.id)}
                             data-testid={`wf-open-${a.id}`}>Details</button>
-                    <button type="button" className="roster-ask" onClick={() => askAgent(a.name)}
+                    <button type="button" className="roster-ask" onClick={() => askAgent(a)}
                             data-testid={`wf-ask-${a.id}`}>Ask</button>
                     {!a.registered ? (
                       <button type="button" className="roster-open" onClick={() => setCreating(a.name)}

@@ -29,6 +29,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { AgentStudioFeed } from "../lib/agent-studio";
+import { openPlan, openTalk } from "../lib/agent-converse";
 import { formatDate } from "../lib/datetime";
 import { AgentProfile } from "./agent-profile-ui";
 import { HelpTip } from "./help-tip";
@@ -200,6 +201,16 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
       <header className="tpl-page-head">
         <button type="button" className="tpl-back" onClick={onClose}>← Back to agents</button>
         <span className="tpl-crumb">Agents · {detail?.name ?? roleKey}</span>
+        {/* TALK TO IT, OR PLAN SOMETHING WITH IT (agents/converse-host.tsx). */}
+        {detail?.registered ? (
+          <span className="ag-head-acts" style={{ marginLeft: "auto" }}>
+            <button type="button" className="ag-btn ag-btn-primary" data-testid="agent-detail-talk"
+                    onClick={() => openTalk(roleKey, { from: "passport" })}>Talk</button>
+            <button type="button" className="ag-btn" data-testid="agent-detail-plan"
+                    title="Discuss a piece of work, then start it"
+                    onClick={() => openPlan(roleKey, { from: "passport" })}>Plan it</button>
+          </span>
+        ) : null}
       </header>
 
       <div className="tpl-page-inner">
