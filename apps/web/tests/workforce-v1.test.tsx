@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { OrgChartArea, WorkforceArea } from "../app/workforce-ui";
+import { OrgChartArea, UNREGISTERED_TIP, WorkforceArea } from "../app/workforce-ui";
 import { readdirSync } from "node:fs";
 
 import { codeOnly, cssOnly } from "./_helpers/source";
@@ -67,8 +67,8 @@ describe("v1 Workforce", () => {
     const out = html(wf({ agents: [agent({ registered: false })] }));
     expect(out).toContain('data-testid="roster-ungoverned"');
     expect(out).toContain("1 unregistered");
-    // The reason is a tooltip, not a paragraph.
-    expect(out).toContain('title="Work by roles nothing governs. Review their authority before another run."');
+    // The reason is a tooltip, not a paragraph, and it says what pressing it does.
+    expect(out).toContain(`title="${UNREGISTERED_TIP}"`);
   });
 
   it("says so rather than rendering an empty roster when the API is unreachable", () => {

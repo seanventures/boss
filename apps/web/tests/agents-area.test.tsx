@@ -134,6 +134,45 @@ describe("the roster", () => {
   });
 });
 
+describe("the roster is every agent the step picker offers", () => {
+  // The lead's walk: "All 5" on the roster, ~34 in a step's agent picker. The feed's `roster`
+  // is the picker's list plus unregistered agents doing work; `agents` is only who worked.
+  const worked = agent("cto", { calls: 4, task: "last: review" });
+  const idle = agent("architect", { task: "No work in 30 days" });
+  const stray = agent("product_manager", { name: "Product Manager", registered: false, calls: 2 });
+  const feed: Workforce = { ...workforce, agents: [worked, stray], roster: [worked, stray, idle] };
+
+  async function mountFeed() {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => root!.render(
+      <WorkforceArea workforce={feed} chart={chart} studio={studio()} actor="ceo" />));
+    await settle();
+  }
+
+  it("lists and counts agents with no work, and says they have none", async () => {
+    await mountFeed();
+    expect($('[data-testid="wf-filter-all"]')?.textContent).toBe("All 3");
+    expect($('[data-testid="wf-agent-architect"]')?.textContent).toContain("No work in 30 days");
+    expect($('[data-testid="wf-filter-worked"]')?.textContent).toBe("Has done work 2");
+  });
+
+  it("says what unregistered means and shows those agents, each with Register", async () => {
+    await mountFeed();
+    const note = $('[data-testid="roster-ungoverned"]');
+    expect(note?.textContent).toBe("1 unregistered");
+    expect(note?.getAttribute("title")).toMatch(/nothing governs it/);
+    await click(note);
+    expect($('[data-testid="wf-agent-product_manager"]')).not.toBeNull();
+    expect($('[data-testid="wf-agent-cto"]')).toBeNull();
+    expect($('[data-testid="wf-register-cto"]')).toBeNull();
+    await click($('[data-testid="wf-register-product_manager"]'));
+    const name = document.querySelector<HTMLInputElement>('input[value="Product Manager"]');
+    expect(name).not.toBeNull();
+  });
+});
+
 describe("Roster | Team | Panels", () => {
   it("reads the view from the URL, and only its own views", () => {
     expect(readAgentsView("?view=team")).toBe("team");
