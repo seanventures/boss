@@ -61,7 +61,13 @@ BOSS's `boss.deploy.yaml` runs `scripts/deploy/boss_stack.sh`. That script calls
 
 The script also handles the one thing the release layout changes. The install's `.env` holds the database credentials, and each new release directory starts without one. The script keeps `.env` in `<dir>/.boss/boss` and copies it into each release before the installer runs. It copies it back afterwards, even when the installer fails. Updates run `scripts/install/backup.sh` first.
 
-The VM needs passwordless `sudo`, because the installer installs Docker itself. The target's public URL must be `https`.
+The VM needs passwordless `sudo`, because the installer installs Docker itself. The target's public URL must be `https`. The install and update steps may run for up to 90 minutes, since the first build of every image can take longer than the default 30-minute step limit on a small VM.
+
+A host runs one BOSS. If the VM already runs a BOSS installed another way, such as the README install in `~/boss`, the deployment stops before installing anything and says so. Remove that install first, or deploy to another VM. The same applies when the VM still holds an earlier install's database volume that this deployment has no credentials for.
+
+The HTTPS step installs Caddy if it is missing. It refreshes the package lists first. On a release whose archive has no `caddy` package, such as Ubuntu 22.04, it adds Caddy's own apt repository as Caddy's install guide documents.
+
+The installer's `boss` command is pointed at `<dir>/current`, so `boss status`, `boss upgrade` and `boss backup` on the host keep working after older releases are removed.
 
 ## boss.verify.yaml
 
@@ -84,9 +90,10 @@ suites:
 timeout_seconds: 900            # per command
 ```
 
-- `by: imports` selects the test files that import a changed file or name its path in a string. A changed test file is always selected. `by: all` selects the whole glob every time.
+- `by: imports` selects the test files that import a changed file or name its path in a string. A changed test file is always selected. `by: all` selects the whole glob every time. An import of a workspace package, such as `@boss/api-client`, counts as an import of every file in the directory whose `package.json` declares that name.
 - If no test in a touched suite matches, `fallback: skip` (the default) runs nothing for that suite. `fallback: all` runs the whole glob.
-- A change that no suite covers, such as a docs-only edit, passes the gate, and the gate log says why.
+- Every changed code file must be covered by a test the gate runs. A changed file that no suite claims, or that no selected test imports or names, fails the gate with `no test covers <files>`. Add a test for it, or get a human waiver. Only documentation and other non-code files (`.md`, `.txt`, images, anything under `docs/`) and deleted files may go untested, so a docs-only change passes.
+- The gate reads `boss.verify.yaml` once, from the base commit, before any agent runs. A code task that creates, edits or deletes the file fails that attempt as tampering, and the file is put back. Change the verify declaration in its own reviewed pull request.
 - If the code task cannot list the changed files, every suite runs its whole glob.
 - Commands run **without a shell**, one command per entry. Each one must start with an executable on the sandbox allowlist (`BOSS_SANDBOX_VALIDATION_ALLOWED_COMMANDS`). A manifest that does not validate fails the gate and shows its error.
 - A task's explicit `test_commands` override the manifest.

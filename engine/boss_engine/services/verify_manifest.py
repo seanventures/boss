@@ -27,6 +27,15 @@ changed file (``by: imports``) or the whole glob (``by: all``). A changed test f
 selected. When a suite is touched but nothing in it references the change, ``fallback`` decides:
 ``skip`` (the default) runs nothing for that suite, ``all`` runs its whole glob.
 
+A CHANGED CODE FILE NO TEST COVERS IS NOT A PASS. A plan that ran zero tests used to read as
+green, so a change outside every suite (BOSS's ``apps/api``) or in a module no test imports
+passed the gate on no evidence at all — and so did a planted bug in such a module. Each changed
+file is now either covered (a ran test references it, it is a selected test, or its suite ran
+whole) or listed in ``VerifyPlan.uncovered``, and the gate fails on that list with the files'
+names. Only documentation and other non-code files (``NON_CODE_SUFFIXES``, ``docs/``) and
+deleted files may go uncovered. A workspace package import (``@boss/api-client``) names every
+file of that package: the specifier is mapped to the directory whose ``package.json`` declares it.
+
 COMMANDS ARE ARGV, NOT SHELL. They go to ``EphemeralSandbox.run``, which refuses shell syntax
 and checks argv[0] against the allowlist — a manifest cannot widen what the sandbox runs.
 ``{tests}`` expands to one argument per selected file, relative to the suite's ``cwd`` (the
@@ -56,6 +65,15 @@ TESTS_PLACEHOLDER = "{tests}"
 _SELECT_BY = ("imports", "all")
 _FALLBACK = ("skip", "all")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+#: Changes that carry no behaviour a test could check. Everything else is code and must be
+#: covered by a test the plan runs.
+NON_CODE_SUFFIXES = frozenset({
+    ".md", ".mdx", ".rst", ".txt", ".adoc",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".pdf",
+})
+NON_CODE_NAMES = frozenset({"LICENSE", "NOTICE", "AUTHORS", "CODEOWNERS"})
+_PACKAGE_SKIP_DIRS = frozenset({"node_modules", ".git", ".next", "dist", "build", ".venv",
+                                "venv", "__pycache__", ".turbo", "coverage"})
 
 
 class VerifyManifestError(ValueError):
@@ -90,6 +108,8 @@ class VerifyPlan:
     steps: list[tuple[str, str]] = field(default_factory=list)
     suites: list[dict[str, Any]] = field(default_factory=list)
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    #: Changed code files no test in this plan covers. Non-empty means the gate cannot pass.
+    uncovered: list[str] = field(default_factory=list)
 
     @property
     def commands(self) -> list[str]:
@@ -98,9 +118,30 @@ class VerifyPlan:
     def describe(self) -> str:
         """One line for the console and the agent prompt: which suites, how many tests each."""
         if not self.suites:
-            return f"{MANIFEST_NAME}: no suite covers the changed files"
-        parts = [f"{s['name']} ({s['selected']} test file(s), {s['reason']})" for s in self.suites]
-        return f"{MANIFEST_NAME}: " + "; ".join(parts)
+            text = f"{MANIFEST_NAME}: no suite covers the changed files"
+        else:
+            parts = [f"{s['name']} ({s['selected']} test file(s), {s['reason']})"
+                     for s in self.suites]
+            text = f"{MANIFEST_NAME}: " + "; ".join(parts)
+        if self.uncovered:
+            text += "; " + uncovered_message(self.uncovered)
+        return text
+
+
+def uncovered_message(files: list[str]) -> str:
+    """The gate's failure for changed code no test covers — what is missing and the way out."""
+    shown = ", ".join(files[:10]) + (f" and {len(files) - 10} more" if len(files) > 10 else "")
+    return (f"no test covers {shown}. Add or extend a test that imports or names each file "
+            f"(or a suite in {MANIFEST_NAME} that covers it); an unverified change needs a "
+            "human waiver, it does not pass on its own")
+
+
+def is_code_path(path: str) -> bool:
+    """False for documentation and other files no test could check."""
+    p = Path(path)
+    if p.parts and p.parts[0] == "docs":
+        return False
+    return p.suffix.lower() not in NON_CODE_SUFFIXES and p.name not in NON_CODE_NAMES
 
 
 # ---------------------------------------------------------------------------------- loading
@@ -231,6 +272,41 @@ def _stem(path: str) -> str:
     return stem.replace("\\", "/")
 
 
+def workspace_packages(root: Path | str) -> dict[str, str]:
+    """``package.json`` ``name`` -> its repo-relative directory, for every package in the tree.
+
+    ``import { x } from "@boss/api-client"`` names ``packages/api-client``; without this map the
+    specifier is compared as a path, never equals a file, and a change to the package selects
+    none of the tests that import it.
+    """
+    import json
+
+    base = Path(root)
+    found: dict[str, str] = {}
+    for current, dirs, files in os.walk(base):
+        dirs[:] = sorted(d for d in dirs if d not in _PACKAGE_SKIP_DIRS)
+        if "package.json" not in files:
+            continue
+        rel = Path(current).relative_to(base).as_posix()
+        if rel == ".":
+            continue  # the workspace root is not something a test imports
+        try:
+            name = json.loads((Path(current) / "package.json").read_text(encoding="utf-8")).get(
+                "name")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(name, str) and name.strip():
+            found.setdefault(name.strip(), rel)
+    return found
+
+
+def _package_dir(spec: str, packages: dict[str, str]) -> str | None:
+    for name, rel in packages.items():
+        if spec == name or spec.startswith(name + "/"):
+            return rel
+    return None
+
+
 _JS_SPEC = re.compile(
     r"""(?:import|export)\s[^'"]*?from\s*['"]([^'"]+)['"]"""
     r"""|import\s*\(\s*['"]([^'"]+)['"]\s*\)"""
@@ -298,13 +374,20 @@ def _normalise(path: Path) -> str:
     return "/".join(parts)
 
 
-def _references_changed(refs: Iterable[str], changed_stems: set[str]) -> bool:
-    """A reference names a changed file when, extension aside, one ends with the other on a
-    path boundary. ``boss_engine/services/x`` names ``engine/boss_engine/services/x.py``;
-    ``app/deploy-ui.tsx`` (relative to apps/web) names ``apps/web/app/deploy-ui.tsx``.
-    A bare package specifier (``react``) never names a repo file."""
+def _referenced(refs: Iterable[str], changed_stems: set[str],
+                packages: dict[str, str] | None = None) -> set[str]:
+    """The changed stems these references name. A reference names a changed file when,
+    extension aside, one ends with the other on a path boundary. ``boss_engine/services/x``
+    names ``engine/boss_engine/services/x.py``; ``app/deploy-ui.tsx`` (relative to apps/web)
+    names ``apps/web/app/deploy-ui.tsx``. A workspace package specifier names every file in
+    that package. Any other bare package specifier (``react``) never names a repo file."""
+    named: set[str] = set()
     for ref in refs:
         cleaned = ref.strip()
+        package = _package_dir(cleaned, packages or {})
+        if package is not None:
+            named.update(c for c in changed_stems if c == package or c.startswith(package + "/"))
+            continue
         while cleaned.startswith("./"):
             cleaned = cleaned[2:]
         for prefix in ("@/", "~/"):
@@ -314,17 +397,28 @@ def _references_changed(refs: Iterable[str], changed_stems: set[str]) -> bool:
             # `import yaml` must not select a test because some `x/yaml.py` changed; a bare
             # Python module is only matched when it IS a top-level file.
             if cleaned in changed_stems:
-                return True
+                named.add(cleaned)
             continue
         stem = _stem(cleaned)
-        for changed in changed_stems:
-            if changed == stem or changed.endswith("/" + stem):
-                return True
-    return False
+        named.update(c for c in changed_stems if c == stem or c.endswith("/" + stem))
+    return named
 
 
-def select_tests(root: Path | str, suite: VerifySuite, changed: list[str]) -> tuple[list[str], str]:
+def _references_changed(refs: Iterable[str], changed_stems: set[str],
+                        packages: dict[str, str] | None = None) -> bool:
+    return bool(_referenced(refs, changed_stems, packages))
+
+
+def select_tests(root: Path | str, suite: VerifySuite, changed: list[str],
+                 packages: dict[str, str] | None = None) -> tuple[list[str], str]:
     """Test files of ``suite`` to run for ``changed``, and why. Repo-relative, sorted."""
+    tests, reason, _covered = _select(root, suite, changed, packages)
+    return tests, reason
+
+
+def _select(root: Path | str, suite: VerifySuite, changed: list[str],
+            packages: dict[str, str] | None) -> tuple[list[str], str, set[str]]:
+    """``select_tests`` plus the changed files the selection covers."""
     base = Path(root)
     pattern = suite.tests_glob
     all_tests = sorted(
@@ -333,10 +427,15 @@ def select_tests(root: Path | str, suite: VerifySuite, changed: list[str]) -> tu
         if p.is_file()
     ) if pattern else []
     if suite.by == "all":
-        return all_tests, "all tests"
+        return all_tests, "all tests", set(changed) if all_tests else set()
     changed_set = {c for c in changed}
     picked = {t for t in all_tests if t in changed_set}
-    stems = {_stem(c) for c in changed if not glob_match(c, pattern)}
+    by_stem: dict[str, set[str]] = {}
+    for c in changed:
+        if not glob_match(c, pattern):
+            by_stem.setdefault(_stem(c), set()).add(c)
+    stems = set(by_stem)
+    covered = set(picked)
     if stems:
         for rel in all_tests:
             if rel in picked:
@@ -347,13 +446,17 @@ def select_tests(root: Path | str, suite: VerifySuite, changed: list[str]) -> tu
                 continue
             refs = (_python_references(text, rel) if rel.endswith(".py")
                     else _js_references(text, rel))
-            if _references_changed(refs, stems):
+            named = _referenced(refs, stems, packages)
+            if named:
                 picked.add(rel)
+                for stem in named:
+                    covered.update(by_stem[stem])
     if picked:
-        return sorted(picked), "tests that reference the change"
+        return sorted(picked), "tests that reference the change", covered
     if suite.fallback == "all":
-        return all_tests, "no test references the change; whole suite"
-    return [], "no test references the change"
+        return (all_tests, "no test references the change; whole suite",
+                set(changed) if all_tests else set())
+    return [], "no test references the change", set()
 
 
 def _expand(command: str, tests: list[str], cwd: str) -> str:
@@ -372,11 +475,16 @@ def plan_verify(manifest: VerifyManifest, root: Path | str, changed: list[str] |
     changed = [c.replace("\\", "/").lstrip("/") for c in (changed or []) if str(c).strip()]
     plan = VerifyPlan(timeout_seconds=manifest.timeout_seconds)
     suite_steps: list[tuple[str, str]] = []
+    packages = workspace_packages(root) if changed else {}
+    covered: set[str] = set()
     for suite in manifest.suites:
         if changed:
-            if not any(glob_match(c, p) for c in changed for p in suite.paths):
+            mine = [c for c in changed if any(glob_match(c, p) for p in suite.paths)]
+            if not mine:
                 continue
-            tests, reason = select_tests(root, suite, changed)
+            # Selection sees every changed file (a console test may read an engine file), but
+            # a suite vouches only for the files its own paths claim.
+            tests, reason, suite_covered = _select(root, suite, changed, packages)
         else:
             tests, reason = select_tests(root, VerifySuite(
                 name=suite.name, paths=suite.paths, run=suite.run,
@@ -387,10 +495,20 @@ def plan_verify(manifest: VerifyManifest, root: Path | str, changed: list[str] |
             plan.suites.append({"name": suite.name, "selected": 0, "reason": reason,
                                 "ran": False})
             continue
+        if changed:
+            covered.update(c for c in suite_covered if c in mine)
         plan.suites.append({"name": suite.name, "selected": len(tests), "reason": reason,
                             "ran": True, "tests": tests[:200]})
         suite_steps.extend((c, suite.cwd) for c in suite.setup)
         suite_steps.extend((_expand(c, tests, suite.cwd), suite.cwd) for c in suite.run)
     if suite_steps:
         plan.steps = [*((c, ".") for c in manifest.setup), *suite_steps]
+    base = Path(root)
+    plan.uncovered = sorted(
+        c for c in changed
+        if c not in covered and is_code_path(c) and c != MANIFEST_NAME
+        # A deleted file has nothing left to test; a test that still imports it is selected
+        # by the reference and fails on its own.
+        and (base / c).exists()
+    )
     return plan

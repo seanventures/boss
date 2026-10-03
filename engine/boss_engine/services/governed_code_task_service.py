@@ -2509,10 +2509,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # there was a checkout, so it could only guess from the task text. A monorepo that ships
         # boss.verify.yaml (BOSS itself does) declares its suites; a pytest project gets pytest,
         # not a unittest discover that collects nothing. Explicit test_commands still win.
-        _gate_plan0 = verification_target.resolve_gate_plan(spec, title, root, app_id=_app_id)
+        # PINNED HERE, BEFORE ANY AGENT RUNS: every later verify plans from this copy, never
+        # from the tree the implementer edits (see verification_target.PinnedVerifyManifest).
+        _pinned_manifest = verification_target.pin_verify_manifest(root)
+        _gate_plan0 = verification_target.resolve_gate_plan(
+            spec, title, root, app_id=_app_id, pinned=_pinned_manifest)
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
-            test_cmd = ((verification_target.manifest_display(root)
+            test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
                          if _gate_plan0.from_manifest else " && ".join(verify_commands))
                         or test_cmd)
         _web_verify = (
@@ -2539,8 +2543,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             from .sandbox import CommandResult
 
             if plan.error or not plan.commands:
-                # A manifest that does not validate fails closed with its own message. A valid
-                # one that no suite covers (a docs-only change) passes, and says so.
+                # A manifest that does not validate fails closed with its own message. A plan
+                # that runs nothing passes only when nothing it leaves out is code (a docs-only
+                # change); changed code no test covers fails below.
                 failed = bool(plan.error)
                 result = CommandResult(
                     command="", argv=[], exit_code=1 if failed else 0, duration_ms=0,
@@ -2551,6 +2556,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 results = verification_target.run_steps_until_failure(
                     sandbox, plan.steps, timeout=plan.timeout_seconds)
                 result = results[-1]
+            if result.ok and plan.uncovered:
+                # Zero tests ran for these files: that is no evidence, not a pass.
+                from .verify_manifest import uncovered_message
+
+                message = uncovered_message(plan.uncovered)
+                result = CommandResult(
+                    command="", argv=[], exit_code=1, duration_ms=0, timed_out=False,
+                    stdout="", stderr=message)
+                results.append(result)
             output = (
                 f"[boss] {plan.description}\n"
                 + "".join(((item.stdout or "") + "\n" + (item.stderr or "") + "\n")
@@ -2563,8 +2577,26 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory."""
             nonlocal last_verify_cwd, last_verify_output
+            tampered_manifest = verification_target.verify_manifest_tampered(
+                _pinned_manifest, root)
+            if tampered_manifest:
+                # Fail this attempt like a frozen-test edit, then put the base version back so
+                # neither the next attempt nor the pull request carries the agent's copy.
+                from .sandbox import CommandResult
+                from .verify_manifest import MANIFEST_NAME
+
+                _manifest_path = Path(root) / MANIFEST_NAME
+                if _pinned_manifest.text is None:
+                    _manifest_path.unlink(missing_ok=True)
+                else:
+                    _manifest_path.write_text(_pinned_manifest.text, encoding="utf-8")
+                if record:
+                    last_verify_output = f"[boss] {tampered_manifest}\n"
+                return CommandResult(command="", argv=[], exit_code=1, duration_ms=0,
+                                     timed_out=False, stdout="", stderr=tampered_manifest)
             plan = verification_target.resolve_gate_plan(
-                spec, title, root, app_id=_app_id, changed=_changed_paths())
+                spec, title, root, app_id=_app_id, changed=_changed_paths(),
+                pinned=_pinned_manifest)
             cwd = plan.cwd
             try:
                 last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."

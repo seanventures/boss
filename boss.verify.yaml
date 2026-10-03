@@ -3,7 +3,11 @@
 #
 # Only the suites a change touches run, and in each only the tests that import or name a
 # changed file (a changed test always runs). The apps/api suite is not here on purpose: it
-# needs a live Postgres, which the code-task sandbox does not have.
+# needs a live Postgres, which the code-task sandbox does not have. So a code task that changes
+# apps/api (or any other code no suite covers) fails the gate with "no test covers ..." and
+# needs a human waiver; it is never passed on zero tests.
+#
+# The gate reads this file from the base commit; a code task cannot change it.
 version: 1
 suites:
   - name: engine
