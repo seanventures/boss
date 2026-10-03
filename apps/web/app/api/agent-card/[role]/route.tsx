@@ -12,8 +12,9 @@ import React from "react";
 import { ImageResponse } from "next/og";
 
 import { API_URL, authHeaders } from "../../../../lib/client";
-import { avatarSvg } from "../../../../lib/agent-world-types";
-import { bornDate, humanise, mrz, toPassport } from "../../../../lib/agent-world";
+import { avatarSvg } from "../../../../lib/agent-avatar";
+import type { AvatarSpec } from "../../../../lib/agent-world-types";
+import { bornDate, humanise, mrz, resolveAvatar, toPassport } from "../../../../lib/agent-world";
 
 export const dynamic = "force-dynamic";
 
@@ -28,22 +29,8 @@ async function getJson(path: string): Promise<unknown> {
   return r.json();
 }
 
-function faceDataUri(spec: { kit: "boss-v1"; seed: string }): string {
-  let svg = "";
-  try { svg = avatarSvg(spec, { size: 320, state: "idle" }); } catch { /* the kit is not there yet */ }
-  if (!svg) {
-    // Until the kit lands: a plain robot head in shapes (no text — the renderer has no fonts
-    // inside an SVG image), so a card is never a blank disc.
-    svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">`
-      + `<circle cx="160" cy="160" r="152" fill="${C.surface}" stroke="${C.teal}" stroke-width="8"/>`
-      + `<line x1="160" y1="58" x2="160" y2="86" stroke="${C.muted}" stroke-width="8" stroke-linecap="round"/>`
-      + `<circle cx="160" cy="52" r="12" fill="${C.teal}"/>`
-      + `<rect x="78" y="86" width="164" height="150" rx="40" fill="#16213C" stroke="${C.border}" stroke-width="4"/>`
-      + `<rect x="98" y="122" width="124" height="58" rx="20" fill="${C.bg}"/>`
-      + `<rect x="120" y="140" width="22" height="22" rx="6" fill="${C.teal}"/>`
-      + `<rect x="178" y="140" width="22" height="22" rx="6" fill="${C.teal}"/>`
-      + `<rect x="134" y="200" width="52" height="8" rx="4" fill="${C.muted}"/></svg>`;
-  }
+function faceDataUri(spec: AvatarSpec): string {
+  const svg = avatarSvg(spec, { size: 320, state: "idle" });
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
@@ -70,7 +57,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ role: string }>
   const persona = passport.persona;
   const display = passport.displayName || humanise(role);
   const name = persona.callsign || display;
-  const face = faceDataUri(persona.avatar ?? { kit: "boss-v1", seed: passport.agentId || role });
+  // The same face as every chip: resolved, never the stored avatar drawn raw.
+  const face = faceDataUri(resolveAvatar(passport.roleKey || role, passport.agentId, persona.avatar));
   const about = (persona.about_me ?? "").slice(0, 170);
   const [m1, m2] = mrz(passport.agentId, passport.version, name);
   const v = passport.vitals;

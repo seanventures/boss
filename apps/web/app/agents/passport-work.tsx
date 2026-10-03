@@ -18,6 +18,7 @@ import type { Act, ActKind, AvatarState, Presence } from "../../lib/agent-world-
 import {
   forgetMemory, identityOf, listActs, listRoleMemories, money, toast, type Memory,
 } from "../../lib/agent-world";
+import { consoleHref } from "../url-intent";
 import { AgFace, AgState } from "./agent-face";
 
 type Row = Act & { from?: { kind: string; id?: string; roleKey?: string } };
@@ -47,12 +48,16 @@ export function actState(status: Act["status"]): AvatarState {
   return "idle";
 }
 
-/** Where the act's subject lives in the console. */
-export function actHref(a: Act): string | null {
+/** The query string the console is on now; empty on a server render. */
+const here = () => (typeof window === "undefined" ? "" : window.location.search);
+
+/** Where the act's subject lives in the console. Built from the current URL, so `?org=` stays
+ *  (url-intent.ts): a link without it lands on the organisation picker. */
+export function actHref(a: Act, search: string = here()): string | null {
   const l = a.links;
-  if (l.workflow_run_id) return `?area=delivery_workflows&wfr=${encodeURIComponent(l.workflow_run_id)}`;
-  if (l.code_task_run_id) return `?area=code_tasks&run=${encodeURIComponent(l.code_task_run_id)}`;
-  if (l.meeting_run_id) return "?area=meetings";
+  if (l.workflow_run_id) return consoleHref(search, { area: "delivery_workflows", wfr: l.workflow_run_id });
+  if (l.code_task_run_id) return consoleHref(search, { area: "code_tasks", run: l.code_task_run_id });
+  if (l.meeting_run_id) return consoleHref(search, { area: "meetings" });
   return null;
 }
 
@@ -179,7 +184,7 @@ export function PassportWork({ projectId, actor, roleKey, name, presence }: {
       {rows && !rows.length && !failed ? (
         <div className="ag-empty" data-testid="ag-work-empty">
           <span>No signed work yet</span>
-          <a className="ag-link" href="?area=delivery_workflows&tab=library"
+          <a className="ag-link" href={consoleHref(here(), { area: "delivery_workflows", tab: "library" })}
              title={`Give ${name} a workflow step`}>Name it on a step ↗</a>
         </div>
       ) : null}

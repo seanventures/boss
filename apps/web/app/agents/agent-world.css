@@ -160,30 +160,9 @@
 .ag-seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); }
 .ag-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 12px; }
 
-/* The face, placed. The kit's SVG fills it; until then, the initials disc in a state ring. */
-.ag-face { position: relative; display: inline-flex; flex: none; line-height: 0; border-radius: 50%; }
-.ag-face[data-size="16"] { width: 16px; height: 16px; }
-.ag-face[data-size="20"] { width: 20px; height: 20px; }
-.ag-face[data-size="24"] { width: 24px; height: 24px; }
-.ag-face[data-size="32"] { width: 32px; height: 32px; }
-.ag-face[data-size="48"] { width: 48px; height: 48px; }
-.ag-face[data-size="96"] { width: 96px; height: 96px; }
-.ag-face[data-size="320"] { width: 320px; height: 320px; }
-.ag-face > svg { width: 100%; height: 100%; }
-.ag-face .ag-face-disc { width: 100%; height: 100%; font-size: 0.6rem; box-shadow: 0 0 0 1px var(--border-strong); }
-.ag-face[data-size="48"] .ag-face-disc { font-size: 0.95rem; }
-.ag-face[data-size="96"] .ag-face-disc, .ag-face[data-size="320"] .ag-face-disc { font-size: 1.8rem; }
-.ag-face:not([data-kit])[data-state="working"] .ag-face-disc,
-.ag-face:not([data-kit])[data-state="thinking"] .ag-face-disc,
-.ag-face:not([data-kit])[data-state="speaking"] .ag-face-disc { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--teal); }
-.ag-face:not([data-kit])[data-state="needs_you"] .ag-face-disc { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--amber); }
-.ag-face:not([data-kit])[data-state="done"] .ag-face-disc { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--green); }
-.ag-face:not([data-kit])[data-state="stuck"] .ag-face-disc { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--red); }
-.ag-face:not([data-kit])[data-state="paused"] .ag-face-disc,
-.ag-face:not([data-kit])[data-state="retired"] .ag-face-disc { opacity: 0.55; outline: 1px dashed var(--faint); outline-offset: 2px; }
-
+/* The face, placed: the kit's .ag-avatar sizes and draws it (see [kit] above). */
 .ag-stack { display: inline-flex; align-items: center; }
-.ag-stack > .ag-face { box-shadow: 0 0 0 2px var(--surface); }
+.ag-stack > .ag-face { box-shadow: 0 0 0 2px var(--surface); border-radius: 50%; }
 .ag-stack > .ag-face + .ag-face { margin-left: -6px; }
 .ag-stack-more { margin-left: 4px; font-size: 0.72rem; color: var(--faint); }
 
@@ -193,7 +172,7 @@
 .ag-state[data-state="done"] { color: var(--green); }
 .ag-state[data-state="stuck"] { color: var(--red); }
 
-.ag-ai {
+.ag-ai-tag {
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px;
   border: 1px solid var(--accent-line); color: var(--accent-text); font-size: 0.68rem; font-weight: 700;
   letter-spacing: 0.04em; white-space: nowrap;
@@ -275,7 +254,6 @@
 .ag-passport[data-lifecycle="paused"], .ag-passport[data-lifecycle="retired"] { border-style: dashed; }
 .ag-passport-hero { position: relative; }
 .ag-hero-face { border: 0; padding: 0; background: none; cursor: pointer; border-radius: 50%; }
-.ag-hero-face[data-wave] .ag-face { animation: agav-hero-wave 1.2s ease-in-out; }
 .ag-hero-bubble {
   position: absolute; left: 70%; top: -8px; z-index: 2; max-width: 220px; padding: 6px 10px;
   border: 1px solid var(--accent-line); border-radius: 12px 12px 12px 2px; background: var(--surface-3);
@@ -459,8 +437,6 @@
   background: linear-gradient(160deg, var(--surface) 0%, var(--bg-tint) 100%); box-shadow: var(--shadow-lg);
 }
 .ag-birth-face { animation: agav-birth-rise 600ms cubic-bezier(.2,.8,.2,1) both; }
-.ag-birth-face .av-hat { animation: agav-birth-drop 360ms 300ms cubic-bezier(.3,1.4,.5,1) both; }
-.ag-birth-face .av-emblem { animation: agav-birth-pop 240ms 560ms ease-out both; }
 .ag-birth-name { font-family: var(--display); font-size: 1.4rem; color: var(--ink); }
 .ag-birth-facts { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 0.8rem; }
 .ag-birth-facts > div { display: contents; }
@@ -474,18 +450,11 @@
 
 @keyframes agav-pill-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 @keyframes agav-bubble-in { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: none; } }
-@keyframes agav-hero-wave {
-  0%, 100% { transform: rotate(0); } 20% { transform: rotate(-8deg); } 45% { transform: rotate(8deg); }
-  70% { transform: rotate(-5deg); }
-}
 @keyframes agav-birth-rise { from { opacity: 0; transform: translateY(10px) scale(0.85); } to { opacity: 1; transform: none; } }
-@keyframes agav-birth-drop { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: none; } }
-@keyframes agav-birth-pop { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: none; } }
 @keyframes agav-birth-stamp { from { opacity: 0; transform: rotate(-12deg) scale(1.8); } to { opacity: 1; transform: rotate(-12deg) scale(1); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .ag-pill, .ag-hero-bubble, .ag-hero-face[data-wave] .ag-face, .ag-birth-face, .ag-birth-face .av-hat,
-  .ag-birth-face .av-emblem, .ag-birth-stamp { animation: none; }
+  .ag-pill, .ag-hero-bubble, .ag-birth-face, .ag-birth-stamp { animation: none; }
   .ag-swarm-edge, .ag-share-preview img, .ag-card-actions { transition: none; }
 }
 

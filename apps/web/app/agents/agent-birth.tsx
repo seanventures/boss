@@ -29,7 +29,8 @@ export function AgentBirth({ identity, agentId, onDone }: {
     <div className="ag-birth" role="status" aria-label={`${identity.name} is born`} data-testid="ag-birth"
          onClick={finish}>
       <div className="ag-birth-cert">
-        <div className="ag-birth-face"><AgFace roleKey={identity.roleKey} identity={identity} size={96} decorative /></div>
+        <div className="ag-birth-face"><AgFace roleKey={identity.roleKey} identity={identity} size={96} decorative
+                                                  aiBadge={false} motion="birth" /></div>
         <div className="ag-birth-name">{identity.callsign || identity.name}</div>
         <AiBadge long />
         <dl className="ag-birth-facts">

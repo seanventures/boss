@@ -72,6 +72,45 @@ export function layoutEgo(graph: LineageGraph, roleKey: string, declared = false
   return { height, center, left, right, top, edges };
 }
 
+/** An edge's identity across renders: graph objects are rebuilt on every read. */
+export const edgeKey = (e: { from: string; to: string }) => `${e.from}>${e.to}`;
+
+type AnyAct = Act & { from?: { kind: string; id?: string; roleKey?: string } };
+
+/** Did `sender` hand this act its work? Lineage node ids are not role keys: an agent is matched
+ *  by its role key, a person by their actor id, BOSS by kind. */
+export function handedBySender(a: AnyAct, sender: Node): boolean {
+  const kind = a.from?.kind ?? a.handedBy.kind;
+  if (sender.kind === "boss") return kind === "boss";
+  if (sender.kind === "person") return kind === "person" && (a.from?.id ?? a.handedBy.id) === sender.id;
+  const role = sender.roleKey ?? sender.id;
+  return kind === "agent" && (a.from?.roleKey ?? a.from?.id ?? a.handedBy.id) === role;
+}
+
+const LAST = 10;
+const MAX_PAGES = 10;
+
+/** The last ten pieces of work that crossed an edge, paging through the receiver's work until
+ *  ten are found or it runs out (a busy agent's first page may hold none of them). */
+export async function actsAcross(projectId: string, graph: LineageGraph, edge: Edge, days: number): Promise<Act[]> {
+  const node = (id: string): Node => graph.nodes.find((n) => n.id === id)
+    ?? { id, kind: "agent", roleKey: id };
+  const sender = node(edge.from);
+  const receiver = node(edge.to);
+  if (receiver.kind !== "agent") return [];
+  const receiverRole = receiver.roleKey ?? receiver.id;
+  const found: Act[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES && found.length < LAST; page++) {
+    const r = await listActs(projectId, receiverRole, { days, cursor });
+    if (!r.ok) break;
+    for (const a of r.data.items) if (handedBySender(a, sender) && found.length < LAST) found.push(a);
+    cursor = r.data.next;
+    if (!cursor) break;
+  }
+  return found;
+}
+
 function NodeChip({ n, actor, center = false }: { n: Node & Pos; actor: string; center?: boolean }) {
   const label = n.kind === "boss" ? "BOSS" : n.kind === "person" ? (n.id === actor ? "You" : n.id)
     : (identityOf(n.roleKey ?? n.id).callsign || identityOf(n.roleKey ?? n.id).name);
@@ -90,7 +129,7 @@ export function PassportLineage({ projectId, actor, roleKey }: { projectId: stri
   const [days, setDays] = useState<7 | 30>(30);
   const [graph, setGraph] = useState<LineageGraph | null>(null);
   const [failed, setFailed] = useState("");
-  const [picked, setPicked] = useState<{ edge: Edge; acts: Act[] | null } | null>(null);
+  const [picked, setPicked] = useState<{ key: string; label: string; acts: Act[] | null } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -106,21 +145,10 @@ export function PassportLineage({ projectId, actor, roleKey }: { projectId: stri
   const layout = useMemo(() => (graph ? layoutEgo(graph, roleKey, mode === "declared") : null),
                          [graph, roleKey, mode]);
 
-  const pick = async (edge: Edge, side: "in" | "out" | "top") => {
-    setPicked({ edge, acts: null });
-    // The work that crossed this edge: this agent's acts handed by the other end, or the other
-    // end's acts handed by this agent.
-    const other = side === "in" ? edge.from : edge.to;
-    const otherRole = graph?.nodes.find((n) => n.id === other)?.roleKey;
-    const r = side === "out" && otherRole
-      ? await listActs(projectId, otherRole, { days })
-      : await listActs(projectId, roleKey, { days });
-    const acts = r.ok ? r.data.items.filter((a) => {
-      const from = a.from?.roleKey ?? a.from?.id ?? a.handedBy.id;
-      return side === "out" ? from === roleKey || a.handedBy.id === roleKey
-        : from === other || (other === "boss" && a.handedBy.kind === "boss");
-    }).slice(0, 10) : [];
-    setPicked({ edge, acts });
+  const pick = async (edge: Edge) => {
+    setPicked({ key: edgeKey(edge), label: edge.label, acts: null });
+    const acts = graph ? await actsAcross(projectId, graph, edge, days) : [];
+    setPicked((p) => (p && p.key === edgeKey(edge) ? { ...p, acts } : p));
   };
 
   const empty = layout && !layout.edges.length;
@@ -165,10 +193,10 @@ export function PassportLineage({ projectId, actor, roleKey }: { projectId: stri
             <button key={`l:${e.from}>${e.to}`} type="button" className="ag-ln-label"
                     data-testid={`ag-ln-edge-${e.from}-${e.to}`}
                     data-reconstructed={e.reconstructed || undefined}
-                    aria-pressed={picked?.edge === e}
+                    aria-pressed={picked?.key === edgeKey(e)}
                     style={{ left: `${(((e.a.x + e.b.x) / 2) / W) * 100}%`, top: (e.a.y + e.b.y) / 2 }}
                     title={e.reconstructed ? "Rebuilt from older records; the handoff order may be approximate." : undefined}
-                    onClick={() => void pick(e, e.side)}>
+                    onClick={() => void pick(e)}>
               {e.label}{e.reconstructed ? " · Reconstructed" : ""}
             </button>
           ))}
@@ -176,7 +204,7 @@ export function PassportLineage({ projectId, actor, roleKey }: { projectId: stri
       ) : null}
       {picked ? (
         <div className="ag-ln-acts" data-testid="ag-ln-acts">
-          <div className="ag-day-head">{picked.edge.label}</div>
+          <div className="ag-day-head">{picked.label}</div>
           {picked.acts === null ? <span className="ag-muted">Reading…</span>
             : picked.acts.length ? (
               <ul className="ag-acts">

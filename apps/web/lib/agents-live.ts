@@ -22,6 +22,9 @@ const EMPTY: LiveMap = new Map();
 type Store = {
   value: LiveMap; etag: string | null; listeners: Set<(m: LiveMap) => void>;
   timer: ReturnType<typeof setTimeout> | null; stopped: boolean; inflight: boolean;
+  /** Bumped whenever the chain is restarted. A tick schedules its successor only while its own
+   *  generation is current, so a restart during a pending fetch can never leave two chains. */
+  gen: number;
 };
 const stores = new Map<string, Store>();
 
@@ -48,8 +51,8 @@ function same(a: LiveMap, b: LiveMap): boolean {
 
 const hidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
 
-async function tick(projectId: string, store: Store): Promise<void> {
-  if (store.stopped) return;
+async function tick(projectId: string, store: Store, gen = store.gen): Promise<void> {
+  if (store.stopped || gen !== store.gen) return;
   let wait = POLL_MS;
   if (!hidden() && !store.inflight) {
     store.inflight = true;
@@ -69,7 +72,9 @@ async function tick(projectId: string, store: Store): Promise<void> {
     } catch { /* keep what is on screen; a failed poll is not "nobody is working" */ }
     finally { store.inflight = false; }
   }
-  if (!store.stopped) store.timer = setTimeout(() => void tick(projectId, store), wait);
+  // ONE CHAIN PER STORE. If the chain was restarted while this fetch was out (the tab came
+  // back), the restart owns the next timer; scheduling here as well would double the poll.
+  if (!store.stopped && gen === store.gen) store.timer = setTimeout(() => void tick(projectId, store, gen), wait);
 }
 
 function onVisible(): void {
@@ -77,14 +82,16 @@ function onVisible(): void {
   // Back on the tab: answer now rather than up to 4s later.
   for (const [projectId, store] of stores) {
     if (store.timer) clearTimeout(store.timer);
-    void tick(projectId, store);
+    store.timer = null;
+    store.gen += 1;
+    void tick(projectId, store, store.gen);
   }
 }
 
 export function subscribeLive(projectId: string, listener: (m: LiveMap) => void): () => void {
   let store = stores.get(projectId);
   if (!store) {
-    store = { value: EMPTY, etag: null, listeners: new Set(), timer: null, stopped: false, inflight: false };
+    store = { value: EMPTY, etag: null, listeners: new Set(), timer: null, stopped: false, inflight: false, gen: 0 };
     stores.set(projectId, store);
     if (stores.size === 1 && typeof document !== "undefined") {
       document.addEventListener("visibilitychange", onVisible);

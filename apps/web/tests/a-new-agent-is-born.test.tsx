@@ -95,21 +95,43 @@ describe("Blank: born with a face and a voice", () => {
     expect(new URLSearchParams(window.location.search).get("dock_role")).toBe("Release Auditor");
   });
 
-  it("Reroll changes the face seed and nothing else", async () => {
+  it("the face is the kit's picker: Reroll re-seeds and keeps the parts picked by hand", async () => {
     const { calls } = installAgentWorldApi([(url, init) => (url === "/v1/agents" && init.method === "POST" ? created("x_agent") : undefined)]);
     const agentWorld = await import("../lib/agent-world");
-    const seeds = ["aaaaaaaaaa", "bbbbbbbbbb"];
-    const spy = vi.spyOn(agentWorld, "newSeed").mockImplementation(() => seeds.shift() ?? "cccccccccc");
+    const spy = vi.spyOn(agentWorld, "newSeed").mockImplementation(() => "aaaaaaaaaa");
     await open();
     await act(async () => { type($('[data-testid="aq-name"]') as HTMLInputElement, "X Agent"); });
-    await click($('[data-testid="aq-reroll"]'));
+    const picker = $('[data-testid="aq-face-voice"] [data-testid="ag-face-picker"]');
+    expect(picker).not.toBeNull();
+    // A cast hat is never offered to a new agent: it would dress it as a cast member.
+    const hats = [...picker!.querySelectorAll<HTMLOptionElement>('[data-testid="ag-face-hat"] option')].map((o) => o.value);
+    expect(hats).not.toContain("magnifier");
+    const emblem = picker!.querySelector<HTMLSelectElement>('[data-testid="ag-face-emblem"]')!;
+    await act(async () => {
+      emblem.value = "gear";
+      emblem.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await click($('[data-testid="ag-face-reroll"]'));
     await click($('[data-testid="aq-create"]'));
     const b = posts(calls);
     expect(b).toHaveLength(1);
     expect(b[0].body).toMatchObject({ name: "X Agent", born_from: { kind: "blank" } });
-    expect((b[0].body!.persona as { avatar: { seed: string } }).avatar.seed).toBe("bbbbbbbbbb");
-    expect($('[data-testid="aq-reroll"]')).toBeNull(); // the birth has replaced the dialog
+    const avatar = (b[0].body!.persona as { avatar: { seed: string; emblem?: string } }).avatar;
+    expect(avatar.seed).toMatch(/^aaaaaaaaaa~/);
+    expect(avatar.emblem).toBe("gear");
+    expect($('[data-testid="ag-face-reroll"]')).toBeNull(); // the birth has replaced the dialog
     spy.mockRestore();
+  });
+
+  it("a callsign another agent answers to is refused before it is sent", async () => {
+    const { calls } = installAgentWorldApi();
+    await open();
+    await act(async () => { type($('[data-testid="aq-name"]') as HTMLInputElement, "Second QA"); });
+    await act(async () => { type($('[data-testid="aq-callsign"]') as HTMLInputElement, "Vera"); });
+    await settle();
+    expect($('[data-testid="aq-face-voice"]')?.textContent).toContain("Taken");
+    expect(($('[data-testid="aq-create"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(posts(calls)).toHaveLength(0);
   });
 
   it("a refused create shows the API's sentence and plays no birth", async () => {
@@ -123,13 +145,41 @@ describe("Blank: born with a face and a voice", () => {
   });
 });
 
-describe("From archetype: fourteen faces, none of them a person", () => {
-  it("offers all fourteen, and a 'thinks like' archetype says it is a way of thinking", async () => {
+describe("From archetype: the kit's cast, none of them a person", () => {
+  it("offers the operator's crew first and the 'thinks like' archetypes last, from the kit's cast", async () => {
+    const { CAST } = await import("../lib/avatar-kit/cast");
     installAgentWorldApi();
     await open();
     await click($('[data-testid="aq-tab-archetype"]'));
-    expect(document.querySelectorAll('[data-testid^="aq-arch-"][role="radio"]')).toHaveLength(14);
+    const keys = [...document.querySelectorAll('[data-testid^="aq-arch-"][role="radio"]')]
+      .map((b) => b.getAttribute("data-testid")!.replace("aq-arch-", ""));
+    expect(keys).toEqual(CAST.filter((c) => c.designed === "hand").map((c) => c.roleKey));
+    expect(keys.slice(0, 5)).toEqual(["engineering_captain", "backend_engineer", "frontend_engineer",
+                                      "operations_engineer", "sre"]);
+    expect(keys.slice(-4)).toEqual(["first_principles_researcher", "visionary_founder", "relentless_operator",
+                                    "teacher_who_simplifies"]);
     expect($('[data-testid="aq-arch-visionary_founder"]')?.getAttribute("title")).toMatch(/^Inspired by a way of thinking/);
+  });
+
+  it("a new agent born from qa is not a second Vera: no callsign, no tagline, no cast parts", async () => {
+    const { CAST_BY_KEY } = await import("../lib/avatar-kit/cast");
+    const { calls } = installAgentWorldApi([(url, init) => (url === "/v1/agents" && init.method === "POST" ? created("my_qa_lead") : undefined)]);
+    await open();
+    await click($('[data-testid="aq-tab-archetype"]'));
+    await click($('[data-testid="aq-arch-qa"]'));
+    expect(($('[data-testid="aq-arch-name"]') as HTMLInputElement).value).toBe("My QA Lead");
+    await click($('[data-testid="aq-arch-create"]'));
+    const body = posts(calls)[0].body!;
+    expect(body.born_from).toEqual({ kind: "template", template_key: "qa" });
+    const persona = body.persona as { callsign?: string; tagline?: string; avatar: Record<string, string> };
+    expect(persona.callsign).toBeUndefined();
+    expect(persona.tagline).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("Vera");
+    const vera = CAST_BY_KEY.qa.avatar;
+    expect(persona.avatar.hat).toBeUndefined();
+    expect(persona.avatar.emblem).toBeUndefined();
+    expect(persona.avatar.seed).not.toBe(vera.seed);
+    expect(persona.avatar.seed).toMatch(/^[0-9a-z]{10}$/);
   });
 
   it("an archetype is born_from archetype; a role face is born_from its template", async () => {
@@ -146,7 +196,7 @@ describe("From archetype: fourteen faces, none of them a person", () => {
     expect(onCreated).toHaveBeenCalledWith("my_visionary_founder");
 
     expect(bornFromFor("qa")).toEqual({ kind: "template", template_key: "qa" });
-    expect(birthPersona({ seed: "abc", archetype: null }).archetype).toBeNull();
+    expect(birthPersona({ archetype: null }).archetype).toBeNull();
   });
 
   it("Draft about me is one model call in that voice, and says when there is no model", async () => {
@@ -160,5 +210,22 @@ describe("From archetype: fourteen faces, none of them a person", () => {
     expect(draft).toHaveLength(1);
     expect(draft[0].body).toMatchObject({ field: "about_me", actor: "ceo" });
     expect(document.body.textContent).toContain("Needs a model. Set one in Settings.");
+  });
+});
+
+describe("From template: a shipped role keeps its face", () => {
+  it("installs qa with the cast face untouched — no new seed, no persona face", async () => {
+    const { calls } = installAgentWorldApi([
+      (url) => (url.includes("/v1/agent-studio/templates") ? Response.json({ items: [
+        { id: "tpl_qa", name: "QA Lead", description: "Tests", role_key: "qa", category: "Quality", installed: true, active: true },
+      ] }) : undefined),
+      (url, init) => (url === "/v1/agents" && init.method === "POST" ? created("qa") : undefined),
+    ]);
+    await open();
+    await click($('[data-testid="aq-tab-template"]'));
+    await click($('[data-testid="aq-template-tpl_qa"] button'));
+    const body = posts(calls)[0].body!;
+    expect(body.born_from).toEqual({ kind: "template", template_key: "tpl_qa" });
+    expect((body.persona as { avatar?: unknown } | undefined)?.avatar).toBeUndefined();
   });
 });

@@ -7,15 +7,18 @@
  * press is one request. The API speaks snake_case; everything returned here is the frozen web
  * shape from lib/agent-world-types.ts, mapped once, here, so no component reads a wire field.
  *
- * SAFE EDGES. The face (avatarSvg), the resolver (agentIdentity) and the 1:1 talk (openTalk)
- * belong to S-kit and S-converse and throw until they land. Nothing in the Agents area may crash
- * because a sibling stream is late, so each is called through a wrapper that falls back: a
- * plain initials face, a humanised name, and the existing side dock.
+ * The face, the cast and the identity resolver are the kit's (lib/agent-avatar.ts,
+ * lib/agent-identity.ts, lib/avatar-kit/): nothing here draws or names an agent its own way. The
+ * 1:1 talk (openTalk) belongs to S-converse and throws until it lands, so it is called through a
+ * wrapper that falls back to the existing side dock.
  */
 import { apiWrite } from "./api-write";
 import { openDockAbout } from "./dock-subject";
+import { avatarSvg, seededSpec } from "./agent-avatar";
+import { agentIdentity } from "./agent-identity";
+import { CAST, CAST_BY_KEY } from "./avatar-kit/cast";
 import {
-  agentIdentity, avatarSvg, openTalk,
+  openTalk,
   type Act, type ActHow, type ActKind, type ActStatus, type AgentIdentity, type AvatarSpec,
   type AvatarState, type AvatarVariant, type ConversationContext, type LineageGraph,
   type Passport, type Persona, type Presence, type Voice,
@@ -28,36 +31,19 @@ export type {
 
 const enc = encodeURIComponent;
 
-// ── The cast and the face parts ─────────────────────────────────────────────────────────────
+// ── The cast ────────────────────────────────────────────────────────────────────────────────
 
-/** The 14 shipped faces (spec §8), in the order the Archetype grid shows them. */
-export const CAST_KEYS = [
-  "pm", "chief_architect", "software_engineer", "adversarial_reviewer", "security_reviewer", "qa",
-  "release_manager", "design_critic", "docs_writer", "finops_sentinel",
-  "first_principles_researcher", "visionary_founder", "relentless_operator", "teacher_who_simplifies",
-] as const;
+/** The hand-designed cast, in the kit's order: the §0.1 crew the operator named first
+ *  (engineering captain, backend, frontend, operations, SRE, …), the "thinks like" archetypes last. */
+export const CAST_KEYS: readonly string[] = CAST.filter((c) => c.designed === "hand").map((c) => c.roleKey);
 
 /** The "thinks like" archetypes: inspired by a way of thinking, never a person (§0.1.3). */
-export const ARCHETYPE_KEYS = [
-  "first_principles_researcher", "visionary_founder", "relentless_operator", "teacher_who_simplifies",
-] as const;
-
-/** Face part ids offered by the Face pickers. INTEGRATION: replace with the kit manifests
- *  (lib/avatar-kit/hats.ts, emblems.ts, palettes.ts) once S-kit lands; ids are the kit's. */
-export const FACE_PARTS: { hats: string[]; emblems: string[]; palettes: string[] } = {
-  hats: ["navigator_cap", "hard_hat", "headphones", "monocle", "shield_visor", "magnifier",
-         "flag_antenna", "beret", "quill", "coin_stack", "goggles", "telescope", "headset",
-         "round_glasses", "antenna", "halo_ring", "bolt", "fin", "dome", "visor_band", "sprout",
-         "crest"],
-  emblems: ["compass", "blueprint", "braces", "red_pen", "lock", "check", "rocket", "pen_nib",
-            "page", "dollar", "atom", "spark", "stopwatch", "chalk", "gear", "wave"],
-  palettes: ["teal", "accent", "mint", "purple", "amber", "pink", "green", "slate"],
-};
+export const ARCHETYPE_KEYS: readonly string[] = CAST.filter((c) => c.archetype).map((c) => c.roleKey);
 
 export const DISCLOSURE = "AI agent · not a real person";
 export const AI_TIP = "An AI agent. Not a real person.";
 
-// ── Safe edges onto the other streams ───────────────────────────────────────────────────────
+// ── Identity and face (the kit) ─────────────────────────────────────────────────────────────
 
 const ACRONYMS: Record<string, string> = {
   qa: "QA", cto: "CTO", coo: "COO", cao: "CAO", ux: "UX", vp: "VP", pm: "PM", sre: "SRE", mcp: "MCP",
@@ -68,33 +54,40 @@ export function humanise(key: string): string {
     .join(" ");
 }
 
-/** One identity for a role key, title or name. The kit's resolver when it is there; otherwise a
- *  stable fallback seeded by the key, so the same agent still looks the same everywhere. */
+/** One identity for a role key, title or name: the kit's resolver (lib/agent-identity.ts). */
 export function identityOf(keyOrTitle: string, name?: string): AgentIdentity {
-  try {
-    const found = agentIdentity(keyOrTitle);
-    if (found) return name && !found.name ? { ...found, name } : found;
-  } catch { /* the kit has not landed: fall through */ }
-  const roleKey = (keyOrTitle || "").trim();
-  return {
-    roleKey, agentId: null, name: name || humanise(roleKey), avatar: { kit: "boss-v1", seed: roleKey },
-    lifecycle: "active",
-  };
+  const found = agentIdentity(keyOrTitle);
+  return name && !found.name ? { ...found, name } : found;
 }
 
-/** The face as SVG markup, or null when the kit is not there yet (the caller draws initials). */
-export function faceMarkup(spec: AvatarSpec, size: number, state?: AvatarState,
-                           variant?: AvatarVariant): string | null {
-  try {
-    const svg = avatarSvg(spec, { size, state, variant });
-    return typeof svg === "string" && svg.includes("<svg") ? svg : null;
-  } catch {
-    return null;
-  }
+/** The face as SVG markup: the kit's one drawing function. */
+export function faceMarkup(spec: AvatarSpec, size: number, state?: AvatarState, variant?: AvatarVariant): string {
+  return avatarSvg(spec, { size, state, variant });
+}
+
+const PARTS = ["hat", "emblem", "palette", "visor"] as const;
+/** True when an avatar names a part, not just a seed. */
+export function hasParts(a: Partial<AvatarSpec> | null | undefined): boolean {
+  return !!a && PARTS.some((k) => !!a[k]);
+}
+
+/**
+ * An agent's face from its role and its stored avatar, the way the kit resolves an identity:
+ * a shipped role's hand-drawn face (a custom agent's seeded one), with the stored parts laid
+ * over it only when the operator picked some. A bare seed on a shipped role is a default, not
+ * a choice, so Vera is still Vera on a passport that only carries `{seed: agt_…}`.
+ */
+export function resolveAvatar(roleKey: string, agentId: string | null | undefined,
+                              stored?: Partial<AvatarSpec> | null): AvatarSpec {
+  const cast = CAST_BY_KEY[roleKey];
+  const base = cast?.avatar ?? seededSpec(agentId || roleKey);
+  if (!stored || (cast && !hasParts(stored))) return base;
+  const picked = Object.fromEntries(Object.entries(stored).filter(([k, v]) => v && k !== "kit"));
+  return { ...base, ...picked, kit: "boss-v1" } as AvatarSpec;
 }
 
 /** Talk to an agent. The 1:1 conversation when S-converse is there; the side dock, addressed to
- *  that agent by role key, until then. */
+ *  that agent by role key, until then (openTalk is still the contract's stub). */
 export function askAgent(roleKey: string, name: string, context?: ConversationContext): void {
   try {
     openTalk(roleKey, context);
@@ -226,9 +219,16 @@ export function toPassport(w: unknown): Passport {
   const vitals = obj(o.vitals);
   const persona = toPersona(o.persona);
   const agentId = str(o.agent_id);
-  if (!persona.avatar && o.avatar) persona.avatar = toAvatar(o.avatar, agentId);
+  // A face counts only when it is a choice: parts picked, or a custom agent's own (re)seed. A
+  // bare seed on a shipped role is a default (the kit draws the cast face for it), and keeping it
+  // in the persona would write it back on the next Save of any voice field.
+  const roleKey = str(o.role_key);
+  if (CAST_BY_KEY[roleKey] && persona.avatar && !hasParts(persona.avatar)) delete persona.avatar;
+  if (!persona.avatar && o.avatar && (hasParts(obj(o.avatar)) || !CAST_BY_KEY[roleKey])) {
+    persona.avatar = toAvatar(o.avatar, agentId);
+  }
   return {
-    agentId, roleKey: str(o.role_key), displayName: str(o.display_name),
+    agentId, roleKey, displayName: str(o.display_name),
     persona,
     born: { at: str(born.at), by: str(born.by), from: obj(born.from) },
     sponsor: opt(o.sponsor), lifecycle: (str(o.lifecycle, "active") as Passport["lifecycle"]),
@@ -321,6 +321,31 @@ export type RunChainLite = { acts: ReturnType<typeof toAct>[] };
 export function getRunChain(workflowRunId: string, projectId: string): Promise<Result<RunChainLite>> {
   return getJson(`/v1/workflow-runs/${enc(workflowRunId)}/chain?project_id=${enc(projectId)}`,
                  (w) => ({ acts: arr(obj(w).acts).map(toAct) }));
+}
+
+/** One act, as `/v1/acts/{act_id}` returns it. */
+export function getAct(projectId: string, actId: string): Promise<Result<ReturnType<typeof toAct>>> {
+  return getJson(`/v1/acts/${enc(actId)}?project_id=${enc(projectId)}`, toAct);
+}
+
+/** Who really handed this act its work: the agent named on it, else its parent act's agent.
+ *  null when the work came from a person or BOSS, or the parent is unknown — never a guess. */
+export async function handedByRole(projectId: string, actId: string): Promise<string | null> {
+  const r = await getAct(projectId, actId);
+  if (!r.ok) return null;
+  const a = r.data;
+  if (a.from?.kind === "agent" && a.from.roleKey) return a.from.roleKey;
+  if (a.handedBy.kind === "agent" && a.handedBy.id) return a.handedBy.id;
+  if (!a.parentActId) return null;
+  const parent = await getAct(projectId, a.parentActId);
+  return parent.ok && parent.data.roleKey ? parent.data.roleKey : null;
+}
+
+/** The project's workflow runs, most recently active first (ids of `workflow_runs`, which is
+ *  what `/v1/workflow-runs/{id}/chain` is keyed by). */
+export function listRecentRunIds(projectId: string, limit = 5): Promise<Result<string[]>> {
+  return getJson(`/v1/delivery-workflows/runs?project_id=${enc(projectId)}&limit=${limit}`,
+                 (w) => arr<Wire>(obj(w).runs).map((r) => str(r.id)).filter(Boolean));
 }
 
 export type Memory = { id: string; body: string; source?: string };
@@ -510,14 +535,15 @@ export const VOICE_AXES: { key: keyof Voice; low: string; high: string }[] = [
   { key: "casual", low: "Formal", high: "Casual" },
 ];
 
-/** A persona with every optional field present, for an editor to bind to. */
-export function fullPersona(p?: Partial<Persona> | null, seed = ""): Persona {
+/** A persona with every optional field present, for an editor to bind to. The avatar is left
+ *  as stored — absent stays absent — so saving a voice never writes a face nobody picked. */
+export function fullPersona(p?: Partial<Persona> | null): Persona {
   return {
     version: 1, archetype: p?.archetype ?? null, callsign: p?.callsign ?? "", tagline: p?.tagline ?? "",
     about_me: p?.about_me ?? "",
     voice: { blunt: 2, thorough: 2, bold: 2, casual: 2, ...(p?.voice ?? {}) },
     phrases: [...(p?.phrases ?? [])], never: [...(p?.never ?? [])],
-    avatar: { kit: "boss-v1", seed: p?.avatar?.seed || seed, ...(p?.avatar ?? {}) },
+    ...(p?.avatar ? { avatar: { ...p.avatar, kit: "boss-v1" as const } } : {}),
   };
 }
 
