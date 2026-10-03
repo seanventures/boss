@@ -20,6 +20,9 @@ const VIEWS: Record<string, (project: string) => string> = {
   custom_steps: (p) =>
     `/v1/delivery-workflows/custom-steps?project_id=${encodeURIComponent(p)}`,
   installed: (p) => `/v1/delivery-workflows?project_id=${encodeURIComponent(p)}`,
+  // The Workflow Studio library: the same list, read by lib/workflow-api.ts `fetchLibrary`,
+  // which also uses the fields the list gained for it (copies, run count, last run).
+  library: (p) => `/v1/delivery-workflows?project_id=${encodeURIComponent(p)}`,
   runs: (p) => `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}`,
   schedules: (p) =>
     `/v1/delivery-workflows/schedules?project_id=${encodeURIComponent(p)}`,
@@ -29,11 +32,13 @@ const VIEWS: Record<string, (project: string) => string> = {
   repositories: (p) => `/v1/projects/${encodeURIComponent(p)}/repositories`,
 };
 
-/** `view=spec&key=…` — the steps a workflow currently has, so the builder opens with them
- *  rather than making a customer rebuild ten steps to change one. */
-function specPath(project: string, key: string): string {
+/** `view=spec&key=…[&version=n]` — the steps a workflow currently has (or had at version n),
+ *  so the editor opens with them rather than making a customer rebuild ten steps to change
+ *  one. */
+function specPath(project: string, key: string, version: string | null): string {
   return `/v1/delivery-workflows/${encodeURIComponent(key)}/spec`
-    + `?project_id=${encodeURIComponent(project)}`;
+    + `?project_id=${encodeURIComponent(project)}`
+    + (version && /^\d+$/.test(version) ? `&version=${version}` : "");
 }
 
 /** `view=plan&key=…` — what the workflow WILL DO, as opposed to which steps it has.
@@ -68,12 +73,16 @@ export async function GET(req: Request) {
     try {
       const path = view === "plan" ? planPath(project, key)
         : view === "readiness" ? readinessPath(project, key, params.get("input"))
-        : specPath(project, key);
+        : specPath(project, key, params.get("version"));
       const r = await fetch(`${API_URL}${path}`, {
         headers: authHeaders({}), cache: "no-store",
       });
       if (!r.ok) {
-        return NextResponse.json({ error: `API returned ${r.status}` }, { status: r.status });
+        // The API's own sentence ("no workflow 'x'"), so the editor can say what is wrong.
+        const raw = await r.text();
+        let parsed: unknown;
+        try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+        return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
       }
       return NextResponse.json(await r.json());
     } catch (e) {
@@ -114,6 +123,13 @@ const ACTIONS: Record<string, string> = {
   advance: "/v1/delivery-workflows/run-capabilities",
   define_step: "/v1/delivery-workflows/custom-steps",
   schedule: "/v1/delivery-workflows/schedules",
+  // The Workflow Studio editor (lib/workflow-api.ts). `check` and `publish` run the same
+  // collector, so a check that passes is a publish that passes; `draft` and `wire` write
+  // nothing. A refusal keeps its `problems` and `suggested_name` (lib/start-refusal.ts).
+  check: "/v1/delivery-workflows/check",
+  publish: "/v1/delivery-workflows/publish",
+  draft: "/v1/delivery-workflows/draft",
+  wire: "/v1/delivery-workflows/wire",
 };
 
 /** Actions addressed to ONE run. Kept apart because their path carries the run id. */
@@ -143,9 +159,18 @@ async function proxyPost(path: string, payload: unknown) {
 }
 
 async function proxyDelete(path: string) {
+  return proxyWrite("DELETE", path, null);
+}
+
+/** One PATCH or DELETE to the API, its refusal read by the one shared helper. */
+async function proxyWrite(method: "PATCH" | "DELETE", path: string, payload: unknown) {
   try {
-    const r = await apiWrite(`${API_URL}${path}`,
-                          { method: "DELETE", headers: authHeaders({}), cache: "no-store" });
+    const r = await apiWrite(`${API_URL}${path}`, {
+      method,
+      headers: authHeaders(payload === null ? {} : { "Content-Type": "application/json" }),
+      ...(payload === null ? {} : { body: JSON.stringify(payload) }),
+      cache: "no-store",
+    });
     const raw = await r.text();
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
@@ -241,11 +266,12 @@ export async function POST(req: Request) {
 /** Removing a step a customer defined. Separate from POST because it is the one destructive
  *  thing this screen does, and routing it through the same `action` switch as "save" would
  *  make a typo in an action name capable of deleting something. */
-/** Change a step that already exists.
+/** Change a step that already exists (`step_key`), or rename a workflow (`definition_id`).
  *
  *  Its own verb rather than another POST action, because the key stays in the PATH: the key is
  *  what workflow specs bind to, so it is the one thing an edit must not be able to change. A
- *  body that carried it would invite exactly that. */
+ *  body that carried it would invite exactly that. A workflow's name and description change in
+ *  place the same way — no new version — and its id is likewise the path, not the body. */
 export async function PATCH(req: Request) {
   let body: Record<string, unknown>;
   try {
@@ -253,35 +279,22 @@ export async function PATCH(req: Request) {
   } catch {
     return NextResponse.json({ error: "body must be JSON" }, { status: 400 });
   }
+  const definitionId = String(body.definition_id ?? "").trim();
+  if (definitionId) {
+    const { definition_id: _id, step_key: _key, ...rename } = body;
+    return proxyWrite("PATCH",
+      `/v1/delivery-workflows/${encodeURIComponent(definitionId)}`, rename);
+  }
   const key = String(body.step_key ?? "").trim();
   if (!key) {
     return NextResponse.json({ error: "step_key is required" }, { status: 400 });
   }
   const { step_key: _drop, ...payload } = body;
-  try {
-    const r = await apiWrite(
-      `${API_URL}/v1/delivery-workflows/custom-steps/${encodeURIComponent(key)}`,
-      {
-        method: "PATCH",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      },
-    );
-    const raw = await r.text();
-    let parsed: unknown;
-    try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
-    if (!r.ok) {
-      // Forwarded verbatim, like every other message from the API here: "choose the skill this
-      // step runs" is the sentence the form shows, and "request failed" would waste it.
-      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
-    }
-    return NextResponse.json(parsed);
-  } catch (e) {
-    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
-  }
+  // Refusals are forwarded verbatim, like every other message from the API here: "choose the
+  // skill this step runs" is the sentence the form shows, and "request failed" would waste it.
+  return proxyWrite("PATCH",
+    `/v1/delivery-workflows/custom-steps/${encodeURIComponent(key)}`, payload);
 }
-
 
 export async function DELETE(req: Request) {
   const params = new URL(req.url).searchParams;
@@ -292,6 +305,17 @@ export async function DELETE(req: Request) {
   // REMOVING A FINISHED RUN. A DELETE verb rather than another POST action, for the reason
   // given above the step delete: an action name is a string, and a typo in one must not be
   // able to destroy something.
+  // DELETING (OR RETIRING) A WORKFLOW — the Library's Delete. The API retires instead when the
+  // workflow has runs, refuses a standard (403) and one with live runs (409). The actor is the
+  // signed-in member the API reads from the credentials, never a name from this request.
+  const definitionId = params.get("definition_id")?.trim() ?? "";
+  if (definitionId) {
+    if (!project) {
+      return NextResponse.json({ error: "project_id is required" }, { status: 400 });
+    }
+    return proxyDelete(`/v1/delivery-workflows/${encodeURIComponent(definitionId)}`
+      + `?project_id=${encodeURIComponent(project)}`);
+  }
   const runId = params.get("run_id")?.trim() ?? "";
   if (runId) {
     if (!project) {
