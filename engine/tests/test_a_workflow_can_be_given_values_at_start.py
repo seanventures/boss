@@ -93,12 +93,6 @@ def test_a_field_name_that_could_not_be_bound_is_rejected():
         validate_input_schema({"required": ["video url"], "properties": {}})
 
 
-def test_the_start_tool_lets_a_caller_supply_them():
-    """The actual gap: the plumbing resolved any field and nothing could pass one."""
-    import inspect
-    from boss_engine.tools import builtin
 
-    src = inspect.getsource(builtin)
-    assert '"inputs": {' in src
-    # Supplied values must not be able to shadow what BOSS itself sets.
-    assert 'run_input.update({"directive": directive, "title": title})' in src
+# The start tool's `inputs` reaching the run, and not shadowing the directive, is driven through
+# the tool in apps/api/tests/test_workflow_management_runs_e2e.py (it needs a database).

@@ -3566,6 +3566,37 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
         return
 
 
+#: What ends a run's `waiting` step, by kind — exactly the conditions `advance_run` acts on.
+_ANSWERED_DECISION = ("approved", "rejected", "expired")
+_ENDED_CHILD_RUN = ("completed", "failed", "deadlettered", "cancelled")
+
+
+def a_wait_is_over(connection: Connection, run_id: str) -> bool:
+    """Whether one of this run's waiting steps can now move: a timer that is due, a gate a
+    person has answered, a child run that has ended.
+
+    The product tick asks this before calling `advance_run`, which is the only code that
+    releases those three kinds of wait. Kept beside it so the two cannot disagree about what
+    "over" means; capability steps waiting on a gate or on outside work are the runner's own.
+    """
+    return connection.execute(
+        text(
+            """
+            SELECT 1
+            FROM workflow_step_runs s
+            LEFT JOIN decisions d ON d.id = s.decision_id
+            LEFT JOIN workflow_runs c ON c.id = s.child_workflow_run_id
+            WHERE s.workflow_run_id = :r AND s.status = 'waiting'
+              AND ((s.step_kind = 'timer' AND s.run_after <= now())
+                   OR (s.step_kind = 'decision' AND d.status IN :answered)
+                   OR (s.step_kind = 'subworkflow' AND c.status IN :ended))
+            LIMIT 1
+            """
+        ).bindparams(bindparam("answered", expanding=True), bindparam("ended", expanding=True)),
+        {"r": run_id, "answered": list(_ANSWERED_DECISION), "ended": list(_ENDED_CHILD_RUN)},
+    ).first() is not None
+
+
 def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[str, Any]:
     run = _run_row(connection, run_id, lock=True)
     if run["project_id"] != project_id:
