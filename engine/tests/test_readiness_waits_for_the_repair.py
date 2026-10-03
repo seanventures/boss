@@ -89,7 +89,8 @@ def test_a_run_with_nothing_built_is_still_not_a_failure(monkeypatch):
     assert output["status"] == "not_applicable"
 
 
-def test_the_preview_and_the_deploy_follow_the_repair_not_the_original_build():
+def test_the_deploy_follows_the_repair_not_the_original_build():
     repair = {"from_step": "plrr", "field": "code_task_run_id"}
-    assert _step("preview_final")["binding"]["inputs"]["run_id"] == repair
+    # No second preview after readiness (removed at the operator's request); the deploy is
+    # what must follow the repair, and is checked below.
     assert _step("deploy")["binding"]["inputs"]["run_id"] == repair

@@ -181,22 +181,14 @@ CATALOGUE: list[dict[str, Any]] = [
             # step holds the built app against what that spec promised and closes the gaps in
             # code before production, rather than filing them as follow-ups nobody runs.
             _step("plrr", "plrr", {"run_id": _from("build", "code_task_run_id")}),
-            # AND PREVIEW AGAIN AFTER IT CHANGES CODE.
-            #
-            # PLRR writes code. Deploying straight after it would ship something nobody looked
-            # at, which voids the gate the earlier preview exists to be. The second preview is
-            # cheap — the app is already built — and it is what keeps "a person saw this" true.
-            # THE REPAIR'S RUN, NOT THE BUILD'S.
-            #
-            # PLRR extends the build into a new code task on the same branch. Previewing and
-            # deploying the original run id adopts the preview that was already serving the
-            # pre-repair app, then ships while — or instead of — the repair. Both steps follow
-            # the run plrr waited for.
-            _step("preview_final", "preview",
-                  {"run_id": _from("plrr", "code_task_run_id")}),
+            # NO SECOND PREVIEW AFTER READINESS (removed 2026-10-03, the operator: "it's not
+            # useful"). The earlier preview is the human look at what was built; readiness then
+            # closes operability gaps (health checks, metrics, rollback notes), and the deploy
+            # below ships the run readiness waited for — so the repair is what ships, and the
+            # run report says exactly what readiness changed before anyone approves the deploy.
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
-            # Last, before the deploy gate — deliberately after readiness and its preview, so
+            # Last, before the deploy gate — deliberately after readiness, so
             # the report can say what PLRR actually changed:
             #
             #     "I want to see the summary of what plr did in the workflow pipeline"

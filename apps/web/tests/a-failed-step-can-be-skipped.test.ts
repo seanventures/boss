@@ -32,7 +32,10 @@ describe("Skip and proceed", () => {
     // that did not fail and for an approval, and the SAME verdict is what skip_failed_step
     // enforces through `require`.
     expect(ENGINE).toContain("if step_status not in SKIPPABLE_STEP_STATES:");
-    expect(ENGINE).toContain("elif is_gate(_step_kind(step), step_capability(step)):");
+    // ...and a refused approval of any kind: a gate, or a stack deployment the operator
+    // rejected (is_refused_approval) — skipping either would turn a "no" into a yes.
+    expect(ENGINE).toContain("elif (is_gate(_step_kind(step), step_capability(step))");
+    expect(ENGINE).toContain("or is_refused_approval(step)):");
   });
 
   it("is never offered on an approval gate — a refused gate is somebody's no", () => {
