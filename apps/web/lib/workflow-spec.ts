@@ -56,6 +56,14 @@ const strings = (value: unknown): string[] =>
 /** Step keys the canvas owns; every other top-level key on a loaded step is carried through. */
 const OWNED_STEP_KEYS = ["id", "kind", "binding", "approval", "next", "captain", "title"];
 
+/** Step keys a `config` patch may never write: identity, graph structure, and the keys other
+ *  patch fields own. Everything else is a block setting (question, wait_seconds, a condition's
+ *  expression, …). */
+const STRUCTURAL_STEP_KEYS = new Set([
+  ...OWNED_STEP_KEYS, "branches", "join", "wait_for", "on_true", "on_false", "body",
+  "max_attempts",
+]);
+
 /** Turn one stored step into a canvas step. */
 export function draftFromSpecStep(step: Obj): DraftStep {
   const binding = asObj(step.binding);
@@ -385,10 +393,15 @@ export function applyStepPatch(step: SpecStep, patch: StepPatch): SpecStep {
     }
   }
   if (patch.config) {
-    for (const [key, value] of Object.entries(patch.config)) {
+    for (const [key, raw] of Object.entries(patch.config)) {
+      // A block setting only. Identity, structure, binding and the keys this patch owns have
+      // their own edits (renameStepId, the linear-only graph edits, the fields above); a config
+      // key that wrote them would bypass every rule those keep.
+      if (STRUCTURAL_STEP_KEYS.has(key)) continue;
+      const value = raw === "" ? undefined : raw;
       // "Run another workflow" is read from the binding by the validator, not the top level.
       if (key === "workflow_version_id" && step.kind === "subworkflow") {
-        binding = setOrDrop(binding, key, value === "" ? undefined : value);
+        binding = setOrDrop(binding, key, value);
         bindingTouched = true;
       } else {
         out = setOrDrop(out, key, value);

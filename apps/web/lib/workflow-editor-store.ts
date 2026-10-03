@@ -21,7 +21,7 @@ import type {
   EditorAction, EditorMeta, EditorState, Palette, Spec, SpecStep,
 } from "./workflow-editor-types";
 import {
-  insertStep, linearOrder, moveStep, removeStep, renameStepId, wireInputs,
+  duplicateStep, insertStep, moveStep, removeStep, renameStepId, wireInputs,
 } from "./workflow-graph";
 import { freeStepId } from "./step-view";
 import { applyStepPatch, deepEqual, inputsReadBy, mergeInputSchema } from "./workflow-spec";
@@ -170,11 +170,9 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
                     s.selection === a.id ? { selection: null } : {});
 
     case "DUPLICATE": {
-      const original = s.spec.steps.find((step) => step.id === a.id);
-      if (!original) return s;
-      const copy = { ...structuredClone(original), id: freeStepId(s.spec, a.id) } as SpecStep;
-      const spec = insertStep(s.spec, linearOrder(s.spec).indexOf(a.id) + 1, copy);
-      return spec === s.spec ? s : commit(s, spec, { selection: copy.id });
+      const copyId = freeStepId(s.spec, a.id);
+      const spec = duplicateStep(s.spec, a.id, copyId);
+      return spec === s.spec ? s : commit(s, spec, { selection: copyId });
     }
 
     case "PATCH_STEP": {
@@ -482,6 +480,11 @@ export function useWorkflowEditor(key: string | "new", projectId: string,
   const storageKey = draftKey(projectId, key);
   const storageKeyRef = useRef(storageKey);
   storageKeyRef.current = storageKey;
+  // The draft key `state` belongs to: set when a load lands (or when what is in memory already
+  // is that workflow), cleared when another starts loading. A draft is written only under it,
+  // so a failed or still-pending load can neither erase this key's draft nor file another
+  // workflow's spec under it.
+  const stateKeyRef = useRef<string | null>(null);
 
   const refreshPalette = useCallback(async () => {
     try { setPalette(await fetchPalette(projectId)); } catch (e) {
@@ -493,14 +496,19 @@ export function useWorkflowEditor(key: string | "new", projectId: string,
 
   useEffect(() => {
     // Just saved a new workflow or a copy, and the URL moved to its key: what is in memory IS
-    // that workflow. Reloading would only flash a spinner.
+    // that workflow's running version. Reloading would only flash a spinner. An older version
+    // on screen ("Viewing v2") is not the running one, so going back to it loads.
     const current = stateRef.current;
     if (key !== "new" && current.meta.workflow_key === key && current.loaded && !version
-        && !isDirty(current)) {
+        && !current.meta.readOnlyVersion && !isDirty(current)) {
+      stateKeyRef.current = storageKey;
       setLoading(false);
       return;
     }
     let live = true;
+    stateKeyRef.current = null;
+    // Nothing of the previous workflow stays on screen (or in a draft) while this one loads.
+    rawDispatch({ type: "LOAD", spec: { steps: [] }, meta: newMeta() });
     setLoading(true);
     setError(null);
     setOffer(null);
@@ -510,6 +518,7 @@ export function useWorkflowEditor(key: string | "new", projectId: string,
     load.then(({ spec, meta }) => {
       if (!live) return;
       rawDispatch({ type: "LOAD", spec, meta });
+      stateKeyRef.current = storageKey;
       const stored = meta.readOnlyVersion ? null : readDraft(storageKey);
       if (stored && !deepEqual(stored.spec, spec)) setOffer(stored);
       else if (stored) writeDraft(storageKey, null);
@@ -525,11 +534,14 @@ export function useWorkflowEditor(key: string | "new", projectId: string,
   const dirty = useMemo(() => isDirty(state), [state]);
 
   // Keep the unsaved draft in this browser, a convenience only. Paused while an earlier draft
-  // is being offered back, so loading cannot overwrite the thing being offered.
+  // is being offered back, so loading cannot overwrite the thing being offered; and written
+  // only once this key's workflow has loaded. While the JSON is broken the draft is the last
+  // spec that parsed, so earlier edits are not lost to half-typed text.
   useEffect(() => {
-    if (loading || offer || state.meta.readOnlyVersion) return;
+    if (loading || offer || state.meta.readOnlyVersion || stateKeyRef.current !== storageKey) return;
+    const specDirty = isDirty({ ...state, jsonError: null });
     const timer = setTimeout(() => {
-      writeDraft(storageKey, dirty && !state.jsonError ? {
+      writeDraft(storageKey, specDirty ? {
         spec: state.spec,
         meta: { name: state.meta.name, description: state.meta.description,
                 from_workflow_key: state.meta.from_workflow_key },
@@ -538,7 +550,7 @@ export function useWorkflowEditor(key: string | "new", projectId: string,
       } : null);
     }, 400);
     return () => clearTimeout(timer);
-  }, [state, dirty, loading, offer, storageKey]);
+  }, [state, loading, offer, storageKey]);
 
   useEffect(() => {
     if (!dirty) return;
