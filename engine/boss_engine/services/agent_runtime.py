@@ -57,21 +57,28 @@ class AgentRuntimeService:
             }
         role = module.get("role") or {}
         role_key = role.get("role_key") or role.get("role_id")
+        #: Who the installed agent is (agent id, version), for the identity line of its voice.
+        identity: dict[str, Any] = {}
         if role_key:
             installed_role = connection.execute(
                 text(
-                    "SELECT spec FROM roles WHERE project_id = :project_id "
-                    "AND role_key = :role_key"
+                    "SELECT spec, display_name, agent_id, identity_version FROM roles "
+                    "WHERE project_id = :project_id AND role_key = :role_key"
                 ),
                 {"project_id": project_id, "role_key": role_key},
             ).mappings().one_or_none()
             if installed_role is not None:
                 role = dict(installed_role["spec"] or role)
+                identity = {"role_key": role_key,
+                            "display_name": installed_role["display_name"],
+                            "agent_id": installed_role["agent_id"],
+                            "identity_version": installed_role["identity_version"]}
         runtime = module.get("runtime") or {}
         prompt_bundle = module.get("prompt_bundle") or {}
         job_prompt = self._job_prompt(job_kind, prompt_bundle, runtime)
         compiled_prompt = {
-            "system": self._compile_system_prompt(module, role, prompt_bundle),
+            "system": self._compile_system_prompt(module, role, prompt_bundle,
+                                                  identity=identity),
             "job": self._compile_job_prompt(job_kind, job_prompt, task_payload or {}),
             "checklist": self._compile_checklist(role, runtime),
             "runtime_contract": self._compile_runtime_contract(role, runtime),
@@ -199,6 +206,8 @@ class AgentRuntimeService:
         module: dict[str, Any],
         role: dict[str, Any],
         prompt_bundle: dict[str, Any],
+        *,
+        identity: Optional[dict[str, Any]] = None,
     ) -> str:
         sections = [
             str(prompt_bundle.get("system") or "").strip(),
@@ -214,8 +223,21 @@ class AgentRuntimeService:
             self._format_mapping("Evaluation rubric", role.get("eval_rubric") or {}),
             self._format_mapping("Autonomy", role.get("autonomy") or {}),
             self._format_list("BOSS invariants", self.BOSS_INVARIANTS),
+            # THE AGENT'S OWN VOICE, the same one it has in chat and on a panel
+            # (agent_persona L1 + L3): who it is, that it is an AI, and how it speaks. The
+            # remit above stays the authority on what it may do.
+            self._agent_voice(role, identity or {}),
         ]
         return "\n\n".join(section for section in sections if section)
+
+    @staticmethod
+    def _agent_voice(role: dict[str, Any], identity: dict[str, Any]) -> str:
+        from .agent_persona import identity_and_voice
+
+        try:
+            return identity_and_voice({**identity, "spec": role}, mode="work")
+        except Exception:  # noqa: BLE001 — a work prompt must still compile
+            return ""
 
     def _compile_job_prompt(
         self,

@@ -34,6 +34,10 @@ class AgentCreateBody(BaseModel):
     mcp_servers: list[Any] = Field(default_factory=list)
     reports_to: Optional[str] = None
     boundaries: Optional[dict[str, Any]] = None
+    #: How it speaks (agent_persona; linted, never widens what it may do).
+    persona: Optional[dict[str, Any]] = None
+    #: {kind: blank|template|archetype, template_key?|archetype?} — what it starts from.
+    born_from: Optional[dict[str, Any]] = None
 
 
 class AgentUpdateBody(BaseModel):
@@ -48,6 +52,16 @@ class AgentUpdateBody(BaseModel):
     mcp_servers: Optional[list[Any]] = None
     grant_skills: list[str] = Field(default_factory=list)
     grant_mcp_servers: list[Any] = Field(default_factory=list)
+    persona: Optional[dict[str, Any]] = None
+    # IDENTITY FIELDS ARE FACTS, NOT SETTINGS. Accepted here only so a body carrying one is
+    # refused by name (422 "Identity fields are fixed") instead of being silently ignored.
+    agent_id: Optional[Any] = None
+    born_by: Optional[Any] = None
+    born_from: Optional[Any] = None
+    sponsor: Optional[Any] = None
+    lifecycle: Optional[Any] = None
+    identity_version: Optional[Any] = None
+    fingerprint: Optional[Any] = None
 
 
 class RoleMcpBody(BaseModel):
@@ -69,7 +83,13 @@ def build_agents_router(
     router = APIRouter(tags=["agents"])
 
     def _fail(error: Exception):
-        if isinstance(error, agents.AgentError):
+        from boss_engine.services.agent_identity import IdentityError
+
+        if isinstance(error, agents.PersonaInvalid):
+            # The field travels with the sentence, so the editor can put it on its control.
+            raise HTTPException(status_code=422, detail={"field": error.field,
+                                                         "message": str(error)}) from error
+        if isinstance(error, (agents.AgentError, IdentityError)):
             raise HTTPException(status_code=error.status, detail=str(error)) from error
         raise error
 
@@ -126,17 +146,24 @@ def build_agents_router(
                     connection, body.project_id, actor=actor, name=body.name,
                     purpose=body.purpose, role_key=body.role_key, skills=body.skills,
                     mcp_servers=body.mcp_servers, reports_to=body.reports_to,
-                    boundaries=body.boundaries)
+                    boundaries=body.boundaries, persona=body.persona,
+                    born_from=body.born_from)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 
     @router.patch("/v1/agents/{role_key}")
     def update_agent(role_key: str, body: AgentUpdateBody) -> dict[str, Any]:
+        from boss_engine.services.agent_identity import IDENTITY_FIELDS, IDENTITY_FIXED
+
         given = body.model_fields_set
+        fixed = sorted(set(IDENTITY_FIELDS) & given)
+        if fixed:
+            raise HTTPException(status_code=422, detail={"field": fixed[0],
+                                                         "message": IDENTITY_FIXED})
         changes: dict[str, Any] = {
             name: getattr(body, name)
             for name in ("display_name", "mission", "boundaries", "reports_to", "skills",
-                         "mcp_servers")
+                         "mcp_servers", "persona")
             if name in given
         }
         grants = bool(body.grant_skills or body.grant_mcp_servers

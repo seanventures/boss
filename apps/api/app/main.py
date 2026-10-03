@@ -27440,6 +27440,227 @@ app.include_router(
     )
 )
 mount_platform_routers(app)
+# --- agent world: identity ---
+# WHO AN AGENT IS (agent-world spec §5.4): the light identities list the web resolver loads
+# once, the Passport, lifecycle, the A2A card, and hearing the voice (Draft it, Test). Mounted
+# BEFORE the agent resource router, whose GET /v1/agents/{role_key} would otherwise take
+# /v1/agents/identities as an agent called "identities".
+
+
+class AgentLifecycleBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    state: Literal["active", "paused", "retired"]
+    reason: str = ""
+
+
+class AgentPersonaDraftBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    field: Literal["about_me", "tagline"]
+    persona: Optional[dict[str, Any]] = None
+
+
+class AgentVoiceTestBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    probe: Literal["intro", "push_back", "out_of_scope"]
+    persona: Optional[dict[str, Any]] = None
+
+
+def _identity_http(error: Exception):
+    from boss_engine.services.agent_identity import IdentityError
+
+    if isinstance(error, IdentityError):
+        raise HTTPException(status_code=error.status, detail=str(error)) from error
+    raise error
+
+
+def _agent_voice_row(connection, project_id: str, role_key: str) -> dict[str, Any]:
+    row = connection.execute(
+        text("SELECT role_key, display_name, spec, agent_id, identity_version, fingerprint "
+             "FROM roles WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": role_key},
+    ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no agent {role_key!r} on this project.")
+    return dict(row)
+
+
+def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
+                      persona: Optional[dict[str, Any]], reason: str):
+    """Everything checked before a voice call spends anything: who, which agent, a model, the
+    budget. Returns (actor, role row with any unsaved persona, reservation id)."""
+    from boss_engine.services import agent_voice
+
+    with begin(engine) as connection:
+        who = require_project_write_actor(connection, project_id, actor, "role_review")
+        row = _agent_voice_row(connection, project_id, role_key)
+        problems = agent_voice.lint_unsaved(persona)
+        if problems:
+            raise HTTPException(status_code=422, detail=problems[0])
+        if not agent_voice.model_ready(connection, settings, project_id):
+            raise HTTPException(status_code=409, detail=agent_voice.NEEDS_MODEL)
+        try:
+            reservation = agent_voice.reserve(connection, settings, project_id, reason)
+        except agent_voice.VoiceError as refused:
+            raise HTTPException(status_code=409, detail=refused.payload) from refused
+    return who, agent_voice.voiced_role(row, persona), reservation
+
+
+@app.get("/v1/agents/identities")
+def agent_identities_endpoint(project_id: str, request: Request):
+    """Every agent's face and name, plus the alias table, for the one web resolver. ETag'd."""
+    import hashlib
+
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        payload = {"project_id": project_id,
+                   "items": agent_identity.identities(connection, project_id),
+                   "aliases": agent_identity.aliases(connection, project_id)}
+    tag = '"' + hashlib.sha256(json.dumps(payload, sort_keys=True, default=str)
+                               .encode("utf-8")).hexdigest()[:32] + '"'
+    if request.headers.get("if-none-match") == tag:
+        return Response(status_code=304, headers={"ETag": tag})
+    return JSONResponse(jsonable_encoder(payload), headers={"ETag": tag})
+
+
+@app.get("/v1/agents/{role_key}/passport")
+def agent_passport_endpoint(role_key: str, project_id: str):
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return jsonable_encoder(agent_identity.passport(connection, project_id, role_key))
+        except Exception as error:  # noqa: BLE001 — typed mapping in _identity_http
+            _identity_http(error)
+
+
+@app.post("/v1/agents/{role_key}/lifecycle")
+def agent_lifecycle_endpoint(role_key: str, body: AgentLifecycleBody):
+    """Pause, resume or retire. The sponsor, or an owner (a CEO member), and nobody else."""
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        who = require_project_write_actor(connection, body.project_id, body.actor,
+                                          "role_review")
+        try:
+            members.require_member(connection, body.project_id, who, role_keys_any=["ceo"])
+            owner = True
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+            owner = False
+        try:
+            return jsonable_encoder(agent_identity.set_lifecycle(
+                connection, body.project_id, role_key, body.state, who, body.reason,
+                is_owner=owner))
+        except Exception as error:  # noqa: BLE001
+            _identity_http(error)
+
+
+@app.get("/v1/agents/{role_key}/card")
+def agent_card_endpoint(role_key: str, project_id: str):
+    """A2A Agent Card v1.0 + x-boss. Unsigned; carries no repos, servers or costs."""
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return jsonable_encoder(agent_identity.agent_card(connection, project_id, role_key))
+        except Exception as error:  # noqa: BLE001
+            _identity_http(error)
+
+
+@app.post("/v1/agents/{role_key}/persona/draft")
+def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
+    """`Draft it`: one model call in the agent's own composed voice. Saves nothing."""
+    from boss_engine.services import agent_voice
+    from boss_engine.services.agent_persona import lint_persona
+    from boss_engine.services.core import emit_event
+    from boss_engine.services.model_failures import explain
+
+    who, row, reservation = _agent_voice_gate(
+        body.project_id, role_key, body.actor, body.persona, f"Draft {body.field} for {role_key}")
+    try:
+        raw, usage = agent_voice.ask_model(engine, settings, body.project_id,
+                                           system=agent_voice.system_prompt(row),
+                                           prompt=agent_voice.draft_prompt(body.field))
+    except Exception as error:  # noqa: BLE001 — explained, never a bare 500
+        agent_voice.release(engine, settings, body.project_id, reservation)
+        raise HTTPException(status_code=502, detail={"code": "model_failed",
+                                                     "error": explain(error)}) from error
+    agent_voice.release(engine, settings, body.project_id, reservation)
+    draft = agent_voice.clip_draft(body.field, raw)
+    errors, warnings = lint_persona({body.field: draft})
+    with begin(engine) as connection:
+        emit_event(connection, body.project_id, "agent.persona_drafted", who, "agent",
+                   str(row.get("agent_id") or role_key),
+                   {"role_key": role_key, "field": body.field, "reservation_id": reservation,
+                    "usage": usage})
+    return {"role_key": role_key, "field": body.field, "draft": draft,
+            "problems": errors, "warnings": warnings, "receipt_id": reservation}
+
+
+@app.post("/v1/agents/{role_key}/test")
+def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
+    """`Test`: a probe, answered through the agent's exact composed prompt, streamed as SSE.
+
+    Events: `token` {text}* then `result` {voice 0-5, in_remit, says_ai, fingerprint, …};
+    or `error` {error: model_failures.explain()}. Refusals (no model, budget, a persona that
+    fails the lint) are answered before the stream opens, as plain HTTP errors.
+    """
+    from boss_engine.services import agent_voice
+    from boss_engine.services.core import emit_event
+    from boss_engine.services.model_failures import explain
+
+    who, row, reservation = _agent_voice_gate(
+        body.project_id, role_key, body.actor, body.persona, f"Test {body.probe} for {role_key}")
+
+    def sse(event: str, data: dict[str, Any]) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+    def stream():
+        try:
+            reply, usage = agent_voice.ask_model(
+                engine, settings, body.project_id, system=agent_voice.system_prompt(row),
+                prompt=agent_voice.PROBES[body.probe]["prompt"])
+        except Exception as error:  # noqa: BLE001
+            agent_voice.release(engine, settings, body.project_id, reservation)
+            yield sse("error", {"error": explain(error)})
+            return
+        for piece in agent_voice.chunks(reply):
+            yield sse("token", {"text": piece})
+        judgement = None
+        try:
+            raw, _ = agent_voice.ask_model(
+                engine, settings, body.project_id,
+                system="You grade replies. You output JSON only.",
+                prompt=agent_voice.judge_prompt(row, body.probe, reply))
+            judgement = agent_voice.parse_judgement(raw)
+        except Exception:  # noqa: BLE001 — the plain checks still score it
+            judgement = None
+        agent_voice.release(engine, settings, body.project_id, reservation)
+        result = {**agent_voice.score(row, body.probe, reply, judgement),
+                  "probe": body.probe, "fingerprint": row.get("fingerprint") or "",
+                  "version": int(row.get("identity_version") or 1),
+                  "draft": body.persona is not None, "receipt_id": reservation}
+        try:
+            with begin(engine) as connection:
+                emit_event(connection, body.project_id, "agent.tested", who, "agent",
+                           str(row.get("agent_id") or role_key),
+                           {"role_key": role_key, **result, "usage": usage,
+                            "reply": reply[:2000]})
+        except Exception:  # noqa: BLE001 — the operator still gets the result
+            logging.getLogger(__name__).warning("agent.tested not recorded", exc_info=True)
+        yield sse("result", result)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+# --- end agent world: identity ---
+
+
 # THE ONE AGENT MODEL: create/read/edit/delete an agent and its MCP grants (routers/agents.py).
 from .routers.agents import build_agents_router
 

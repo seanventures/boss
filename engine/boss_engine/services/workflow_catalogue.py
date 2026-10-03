@@ -42,6 +42,29 @@ def work_class_label(work_class: str) -> str:
     return WORK_CLASS_LABELS.get(work_class, work_class)
 
 
+#: WHO DOES EACH KIND OF STEP, BY DEFAULT (agent-world spec §0.1 item 4). Every catalogue step
+#: of these kinds names its agent, so a stock run is staffed — Juno convenes the panel, Helm
+#: runs the build, Vera checks the preview, Beacon holds it to readiness and watches it — and
+#: the run's chain shows who did what instead of "You" on every step.
+#:
+#: Only steps whose work is BOSS's own: naming an agent there changes who the work is credited
+#: to and who answers for it, never what it may reach (a built-in needs no grant —
+#: step_agents). Gates keep naming their approver in `approval.approver_role`; the deploy step
+#: keeps running as the run's actor, since its stack plan records who asked. An operator who
+#: clears a step's agent in the Studio gets Auto, exactly as before.
+DEFAULT_STEP_AGENTS: dict[str, str] = {
+    "research": "pm",
+    "meeting": "pm",
+    "build": "engineering_captain",
+    "retry_build": "engineering_captain",
+    "preview": "qa",
+    "review": "adversarial_reviewer",
+    "plrr": "sre",
+    "monitor": "sre",
+    "document": "docs_writer",
+}
+
+
 def _step(
     step_id: str,
     capability: str,
@@ -57,6 +80,8 @@ def _step(
         "binding": {"capability": capability, "inputs": inputs or {}},
         "next": nxt or [],
     }
+    if capability in DEFAULT_STEP_AGENTS:
+        step["captain"] = DEFAULT_STEP_AGENTS[capability]
     if approval or approver_role:
         step["approval"] = {}
         if approval:
@@ -885,6 +910,12 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
     than accumulating identical ones on every boot.
     """
     installed: list[dict[str, Any]] = []
+    # THE AGENTS THIS PROJECT ACTUALLY HAS, not the bundled roster: a step naming an agent
+    # with no roles row is refused at start ("there is no agent 'sre' on this project"), so a
+    # default agent is named only where it exists.
+    present = frozenset(str(k) for k in connection.execute(
+        text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id},
+    ).scalars().all())
     for entry in CATALOGUE:
         existing = connection.execute(
             text(
@@ -909,7 +940,7 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
             )
             definition_id = definition["id"]
 
-        spec = entry_spec(entry)
+        spec = entry_spec(_staffed_for(entry, present))
         try:
             version = workflows.publish_version(
                 connection, project_id=project_id, definition_id=definition_id,
@@ -923,6 +954,23 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
     mapped = _seed_default_mappings(connection, project_id, actor=actor)
     return {"project_id": project_id, "installed": installed, "count": len(installed),
             "mapped": mapped}
+
+
+def _staffed_for(entry: dict[str, Any], present: frozenset[str]) -> dict[str, Any]:
+    """The entry with every default agent this project HAS; the rest left to Auto.
+
+    A project whose operator deleted a shipped agent, or that never installed the pack that
+    ships it, would otherwise be published a step naming an agent it does not have — refused
+    at publish for a deleted one (stopping the whole catalogue from seeding) and refused at
+    start for a missing one. Such a step is published unnamed (Auto) there, and only there;
+    the next seed after the agent appears names it again.
+    """
+    steps = []
+    for step in entry["steps"]:
+        if step.get("captain") and step["captain"] not in present:
+            step = {k: v for k, v in step.items() if k != "captain"}
+        steps.append(step)
+    return {**entry, "steps": steps}
 
 
 #: EXACTLY THE ONE THE CONSOLE ALREADY CALLS THE DEFAULT, and nothing else.
