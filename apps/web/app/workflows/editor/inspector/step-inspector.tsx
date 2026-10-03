@@ -8,13 +8,14 @@ import {
 
 import { HelpTip } from "../../../help-tip";
 import { StepIcon, hasStepIcon } from "../../../step-icons";
-import { stepView, upstreamOf, wireInputs } from "../../../../lib/workflow-editor-types";
+import { TITLE_MAX, stepView, upstreamOf, wireInputs } from "../../../../lib/workflow-editor-types";
 import type {
   EditorAction, EditorState, Palette, Problem, SpecStep, StepPatch, StepView,
 } from "../../../../lib/workflow-editor-types";
 import { AgentCombobox } from "./agent-combobox";
-import { ApproverSelect, BlockSettings, FieldError } from "./block-settings";
+import { ApproverSelect, BlockSettings, FieldError, blockFieldKeys } from "./block-settings";
 import { ChipInput } from "./chip-input";
+import { Editable } from "./editable";
 import { GrantRow } from "./grant-row";
 import { InputSourceRow, type Upstream } from "./input-source";
 import { Popover } from "./popover";
@@ -41,7 +42,10 @@ export function TypeIcon({ view, size = 20 }: { view: StepView; size?: number })
   return <Icon size={size} weight="bold" aria-hidden />;
 }
 
-/** An 11px caps label, an `(i)`, an optional header action, then the controls. No paragraphs. */
+/**
+ * An 11px caps label, an `(i)`, an optional header action, then the controls. No paragraphs.
+ * The action and the controls are Editable (locked with the drawer); the label and `(i)` are not.
+ */
 export function Section({ label, tip, action, children, testId }: {
   label: string; tip?: string; action?: ReactNode; children: ReactNode; testId?: string;
 }) {
@@ -51,45 +55,60 @@ export function Section({ label, tip, action, children, testId }: {
         <h3 className="wf-sec-label">{label}</h3>
         {tip ? <HelpTip label={label} text={tip} /> : null}
         <span className="wf-spacer" />
-        {action}
+        {action ? <Editable inline>{action}</Editable> : null}
       </div>
-      {children}
+      <Editable>{children}</Editable>
     </section>
   );
 }
 
-/** Fields that render their own server problem inline; anything else shows at the top. */
-const INLINE_FIELDS = new Set(["captain", "approval", "instructions", "skills", "mcp", "question",
-  "guidance", "approver_role", "wait_seconds", "workflow_version_id", "expression", "max_attempts",
-  "title", "id", "produces"]);
+const BLOCK_TYPES: StepView["type"][] = ["gate", "wait", "subworkflow", "condition", "parallel", "join", "loop"];
 
 /**
  * One step's properties. Every control dispatches exactly one action — `PATCH_STEP`,
- * `RENAME_ID`, `SET_SPEC` (Auto-wire) — so undo, the node and the JSON follow on their own.
+ * `RENAME_ID`, `WIRE` (Auto-wire) — so undo, the node and the JSON follow on their own.
  */
-export function StepInspector({ state, step, palette, dispatch, projectId, actor, autoWired,
-                                onAutoWired, onGranted, onClose }: {
+export function StepInspector({ state, step, palette, dispatch, projectId, actor, refreshPalette, onClose }: {
   state: EditorState;
   step: SpecStep;
   palette: Palette;
   dispatch: Dispatch<EditorAction>;
   projectId: string;
   actor?: string;
-  autoWired: string[];
-  onAutoWired(stepId: string, names: string[] | ((was: string[]) => string[])): void;
-  onGranted(roleKey: string, skillId: string): void;
+  refreshPalette(): Promise<void>;
   onClose(): void;
 }) {
   const view = stepView(step, palette);
   const patch = (p: StepPatch) => dispatch({ type: "PATCH_STEP", id: step.id, patch: p });
   const problems = state.problems.filter((p) => p.step_id === step.id);
   const inputs = declaredInputs(step, palette);
-  const inputNames = new Set(inputs.map((i) => i.name));
-  const topProblems = problems.filter((p) => !p.field || (!INLINE_FIELDS.has(p.field) && !inputNames.has(p.field)));
   const agentTask = isAgentTask(step);
   const captain = typeof step.captain === "string" && step.captain && step.captain !== "human"
     ? step.captain : null;
   const named = captain ? palette.agents.find((a) => a.role_key === captain) : undefined;
+  const makes = producesOf(step, palette);
+
+  // WHICH SECTIONS THIS STEP DRAWS — decided once, and used both to render them and to place
+  // each problem: a problem whose field has a control here shows on that control; every other
+  // one (scope on a built-in step, approval on a gate, a captain on a Wait…) shows at the top,
+  // so no problem the server names is ever invisible.
+  const shows = {
+    agent: AGENTED.includes(view.type),
+    scope: agentTask,
+    approval: APPROVABLE.includes(view.type),
+    inputs: inputs.length > 0 || makes.length > 0 || agentTask,
+    makes: makes.length > 0 || agentTask,
+    settings: BLOCK_TYPES.includes(view.type),
+  };
+  const inline = new Set<string>(["title", "id", "max_attempts"]);
+  if (shows.agent) inline.add("captain");
+  if (shows.scope) ["instructions", "skills", "mcp"].forEach((f) => inline.add(f));
+  if (shows.approval) inline.add("approval");
+  // Every declared input is drawn when it has a problem, optional or not (InputsSection).
+  if (shows.inputs) inputs.forEach((i) => inline.add(i.name));
+  if (shows.inputs && shows.makes) inline.add("produces");
+  if (shows.settings) blockFieldKeys(view, blockOf(step, palette)).forEach((f) => inline.add(f));
+  const topProblems = problems.filter((p) => !p.field || !inline.has(p.field));
 
   return (
     <div className="wf-insp-step" data-testid={`wf-inspector-${step.id}`}>
@@ -102,7 +121,7 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
         </ul>
       ) : null}
 
-      {AGENTED.includes(view.type) ? (
+      {shows.agent ? (
         <Section label="Agent" tip="Who runs this step." testId="wf-sec-agent">
           <AgentCombobox step={step} view={view} palette={palette}
                          onChange={(next) => patch({ captain: next })} />
@@ -110,14 +129,14 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
           {captain && named ? (
             <GrantRow projectId={projectId} actor={actor} roleKey={captain}
                       agentName={named.name || captain} lacks={view.badges.lacks}
-                      onGranted={onGranted} />
+                      onGranted={refreshPalette} />
           ) : null}
         </Section>
       ) : null}
 
       {agentTask ? <TaskSection step={step} problems={problems} onPatch={patch} /> : null}
 
-      {agentTask ? (
+      {shows.scope ? (
         <Section label="Skills" tip="Limits what the agent may use here. Never grants." testId="wf-sec-scope">
           <ScopePicker kind="skill" selected={scopedSkills(step)} captain={captain} palette={palette}
                        onChange={(skills) => patch({ skills })} />
@@ -135,26 +154,23 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
         </Section>
       ) : null}
 
-      {APPROVABLE.includes(view.type) ? (
+      {shows.approval ? (
         <ApprovalSection step={step} palette={palette} problems={problems} onPatch={patch} />
       ) : null}
 
-      {inputs.length || producesOf(step, palette).length || agentTask ? (
+      {shows.inputs ? (
         <InputsSection step={step} state={state} palette={palette} view={view} problems={problems}
-                       autoWired={autoWired} onPatch={patch}
+                       showMakes={shows.makes} onPatch={patch}
                        onAutoWire={() => {
-                         const result = wireInputs(state.spec, palette, [step.id]);
-                         const mine = result.wired.filter((w) => w.step_id === step.id).map((w) => w.input);
-                         if (mine.length) {
-                           dispatch({ type: "SET_SPEC", spec: result.spec });
-                           onAutoWired(step.id, (was) => [...new Set([...was, ...mine])]);
-                         }
-                         return mine.length;
-                       }}
-                       onManual={(name) => onAutoWired(step.id, (was) => was.filter((n) => n !== name))} />
+                         // The store's own WIRE (which also marks the `auto` chips), sent only
+                         // when it will wire something, so "Nothing to wire" can say so.
+                         if (!wireInputs(state.spec, palette, [step.id]).wired.length) return 0;
+                         dispatch({ type: "WIRE", palette, ids: [step.id] });
+                         return 1;
+                       }} />
       ) : null}
 
-      {["gate", "wait", "subworkflow", "condition", "parallel", "join", "loop"].includes(view.type) ? (
+      {shows.settings ? (
         <Section label="Settings" testId="wf-sec-settings">
           <BlockSettings step={step} view={view} block={blockOf(step, palette)} palette={palette}
                          projectId={projectId} workflowKey={state.meta.workflow_key}
@@ -164,20 +180,44 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
 
       <details className="wf-more" data-testid="wf-sec-more">
         <summary>More</summary>
-        <label className="wf-field wf-field-inline">
-          <span className="wf-label">Retries</span>
+        <div className="wf-field wf-field-inline">
+          <label className="wf-label" htmlFor={`wf-retries-${step.id}`}>Retries</label>
           <HelpTip label="Retries" text="Attempts before the step fails" />
-          <input className="wf-input wf-num" type="number" min={1} max={25}
-                 value={Number(step.max_attempts ?? 3)} data-testid="wf-retries"
-                 onChange={(e) => {
-                   const n = Math.round(Number(e.target.value));
-                   if (Number.isFinite(n)) patch({ max_attempts: Math.min(25, Math.max(1, n)) });
-                 }} />
-        </label>
+          <Editable inline>
+            <input id={`wf-retries-${step.id}`} className="wf-input wf-num" type="number" min={1} max={25}
+                   value={Number(step.max_attempts ?? 3)} data-testid="wf-retries"
+                   onChange={(e) => {
+                     const n = Math.round(Number(e.target.value));
+                     if (Number.isFinite(n)) patch({ max_attempts: Math.min(25, Math.max(1, n)) });
+                   }} />
+          </Editable>
+        </div>
         <FieldError problems={problems} field="max_attempts" />
       </details>
     </div>
   );
+}
+
+/**
+ * The title box's text, as typed. The store keeps a title trimmed (S1 `applyStepPatch`), so a
+ * box bound to `step.title` loses a trailing space before the next key arrives and "Build it"
+ * becomes "Buildit". The box keeps the raw text; every key still dispatches (the node and JSON
+ * follow as you type, and Ctrl+S saves what is shown), and the box only takes the stored title
+ * back when it changes underneath — undo, a JSON edit — or when the box is left.
+ */
+function useTitleDraft(step: SpecStep, dispatch: Dispatch<EditorAction>) {
+  const stored = typeof step.title === "string" ? step.title : "";
+  const [value, setValue] = useState(stored);
+  const asStored = (text: string) => text.trim().slice(0, TITLE_MAX);
+  useEffect(() => { setValue((typed) => (asStored(typed) === stored ? typed : stored)); }, [stored]);
+  return {
+    value,
+    change(text: string) {
+      setValue(text);
+      dispatch({ type: "PATCH_STEP", id: step.id, patch: { title: text } });
+    },
+    settle() { setValue(stored); },
+  };
 }
 
 function StepHeader({ step, view, state, dispatch, problems, onClose }: {
@@ -185,6 +225,7 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
   problems: Problem[]; onClose(): void;
 }) {
   const [editingId, setEditingId] = useState(false);
+  const title = useTitleDraft(step, dispatch);
   const [idDraft, setIdDraft] = useState(step.id);
   const [idError, setIdError] = useState("");
   const [menu, setMenu] = useState(false);
@@ -204,11 +245,13 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
     <header className="wf-insp-head">
       <span className="wf-insp-icon" data-type={view.type}><TypeIcon view={view} /></span>
       <div className="wf-insp-names">
-        <input className="wf-insp-title" value={typeof step.title === "string" ? step.title : ""}
-               placeholder={view.title} maxLength={80} aria-label="Step title"
-               data-testid="wf-step-title"
-               onChange={(e) => dispatch({ type: "PATCH_STEP", id: step.id, patch: { title: e.target.value } })} />
+        <Editable>
+          <input className="wf-insp-title" value={title.value} placeholder={view.title} maxLength={TITLE_MAX}
+                 aria-label="Step title" data-testid="wf-step-title"
+                 onChange={(e) => title.change(e.target.value)} onBlur={title.settle} />
+        </Editable>
         <span className="wf-insp-id">
+          <Editable inline>
           {editingId ? (
             <input className="wf-input wf-mono wf-id-input" autoFocus value={idDraft}
                    aria-label="Step id" aria-invalid={idError ? true : undefined}
@@ -226,19 +269,22 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
                       title="Rename id" onClick={() => setEditingId(true)}>
                 <PencilSimple size={12} weight="bold" />
               </button>
-              <HelpTip label="Step id" text="Used in JSON and run history" />
             </>
           )}
+          </Editable>
+          {editingId ? null : <HelpTip label="Step id" text="Used in JSON and run history" />}
           {idError ? <span className="wf-field-error" role="alert">{idError}</span> : null}
         </span>
         <FieldError problems={problems} field="title" />
         <FieldError problems={problems} field="id" />
       </div>
       <span className="wf-chip wf-type-chip">{TYPE_LABEL[view.type]}</span>
-      <button ref={menuBtn} type="button" className="wf-icon-btn" aria-label="Step actions"
-              aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
-        <DotsThree size={18} weight="bold" />
-      </button>
+      <Editable inline>
+        <button ref={menuBtn} type="button" className="wf-icon-btn" aria-label="Step actions"
+                aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
+          <DotsThree size={18} weight="bold" />
+        </button>
+      </Editable>
       <button type="button" className="wf-icon-btn" aria-label="Close" title="Close (Esc)"
               data-testid="wf-inspector-close" onClick={onClose}>
         <X size={16} weight="bold" />
@@ -342,9 +388,9 @@ function ApprovalSection({ step, palette, problems, onPatch }: {
   );
 }
 
-function InputsSection({ step, state, palette, view, problems, autoWired, onPatch, onAutoWire, onManual }: {
+function InputsSection({ step, state, palette, view, problems, showMakes, onPatch, onAutoWire }: {
   step: SpecStep; state: EditorState; palette: Palette; view: StepView; problems: Problem[];
-  autoWired: string[]; onPatch(p: StepPatch): void; onAutoWire(): number; onManual(name: string): void;
+  showMakes: boolean; onPatch(p: StepPatch): void; onAutoWire(): number;
 }) {
   const [showOptional, setShowOptional] = useState(false);
   const [note, setNote] = useState("");
@@ -358,7 +404,11 @@ function InputsSection({ step, state, palette, view, problems, autoWired, onPatc
     }));
   }, [state.spec, step.id, palette]);
   const formNames = formFields(state.spec).map((f) => f.name);
-  const shown = inputs.filter((i) => i.required || i.extra || sourceOf(step, i.name) !== null);
+  // An optional input with a problem is drawn, not hidden behind "n optional": the problem
+  // shows on it (StepInspector counts on that when it places problems).
+  const shown = inputs.filter((i) => i.required || i.extra || sourceOf(step, i.name) !== null
+    || problems.some((p) => p.field === i.name));
+  const autoWired = state.wired?.[step.id] ?? [];
   const hidden = inputs.filter((i) => !shown.includes(i));
   const makes = producesOf(step, palette);
 
@@ -376,7 +426,7 @@ function InputsSection({ step, state, palette, view, problems, autoWired, onPatc
                           source={sourceOf(step, input.name)} upstream={upstream} formNames={formNames}
                           auto={autoWired.includes(input.name)}
                           unwired={view.badges.unwired.includes(input.name)}
-                          onChange={(source) => { onManual(input.name); onPatch({ input: { name: input.name, source } }); }} />
+                          onChange={(source) => onPatch({ input: { name: input.name, source } })} />
           <FieldError problems={problems} field={input.name} />
         </React.Fragment>
       ))}
@@ -384,7 +434,7 @@ function InputsSection({ step, state, palette, view, problems, autoWired, onPatc
         <button type="button" className="wf-link" data-testid="wf-inputs-optional"
                 onClick={() => setShowOptional(true)}>{hidden.length} optional</button>
       ) : null}
-      {makes.length || isAgentTask(step) ? (
+      {showMakes ? (
         <div className="wf-makes">
           <div className="wf-sub-label">Makes</div>
           {isAgentTask(step) ? (

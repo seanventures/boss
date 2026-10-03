@@ -54,7 +54,10 @@ export type WorkflowSummary = { definition_id: string; workflow_key: string; nam
   is_catalogue: boolean; version: number | null; step_count: number;
   steps: { id: string; title: string; capability?: string; captain?: string; approval?: string }[];
   forked_from_workflow_key?: string | null; forked_from_name?: string | null; run_count: number;
-  last_run?: { status: string; at: string } | null; schedule?: unknown; used_for?: string[] };
+  last_run?: { status: string; at: string } | null; schedule?: unknown; used_for?: string[];
+  /** The running version's id: what a "Run another workflow" step is pinned to. Null when
+   *  nothing is published yet. */
+  active_version_id?: string | null };
 
 /* ── Problems / check / publish ───────────────────────────────────────────────────── */
 
@@ -125,7 +128,12 @@ export type EditorAction =
   | { type: "SET_INPUT_SCHEMA"; schema: Record<string, unknown> }
   | { type: "SELECT"; id: string | null }
   | { type: "SET_PROBLEMS"; result: CheckResult }
-  | { type: "UNDO" } | { type: "REDO" } | { type: "SAVED"; spec: Spec; meta: EditorMeta };
+  | { type: "UNDO" } | { type: "REDO" }
+  /** A save landed: `spec` and `meta` are what was published, the new baseline. Edits made
+   *  while the request was in flight are KEPT (the draft stays dirty with them): the spec is
+   *  never replaced, and a name or description that differs from `sent` (the meta the request
+   *  was made from; default the current meta) keeps the operator's newer value. */
+  | { type: "SAVED"; spec: Spec; meta: EditorMeta; sent?: EditorMeta };
 export type StepPatch = { title?: string; captain?: string | null;
   instructions?: { mode: "ask" | "fixed"; text?: string };
   skills?: string[]; mcp?: string[]; approval?: "auto" | "manual"; approvalMore?: Record<string, unknown>;
@@ -169,7 +177,7 @@ export { MiniLane } from "../app/workflows/flow/mini-lane";
 // S3 · app/workflows/editor/inspector/*, json/*, save/*
 /** Step properties, or the workflow settings when nothing is selected. */
 export function Inspector(p: { state: EditorState; palette: Palette; dispatch: Dispatch<EditorAction>;
-  projectId: string; onClose(): void }): JSX.Element {
+  projectId: string; onClose(): void; refreshPalette(): Promise<void> }): JSX.Element {
   return notImplemented("Inspector");
 }
 export function JsonView(p: { state: EditorState; palette: Palette | null;

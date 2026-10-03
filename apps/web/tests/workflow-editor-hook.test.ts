@@ -164,6 +164,23 @@ describe("useWorkflowEditor", () => {
     expect(editor.dirty).toBe(false);
   });
 
+  it("moving to the saved key keeps an edit made while the save was in flight (no reload)", async () => {
+    await mount("new");
+    act(() => editor.dispatch({ type: "INSERT", at: -1, step: { id: "only", kind: "timer",
+                                                                wait_seconds: 5, next: [] } }));
+    const sent = editor.state;
+    act(() => editor.dispatch({ type: "PATCH_STEP", id: "only", patch: { title: "Pause" } }));
+    act(() => editor.dispatch({ type: "SAVED", spec: sent.spec, sent: sent.meta,
+      meta: { ...sent.meta, definition_id: "wfd_9", workflow_key: "mine", version: 1 } }));
+    reads = [];
+    // The host replaces the URL with the new key, as the editor does after a first save.
+    await act(async () => { root!.render(createElement(Probe, { k: "mine" })); });
+    await settle();
+    expect(reads.filter((r) => r.startsWith("spec"))).toEqual([]);
+    expect(editor.state.spec.steps[0].title).toBe("Pause");
+    expect(editor.dirty).toBe(true);
+  });
+
   it("works with storage blocked", async () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
