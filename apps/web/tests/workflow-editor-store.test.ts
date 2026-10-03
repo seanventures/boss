@@ -129,6 +129,12 @@ describe("structural edits", () => {
     expect(step(s, "research_2").binding).toEqual(step(s, "research").binding);
   });
 
+  it("DUPLICATE of a branch construct is refused as a whole", () => {
+    const s = loaded(PARALLEL);
+    expect(editorReducer(s, { type: "DUPLICATE", id: "merge" })).toBe(s);
+    expect(editorReducer(s, { type: "DUPLICATE", id: "fan" })).toBe(s);
+  });
+
   it("an edit across a branch boundary is refused as a whole", () => {
     const s = loaded(PARALLEL);
     expect(editorReducer(s, { type: "REMOVE", id: "merge" })).toBe(s);
