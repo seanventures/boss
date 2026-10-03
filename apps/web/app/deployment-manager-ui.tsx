@@ -130,8 +130,9 @@ export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
       {/* THE LIMIT, SAID UP FRONT. An operator who believes this can restart a service will
           phrase a request as an instruction and read the reply as confirmation. */}
       <p className="dm-scope detail" data-testid="dm-scope">
-        Reads hosts, health and deployment history. Deployment target bootstrap and SSH
-        workload delivery are paused in Community while their safeguards are completed.
+        Reads hosts, health and deployment history; it changes nothing on a host itself. To
+        deploy, use Infra → Deploy a repository: a repository with a boss.deploy.yaml goes to a
+        verified VM after you approve the plan.
       </p>
 
       <div className="dm-starters">
