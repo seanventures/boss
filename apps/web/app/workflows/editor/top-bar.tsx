@@ -93,89 +93,92 @@ export function TopBar(p: {
 
   return (
     <header className="wf-topbar" data-testid="wf-topbar">
-      <button type="button" className="wf-btn wf-btn-ghost wf-back" data-testid="wf-back" onClick={p.onBack}>
-        <ArrowLeft size={14} weight="bold" aria-hidden />Library
-      </button>
-
-      <label className="wf-name" data-error={p.nameError ? "true" : undefined}>
-        <input className="wf-name-input" value={meta.name} aria-label="Name" readOnly={p.readOnly}
-               autoFocus={p.autoFocusName} data-testid="wf-name" aria-invalid={p.nameError ? true : undefined}
-               onFocus={(e) => { if (p.autoFocusName) e.currentTarget.select(); }}
-               onChange={(e) => p.onName(e.target.value)}
-               onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur(); }} />
-        <PencilSimple size={14} weight="bold" className="wf-name-pencil" aria-hidden />
-        {p.nameError ? <span className="wf-name-error" role="alert">{p.nameError}</span> : null}
-      </label>
-
-      {viewing !== null ? (
-        <span className="wf-chip" data-tone="amber" data-testid="wf-viewing">
-          Viewing v{viewing}
-          <button type="button" className="wf-link" onClick={p.onRestoreVersion} data-testid="wf-restore"
-                  data-tip="Make this the draft. Save publishes it as the next version.">Restore</button>
-          <button type="button" className="wf-link" onClick={p.onLeaveVersion} aria-label="Back to the current version"
-                  data-tip="Back to the current version" data-testid="wf-leave-version">×</button>
-        </span>
-      ) : meta.version !== null ? (
-        <button type="button" ref={versionsRef} className="wf-chip wf-chip-btn" data-tip={VERSION_TIP}
-                aria-haspopup="dialog" onClick={() => void openVersions()} data-testid="wf-version">
-          v{meta.version}
+      <div className="wf-topbar-row" data-testid="wf-topbar-row">
+        <button type="button" className="wf-btn wf-btn-ghost wf-back" data-testid="wf-back" onClick={p.onBack}>
+          <ArrowLeft size={14} weight="bold" aria-hidden />Library
         </button>
-      ) : null}
 
-      {meta.is_catalogue ? (
-        <span className="wf-chip" data-tone="accent" data-tip={STANDARD_TIP} data-testid="wf-kind">Standard</span>
-      ) : meta.definition_id ? (
-        <span className="wf-chip" data-testid="wf-kind">Yours</span>
-      ) : null}
+        <label className="wf-name" data-error={p.nameError ? "true" : undefined}>
+          <input className="wf-name-input" value={meta.name} aria-label="Name" readOnly={p.readOnly}
+                 autoFocus={p.autoFocusName} data-testid="wf-name" aria-invalid={p.nameError ? true : undefined}
+                 data-tip={meta.name.trim() || undefined} data-tip-when="cut"
+                 onFocus={(e) => { if (p.autoFocusName) e.currentTarget.select(); }}
+                 onChange={(e) => p.onName(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur(); }} />
+          <PencilSimple size={14} weight="bold" className="wf-name-pencil" aria-hidden />
+          {p.nameError ? <span className="wf-name-error" role="alert">{p.nameError}</span> : null}
+        </label>
 
-      {meta.is_catalogue && meta.copy ? (
-        <button type="button" className="wf-chip wf-chip-btn" data-tone="accent" onClick={p.onOpenCopy}
-                data-tip={meta.copy.name} data-testid="wf-open-copy">
-          You have a copy · Open
-        </button>
-      ) : null}
+        {viewing !== null ? (
+          <span className="wf-chip" data-tone="amber" data-testid="wf-viewing">
+            Viewing v{viewing}
+            <button type="button" className="wf-link" onClick={p.onRestoreVersion} data-testid="wf-restore"
+                    data-tip="Make this the draft. Save publishes it as the next version.">Restore</button>
+            <button type="button" className="wf-link" onClick={p.onLeaveVersion} aria-label="Back to the current version"
+                    data-tip="Back to the current version" data-testid="wf-leave-version">×</button>
+          </span>
+        ) : meta.version !== null ? (
+          <button type="button" ref={versionsRef} className="wf-chip wf-chip-btn" data-tip={VERSION_TIP}
+                  aria-haspopup="dialog" onClick={() => void openVersions()} data-testid="wf-version">
+            v{meta.version}
+          </button>
+        ) : null}
 
-      {dirty ? <span className="wf-dirty" data-tip="Unsaved changes" role="img" aria-label="Unsaved changes"
-                     data-testid="wf-dirty" /> : null}
+        {meta.is_catalogue ? (
+          <span className="wf-chip" data-tone="accent" data-tip={STANDARD_TIP} data-testid="wf-kind">Standard</span>
+        ) : meta.definition_id ? (
+          <span className="wf-chip" data-testid="wf-kind">Yours</span>
+        ) : null}
 
-      <span className="wf-spacer" />
+        {meta.is_catalogue && meta.copy ? (
+          <button type="button" className="wf-chip wf-chip-btn wf-open-copy" data-tone="accent" onClick={p.onOpenCopy}
+                  data-tip={meta.copy.name} data-testid="wf-open-copy">
+            <span className="wf-cut">You have a copy · Open</span>
+          </button>
+        ) : null}
 
-      <div className="wf-bar-group">
-        <Btn className="wf-icon-btn" blocked={!p.canUndo && "Nothing to undo"} tip="Undo (Ctrl+Z)" label="Undo"
-             onClick={p.onUndo} testId="wf-undo">
-          <ArrowCounterClockwise size={16} weight="bold" aria-hidden />
+        {dirty ? <span className="wf-dirty" data-tip="Unsaved changes" role="img" aria-label="Unsaved changes"
+                       data-testid="wf-dirty" /> : null}
+
+        <span className="wf-spacer" />
+
+        <div className="wf-bar-group">
+          <Btn className="wf-icon-btn" blocked={!p.canUndo && "Nothing to undo"} tip="Undo (Ctrl+Z)" label="Undo"
+               onClick={p.onUndo} testId="wf-undo">
+            <ArrowCounterClockwise size={16} weight="bold" aria-hidden />
+          </Btn>
+          <Btn className="wf-icon-btn" blocked={!p.canRedo && "Nothing to redo"} tip="Redo (Ctrl+Shift+Z)" label="Redo"
+               onClick={p.onRedo} testId="wf-redo">
+            <ArrowClockwise size={16} weight="bold" aria-hidden />
+          </Btn>
+        </div>
+
+        <div className="wf-seg" role="group" aria-label="View">
+          <Btn className="wf-seg-btn" pressed={view === "visual"} blocked={view === "json" && jsonLine}
+               onClick={() => p.onView("visual")} testId="wf-view-visual">Visual</Btn>
+          <Btn className="wf-seg-btn" pressed={view === "json"} onClick={() => p.onView("json")} testId="wf-view-json">
+            JSON
+          </Btn>
+        </div>
+
+        <Btn className="wf-icon-btn" buttonRef={describeRef} label="Describe" testId="wf-describe"
+             blocked={p.readOnly ? `Viewing v${viewing}` : p.describeBlocked}
+             tip="Describe it. BOSS drafts the steps." onClick={() => setPop("describe")}>
+          <Sparkle size={16} weight="bold" aria-hidden />
         </Btn>
-        <Btn className="wf-icon-btn" blocked={!p.canRedo && "Nothing to redo"} tip="Redo (Ctrl+Shift+Z)" label="Redo"
-             onClick={p.onRedo} testId="wf-redo">
-          <ArrowClockwise size={16} weight="bold" aria-hidden />
+        <Btn className="wf-btn wf-btn-secondary" tip={CHECK_TIP} blocked={(p.checking && "Checking…") || jsonLine || p.checkBlocked}
+             onClick={p.onCheck} testId="wf-check">Check</Btn>
+        <Btn className="wf-btn wf-btn-secondary" buttonRef={p.startRef} blocked={p.startBlocked}
+             tip="Start a run of this workflow" testId="wf-start" onClick={p.onStart}>
+          Start<Play size={12} weight="fill" aria-hidden />
+        </Btn>
+        <Btn className="wf-btn wf-btn-primary" buttonRef={p.saveRef} blocked={p.saveBlocked} tip={p.saveTip}
+             onClick={p.onSave} testId="wf-save">{p.saving ? "Saving…" : p.saveLabel}</Btn>
+        <Btn className="wf-icon-btn" buttonRef={menuRef} label="More" tip="More" onClick={() => setPop("menu")}
+             testId="wf-more">
+          <DotsThree size={18} weight="bold" aria-hidden />
         </Btn>
       </div>
-
-      <div className="wf-seg" role="group" aria-label="View">
-        <Btn className="wf-seg-btn" pressed={view === "visual"} blocked={view === "json" && jsonLine}
-             onClick={() => p.onView("visual")} testId="wf-view-visual">Visual</Btn>
-        <Btn className="wf-seg-btn" pressed={view === "json"} onClick={() => p.onView("json")} testId="wf-view-json">
-          JSON
-        </Btn>
-      </div>
-
-      <Btn className="wf-icon-btn" buttonRef={describeRef} label="Describe" testId="wf-describe"
-           blocked={p.readOnly ? `Viewing v${viewing}` : p.describeBlocked}
-           tip="Describe it. BOSS drafts the steps." onClick={() => setPop("describe")}>
-        <Sparkle size={16} weight="bold" aria-hidden />
-      </Btn>
-      <Btn className="wf-btn wf-btn-secondary" tip={CHECK_TIP} blocked={(p.checking && "Checking…") || jsonLine || p.checkBlocked}
-           onClick={p.onCheck} testId="wf-check">Check</Btn>
-      <Btn className="wf-btn wf-btn-secondary" buttonRef={p.startRef} blocked={p.startBlocked}
-           tip="Start a run of this workflow" testId="wf-start" onClick={p.onStart}>
-        Start<Play size={12} weight="fill" aria-hidden />
-      </Btn>
-      <Btn className="wf-btn wf-btn-primary" buttonRef={p.saveRef} blocked={p.saveBlocked} tip={p.saveTip}
-           onClick={p.onSave} testId="wf-save">{p.saving ? "Saving…" : p.saveLabel}</Btn>
-      <Btn className="wf-icon-btn" buttonRef={menuRef} label="More" tip="More" onClick={() => setPop("menu")}
-           testId="wf-more">
-        <DotsThree size={18} weight="bold" aria-hidden />
-      </Btn>
 
       <Popover anchor={versionsRef} open={pop === "versions"} onClose={close} label="Versions" width={220}
                testId="wf-versions">
