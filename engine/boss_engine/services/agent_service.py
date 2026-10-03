@@ -549,6 +549,9 @@ class AgentService:
         #: "Investigate further" / "Do the fix". Otherwise such a question is answered first in
         #: one call from the record (subject_answer.py).
         depth: Optional[str] = None,
+        #: WHAT THE DOCK WAS OPENED ABOUT — {act_id} or {workflow_run_id, step_id}. The turn is
+        #: signed as work under it, so "Ask about this" shows up in that work's chain.
+        context: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         # THE AGENT IS PART OF WHICH CONVERSATION THIS IS. Without it the thread resolved on
         # (project, surface, external_ref) alone, so asking a second agent about the same task
@@ -584,6 +587,12 @@ class AgentService:
             # re-attaching every image in a thread's history to every later turn is how a
             # conversation becomes unaffordable after the third screenshot.
             messages[-1] = {**messages[-1], "attachments": stored}
+        # A QUESTION TO AN AGENT IS SIGNED WORK (agent_acts): one act per turn, asked by this
+        # person, under whatever the dock was opened about. BOSS-in-general is not an agent and
+        # signs nothing.
+        act_id = self._open_chat_act(connection, project_id=project_id, actor=actor, role=role,
+                                     thread_id=thread["id"], message=user_content,
+                                     context=context)
         # Build exactly once for the turn. The router receives the resolved
         # object and never reaches back into the feature catalog per tool call.
         manifest = build_manifest(connection, self.settings, project_id)
@@ -616,6 +625,9 @@ class AgentService:
             proposed_actions=getattr(turn, "proposed_actions", []) or [],
             agent_role=role or "",
         )
+        cited = self._close_chat_act(connection, project_id=project_id, act_id=act_id,
+                                     message_ids=[written["id"], assistant["id"]],
+                                     reply=turn.reply)
 
         pending = turn.pending_confirmation
         # A dispatched OR explicitly dismissed plan clears the thread's pending state (a dismissed
@@ -676,7 +688,44 @@ class AgentService:
             # What the dock offers under a first answer: "Investigate further", "Do the fix".
             "next_steps": getattr(turn, "next_steps", []) or [],
             "messages": [*messages, assistant],
+            # The signed turn, and the agent's own work it pointed at ([act:…] in the reply).
+            "act_id": act_id,
+            "cited_acts": cited,
         }
+
+    @staticmethod
+    def _open_chat_act(connection: Connection, *, project_id: str, actor: str,
+                       role: Optional[str], thread_id: str, message: str,
+                       context: Optional[dict[str, Any]]) -> Optional[str]:
+        from . import agent_acts
+
+        role_key = agent_acts.resolve_role(role) if role else None
+        if not role_key or not connection.execute(
+                text("SELECT 1 FROM roles WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": role_key}).scalar():
+            return None
+        return agent_acts.quietly(
+            connection, "sign a chat turn", agent_acts.open_chat_act, project_id=project_id,
+            actor=actor, role_key=role_key, thread_id=thread_id, message=message,
+            context=context)
+
+    @staticmethod
+    def _close_chat_act(connection: Connection, *, project_id: str, act_id: Optional[str],
+                        message_ids: list[str], reply: str) -> list[str]:
+        if not act_id:
+            return []
+        from . import agent_acts
+
+        def close(c: Connection) -> list[str]:
+            agent_acts.close_act(c, act_id, status="complete")
+            c.execute(
+                text("UPDATE agent_messages m SET act_id = a.act_id, fingerprint = a.fingerprint "
+                     "FROM agent_acts a WHERE a.act_id = :a AND m.id = ANY(:ids)"),
+                {"a": act_id, "ids": message_ids},
+            )
+            return agent_acts.cited_acts(c, project_id, reply)
+
+        return agent_acts.quietly(connection, "close a chat turn", close) or []
 
     def _store_attachments(
         self,

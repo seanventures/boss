@@ -37,6 +37,7 @@ from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import is_iac_task
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
+from .agent_acts import pr_trailers as _pr_trailers
 from .sandbox import SandboxError
 from .sandbox_provider import make_sandbox_provider
 from .software_factory import SoftwareFactoryService
@@ -1834,7 +1835,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                 dedupe_key=f"code:task:{run_id}",
                 title=f"{run['title']}",
                 branch_name=work_branch,
-                summary=result.summary,
+                # Who made it, as git trailers in the PR body (agent_acts; "" when unsigned).
+                summary=result.summary + _pr_trailers(c, run_id),
                 files=result.diff,
                 created_by_job_id=fctx.get("created_by_job_id"),
             )
@@ -1881,6 +1883,11 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
             return _fail(c, run_id, project_id, reason,
                          failure_class=fclass, reason_code=rcode)
     finally:
+        # Its stages end with it: a build that finished, failed or now waits on a person stops
+        # showing its agents as working (agent_acts; never raises).
+        from .agent_acts import settle_code_task
+
+        settle_code_task(engine, run_id)
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.
         clear_llm_context()

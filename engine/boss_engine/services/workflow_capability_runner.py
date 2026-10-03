@@ -27,7 +27,8 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import change_record, workflow_custom_steps as custom_steps, workflows
+from . import agent_acts, change_record, step_agents, workflows
+from . import workflow_custom_steps as custom_steps
 from .core import create_blocking_decision, emit_event, now_utc
 # Named import so "who approved this" is compared against one constant rather than a
 # string literal repeated wherever the question is asked.
@@ -3446,6 +3447,10 @@ def tick(
         else:
             savepoint.commit()
 
+    # Work that ended elsewhere — a build, a panel, a run finished from another screen — stops
+    # showing its agents as busy.
+    agent_acts.quietly(connection, "close finished work", agent_acts.reconcile, project_id)
+
     for run in runs:
         if len(performed) >= limit:
             break
@@ -3564,6 +3569,11 @@ def tick(
                 else:
                     gate_point.commit()
 
+            # SIGNED AS IT MOVES. Gates opened, work resumed, answers given since the last tick
+            # all show in the run's chain before the next step is claimed.
+            phase = "sign the run's work"
+            agent_acts.quietly(connection, "sign a run's work", agent_acts.sync_run, run_id)
+
             phase = "claim a step to run"
             claimed = workflows.claim_step(
                 connection, project_id=project_id, run_id=run_id,
@@ -3591,6 +3601,7 @@ def tick(
             # Rolling back to the savepoint first restores a working connection, so the handlers
             # below record the ORIGINAL failure instead of dying on the attempt.
             step_point = connection.begin_nested()
+            step_agents.forget_resolved()
             try:
                 try:
                     output = execute_step(
@@ -3707,6 +3718,7 @@ def tick(
                         "capability": output.get("capability"), "outcome": "succeeded",
                     })
             except CapabilityExecutionError as error:
+                agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
                 workflows.fail_step(
                     connection, project_id=project_id, step_run_id=claimed["id"],
                     worker_id=worker_id, error=str(error),
@@ -3734,6 +3746,7 @@ def tick(
                     "capability step %s of run %s raised %s",
                     claimed["step_id"], run_id, type(error).__name__,
                 )
+                agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
                 workflows.fail_step(
                     connection, project_id=project_id, step_run_id=claimed["id"],
                     worker_id=worker_id,
@@ -3744,6 +3757,8 @@ def tick(
                     "run_id": run_id, "step_id": claimed["step_id"],
                     "outcome": "failed", "error": f"{type(error).__name__}: {error}",
                 })
+            # The step just settled (succeeded, failed, parked, waiting on a person): signed now.
+            agent_acts.quietly(connection, "sign a step", agent_acts.sync_run, run_id)
         except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
             # ROLL BACK TO THE SAVEPOINT FIRST. Until that happens the connection is unusable,
             # so even the logging below would fail if it touched the database.

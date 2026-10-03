@@ -5358,6 +5358,16 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                 {"p": pid}).mappings().all()
 
         from ..services.meeting_service import meeting_title
+        from ..services.agent_acts import resolve_role
+
+        # THE SEAT IT SAT IN, as signed work: each contribution carries its act id so the
+        # agent can cite it as [act:…] and the dock can link it.
+        with ctx.begin() as c:
+            seat_acts = {r["meeting_run_id"]: r["act_id"] for r in c.execute(
+                _text("SELECT DISTINCT ON (meeting_run_id) meeting_run_id, act_id "
+                      "FROM agent_acts WHERE project_id = :p AND kind = 'seat' "
+                      "AND role_key = :r ORDER BY meeting_run_id, started_at DESC"),
+                {"p": pid, "r": resolve_role(wanted)}).mappings()}
 
         seen = []
         for row in rows:
@@ -5378,6 +5388,7 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                         # Enough to be specific, not so much that a dozen of them flood the
                         # context this is meant to inform.
                         "said": said.strip()[:1200],
+                        "act_id": seat_acts.get(row["id"]),
                     })
                     if len(seen) >= limit:
                         break
@@ -5398,6 +5409,35 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                          "subject — mention it only if the operator asked what this role has "
                          "argued before."
                          if not seen else "these are this role's own past words")}
+
+    @reg.tool(
+        "my_recent_work",
+        "This agent's OWN recent signed work — workflow steps, build stages, panel seats, "
+        "chats — newest first, each with its act id, what it was and how it reached the "
+        "agent. Use it when asked what you have done or worked on, and cite an item as "
+        "[act:<act_id>] so the reader can open it. Never claim work this does not list.",
+        _obj({"role": {"type": "string",
+                       "description": "the agent's role key; defaults to the caller"},
+              "kind": {"type": "string",
+                       "enum": ["step", "stage", "seat", "chat", "approval", "handoff"]},
+              "limit": _LIMIT,
+              "project_id": {"type": "string"}},
+             []),
+        kind="read",
+    )
+    def my_recent_work(ctx, *, project_id, actor, args):
+        from ..services.agent_acts import my_recent_work as recent, resolve_role
+
+        pid = args.get("project_id") or project_id
+        role = resolve_role(str(args.get("role") or actor or ""))
+        if not role:
+            return {"ok": False, "error": "role is required"}
+        with ctx.begin() as c:
+            items = recent(c, pid, role, limit=int(args.get("limit") or 10),
+                           kind=args.get("kind") or None)
+        return {"project_id": pid, "role": role, "items": items, "count": len(items),
+                "note": ("cite an item as [act:<act_id>]" if items else
+                         "no signed work recorded for this agent yet; say so only if asked")}
 
     @reg.tool(
         "describe_role",

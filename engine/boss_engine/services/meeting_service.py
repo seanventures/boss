@@ -770,7 +770,15 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     )
     emit_event(connection, project_id, "meeting.started", "boss", "meeting_run", run_id,
                {"task_id": task_id, "participants": [p["title"] for p in personas]})
+    _sign_seats(connection, run_id)
     return run_id
+
+
+def _sign_seats(connection, run_id: str) -> None:
+    """Each seat is signed work (agent_acts): seated when the panel opens, closed when it ends."""
+    from . import agent_acts
+
+    agent_acts.quietly(connection, "sign a panel's seats", agent_acts.sync_meeting, run_id)
 
 
 #: The blocks request_meeting wraps around a directive so every seat reads them — the SAME
@@ -915,6 +923,7 @@ def _save_phase(connection, run_id, state, add_cost, model, next_phase) -> None:
         {"state": json.dumps(state), "phase": next_phase, "addc": int(add_cost or 0),
          "model": model, "id": run_id},
     )
+    _sign_seats(connection, run_id)
 
 
 def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
@@ -1152,6 +1161,7 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     )
     emit_event(connection, project_id, "meeting.completed", "boss", "meeting", meeting_id,
                {"minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id})
+    _sign_seats(connection, run_id)
     return {"meeting_id": meeting_id, "minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id}
 
 

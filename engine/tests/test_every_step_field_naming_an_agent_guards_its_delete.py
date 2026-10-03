@@ -44,6 +44,8 @@ NOT_AN_AGENT_ON_A_STEP = {
     (("binding", "agent_work"), "services/workflow_drafting.py"): "the same flag",
     (("binding", "agent_work"), "services/command_center.py"):
         "the same flag, read to say BOSS will pick the agent when the step starts",
+    # Agent World: read to name the step "Agent task" on its signed work, never as an agent.
+    (("binding", "agent_work"), "services/agent_acts.py"): "the same flag",
     (("binding", "agent_group_version_id"), "services/workflows.py"):
         "an agent GROUP version id, not a role key",
     (("role_key",), "services/agent_loop.py"):

@@ -59,6 +59,7 @@ the workflow (`legacy_workflow_runner`). The same goes for a skill that calls an
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
 from typing import Any, Iterable, Optional
 
 from sqlalchemy import text
@@ -642,8 +643,26 @@ def assignment_problems(connection: Connection, project_id: str,
 # ── Run time ─────────────────────────────────────────────────────────────────────────────────
 
 
+#: The last answer `resolve` gave on this thread. A step that fails AFTER it was given to an
+#: agent (a model outage, a refused skill) raises before its output is written, and the ledger
+#: would otherwise have to sign the failure to nobody. The runner reads this in its failure
+#: path and hands it to agent_acts; it clears it before every step so it can never be stale.
+_LAST_RESOLVED: ContextVar[Optional[dict[str, Any]]] = ContextVar(
+    "step_agents_last_resolved", default=None)
+
+
+def last_resolved() -> Optional[dict[str, Any]]:
+    return _LAST_RESOLVED.get()
+
+
+def forget_resolved() -> None:
+    _LAST_RESOLVED.set(None)
+
+
 def _record(agent: str, how: str, why: str, considered: Iterable[str] = ()) -> dict[str, Any]:
-    return {"agent": agent, "how": how, "why": why, "considered": list(considered)}
+    record = {"agent": agent, "how": how, "why": why, "considered": list(considered)}
+    _LAST_RESOLVED.set(dict(record))
+    return record
 
 
 def _choose(connection: Connection, settings: Any, project_id: str,
