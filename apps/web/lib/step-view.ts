@@ -111,6 +111,16 @@ function neededMcp(step: SpecStep, palette: Palette): string[] {
   return [];
 }
 
+/**
+ * Everything a step needs its NAMED agent to hold — skills, then MCP servers — and nothing for
+ * a built-in step, whose tools are BOSS's own (it runs as whoever starts the workflow, so no
+ * grant is involved). `badges.lacks` is this list minus what the agent holds; the agent picker
+ * reads it to say `✓ has …` so the two can never disagree.
+ */
+export function stepNeeds(step: SpecStep, palette: Palette): string[] {
+  return [...neededSkills(step, palette), ...neededMcp(step, palette)];
+}
+
 /** Whether a person answers this step: the engine's one test (workflow_run_actions.is_gate) —
  *  a decision step, or a built-in step whose capability is declared a gate. */
 export function isGateStep(step: SpecStep, palette: Palette | null): boolean {

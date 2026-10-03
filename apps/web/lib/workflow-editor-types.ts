@@ -104,6 +104,10 @@ export type EditorMeta = { definition_id: string | null; workflow_key: string | 
  *  (the inspector's `auto` chip); setting one by hand removes it. */
 export type EditorState = { spec: Spec; loaded: Spec | null; meta: EditorMeta; loadedMeta: EditorMeta;
   selection: string | null; problems: Problem[]; summary: CheckResult["summary"] | null;
+  /** The spec `problems`/`summary` were checked against (by identity: every edit makes a new
+   *  spec). When it is not `spec`, the last check describes an older draft and says nothing
+   *  about this one, so nothing may show it as passing. */
+  checkedSpec?: Spec | null;
   past: Spec[]; future: Spec[]; jsonText: string | null;
   jsonError: { line: number; column?: number; message: string } | null;
   wired?: Record<string, string[]> };
@@ -126,7 +130,7 @@ export type EditorAction =
   | { type: "SET_META"; patch: Partial<EditorMeta> }
   | { type: "SET_INPUT_SCHEMA"; schema: Record<string, unknown> }
   | { type: "SELECT"; id: string | null }
-  | { type: "SET_PROBLEMS"; result: CheckResult }
+  | { type: "SET_PROBLEMS"; result: CheckResult; /** The spec that was checked; the one on screen if omitted. */ spec?: Spec }
   | { type: "UNDO" } | { type: "REDO" }
   /** A save landed: `spec` and `meta` are what was published, the new baseline. Edits made
    *  while the request was in flight are KEPT (the draft stays dirty with them): the spec is
