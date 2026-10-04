@@ -255,12 +255,15 @@ export function ActivityLog({
   // `step=` narrows the workflow run to ONE of its steps: the step's own rows and the work task
   // it started. A run step's "Step log" link lands here.
   const [urlStep, setUrlStep] = useState("");
+  // The names the step panel knew, for the banner; the ids are the fallback and the tooltip.
+  const [urlNames, setUrlNames] = useState<{ step: string; run: string }>({ step: "", run: "" });
   useEffect(() => {
     const read = () => {
       const params = new URLSearchParams(window.location.search);
       setUrlRun(params.get("run") ?? "");
       setUrlWorkflowRun(params.get("wfr") ?? "");
       setUrlStep(params.get("step") ?? "");
+      setUrlNames({ step: params.get("step_name") ?? "", run: params.get("run_name") ?? "" });
     };
     read();
     window.addEventListener("popstate", read);
@@ -532,11 +535,15 @@ export function ActivityLog({
         // with both set, the work-task banner above already says the view is narrowed, and two
         // stacked banners saying "showing only" read as a bug rather than as more precision.
         <p className="alog-scope" data-testid="activity-scope-workflow">
-          <span>{scopedStep ? "Showing only step" : "Showing only this workflow run"}</span>
+          <span>{scopedStep ? "Showing only" : "Showing only this workflow run"}</span>
           {scopedStep ? (
-            <strong className="alog-scope-name" data-testid="activity-scope-step">{scopedStep}</strong>
-          ) : null}
-          <code className="mono">{scopedWorkflowRun}</code>
+            <strong className="alog-scope-name" data-testid="activity-scope-step"
+                    data-tip={`${scopedStep} · ${scopedWorkflowRun}`}>
+              {[urlNames.step || scopedStep, urlNames.run].filter(Boolean).join(" · ")}
+            </strong>
+          ) : (
+            <code className="mono">{scopedWorkflowRun}</code>
+          )}
           {scopedStep ? (
             <button
               type="button"
@@ -544,6 +551,8 @@ export function ActivityLog({
               onClick={() => {
                 const url = new URL(window.location.href);
                 url.searchParams.delete("step");
+                url.searchParams.delete("step_name");
+                url.searchParams.delete("run_name");
                 window.history.pushState({}, "", url.toString());
                 window.dispatchEvent(new PopStateEvent("popstate"));
               }}
@@ -559,6 +568,8 @@ export function ActivityLog({
               const url = new URL(window.location.href);
               url.searchParams.delete("wfr");
               url.searchParams.delete("step");
+                url.searchParams.delete("step_name");
+                url.searchParams.delete("run_name");
               window.history.pushState({}, "", url.toString());
               window.dispatchEvent(new PopStateEvent("popstate"));
             }}

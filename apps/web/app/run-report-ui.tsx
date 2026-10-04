@@ -1,5 +1,6 @@
 "use client";
 
+import { usd } from "../lib/money";
 import React, { useCallback, useEffect, useState } from "react";
 import { FilePdf, Hammer, Warning } from "@phosphor-icons/react";
 import { apiWrite } from "../lib/api-write";
@@ -233,7 +234,7 @@ export function RunReportPanel(
   const lost = Math.max(0, (report.elapsed_minutes ?? 0) - (report.working_minutes ?? 0));
   const ran = (build.commands_run ?? []).map((c) => c.command);
 
-  const money = `${done}/${steps.length} · ${report.working_minutes}min · $${(report.total_usd ?? 0).toFixed(2)}`;
+  const money = `${done}/${steps.length} · ${report.working_minutes}min · ${usd(report.total_usd ?? 0)}`;
 
   return (
     /* THE WHOLE REPORT IS COLLAPSED, and the summary line has to earn the click on its own:
@@ -390,7 +391,7 @@ export function RunReportPanel(
         <summary>
           Run facts
           <span className="rr-count">
-            {done}/{steps.length} · {report.working_minutes}min · ${(report.total_usd ?? 0).toFixed(2)}
+            {done}/{steps.length} · {report.working_minutes}min · {usd(report.total_usd ?? 0)}
           </span>
         </summary>
         {lost > 0 ? (
@@ -408,7 +409,7 @@ export function RunReportPanel(
               <tr key={c.role}>
                 <td>{c.role}</td>
                 <td>{c.turns || "—"}</td>
-                <td>${c.usd.toFixed(2)}</td>
+                <td>{usd(c.usd)}</td>
               </tr>
             ))}
           </tbody>

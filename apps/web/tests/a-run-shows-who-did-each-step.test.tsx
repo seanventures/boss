@@ -214,6 +214,9 @@ describe("the run view, signed", () => {
         const a = (chain.acts as Record<string, unknown>[]).find((x) => x.act_id === id);
         return Response.json({ ...a, ...(id === "act_plan" ? TURNS : {}) });
       }
+      if (url.pathname.includes("host-advice")) {
+        return Response.json({ show: true, severity: "warning", headline: "Disk nearly full", cause: "disk" });
+      }
       return Response.json({});
     }));
   });
@@ -231,6 +234,22 @@ describe("the run view, signed", () => {
     await settle();
     return host;
   }
+
+  it("says the host's trouble once above the runs, not on every live card", async () => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const noop = () => {};
+    const second = { ...RUN, id: "wfr_2" };
+    await act(async () => root!.render(
+      <RunsView runs={[RUN as never, second as never]} openRun={null} setOpenRun={noop} onAdvance={noop} busy={null}
+                capabilities={[]} onRetryStep={noop} onSkipStep={noop} onRerun={noop} onStop={noop} onDelete={noop}
+                onStopAndRerun={noop} onBuildOnThis={noop} onRecheck={noop} onSetTarget={noop} onPrepareTarget={noop}
+                onRunPreview={noop} onBound={noop} projectId="p1" actor="ceo" roles={[]} targets={[]} hosts={[]} />));
+    await settle();
+    expect(host.querySelectorAll('[data-testid="host-advice"]')).toHaveLength(1);
+    expect(host.querySelector('[data-testid="dw-run"] [data-testid="host-advice"]')).toBeNull();
+  });
 
   it("draws the chain above the lane, and the lane's faces from the same work", async () => {
     const el = await mount();
@@ -257,8 +276,10 @@ describe("the run view, signed", () => {
     expect(signed.querySelector('[data-testid="ag-said"]')?.textContent).toContain("I rejected the queue");
     // The old unsigned ask is replaced by the agent's own.
     expect(el.querySelector('[data-testid="dw-ask-boss"]')).toBeNull();
-    const ask = signed.querySelector('[data-testid="ag-signed-ask"]') as HTMLButtonElement;
-    expect(ask.textContent).toBe("Ask Atlas");
+    // ONE Ask, on the Done-by line: the card's own would be a second door to the same talk.
+    expect(signed.querySelector('[data-testid="ag-signed-ask"]')).toBeNull();
+    const ask = el.querySelector('[data-testid="dw-step-ask"]') as HTMLButtonElement;
+    expect(ask.getAttribute("data-tip")).toBe("Ask Atlas about this step");
     // The 1:1 talk with that agent, about this step: its first reply is signed under this act.
     const opened: { kind: string; roleKey?: string; fresh?: boolean; context?: Record<string, string> }[] = [];
     const onOpen = (e: Event) => opened.push((e as CustomEvent<(typeof opened)[number]>).detail);
