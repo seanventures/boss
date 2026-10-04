@@ -74,6 +74,27 @@ def test_an_ordinary_https_link_is_a_direct_file():
 
 # --- refusing a link -------------------------------------------------------------------------
 
+@pytest.mark.parametrize("url,site", [
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "YouTube"),
+    ("https://youtu.be/dQw4w9WgXcQ", "YouTube"),
+    ("https://m.youtube.com/shorts/abc123", "YouTube"),
+    ("https://vimeo.com/123456789", "Vimeo"),
+])
+def test_a_video_sites_page_is_refused_before_anything_is_fetched(url, site):
+    """A watch page is HTML. Fetched, it failed as ffmpeg's "Invalid data found when processing
+    input" — the live video example's edit step — which never said the LINK was the problem.
+    Refused by host, saying what to give instead."""
+    with pytest.raises(m.MediaProviderError) as refused:
+        m.resolve_link(url)
+    said = str(refused.value)
+    assert f"{site} page, not a video file" in said
+    assert "Google Drive" in said and "direct link" in said
+
+
+def test_a_file_on_a_lookalike_host_is_not_mistaken_for_a_video_site():
+    assert m.resolve_link("https://notyoutube.com/clip.mp4").provider_key == "http"
+
+
 @pytest.mark.parametrize("host", [
     "localhost",                 # the console and the API itself
     "127.0.0.1",

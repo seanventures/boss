@@ -189,6 +189,25 @@ class ResolvedLink:
 _GOOGLE_FILE = re.compile(r"/(?:file|document|presentation|spreadsheets)/d/([A-Za-z0-9_-]{10,})")
 _SHAREPOINT_HOST = re.compile(r"(^|\.)sharepoint\.com$", re.I)
 
+#: Sites whose links are a PLAYER PAGE, not a file. Fetching one returns HTML, and the failure
+#: used to surface as ffmpeg's "Invalid data found when processing input" — after a download —
+#: which told nobody that the link itself was the problem (the video example, run live with a
+#: YouTube watch link). Refused by host, before anything is fetched. Matched on the registrable
+#: domain, so `www.`, `m.` and `music.` variants are covered.
+_VIDEO_PAGE_SITES = {
+    "youtube.com": "YouTube", "youtu.be": "YouTube", "youtube-nocookie.com": "YouTube",
+    "vimeo.com": "Vimeo", "dailymotion.com": "Dailymotion", "dai.ly": "Dailymotion",
+    "tiktok.com": "TikTok", "instagram.com": "Instagram", "facebook.com": "Facebook",
+    "fb.watch": "Facebook", "twitch.tv": "Twitch", "x.com": "X", "twitter.com": "X",
+}
+
+
+def _video_page_site(host: str) -> str:
+    for domain, site in _VIDEO_PAGE_SITES.items():
+        if host == domain or host.endswith("." + domain):
+            return site
+    return ""
+
 
 def resolve_link(url: str) -> ResolvedLink:
     """Work out which provider a pasted link belongs to, and what it points at.
@@ -253,6 +272,13 @@ def resolve_link(url: str) -> ResolvedLink:
     if ".amazonaws.com" in host and ("s3" in host):
         style = "vhost" if not host.startswith("s3.") and not host.startswith("s3-") else "path"
         return _s3_link(host, path, ".amazonaws.com", style, raw)
+
+    # --- A video site's page, which is not a file ------------------------------------------
+    site = _video_page_site(host)
+    if site:
+        raise MediaProviderError(
+            f"that is a {site} page, not a video file — BOSS cannot download from {site}. "
+            "Use a Google Drive share link, or a direct link to the file itself (.mp4, .mov).")
 
     # --- Anything else: a direct file, if it is safe to fetch -----------------------------
     _refuse_unroutable(host)

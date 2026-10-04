@@ -89,7 +89,7 @@
         {"call": [{"tool": "media_fetch_link", "arguments": {"url": "{{video_url}}"}}]},
         {"call": [{"tool": "video_trim", "arguments": {"media_artifact_id": "{{artifact}}", "start": "00:00:00", "end": "00:00:03"}}]}
       ],
-      "reply": "Fetched the clip and trimmed it to three seconds.\n{\"title\": \"E2E clip\", \"description\": \"A three-second clip made by the e2e harness.\"}"
+      "reply": "Fetched the clip and trimmed it to three seconds.\n{\"outcome\": \"completed\", \"reason\": \"trimmed to three seconds\", \"title\": \"E2E clip\", \"description\": \"A three-second clip made by the e2e harness.\"}"
     },
     {
       "id": "agent.e2e-journey-step",
