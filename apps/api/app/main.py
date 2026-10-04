@@ -14103,6 +14103,48 @@ def rebuild_change_record(artifact_id: str, payload: open_bodies.ArtifactRebuild
     return result
 
 
+@app.get("/v1/artifacts/{artifact_id}/media")
+def get_artifact_media(artifact_id: str) -> Response:
+    """The media file an artifact holds, so a rendered edit can be watched before it is published.
+
+    Only for media BOSS keeps in its own artifact storage (`media_storage.store_local`); a file
+    kept in Drive is opened with its Drive link. Read access is the project's, exactly as for
+    the artifact itself, and the stored path is re-checked against THIS project's media
+    directory before anything is opened — a path in a row is not trusted to choose a file.
+    Served as a file response, so a browser's player can seek (Range requests).
+    """
+    from fastapi.responses import FileResponse
+
+    from boss_engine.services.media_storage import MediaStorageError, local_file_for
+
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id, title, content FROM artifacts WHERE id = :a"),
+            {"a": artifact_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        require_project_reader(connection, row["project_id"])
+    content = row["content"] if isinstance(row["content"], dict) else {}
+    if not content.get("local_path"):
+        where = content.get("view_url")
+        raise HTTPException(
+            status_code=409,
+            detail=("this artifact is not a media file BOSS keeps itself"
+                    + (f"; it is in Drive at {where}" if where else "")))
+    try:
+        path = local_file_for(settings, str(row["project_id"]), content)
+    except MediaStorageError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    name = str(content.get("name") or row["title"] or path.name)
+    return FileResponse(
+        path,
+        media_type=str(content.get("mime_type") or "") or "application/octet-stream",
+        filename=name,
+        content_disposition_type="inline",
+    )
+
+
 @app.get("/v1/artifacts/{artifact_id}/pdf")
 def get_artifact_pdf(artifact_id: str) -> Response:
     """A document as a PDF anyone can open, mail, or put in a folder.

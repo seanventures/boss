@@ -27,7 +27,11 @@ additive — nothing above this module changes.
 """
 from __future__ import annotations
 
+import mimetypes
 import os
+import shutil
+import uuid
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -36,6 +40,8 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .media_providers import (
     AUTH_NONE,
+    CAP_WRITE,
+    LOCAL_PROVIDER,
     ResolvedLink,
     provider,
     resolve_link,
@@ -128,6 +134,148 @@ def fetch(
         f"{_not_implemented_hint(target.provider_key)}")
 
 
+def media_url(artifact_id: str) -> str:
+    """The console's link to a media artifact BOSS holds itself.
+
+    Relative on purpose: the console proxies /v1 to the API behind its own sign-in, the same way
+    the change record's PDF link works, so the link opens for whoever can read the project and
+    for nobody else.
+    """
+    return f"/v1/artifacts/{artifact_id}/media"
+
+
+def provider_connected(connection: Optional[Connection], project_id: str,
+                       provider_key: str) -> bool:
+    """Whether this project has an active connection to ``provider_key`` — counted, never read.
+
+    The same question `workflow_readiness.check('google')` asks, so a run that readiness let
+    start and the step that stores its result cannot disagree about whether Google is there.
+    """
+    key = str(provider_key or "").strip().lower()
+    if key in (LOCAL_PROVIDER, "http"):
+        return True
+    if connection is None:
+        return False
+    try:
+        from sqlalchemy import text as _sql
+
+        with connection.begin_nested():
+            found = connection.execute(
+                _sql("""SELECT count(*) FROM integration_connections c
+                        JOIN integration_definitions d ON d.id = c.integration_definition_id
+                        WHERE c.project_id = :p AND d.integration_key = :k
+                          AND c.status = 'active'"""),
+                {"p": project_id, "k": key},
+            ).scalar()
+    except Exception:  # noqa: BLE001 — no table means no connection
+        return False
+    return bool(found)
+
+
+def _segment(value: str, what: str) -> str:
+    """A project id becomes a directory name, so it may not name any other directory."""
+    cleaned = str(value or "").strip()
+    if not cleaned or cleaned in (".", "..") or "/" in cleaned or "\\" in cleaned \
+            or "\x00" in cleaned:
+        raise MediaStorageError(f"{what} {value!r} cannot name a storage directory.")
+    return cleaned
+
+
+def _media_dir(settings: Settings, project_id: str) -> Path:
+    return Path(settings.artifact_root).resolve() / _segment(project_id, "project") / "media"
+
+
+def store_local(settings: Settings, *, project_id: str, local_path: str,
+                name: str) -> dict[str, Any]:
+    """Keep a finished file in BOSS's own artifact storage, as a NEW file.
+
+    The destination is ``<artifacts>/<project>/media/<random>-<safe name>``: the project is the
+    directory (so the route that serves it can check the file belongs to the project asking),
+    the random prefix means two edits named the same never meet, and the file is opened with
+    exclusive create, so even a collision fails rather than overwrites.
+    """
+    source = Path(local_path)
+    if not source.is_file():
+        raise MediaStorageError(f"nothing to store at {local_path}.")
+    size = source.stat().st_size
+    if size > MAX_DIRECT_BYTES:
+        raise MediaStorageError(
+            f"that file is {_size(size)}, over BOSS's {_size(MAX_DIRECT_BYTES)} limit for media "
+            "it keeps itself.")
+    directory = _media_dir(settings, project_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    display = os.path.basename(str(name or "").replace("\\", "/")) or source.name
+    target = directory / f"{uuid.uuid4().hex[:12]}-{_safe_name(display)}"
+    try:
+        with open(source, "rb") as reader, open(target, "xb") as writer:
+            shutil.copyfileobj(reader, writer, 1024 * 1024)
+    except FileExistsError as exc:  # pragma: no cover - 48 random bits colliding
+        raise MediaStorageError("a stored file already has that name; not overwriting it.") \
+            from exc
+    except Exception:
+        _discard(str(target))
+        raise
+    root = Path(settings.artifact_root).resolve()
+    return {
+        "provider": LOCAL_PROVIDER,
+        "storage": LOCAL_PROVIDER,
+        "local_path": str(target.relative_to(root)),
+        "name": display,
+        "bytes": size,
+        "mime_type": mimetypes.guess_type(display)[0] or "application/octet-stream",
+        "file_id": None,
+        "view_url": None,
+    }
+
+
+def local_file_for(settings: Settings, project_id: str, content: dict[str, Any]) -> Path:
+    """The file a locally stored media artifact names, refusing anything outside its project.
+
+    ``local_path`` is a column value, and a column value is not trusted to choose a path: it is
+    resolved (symlinks and ``..`` included) and must land inside THIS project's media directory.
+    """
+    relative = str((content or {}).get("local_path") or "").strip()
+    if not relative:
+        raise MediaStorageError("this artifact is not kept in BOSS's own storage.")
+    root = Path(settings.artifact_root).resolve()
+    expected = _media_dir(settings, project_id)
+    path = (root / relative).resolve()
+    if not path.is_relative_to(expected):
+        raise MediaStorageError("that artifact's file is outside this project's media storage.")
+    if not path.is_file():
+        raise MediaStorageError(
+            "that artifact's file is no longer in BOSS's storage (the artifacts volume may have "
+            "been reset).")
+    return path
+
+
+def materialize(
+    connection: Connection,
+    settings: Settings,
+    *,
+    project_id: str,
+    content: dict[str, Any],
+    dest_dir: str,
+    connection_key: Optional[str] = None,
+) -> str:
+    """A local path for a media artifact's file, wherever the artifact keeps it.
+
+    Kept in BOSS: the stored file itself, read in place — the editing steps write to their own
+    work directory and never modify their input, so copying gigabytes to read them is waste.
+    Kept in Drive: downloaded into ``dest_dir`` with the project's Google connection.
+    """
+    if (content or {}).get("local_path"):
+        return str(local_file_for(settings, project_id, content))
+    file_id = str((content or {}).get("drive_file_id") or "").strip()
+    if file_id:
+        from .drive_media import download
+
+        key = _resolve_connection_key(connection, project_id, "google", connection_key)
+        return download(connection, settings, project_id=project_id, file_id=file_id,
+                        dest_dir=dest_dir, connection_key=key)["path"]
+    raise MediaStorageError("that artifact names no media file — neither stored nor in Drive.")
+
+
 def store(
     connection: Connection,
     settings: Settings,
@@ -135,30 +283,56 @@ def store(
     project_id: str,
     local_path: str,
     name: str,
-    provider_key: str = "google",
+    provider_key: Optional[str] = None,
     container: str = "",
     connection_key: Optional[str] = None,
     actor: str = "system",
+    source_storage: Optional[str] = None,
 ) -> dict[str, Any]:
     """Put a finished file where the project keeps its media, as a NEW file.
 
     Never an overwrite, for any provider. A pipeline that can overwrite is a pipeline that will
     eventually overwrite the only copy of something.
-    """
-    entry = provider(provider_key)
-    from .media_providers import CAP_WRITE
 
+    WHERE IT GOES. BOSS's own artifact storage, unless the workflow named a provider AND that
+    provider is connected. This used to default to Google, which made a Google connection a
+    precondition of every edit — even of a video fetched from a direct link, edited, and only
+    ever meant to be watched in the console. Google is needed to publish to YouTube, and to read
+    or write Drive when a workflow asks for that; it is not needed to keep an intermediate file.
+    A named provider that is not connected falls back to BOSS's storage and says so in `note`,
+    rather than stopping a run whose only use of that provider was somewhere to put a file.
+
+    WHERE THE SOURCE CAME FROM DECIDES THE DEFAULT. An edit of a video that came out of Drive
+    goes back to Drive when nothing else was asked and Google is connected — the behaviour every
+    Drive-based workflow was built on, an operator's YouTube pipeline included. A source that did
+    not come from Drive (a direct link, a file BOSS already keeps) stays in BOSS. An explicit
+    `provider_key` always wins, `boss` included.
+    """
+    asked = str(provider_key or "").strip().lower()
+    if not asked and str(source_storage or "").strip().lower() == "google":
+        asked = "google"
+    if asked in ("", LOCAL_PROVIDER, "local"):
+        return store_local(settings, project_id=project_id, local_path=local_path, name=name)
+
+    entry = provider(asked)
     if CAP_WRITE not in entry.capabilities:
         raise MediaStorageError(
             f"{entry.display_name} is read-only — an edited video cannot be written back to it. "
             "Give the workflow an output provider that can be written to.")
 
-    if provider_key == "google":
+    if asked == "google":
+        if not provider_connected(connection, project_id, "google"):
+            stored = store_local(settings, project_id=project_id, local_path=local_path,
+                                 name=name)
+            stored["note"] = ("Google is not connected to this project, so this was kept in "
+                              "BOSS's own storage instead of Drive.")
+            return stored
         from .drive_media import upload
 
         key = _resolve_connection_key(connection, project_id, "google", connection_key)
-        return upload(connection, settings, project_id=project_id, local_path=local_path,
-                      name=name, folder_id=container, connection_key=key, actor=actor)
+        written = upload(connection, settings, project_id=project_id, local_path=local_path,
+                         name=name, folder_id=container, connection_key=key, actor=actor)
+        return {**written, "provider": "google", "storage": "google"}
 
     raise MediaStorageError(
         f"BOSS cannot store to {entry.display_name} yet. "
