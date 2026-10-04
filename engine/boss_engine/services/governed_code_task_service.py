@@ -212,7 +212,7 @@ def classify_gate_faults(
     return faults
 
 
-def take_pending_guidance(engine, run_id: str) -> list[dict]:
+def take_pending_guidance(engine, run_id: str, stage: Optional[str] = None) -> list[dict]:
     """Pop operator guidance queued for a RUNNING task, so the next stage can honour it.
 
     Without this a run is fire-and-wait: the operator watches it head somewhere wrong for
@@ -238,6 +238,28 @@ def take_pending_guidance(engine, run_id: str) -> list[dict]:
         pending = list(fctx.get("pending_guidance") or [])
         if not pending:
             return []
+        if stage:
+            # THE STEER IS ACKNOWLEDGED (factory spec §6.4): each item says when it was read
+            # and by which stage act — so the cockpit's `Queued for next station` becomes
+            # `Read by <name>` on a real transition, not a guess.
+            read_by = None
+            try:
+                read_by = agent_acts.quietly(c, "sign a steer", agent_acts.stage_act,
+                                             project_id=None, code_task_run_id=run_id,
+                                             stage=stage)
+            except Exception:  # noqa: BLE001 — an acknowledgement never blocks the guidance
+                read_by = None
+            from datetime import datetime as _dt, timezone as _tz
+            stamp = _dt.now(_tz.utc).isoformat()
+            pending = [{**item, "applied_at": stamp, "applied_stage": stage,
+                        "applied_act_id": (read_by or {}).get("act_id"),
+                        "applied_role": (read_by or {}).get("role_key")} for item in pending]
+            row_p = c.execute(sql("SELECT project_id FROM code_task_runs WHERE id=:id"),
+                              {"id": run_id}).scalar()
+            if row_p:
+                emit_event(c, row_p, "code_task.guidance_applied", "boss", "code_task_run",
+                           run_id, {"count": len(pending), "stage": stage,
+                                    "act_id": (read_by or {}).get("act_id")})
         c.execute(sql(
             "UPDATE code_task_runs SET finalize_ctx = "
             "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
@@ -855,6 +877,25 @@ def _json_dumps(value) -> str:
     return _json.dumps(value)
 
 
+def _comment_signers(c, run_id: str, review_seat) -> dict:
+    """{stage: {act_id, role_key}}: the newest act that ran each review stage of this build.
+    For a panel, the code review is the seat whose findings stand for it."""
+    out: dict = {}
+    try:
+        rows = c.execute(sql(
+            "SELECT act_id, role_key, step_id, seat FROM agent_acts WHERE kind = 'stage' "
+            "AND code_task_run_id = :r AND step_id IN ('review_code','security_check',"
+            "'consistency_check') ORDER BY started_at"), {"r": run_id}).mappings().all()
+    except Exception:  # noqa: BLE001 — a signature is never worth losing the comments
+        return out
+    for r in rows:
+        stage = r["step_id"]
+        if stage == "review_code" and review_seat and r["seat"] not in (None, review_seat):
+            continue
+        out[stage] = {"act_id": r["act_id"], "role_key": r["role_key"]}
+    return out
+
+
 def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict,
                             *, round_i: int = 0) -> int:
     """Turn the panel's findings into durable, line-anchored comments AS THE REVIEW HAPPENS.
@@ -883,6 +924,7 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
                 "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
                 {"id": run_id, "p": project_id}).mappings().first()
             existing = list(((row or {}).get("finalize_ctx") or {}).get("review_comments") or [])
+            signers = _comment_signers(c, run_id, evidence.get("review_seat"))
             seen = {(e.get("stage"), e.get("path"), e.get("line"), e.get("severity"),
                      (e.get("body") or "")[:120]) for e in existing}
             added = []
@@ -892,7 +934,12 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
                 if key_t in seen:
                     continue
                 seen.add(key_t)
-                added.append({"id": make_id("rc"), "round": round_i, **comment.to_dict()})
+                signed = signers.get(comment.stage) or {}
+                added.append({"id": make_id("rc"), "round": round_i, **comment.to_dict(),
+                              # The agent who wrote it, from the act that ran the stage —
+                              # never the parser's default (factory spec §6.4).
+                              "author_role_key": signed.get("role_key"),
+                              "act_id": signed.get("act_id")})
             if not added:
                 return 0
             c.execute(sql(
@@ -3147,7 +3194,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # pass, carrying the reviewers' findings as the concrete evidence to fix.
             # STAGE-BOUNDARY STEERING: fold in anything the operator sent while this run has
             # been executing, so a wrong direction costs one stage instead of the whole run.
-            _steer = take_pending_guidance(engine, run_id)
+            _steer = take_pending_guidance(
+                engine, run_id, stage="implement" if do_separate_tests else "solo")
             if _steer:
                 base_impl_prompt = base_impl_prompt + _guidance_block(_steer)
                 with _transaction(engine) as c:
@@ -3450,6 +3498,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         deferred_findings: list[dict] = []  # sub-threshold review findings → follow-up task
         test_arbitrations: list[dict] = []  # CODE_WRONG/TEST_WRONG rulings on failing tests
         panel_size = 1
+        review_seat = None  # the panel seat whose findings stand for the review (§6.4)
         review_cost = 0
         mutation_caught = None
         regressions_ok = None
@@ -3510,8 +3559,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             def _make_review(seat, seat_agent, seat_model):
                 def _run():
+                    # Each seat of a real panel signs its own act (factory §6.4); a panel of
+                    # one is just the review.
                     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
-                                    stage="review_code")
+                                    stage="review_code",
+                                    seat=(seat + 1) if panel_size > 1 else None)
                     rr = seat_agent.run_role(
                         _review_prompt(title, criteria, instructions=instructions, ui=ui_task, change=change_block),
                         review_root, read_only=True, model=seat_model)
@@ -3662,6 +3714,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             verdict, review_confidence = _aggregate_panel([vd for _, vd in votes], review_quorum)
             r3 = next((rr for rr, vd in votes if vd == "refuted"),
                       votes[0][0] if votes else r3)
+            if panel_size > 1:
+                # Which seat's findings stand for the review, so its comments are signed by
+                # that seat's act and not the panel's (factory spec §6.4).
+                review_seat = next(
+                    (i + 1 for i, v in enumerate(panel["review_votes"]) if v and v[0] is r3),
+                    None)
             review_cost = sum(int((rr or {}).get("cost_usd_micros") or 0) for rr, _ in votes)
             r4, sec_verdict = panel["security"]
             r6, cons_verdict = panel["consistency"]
@@ -4013,6 +4071,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
             "review_summary": r3.get("summary", "")[:4000],
+            "review_seat": review_seat,
             "security_summary": r4.get("summary", "")[:4000],
             "consistency_summary": r6.get("summary", "")[:1500],
         }

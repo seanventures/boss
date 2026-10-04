@@ -122,6 +122,39 @@ class PreviewFlag(TypedDict, total=False):
 
 # ── GET /v1/factory/floor (§6.2) ────────────────────────────────────────────────────────────
 
+_BUILDING_ORDER = {"needs_plan": 0, "needs_waiver": 0, "budget_refused": 0, "quiet": 1,
+                   "blocked": 1, "budget_wait": 2, "building": 2, "queued": 3}
+
+
+def _sort_building(rows: list[BuildRow], now: datetime) -> list[BuildRow]:
+    """Waiting on you → quiet → building (newest station first) → queued (§4.2.2)."""
+    return sorted((b for b in rows if section_of(b["state"]) == "building"),
+                  key=lambda b: (_BUILDING_ORDER.get(b["state"], 2),
+                                 -(_aware(b.get("station_since")) or now).timestamp()))
+
+
+def building_rows(connection: Any, project_id: str, attention: list[Mapping[str, Any]], *,
+                  viewer: Optional[str] = None, now: Optional[datetime] = None) -> list[BuildRow]:
+    """The Floor's BUILDING rows alone — what Agents › Live shows of the builds, so the two
+    say the same rows with the same counts (factory spec §10 decision 2)."""
+    from .code_task_service import list_code_task_runs
+
+    now = now or _now()
+    runs = list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+    latest: dict[str, Mapping[str, Any]] = {}
+    for r in runs:
+        latest.setdefault(_lineage_key(r), r)
+    live = [r for r in latest.values()
+            if str(r.get("status") or "") in ("running", "repairing", "blocked")][:ACT_RUNS_CAP]
+    facts = load_facts(connection, project_id, live)
+    names = _workflow_names(connection, project_id, live)
+    attention_of = {str((a.get("build") or {}).get("run_id")): str(a["id"]) for a in attention
+                    if isinstance(a.get("build"), dict)}
+    return _sort_building([build_row(r, facts, now=now, viewer=viewer,
+                                     attention_id=attention_of.get(str(r["id"])),
+                                     origin=_origin(None, project_id, r, names))
+                           for r in live], now)
+
 
 class BuildRow(TypedDict, total=False):
     run_id: str
@@ -335,3 +368,1686 @@ def failure_line(fctx: Optional[dict[str, Any]], error: Optional[str] = None) ->
             tip = str(value).strip().splitlines()[0][:160]
             break
     return {"line": line, "tip": tip}
+
+
+# ══ Implementation (S1) ═════════════════════════════════════════════════════════════════════
+
+import hashlib  # noqa: E402
+from typing import Mapping  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from sqlalchemy import text  # noqa: E402
+
+CORE_STATIONS: tuple[str, ...] = ("plan", "tests", "build", "check", "review", "pr", "preview",
+                                  "ship")
+#: Stations where an agent stands. The rest are BOSS's machinery (Check when no qa act ran it).
+AGENT_STATIONS = frozenset({"plan", "tests", "build", "review"})
+MACHINE_STATIONS = frozenset({"check", "pr", "preview"})
+#: The role a pending station's hollow face may show: only where the role is certain.
+CERTAIN_ROLE: dict[str, str] = {
+    "plan": "chief_architect", "tests": "qa", "review": "adversarial_reviewer",
+}
+STATION_VERB: dict[str, str] = {
+    "plan": "Planning", "you_plan": "Needs you", "tests": "Testing", "build": "Coding",
+    "check": "Testing", "review": "Reviewing", "pr": "Working", "preview": "Deploying",
+    "ship": "Deploying",
+}
+BOSS_TIP = "BOSS machinery. No agent at this station."
+OUTCOME_WINDOW = timedelta(days=7)
+FLOOR_RUNS = 200
+ACT_RUNS_CAP = 40
+DEPLOY_OK = frozenset({"healthy", "succeeded", "completed", "passed"})
+DEPLOY_BAD = frozenset({"failed", "rejected", "rolled_back", "rollback_pending"})
+PREVIEW_FLAGS = frozenset({"starting", "running", "failed"})
+VERDICT_WORDS = {"approved": "Approved", "changes_asked": "Changes asked", "blocked": "Blocked"}
+_VERDICT_OF = {"survived": "approved", "clean": "approved", "consistent": "approved",
+               "refuted": "changes_asked", "issues": "changes_asked", "drift": "changes_asked"}
+_SEAT_VERDICT_KEY = {"review_code": "adversarial_verdict", "security_check": "security_verdict",
+                     "consistency_check": "consistency_verdict"}
+_SEAT_GATE = {"review_code": "code_review_passed", "security_check": "security_clean",
+              "consistency_check": "consistent"}
+_SAID_KEY = {"write_tests": "qa_summary", "review_code": "review_summary",
+             "security_check": "security_summary", "consistency_check": "consistency_summary"}
+_FILE_TOOLS = frozenset({"read", "edit", "write", "multiedit", "notebookedit", "str_replace",
+                         "create", "view", "str_replace_editor", "apply_patch"})
+_SHELL_TOOLS = frozenset({"bash", "shell", "run", "exec", "terminal"})
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aware(value: Any) -> Optional[datetime]:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _iso(value: Any) -> Optional[str]:
+    found = _aware(value)
+    return found.isoformat() if found else None
+
+
+def _j(value: Any, default: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return default
+    return value if value is not None else default
+
+
+def _minutes(delta: timedelta) -> str:
+    """`24m`, `3h`, `2d` — a duration as the Floor says it."""
+    mins = max(0, int(delta.total_seconds() // 60))
+    if mins < 60:
+        return f"{mins}m"
+    if mins < 60 * 48:
+        return f"{mins // 60}h"
+    return f"{mins // (60 * 24)}d"
+
+
+def _first_line(value: Any, limit: int = 160) -> str:
+    for line in str(value or "").splitlines():
+        if line.strip():
+            return line.strip()[:limit]
+    return ""
+
+
+def _pr_number(run: Mapping[str, Any]) -> Optional[int]:
+    number = run.get("pull_request_number")
+    if number:
+        return int(number)
+    found = re.search(r"/pull/(\d+)", str(run.get("pull_request_url") or ""))
+    return int(found.group(1)) if found else None
+
+
+# ── naming an app (the engine's half of app-identity.ts / app-grouping.ts) ──────────────────
+
+
+def app_name(run: Mapping[str, Any]) -> str:
+    """What a person calls the app this build makes: the benchmark's name, the name the brief
+    gives itself (naming.project_name), else the directive that asked for it."""
+    from .naming import project_name
+
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    bench = fctx.get("qa_benchmark") if isinstance(fctx.get("qa_benchmark"), dict) else {}
+    if bench.get("name"):
+        return str(bench["name"])[:46]
+    title = re.sub(r"^\[\d+/\d+\]\s*", "", str(run.get("title") or ""))
+    name = project_name(title)[0]
+    if name == "Untitled app":
+        origin = fctx.get("origin") if isinstance(fctx.get("origin"), dict) else {}
+        directive = origin.get("title") or origin.get("directive")
+        if directive:
+            alt = project_name(str(directive))[0]
+            if alt != "Untitled app":
+                return alt
+    return name
+
+
+def _identity_tokens(run: Mapping[str, Any]) -> list[str]:
+    from .naming import identity_key
+
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    spec = _j(run.get("spec"), {}) or {}
+    tokens = [f"id:{run['id']}"]
+    if fctx.get("app_id"):
+        tokens.append(f"app:{fctx['app_id']}")
+    name = app_name(run)
+    if name and name != "Untitled app":
+        tokens.append(f"app:{str(spec.get('repo') or '').strip().lower()}␟"
+                      f"{identity_key(name)}")
+    bench = fctx.get("qa_benchmark") if isinstance(fctx.get("qa_benchmark"), dict) else {}
+    if bench.get("id"):
+        tokens.append(f"qa:{bench['id']}")
+    for field in ("root_run_id", "deferred_from_run", "parent_run_id"):
+        if fctx.get(field):
+            tokens.append(f"id:{fctx[field]}")
+    matched = re.match(r"^boss/code/(crun_[a-z0-9]+)$", str(spec.get("base_branch") or ""), re.I)
+    if matched:
+        tokens.append(f"id:{matched.group(1)}")
+    return tokens
+
+
+def group_into_apps(runs: list[Mapping[str, Any]]) -> list[list[Mapping[str, Any]]]:
+    """Runs grouped by IDENTITY into apps, in the order apps first appear (groupRunsIntoApps)."""
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    tokens = [_identity_tokens(r) for r in runs]
+    for toks in tokens:
+        for t in toks[1:]:
+            ra, rb = find(toks[0]), find(t)
+            if ra != rb:
+                parent[rb] = ra
+    groups: dict[str, list[Mapping[str, Any]]] = {}
+    order: list[str] = []
+    for run, toks in zip(runs, tokens):
+        root = find(toks[0])
+        if root not in groups:
+            groups[root] = []
+            order.append(root)
+        groups[root].append(run)
+    return [groups[k] for k in order]
+
+
+# ── what one build is made of: its acts, decision, preview, deploys, cost ───────────────────
+
+
+class Facts:
+    """Everything the derivations read about a set of builds, loaded in a fixed number of
+    queries whatever the number of builds (one per kind of fact)."""
+
+    def __init__(self) -> None:
+        self.acts: dict[str, list[dict[str, Any]]] = {}
+        self.decisions: dict[str, dict[str, Any]] = {}
+        self.previews: dict[str, dict[str, Any]] = {}
+        self.deploys: dict[str, list[dict[str, Any]]] = {}
+        self.cost: dict[str, dict[str, Any]] = {}
+        self.gates: dict[str, dict[str, Any]] = {}
+        self.tool_calls: dict[str, int] = {}
+
+
+def load_facts(connection: Any, project_id: str, runs: list[Mapping[str, Any]], *,
+               acts: bool = True, deploys: bool = True,
+               gates: bool = False, tool_calls: bool = False) -> Facts:
+    facts = Facts()
+    ids = [str(r["id"]) for r in runs]
+    if not ids:
+        return facts
+    if acts:
+        for row in connection.execute(
+            text("SELECT * FROM agent_acts WHERE project_id = :p AND code_task_run_id = ANY(:ids) "
+                 "AND kind IN ('stage', 'run') ORDER BY started_at, act_id"),
+            {"p": project_id, "ids": ids},
+        ).mappings().all():
+            facts.acts.setdefault(str(row["code_task_run_id"]), []).append(dict(row))
+    decision_ids = [str(r["decision_id"]) for r in runs if r.get("decision_id")]
+    if decision_ids:
+        for row in connection.execute(
+            text("SELECT id, status, risk_tier, default_action, deadline_at, recommendation, "
+                 "approved_by, approved_at, executed_at, updated_at, created_at, question, "
+                 "task_id, delegated_to FROM decisions WHERE project_id = :p AND id = ANY(:ids)"),
+            {"p": project_id, "ids": decision_ids},
+        ).mappings().all():
+            item = dict(row)
+            item["recommendation"] = _j(item.get("recommendation"), {}) or {}
+            facts.decisions[str(row["id"])] = item
+    for row in connection.execute(
+        text("SELECT DISTINCT ON (run_id) id, run_id, status, url, error, expires_at, steps, "
+             "created_at FROM app_previews WHERE project_id = :p AND run_id = ANY(:ids) "
+             "ORDER BY run_id, created_at DESC"),
+        {"p": project_id, "ids": ids},
+    ).mappings().all():
+        facts.previews[str(row["run_id"])] = dict(row)
+    if deploys:
+        names = {str(r["id"]): app_name(r) for r in runs}
+        from .naming import identity_key
+
+        wanted = {identity_key(n): rid for rid, n in names.items() if n != "Untitled app"}
+        for row in connection.execute(
+            text("SELECT r.id, r.app_name, r.environment, r.status, r.commit_ref, r.started_at, "
+                 "r.finished_at, r.failure_reason, r.trigger, r.deployment_target_id, r.steps, "
+                 "r.created_at, r.release_packet->>'code_task_run_id' AS run_id "
+                 "FROM deployment_runs r WHERE r.project_id = :p "
+                 "ORDER BY r.created_at DESC LIMIT 200"),
+            {"p": project_id},
+        ).mappings().all():
+            rid = str(row["run_id"] or "")
+            if rid not in names:
+                rid = wanted.get(identity_key(str(row["app_name"] or "")), "")
+            if rid:
+                facts.deploys.setdefault(rid, []).append(dict(row))
+    for row in connection.execute(
+        text("SELECT code_task_run_id AS run_id, "
+             "COALESCE(sum(cost_usd_micros) FILTER (WHERE NOT included_in_subscription), 0) "
+             "AS metered, count(*) FILTER (WHERE included_in_subscription) AS included, "
+             "count(*) AS calls FROM llm_calls WHERE code_task_run_id = ANY(:ids) "
+             "GROUP BY code_task_run_id"),
+        {"ids": ids},
+    ).mappings().all():
+        facts.cost[str(row["run_id"])] = {"metered_usd": int(row["metered"] or 0) / 1e6,
+                                          "included": int(row["included"] or 0),
+                                          "calls": int(row["calls"] or 0)}
+    if gates:
+        for row in connection.execute(
+            text("SELECT DISTINCT ON (code_task_run_id) code_task_run_id, id, status, "
+                 "gates_passed, gates_failed, evidence, created_at FROM quality_gates "
+                 "WHERE project_id = :p AND code_task_run_id = ANY(:ids) "
+                 "ORDER BY code_task_run_id, created_at DESC"),
+            {"p": project_id, "ids": ids},
+        ).mappings().all():
+            facts.gates[str(row["code_task_run_id"])] = dict(row)
+    if tool_calls:
+        act_ids = [a["act_id"] for acts_ in facts.acts.values() for a in acts_]
+        if act_ids:
+            for row in connection.execute(
+                text("SELECT act_id, count(*) AS n FROM agent_turns WHERE act_id = ANY(:a) "
+                     "AND direction = 'tool_call' GROUP BY act_id"),
+                {"a": act_ids},
+            ).mappings().all():
+                facts.tool_calls[str(row["act_id"])] = int(row["n"] or 0)
+    return facts
+
+
+# ── one state per build (§4.4) ──────────────────────────────────────────────────────────────
+
+
+def _stage_acts(acts: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [a for a in acts if a.get("kind") == "stage"]
+
+
+def _open_act(acts: list[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    live = [a for a in _stage_acts(acts) if a.get("ended_at") is None]
+    return live[-1] if live else None
+
+
+def _last_act_at(acts: list[Mapping[str, Any]]) -> Optional[datetime]:
+    times = [t for a in acts for t in (_aware(a.get("started_at")), _aware(a.get("ended_at")))
+             if t]
+    return max(times) if times else None
+
+
+def _station_of_stage(stage: Any) -> Optional[str]:
+    return STAGE_STATION.get(str(stage or "").strip().lower())
+
+
+def _current_station(run: Mapping[str, Any], acts: list[Mapping[str, Any]]) -> Optional[str]:
+    """Where the build is: its phase's station, else the station of its newest act."""
+    phase = str(run.get("phase") or "")
+    if phase in ("queued",):
+        return None
+    if phase == "provisioning":
+        return "plan"
+    here = _station_of_stage(phase)
+    if here:
+        return here
+    stages = _stage_acts(acts)
+    if stages:
+        return _station_of_stage(stages[-1].get("step_id"))
+    return None
+
+
+def _next_station(after: Optional[str]) -> str:
+    if after is None or after not in CORE_STATIONS:
+        return "plan"
+    i = CORE_STATIONS.index(after)
+    return CORE_STATIONS[min(i + 1, len(CORE_STATIONS) - 1)]
+
+
+def _rounds(acts: list[Mapping[str, Any]]) -> int:
+    """Repair rounds: the build station worked again after its first act."""
+    build = [a for a in _stage_acts(acts) if _station_of_stage(a.get("step_id")) == "build"]
+    return max(0, len(build) - 1)
+
+
+def _decision_state(decision: Optional[Mapping[str, Any]], now: datetime) -> Optional[str]:
+    """`waiting` (the operator's), `merged`, or `other` — read through decision_actions, the one
+    rule for what waits on the operator."""
+    if not decision:
+        return None
+    from . import decision_actions
+
+    if decision_actions.attention(dict(decision), now) == "needs_action":
+        return "waiting"
+    if str(decision.get("status") or "") in ("approved", "executed"):
+        return "merged"
+    return "other"
+
+
+def _latest_deploy(deploys: list[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    return deploys[0] if deploys else None
+
+
+def preview_flag(preview: Optional[Mapping[str, Any]], now: Optional[datetime] = None
+                 ) -> Optional[PreviewFlag]:
+    if not preview:
+        return None
+    status = str(preview.get("status") or "")
+    if status not in PREVIEW_FLAGS:
+        return None
+    expires = _aware(preview.get("expires_at"))
+    if status == "running" and expires and expires < (now or _now()):
+        return None
+    return {"status": status, "url": preview.get("url") if status == "running" else None}
+
+
+def _who_stopped(fctx: Mapping[str, Any], viewer: Optional[str]) -> str:
+    actor = str(fctx.get("cancelled_by") or "").strip()
+    if not actor:
+        return "Stopped"
+    if viewer and actor == viewer:
+        return "Stopped by you"
+    return f"Stopped by {actor}"
+
+
+def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]]] = None,
+                decision: Optional[Mapping[str, Any]] = None,
+                preview: Optional[Mapping[str, Any]] = None,
+                deploys: Optional[list[Mapping[str, Any]]] = None,
+                now: Optional[datetime] = None, viewer: Optional[str] = None) -> BuildState:
+    """THE ONE STATE of a build (§4.4), top-down precedence. The Floor, the cockpit, MCP
+    get_code_task and Agents › Live all read this; none derives its own."""
+    from . import agent_acts
+
+    now = now or _now()
+    acts = list(acts or [])
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    status = str(run.get("status") or "")
+    phase = str(run.get("phase") or "")
+    station = _current_station(run, acts)
+    rounds = _rounds(acts)
+    flag = preview_flag(preview, now)
+    open_act = _open_act(acts)
+
+    def out(state: str, word: str, tip: Optional[str], verb: str,
+            at: Optional[str] = station) -> BuildState:
+        return {"state": state, "word": word, "tip": tip, "verb": verb, "station": at,
+                "rounds": rounds, "preview": flag["status"] if flag else None}
+
+    label = STATION_LABELS.get(station or "", "")
+    if status == "cancelled":
+        when = _aware(fctx.get("cancelled_at")) or _aware(run.get("updated_at"))
+        tip = "Cancelled" + (f" at {label}" if label else "") + (
+            f" · {when.strftime('%H:%M')}" if when else "")
+        return out("cancelled", _who_stopped(fctx, viewer), tip, "Stuck")
+    if status == "failed":
+        return out("failed", f"Failed · {label}" if label else "Failed",
+                   failure_line(fctx, run.get("error"))["line"], "Stuck")
+    if status == "blocked":
+        if phase == "awaiting_plan_approval":
+            return out("needs_plan", "Needs you · plan", "Approve the plan to start building",
+                       "Needs you", "you_plan")
+        if phase == "awaiting_gate_override":
+            failing = [gate_label(g) for g in fctx.get("failing_gates") or []]
+            return out("needs_waiver", "Checks failed", " · ".join(failing)[:120] or None,
+                       "Stuck", station or "review")
+        if str(fctx.get("reason_code") or "") == "budget_denied":
+            last = _stage_acts(acts)
+            here = _next_station(_station_of_stage(last[-1].get("step_id")) if last else None) \
+                if last else "plan"
+            return out("budget_refused", "Budget refused",
+                       "Over the build budget. Raise it or retry.", "Blocked", here)
+        return out("blocked", "Blocked", _first_line(run.get("error")) or None, "Blocked")
+    if status in ("running", "repairing"):
+        if fctx.get("budget_wait_since"):
+            return out("budget_wait", "Waiting · budget",
+                       "Waiting for budget to free up. Costs nothing meanwhile.", "Waiting")
+        if phase == "queued":
+            return out("queued", "Queued", "Waiting for a worker", "Waiting", None)
+        if phase == "provisioning":
+            return out("queued", "Starting", "Cloning the repo", "Working", "plan")
+        moved = max([t for t in (_aware(run.get("updated_at")), _last_act_at(acts)) if t],
+                    default=None)
+        if moved and now - moved > timedelta(minutes=QUIET_AFTER_MINUTES):
+            gap = _minutes(now - moved)
+            verb = agent_acts.work_verb(dict(open_act)) if open_act else \
+                STATION_VERB.get(station or "", "Working")
+            return out("quiet", f"Quiet · {gap}", f"No progress for {gap}. It may be stuck.", verb)
+        verb = agent_acts.work_verb(dict(open_act)) if open_act else \
+            STATION_VERB.get(station or "", "Working")
+        word = verb + (f" · round {rounds + 1}" if rounds and station in ("build", "review")
+                       else "")
+        stage = (open_act or {}).get("step_id")
+        tip = f"{label} · {agent_acts.STAGE_TITLES.get(str(stage), '')}".strip(" ·") \
+            if label else None
+        return out("building", word, tip or None, verb)
+    # Finished: completed / simulated.
+    ok_deploys = [d for d in deploys or [] if str(d.get("status") or "") in DEPLOY_OK]
+    if ok_deploys:
+        return out("deployed", f"Deployed · {ok_deploys[0].get('environment') or 'dev'}", None,
+                   "Working", "ship")
+    if run.get("pull_request_url") or run.get("pull_request_number"):
+        if _decision_state(decision, now) == "merged":
+            return out("merged", "Merged", None, "Working", "ship")
+        return out("pr_open", "PR open", None, "Needs you", "ship")
+    index, total = fctx.get("decomposition_index"), fctx.get("decomposition_total")
+    tip = f"Part {index} of {total}" if index and total else None
+    return out("done_no_pr", "Done · no PR", tip, "Working", "pr")
+
+
+def section_of(state: str) -> str:
+    return SECTION_OF.get(state, "building")
+
+
+# ── the line of stations (§4.3) ─────────────────────────────────────────────────────────────
+
+
+def _act_station_status(act: Mapping[str, Any]) -> str:
+    return {"active": "working", "pending": "working", "awaiting_input": "needs_you",
+            "complete": "done", "error": "stuck", "stale": "stuck",
+            "skipped": "skipped"}.get(str(act.get("status") or ""), "pending")
+
+
+def _verdict(stage: str, state: Mapping[str, Any], failing: set[str]) -> Optional[str]:
+    gate = _SEAT_GATE.get(stage)
+    if gate and gate in failing:
+        return "blocked"
+    raw = state.get(_SEAT_VERDICT_KEY.get(stage, ""))
+    return _VERDICT_OF.get(str(raw or ""))
+
+
+def _skip_tip(station: str, state: Mapping[str, Any]) -> str:
+    profile = str(state.get("profile") or "").strip()
+    name = STATION_LABELS[station]
+    if profile:
+        return f"{profile.capitalize()} profile skips {name}"
+    return f"This build skipped {name}"
+
+
+def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]]] = None,
+                 decision: Optional[Mapping[str, Any]] = None,
+                 preview: Optional[Mapping[str, Any]] = None,
+                 deploys: Optional[list[Mapping[str, Any]]] = None,
+                 bstate: Optional[BuildState] = None, now: Optional[datetime] = None,
+                 viewer: Optional[str] = None) -> list[Station]:
+    """The build's line (§4.3). Faces come from acts; a pending station shows a hollow face only
+    when its role is certain; machinery shows the BOSS glyph; nothing is drawn working without
+    an act that is."""
+    from . import agent_acts
+
+    now = now or _now()
+    acts = list(acts or [])
+    deploys = list(deploys or [])
+    st = bstate or build_state(run, acts=acts, decision=decision, preview=preview,
+                               deploys=deploys, now=now, viewer=viewer)
+    state_key = st["state"]
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    spec = _j(run.get("spec"), {}) or {}
+    evidence = _j(run.get("state"), {}) or {}
+    failing = {str(g) for g in fctx.get("failing_gates") or []}
+    steps_run = evidence.get("steps_run") if isinstance(evidence.get("steps_run"), list) else None
+    by_station: dict[str, list[Mapping[str, Any]]] = {}
+    for a in _stage_acts(acts):
+        key = _station_of_stage(a.get("step_id"))
+        if key:
+            by_station.setdefault(key, []).append(a)
+    here = st.get("station")
+    finished = state_key in ("pr_open", "merged", "deployed", "done_no_pr")
+    pr_n = _pr_number(run)
+    flag = preview_flag(preview, now)
+    ok_deploys = [d for d in deploys if str(d.get("status") or "") in DEPLOY_OK]
+    order = list(CORE_STATIONS)
+    plan_gate = bool(evidence.get("awaiting_plan_approval")) or state_key == "needs_plan" or (
+        decision is not None and str((decision.get("recommendation") or {}).get("action") or "")
+        == "resume_code_task")
+    if plan_gate:
+        order.insert(1, "you_plan")
+    if here in order:
+        here_i = order.index(here)
+    elif here is None and state_key == "queued":
+        here_i = -1
+    else:
+        here_i = len(order) if finished else -1
+    rounds = _rounds(acts)
+    review_acts = by_station.get("review", [])
+    out: list[Station] = []
+    for i, key in enumerate(order):
+        mine = by_station.get(key, [])
+        latest = mine[-1] if mine else None
+        s: Station = {"key": key, "label": STATION_LABELS[key], "status": "pending",
+                      "face": "none", "role_key": None, "hollow_role": None,
+                      "act_id": latest["act_id"] if latest else None,
+                      "act_ids": [a["act_id"] for a in mine], "seats": [], "word": "Next",
+                      "tip": None, "started_at": _iso(mine[0].get("started_at")) if mine else None,
+                      "ended_at": _iso(latest.get("ended_at")) if latest else None,
+                      "edge_label": agent_acts._label_for(dict(mine[0])) if mine else None,
+                      "rounds": 0, "loop_with": None, "links": []}
+        before = i < here_i
+        at_here = i == here_i
+        if key == "you_plan":
+            s.update(face="you", tip="Approve the plan to start building")
+            if state_key == "needs_plan":
+                s.update(status="needs_you", word="Needs you")
+            elif before or finished or here_i > i:
+                s.update(status="done", word="Done")
+            out.append(s)
+            continue
+        if mine:
+            status = _act_station_status(latest)
+            if key in AGENT_STATIONS or latest.get("role_key"):
+                s.update(face="agent" if latest.get("role_key") else "boss",
+                         role_key=latest.get("role_key"))
+            else:
+                s.update(face="boss", tip=BOSS_TIP)
+            if status == "needs_you":
+                # A stage set to awaiting_input waits on the operator's answer elsewhere (the
+                # plan, the checks): it is the build that is stopped, not the agent's work.
+                status = "stuck" if state_key == "needs_waiver" else "done"
+            s["status"] = status
+        elif before or (finished and key in ("plan", "tests", "build", "check", "review")):
+            # Passed without an act of its own.
+            if key in AGENT_STATIONS and key != "build":
+                ran = steps_run is not None
+                s.update(status="skipped", face="none",
+                         tip=_skip_tip(key, evidence) if ran else f"No {STATION_LABELS[key]} act")
+            else:
+                s.update(status="done", face="boss" if key in MACHINE_STATIONS else "none",
+                         tip=BOSS_TIP if key in MACHINE_STATIONS else None)
+        elif at_here:
+            s.update(status="working", face="boss", tip=BOSS_TIP)
+        else:
+            role = CERTAIN_ROLE.get(key)
+            if key == "review" and spec.get("review_panel_size") and not role:
+                role = "adversarial_reviewer"
+            if role:
+                s.update(face="hollow", hollow_role=role,
+                         tip=f"Next: {agent_acts.STAGE_TITLES.get(key, STATION_LABELS[key])}")
+            elif key in MACHINE_STATIONS:
+                s.update(face="boss", tip=BOSS_TIP)
+        # The state at the build's own station overrides what its act says.
+        if at_here:
+            if state_key in ("budget_wait", "queued") and s["status"] in ("working", "pending"):
+                s["status"] = "waiting"
+            elif state_key in ("failed", "blocked", "needs_waiver", "budget_refused"):
+                s["status"] = "stuck"
+                if state_key == "budget_refused" and not mine:
+                    s.update(face="boss", tip=BOSS_TIP)
+            elif state_key == "cancelled":
+                s["status"] = "skipped" if s["status"] in ("working", "pending") else s["status"]
+        if state_key == "cancelled" and i > here_i:
+            s.update(status="skipped", face="none", hollow_role=None, tip=None)
+        # Review seats: every act at the review station of the latest round.
+        if key == "review" and review_acts:
+            seats: list[Seat] = []
+            latest_start = None
+            for a in review_acts:
+                if a.get("step_id") == "review_code" and (a.get("seat") or 1) == 1:
+                    latest_start = a.get("started_at")
+            current = [a for a in review_acts
+                       if latest_start is None or (_aware(a.get("started_at")) or now)
+                       >= (_aware(latest_start) or now)]
+            for n, a in enumerate(current, start=1):
+                seat_status = _act_station_status(a)
+                if seat_status == "needs_you":
+                    seat_status = "stuck" if state_key == "needs_waiver" else "done"
+                verdict = _verdict(str(a.get("step_id")), evidence, failing) \
+                    if a.get("ended_at") or state_key == "needs_waiver" else None
+                if verdict == "blocked":
+                    seat_status = "stuck"
+                seats.append({"act_id": a["act_id"], "role_key": a.get("role_key"), "seat": n,
+                              "status": seat_status, "verdict": verdict})
+            s["seats"] = seats
+            if any(x["status"] == "stuck" for x in seats):
+                s["status"] = "stuck"
+        if key == "build" and rounds:
+            s["rounds"] = rounds
+            loop = next((a.get("role_key") for a in reversed(review_acts) if a.get("role_key")),
+                        None)
+            s["loop_with"] = loop
+        if key == "pr":
+            if pr_n or run.get("pull_request_url"):
+                s.update(status="done", face="boss", tip=BOSS_TIP)
+                s["links"] = [{"label": f"#{pr_n} ↗" if pr_n else "PR ↗",
+                               "url": run.get("pull_request_url")}]
+            elif state_key == "done_no_pr":
+                s.update(status="skipped", face="none",
+                         tip=st.get("tip") or "This build opens no PR")
+        if key == "preview":
+            if flag:
+                s.update(face="boss", tip=BOSS_TIP,
+                         status={"running": "done", "starting": "working",
+                                 "failed": "stuck"}[flag["status"]])
+                if flag["status"] == "running" and flag.get("url"):
+                    s["links"] = [{"label": "Open ↗", "url": flag["url"]}]
+            elif finished:
+                s.update(status="pending", face="boss", tip=BOSS_TIP)
+        if key == "ship":
+            if state_key == "pr_open":
+                s.update(status="needs_you", face="you", word="Needs you",
+                         tip="The merge needs you")
+            elif state_key in ("merged", "deployed"):
+                s.update(status="done", face="you" if state_key == "merged" else "boss",
+                         tip=None if state_key == "merged" else BOSS_TIP)
+                s["links"] = [{"label": f"{d.get('environment') or 'dev'} ✓",
+                               "url": None} for d in _one_per_env(ok_deploys)]
+            elif state_key == "done_no_pr":
+                s.update(status="skipped", face="none", tip="Nothing to merge")
+        # The word under the bay.
+        s["word"] = {"done": "Done", "pending": "Next", "stuck": "Stuck", "skipped": "Skipped",
+                     "waiting": "Waiting", "needs_you": "Needs you"}.get(
+            s["status"],
+            agent_acts.work_verb(dict(latest)) if latest and s["status"] == "working"
+            else STATION_VERB.get(key, "Working"))
+        if key == "ship" and state_key == "merged":
+            s["word"] = "Merged"
+        out.append(s)
+    return out
+
+
+def _one_per_env(deploys: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    seen: set[str] = set()
+    out = []
+    for d in deploys:
+        env = str(d.get("environment") or "dev")
+        if env not in seen:
+            seen.add(env)
+            out.append(d)
+    return out
+
+
+def k_of_n(stations: list[Station]) -> tuple[int, int]:
+    """Stations done of stations planned. `You` is not a station of the work."""
+    core = [s for s in stations if s["key"] != "you_plan"]
+    n = sum(1 for s in core if s["status"] != "skipped")
+    k = sum(1 for s in core if s["status"] == "done")
+    return min(k, n), n
+
+
+_GATE_STAGE = {"code_review_passed": "review_code", "security_clean": "security_check",
+               "consistent": "consistency_check"}
+
+
+def gate_owner(name: str, acts: list[Mapping[str, Any]]) -> Optional[str]:
+    """The agent whose stage owns a gate, from the build's acts — None (BOSS) when no act ran
+    it. app_serves and infra checks are BOSS's own."""
+    if name == "app_serves" or str(name).startswith("iac_"):
+        return None
+    stage = _GATE_STAGE.get(name)
+    stages = _stage_acts(acts)
+    if stage:
+        found = [a for a in stages if a.get("step_id") == stage]
+    else:
+        station = gate_station(name)
+        found = [a for a in stages if _station_of_stage(a.get("step_id")) == station]
+        if not found and station == "check":
+            found = [a for a in stages if _station_of_stage(a.get("step_id")) == "tests"]
+    return (found[-1].get("role_key") if found else None) or None
+
+
+def _round_word(fctx: Mapping[str, Any], evidence: Mapping[str, Any]) -> int:
+    attempts = evidence.get("repair_attempts") or fctx.get("repair_attempts") or 0
+    try:
+        return int(attempts) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+# ── attention: the builds stopped for you (§6.5) ────────────────────────────────────────────
+
+
+def build_attention_rows(connection: Any, project_id: str,
+                         decisions: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """What command_center.read hands assemble about builds: the blocked builds that wait on
+    the operator (failed checks, a refused budget) and, for each decision whose subject is a
+    build, which build. Two queries, plus one act query for the blocked ones."""
+    blocked = [dict(r) for r in connection.execute(
+        text(
+            """
+            SELECT r.id, r.title, r.status, r.phase, r.spec, r.state, r.finalize_ctx, r.error,
+                   r.created_at, r.updated_at, r.pull_request_url, r.pull_request_number,
+                   r.decision_id
+            FROM code_task_runs r
+            WHERE r.project_id = :p AND r.status = 'blocked'
+              AND (r.phase = 'awaiting_gate_override'
+                   OR r.finalize_ctx->>'reason_code' = 'budget_denied')
+              AND NOT EXISTS (SELECT 1 FROM code_task_runs n WHERE n.project_id = r.project_id
+                              AND n.finalize_ctx->>'parent_run_id' = r.id)
+            ORDER BY r.updated_at DESC LIMIT 50
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all()]
+    acts: dict[str, list[dict[str, Any]]] = {}
+    if blocked:
+        for row in connection.execute(
+            text("SELECT act_id, code_task_run_id, step_id, role_key, started_at, kind "
+                 "FROM agent_acts WHERE project_id = :p AND code_task_run_id = ANY(:ids) "
+                 "AND kind = 'stage' ORDER BY started_at"),
+            {"p": project_id, "ids": [b["id"] for b in blocked]},
+        ).mappings().all():
+            acts.setdefault(str(row["code_task_run_id"]), []).append(dict(row))
+    rows = []
+    for b in blocked:
+        fctx = _j(b.get("finalize_ctx"), {}) or {}
+        evidence = _j(b.get("state"), {}) or {}
+        mine = acts.get(b["id"], [])
+        if b["phase"] == "awaiting_gate_override":
+            failing = [str(g) for g in fctx.get("failing_gates") or []]
+            role = next((gate_owner(g, mine) for g in failing if gate_owner(g, mine)), None)
+            round_n = _round_word(fctx, evidence)
+            where = gate_station(failing[0]) if failing else "review"
+            rows.append({
+                "kind": "gate_override", "run_id": b["id"], "app": app_name(b),
+                "role_key": role, "failing": failing,
+                "where": STATION_LABELS.get(where, "Review")
+                + (f" · round {round_n}" if round_n > 1 else ""),
+                "at": _iso(b.get("updated_at")), "error": b.get("error"),
+            })
+        else:
+            last = mine[-1] if mine else None
+            nxt = _next_station(_station_of_stage(last.get("step_id")) if last else None) \
+                if last else "plan"
+            rows.append({
+                "kind": "budget_refused", "run_id": b["id"], "app": app_name(b),
+                "role_key": None, "failing": [], "where": f"before {STATION_LABELS[nxt]}",
+                "at": _iso(b.get("updated_at")), "error": b.get("error"),
+            })
+    by_decision: dict[str, dict[str, Any]] = {}
+    ids = [str(d.get("id")) for d in decisions if d.get("id")]
+    plan_runs = {str(_j(d.get("recommendation"), {}).get("run_id") or ""): str(d.get("id"))
+                 for d in decisions
+                 if str((_j(d.get("recommendation"), {}) or {}).get("action") or "")
+                 == "resume_code_task"}
+    plan_runs.pop("", None)
+    if ids:
+        for r in connection.execute(
+            text("SELECT r.id, r.title, r.spec, r.finalize_ctx, r.decision_id, r.pull_request_url, "
+                 "r.pull_request_number, r.status, r.phase, "
+                 "(SELECT url FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
+                 " ORDER BY p.created_at DESC LIMIT 1) AS preview_url "
+                 "FROM code_task_runs r WHERE r.project_id = :p "
+                 "AND (r.decision_id = ANY(:ids) OR r.id = ANY(:runs))"),
+            {"p": project_id, "ids": ids, "runs": list(plan_runs)},
+        ).mappings().all():
+            row = dict(r)
+            plan_decision = plan_runs.get(str(row["id"]))
+            if plan_decision:
+                by_decision[plan_decision] = {
+                    "kind": "plan", "run_id": row["id"], "app": app_name(row), "where": "Plan",
+                    "plan_url": f"/v1/code-tasks/{row['id']}"}
+            if row.get("decision_id") and row["decision_id"] != plan_decision and (
+                    row.get("pull_request_url") or row.get("pull_request_number")):
+                by_decision[str(row["decision_id"])] = {
+                    "kind": "pr", "run_id": row["id"], "app": app_name(row), "where": "PR open",
+                    "pr_number": _pr_number(row), "pr_url": row.get("pull_request_url"),
+                    "preview_url": row.get("preview_url")}
+    return {"blocked": rows, "by_decision": by_decision}
+
+
+def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
+    """The `build` an attention item carries (lib/agents-live-board.ts AttentionBuild)."""
+    failing = [{"name": g, "label": gate_label(g), "waivable": g not in UNWAIVABLE_GATES,
+                **({"reason": "Can't be waived: the app must start"}
+                   if g in UNWAIVABLE_GATES else {})}
+               for g in info.get("failing") or []]
+    out: dict[str, Any] = {"run_id": info.get("run_id"), "app": info.get("app") or "",
+                           "where": info.get("where") or "", "failing": failing,
+                           "retryable": info.get("kind") in ("gate_override", "budget_refused"),
+                           "retry_reason": None}
+    for key in ("pr_url", "preview_url", "plan_url"):
+        if info.get(key):
+            out[key] = info[key]
+    return out
+
+
+def build_decision_owners(connection: Any, project_id: str,
+                          wanted: Mapping[str, tuple[str, str]]) -> dict[str, Optional[str]]:
+    """{decision_id: role_key} for a build's plan and merge decisions, from its acts: the plan
+    is the planning act's agent, the pull request its builder's. None when no act says."""
+    if not wanted:
+        return {}
+    runs = list({run for run, _ in wanted.values()})
+    acts: dict[str, list[dict[str, Any]]] = {}
+    for row in connection.execute(
+        text("SELECT code_task_run_id, step_id, role_key FROM agent_acts WHERE project_id = :p "
+             "AND code_task_run_id = ANY(:ids) AND kind = 'stage' ORDER BY started_at"),
+        {"p": project_id, "ids": runs},
+    ).mappings().all():
+        acts.setdefault(str(row["code_task_run_id"]), []).append(dict(row))
+    out: dict[str, Optional[str]] = {}
+    for decision_id, (run_id, where) in wanted.items():
+        mine = [a for a in acts.get(run_id, []) if a.get("role_key")]
+        station = "plan" if where == "Plan" else "build"
+        hit = [a for a in mine if _station_of_stage(a.get("step_id")) == station]
+        out[decision_id] = hit[-1]["role_key"] if hit else None
+    return out
+
+
+# ── composing one build's row ───────────────────────────────────────────────────────────────
+
+
+def _lineage_key(run: Mapping[str, Any]) -> str:
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    return str(fctx.get("root_run_id") or run["id"])
+
+
+def _origin(connection: Any, project_id: str, run: Mapping[str, Any],
+            names: Optional[dict[str, str]] = None) -> Optional[Origin]:
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    origin = fctx.get("origin") if isinstance(fctx.get("origin"), dict) else {}
+    wfr = origin.get("workflow_run_id") or fctx.get("workflow_run_id")
+    if wfr:
+        label = (names or {}).get(str(wfr))
+        if label is None and connection is not None:
+            label = connection.execute(
+                text("SELECT d.name FROM workflow_runs r JOIN workflow_definitions d "
+                     "ON d.id = r.workflow_definition_id WHERE r.id = :r AND r.project_id = :p"),
+                {"r": str(wfr), "p": project_id},
+            ).scalar()
+        return {"kind": "workflow_run", "id": str(wfr), "label": str(label or "Workflow")}
+    meeting = origin.get("meeting_run_id") or fctx.get("meeting_run_id") or fctx.get("prd_meeting")
+    if meeting:
+        return {"kind": "meeting", "id": str(meeting), "label": "PRD"}
+    discovery = origin.get("discovery_id") or fctx.get("discovery_id")
+    if discovery:
+        return {"kind": "discovery", "id": str(discovery), "label": "research"}
+    return None
+
+
+def _workflow_names(connection: Any, project_id: str,
+                    runs: list[Mapping[str, Any]]) -> dict[str, str]:
+    ids = []
+    for r in runs:
+        fctx = _j(r.get("finalize_ctx"), {}) or {}
+        origin = fctx.get("origin") if isinstance(fctx.get("origin"), dict) else {}
+        wfr = origin.get("workflow_run_id") or fctx.get("workflow_run_id")
+        if wfr:
+            ids.append(str(wfr))
+    if not ids:
+        return {}
+    return {str(r["id"]): str(r["name"]) for r in connection.execute(
+        text("SELECT r.id, d.name FROM workflow_runs r JOIN workflow_definitions d "
+             "ON d.id = r.workflow_definition_id WHERE r.id = ANY(:ids) AND r.project_id = :p"),
+        {"ids": ids, "p": project_id},
+    ).mappings().all()}
+
+
+def _retry_offer(run: Mapping[str, Any]) -> tuple[bool, Optional[str]]:
+    status = str(run.get("status") or "")
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    if status in ("running", "repairing"):
+        return False, "Still running"
+    if status == "simulated":
+        return False, "A fixture can't be retried"
+    if status == "completed" and not (fctx.get("advisory_failing_gates")
+                                      or fctx.get("failing_gates")):
+        return False, "Already passed its checks"
+    return True, None
+
+
+def build_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
+              viewer: Optional[str] = None, attention_id: Optional[str] = None,
+              origin: Optional[Origin] = None) -> BuildRow:
+    rid = str(run["id"])
+    acts = facts.acts.get(rid, [])
+    decision = facts.decisions.get(str(run.get("decision_id") or ""))
+    preview = facts.previews.get(rid)
+    deploys = facts.deploys.get(rid, [])
+    st = build_state(run, acts=acts, decision=decision, preview=preview, deploys=deploys,
+                     now=now, viewer=viewer)
+    stations = stations_for(run, acts=acts, decision=decision, preview=preview,
+                            deploys=deploys, bstate=st, now=now, viewer=viewer)
+    k, n = k_of_n(stations)
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    cost = facts.cost.get(rid, {})
+    metered = float(cost.get("metered_usd") or 0)
+    return {
+        "run_id": rid, "app": app_name(run), "title": str(run.get("title") or ""),
+        "attempt": int(fctx.get("attempt") or 1), "root_run_id": _lineage_key(run),
+        "actor": (fctx.get("origin") or {}).get("actor") if isinstance(fctx.get("origin"), dict)
+        else fctx.get("actor"),
+        "state": st["state"], "word": st["word"], "tip": st.get("tip"), "verb": st["verb"],
+        "station": st.get("station"), "stations": stations, "k": k, "n": n,
+        "rounds": st.get("rounds") or 0,
+        "started_at": _iso(run.get("created_at")),
+        "station_since": _iso(fctx.get("phase_started_at")) or _iso(run.get("updated_at")),
+        "updated_at": _iso(run.get("updated_at")),
+        "cost_usd": round(metered, 4) if metered > 0 else 0, "metered": metered > 0,
+        "attention_id": attention_id,
+        "preview": preview_flag(preview, now),
+        "origin": origin,
+    }
+
+
+def _attention_for_builds(connection: Any, settings: Any, project_id: str,
+                          now: datetime) -> list[dict[str, Any]]:
+    """`command_center.assemble().needs_you`, attributed (agents_live_board.attention_items),
+    filtered to the items whose subject is a build — the same list the pill counts."""
+    from . import agents_live_board, command_center
+
+    read = command_center.read(connection, settings, project_id, now)
+    cc = command_center.assemble(**read)
+    items = agents_live_board.attention_items(connection, project_id, cc["needs_you"],
+                                              read["decisions"])
+    return [i for i in items if isinstance(i.get("build"), dict)]
+
+
+def _etag(material: Any) -> str:
+    digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode())
+    return f'"fx-{digest.hexdigest()[:24]}"'
+
+
+# ── GET /v1/factory/floor (§6.2) ────────────────────────────────────────────────────────────
+
+
+def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None,
+          now: Optional[datetime] = None) -> Floor:
+    from .code_task_service import list_code_task_runs
+
+    now = now or _now()
+    runs = list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+    latest: dict[str, Mapping[str, Any]] = {}
+    for r in runs:  # newest first: the first of a lineage is its latest attempt
+        latest.setdefault(_lineage_key(r), r)
+    building, recent = [], []
+    for r in latest.values():
+        status = str(r.get("status") or "")
+        if status in ("running", "repairing", "blocked"):
+            building.append(r)
+        else:
+            moved = _aware(r.get("updated_at")) or _aware(r.get("created_at"))
+            if moved and now - moved <= OUTCOME_WINDOW:
+                recent.append(r)
+    chosen = (building + recent)[:ACT_RUNS_CAP]
+    facts = load_facts(connection, project_id, chosen)
+    names = _workflow_names(connection, project_id, chosen)
+    attention = _attention_for_builds(connection, settings, project_id, now)
+    attention_of = {str((a.get("build") or {}).get("run_id")): str(a["id"]) for a in attention}
+    rows = [build_row(r, facts, now=now, viewer=viewer, attention_id=attention_of.get(str(r["id"])),
+                      origin=_origin(None, project_id, r, names))
+            for r in chosen]
+    builds = _sort_building(rows, now)
+    outcomes: list[FloorOutcome] = []
+    stopped: list[StoppedRow] = []
+    for b, r in ((b, r) for b, r in zip(rows, chosen)):
+        sec = section_of(b["state"])
+        builder = next((s.get("role_key") for s in b["stations"] if s["key"] == "build"
+                        and s.get("role_key")), None)
+        if sec == "shipped":
+            outcomes.extend(_outcomes_of(b, r, facts, builder))
+        elif sec == "stopped":
+            stuck = next((s for s in b["stations"] if s["status"] in ("stuck", "skipped")
+                          and s.get("role_key")), None)
+            ok, why = _retry_offer(r)
+            stopped.append({"run_id": b["run_id"], "app": b["app"], "title": b["title"],
+                            "state": b["state"], "word": b["word"], "tip": b.get("tip"),
+                            "role_key": (stuck or {}).get("role_key"),
+                            "station": b.get("station"), "retryable": ok, "retry_reason": why,
+                            "at": b.get("updated_at") or ""})
+        if b.get("preview") and b["preview"]["status"] == "running" and sec != "shipped":
+            outcomes.append({"kind": "preview", "run_id": b["run_id"], "app": b["app"],
+                             "role_key": builder, "text": "Preview live",
+                             "url": b["preview"].get("url"), "at": b.get("updated_at") or ""})
+    outcomes.sort(key=lambda o: str(o.get("at") or ""), reverse=True)
+    stopped.sort(key=lambda o: str(o.get("at") or ""), reverse=True)
+    pre_build = _pre_build(connection, project_id)
+    apps = len(group_into_apps(runs))
+    out: Floor = {
+        "project_id": project_id, "etag": "", "generated_at": now.isoformat(),
+        "counts": {"building": len(builds), "needs_you": len(attention),
+                   "shipped_7d": len({o["run_id"] for o in outcomes if o["kind"] != "preview"}),
+                   "stopped": len(stopped), "apps": apps},
+        "attention": attention, "builds": builds, "outcomes": outcomes[:8],
+        "stopped": stopped[:20], "pre_build": pre_build,
+    }
+    out["etag"] = _etag({
+        "b": [(b["run_id"], b["state"], b["word"], b["k"], b["n"], b.get("cost_usd"),
+               b.get("preview"), [(s["key"], s["status"], s.get("role_key"),
+                                   [x["status"] for x in s.get("seats") or []])
+                                  for s in b["stations"]]) for b in builds],
+        "a": [(a["id"], a.get("title"), a.get("role_key")) for a in attention],
+        "o": [(o["run_id"], o["kind"], o["text"]) for o in outcomes[:8]],
+        "s": [(s["run_id"], s["word"], s["retryable"]) for s in stopped[:20]],
+        "p": [(p["meeting_run_id"], tuple(p["seats"])) for p in pre_build],
+        "c": out["counts"],
+    })
+    return out
+
+
+def _outcomes_of(b: BuildRow, run: Mapping[str, Any], facts: Facts,
+                 builder: Optional[str]) -> list[FloorOutcome]:
+    n = _pr_number(run)
+    at = b.get("updated_at") or ""
+    base = {"run_id": b["run_id"], "app": b["app"], "role_key": builder}
+    if b["state"] == "deployed":
+        ok = [d for d in facts.deploys.get(b["run_id"], [])
+              if str(d.get("status") or "") in DEPLOY_OK]
+        when = _iso(ok[0].get("finished_at") or ok[0].get("created_at")) if ok else at
+        # A deploy carries no act yet: BOSS's glyph, never a guessed agent (§4.2.3).
+        return [{**base, "kind": "deployed", "role_key": None, "text": b["word"],
+                 "url": None, "at": when or at}]
+    if b["state"] == "merged":
+        decision = facts.decisions.get(str(run.get("decision_id") or "")) or {}
+        when = _iso(decision.get("executed_at") or decision.get("approved_at")
+                    or decision.get("updated_at")) or at
+        return [{**base, "kind": "pr_merged", "text": f"PR #{n} merged" if n else "PR merged",
+                 "url": run.get("pull_request_url"), "at": when}]
+    if b["state"] == "pr_open":
+        return [{**base, "kind": "pr_opened", "text": f"PR #{n} opened" if n else "PR opened",
+                 "url": run.get("pull_request_url"), "at": at}]
+    return [{**base, "kind": "done_no_pr", "text": "Done · no PR", "url": None, "at": at}]
+
+
+def _pre_build(connection: Any, project_id: str) -> list[PreBuild]:
+    """Panels sitting on a PRD: pre-build work on the same Floor (§4.6)."""
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(
+                text("SELECT id, title, directive, role_keys, created_at FROM meeting_runs "
+                     "WHERE project_id = :p AND status = 'running' "
+                     "ORDER BY created_at DESC LIMIT 6"),
+                {"p": project_id},
+            ).mappings().all()
+    except Exception:  # noqa: BLE001 — a panel probe must never blank the Floor
+        return []
+    out: list[PreBuild] = []
+    from .meeting_service import meeting_title
+
+    for r in rows:
+        seats = [str(k) for k in (_j(r["role_keys"], []) or []) if k]
+        out.append({"meeting_run_id": str(r["id"]),
+                    "title": meeting_title(r["title"], r["directive"]),
+                    "seats": seats, "at": _iso(r["created_at"])})
+    return out
+
+
+def state_of(connection: Any, project_id: str, run_id: str, *,
+             viewer: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """One build's state, as every reader says it (MCP get_code_task, the code-task list)."""
+    from .code_task_service import load_code_task_run
+
+    run = load_code_task_run(connection, run_id)
+    if not run or run.get("project_id") != project_id:
+        return None
+    facts = load_facts(connection, project_id, [run])
+    now = _now()
+    row = build_row(run, facts, now=now, viewer=viewer)
+    return {"state": row["state"], "word": row["word"], "tip": row.get("tip"),
+            "verb": row["verb"], "station": row.get("station"), "k": row["k"], "n": row["n"],
+            "rounds": row["rounds"], "preview": (row.get("preview") or {}).get("status")}
+
+
+# ── GET /v1/code-tasks/{id}/cockpit (§6.3) ──────────────────────────────────────────────────
+
+_ACT_WORD = {"active": "Working", "pending": "Working", "awaiting_input": "Needs you",
+             "complete": "Done", "error": "Stuck", "stale": "Stuck", "skipped": "Skipped"}
+ENGINEERING = frozenset({"implement", "solo", "guest", "repair"})
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def _trim(value: Any, limit: int = 300) -> Optional[str]:
+    lines = [ln.strip() for ln in str(value or "").splitlines() if ln.strip()]
+    if not lines:
+        return None
+    out = " ".join(lines[:3])
+    return out[:limit].rstrip() + ("…" if len(out) > limit else "")
+
+
+def _now_arg(tool: str, content: Any) -> Optional[str]:
+    """A tool call's short argument: a path for file tools, ≤ 40 chars of a command for a
+    shell. Never the content a tool wrote or read."""
+    name = str(tool or "").strip().lower()
+    data = _j(content, None)
+    if not isinstance(data, dict):
+        return None
+    if name in _SHELL_TOOLS or "command" in data and name not in _FILE_TOOLS:
+        cmd = data.get("command") or data.get("cmd")
+        if isinstance(cmd, list):
+            cmd = " ".join(str(c) for c in cmd)
+        return str(cmd).strip().splitlines()[0][:40] if cmd else None
+    for key in ("file_path", "path", "notebook_path", "filename"):
+        if data.get(key):
+            return str(data[key])[:160]
+    return None
+
+
+def _lineage(connection: Any, project_id: str, run: Mapping[str, Any], now: datetime,
+             viewer: Optional[str]) -> list[dict[str, Any]]:
+    root = _lineage_key(run)
+    rows = [dict(r) for r in connection.execute(
+        text("SELECT id, project_id, status, phase, title, spec, state, finalize_ctx, error, "
+             "decision_id, pull_request_url, pull_request_number, created_at, updated_at "
+             "FROM code_task_runs WHERE project_id = :p "
+             "AND (id = :root OR finalize_ctx->>'root_run_id' = :root) "
+             "ORDER BY created_at DESC LIMIT 20"),
+        {"p": project_id, "root": root},
+    ).mappings().all()]
+    for r in rows:
+        r["finalize_ctx"] = _j(r.get("finalize_ctx"), {}) or {}
+        r["state"] = _j(r.get("state"), {}) or {}
+        r["spec"] = _j(r.get("spec"), {}) or {}
+    facts = load_facts(connection, project_id, rows, deploys=False)
+    out = []
+    for r in rows:
+        acts = facts.acts.get(str(r["id"]), [])
+        st = build_state(r, acts=acts, decision=facts.decisions.get(str(r.get("decision_id") or "")),
+                         preview=facts.previews.get(str(r["id"])), now=now, viewer=viewer)
+        out.append({"run_id": r["id"], "attempt": int(r["finalize_ctx"].get("attempt") or 1),
+                    "state": st["state"], "word": st["word"], "at": _iso(r.get("created_at"))})
+    return out
+
+
+def _comment_rows(run: Mapping[str, Any], acts: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    from .code_task_service import review_comments_of
+
+    evidence = _j(run.get("state"), {}) or {}
+    rep_seat = evidence.get("review_seat")
+    stages = _stage_acts(acts)
+
+    def signer(stage: str) -> Optional[Mapping[str, Any]]:
+        found = [a for a in stages if a.get("step_id") == stage
+                 and (stage != "review_code" or not rep_seat or a.get("seat") in (None, rep_seat))]
+        return found[-1] if found else None
+
+    out = []
+    for c in review_comments_of(dict(run)):
+        human = str(c.get("author_kind") or "") == "human"
+        act = None if human else signer(str(c.get("stage") or ""))
+        role = None if human else (c.get("author_role_key") or (act or {}).get("role_key"))
+        out.append({
+            "id": str(c.get("id") or ""), "round": int(c.get("round") or 0) + 1,
+            "severity": str(c.get("severity") or "minor"), "body": str(c.get("body") or ""),
+            "path": c.get("path"), "line": c.get("line"), "end_line": c.get("end_line"),
+            "author": c.get("author") if human else None,
+            "author_role_key": role,
+            "act_id": c.get("act_id") or (act or {}).get("act_id"),
+            "stage": c.get("stage"), "status": str(c.get("status") or "open"),
+        })
+    return out
+
+
+def _said(connection: Any, acts: list[Mapping[str, Any]]) -> dict[str, str]:
+    ids = [a["act_id"] for a in _stage_acts(acts)]
+    if not ids:
+        return {}
+    return {str(r["act_id"]): str(r["content"] or "") for r in connection.execute(
+        text("SELECT DISTINCT ON (act_id) act_id, content FROM agent_turns "
+             "WHERE act_id = ANY(:a) AND direction = 'completion' "
+             "ORDER BY act_id, created_at DESC"),
+        {"a": ids},
+    ).mappings().all()}
+
+
+def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Facts,
+           st: BuildState, comments: list[dict[str, Any]], plan_decision: Optional[Mapping[str, Any]],
+           now: datetime, viewer: Optional[str]) -> list[dict[str, Any]]:
+    from . import agent_acts
+
+    rid = str(run["id"])
+    acts = facts.acts.get(rid, [])
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    evidence = _j(run.get("state"), {}) or {}
+    failing = {str(g) for g in fctx.get("failing_gates") or []}
+    rep_seat = evidence.get("review_seat")
+    stages = _stage_acts(acts)
+    excerpts = _said(connection, acts)
+    rows: list[dict[str, Any]] = []
+    counts: dict[tuple, int] = {}
+    last_of_step = {a.get("step_id"): a["act_id"] for a in stages}
+    last_eng = next((a["act_id"] for a in reversed(stages) if a.get("step_id") in ENGINEERING),
+                    None)
+    for a in stages:
+        step = str(a.get("step_id") or "")
+        seat = a.get("seat")
+        counts[(step, seat)] = counts.get((step, seat), 0) + 1
+        rnd = counts[(step, seat)]
+        station = _station_of_stage(step)
+        verdict = None
+        if station == "review" and (a.get("ended_at") or st["state"] == "needs_waiver"):
+            if step != "review_code" or not seat or not rep_seat or seat == rep_seat:
+                verdict = _verdict(step, evidence, failing) if a["act_id"] == last_of_step.get(step) \
+                    or seat else None
+        word = VERDICT_WORDS.get(verdict or "", _ACT_WORD.get(str(a.get("status")), "Working"))
+        files = None
+        if step == "write_tests" and a["act_id"] == last_of_step.get(step):
+            files = [str(f) for f in evidence.get("test_files") or []] or None
+        if step in ENGINEERING and a["act_id"] == last_eng:
+            files = [str(f) for f in evidence.get("impl_files") or []] or None
+        said = None
+        key = _SAID_KEY.get(step)
+        if key and a["act_id"] == last_of_step.get(step) and (
+                step != "review_code" or not rep_seat or seat == rep_seat):
+            said = _trim(evidence.get(key))
+        if step in ENGINEERING and a["act_id"] == last_eng:
+            said = _trim(evidence.get("summary") or evidence.get("impl_summary"))
+        said = said or _trim(excerpts.get(a["act_id"]))
+        authored = sum(1 for c in comments if c.get("act_id") == a["act_id"])
+        fixed = sum(1 for c in comments if c["status"] == "addressed") \
+            if step in ENGINEERING and rnd > 1 and a["act_id"] == last_eng else 0
+        wire = agent_acts.serialize(dict(a))
+        rows.append({
+            "id": a["act_id"], "type": "act", "station": station, "act": wire,
+            "title": agent_acts.STAGE_TITLES.get(step, step.replace("_", " ").capitalize()),
+            "seat": seat, "round": rnd, "word": word, "verdict": verdict, "files": files,
+            "tool_calls": facts.tool_calls.get(a["act_id"], 0),
+            "comments_authored": authored, "comments_fixed": fixed, "said": said,
+            "failure": None, "_at": _aware(a.get("started_at")) or now,
+        })
+    if st["state"] == "failed":
+        target = next((r for r in reversed(rows)), None)
+        if target is not None:
+            target["failure"] = failure_line(fctx, run.get("error"))
+    # The people.
+    you: list[dict[str, Any]] = []
+    for i, g in enumerate(list(fctx.get("applied_guidance") or [])
+                          + list(fctx.get("pending_guidance") or [])):
+        if not isinstance(g, dict):
+            continue
+        applied = g.get("applied_act_id")
+        you.append({"id": f"steer:{i}", "type": "you",
+                    "station": next((_station_of_stage(a.get("step_id")) for a in stages
+                                     if a["act_id"] == applied), None) or st.get("station"),
+                    "what": "steered", "actor": str(g.get("actor") or ""),
+                    "text": str(g.get("text") or "")[:400], "at": _iso(g.get("at")) or "",
+                    "applied_at": _iso(g.get("applied_at")), "applied_act_id": applied,
+                    "applied_role": g.get("applied_role")})
+    if plan_decision and str(plan_decision.get("status") or "") in ("approved", "executed"):
+        you.append({"id": "plan", "type": "you", "station": "you_plan", "what": "approved_plan",
+                    "actor": str(plan_decision.get("approved_by") or ""),
+                    "at": _iso(plan_decision.get("approved_at") or plan_decision.get("updated_at"))
+                    or ""})
+    waived = fctx.get("waived") if isinstance(fctx.get("waived"), dict) else None
+    if waived:
+        you.append({"id": "waived", "type": "you", "station": "review", "what": "waived",
+                    "actor": str(waived.get("by") or ""), "text": waived.get("reason") or None,
+                    "count": len(waived.get("gates") or []), "at": _iso(waived.get("at")) or ""})
+    if fctx.get("parent_run_id"):
+        origin = fctx.get("origin") if isinstance(fctx.get("origin"), dict) else {}
+        you.append({"id": "retried", "type": "you", "station": "plan", "what": "retried",
+                    "actor": str(origin.get("actor") or fctx.get("actor") or ""),
+                    "at": _iso(run.get("created_at")) or ""})
+    if fctx.get("cancelled_by"):
+        you.append({"id": "stopped", "type": "you", "station": st.get("station"),
+                    "what": "stopped", "actor": str(fctx.get("cancelled_by")),
+                    "at": _iso(fctx.get("cancelled_at")) or ""})
+    for y in you:
+        y["_at"] = _aware(y.get("at")) or now
+    # BOSS's machinery.
+    boss: list[dict[str, Any]] = []
+    timings = [t for t in fctx.get("phase_timings") or [] if isinstance(t, dict)]
+    cloned = next((t for t in timings if t.get("phase") == "provisioning"), None)
+    if cloned or str(run.get("phase") or "") not in ("queued", "provisioning"):
+        boss.append({"id": "cloned", "type": "boss", "station": "plan", "what": "cloned",
+                     "text": "Cloned the repo", "at": _iso(run.get("created_at")) or "",
+                     "ms": int(cloned.get("ms") or 0) if cloned else None})
+    tests = [t for t in evidence.get("tests") or [] if isinstance(t, dict)]
+    if tests:
+        check = [a for a in stages if _station_of_stage(a.get("step_id")) == "check"]
+        at = (check[-1].get("ended_at") if check else None) or run.get("updated_at")
+        boss.append({"id": "ran_tests", "type": "boss", "station": "check", "what": "ran_tests",
+                     "text": "Ran tests", "at": _iso(at) or "",
+                     "detail": {"commands": [{"command": t.get("command"),
+                                              "exit_code": t.get("exit_code"),
+                                              "ok": bool(t.get("ok"))} for t in tests]}})
+    n = _pr_number(run)
+    if n or run.get("pull_request_url"):
+        opened = connection.execute(
+            text("SELECT created_at FROM events WHERE project_id = :p AND entity_id = :r "
+                 "AND event_type IN ('code_task.pr_opened', 'code_task.gate_overridden') "
+                 "ORDER BY created_at LIMIT 1"),
+            {"p": project_id, "r": rid},
+        ).scalar()
+        boss.append({"id": "opened_pr", "type": "boss", "station": "pr", "what": "opened_pr",
+                     "text": f"Opened PR #{n}" if n else "Opened the PR",
+                     "at": _iso(opened or run.get("updated_at")) or ""})
+    preview = facts.previews.get(rid)
+    if preview:
+        steps = [s for s in _j(preview.get("steps"), []) or [] if isinstance(s, dict)]
+        boss.append({"id": "preview", "type": "boss", "station": "preview",
+                     "what": "started_preview", "text": "Started preview",
+                     "at": _iso(preview.get("created_at")) or "",
+                     "detail": {"steps_done": sum(1 for s in steps
+                                                  if s.get("status") in ("ok", "skipped")),
+                                "steps_total": len(steps)} if steps else None})
+    for d in facts.deploys.get(rid, []):
+        if str(d.get("status") or "") in DEPLOY_OK:
+            boss.append({"id": f"deploy:{d['id']}", "type": "boss", "station": "ship",
+                         "what": "deployed", "text": f"Deployed to {d.get('environment') or 'dev'}",
+                         "at": _iso(d.get("finished_at") or d.get("created_at")) or "",
+                         "ms": d.get("duration_ms")})
+    for b in boss:
+        b["_at"] = _aware(b.get("at")) or now
+    story = sorted(rows + you + boss, key=lambda r: r["_at"])
+    for r in story:
+        r.pop("_at", None)
+    return story
+
+
+def _now_line(connection: Any, acts: list[Mapping[str, Any]]) -> Optional[Now]:
+    open_act = _open_act(acts)
+    if not open_act:
+        return None
+    row = connection.execute(
+        text("SELECT tool_name, content, created_at FROM agent_turns WHERE act_id = :a "
+             "AND direction = 'tool_call' ORDER BY created_at DESC LIMIT 1"),
+        {"a": open_act["act_id"]},
+    ).mappings().first()
+    if not row or not row["tool_name"]:
+        return None
+    return {"act_id": open_act["act_id"], "role_key": open_act.get("role_key"),
+            "tool": str(row["tool_name"]), "arg": _now_arg(row["tool_name"], row["content"]),
+            "at": _iso(row["created_at"]) or ""}
+
+
+def _cost(connection: Any, run_id: str, st: BuildState) -> dict[str, Any]:
+    rows = connection.execute(
+        text("SELECT COALESCE(a.role_key, l.role) AS role, l.stage, count(*) AS calls, "
+             "COALESCE(sum(l.turns), 0) AS turns, COALESCE(sum(l.total_tokens), 0) AS tokens, "
+             "COALESCE(sum(l.cost_usd_micros) FILTER (WHERE NOT l.included_in_subscription), 0) "
+             "AS micros, count(*) FILTER (WHERE l.included_in_subscription) AS included "
+             "FROM llm_calls l LEFT JOIN agent_acts a ON a.act_id = l.act_id "
+             "WHERE l.code_task_run_id = :r GROUP BY 1, 2"),
+        {"r": run_id},
+    ).mappings().all()
+    by_agent: dict[str, dict[str, Any]] = {}
+    by_station: dict[str, float] = {}
+    metered, included, calls = 0.0, 0, 0
+    for r in rows:
+        usd = int(r["micros"] or 0) / 1e6
+        metered += usd
+        included += int(r["included"] or 0)
+        calls += int(r["calls"] or 0)
+        key = str(r["role"] or "")
+        agent = by_agent.setdefault(key, {"role_key": r["role"] or None, "turns": 0,
+                                          "tokens": 0, "usd": 0.0})
+        agent["turns"] += int(r["turns"] or 0)
+        agent["tokens"] += int(r["tokens"] or 0)
+        agent["usd"] = round(agent["usd"] + usd, 6)
+        station = _station_of_stage(r["stage"])
+        if station and usd > 0:
+            by_station[station] = round(by_station.get(station, 0.0) + usd, 6)
+    agents = sorted(by_agent.values(), key=lambda a: -a["usd"])
+    named = [a for a in agents if a["role_key"]]
+    if st["state"] == "budget_wait":
+        word = "Paused for budget"
+    elif metered > 0:
+        word = f"${metered:.2f} · {_plural(len(named), 'agent', 'agents')}"
+    elif calls and included == calls:
+        word = "Included in plan"
+    else:
+        word = "Not yet"
+    return {"word": word, "metered_usd": round(metered, 6), "subscription_calls": included,
+            "by_agent": agents, "by_station": by_station}
+
+
+def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildState,
+             stations: list[Station], comments: list[dict[str, Any]],
+             decision: Optional[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
+    rid = str(run["id"])
+    acts = facts.acts.get(rid, [])
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    evidence = _j(run.get("state"), {}) or {}
+    role_at = {s["key"]: s.get("role_key") for s in stations}
+    running = st["state"] in ("building", "queued", "quiet", "budget_wait")
+    # Pull request.
+    n = _pr_number(run)
+    agents = len({a.get("role_key") for a in _stage_acts(acts) if a.get("role_key")})
+    pr: Optional[dict[str, Any]] = None
+    if n or run.get("pull_request_url"):
+        dstate = _decision_state(decision, now)
+        word = (f"#{n} · Merged" if dstate == "merged" else
+                f"#{n} · Waiting on you" if dstate == "waiting" else f"#{n} · Open")
+        url = run.get("pull_request_url")
+        pr = {"number": n, "url": url, "files_url": f"{url}/files" if url else None,
+              "decision_id": run.get("decision_id"),
+              "decision_status": (decision or {}).get("status"), "made_by": agents,
+              "word": word, "role_key": role_at.get("build")}
+    elif st["state"] == "done_no_pr":
+        pr = {"number": None, "url": None, "made_by": agents, "role_key": role_at.get("build"),
+              "word": "No PR" + (f" · {st['tip'].lower()}" if st.get("tip") else "")}
+    # Checks.
+    gate = facts.gates.get(rid)
+    waived = fctx.get("waived") if isinstance(fctx.get("waived"), dict) else {}
+    checks = None
+    if gate:
+        passed = [str(g) for g in _j(gate.get("gates_passed"), []) or []]
+        failed = [str(g) for g in _j(gate.get("gates_failed"), []) or []]
+        gate_evidence = _j(gate.get("evidence"), {}) or {}
+        gates = []
+        for name, ok in [(g, True) for g in passed] + [(g, False) for g in failed]:
+            ev = gate_evidence.get(name)
+            gates.append({
+                "name": name, "label": gate_label(name), "ok": ok,
+                "waived_by": waived.get("by") if name in (waived.get("gates") or []) else None,
+                "role_key": gate_owner(name, acts), "station": gate_station(name),
+                "evidence": ev[:160] if isinstance(ev, str) else None,
+                "waivable": name not in UNWAIVABLE_GATES,
+                **({"reason": "Can't be waived: the app must start"}
+                   if name in UNWAIVABLE_GATES else {})})
+        advisory = bool(failed) and bool(run.get("pull_request_url")) and not waived and bool(
+            fctx.get("advisory_failing_gates"))
+        word = (f"All {len(gates)} passed" if not failed else
+                f"{len(failed)} failed" + (" · shipped anyway" if advisory else ""))
+        checks = {"word": word, "advisory": advisory, "gates": gates,
+                  "tip": "First pass: checks advise, they don't block" if advisory else None}
+    elif running:
+        checks = {"word": "After review", "advisory": False, "gates": []}
+    # Tests.
+    commands = [{"command": str(t.get("command") or ""), "exit_code": t.get("exit_code"),
+                 "ok": bool(t.get("ok")), "timed_out": bool(t.get("timed_out"))}
+                for t in evidence.get("tests") or [] if isinstance(t, dict)]
+    tail = "\n".join(str(evidence.get("last_verify_output") or "").splitlines()[-40:]) or None
+    if commands:
+        bad = sum(1 for c in commands if not c["ok"])
+        word = (f"{bad} of {len(commands)} failed" if bad else
+                f"{len(commands)} of {len(commands)} commands passed")
+        tests = {"word": word, "role_key": role_at.get("tests"), "commands": commands,
+                 "output_tail": tail}
+    else:
+        tests = {"word": "Not run", "role_key": None, "commands": [], "output_tail": None}
+    # Changes.
+    test_files = [{"path": str(f)} for f in evidence.get("test_files") or [] if f]
+    code_files = [{"path": str(f)} for f in evidence.get("impl_files") or [] if f]
+    changes = None
+    if test_files or code_files:
+        url = run.get("pull_request_url")
+        changes = {"word": _plural(len(test_files) + len(code_files), "file", "files"),
+                   "tests": test_files, "code": code_files,
+                   "tests_role_key": role_at.get("tests"), "code_role_key": role_at.get("build"),
+                   "diff_url": f"{url}/files" if url else None}
+    # Comments.
+    open_ = sum(1 for c in comments if c["status"] == "open")
+    fixed = sum(1 for c in comments if c["status"] == "addressed")
+    cword = f"{open_} open · {fixed} fixed" if comments else "None"
+    # Preview.
+    p = facts.previews.get(rid)
+    preview = None
+    if p:
+        status = str(p.get("status") or "")
+        flag = preview_flag(p, now)
+        steps = [s for s in _j(p.get("steps"), []) or [] if isinstance(s, dict)]
+        preview = {"id": str(p["id"]), "status": status,
+                   "word": {"running": "Live ↗", "starting": "Starting…",
+                            "failed": "Failed"}.get(status if flag else "", "Not running"),
+                   "url": p.get("url") if flag and status == "running" else None,
+                   "expires_at": _iso(p.get("expires_at")),
+                   "steps_done": sum(1 for s in steps if s.get("status") in ("ok", "skipped")),
+                   "steps_total": len(steps), "error": _first_line(p.get("error")) or None}
+    # Deploy.
+    deploys = facts.deploys.get(rid, [])
+    ok = [d for d in deploys if str(d.get("status") or "") in DEPLOY_OK]
+    bad = [d for d in deploys if str(d.get("status") or "") in DEPLOY_BAD]
+    if ok:
+        dword = " · ".join(f"{d.get('environment') or 'dev'} ✓" for d in _one_per_env(ok))
+    elif bad:
+        dword = f"Failed · {bad[0].get('environment') or 'dev'}"
+    elif deploys:
+        dword = "Deploying"
+    else:
+        dword = "Not set up"
+    items = [{k: (_iso(v) if k.endswith("_at") else v) for k, v in d.items()
+              if k not in ("run_id",)} for d in deploys[:5]]
+    # Merge readiness.
+    blockers = sum(1 for c in comments if c["status"] == "open" and c["severity"] == "blocker")
+    if running:
+        ready = {"ready": False, "word": "Building"}
+    else:
+        failed_checks = bool(checks and any(not g["ok"] and not g.get("waived_by")
+                                            for g in checks["gates"]))
+        tests_ok = not commands or all(c["ok"] for c in commands)
+        if st["state"] == "pr_open" and not failed_checks and tests_ok and not blockers:
+            ready = {"ready": True, "word": "Ready to merge"}
+        elif blockers:
+            ready = {"ready": False,
+                     "word": f"Not ready · {_plural(blockers, 'open blocker', 'open blockers')}"}
+        else:
+            ready = {"ready": False, "word": "Not ready"}
+    return {"merge_ready": ready, "pr": pr, "checks": checks, "tests": tests, "changes": changes,
+            "comments": {"word": cword, "items": comments}, "preview": preview,
+            "deploy": {"word": dword, "items": items}, "cost": _cost(connection, rid, st)}
+
+
+def _plan_decision(connection: Any, project_id: str, run_id: str) -> Optional[dict[str, Any]]:
+    row = connection.execute(
+        text("SELECT id, status, approved_by, approved_at, updated_at FROM decisions "
+             "WHERE project_id = :p AND recommendation->>'action' = 'resume_code_task' "
+             "AND recommendation->>'run_id' = :r ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "r": run_id},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
+            viewer: Optional[str] = None, now: Optional[datetime] = None) -> Optional[Cockpit]:
+    """One build, whole: header state, line, story, outputs (§4.5). None when not found."""
+    from .code_task_service import load_code_task_run
+
+    now = now or _now()
+    run = load_code_task_run(connection, run_id)
+    if not run or run.get("project_id") != project_id:
+        return None
+    facts = load_facts(connection, project_id, [run], gates=True, tool_calls=True)
+    acts = facts.acts.get(run_id, [])
+    decision = facts.decisions.get(str(run.get("decision_id") or ""))
+    plan_decision = _plan_decision(connection, project_id, run_id)
+    row = build_row(run, facts, now=now, viewer=viewer,
+                    origin=_origin(connection, project_id, run))
+    st: BuildState = {"state": row["state"], "word": row["word"], "tip": row.get("tip"),
+                      "verb": row["verb"], "station": row.get("station"), "k": row["k"],
+                      "n": row["n"], "rounds": row["rounds"],
+                      "preview": (row.get("preview") or {}).get("status")}
+    comments = _comment_rows(run, acts)
+    attention = [a for a in _attention_for_builds(connection, settings, project_id, now)
+                 if str((a.get("build") or {}).get("run_id")) == run_id]
+    agents: dict[str, str] = {}
+    for a in _stage_acts(acts):
+        if a.get("role_key"):
+            live = a.get("ended_at") is None
+            state = "working" if live and a.get("status") == "active" else (
+                "stuck" if a.get("status") in ("error", "stale") else
+                "needs_you" if a.get("status") == "awaiting_input" else "done")
+            agents[str(a["role_key"])] = state if live or agents.get(a["role_key"]) != "working" \
+                else agents[a["role_key"]]
+    agent_list = sorted(({"role_key": k, "state": v} for k, v in agents.items()),
+                        key=lambda a: a["state"] != "working")
+    ok, why = _retry_offer(run)
+    live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan")
+    fctx = run.get("finalize_ctx") or {}
+    out: Cockpit = {
+        "etag": "", "run": {**run, "attempt": row["attempt"], "root_run_id": row["root_run_id"],
+                            "finalize_ctx": None, "spec": None, "state": None},
+        "app": row["app"], "state": st,
+        "started_at": row.get("started_at"), "station_since": row.get("station_since"),
+        "cost_usd": row["cost_usd"], "metered": row["metered"], "live": live,
+        "stoppable": str(run.get("status")) in ("running", "repairing", "blocked"),
+        "retryable": ok, "retry_reason": why,
+        "failure": failure_line(fctx, run.get("error")) if row["state"] == "failed" else None,
+        "lineage": _lineage(connection, project_id, run, now, viewer),
+        "origin": row.get("origin"), "agents": agent_list, "stations": row["stations"],
+        "attention": attention,
+        "story": _story(connection, project_id, run, facts, st, comments, plan_decision, now,
+                        viewer),
+        "now": _now_line(connection, acts) if live else None,
+        "outputs": _outputs(connection, run, facts, st, row["stations"], comments, decision, now),
+    }
+    for key in ("finalize_ctx", "spec", "state"):
+        out["run"].pop(key, None)
+    out["etag"] = _etag({k: v for k, v in out.items() if k != "etag"})
+    return out
+
+
+# ── GET /v1/factory/apps (§4.6) ─────────────────────────────────────────────────────────────
+
+
+class AppDeploy(TypedDict):
+    env: str
+    ok: bool
+    word: str                      # "dev ✓" | "prod —" | "Failed · dev"
+
+
+class AppRow(TypedDict, total=False):
+    key: str                       # the newest run id of the app (stable while it lives)
+    app: str
+    builders: list[str]            # role keys of every agent that built it, newest first
+    run_id: str                    # its newest build (the cockpit `↗` opens)
+    state: str                     # BuildStateKey of that build
+    word: str
+    preview: Optional[PreviewFlag]
+    deploys: list[AppDeploy]
+    builds: int                    # how many builds (attempts included)
+    run_ids: list[str]             # every build, newest first (the row expands to these)
+    at: Optional[str]
+
+
+class Apps(TypedDict):
+    project_id: str
+    etag: str
+    apps: list[AppRow]
+
+
+def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
+         now: Optional[datetime] = None) -> Apps:
+    """One row per app, grouped by identity (the logic of app-grouping.ts, server-side)."""
+    from .code_task_service import list_code_task_runs
+
+    now = now or _now()
+    runs = list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+    groups = group_into_apps(runs)
+    newest = [g[0] for g in groups][:ACT_RUNS_CAP]
+    facts = load_facts(connection, project_id, newest)
+    builders_of: dict[str, list[str]] = {}
+    ids = [str(r["id"]) for r in runs]
+    if ids:
+        for row in connection.execute(
+            text("SELECT code_task_run_id, role_key FROM agent_acts WHERE project_id = :p "
+                 "AND code_task_run_id = ANY(:ids) AND kind = 'stage' AND role_key IS NOT NULL "
+                 "ORDER BY started_at DESC"),
+            {"p": project_id, "ids": ids},
+        ).mappings().all():
+            builders_of.setdefault(str(row["code_task_run_id"]), []).append(str(row["role_key"]))
+    rows: list[AppRow] = []
+    for group in groups:
+        head = group[0]
+        rid = str(head["id"])
+        if head in newest:
+            b = build_row(head, facts, now=now, viewer=viewer)
+            state, word, flag = b["state"], b["word"], b.get("preview")
+        else:
+            st = build_state(head, now=now, viewer=viewer)
+            state, word, flag = st["state"], st["word"], None
+        roles: list[str] = []
+        for r in group:
+            for role in builders_of.get(str(r["id"]), []):
+                if role not in roles:
+                    roles.append(role)
+        deploys: list[AppDeploy] = []
+        seen: set[str] = set()
+        for d in facts.deploys.get(rid, []):
+            env = str(d.get("environment") or "dev")
+            if env in seen:
+                continue
+            seen.add(env)
+            good = str(d.get("status") or "") in DEPLOY_OK
+            deploys.append({"env": env, "ok": good,
+                            "word": f"{env} ✓" if good else
+                            (f"Failed · {env}" if str(d.get("status") or "") in DEPLOY_BAD
+                             else f"{env} —")})
+        rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
+                     "state": state, "word": word, "preview": flag, "deploys": deploys,
+                     "builds": len(group), "run_ids": [str(r["id"]) for r in group],
+                     "at": _iso(head.get("updated_at") or head.get("created_at"))})
+    rank = {"needs_plan": 0, "needs_waiver": 0, "budget_refused": 0, "pr_open": 0}
+    rows.sort(key=lambda r: (rank.get(r["state"], 1 if section_of(r["state"]) == "building"
+                                      else 2), -(_aware(r.get("at")) or now).timestamp()))
+    out: Apps = {"project_id": project_id, "etag": "", "apps": rows}
+    out["etag"] = _etag([(r["run_id"], r["state"], r["word"], r["builders"], r["deploys"],
+                          r["builds"], r.get("preview")) for r in rows])
+    return out

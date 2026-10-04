@@ -156,6 +156,7 @@ class Counts(TypedDict):
     needs_you: int
     running: int
     stopped: int
+    building: int            # the Factory's BUILDING rows (factory spec §10, decision 2)
 
 
 class LiveBoard(TypedDict):
@@ -168,6 +169,8 @@ class LiveBoard(TypedDict):
     outcomes: list[Outcome]
     teams: list[Team]
     agents: list[BoardAgent]
+    # factory_view.BuildRow, the Floor's BUILDING rows — the same rows, the same words.
+    builds: list[dict[str, Any]]
 
 
 # ── policy ───────────────────────────────────────────────────────────────────────────────────
@@ -276,6 +279,15 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
         connection, project_id,
         [(str(n.get("run_id")), str(n.get("step_id"))) for n in needs_you
          if n.get("kind") == "failed_step"])
+    build_owner: dict[str, Optional[str]] = {}
+    wanted = {str(n.get("decision_id")): (str(n["build"].get("run_id")), str(n["build"].get("where")))
+              for n in needs_you
+              if n.get("kind") == "approval" and isinstance(n.get("build"), dict)
+              and not owners.get(str(n.get("decision_id")))}
+    if wanted:
+        from . import factory_view
+
+        build_owner = factory_view.build_decision_owners(connection, project_id, wanted)
     out: list[AttentionItem] = []
     for n in needs_you:
         kind = str(n.get("kind"))
@@ -296,6 +308,7 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
             "risk_tier": n.get("risk_tier"),
             "fix": ({"area": str(n["fix_area"]), "label": "Fix"} if n.get("fix_area") else None),
             "at": n.get("at"),
+            "build": n.get("build"),
         }
         if kind == "approval":
             decision = by_id.get(str(n.get("decision_id"))) or {}
@@ -308,10 +321,20 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
             item["actions"] = actions  # type: ignore[typeddict-item]
             item["content_hash"] = content_hash
             item["preview"] = _preview_line(preview)
-            item["role_key"] = owners.get(str(n.get("decision_id")))
+            item["role_key"] = (owners.get(str(n.get("decision_id")))
+                                or build_owner.get(str(n.get("decision_id"))))
             item["decide_inline"] = decide_inline(
                 n.get("decision_kind"), n.get("risk_tier"), actions, bool(preview),
                 content_hash)
+        elif kind in ("gate_override", "budget_refused"):
+            # A build stopped for the operator (factory spec §6.5): the reviewer whose gate
+            # failed, from the build's acts — or nobody (a refused budget is BOSS's).
+            item["role_key"] = n.get("role_key")
+            item["answers"] = [
+                {"key": a.get("key"), "label": a.get("label"),
+                 "enabled": a.get("state", "enabled") == "enabled",
+                 **({"reason": a["reason"]} if a.get("reason") else {})}
+                for a in n.get("answers") or []]
         elif kind == "failed_step":
             item["role_key"] = step_owner.get((str(n.get("run_id")), str(n.get("step_id"))))
             item["answers"] = [
@@ -917,6 +940,9 @@ def etag_of(board: Mapping[str, Any]) -> str:
         "teams": [(t["key"], len(t["members"]), t["working"], t["needs_you"], t["in_panel"])
                   for t in board["teams"]],
         "agents": [(a["role_key"], a["state"], a.get("team")) for a in board["agents"]],
+        "builds": [(b["run_id"], b["state"], b["word"], b["k"], b["n"],
+                    [(s["key"], s["status"], s.get("role_key")) for s in b["stations"]])
+                   for b in board.get("builds") or []],
         "counts": board["counts"],
     }
     digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode())
@@ -933,6 +959,20 @@ def build(connection: Any, settings: Any, project_id: str, *,
     cc = command_center.assemble(**read)
     attention = attention_items(connection, project_id, cc["needs_you"], read["decisions"])
     rows = missions(connection, project_id, read, attention, now=now, viewer=viewer)
+    # THE BUILDS ON THE FLOOR ARE THE BUILDS HERE (factory spec §10, decision 2): the same rows
+    # factory_view draws, so Agents › Live and the Factory say the same builds and counts.
+    builds: list[dict[str, Any]] = []
+    try:
+        from . import factory_view
+
+        with connection.begin_nested():
+            builds = [dict(b) for b in factory_view.building_rows(
+                connection, project_id, attention, viewer=viewer, now=now)]
+    except Exception:  # noqa: BLE001 — the builds are never worth a blank Live tab
+        import logging
+
+        logging.getLogger("boss.agents_live_board").warning(
+            "could not read the building builds", exc_info=True)
     teams, agents = force(connection, project_id, attention)
     board: LiveBoard = {
         "project_id": project_id,
@@ -946,9 +986,11 @@ def build(connection: Any, settings: Any, project_id: str, *,
             "needs_you": len(attention),
             "running": sum(1 for m in rows if m["state"] not in ("done", "stopped")),
             "stopped": sum(1 for m in rows if m["state"] == "stopped"),
+            "building": len(builds),
         },
         "attention": attention,
         "missions": rows,
+        "builds": builds,
         "outcomes": outcomes(connection, project_id, read, now=now),
         "teams": teams,
         "agents": agents,

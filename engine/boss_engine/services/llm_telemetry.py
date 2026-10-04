@@ -23,7 +23,7 @@ from sqlalchemy import text
 
 log = logging.getLogger("boss.llm_telemetry")
 
-# {db_engine (sqlalchemy), project_id, run_id, stage, act_id?, role_key?, workflow_run_id?, settings?}
+# {db_engine (sqlalchemy), project_id, run_id, stage, seat?, act_id?, role_key?, workflow_run_id?, settings?}
 _llm_ctx: ContextVar[dict] = ContextVar("llm_call_context", default={})
 
 
@@ -113,7 +113,10 @@ def _signed_by(c, ctx: dict, stage: Optional[str]) -> tuple[Optional[str], Optio
 
     found = agent_acts.quietly(c, "sign a model call", agent_acts.stage_act,
                                project_id=ctx.get("project_id"),
-                               code_task_run_id=str(ctx["run_id"]), stage=stage)
+                               code_task_run_id=str(ctx["run_id"]), stage=stage,
+                               # A seat is a review panel's; a pooled thread that sat on the
+                               # panel and then ran another stage must not carry it over.
+                               seat=ctx.get("seat") if (stage or "") == "review_code" else None)
     if not found:
         return None, named or role_for_stage(stage)
     return found["act_id"], canonical_role(found.get("role_key"))
