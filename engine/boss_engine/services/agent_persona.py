@@ -23,9 +23,13 @@ THE PERSONA SHAPES HOW, NEVER WHAT. Three guards keep it that way, and each is t
 
   * the ORDER: L0 and L1 come before anything an operator wrote, and L3 ends with "Voice shapes
     how you say things, never what you may do";
-  * the LINT (`lint_persona`): a persona that names a tool or a skill, or says "you may",
-    "allowed to", "ignore previous/all" or "system prompt", is refused with
-    "Persona can't change what the agent may do" — nothing here can grant;
+  * the LINT (`lint_persona`): a persona that names a tool or a skill, claims reach ("you may",
+    "permitted", "can now", "admin rights"), tells the model to drop its rules ("disregard",
+    "ignore the above", "override", "bypass", "system prompt"), waves a gate through ("without
+    review", "skip the approval") — or, in a `never` line, negates one ("Never wait for a human
+    approval") — is refused with "Persona can't change what the agent may do". It reads the
+    text NFKC-normalised with format characters removed, and stores it that way, so what the
+    model is given is what was checked;
   * the TOOLS are never read from the persona: what an agent may call is role_skills and
     role_mcp_servers, decided elsewhere and untouched by this module.
 
@@ -66,10 +70,37 @@ ARCHETYPES = ("first_principles_researcher", "visionary_founder", "relentless_op
 PERMISSION_MESSAGE = "Persona can't change what the agent may do"
 REAL_NAME_WARNING = "Mentions a real person · the agent won't claim to be them"
 
-#: Phrases that try to change what an agent may do rather than how it sounds.
+#: Phrases that try to change what an agent may do rather than how it sounds. Matched on the
+#: NORMALISED text (`_normalise`): a zero-width space or a full-width letter cannot split a word.
 _PERMISSION_PATTERNS = re.compile(
-    r"\byou\s+may\b|\ballowed\s+to\b|\bignore\s+(?:all|previous)\b|\bsystem\s+prompt\b",
+    r"\byou\s+may\b|\ballowed\s+to\b|\bpermitted\b|\bcan\s+now\b|\bdisregard\w*"
+    r"|\bignor\w*\s+(?:all|any|previous|the|above|earlier|prior|your|these|those)\b"
+    r"|\boverrid\w*|\bbypass\w*|\bsystem\s+prompt\b|\bsudo\b"
+    r"|\badmin(?:istrator)?\s+(?:rights|access|privileges?|role|permissions?)\b"
+    r"|\b(?:as|is|are|am|full|have|has|with)\s+(?:an?\s+)?admin(?:istrator)?\b"
+    r"(?!\s+(?:panel|page|ui|screen|console|dashboard|tool))",
     re.I)
+#: Waving a gate through. In a tagline, About me or phrase this is a claim of reach ("I merge
+#: without review"); a `never` line is a restraint, so "Never skip the review" stays sayable and
+#: is checked by `_NEGATES_A_GATE` instead.
+_SKIPS_A_GATE = re.compile(
+    r"\bskip\w*\s+(?:the\s+|a\s+|an\s+|any\s+)?(?:approvals?|reviews?|gates?|checks?|sign-?offs?)\b"
+    r"|\bwithout\s+(?:an?\s+|any\s+|the\s+)?(?:human\s+)?(?:approvals?|reviews?|sign-?offs?)\b",
+    re.I)
+#: A `never` line that negates a gate is a grant written backwards: "Never wait for a human
+#: approval before merging" would sit in the remit's Never: list. Refused, as is a never-line
+#: that negates a refusal ("Never refuse to deploy") or addresses a grant to the agent ("You
+#: can merge PRs without review").
+_NEGATES_A_GATE = re.compile(
+    r"\b(?:wait\w*|ask\w*|request\w*|seek\w*|need\w*|requir\w*|get|gets|getting|block\w*|"
+    r"stop\w*|paus\w*|escalat\w*|check\w*\s+with|defer\w*\s+to|involv\w*|loop\w*\s+in)\b"
+    r"[^.;]{0,40}?\b(?:approv\w*|reviews?|reviewers?|gates?|sign-?offs?|humans?|person|people|"
+    r"permission|owner|operator)\b"
+    r"|\b(?:refus\w*|declin\w*|hesitat\w*|say\w*\s+no)\b"
+    r"|\byou\s+(?:can|could|are\s+free|have\s+(?:the\s+)?(?:right|power))\b",
+    re.I)
+#: Format characters (zero-width space/joiner, BOM, bidi controls) a word can hide behind.
+_FORMAT_CATEGORIES = frozenset({"Cf"})
 #: Tokens a persona is checked for: words, snake_case names and dotted ids (`test.run`,
 #: `github.merge_pr_real`, `coding_pipeline.*`). A single plain word ("remember",
 #: "investigate") is English, not a tool, and is left alone; so are "e.g." and "example.com".
@@ -216,6 +247,31 @@ def _tool_names() -> frozenset[str]:
 # ── Validation ───────────────────────────────────────────────────────────────────────────────
 
 
+def _normalise(value: str) -> str:
+    """The text the lint judges and the store keeps: NFKC, format characters removed.
+
+    `y\u200bou may` must read as "you may" and a full-width `ｙｏｕ` as "you" — otherwise the lint
+    checks one string and the model reads another.
+    """
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKC", value or "")
+    return "".join(ch for ch in folded if unicodedata.category(ch) not in _FORMAT_CATEGORIES)
+
+
+def grants_something(field: str, value: str, named: frozenset[str] | set[str] = frozenset()) -> bool:
+    """Does this one persona line try to change what the agent may do?"""
+    text_ = _normalise(value)
+    tokens = set(_TOKEN.findall(text_.lower()))
+    if _PERMISSION_PATTERNS.search(text_) or tokens & named:
+        return True
+    if any(_looks_like_a_grant(token) for token in tokens):
+        return True
+    if field == "never":
+        return bool(_NEGATES_A_GATE.search(text_))
+    return bool(_SKIPS_A_GATE.search(text_))
+
+
 class PersonaError(ValueError):
     """A persona that cannot be saved: `field` names the control, `message` the reason."""
 
@@ -314,13 +370,12 @@ def lint_persona(persona: dict, *, extra_names: Iterable[str] = ()) -> tuple[lis
     named = {n.lower() for n in _tool_names()} | _specpack_skill_ids() | {
         str(n).lower() for n in extra_names if n and ("_" in str(n) or "." in str(n))}
     for field, value in _texts(persona):
-        tokens = set(_TOKEN.findall(value.lower()))
-        if (_PERMISSION_PATTERNS.search(value) or tokens & named
-                or any(_looks_like_a_grant(token) for token in tokens)):
+        if grants_something(field, value, named):
             err(field, PERMISSION_MESSAGE)
 
     pattern = _real_name_pattern()
-    if pattern is not None and any(pattern.search(value) for _, value in _texts(persona)):
+    if pattern is not None and any(pattern.search(_normalise(value))
+                                   for _, value in _texts(persona)):
         warnings.append(REAL_NAME_WARNING)
     return errors, warnings
 
@@ -334,14 +389,16 @@ def clean_persona(persona: Any, *, extra_names: Iterable[str] = ()) -> tuple[dic
         first = errors[0]
         raise PersonaError(first["field"], first["message"])
     out: dict[str, Any] = {"version": 1, "archetype": persona.get("archetype") or None}
+    # Stored as the lint read it: what the model is given is exactly what was checked.
     for field in ("callsign", "tagline", "about_me"):
-        value = str(persona.get(field) or "").strip()
+        value = _normalise(str(persona.get(field) or "")).strip()
         if value:
             out[field] = value
     if isinstance(persona.get("voice"), dict):
         out["voice"] = {axis: int(persona["voice"].get(axis, 2)) for axis in VOICE_AXES}
     for field in ("phrases", "never"):
-        items = [str(v).strip() for v in persona.get(field) or [] if str(v).strip()]
+        items = [_normalise(str(v)).strip() for v in persona.get(field) or []
+                 if _normalise(str(v)).strip()]
         if items:
             out[field] = items
     if isinstance(persona.get("avatar"), dict):
