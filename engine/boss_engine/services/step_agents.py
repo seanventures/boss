@@ -132,6 +132,25 @@ def named_agent(step: dict[str, Any]) -> str:
     return str(raw or "").strip().lower()
 
 
+def is_default_captain(step: dict[str, Any]) -> bool:
+    """Is the agent on this step only the catalogue's SOFT default, not somebody's choice?
+
+    The catalogue marks the agents it puts on built-in steps with `default_captain`
+    (workflow_catalogue.DEFAULT_STEP_AGENTS). The mark counts only while it still matches the
+    named agent — an operator who picks someone else has made a real choice — and only on a
+    built-in capability step, whose tool is BOSS's own and needs no grant: falling back to Auto
+    there is falling back to what every catalogue run did before agents were named. An agent or
+    custom step's named agent is always a real choice, whatever the spec says.
+    """
+    binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+    if str(step.get("kind") or "capability") != "capability":
+        return False
+    if binding.get("agent_work") or binding.get("custom_step") or not binding.get("capability"):
+        return False
+    default = str(step.get("default_captain") or "").strip().lower()
+    return bool(default) and default == named_agent(step)
+
+
 def is_gate(step: dict[str, Any]) -> bool:
     """A step whose whole purpose is that somebody answers it."""
     if str(step.get("kind") or "") == "decision":
@@ -214,7 +233,7 @@ def _agent_rows(connection: Connection, project_id: str) -> list[Any]:
     """THE LIST OF AGENTS: every `roles` row but the person. The step picker and the Agents
     roster both read it, so the roster cannot show five agents while the picker offers 34."""
     rows = connection.execute(
-        text("SELECT role_key, display_name, spec FROM roles WHERE project_id = :p "
+        text("SELECT role_key, display_name, spec, lifecycle FROM roles WHERE project_id = :p "
              "ORDER BY role_key"),
         {"p": project_id},
     ).mappings().all()
@@ -257,8 +276,40 @@ def project_agents(connection: Connection, project_id: str,
             # The MCP servers it holds (role_mcp_servers), by name and id.
             "mcp": list((held.get(role) or {}).get("mcp") or []),
             "mcp_ids": list((held.get(role) or {}).get("mcp_ids") or []),
+            # Agent World: a paused or retired agent is never picked (see `resolve`).
+            "lifecycle": str(_get(row, "lifecycle") or "active"),
+            "callsign": str(((spec or {}).get("persona") or {}).get("callsign") or "")
+            if isinstance((spec or {}).get("persona"), dict) else "",
         })
     return out
+
+
+def _get(row: Any, key: str) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _off_duty_name(agent: dict[str, Any]) -> str:
+    return str(agent.get("callsign") or agent.get("name") or agent.get("role_key"))
+
+
+def _on_duty(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The agents in `pool` Auto may pick: not paused, not retired.
+
+    When EVERY agent that could do the step is off duty, the step fails fast with
+    `<Name> is paused` rather than with "nobody holds this", which would send the operator to
+    grant a skill the agent already holds.
+    """
+    active = [a for a in pool if str(a.get("lifecycle") or "active") == "active"]
+    if pool and not active:
+        from .agent_identity import paused_message
+
+        first = pool[0]
+        raise StepAgentError(paused_message(_off_duty_name(first),
+                                            str(first.get("lifecycle") or "paused")))
+    return active
 
 
 def _listed(agents: Iterable[dict[str, Any]], limit: int = 8) -> str:
@@ -567,6 +618,8 @@ def assignment_problems(connection: Connection, project_id: str,
         named = named_agent(step)
         if legacy and not binding.get("agent_work"):
             continue
+        if named and is_default_captain(step) and named not in roster:
+            continue  # a catalogue default the project lacks: the step runs on Auto (resolve)
         if named and named != HUMAN and named not in roster:
             problems.append(
                 f"step '{step_id}' names agent '{named}', which this project does not have. "
@@ -659,6 +712,26 @@ def _choose(connection: Connection, settings: Any, project_id: str,
                    [a["role_key"] for a in pool])
 
 
+def _lifecycle_of(connection: Connection, project_id: str,
+                  role_key: str) -> Optional[tuple[str, str]]:
+    """(lifecycle, name to show) for one agent, or None when it is not a roles row."""
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT lifecycle, display_name, spec FROM roles "
+                     "WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": role_key},
+            ).mappings().first()
+    except Exception:  # noqa: BLE001 — no connection or no lifecycle column: on duty
+        return None
+    if row is None:
+        return None
+    spec = row["spec"] if isinstance(row["spec"], dict) else {}
+    persona = spec.get("persona") if isinstance(spec.get("persona"), dict) else {}
+    return (str(row["lifecycle"] or "active"),
+            str(persona.get("callsign") or row["display_name"] or role_key))
+
+
 def resolve(
     connection: Connection,
     settings: Any,
@@ -676,11 +749,30 @@ def resolve(
     binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
     named = named_agent(step)
     if named:
+        off = _lifecycle_of(connection, project_id, named)
+        # A CATALOGUE DEFAULT THAT IS OFF DUTY OR GONE HANDS THE STEP BACK TO AUTO (§0.1.4:
+        # "Auto still allowed"). Pausing Juno must not fail every stock run at its research
+        # step: nobody chose Juno there, BOSS did, and the step ran without a name before.
+        if is_default_captain(step) and (off is None or off[0] != "active"):
+            unnamed = {k: v for k, v in step.items() if k not in ("captain", "default_captain")}
+            record = resolve(connection, settings, project_id, unnamed, actor=actor,
+                             instructions=instructions)
+            state = "is not on this project" if off is None else f"is {off[0]}"
+            who = named if off is None else off[1]
+            return {**record, "why": f"{who}, this step's default agent, {state}, so it ran on "
+                                     f"Auto: {record['why']}",
+                    "default_skipped": named}
+        # A PAUSED AGENT AN OPERATOR NAMED ON A STEP FAILS THE STEP FAST, with its name — it
+        # does not run, and nobody else is silently put in its place.
+        if off and off[0] != "active":
+            from .agent_identity import paused_message
+
+            raise StepAgentError(paused_message(off[1], off[0]))
         return _record(named, "named", "named on the step", [named])
 
     if binding.get("agent_work"):
         agents = project_agents(connection, project_id)
-        pool = _agent_work_pool(step, agents)
+        pool = _on_duty(_agent_work_pool(step, agents))
         skills, mcp = step_scope(step)
         if not pool:
             raise StepAgentError(
@@ -704,6 +796,7 @@ def resolve(
                 f"this project has no custom step called '{binding['custom_step']}'.")
         agents = project_agents(connection, project_id)
         pool, basis, fallback = who_may_run(connection, project_id, definition, agents)
+        pool = _on_duty(pool)
         runs = custom_step_runs(definition, connection, project_id)
         brief = " ".join(str(x) for x in (definition.get("label"), definition.get("summary"),
                                           runs) if x)
