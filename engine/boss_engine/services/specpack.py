@@ -244,6 +244,15 @@ class SpecPackService:
             if not isinstance(level, int) or level < 0:
                 errors.append("autonomy.level must be a non-negative integer")
 
+        # A pack's persona is held to the same lint as one typed into the console: it reaches
+        # the dock, the work prompt and every panel seat, so a pack cannot be the way round it.
+        persona = role_spec.get("persona")
+        if persona is not None:
+            from .agent_persona import lint_persona
+
+            for problem in lint_persona(persona)[0]:
+                errors.append(f"persona.{problem['field']}: {problem['message']}")
+
         if errors:
             raise ValueError(f"{source} is invalid: {'; '.join(errors)}")
 
@@ -767,6 +776,14 @@ class SpecPackService:
         key = (role_key or "").strip()
         if not key:
             raise ValueError("role_key is required")
+        # ONE LINT FOR EVERY WAY IN. A persona written here reaches the same prompts as one
+        # saved through PATCH /v1/agents, so it is cleaned (and refused) the same way: raises
+        # agents.PersonaInvalid, a 422 naming the field.
+        if isinstance(spec, dict) and spec.get("persona") is not None:
+            from .agents import _clean_persona
+
+            cleaned, _warnings = _clean_persona(connection, project_id, spec["persona"])
+            spec = {**spec, "persona": cleaned}
 
         existing = connection.execute(
             text("SELECT id FROM roles WHERE project_id = :p AND role_key = :k"),

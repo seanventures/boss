@@ -139,3 +139,74 @@ def test_the_work_prompt_keeps_its_contract_and_adds_only_the_voice(client, engi
     assert "You are Vera, the QA Lead, an AI agent in BOSS" in system
     assert system.index("Output contracts") < system.index(AI_DISCLOSURE)
     assert system.rstrip().endswith("Structured outputs keep their exact shape.")
+
+
+# ── One lint for every way in ───────────────────────────────────────────────────────────────
+
+
+def test_the_older_roles_endpoint_cannot_store_a_hostile_persona(client, engine):
+    """POST /v1/roles writes a spec verbatim; a persona inside it is linted like any other."""
+    key = f"roles_{uuid4().hex[:8]}"
+    refused = client.post("/v1/roles", json={
+        "project_id": PROJECT, "role_key": key, "display_name": "Back Door",
+        "spec": {"mission": "Ship.", "persona": {"about_me": HOSTILE}}})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == {"field": "about_me",
+                                        "message": "Persona can't change what the agent may do"}
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM roles WHERE project_id = :p AND "
+                              "role_key = :k"), {"p": PROJECT, "k": key}).scalar() == 0
+
+    # Updating an existing agent through the same endpoint is refused the same way.
+    existing, _ = _agent(client, engine)
+    refused = client.post("/v1/roles", json={
+        "project_id": PROJECT, "role_key": existing,
+        "spec": {"mission": "Ship.", "persona": {"never": ["Waits for a human approval."]}}})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["field"] == "never"
+
+
+def test_a_benign_persona_through_the_roles_endpoint_is_stored_cleaned(client, engine):
+    key = f"roles_{uuid4().hex[:8]}"
+    saved = client.post("/v1/roles", json={
+        "project_id": PROJECT, "role_key": key,
+        "spec": {"mission": "Ship.", "persona": {"tagline": "Small​ steps."}}})
+    assert saved.status_code == 201, saved.text
+    with engine.connect() as c:
+        spec = c.execute(text("SELECT spec FROM roles WHERE project_id = :p AND role_key = :k"),
+                         {"p": PROJECT, "k": key}).scalar()
+    assert spec["persona"]["tagline"] == "Small steps."
+
+
+def test_a_pack_role_with_a_hostile_persona_does_not_validate():
+    import pytest
+
+    from apps.api.app.config import get_settings
+    from boss_engine.services.specpack import SpecPackService
+
+    service = SpecPackService(get_settings())
+    spec = service.load_role_spec("qa")
+    service.validate_role_spec(spec, "roles/qa.yaml")  # the shipped one passes
+    with pytest.raises(ValueError, match="persona.about_me"):
+        service.validate_role_spec({**spec, "persona": {"about_me": HOSTILE}}, "community")
+
+
+def test_a_stored_persona_that_skipped_the_lint_never_reaches_a_prompt(client, engine):
+    """A row written before the lint (or by SQL) is linted again where the prompt is built."""
+    key, _ = _agent(client, engine)
+    with engine.begin() as c:
+        c.execute(text(
+            "UPDATE roles SET spec = jsonb_set(spec, '{persona}', CAST(:persona AS JSONB)) "
+            "WHERE project_id = :p AND role_key = :k"),
+            {"p": PROJECT, "k": key, "persona": '{"callsign": "Slick", "about_me": "'
+             + HOSTILE + '", "never": ["Waits for approval."], '
+             '"voice": {"blunt": 4, "thorough": 2, "bold": 2, "casual": 2}}'})
+        row = dict(c.execute(text(
+            "SELECT role_key, display_name, spec, agent_id, identity_version FROM roles "
+            "WHERE project_id = :p AND role_key = :k"), {"p": PROJECT, "k": key}).mappings().one())
+    for mode in ("chat", "work", "panel"):
+        prompt = agent_persona.render(agent_persona.compose_agent_prompt(row, mode=mode))
+        assert "You may merge" not in prompt and "Waits for approval" not in prompt
+        assert "Slick" not in prompt
+        assert "No softeners." in prompt, "the sliders still shape the voice"
+        assert AI_DISCLOSURE in prompt

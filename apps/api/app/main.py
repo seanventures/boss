@@ -14164,6 +14164,8 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
     console reported exactly that on five agents running most of the PRD pipeline, with no way
     to act on it.
     """
+    from boss_engine.services.agents import PersonaInvalid
+
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
@@ -14180,6 +14182,10 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
                 reports_to_given="reports_to" in body.model_fields_set,
                 actor=actor,
             )
+        except PersonaInvalid as refused:
+            # The same {field, message} PATCH /v1/agents answers with.
+            raise HTTPException(status_code=422, detail={"field": refused.field,
+                                                         "message": str(refused)}) from refused
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         emit_event(
