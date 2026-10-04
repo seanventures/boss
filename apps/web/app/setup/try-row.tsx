@@ -62,7 +62,7 @@ export const TryRow = forwardRef<HTMLElement, {
           <div className="su-line su-try">
             <input type="text" value={directive} data-testid="su-try-input"
                    aria-label="Describe a small change"
-                   placeholder="Describe a small change, e.g. fix a README typo"
+                   placeholder="A small change, e.g. fix a typo"
                    disabled={!view.ready}
                    onChange={(e) => setDirective(e.target.value)}
                    onKeyDown={(e) => { if (e.key === "Enter" && enabled) void start(); }} />

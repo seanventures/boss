@@ -26,6 +26,10 @@ function audit(root: HTMLElement) {
     .filter((tip) => tip.split(/\s+/).filter(Boolean).length > 14);
   expect(long).toEqual([]);
   expect(root.querySelectorAll(".su-board p, .su-drawer p").length).toBe(0);
+  // A placeholder fits a phone's field (the Quick PR one was cut to "…fix a READM" at 390px).
+  const wide = [...root.querySelectorAll("[placeholder]")]
+    .map((el) => el.getAttribute("placeholder") ?? "").filter((p) => p.length > 32);
+  expect(wide).toEqual([]);
   const visible = ` ${root.textContent ?? ""} `;
   for (const word of BANNED) expect(visible.toLowerCase()).not.toContain(word.toLowerCase());
 }
