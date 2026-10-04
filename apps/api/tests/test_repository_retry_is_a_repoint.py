@@ -23,8 +23,8 @@ def test_replace_token_keeps_one_connection_and_one_binding(client, engine, monk
         "connection_id": first["repository"]["connection"]["id"]})
     assert replaced.status_code == 200, replaced.text
     assert replaced.json()["connection_id"] == first["repository"]["connection"]["id"]
-    again = client.post("/v1/setup/checks", headers=AUTH,
-                        json={"project_id": PROJECT, "target": "repository"}).json()
+    assert replaced.json()["rechecked"] == [repo["binding_id"]]
+    again = client.get("/v1/setup", params={"project_id": PROJECT}, headers=AUTH).json()
     [repo2] = again["repository"]["repos"]
     assert repo2["binding_id"] == repo["binding_id"]
     assert repo2["pill"]["label"] == "Working"

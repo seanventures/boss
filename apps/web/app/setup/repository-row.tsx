@@ -7,7 +7,7 @@
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { CircleNotch, Plus } from "@phosphor-icons/react";
 
-import { fetchRepos, SetupFailure, setupWrite } from "../../lib/setup-client";
+import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
 import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
 import { Drawer } from "./drawer";
@@ -65,6 +65,12 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
         token: value.trim(), connection_id: connectionId ?? undefined,
         accept_database_fallback: needsConsent ? consent : undefined,
       }, { label: "Connect GitHub" });
+      if (connectionId && answer.rechecked?.length) {
+        // Replace token: the bound repositories were re-checked with it; show the result.
+        apply(await fetchSetup(projectId));
+        onDone?.();
+        return;
+      }
       setFound(answer);
       setPhase("found");
     } catch (error) {

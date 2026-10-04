@@ -168,8 +168,21 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
              "updated_at = now() WHERE id = :id"),
         {"login": found["account_login"], "exp": parse_time(found["expires_at"]),
          "id": current["id"]})
+    # REPLACE TOKEN RE-PROVES WHAT IT SERVES. The repositories already bound to this
+    # connection are checked with the new token now, on the same bindings — so a fixed token
+    # turns the same row green (no duplicate row, no "already has" error).
+    rechecked = []
+    if existing is not None:
+        bound = connection.execute(
+            text("SELECT id FROM github_repository_bindings WHERE project_id = :p "
+                 "AND connection_id = :c AND status = 'active'"),
+            {"p": project_id, "c": current["id"]}).scalars().all()
+        for binding_id in bound:
+            check_repository(connection, settings, project_id, str(binding_id), actor=actor,
+                             http=http)
+            rechecked.append(str(binding_id))
     return {"account_login": found["account_login"], "expires_at": found["expires_at"],
-            "repos": found["repos"], "connection_id": current["id"]}
+            "repos": found["repos"], "connection_id": current["id"], "rechecked": rechecked}
 
 
 def connection_repos(connection: Connection, settings: Any, project_id: str,

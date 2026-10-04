@@ -104,3 +104,20 @@ export function tileOf(view: SetupView, provider: string): "subscription" | "api
 export function canAsk(view: SetupView): boolean {
   return view.models.some((m) => m.pill.tone === "green");
 }
+
+export type SetupSummary = { ready: boolean; badge: { count: number; tone: "amber" | "red" } | null };
+
+/** The landing rule's and the rail badge's reading of the view: unfinished rows plus failing
+ *  checks, red while any check fails. */
+export function summarize(view: Pick<SetupView, "ready" | "next" | "problems" | "repository" | "models">):
+  SetupSummary {
+  const unfinished = (view.repository.repos.length ? 0 : 1) + (view.models.length ? 0 : 1);
+  const count = unfinished + view.problems;
+  return {
+    ready: view.ready,
+    badge: count > 0 ? { count, tone: view.problems > 0 ? "red" : "amber" } : null,
+  };
+}
+
+/** The event the board sends so the rail badge follows the board without a reload. */
+export const SETUP_BADGE_EVENT = "boss:setup-badge";

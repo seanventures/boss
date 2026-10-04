@@ -40,7 +40,8 @@ describe("the rail badge", () => {
 
   it("is the shell's, on the Repo and models entry", () => {
     const SHELL = codeOnly("app/ConsoleShell.tsx");
-    expect(SHELL).toContain('if (id === "setup" && status.setup && status.setup.count > 0)');
+    expect(SHELL).toContain('if (id === "setup" && setupBadge && setupBadge.count > 0)');
+    expect(SHELL).toContain("window.addEventListener(SETUP_BADGE_EVENT, onBadge)");
     expect(SHELL).toContain('sub: "Where BOSS writes code and what it thinks with"');
   });
 });
