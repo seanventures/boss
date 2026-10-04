@@ -148,3 +148,33 @@ def test_stop_is_instant_while_the_worker_holds_the_run(client, engine):
         honoured = c.execute(text("SELECT honoured_at FROM code_task_stop_requests "
                                   "WHERE run_id = :r"), {"r": run_id}).scalar()
     assert status == "cancelled" and act_status == "skipped" and honoured is not None
+
+
+def test_a_stop_the_build_outran_is_too_late_not_a_stop(client, engine):
+    """Walk D1: Stop pressed while the build was opening its PR (one long transaction, so no
+    boundary came). The build finished first: it reads as PR open — never `Stopped by you` —
+    and the Story says the Stop came too late. While it was still stopping, `k of n` kept the
+    stations the stop skipped (`2 of 8`, never `2 of 2`)."""
+    run_id = fx.new_run(engine)
+    fx.stage(engine, run_id, "implement")
+    worker = engine.connect()
+    held = worker.begin()
+    worker.execute(text("SELECT id FROM code_task_runs WHERE id = :r FOR UPDATE"), {"r": run_id})
+    try:
+        assert client.post(f"/v1/code-tasks/{run_id}/cancel",
+                           json={"actor": fx.ACTOR}).json()["status"] == "stopping"
+        stopping = client.get(f"/v1/code-tasks/{run_id}/cockpit",
+                              params={"project_id": fx.PROJECT, "viewer": fx.ACTOR}).json()
+        assert stopping["state"]["n"] > stopping["state"]["k"]
+    finally:
+        held.rollback()
+        worker.close()
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status = 'completed', phase = 'done', "
+                       "pull_request_url = 'https://github.com/acme/app/pull/9', "
+                       "pull_request_number = 9 WHERE id = :r"), {"r": run_id})
+    body = client.get(f"/v1/code-tasks/{run_id}/cockpit",
+                      params={"project_id": fx.PROJECT, "viewer": fx.ACTOR}).json()
+    assert body["state"]["word"] != "Stopped by you"
+    late = [r for r in body["story"] if r["type"] == "you" and r["what"] == "stopped"]
+    assert late and late[0]["word"] == "Too late · it had finished"

@@ -1177,31 +1177,43 @@ def honour_stop_request(connection, run_id: str) -> Optional[dict]:
 
 def overlay_stop_requests(connection, runs: list[dict]) -> list[dict]:
     """Every reader says `Stopped by <actor>` the moment Stop is pressed, not when the worker
-    lets go of the run row: a pending request reads as the cancelled run it is becoming."""
-    live = [r for r in runs if r and r.get("status") not in TERMINAL_RUN_STATUSES]
-    if not live or hasattr(connection, "get_run"):
+    lets go of the run row: a pending request reads as the cancelled run it is becoming.
+
+    A request the build outran (it finished — opened its PR — before the worker reached a
+    boundary) is never shown as a stop: the run reads as what it is, and `stop_too_late`
+    names who pressed Stop and when, so the cockpit's Story can say it came too late."""
+    wanted = [r for r in runs if r and r.get("status") != "cancelled"]
+    if not wanted or hasattr(connection, "get_run"):
         return runs
     try:
         with connection.begin_nested():
             rows = connection.execute(
                 sql("SELECT run_id, actor, phase, requested_at FROM code_task_stop_requests "
                     "WHERE run_id = ANY(:ids) AND honoured_at IS NULL"),
-                {"ids": [str(r["id"]) for r in live]}).mappings().all()
+                {"ids": [str(r["id"]) for r in wanted]}).mappings().all()
     except Exception:  # noqa: BLE001
         return runs
     by_id = {str(r["run_id"]): r for r in rows}
-    for run in live:
+    for run in wanted:
         req = by_id.get(str(run["id"]))
         if not req:
             continue
+        at = (req["requested_at"].isoformat() if hasattr(req["requested_at"], "isoformat")
+              else str(req["requested_at"]))
         fctx = dict(run.get("finalize_ctx") or {})
+        if run.get("status") in TERMINAL_RUN_STATUSES:
+            fctx["stop_too_late"] = {"actor": req["actor"], "at": at}
+            run["finalize_ctx"] = fctx
+            continue
         fctx.setdefault("cancelled_by", req["actor"])
-        fctx.setdefault("cancelled_at", req["requested_at"].isoformat()
-                        if hasattr(req["requested_at"], "isoformat") else str(req["requested_at"]))
+        fctx.setdefault("cancelled_at", at)
         fctx.setdefault("cancelled_phase", req.get("phase") or run.get("phase") or "")
         fctx["stopping"] = True
         run["finalize_ctx"] = fctx
         run["status"] = "cancelled"
+        # The run row's own updated_at is held back by the worker's open transaction; the
+        # build's elapsed time ends when Stop was pressed.
+        run["updated_at"] = req["requested_at"]
     return runs
 
 

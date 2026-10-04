@@ -79,6 +79,7 @@ class Station(TypedDict, total=False):
     rounds: int                    # repair rounds through this station (0 = none)
     loop_with: Optional[str]       # the other role in a repair loop (`Forge ↔ Rook ×2`)
     links: list[StationLink]       # PR / preview / per-env deploy marks
+    stopped: bool                  # skipped because the build was stopped (still planned)
 
 
 # ── one state per build (§4.4) ──────────────────────────────────────────────────────────────
@@ -1024,9 +1025,11 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
                 if state_key == "budget_refused" and not mine:
                     s.update(face="boss", tip=BOSS_TIP)
             elif state_key == "cancelled":
-                s["status"] = "skipped" if s["status"] in ("working", "pending") else s["status"]
+                if s["status"] in ("working", "pending"):
+                    s.update(status="skipped", stopped=True, tip="Stopped here")
         if state_key == "cancelled" and i > here_i:
-            s.update(status="skipped", face="none", hollow_role=None, tip=None)
+            s.update(status="skipped", face="none", hollow_role=None, tip="Stopped before this",
+                     stopped=True)
         # Review seats: every act at the review station of the latest round.
         if key == "review" and review_acts:
             seats: list[Seat] = []
@@ -1109,7 +1112,9 @@ def _one_per_env(deploys: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
 def k_of_n(stations: list[Station]) -> tuple[int, int]:
     """Stations done of stations planned. `You` is not a station of the work."""
     core = [s for s in stations if s["key"] != "you_plan"]
-    n = sum(1 for s in core if s["status"] != "skipped")
+    # A station a STOP skipped was still planned: `2 of 8`, never `2 of 2`. Only a station the
+    # build's profile never runs leaves the count.
+    n = sum(1 for s in core if s["status"] != "skipped" or s.get("stopped"))
     k = sum(1 for s in core if s["status"] == "done")
     return min(k, n), n
 
@@ -1804,6 +1809,12 @@ def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Fact
         you.append({"id": "retried", "type": "you", "station": "plan", "what": "retried",
                     "actor": str(origin.get("actor") or fctx.get("actor") or ""),
                     "at": _iso(run.get("created_at")) or ""})
+    late = fctx.get("stop_too_late") if isinstance(fctx.get("stop_too_late"), dict) else None
+    if late:
+        # Stop was pressed while the build was finishing; it finished first (D1).
+        you.append({"id": "stopped", "type": "you", "station": st.get("station"),
+                    "what": "stopped", "actor": str(late.get("actor") or ""),
+                    "word": "Too late · it had finished", "at": str(late.get("at") or "")})
     if fctx.get("cancelled_by"):
         you.append({"id": "stopped", "type": "you", "station": st.get("station"),
                     "what": "stopped", "actor": str(fctx.get("cancelled_by")),

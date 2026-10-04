@@ -208,6 +208,9 @@ function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?:
             : row.appliedAt || row.word?.startsWith("Read by")
               ? <span data-testid="fx-steer-read">{row.word ?? `Read by ${whoName(row.appliedRole)}`}</span>
               : <span data-testid="fx-steer-queued" title="Agents read guidance between stations">Queued for next station</span>
+        ) : row.word ? (
+          // Any other row the server has a last word on: a Stop the build outran (walk D1).
+          <span data-testid={`fx-you-word-${row.id}`}>{row.word}</span>
         ) : null}
       </span>
     </li>
