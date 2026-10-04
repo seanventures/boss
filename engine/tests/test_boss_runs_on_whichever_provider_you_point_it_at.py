@@ -486,7 +486,7 @@ def test_the_environment_wins_over_the_stored_secret() -> None:
     # reach the stored credential at all, which is how a connected subscription produced
     # "OPENAI_API_KEY is not configured".
     src = inspect.getsource(cli_harness.stored_credential)
-    assert src.index("os.environ.get") < src.index("backend_for")
+    assert src.index("os.environ.get") < src.index("_lookup_once(")
     # And both routes reach it rather than reimplementing it.
     assert "stored_credential(self.settings, name)" in inspect.getsource(
         cli_harness.GenericCliCodeAgent._resolve_secret)

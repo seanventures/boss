@@ -92,19 +92,20 @@ def _as_wait(error: CapabilityExecutionError) -> Optional[CapabilityWaitError]:
     """The wait a capability failure really is, or None.
 
     Raised explicitly by the paths that know (a custom step's skill, `CapabilityWaitError`),
-    and recognised here for any other capability whose budget reservation was refused by the
-    per-minute cap — read by the same classifier every surface uses (model_failures.explain),
-    so a refusal that clears by itself waits wherever in the runner it surfaces."""
+    and recognised here for any other capability that could not start for a reason that clears
+    by itself — the per-minute cap, a model source whose every lease is held by other work, a
+    secret store that did not answer — read by the one classifier every surface uses
+    (model_failures.waiting_for), so a wait waits wherever in the runner it surfaces."""
     if isinstance(error, CapabilityWaitError):
         return error
     if isinstance(error, SettledCapabilityError):
         return None
-    from .model_failures import explain
+    from .model_failures import waiting_for
 
-    said = explain(str(error))
-    if said.get("kind") != "budget_wait":
+    said = waiting_for(str(error))
+    if said is None:
         return None
-    return CapabilityWaitError(said["headline"], wait_seconds=30)
+    return CapabilityWaitError(said["headline"], wait_seconds=30, kind=said["kind"])
 
 
 def _as_settled(error: CapabilityExecutionError) -> CapabilityExecutionError:

@@ -469,7 +469,11 @@ class TypedDecisionSpend:
             )
         except ModelCapacityDeniedError as denied:
             self.budget.release(connection, self.project_id, reservation_id, str(denied))
-            decision_id = self._decision(
+            # Every lease held by other work is a queue, not something a person decides: the
+            # step waits (workflow_capability_runner._as_wait reads the same classification).
+            from .model_failures import waiting_for
+
+            decision_id = None if waiting_for(denied) is not None else self._decision(
                 connection,
                 f"Model capacity refused typed decision {self.run_id}/{self.step_id}",
                 "model_capacity_denied",

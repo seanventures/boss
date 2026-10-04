@@ -256,6 +256,6 @@ def test_the_sink_counts_rows_returned_by_the_recorder():
     from boss_engine.services.code_agent import ClaudeCodeAgent
 
     src = inspect.getsource(ClaudeCodeAgent._invoke)
-    sink = src[src.index("def _live_sink"):src.index("for attempt in range(3)")]
+    sink = src[src.index("def _live_sink"):src.index("for attempt in range(4)")]
     assert "record_agent_turns(produced" in sink
     assert 'written["rows"] +=' in sink

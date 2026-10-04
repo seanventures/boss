@@ -490,7 +490,73 @@ def load_specs(settings) -> dict[str, CliHarnessSpec]:
     return specs
 
 
-def stored_credential(settings, name: str) -> Optional[str]:
+class CredentialStoreUnavailable(RuntimeError):
+    """The secret store holding a credential could not be read, so whether one exists is
+    UNKNOWN. Not "absent": the caller must not act as though nothing is stored.
+
+    `transient` when the store did not answer (unreachable, timed out, 429, 5xx) — the same
+    lookup a little later is expected to work, and model_failures.explain says it waits.
+    """
+
+    #: The sentence every surface recognises (model_failures.explain). Never carries a value.
+    UNREACHABLE = "BOSS could not reach its secret store to read"
+    UNREADABLE = "BOSS could not read"
+
+    def __init__(self, name: str, trouble: str, *, transient: bool):
+        self.transient = transient
+        lead = self.UNREACHABLE if transient else self.UNREADABLE
+        super().__init__(f"{lead} the stored {name} ({trouble[:200]}); "
+                         + ("it is retried shortly." if transient else
+                            "save the credential again in Setup."))
+
+
+#: How many times a credential lookup is made when the store did not answer, and the pause
+#: before each repeat. Short: a blip under load clears in well under a second, and a caller
+#: that reads a key nobody stored (the common case) never waits — only a store that FAILED does.
+CREDENTIAL_LOOKUP_ATTEMPTS = 3
+CREDENTIAL_LOOKUP_BACKOFF_SECONDS = (0.25, 0.75)
+
+
+def _lookup_once(settings, name: str) -> tuple[Optional[str], list[tuple[str, bool]]]:
+    """(value, trouble) for one pass over the store. `trouble` lists every way the store
+    failed to ANSWER on this pass, each with whether it may clear by itself; empty means the
+    store answered, and a None value then truly means absent."""
+    from .secret_backends import (
+        SecretNotFound,
+        SecretUnavailable,
+        backend_for,
+        pick_default_backend,
+    )
+    from .secrets_service import ref_key_for
+
+    trouble: list[tuple[str, bool]] = []
+    try:
+        kind, passed_over = pick_default_backend(settings)
+        # A configured store that did not answer was passed over for the next one, which does
+        # not hold what was written to the first. Its silence is trouble, not absence.
+        trouble += [(why, True) for why in passed_over]
+        store = backend_for(kind, settings)
+    except SecretUnavailable as exc:
+        return None, [(str(exc), exc.transient)]
+    except Exception as exc:  # noqa: BLE001 — e.g. the database is restarting
+        return None, [(type(exc).__name__, True)]
+    for key in (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name)):
+        try:
+            value = store.get(key)
+        except SecretNotFound:
+            continue                       # an answer: not under this key, try the next
+        except SecretUnavailable as exc:
+            trouble.append((str(exc), exc.transient))
+            continue
+        except Exception as exc:  # noqa: BLE001 — a driver error is the store not answering
+            trouble.append((type(exc).__name__, True))
+            continue
+        if (value or "").strip():
+            return value.strip(), []
+    return None, trouble
+
+
+def stored_credential(settings, name: str, *, strict: bool = False) -> Optional[str]:
     """A CLI credential: the environment first, then this install's secret store.
 
     Module-level and shared, because two different things shell out to these CLIs. The coding
@@ -506,25 +572,57 @@ def stored_credential(settings, name: str) -> Optional[str]:
 
     Both keys are tried for the same reason as everywhere else: an operator who sets a
     credential themselves uses the plain name, and BOSS's own API namespaces what it writes.
+
+    ABSENT IS AN ANSWER; A STORE THAT DID NOT ANSWER IS NOT. Every failure used to be
+    swallowed as "not stored", so on boss-1 (2026-10-04) one discovery stage out of many
+    concurrent ones started `claude` with no login while the stored token was fine — the CLI
+    said "Not logged in", and the run was failed as a rejected login, between successful calls
+    on either side. A lookup the store did not answer is now made again (bounded), and with
+    `strict` a store that still does not answer raises `CredentialStoreUnavailable` instead of
+    pretending nothing is stored. Without `strict` the answer stays None, logged as a warning.
     """
     direct = os.environ.get(name)
     if direct and direct.strip():
         return direct.strip()
-    try:
-        from .secret_backends import backend_for, default_secret_backend
-        from .secrets_service import ref_key_for
-
-        store = backend_for(default_secret_backend(settings), settings)
-        for key in (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name)):
-            try:
-                value = store.get(key)
-            except Exception:  # noqa: BLE001 — absent under this key, try the next
-                continue
-            if (value or "").strip():
-                return value.strip()
-    except Exception as exc:  # noqa: BLE001 — a missing secret is an answer, not a crash
-        _log.info("no stored %s (%s)", name, type(exc).__name__)
+    trouble: list[tuple[str, bool]] = []
+    for attempt in range(max(1, CREDENTIAL_LOOKUP_ATTEMPTS)):
+        if attempt:
+            pauses = CREDENTIAL_LOOKUP_BACKOFF_SECONDS
+            time.sleep(pauses[min(attempt - 1, len(pauses) - 1)] if pauses else 0)
+        value, trouble = _lookup_once(settings, name)
+        if value:
+            return value
+        if not trouble:
+            return None                    # the store answered: nothing stored
+        if not any(transient for _, transient in trouble):
+            break                          # broken, not busy: asking again cannot help
+    said = "; ".join(why for why, _ in trouble)
+    transient = any(flag for _, flag in trouble)
+    # Names and store errors only — a store error never carries the value (secret_backends).
+    _log.warning("could not read the stored %s: %s", name, said)
+    if strict:
+        raise CredentialStoreUnavailable(name, said, transient=transient)
     return None
+
+
+def claude_login_token(settings) -> str:
+    """THE ONE RESOLUTION of the login a `claude` child process runs on, or "" for none.
+
+    Three places spawned `claude` and each resolved the token with its own copy of the same
+    four lines (the chat adapter twice, the coding/research agent once). One function, so a
+    lookup the store did not answer is never handed to the CLI as "no login" by any of them:
+    it raises `CredentialStoreUnavailable`, which every surface explains as a wait.
+
+    Strict only when nothing else could log the CLI in: an install that runs the CLI on an
+    ANTHROPIC_API_KEY keeps working while its secret store is down.
+    """
+    # What the lane binder resolved, then what an operator exported, then the store.
+    token = (str(getattr(settings, "claude_code_oauth_token", "") or "").strip()
+             or (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip())
+    if token:
+        return token
+    strict = not (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    return stored_credential(settings, "CLAUDE_CODE_OAUTH_TOKEN", strict=strict) or ""
 
 
 def _uses_env_route(spec: CliHarnessSpec) -> bool:
