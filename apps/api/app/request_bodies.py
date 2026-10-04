@@ -47,6 +47,8 @@ class CodeTaskStartBody(ProjectBody):
     review_panel_size: int | None = None
     simulated: bool | None = None
     official: bool | None = None
+    #: Run the task AS this agent: its held MCP servers reach the coding harness.
+    role_key: str | None = None
 
 
 class CodeTaskFollowUpBody(OpenRequestBody):

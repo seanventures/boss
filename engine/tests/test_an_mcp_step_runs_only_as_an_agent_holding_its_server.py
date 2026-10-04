@@ -90,7 +90,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(MCPClient, "list_tools", lambda self, url, headers=None: [
         {"name": TOOL, "inputSchema": {"type": "object"}}])
     monkeypatch.setattr(MCPClient, "call_tool",
-                        lambda self, url, tool, args: made.append((tool, args)) or {"ok": 1})
+                        lambda self, url, tool, args, headers=None: made.append((tool, args)) or {"ok": 1})
     return made
 
 

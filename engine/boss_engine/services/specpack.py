@@ -355,6 +355,13 @@ class SpecPackService:
             permissions = dict(role_spec.get("permissions") or {})
             permissions.setdefault("mcp_servers", shipped["mcp_servers"])
             role_spec["permissions"] = permissions
+        # AND ITS KIT LOADOUT (skills-mcp §6.2): the abilities the role names travel with the
+        # role too, or a module-installed Juno would hold none of hers.
+        for field in ("abilities", "recommended_abilities"):
+            if shipped.get(field):
+                permissions = dict(role_spec.get("permissions") or {})
+                permissions.setdefault(field, list(shipped[field]))
+                role_spec["permissions"] = permissions
         role_spec["agent_module"] = {
             "id": module_spec["id"],
             "version": module_spec.get("version", "0.0.0"),
@@ -385,8 +392,11 @@ class SpecPackService:
             return {}
         if not isinstance(payload, dict):
             return {}
+        permissions = payload.get("permissions") or {}
         return {"persona": payload.get("persona"),
-                "mcp_servers": (payload.get("permissions") or {}).get("mcp_servers")}
+                "mcp_servers": permissions.get("mcp_servers"),
+                "abilities": permissions.get("abilities"),
+                "recommended_abilities": permissions.get("recommended_abilities")}
 
     def _upsert_role_spec(
         self,

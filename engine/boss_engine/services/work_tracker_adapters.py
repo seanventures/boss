@@ -928,3 +928,103 @@ def strip_html(html: str) -> str:
     text = re.sub(r"</p>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", "", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+# ---------------------------------------------------------------------------
+# Updating an issue: a comment, and (where the tracker has one) its open/closed state
+# ---------------------------------------------------------------------------
+#
+# `work_tracker.issue.update` had no executor, so "update the ticket" was a skill an agent could
+# hold and never run (skills-mcp spec RC4b, E12). Each tracker's own API, one call each. State is
+# changed only where it is a plain open/closed switch (GitHub Issues) or a named state the tracker
+# looks up itself (Linear); Jira, Plane and Azure DevOps move issues through workflows of the
+# project's own design, so a state there is refused with that reason rather than guessed at.
+
+
+def update_issue(
+    provider_key: str,
+    configuration: dict[str, Any],
+    *,
+    issue: str,
+    comment: str = "",
+    state: str = "",
+) -> dict[str, Any]:
+    """Comment on and/or change the state of one issue. Raises WorkTrackerHttpError."""
+    key = (provider_key or "").strip().lower()
+    issue = str(issue or "").strip()
+    if not issue:
+        raise WorkTrackerHttpError("which issue: give its number, key or id")
+    token = resolve_credential(configuration)
+    if not token:
+        raise WorkTrackerHttpError(f"{key}: no credential")
+    done: dict[str, Any] = {"issue": issue, "commented": False, "state": None}
+    if key == "github_issues":
+        owner = str(configuration.get("owner") or "").strip()
+        repo = str(configuration.get("repo") or "").strip()
+        base = str(configuration.get("api_base_url") or "https://api.github.com").rstrip("/")
+        headers = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
+        number = issue.lstrip("#")
+        root = f"{base}/repos/{quote(owner)}/{quote(repo)}/issues/{quote(number)}"
+        if comment:
+            _http_json("POST", f"{root}/comments", headers=headers, body={"body": comment})
+            done["commented"] = True
+        if state:
+            wanted = "closed" if state.lower() in ("closed", "close", "done") else "open"
+            _http_json("PATCH", root, headers=headers, body={"state": wanted})
+            done["state"] = wanted
+        return done
+    if key == "linear":
+        adapter = LinearWorkTrackerAdapter()
+        if comment:
+            adapter._gql(configuration,
+                         "mutation($i: CommentCreateInput!) { commentCreate(input: $i) "
+                         "{ success } }", {"i": {"issueId": issue, "body": comment}})
+            done["commented"] = True
+        if state:
+            data = adapter._gql(
+                configuration,
+                "query($id: String!) { issue(id: $id) { team { states { nodes { id name } } } } }",
+                {"id": issue})
+            nodes = (((data.get("issue") or {}).get("team") or {}).get("states") or {}
+                     ).get("nodes") or []
+            match = next((n for n in nodes if str(n.get("name")).lower() == state.lower()), None)
+            if match is None:
+                raise WorkTrackerHttpError(
+                    f"Linear has no state {state!r} for this issue's team. States: "
+                    + ", ".join(str(n.get("name")) for n in nodes))
+            adapter._gql(configuration,
+                         "mutation($id: String!, $s: String!) { issueUpdate(id: $id, "
+                         "input: {stateId: $s}) { success } }", {"id": issue, "s": match["id"]})
+            done["state"] = match["name"]
+        return done
+    if state:
+        raise WorkTrackerHttpError(
+            f"{key} moves issues through the project's own workflow; BOSS comments on it and "
+            "leaves the state to that workflow")
+    if not comment:
+        return done
+    if key == "jira":
+        base = str(configuration.get("base_url") or "").rstrip("/")
+        _http_json("POST", f"{base}/rest/api/3/issue/{quote(issue)}/comment",
+                   headers={"Authorization": JiraWorkTrackerAdapter()._auth_header(configuration)},
+                   body={"body": {"type": "doc", "version": 1, "content": [
+                       {"type": "paragraph", "content": [{"type": "text", "text": comment}]}]}})
+    elif key == "plane":
+        base = str(configuration.get("api_base_url") or configuration.get("web_base_url")
+                   or "").rstrip("/")
+        workspace = str(configuration.get("workspace_slug") or "").strip("/")
+        project = str(configuration.get("project_id") or "").strip()
+        _http_json("POST", f"{base}/api/v1/workspaces/{workspace}/projects/{project}/issues/"
+                           f"{quote(issue)}/comments/",
+                   headers={"X-API-Key": token}, body={"comment_html": f"<p>{comment}</p>"})
+    elif key == "azure_devops":
+        org = str(configuration.get("organization") or "").strip()
+        project = str(configuration.get("project") or "").strip()
+        _http_json("POST", f"https://dev.azure.com/{quote(org)}/{quote(project)}/_apis/wit/"
+                           f"workItems/{quote(issue)}/comments?api-version=7.1-preview.4",
+                   headers={"Authorization": AzureDevOpsWorkTrackerAdapter()._auth(configuration)},
+                   body={"text": comment})
+    else:
+        raise WorkTrackerHttpError(f"Unknown work tracker '{provider_key}'")
+    done["commented"] = True
+    return done

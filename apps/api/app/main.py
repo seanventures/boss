@@ -5914,6 +5914,8 @@ def register_mcp(payload: McpServerRegisterRequest):
                 provenance=payload.provenance,
                 tool_risk_overrides=payload.tool_risk_overrides,
                 actor=payload.actor,
+                auth=payload.auth,
+                settings=get_settings(),
             )
         except McpServerConflict as error:
             # 409: the name is taken — a double-pressed Register used to make a second server
@@ -5987,7 +5989,7 @@ def toggle_mcp(
                                       actor=actor)
             else:
                 row = update_mcp_server(connection, project_id, server_id, actor=actor,
-                                        **changes)
+                                        settings=get_settings(), **changes)
         except McpServerConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
@@ -6416,6 +6418,8 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
                 repair_retries=payload.get("repair_retries"),
                 review_panel_size=payload.get("review_panel_size"),
                 simulated=simulated,
+                # RUN AS AN AGENT: its held MCP servers reach the harness (skills-mcp E6).
+                role_key=payload.get("role_key"),
             )
     except ValueError as error:
         # Preflight rejections (e.g. non-allowlisted test executables) are the CALLER's
@@ -24054,7 +24058,11 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
 
 def _editor_problems(problems: list) -> list[dict]:
     """Problems as the editor reads them: {step_id, field, message}."""
-    return [{"step_id": p.get("step_id"), "field": p.get("field"), "message": p.get("message")}
+    return [{"step_id": p.get("step_id"), "field": p.get("field"), "message": p.get("message"),
+             # A warning (an ability not set up yet) is said on the step and does not block Save;
+             # `ability` is what the Studio links to (?area=skills&ability=<key>).
+             **({"severity": p["severity"]} if p.get("severity") else {}),
+             **({"ability": p["ability"]} if p.get("ability") else {})}
             for p in problems]
 
 
@@ -27965,6 +27973,15 @@ from .routers.agents import build_agents_router
 
 app.include_router(build_agents_router(
     engine=engine,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# THE KIT: Skills & MCP's abilities, connections, tests, holders and tool policy (routers/kit.py).
+from .routers.kit import build_kit_router
+
+app.include_router(build_kit_router(
+    engine=engine,
+    settings=get_settings,
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))

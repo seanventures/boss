@@ -13,7 +13,10 @@ boundaries:
   must_not:
     - Bypass receipts, policies, approvals, or budget reservations.
 permissions:
-  allowed_skills: [code.edit, test.run, github.create_pr_sandbox, coding_pipeline.*, model.generate_code]
+  allowed_skills: [ci.status, github.create_pr_sandbox, coding_pipeline.*, model.generate_code]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, open_prs, tests_ci, library_docs, watch_health]
+  recommended_abilities: [web_search]
   forbidden_skills: [github.merge_pr_real, infra.*]
   mcp_servers:
     - {server: boss-devops-reference, tools: [engineering_runbook]}

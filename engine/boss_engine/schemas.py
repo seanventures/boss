@@ -1259,6 +1259,9 @@ class McpServerRegisterRequest(BaseModel):
     publisher: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
     tool_risk_overrides: dict[str, int] = Field(default_factory=dict)
+    #: How BOSS signs in: {type: none|bearer|header, header_name?, secret?}. `secret` is
+    #: write-only — written through to the secret store, never stored here or read back.
+    auth: Optional[dict[str, Any]] = None
     actor: str = "system"
 
 
@@ -1276,6 +1279,8 @@ class McpServerUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     #: A person's review. Recorded with who marked it (provenance.reviewed_by).
     trusted: Optional[bool] = None
+    #: A new sign-in; a form that leaves `secret` out keeps the token already stored.
+    auth: Optional[dict[str, Any]] = None
 
 
 class CapabilityBundleImportRequest(BaseModel):

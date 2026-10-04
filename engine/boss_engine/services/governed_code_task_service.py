@@ -29,7 +29,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..config import Settings
 from ..ports import sql
@@ -1681,6 +1681,29 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
 # --------------------------------------------------------------------------- #
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
+    """One governed attempt, with the MCP servers of the agent it runs as (skills-mcp E6).
+
+    A task started as an agent (`spec.role_key`) hands every seat's harness exactly that
+    agent's held servers (code_task_mcp); the file carrying their sign-in is removed however
+    the attempt ends."""
+    from .code_task_mcp import prepare
+
+    mcp = None
+    with _transaction(engine) as c:
+        run = load_code_task_run(c, run_id)
+        role = str(((run or {}).get("spec") or {}).get("role_key") or "").strip()
+        if run is not None and role:
+            mcp = prepare(c, settings, run["project_id"], role)
+    try:
+        return _run_governed_code_task(engine, settings, jobs, run_id,
+                                       fencing_token=fencing_token, mcp=mcp)
+    finally:
+        if mcp is not None:
+            mcp.cleanup()
+
+
+def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
+                            *, fencing_token: Optional[str] = None, mcp: Any = None) -> dict:
     from .run_fencing import RunFenced, assert_owner, claim_run, hash_token  # noqa: F401
     _fence = hash_token(fencing_token)
     with _transaction(engine) as c:
@@ -1923,6 +1946,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     engine=engine_name,
                     connection=c,
                     project_id=project_id,
+                    mcp=mcp,
                 )
             if redact_external:
                 a.redact = True

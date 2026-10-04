@@ -24,7 +24,7 @@ abilities:
     tools:
       - {ref: "skill:repo.read", label: Read code and history}
     test: github_read
-    try: {tool: "skill:repo.read", field: {name: path, label: Path, placeholder: README.md}}
+    try: {tool: "skill:repo.read", arg: file, field: {name: file, label: Path, placeholder: README.md}}
 
   - key: open_prs
     group: code

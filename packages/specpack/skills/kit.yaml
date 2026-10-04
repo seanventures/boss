@@ -1,0 +1,73 @@
+# Skills the Kit's abilities need that no other bundle ships (skills-mcp spec E5, E11, E12).
+#
+# Each has an executor (skill_executors.py) — an ability whose skill cannot run is not an
+# ability, and test_every_kit_skill_has_an_executor fails on one.
+skills:
+  # READ THE REPO, as one grantable skill (E11). A workflow step's agent got no native tools at
+  # all, so it could not read the code it was asked to review. Holding this offers it the engine's
+  # own read tools — read_code, search_code, list_source, git_history, read_pull_request — scoped
+  # to the project's bound repositories, each call going through the skill runtime (permission,
+  # budget, invocation record) like any other skill.
+  - id: repo.read
+    kind: repository
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: Read the project's repository — files, search, history and pull requests.
+    data_boundary: internal
+    input_schema:
+      tool: string
+      path: string?
+      query: string?
+      ref: string?
+      number: integer?
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      # Nobody by default but the Kit's own Try: the grant (role_skills) is the way in.
+      allowed_callers: [kit_try]
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      tools: [read_code, search_code, list_source, git_history, read_pull_request]
+
+  # TESTS & CI: the repo's CI results, read-only (GitHub check runs).
+  - id: ci.status
+    kind: repository
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: Read CI results for a branch or commit of the project's repository.
+    data_boundary: internal
+    input_schema:
+      ref: string?
+    output_schema: { ref: string, total: integer, failing: array, checks: array }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions:
+      allowed_callers: []
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+
+  # RENDER DOCS: draft a document with the project's model, in a document's shape.
+  - id: docs.draft
+    kind: model_call
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: Draft a document in Markdown from a brief — headings, sections, no preamble.
+    data_boundary: internal
+    input_schema:
+      brief: string
+      audience: string?
+      length: string?
+    output_schema: { markdown: string }
+    cost: { estimator: token_usage_estimate, category: model }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: []
+      required_permissions: [model_call]
+    policy:
+      requires_receipt: false

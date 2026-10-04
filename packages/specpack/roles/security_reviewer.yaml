@@ -18,7 +18,10 @@ decision_rights:
   must_escalate:
     - Accepted-risk exceptions (require an auditable Decision).
 permissions:
-  allowed_skills: [code.review, coding_pipeline.security_review, ci.status, artifact.create, coding_pipeline.security_check, model.generate_code]
+  allowed_skills: [repo.read, ci.status, coding_pipeline.security_check, model.generate_code]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, tests_ci, web_research]
+  recommended_abilities: [web_search]
   forbidden_skills: [code.edit, github.merge_pr_real, infra.*]
   mcp_servers:
     - {server: web-intel, tools: [fetch_page]}

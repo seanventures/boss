@@ -24,7 +24,7 @@ import subprocess
 import threading
 import logging
 import time
-from typing import Callable, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from sqlalchemy import text
 
@@ -575,6 +575,9 @@ class ClaudeCodeAgent:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        #: The MCP servers the agent this task runs as holds (code_task_mcp, skills-mcp E6).
+        #: None: not run as an agent, and the CLI's flags are as they always were.
+        self.mcp_harness = None
 
     def _claude_bin(self) -> str:
         configured = getattr(self.settings, "claude_cli_path", None) or "claude"
@@ -726,6 +729,9 @@ class ClaudeCodeAgent:
                 "--allowedTools", allowed,
                 "--permission-mode", permission,
             ]
+            if self.mcp_harness is not None:
+                # ONLY THE AGENT'S OWN SERVERS, Ask/Off tools refused (code_task_mcp).
+                argv += self.mcp_harness.argv()
             if resume_session_id:
                 # Token optimization: continue the prior session instead of cold-starting —
                 # the follow-up rides the warm prompt cache (repo context + conversation are
@@ -1708,6 +1714,7 @@ def make_code_agent(
     *,
     connection=None,
     project_id: Optional[str] = None,
+    mcp: Optional[Any] = None,
 ) -> CodeAgent:
     """Build a CodeAgent. ``engine`` overrides ``settings.code_agent_engine`` so the
     governed pipeline can run builder roles on one model and adversary roles on another.
@@ -1720,7 +1727,11 @@ def make_code_agent(
     bound = _bind_lane_credentials(
         settings, engine, connection=connection, project_id=project_id
     )
-    return _wrap_paced(_build_code_agent(bound, engine), bound)
+    agent = _build_code_agent(bound, engine)
+    if mcp is not None and hasattr(agent, "mcp_harness"):
+        # `mcp` (code_task_mcp.HarnessMcp): the servers the agent this task runs as holds.
+        agent.mcp_harness = mcp
+    return _wrap_paced(agent, bound)
 
 
 def _bind_lane_credentials(
