@@ -27982,6 +27982,21 @@ def code_task_acts_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
     return {"run_id": run_id, "items": items}
 
 
+@app.get("/v1/code-tasks/{run_id}/chain")
+def code_task_chain_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
+    """ONE BUILD'S chain, in the workflow run chain's shape (acts, totals, credits), so the
+    cockpit's Credits credit this build's agents — not the workflow run around it."""
+    from boss_engine.services import agent_acts
+
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        found = agent_acts.chain_for_code_task(connection, owner, run_id,
+                                               viewer=_acts_viewer(viewer))
+    if found is None:
+        raise HTTPException(status_code=404, detail="This build has no signed work.")
+    return found
+
+
 @app.get("/v1/code-tasks/{run_id}/gates")
 def code_task_gates_endpoint(run_id: str) -> dict:
     """The build's latest quality gate: each gate with its one label and owner station."""
