@@ -215,7 +215,20 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
                | {k for k, p in presence.items() if p.get("state") != "idle"}
                | {h["source"] for h in handoffs if h.get("source")}
                | {h["target"] for h in handoffs if h.get("target")})
+    # "UNREGISTERED" MEANS NO DEFINITION, not "named differently". Work recorded under another
+    # name for a registered agent (a panel seat "product_manager", a captain id "reviewer") is
+    # that agent's — the one namespace, agent_identity.resolve — and is not a governance gap.
+    from .agent_identity import resolve as _resolve_name
+
     for extra in sorted(working - registered):
+        canonical = _resolve_name(extra)
+        if canonical in registered:
+            # Its work shows on the agent it names, when that agent has none of its own here.
+            for feed in (latest, spend, step_work, live, presence):
+                if extra in feed and canonical not in feed:
+                    feed[canonical] = feed[extra]
+            working.add(canonical)
+            continue
         roles.append({
             "role_key": extra,
             "display_name": _humanise(extra),

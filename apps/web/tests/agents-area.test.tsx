@@ -173,6 +173,50 @@ describe("the roster is every agent the step picker offers", () => {
   });
 });
 
+describe("Register on a shipped agent registers the shipped agent", () => {
+  // The review: Register made a blank operator agent through POST /v1/agents, so a shipped
+  // software_engineer came back with no persona, remit or grants. Untouched, the dialog now asks
+  // that same endpoint for the shipped definition; anything written makes it the operator's.
+  const stray = agent("software_engineer", { name: "Software Engineer", registered: false, calls: 2 });
+  const feed: Workforce = { ...workforce, agents: [stray], roster: [stray] };
+  const agentPosts = () => (vi.mocked(fetch).mock.calls as [unknown, RequestInit | undefined][])
+    .filter(([u, init]) => String(u).endsWith("/v1/agents") && init?.method === "POST")
+    .map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>);
+
+  async function register() {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => root!.render(
+      <WorkforceArea workforce={feed} chart={chart} studio={studio()} actor="ceo" />));
+    await settle();
+    await click($('[data-testid="roster-ungoverned"]'));
+    await click($('[data-testid="wf-register-software_engineer"]'));
+    expect($('#aq-title')?.textContent).toBe("Register agent");
+  }
+
+  it("untouched, it asks POST /v1/agents for the shipped definition", async () => {
+    await register();
+    await click($('[data-testid="aq-create"]'));
+    const sent = agentPosts();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ project_id: "p1", name: "Software Engineer",
+                                    born_from: { kind: "shipped" } });
+    expect(sent[0].persona).toBeUndefined();
+  });
+
+  it("with a purpose written, it is the operator's own blank agent", async () => {
+    await register();
+    const purpose = $('[data-testid="aq-purpose"]') as HTMLTextAreaElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(purpose, "Ours.");
+      purpose.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click($('[data-testid="aq-create"]'));
+    expect(agentPosts()[0]).toMatchObject({ purpose: "Ours.", born_from: { kind: "blank" } });
+  });
+});
+
 describe("Roster | Team | Panels", () => {
   it("reads the view from the URL, and only its own views", () => {
     expect(readAgentsView("?view=team")).toBe("team");

@@ -1259,6 +1259,29 @@ def _backfill_agent_identities() -> int:
         return 0
 
 
+def _install_shipped_cast() -> dict:
+    """AN UPGRADE GETS THE CAST, in every project, not only a fresh install's default one.
+
+    Roles arrived only through the install seed, so a project made before the Agent World had
+    Vera but not Atlas: "No registered role" on the Passport and "this project has no agent
+    chief_architect" on Ask. shipped_cast.sync_all installs what is missing (born from the
+    pack, `agent.born`), fills only absent persona fields, grants skills and MCP servers
+    additively, and backfills identities. Idempotent; never blocks boot.
+    """
+    from boss_engine.services import shipped_cast
+
+    try:
+        results = shipped_cast.sync_all(engine, settings, actor="boss")
+        installed = {p: r["installed"] for p, r in results.items() if r["installed"]}
+        filled = sum(len(r["filled"]) for r in results.values())
+        if installed or filled:
+            print(f"[lifespan] shipped cast: installed {installed}; filled {filled} persona(s)")
+        return results
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] shipped cast sync skipped: {exc}")
+        return {}
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
@@ -1316,6 +1339,7 @@ async def lifespan(_: FastAPI):
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
+    _install_shipped_cast()
     _backfill_agent_identities()
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
     # per-command durations, the queueing-vs-work split, why a preview refused — went to a
