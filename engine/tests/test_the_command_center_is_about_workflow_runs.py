@@ -100,16 +100,19 @@ def test_a_failed_step_on_a_stopped_run_needs_you_with_retry_and_the_reason():
     assert item["what_to_do"]
 
 
-def test_a_refused_approval_is_not_offered_as_a_step_to_retry():
-    """THE INTEGRATION INCIDENT. This list used its own status sets and offered Retry on every
-    failed step — including an approval somebody answered no to, where Try again would turn a
-    person's no into another attempt and the run itself offers nothing. It now reads
+def test_a_refused_approval_offers_ask_again_or_stop_never_skip():
+    """THE INTEGRATION INCIDENT, AS AGENTS HOME SETTLED IT (D3). This list once used its own
+    status sets and offered Retry on every failed step. It reads
     workflow_run_actions.stopped_for_operator, the rule the Workflow screen and the briefing
-    read, so a row appears only with the answers the run really offers."""
+    read, so a row appears only with the answers the run really offers. For an approval
+    somebody answered no to, that is Retry (ask again) and Stop — never Skip, which would carry
+    the run into exactly what was refused."""
     out = build(runs=[run("wfr_1", "failed")],
                 steps=[step("wfr_1", "approve", "failed", step_kind="decision",
                             last_error="rejected by the release manager")])
-    assert [n for n in out["needs_you"] if n["kind"] == "failed_step"] == []
+    [card] = [n for n in out["needs_you"] if n["kind"] == "failed_step"]
+    keys = [a["key"] for a in card["answers"]]
+    assert "retry_step" in keys and "stop" in keys and "skip_step" not in keys
 
 
 def test_a_run_the_operator_cancelled_is_not_waiting_for_a_retry():
@@ -179,9 +182,13 @@ def test_what_stops_work_comes_first():
         ],
         readiness=[{"title": "Connect a model", "done": False}])
     kinds = [(n["kind"], n.get("decision_kind")) for n in out["needs_you"]]
-    assert kinds == [("approval", "deploy_gate"), ("failed_step", None),
-                     ("readiness", None), ("approval", "refusal")]
-    assert out["counts"]["needs_you"] == 4
+    # A STOPPED RUN FIRST (agents-home D12): it has already stopped. Then gates, then notices;
+    # setup last.
+    assert kinds == [("failed_step", None), ("approval", "deploy_gate"),
+                     ("approval", "refusal"), ("readiness", None)]
+    # ONE NUMBER (D2): decisions; the stopped step and the setup gap are counted apart.
+    assert out["counts"]["needs_you"] == 2
+    assert out["counts"]["stopped"] == 1 and out["counts"]["setup"] == 1
 
 
 def test_recent_outcomes_are_the_last_week_of_finished_runs_newest_first():
