@@ -208,11 +208,12 @@ const AREAS: AreaDef[] = [
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
+  // NAMED FOR WHAT IS IN IT, AND FIRST IN SETTINGS. "Setup" is a stage of the product's life —
+  // it reads as something you do once and never open again, so the page an operator needs when
+  // a model runs out of credit or a repo token expires was filed under a name that says
+  // "already done". It carries a badge while anything on it is unfinished or failing.
+  { id: "setup", label: "Repo and models", sub: "Where BOSS writes code and what it thinks with", group: "Settings", icon: ICONS.infra },
   { id: "skills", label: "Skills and MCP", sub: "What agents and steps can do — skills you author, and the MCP servers they reach", group: "Settings", icon: ICONS.capabilities },
-  // NAMED FOR WHAT IS IN IT. "Setup" is a stage of the product's life — it reads as something
-  // you do once and never open again, so the page an operator needs when a model runs out of
-  // credit or a repo token expires was filed under a name that says "already done".
-  { id: "setup", label: "Repo and model", sub: "Connect a repository and a model — the two things a working install needs", group: "Settings", icon: ICONS.infra },
   { id: "budget", label: "Govern", sub: "How hard BOSS runs — concurrency, turn budgets, and spend", group: "Settings", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Settings", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Settings", icon: ICONS.comms },
@@ -272,6 +273,9 @@ export type ConsoleShellProps = {
     budgetState: string;
     deadletters: number;
     pendingDecisions: number;
+    /** Repo and models' rail badge, from GET /v1/setup: how many rows are unfinished or
+     *  failing, red when any check is failing. Absent or 0: no badge. */
+    setup?: { count: number; tone: "amber" | "red" } | null;
     /** WHICH control plane this console is reading.
      *
      *  Two consoles with identical chrome and completely different worlds is how an operator
@@ -927,6 +931,7 @@ export default function ConsoleShell({
   const badgeFor = (id: AreaId): number | undefined => {
     if (id === "decisions" && status.pendingDecisions > 0) return status.pendingDecisions;
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
+    if (id === "setup" && status.setup && status.setup.count > 0) return status.setup.count;
     return undefined;
   };
 
@@ -1063,6 +1068,7 @@ export default function ConsoleShell({
                     data-area-nav={a.id}
                     // The label survives docking as a tooltip — icons alone are a memory test.
                     data-label={labelFor(a)}
+                    title={a.sub}
                     data-paid-badge={paidBadge ? "true" : undefined}
                     data-sso-visible={a.id === "enterprise" ? "true" : undefined}
                     onClick={() => go(a.id)}
@@ -1089,7 +1095,12 @@ export default function ConsoleShell({
                         Paid
                       </span>
                     ) : null}
-                    {badge ? <span className="bx-nav-badge">{badge}</span> : null}
+                    {badge ? (
+                      <span className="bx-nav-badge" data-testid={`nav-badge-${a.id}`}
+                            data-tone={a.id === "setup" ? status.setup?.tone : undefined}>
+                        {badge}
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}

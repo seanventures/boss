@@ -165,6 +165,7 @@ import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
 import { SetupBoard } from "./setup/setup-board";
+import { fetchSetupSummary, landingArea } from "../lib/setup-server";
 import { SkillsHome } from "./skills-ui";
 import { ChannelsHome } from "./channels-ui";
 import { DeploymentManagerPanel } from "./deployment-manager-ui";
@@ -637,6 +638,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const activeOrgId = selectedOrg.org_id;
   const activeOrgName = selectedOrg.org_name;
   const activeProjectId = selectedOrg.project_id;
+  // FIRST SIGN-IN LANDS WHERE THE WORK IS. With no `area` asked for and setup not ready, the
+  // console opens on Repo and models; once ready the default is the Command Center as before.
+  // The same read feeds the rail badge, so the two cannot disagree.
+  const setupSummary = await fetchSetupSummary(activeProjectId);
+  const landing = landingArea(requestedArea, setupSummary);
+  if (landing) {
+    const next = searchParamsFrom(resolvedSearchParams);
+    next.set("area", landing);
+    redirect(`/?${next}`);
+  }
   // LOAD ONLY WHAT THIS AREA NEEDS.
   //
   // Every area paid for every other: one render fetched ~70 feeds and shipped 8.38 MB in
@@ -978,6 +989,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         budgetState: status.budgetState,
         deadletters: deadletterCount,
         pendingDecisions: status.pendingDecisions,
+        setup: setupSummary?.badge ?? null,
         // Read here, on the server, because this is the URL the page's fetches actually use.
         controlPlane: API_URL,
       }}
