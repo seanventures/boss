@@ -146,3 +146,18 @@ def test_activity_says_which_calls_were_included(client, engine):
     assert calls and calls[0]["included_in_subscription"] is True
     cost = _cockpit(client, run_id)["outputs"]["cost"]
     assert cost["word"] == "Included in plan" and cost["metered_usd"] == 0
+
+
+def test_credits_credit_this_build_not_the_run_around_it(client, engine):
+    """D4: the cockpit's Credits read the workflow run's chain — "1 agent $0.00" while Outputs
+    said 5 agents. A build's own chain has the run chain's shape and this build's agents."""
+    run_id = fx.new_run(engine, title="Credited app")
+    fx.stage(engine, run_id, "write_tests")
+    fx.stage(engine, run_id, "implement")
+    r = client.get(f"/v1/code-tasks/{run_id}/chain", params={"viewer": fx.ACTOR})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["code_task_run_id"] == run_id and body["acts"]
+    roles = [c["role_key"] for c in body["credits"] if c["role_key"]]
+    assert "qa" in roles and "software_engineer" in roles
+    assert set(body["totals"]) >= {"steps", "minutes", "cost"}

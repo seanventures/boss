@@ -43,7 +43,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -2241,6 +2241,32 @@ def chain(connection: Connection, project_id: str, workflow_run_id: str, *,
 
     # This run's subtree: a child run's chain is its own, and its parent's chain contains it.
     walk(dict(root), 0)
+    return _chain_of(connection, ordered, root, viewer=viewer,
+                     ids={"workflow_run_id": workflow_run_id})
+
+
+def chain_for_code_task(connection: Connection, project_id: str, code_task_run_id: str, *,
+                        viewer: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """ONE BUILD'S chain, in the run chain's shape, so its Credits credit THIS build's acts
+    (factory test D4: the cockpit credited the build's workflow run — "1 agent $0.00" while
+    Outputs said 5 agents). Its root (or the first act that signed it), then every stage and
+    seat, oldest first."""
+    rows = [dict(r) for r in connection.execute(
+        text("SELECT * FROM agent_acts WHERE project_id = :p AND code_task_run_id = :c "
+             "AND kind IN ('run', 'stage') ORDER BY (kind = 'run') DESC, started_at, act_id"),
+        {"p": project_id, "c": code_task_run_id},
+    ).mappings().all()]
+    if not rows:
+        return None
+    root = rows[0]
+    ordered = [(root, 0)] + [(r, 1) for r in rows[1:]]
+    return _chain_of(connection, ordered, root, viewer=viewer,
+                     ids={"workflow_run_id": None, "code_task_run_id": code_task_run_id})
+
+
+def _chain_of(connection: Connection, ordered: list[tuple[dict[str, Any], int]],
+              root: Mapping[str, Any], *, viewer: Optional[str],
+              ids: dict[str, Any]) -> dict[str, Any]:
     wire = _serialized(connection, [a for a, _ in ordered], viewer=viewer)
     for item, (_, depth) in zip(wire, ordered):
         item["depth"] = depth
@@ -2269,7 +2295,7 @@ def chain(connection: Connection, project_id: str, workflow_run_id: str, *,
                 "Started the run" if k == "run" else "Approved" for k in kinds))
         credits.append({"role_key": key, "line": line})
     return {
-        "workflow_run_id": workflow_run_id,
+        **ids,
         "root_act_id": root["act_id"],
         "acts": wire,
         "accountable": root["accountable"],
