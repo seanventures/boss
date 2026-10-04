@@ -57,7 +57,13 @@ function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () =
     target.focus?.({ preventScroll: true });
   }, [where]); // eslint-disable-line react-hooks/exhaustive-deps -- on open and on a move
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") close.current(); };
+    // Esc closes THIS overlay and nothing under it: the agent Passport closes itself on an Esc
+    // nobody handled, so an unmarked one took the whole page down with the sheet.
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      close.current();
+    };
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
   }, []);

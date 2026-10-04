@@ -9,6 +9,7 @@
  * server's own — `Add` stays disabled until one passes. A refusal is one red line of ≤ 6 words
  * with the full reason (the line, the phrase) in its tooltip; a secret is never echoed back.
  */
+import { X } from "@phosphor-icons/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -91,7 +92,7 @@ export function InstructionSheet({ projectId, actor, roleKey, input, taken, onCl
     <ModalShell label={replacing ? "Replace file" : "Add instructions"} testId="instruction-sheet" onClose={onClose} wide over>
       <div className="kit-modal-head">
         <h3>{replacing ? "Replace file" : "Add instructions"}</h3>
-        <button type="button" className="kit-link" aria-label="Close" onClick={onClose}>×</button>
+        <button type="button" className="ag-icon-btn" aria-label="Close" data-tip="Close" onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
       <label className="kit-field">
         <span className="kit-field-label">Name</span>

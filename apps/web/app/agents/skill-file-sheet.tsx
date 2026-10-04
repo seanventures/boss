@@ -6,6 +6,7 @@
  * is not in every prompt: the agent always sees `What it does` and reads the body only when it
  * calls it. It can't act — the risk is always `Reads`.
  */
+import { X } from "@phosphor-icons/react";
 import React, { useState } from "react";
 
 import { frontmatter, instructionsApi, type Refused } from "../../lib/agent-instructions";
@@ -48,7 +49,7 @@ export function SkillFileSheet({ projectId, actor, roleKey, agentName, fileName,
     <ModalShell label="New skill from file" testId="skill-file-sheet" onClose={onClose} wide over>
       <div className="kit-modal-head">
         <h3>New skill from file</h3>
-        <button type="button" className="kit-link" aria-label="Close" onClick={onClose}>×</button>
+        <button type="button" className="ag-icon-btn" aria-label="Close" data-tip="Close" onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
       <label className="kit-field">
         <span className="kit-field-label">Name</span>
