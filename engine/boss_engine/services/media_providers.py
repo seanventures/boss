@@ -53,6 +53,14 @@ CAP_READ = "storage.read"
 CAP_WRITE = "storage.write"
 CAP_PUBLISH = "video.publish"
 
+#: The provider key for BOSS's own artifact storage (see PROVIDERS).
+LOCAL_PROVIDER = "boss"
+
+#: Hosts whose links are Google Drive files. Kept as data so a check that must not touch the
+#: network (readiness, before a run starts) can ask "is this a Drive link" without resolving it.
+GOOGLE_DRIVE_HOSTS = frozenset(
+    {"drive.google.com", "docs.google.com", "drive.usercontent.google.com"})
+
 
 @dataclass(frozen=True)
 class MediaProvider:
@@ -154,6 +162,19 @@ PROVIDERS: dict[str, MediaProvider] = {
         setup_hint="No connection needed. The link must be publicly reachable, and BOSS refuses "
                    "anything on a private or loopback address.",
     ),
+    # BOSS'S OWN ARTIFACT STORAGE: the install's artifacts volume (BOSS_ARTIFACTS_DIR). Where a
+    # fetched source, a rendered edit and anything else in between is kept when the workflow
+    # names no output provider, or names one that is not connected. Without it, storing the
+    # result of a direct-link fetch defaulted to Google, so nobody could try an edit at all
+    # without first connecting an account that only publishing actually needs.
+    LOCAL_PROVIDER: MediaProvider(
+        key=LOCAL_PROVIDER,
+        display_name="BOSS artifact storage",
+        auth_style=AUTH_NONE,
+        capabilities=(CAP_READ, CAP_WRITE),
+        setup_hint="No connection needed. Kept on this install's artifacts volume and "
+                   "reviewable from the console.",
+    ),
 }
 
 
@@ -163,6 +184,23 @@ def provider(key: str) -> MediaProvider:
         raise MediaProviderError(
             f"unknown media provider {key!r} — BOSS has {', '.join(sorted(PROVIDERS))}.")
     return entry
+
+
+def is_drive_link(url: str) -> bool:
+    """Whether ``url`` names a Google Drive file, by its host alone — no DNS, no fetch.
+
+    What readiness asks before a run starts: a Drive link needs a Google connection, a direct
+    HTTPS link does not, and the answer must not cost a network round trip per input.
+    """
+    raw = str(url or "").strip()
+    if not raw or len(raw) > 2048:
+        return False
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return False
+    return (parsed.scheme or "").lower() in ("http", "https") and \
+        (parsed.hostname or "").lower() in GOOGLE_DRIVE_HOSTS
 
 
 # ---------------------------------------------------------------------------------------------
@@ -242,7 +280,7 @@ def resolve_link(url: str) -> ResolvedLink:
         raise MediaProviderError("that link names no host.")
 
     # --- Google ---------------------------------------------------------------------------
-    if host in ("drive.google.com", "docs.google.com", "drive.usercontent.google.com"):
+    if host in GOOGLE_DRIVE_HOSTS:
         found = _GOOGLE_FILE.search(parsed.path)
         if found:
             return ResolvedLink("google", file_ref=found.group(1), original_url=raw)

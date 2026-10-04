@@ -1135,7 +1135,7 @@ def execute_code_remember(
 
 
 def _media_artifact(context: "SkillExecutorContext", artifact_id: str) -> dict[str, Any]:
-    """The Drive file an artifact points at."""
+    """The media file an artifact points at: kept in BOSS's own storage, or in Drive."""
     from sqlalchemy import text as _sql
 
     row = context.connection.execute(
@@ -1145,10 +1145,61 @@ def _media_artifact(context: "SkillExecutorContext", artifact_id: str) -> dict[s
     if not row:
         raise ValueError(f"no artifact {artifact_id!r} in this project")
     content = row["content"] or {}
-    if not content.get("drive_file_id"):
+    if not content.get("drive_file_id") and not content.get("local_path"):
         raise ValueError(
-            f"artifact {artifact_id!r} is not a media file — it names no Drive file")
+            f"artifact {artifact_id!r} is not a media file — it names no stored or Drive file")
     return content
+
+
+def _local_media(context: "SkillExecutorContext", content: dict[str, Any], work: str,
+                 inputs: dict[str, Any]) -> str:
+    """A local path for a media artifact, wherever it is kept (media_storage.materialize).
+
+    Only a Drive-kept artifact needs Google; one BOSS keeps itself is read in place.
+    """
+    from .media_storage import materialize
+
+    return materialize(context.connection, context.settings, project_id=context.project_id,
+                       content=content, dest_dir=work,
+                       connection_key=str(inputs.get("connection_key") or "").strip() or None)
+
+
+def _output_provider(inputs: dict[str, Any]) -> Optional[str]:
+    """Where the workflow ASKED for a result to be kept, if it asked at all.
+
+    Naming a Drive output folder is asking for Drive. Naming nothing is not asking for anything,
+    and the result stays in BOSS's own storage — Google is not a precondition of editing.
+    """
+    named = str(inputs.get("store_provider") or "").strip().lower()
+    if named:
+        return named
+    return "google" if str(inputs.get("output_folder_id") or "").strip() else None
+
+
+def _store_media(context: "SkillExecutorContext", inputs: dict[str, Any], path: str,
+                 name: str) -> dict[str, Any]:
+    from .media_storage import store
+
+    return store(context.connection, context.settings, project_id=context.project_id,
+                 local_path=path, name=name, provider_key=_output_provider(inputs),
+                 container=str(inputs.get("output_folder_id") or ""),
+                 connection_key=str(inputs.get("connection_key") or "").strip() or None,
+                 actor=context.actor)
+
+
+def _where_stored(artifact_id: str, written: dict[str, Any]) -> dict[str, Any]:
+    """What every media step reports about the file it kept, whichever storage holds it."""
+    from .media_storage import media_url
+
+    local = bool(written.get("local_path"))
+    out = {
+        "drive_file_id": written.get("file_id"),
+        "view_url": media_url(artifact_id) if local else written.get("view_url"),
+        "stored_in": "boss" if local else str(written.get("provider") or "google"),
+    }
+    if written.get("note"):
+        out["storage_note"] = written["note"]
+    return out
 
 
 def _edit_in_drive(
@@ -1164,22 +1215,16 @@ def _edit_in_drive(
     Written once because the interesting part of each operation is the ffmpeg call, and five
     copies of the download/upload scaffolding is five places for the cleanup to be forgotten.
     """
-    from .drive_media import download, record_artifact, upload, workspace
+    from .drive_media import record_artifact, workspace
     from .video_edit import verify_playable
 
     source_artifact = str(inputs.get("media_artifact_id") or "").strip()
     if not source_artifact:
         raise ValueError("media_artifact_id is required")
     source = _media_artifact(context, source_artifact)
-    connection_key = str(inputs.get("connection_key") or "youtube_default")
-    folder_id = str(inputs.get("output_folder_id") or "")
 
     with workspace(f"boss-{operation}-") as work:
-        local = download(
-            context.connection, context.settings,
-            project_id=context.project_id, file_id=source["drive_file_id"],
-            dest_dir=work, connection_key=connection_key,
-        )["path"]
+        local = _local_media(context, source, work, inputs)
 
         # Clips this operation also needs (an intro, an outro, a logo), each named by its own
         # artifact so they are versioned and inspectable like anything else.
@@ -1189,11 +1234,7 @@ def _edit_in_drive(
             if not artifact_id:
                 continue
             asset = _media_artifact(context, artifact_id)
-            fetched[field] = download(
-                context.connection, context.settings,
-                project_id=context.project_id, file_id=asset["drive_file_id"],
-                dest_dir=work, connection_key=connection_key,
-            )["path"]
+            fetched[field] = _local_media(context, asset, work, inputs)
 
         edited = apply_edit(local, work, fetched)
         # VERIFIED BEFORE IT IS UPLOADED. ffmpeg exits 0 on empty and silent output, and an
@@ -1201,11 +1242,7 @@ def _edit_in_drive(
         info = verify_playable(edited, expect_audio=bool(inputs.get("expect_audio", True)))
 
         name = str(inputs.get("output_name") or "").strip() or os.path.basename(edited)
-        written = upload(
-            context.connection, context.settings,
-            project_id=context.project_id, local_path=edited, name=name,
-            folder_id=folder_id, connection_key=connection_key, actor=context.actor,
-        )
+        written = _store_media(context, inputs, edited, name)
 
     artifact_id = record_artifact(
         context.connection, project_id=context.project_id, actor=context.actor,
@@ -1214,8 +1251,7 @@ def _edit_in_drive(
     )
     return {
         "media_artifact_id": artifact_id,
-        "drive_file_id": written["file_id"],
-        "view_url": written["view_url"],
+        **_where_stored(artifact_id, written),
         "duration_seconds": info.get("duration_seconds"),
         "width": info.get("width"),
         "height": info.get("height"),
@@ -1609,7 +1645,7 @@ def execute_media_fetch_link(
     duplicating a multi-gigabyte file to achieve nothing is the kind of cost that only shows up on
     somebody's bill. Anything else is fetched once and stored once.
     """
-    from .media_storage import MediaStorageError, fetch, store
+    from .media_storage import MediaStorageError, fetch
     from .media_providers import resolve_link
     from .drive_media import record_artifact, workspace
 
@@ -1647,11 +1683,10 @@ def execute_media_fetch_link(
             ) from exc
 
         name = str(inputs.get("output_name") or "").strip() or fetched["name"]
-        written = store(context.connection, context.settings,
-                        project_id=context.project_id, local_path=fetched["path"], name=name,
-                        provider_key=str(inputs.get("store_provider") or "google"),
-                        container=str(inputs.get("output_folder_id") or ""),
-                        actor=context.actor)
+        # KEPT IN BOSS unless the workflow asked for Drive and Drive is connected. This used to
+        # default to Google, so a direct link fetched fine and then the run stopped for want of
+        # a connection only publishing needs.
+        written = _store_media(context, inputs, fetched["path"], name)
 
     artifact_id = record_artifact(
         context.connection, project_id=context.project_id, actor=context.actor,
@@ -1663,8 +1698,7 @@ def execute_media_fetch_link(
     )
     return {
         "media_artifact_id": artifact_id,
-        "drive_file_id": written["file_id"],
-        "view_url": written["view_url"],
+        **_where_stored(artifact_id, written),
         "name": name,
         "provider": link.provider_key,
         "copied": True,
@@ -1694,7 +1728,7 @@ def execute_media_fetch_image(
     and a required step that fails on an empty optional field is a workflow that cannot be run
     without one.
     """
-    from .media_storage import MediaStorageError, fetch, store
+    from .media_storage import MediaStorageError, fetch
     from .media_providers import resolve_link
     from .drive_media import record_artifact, workspace
     from .video_edit import is_a_still, probe, VideoEditError
@@ -1731,11 +1765,7 @@ def execute_media_fetch_image(
         still = is_a_still(fetched["path"])
 
         name = str(inputs.get("output_name") or "").strip() or fetched["name"]
-        written = store(context.connection, context.settings,
-                        project_id=context.project_id, local_path=fetched["path"], name=name,
-                        provider_key=str(inputs.get("store_provider") or "google"),
-                        container=str(inputs.get("output_folder_id") or ""),
-                        actor=context.actor)
+        written = _store_media(context, inputs, fetched["path"], name)
 
     artifact_id = record_artifact(
         context.connection, project_id=context.project_id, actor=context.actor,
@@ -1748,8 +1778,7 @@ def execute_media_fetch_image(
         # KEYED BY THE LABEL, so this wires straight into plan_edit's `assets` and the planning
         # model is told what the picture is for rather than guessing from a bare id.
         "assets": {label: artifact_id},
-        "drive_file_id": written["file_id"],
-        "view_url": written["view_url"],
+        **_where_stored(artifact_id, written),
         "name": name,
         "provider": link.provider_key,
         "source_url": url,
@@ -1840,7 +1869,7 @@ def execute_video_plan_edit(
     """
     from .video_edit import probe, VideoEditError
     from .video_planner import PlanningError, house_style_for, plan_from_instructions, summarise
-    from .drive_media import download, workspace
+    from .drive_media import workspace
 
     source_artifact = str(inputs.get("media_artifact_id") or "").strip()
     if not source_artifact:
@@ -1863,12 +1892,8 @@ def execute_video_plan_edit(
     if duration <= 0:
         # Not recorded — an artifact imported before those were captured. Measure it rather than
         # planning blind, because planning blind is the failure above.
-        connection_key = str(inputs.get("connection_key") or "youtube_default")
         with workspace("boss-plan-probe-") as work:
-            local = download(
-                context.connection, context.settings, project_id=context.project_id,
-                file_id=source["drive_file_id"], dest_dir=work,
-                connection_key=connection_key)["path"]
+            local = _local_media(context, source, work, inputs)
             try:
                 info = probe(local)
             except VideoEditError as exc:
@@ -1922,7 +1947,7 @@ def execute_video_apply_plan(
     It is also the only shape that downloads and uploads once. Eleven steps would mean eleven
     round trips through Drive for a video that is being re-encoded anyway.
     """
-    from .drive_media import download, record_artifact, upload, workspace
+    from .drive_media import record_artifact, workspace
     from .video_edit import apply_plan, validate_plan, verify_playable
 
     source_artifact = str(inputs.get("media_artifact_id") or "").strip()
@@ -1934,8 +1959,6 @@ def execute_video_apply_plan(
     plan = validate_plan(inputs.get("plan"))
 
     source = _media_artifact(context, source_artifact)
-    connection_key = str(inputs.get("connection_key") or "youtube_default")
-    folder_id = str(inputs.get("output_folder_id") or "")
 
     # Every artifact the plan names, gathered from the plan itself rather than from fixed input
     # fields — the point of a plan is that BOSS does not know in advance how many images it
@@ -1948,31 +1971,19 @@ def execute_video_apply_plan(
                 wanted.append(value)
 
     with workspace("boss-apply-plan-") as work:
-        local = download(
-            context.connection, context.settings,
-            project_id=context.project_id, file_id=source["drive_file_id"],
-            dest_dir=work, connection_key=connection_key,
-        )["path"]
+        local = _local_media(context, source, work, inputs)
 
         assets: dict[str, str] = {}
         for artifact_id in wanted:
             asset = _media_artifact(context, artifact_id)
-            assets[artifact_id] = download(
-                context.connection, context.settings,
-                project_id=context.project_id, file_id=asset["drive_file_id"],
-                dest_dir=work, connection_key=connection_key,
-            )["path"]
+            assets[artifact_id] = _local_media(context, asset, work, inputs)
 
         result = apply_plan(local, plan, work_dir=work, artifact_paths=assets)
         info = verify_playable(
             result["path"], expect_audio=bool(inputs.get("expect_audio", True)))
 
         name = str(inputs.get("output_name") or "").strip() or os.path.basename(result["path"])
-        written = upload(
-            context.connection, context.settings,
-            project_id=context.project_id, local_path=result["path"], name=name,
-            folder_id=folder_id, connection_key=connection_key, actor=context.actor,
-        )
+        written = _store_media(context, inputs, result["path"], name)
 
     artifact_id = record_artifact(
         context.connection, project_id=context.project_id, actor=context.actor,
@@ -1985,8 +1996,7 @@ def execute_video_apply_plan(
     )
     return {
         "media_artifact_id": artifact_id,
-        "drive_file_id": written["file_id"],
-        "view_url": written["view_url"],
+        **_where_stored(artifact_id, written),
         "applied": result["applied"],
         "timeline_note": result.get("timeline_note"),
         "duration_seconds": info.get("duration_seconds"),
@@ -2005,7 +2015,7 @@ def execute_publish_youtube(
     the same media artifact every editing step produces, so the thing published is provably the
     thing that was reviewed — not a file somebody re-uploaded in between.
     """
-    from .drive_media import download, workspace
+    from .drive_media import workspace
     from .video_edit import verify_playable
     from .youtube_publish import upload_video
 
@@ -2016,11 +2026,8 @@ def execute_publish_youtube(
     connection_key = str(inputs.get("connection_key") or "youtube_default")
 
     with workspace("boss-publish-") as work:
-        local = download(
-            context.connection, context.settings,
-            project_id=context.project_id, file_id=source["drive_file_id"],
-            dest_dir=work, connection_key=connection_key,
-        )["path"]
+        # Wherever the reviewed file is kept: BOSS's own storage or Drive.
+        local = _local_media(context, source, work, inputs)
         # CHECKED AGAIN, IMMEDIATELY BEFORE THE IRREVERSIBLE ACT. The edit step verified its
         # own output, but something could have replaced the Drive file since. Publishing an
         # empty or silent video is not recoverable by deleting it — people have seen it.
