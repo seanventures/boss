@@ -149,7 +149,7 @@ class TestTheQuestionIsInWords:
 
     def test_the_gate_builds_it_this_way_and_offers_approve_and_reject(self):
         source = inspect.getsource(runner._open_gate)
-        assert "gate_question" in source and "_unique_question" in source
+        assert "gate_question" in source and "open_step_decision(" in source
         assert "· run {run['id'][-8:]}" not in source
         assert '"label": "Approve"' in source and '"label": "Reject"' in source
         # No environment on a step that ships nowhere.

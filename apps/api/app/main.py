@@ -1397,6 +1397,18 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] operator-made workflows moved to product: {adopted}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a housekeeping move
         print(f"[lifespan] operator-made workflow adoption skipped: {exc}")
+    # QUESTIONS LEFT BEHIND BY RUNS THAT ARE OVER. Before run_decisions, stopping or removing a
+    # run left its gates in Approvals, answerable (boss-1: 21 of them). Withdrawn once here;
+    # idempotent, so every boot after the first finds nothing.
+    try:
+        from boss_engine.services.run_decisions import withdraw_orphaned
+
+        with begin(engine) as connection:
+            orphaned = withdraw_orphaned(connection, actor="boss")
+        if orphaned:
+            print(f"[lifespan] decisions of ended runs withdrawn: {len(orphaned)}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] orphaned-decision sweep skipped: {exc}")
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
