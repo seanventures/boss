@@ -969,3 +969,152 @@
   }
   .ag-seat[data-state="speaking"] .ag-cv-face { transform: none; }
 }
+
+/* ── Agents home: Organization, Directory, Activity (S3) ── */
+/* Teams are soft zones tinted from their palette hue (--team-hue); state is always a glyph and a
+   word as well as a ring. Idle faces here never move; live ones move only inside the budget, and
+   every motion has a still under reduced motion (agents-home spec §5.2). */
+[data-still] .ag-av *, [data-still] .ag-av, .ag-team-face[data-still] .ag-av * { animation: none !important; }
+
+/* Live › Agent force (compact) */
+.ag-team-force { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.ag-team-zone {
+  --team-tint: color-mix(in srgb, var(--team-hue, #9fb0ce) 6%, transparent);
+  --team-line: color-mix(in srgb, var(--team-hue, #9fb0ce) 12%, transparent);
+  background: var(--team-tint); border: 1px solid var(--team-line); border-radius: 12px; min-width: 0;
+}
+.ag-team-zone[data-open] { flex: 1 1 100%; }
+.ag-team-pill {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 10px; border: 0;
+  background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; border-radius: 12px;
+}
+.ag-team-pill:focus-visible, .ag-zones-agent:focus-visible, .ag-zones-lhead:focus-visible,
+.ag-river-row:focus-visible, .ag-team-who:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.ag-team-label { font-weight: 700; }
+.ag-team-count { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ag-team-faces { display: inline-flex; align-items: center; gap: 2px; }
+.ag-team-face { display: inline-flex; line-height: 0; transition: opacity 160ms ease; }
+.ag-team-face[data-state="idle"] { opacity: 0.7; }
+.ag-team-face[data-dim="search"], .ag-team-row[data-dim="search"] { opacity: 0.3; }
+.ag-team-more { font-size: 11px; color: var(--faint); margin-left: 2px; }
+.ag-team-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ag-team-badge[data-kind="needs_you"] { color: var(--amber); }
+.ag-team-badge[data-kind="working"] { color: var(--accent-text); }
+.ag-team-members { padding: 4px 10px 10px; animation: agav-team-open 160ms ease-out; transform-origin: top; }
+.ag-team-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; }
+.ag-team-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ag-team-who { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 36px; border: 0;
+  background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; padding: 2px 4px; border-radius: 8px; }
+.ag-team-who:hover { background: var(--team-tint); }
+.ag-team-name { font-weight: 600; white-space: nowrap; }
+.ag-team-line { color: var(--muted); font-size: 12px; min-width: 0; }
+@keyframes agav-team-open { from { opacity: 0; transform: scaleY(0.92); } to { opacity: 1; transform: none; } }
+
+/* Organization › Zones (full) */
+.ag-org-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; }
+.ag-zones { position: relative; }
+.ag-zones-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ag-zones-sel { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.ag-zones-menu-wrap { position: relative; display: inline-flex; }
+.ag-zones-menu {
+  position: absolute; top: 100%; left: 0; z-index: 20; display: flex; flex-direction: column; min-width: 160px; padding: 6px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+.ag-zones-menu-head { font-size: 11px; color: var(--faint); padding: 4px 8px; }
+.ag-zones-menu button { border: 0; background: transparent; color: var(--ink); text-align: left; padding: 6px 8px; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; }
+.ag-zones-menu button:hover:not(:disabled) { background: var(--accent-soft); }
+.ag-zones-menu button:disabled { color: var(--faint); cursor: default; }
+.ag-zones-map { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.ag-zones-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 2; }
+.ag-zones-edge { fill: none; stroke: var(--accent-text); stroke-opacity: 0.55; stroke-linecap: round; }
+.ag-zones-edge[data-new] { animation: agav-zones-draw 400ms ease-out both; }
+.ag-zones-edge[data-lit] { stroke-opacity: 1; }
+@keyframes agav-zones-draw { from { opacity: 0; } to { opacity: 1; } }
+.ag-zones-zone {
+  --team-tint: color-mix(in srgb, var(--team-hue, #9fb0ce) 6%, transparent);
+  --team-line: color-mix(in srgb, var(--team-hue, #9fb0ce) 12%, transparent);
+  background: var(--team-tint); border: 1px solid var(--team-line); border-radius: 14px; padding: 10px 12px 12px; min-width: 0;
+}
+.ag-zones-zone[data-band] { grid-column: 1 / -1; }
+.ag-zones-zone[data-row-start] { grid-column-start: 1; }
+.ag-zones-zone[data-focus] { border-color: color-mix(in srgb, var(--team-hue) 50%, transparent); }
+.ag-zones-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.ag-zones-faces { display: flex; flex-wrap: wrap; gap: 8px 10px; }
+.ag-zones-agent {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 4px; width: 72px; padding: 4px 2px; border: 0;
+  border-radius: 10px; background: transparent; color: var(--ink); font: inherit; cursor: pointer; position: relative; z-index: 3;
+  transition: opacity 160ms ease;
+}
+.ag-zones-agent[data-selected] { background: color-mix(in srgb, var(--team-hue) 18%, transparent); }
+.ag-zones-agent[data-dim="other"] { opacity: 0.4; }
+.ag-zones-agent[data-dim="search"] { opacity: 0.3; }
+.ag-zones-agent[data-lit] .ag-team-face { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--team-hue) 70%, transparent)); }
+.ag-zones-name { font-size: 11px; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-zones-skeleton { height: 320px; border-radius: 14px; background: var(--surface-2); }
+@media (max-width: 1279px) { .ag-zones-map { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1023px) {
+  .ag-zones-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ag-zones-agent .ag-avatar { --ag-size: 32px !important; }
+  .ag-zones-agent { width: 60px; }
+}
+/* Under 640px: a drill-down list, no map, no edges. */
+.ag-zones-list { display: flex; flex-direction: column; gap: 6px; }
+.ag-zones-lrow { background: color-mix(in srgb, var(--team-hue, #9fb0ce) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--team-hue, #9fb0ce) 12%, transparent); border-radius: 12px; }
+.ag-zones-lhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; width: 100%; min-height: 44px; padding: 8px 12px;
+  border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.ag-zones-lmembers { list-style: none; margin: 0; padding: 0 8px 8px; }
+.ag-zones-lmember { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; border: 0; background: transparent;
+  color: var(--ink); font: inherit; font-size: 14px; text-align: left; padding: 4px; cursor: pointer; }
+.ag-zones-lstate { color: var(--muted); }
+
+/* Directory: team sections, the same cards */
+.ag-dir-team .ag-zone-label { text-transform: uppercase; }
+
+/* Activity: the river */
+.ag-river { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ag-river-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ag-river-filters { margin: 0; }
+.ag-river-new {
+  position: sticky; top: 8px; z-index: 5; align-self: center; border: 1px solid var(--accent-line); background: var(--accent-soft);
+  color: var(--ink); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.ag-river-dayhead { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--faint); text-transform: uppercase; margin: 6px 0; }
+.ag-river-list { list-style: none; margin: 0; padding: 0; }
+.ag-river-kids { padding-left: 28px; border-left: 1px solid var(--border); margin-left: 52px; }
+.ag-river-row {
+  display: grid; grid-template-columns: 44px 24px minmax(0, 1fr) auto 56px 56px; align-items: center; gap: 10px;
+  min-height: 40px; padding: 4px 8px; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.ag-river-row:hover { background: var(--surface-2); }
+.ag-river-time { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 12px; }
+.ag-river-face { display: inline-flex; line-height: 0; }
+.ag-river-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-river-edge { color: var(--faint); margin-right: 4px; }
+.ag-river-who { font-weight: 600; }
+.ag-river-verb { color: var(--muted); }
+.ag-river-took, .ag-river-cost { color: var(--faint); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.ag-river-folds { display: flex; gap: 12px; padding: 0 8px 4px 86px; font-size: 12px; }
+.ag-river-tools { list-style: none; margin: 0 0 6px 86px; padding: 0; font-size: 12px; color: var(--muted); }
+.ag-river-tool[data-ok="false"] { color: var(--red); }
+.ag-river-card { margin: 4px 0 8px 86px; }
+.ag-river-more { align-self: center; }
+@media (max-width: 1023px) {
+  .ag-river-row { grid-template-columns: 44px 24px minmax(0, 1fr) auto; }
+  .ag-river-took, .ag-river-cost { display: none; }
+}
+@media (max-width: 639px) {
+  .ag-river-row { grid-template-columns: 40px 24px minmax(0, 1fr) auto; gap: 8px; }
+  /* Status as a glyph; the word stays for a screen reader. */
+  .ag-river-status .ag-state > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .ag-river-folds, .ag-river-tools, .ag-river-card { padding-left: 0; margin-left: 0; }
+  .ag-team-list { grid-template-columns: 1fr; }
+  .ag-river-text { white-space: normal; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-team-members { animation: none !important; }
+  .ag-team-face, .ag-zones-agent { transition: none !important; }
+  .ag-zones-edge[data-new] { animation: none !important; }
+  .ag-team-zone .ag-av *, .ag-zones .ag-av *, .ag-river .ag-av * { animation: none !important; }
+}

@@ -78,7 +78,8 @@ describe("a chart that cannot be drawn is refused before it is stored", () => {
 });
 
 describe("you can say something to an agent", () => {
-  const WF = codeOnly("app/workforce-ui.tsx");
+  // The roster grid and its Ask moved to Agents › Directory (agents/directory-view.tsx).
+  const WF = codeOnly("app/agents/directory-view.tsx");
   const CHAT = codeOnly("app/agent-ui.tsx");
   // Agent World: Ask carries the ROLE KEY to the 1:1 talk (lib/agent-world.ts askAgent), which
   // falls back to this same side dock, addressed to that agent, until the talk is there.
@@ -122,7 +123,8 @@ describe("you can say something to an agent", () => {
   it("keeps the operator where they were", () => {
     // No navigation at all now: the url is edited in place, so org/actor/area survive by
     // construction rather than by being copied across a rebuilt query string.
-    expect(WF).toContain("new URL(window.location.href)");
+    // The door the Directory's Ask goes through (openDockAbout) edits the URL in place.
+    expect(codeOnly("lib/dock-subject.ts")).toContain("new URL(window.location.href)");
     expect(WF).not.toContain("function askHref");
   });});
 

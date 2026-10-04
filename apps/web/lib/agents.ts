@@ -99,6 +99,8 @@ export function createAgent(projectId: string, actor: string, input: {
   reportsTo?: string | null; roleKey?: string;
   /** Its birth record and voice. Sent only when given, so an older API sees the old body. */
   bornFrom?: BornFrom; persona?: Persona;
+  /** Its team (agent_identity.team_of): a shipped key, free text, or left out for `yours`. */
+  team?: string;
 }) {
   return send("/v1/agents", "POST", {
     project_id: projectId, actor, name: input.name, purpose: input.purpose,
@@ -108,6 +110,7 @@ export function createAgent(projectId: string, actor: string, input: {
     ...(input.roleKey ? { role_key: input.roleKey } : {}),
     ...(input.bornFrom ? { born_from: input.bornFrom } : {}),
     ...(input.persona ? { persona: input.persona } : {}),
+    ...(input.team && input.team !== "yours" ? { team: input.team } : {}),
   }, { scope: "agent-create", label: "Create agent" }) as Promise<AgentResult<{ role_key?: string; agent_id?: string }>>;
 }
 
@@ -117,6 +120,8 @@ export function updateAgent(projectId: string, actor: string, roleKey: string, c
   boundaries?: { must: string[]; must_not: string[] }; reports_to?: string | null;
   /** Saving it seals a new version once; the answer carries version, fingerprint, warnings. */
   persona?: Persona;
+  /** Organization › Zones `Move to…`: the team key, or "yours" to clear it. */
+  team?: string;
 }) {
   return send(`/v1/agents/${enc(roleKey)}`, "PATCH",
     { project_id: projectId, actor, ...changes },
