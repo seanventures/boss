@@ -172,7 +172,9 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     try {
       const r = await sendRunAnswer(projectId, actor, run.id,
         { key: a.key, label: a.label, enabled: a.enabled, reason: null,
-          step_id: a.stepId ?? run.stepId } as RunAction, why);
+          step_id: a.stepId ?? run.stepId } as RunAction,
+        // Stop keeps a reason on the run like the run view's Stop does (cancel 422s without).
+        a.key === "stop" ? "Stopped from Agents › Live after a refused approval" : why);
       if (r.ok) {
         finish(a.key === "retry_step" ? `Retrying step ${k ?? ""}`.trim()
           : a.key === "skip_step" ? `Skipped step ${k ?? ""}`.trim()

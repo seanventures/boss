@@ -2287,7 +2287,7 @@ def presence_map(connection: Connection, project_id: str, *, include_idle: bool 
         text(
             f"""
             SELECT a.act_id, a.role_key, a.kind, a.status, a.label, a.started_at,
-                   a.workflow_run_id, a.step_id, p.role_key AS parent_role
+                   a.workflow_run_id, a.step_id, a.decision_id, p.role_key AS parent_role
             FROM agent_acts a LEFT JOIN agent_acts p ON p.act_id = a.parent_act_id
             WHERE a.project_id = :p AND a.ended_at IS NULL
               AND (a.status = 'awaiting_input'
@@ -2311,7 +2311,10 @@ def presence_map(connection: Connection, project_id: str, *, include_idle: bool 
 
     for row in open_rows:
         if row["status"] == "awaiting_input":
-            # Only the agent's own ask. A role-less wait (a gate) belongs to nobody here.
+            # Only the agent's own ask. A gate's wait — a step held on a decision, role-less
+            # since D4 and role-bearing in acts written before it — belongs to nobody here.
+            if row["kind"] == "step" and row.get("decision_id"):
+                continue
             offer(row["role_key"], "needs_you", row, f"Waiting on you: {row['label']}")
         elif row["kind"] == "seat":
             offer(row["role_key"], "in_panel", row, f"In a panel: {row['label']}")

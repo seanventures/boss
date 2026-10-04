@@ -52,4 +52,5 @@ def test_a_panel_seats_its_agents_and_presence_follows(client, engine):
     with engine.begin() as c:
         presence = agent_acts.presence_map(c, PROJECT)
     assert presence["pm"]["state"] == "idle"
-    assert presence["pm"]["line"].startswith("Last: Panel · Dark mode · ")
+    # `Last: <verb> · <label> · <age>` (agents-home §4.5: one verb map for every line).
+    assert presence["pm"]["line"].startswith("Last: In a panel · Panel · Dark mode · ")
