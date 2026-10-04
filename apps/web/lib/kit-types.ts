@@ -66,6 +66,8 @@ export type Ability = {
     acts_as: string | null;
     /** "channels" for YouTube: the drawer runs the existing Google client + channel flow. */
     flow?: string | null;
+    /** Whether something is stored (or works without anything, like keyless Exa). */
+    connected?: boolean;
   };
   tools: KitTool[];
   holders: string[];
@@ -76,7 +78,11 @@ export type Ability = {
   depends_on: string[];
   /** Where an ability whose connection lives in another area is set up (Deploy → Infra). */
   connect_href?: string | null;
+  /** The token scopes a provider needs, for the `Get a token ↗` tooltip. */
+  scopes_tip?: string | null;
   mcp: { server_id: string; name: string; trusted: boolean; reachable: boolean | null }[];
+  /** The MCP servers the kit file names, registered or not. */
+  mcp_names?: string[];
 };
 
 export type Kit = {
