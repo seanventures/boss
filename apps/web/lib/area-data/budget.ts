@@ -57,6 +57,8 @@ function emptyBudgetStatus(projectId: string): BudgetStatusCard {
     utilizationRatio: 0,
     activeReservationsCount: 0,
     topCostDrivers: [],
+    includedInSubscriptionUsdMicros: 0,
+    includedCostDrivers: [],
     apiReachable: false,
     blockedReason: "Area data not loaded for inactive console area",
   };

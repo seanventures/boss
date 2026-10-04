@@ -1573,6 +1573,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     ) : (
                       <p className="detail">No cost receipts recorded yet.</p>
                     )}
+                    {/* NOT MONEY, NEVER DROPPED. What subscription calls would have cost at
+                        API list price: shown, and counted against no cap (included_spend.py). */}
+                    {budgetStatus.includedInSubscriptionUsdMicros > 0 ? (
+                      <p className="detail" data-testid="budget-included-in-subscription">
+                        Included in your subscription:{" "}
+                        {formatMicros(budgetStatus.includedInSubscriptionUsdMicros)} at API list
+                        price — not spent, and not counted against the cap.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </>

@@ -289,6 +289,8 @@ class GitHubPullRequestReviewAgent(GitHubCommunityAgentBase):
                 usage.get("model") or "github-pr-review",
                 amount,
                 estimate_cost_usd_micros(usage),
+                included_in_subscription=model_routing.call_is_included(
+                    connection, self.settings, project_id, usage),
             )
             return result
         except Exception as error:  # noqa: BLE001 - deterministic review remains available

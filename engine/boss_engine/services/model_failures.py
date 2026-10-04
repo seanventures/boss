@@ -31,6 +31,48 @@ _PROVIDER_NAMES = {
 }
 
 
+#: Where an operator raises the cap.
+BUDGET_HREF = "/?area=budget"
+
+#: The job gate's reasons for holding work by budget state (jobs._budget_state_policy_for_job).
+BUDGET_HOLD_REASONS = (
+    "red_halts_non_p0_work", "orange_defers_non_critical_work",
+    "red_freezes_infra_provisioning", "red_freezes_tier2_effects",
+)
+_HELD_PREFIX = "held — the budget is"
+_HELD_DETAIL = re.compile(r"held — the budget is (\w+) \(([^)]*)\)", re.I)
+
+
+def _usd(micros: int) -> str:
+    dollars = int(micros or 0) / 1_000_000
+    return f"${dollars:,.0f}" if dollars == int(dollars) else f"${dollars:,.2f}"
+
+
+def budget_hold_sentence(budget_state: str, utilization_ratio: Optional[float],
+                         cap_usd_micros: Optional[int]) -> str:
+    """THE ONE WORDING for work the budget state holds — the job's last_error, the run's and the
+    discovery's attention, and readiness all say this, never "no worker has picked it up".
+
+    "Held — the budget is red (90% of $10 used). Raise the cap in Budget to let it run."
+
+    The money it counts is money: a subscription's calls are not in it (included_spend.py)."""
+    state = str(budget_state or "unknown")
+    used = ""
+    if cap_usd_micros:
+        percent = round(float(utilization_ratio or 0) * 100)
+        used = f" ({percent:.0f}% of {_usd(cap_usd_micros)} used)"
+    only = {"orange": ", so only P0 and P1 work runs",
+            "red": ", so only P0 work runs"}.get(state, "")
+    return f"Held — the budget is {state}{used}{only}. Raise the cap in Budget to let it run."
+
+
+def is_budget_hold(error: object) -> bool:
+    lowered = str(error or "").lower()
+    return (_HELD_PREFIX in lowered
+            or any(reason in lowered for reason in BUDGET_HOLD_REASONS)
+            or bool(re.search(r"budget state \w+ deferred job", lowered)))
+
+
 def provider_name(source_or_engine: Optional[str]) -> str:
     return _PROVIDER_NAMES.get(str(source_or_engine or ""), "the model")
 
@@ -52,6 +94,21 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "action": (f"Reconnect the {who} in Setup → Model. For Claude Code, run "
                        "`claude setup-token` and paste the long sk-ant-… value it prints."),
             "href": SETUP_HREF, "retry": False,
+        }
+    # HELD BY THE BUDGET STATE (the job gate). Not a failure and not a missing worker: the job
+    # is queued with a later run_after, and it runs once the money spent is back under the line.
+    if is_budget_hold(text):
+        found = _HELD_DETAIL.search(text)
+        state = (found.group(1).lower() if found else
+                 "red" if "red" in lowered else "orange" if "orange" in lowered else "over")
+        headline = (text.strip().split(". Raise")[0].rstrip(".") + "." if found
+                    else f"Held — the budget is {state}.")
+        return {
+            "kind": "budget_hold",
+            "headline": headline,
+            "action": ("Raise the cap in Budget to let it run. Work on a subscription costs no "
+                       "money and does not count against it."),
+            "href": BUDGET_HREF, "retry": False,
         }
     # Before the cap below: the governor's headroom refusal mentions the budget too, and it
     # clears by itself when the work holding the reservations finishes (BudgetGovernor.reserve).

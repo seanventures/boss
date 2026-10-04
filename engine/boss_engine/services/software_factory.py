@@ -1082,6 +1082,8 @@ class SoftwareFactoryService:
             usage.get("model") or ctx.get("route_model_id"),
             int(ctx.get("reservation_amount") or 0),
             estimate_cost_usd_micros(usage),
+            included_in_subscription=model_routing.call_is_included(
+                connection, self.settings, project_id, usage),
         )
         self.events.emit(
             connection,

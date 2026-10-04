@@ -338,6 +338,10 @@ class SkillRuntimeService:
                             estimate,
                             reported_actual,
                             actor,
+                            # A subscription or local model answered: the reported figure is
+                            # its list-price value, not money (included_spend.py).
+                            included_in_subscription=bool(
+                                result.get("included_in_subscription")),
                         )
                     actual_cost = reported_actual
                     cost_receipt_id = settlement["cost_receipt"]["id"]

@@ -496,6 +496,7 @@ def execute_model_generate_code(
     is an artifact for the software-factory gates to validate. Receipt-backed
     so the budget reservation settles with the real token cost."""
     from .core import create_artifact
+    from . import model_routing
     from .model_routing import project_chat_adapter
     from .openai_adapter import estimate_cost_usd_micros
 
@@ -595,6 +596,8 @@ def execute_model_generate_code(
         "test_plan": test_plan,
         "receipt_id": receipt["id"],
         "actual_cost_usd_micros": estimate_cost_usd_micros(usage),
+        "included_in_subscription": model_routing.call_is_included(
+            context.connection, context.settings, context.project_id, usage),
     }
 
 

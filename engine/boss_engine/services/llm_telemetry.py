@@ -92,6 +92,21 @@ def role_for_stage(stage: Optional[str]) -> Optional[str]:
     return STAGE_ROLES.get((stage or "").strip().lower())
 
 
+def engine_call_is_included(engine_name: Optional[str], usage: Optional[dict]) -> bool:
+    """Whether a call on `engine_name` ran on included capacity (a subscription or a local
+    model). The adapter's own `billing` stamp wins; otherwise the engine decides, by the same
+    list the router reserves nothing for (model_routing.UNMETERED)."""
+    from .included_spend import usage_is_included
+    from .model_routing import UNMETERED
+
+    if isinstance(usage, dict) and usage.get("billing"):
+        return usage_is_included(usage)
+    name = str(engine_name or "").strip().lower()
+    if name.startswith("guest:"):
+        name = name.split(":", 1)[1]
+    return name in UNMETERED
+
+
 def record_llm_call(
     *,
     engine_name: str,
@@ -117,6 +132,10 @@ def record_llm_call(
         if u.get("cost_usd_micros") is None and cost_usd_micros:
             _, _, known = price_for_model(model)
             price_estimated = not known
+        # cost_usd_micros is what the call is worth at list price. On a subscription or a local
+        # model that is not money (included_spend.py): the row says so, and the code task's
+        # budget settlement (code_task_service) charges only the rows that are money.
+        included = engine_call_is_included(engine_name, u)
         with begin(ctx.get("db_engine")) as c:
             c.execute(
                 text("""
@@ -124,9 +143,11 @@ def record_llm_call(
                         id, project_id, code_task_run_id, stage, engine, model, role,
                         prompt_tokens, completion_tokens, total_tokens,
                         cache_read_tokens, cache_write_tokens, cost_usd_micros,
-                        price_estimated, latency_ms, retries, turns, ok, error)
+                        price_estimated, latency_ms, retries, turns, ok, error,
+                        included_in_subscription)
                     VALUES (:id, :p, :run, :stage, :eng, :model, :role, :pt, :ct, :tt,
-                            :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err)
+                            :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err,
+                            :included)
                 """),
                 {
                     "id": f"llmc_{uuid4().hex[:20]}",
@@ -148,6 +169,7 @@ def record_llm_call(
                     "turns": int(turns or 0),
                     "ok": bool(ok),
                     "err": (error or None) and str(error)[:500],
+                    "included": included,
                 },
             )
             # A PROVIDER'S CAPACITY IS A GOVERNED FACT, AND THIS IS WHERE IT IS OBSERVED.

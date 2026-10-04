@@ -262,6 +262,10 @@ def _usage_from_response(response, model: str) -> dict:
     }
 
 
+#: Providers this adapter reaches that run on the operator's own hardware: no per-call money.
+_LOCAL_PROVIDERS = frozenset({"ollama", "vllm"})
+
+
 class OpenAIAdapter:
     def __init__(
         self,
@@ -279,6 +283,14 @@ class OpenAIAdapter:
         self._connection = connection
         self._project_id = (project_id or "").strip() or None
         self._provider = (provider or "openai").strip() or "openai"
+
+    def _stamp_billing(self, usage: dict) -> None:
+        """Say whether the call was money (included_spend.py). A local model is not; every
+        hosted endpoint this adapter reaches is metered."""
+        from .included_spend import BILLING_LOCAL, BILLING_METERED
+
+        usage["billing"] = (BILLING_LOCAL if self._provider.lower() in _LOCAL_PROVIDERS
+                            else BILLING_METERED)
 
     def _resolved_base_url(self) -> str:
         if self._base_url_override:
@@ -372,6 +384,7 @@ class OpenAIAdapter:
             usage["retries"] = stats.get("retries", 0)
             # Which endpoint answered, so an endpoint-scoped price applies to it alone.
             usage["base_url"] = self._resolved_base_url()
+            self._stamp_billing(usage)
             return response.id, text, usage
 
         # The Responses API is OpenAI-specific; compatible base URLs use
@@ -466,6 +479,7 @@ class OpenAIAdapter:
         usage["retries"] = stats.get("retries", 0)
         if not self._azure_enabled() and self._resolved_base_url():
             usage["base_url"] = self._resolved_base_url()
+        self._stamp_billing(usage)
         return normalized, usage
 
 

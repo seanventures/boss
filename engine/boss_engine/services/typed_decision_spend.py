@@ -371,11 +371,17 @@ class TypedDecisionSpend:
                 "step_id": self.step_id,
                 "attempt": self.attempt,
             })
+        # $0 of money on a subscription or local source the call is pinned to
+        # (included_spend.py); the reservation is then a gate, not a hold.
+        from .included_spend import reservation_estimate
+
+        estimate = reservation_estimate(connection, self.project_id, source_id,
+                                        MAX_COST_USD_MICROS)
         reserved = self.budget.reserve(
             connection,
             self.project_id,
             "model_gateway",
-            MAX_COST_USD_MICROS,
+            estimate,
             f"Typed decision {self.step_id} attempt {self.attempt}",
             min(240, max(5, math.ceil(self.ttl_seconds / 60) + 5)),
             job_id=None,
@@ -454,7 +460,7 @@ class TypedDecisionSpend:
                 consumer_owner_id=(self.gateway.consumer_for(
                     connection, self.project_id, source_id, self.actor)
                     if hasattr(self.gateway, "consumer_for") else self.actor),
-                estimated_cost_usd_micros=MAX_COST_USD_MICROS,
+                estimated_cost_usd_micros=estimate,
                 max_usage={"total_tokens": 20_000},
                 dedupe_key=dedupe,
                 ttl_seconds=self.ttl_seconds,

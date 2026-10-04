@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .included_spend import INCLUDED_SQL, MONEY_SQL
 from .core import (
     create_blocking_decision,
     emit_event,
@@ -134,6 +135,8 @@ class BudgetGovernor:
                 "utilization_ratio": 0.0,
                 "active_reservations_count": 0,
                 "top_cost_drivers": [],
+                "included_in_subscription_usd_micros": 0,
+                "included_cost_drivers": [],
                 "soft_cap_pct": 0.7,
                 "auto_lite_mode_pct": 0.85,
                 "freeze_provisioning_pct": 0.9,
@@ -158,8 +161,8 @@ class BudgetGovernor:
 
         actual = connection.execute(
             text(
-                """
-                SELECT COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)), 0) AS total
+                f"""
+                SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total
                 FROM cost_receipts
                 WHERE project_id = :project_id
                 """
@@ -172,8 +175,8 @@ class BudgetGovernor:
         burn_window_start = now_utc() - timedelta(hours=burn_window_hours)
         recent_actual = connection.execute(
             text(
-                """
-                SELECT COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)), 0) AS total
+                f"""
+                SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total
                 FROM cost_receipts
                 WHERE project_id = :project_id
                   AND created_at >= :burn_window_start
@@ -193,12 +196,13 @@ class BudgetGovernor:
             }
             for row in connection.execute(
                 text(
-                    """
+                    f"""
                     SELECT
                         skill_or_model_id,
-                        COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)), 0) AS amount_usd_micros
+                        COALESCE(SUM({MONEY_SQL}), 0) AS amount_usd_micros
                     FROM cost_receipts
                     WHERE project_id = :project_id
+                      AND NOT COALESCE(included_in_subscription, false)
                     GROUP BY skill_or_model_id
                     ORDER BY amount_usd_micros DESC, skill_or_model_id ASC
                     LIMIT 5
@@ -206,6 +210,28 @@ class BudgetGovernor:
                 ),
                 {"project_id": project_id},
             ).mappings().all()
+        ]
+
+        # WHAT THE SUBSCRIPTIONS DID, AT LIST PRICE (included_spend.py). Not money and not in
+        # any cap — reported beside the money so it is never silently dropped.
+        included = connection.execute(
+            text(
+                f"""
+                SELECT skill_or_model_id, COALESCE(SUM({INCLUDED_SQL}), 0) AS amount
+                FROM cost_receipts
+                WHERE project_id = :project_id
+                  AND COALESCE(included_in_subscription, false)
+                GROUP BY skill_or_model_id
+                ORDER BY amount DESC, skill_or_model_id ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        included_total = sum(int(row["amount"] or 0) for row in included)
+        included_drivers = [
+            {"skill_or_model_id": row["skill_or_model_id"],
+             "amount_usd_micros": int(row["amount"] or 0)}
+            for row in included[:5]
         ]
 
         cap = int(policy_row["daily_cap_usd_micros"])
@@ -250,6 +276,8 @@ class BudgetGovernor:
             "utilization_ratio": round(utilization, 6),
             "active_reservations_count": active_reservations_count,
             "top_cost_drivers": top_cost_drivers,
+            "included_in_subscription_usd_micros": included_total,
+            "included_cost_drivers": included_drivers,
             "soft_cap_pct": soft,
             "auto_lite_mode_pct": orange,
             "freeze_provisioning_pct": red,
@@ -498,7 +526,7 @@ class BudgetGovernor:
         it ages out for the window to be under `burst_cap` again."""
         rows = connection.execute(
             text(
-                "SELECT COALESCE(actual_usd_micros, estimated_usd_micros) AS amount, "
+                f"SELECT {MONEY_SQL} AS amount, "
                 "       EXTRACT(EPOCH FROM (created_at + make_interval(secs => :w) "
                 "                           - clock_timestamp())) AS ages_out_in "
                 "FROM cost_receipts "
@@ -897,7 +925,10 @@ class BudgetGovernor:
             connection.execute(
                 text(
                     """
-                    SELECT COALESCE(SUM(COALESCE(cr.actual_usd_micros, cr.estimated_usd_micros)), 0)
+                    SELECT COALESCE(SUM(CASE WHEN COALESCE(cr.included_in_subscription, false)
+                                             THEN 0
+                                             ELSE COALESCE(cr.actual_usd_micros,
+                                                           cr.estimated_usd_micros) END), 0)
                     FROM cost_receipts cr
                     JOIN budget_reservations br ON br.id = cr.reservation_id
                     WHERE br.allocation_id = :allocation_id
@@ -1000,7 +1031,12 @@ class BudgetGovernor:
         estimated_usd_micros: int,
         actual_usd_micros: Optional[int],
         actor: str,
+        *,
+        included_in_subscription: bool = False,
     ) -> dict[str, Any]:
+        """Settle `reservation_id` with a call's cost. `included_in_subscription` (a subscription,
+        licensed seat or local model answered — included_spend.py): `actual_usd_micros` is the
+        call's API-equivalent value, recorded as such, and the money settled is $0."""
         if estimated_usd_micros < 0:
             raise ValueError("estimated_usd_micros must be non-negative.")
         if actual_usd_micros is not None and actual_usd_micros < 0:
@@ -1029,9 +1065,11 @@ class BudgetGovernor:
             skill_or_model_id,
             estimated_usd_micros,
             actual_usd_micros,
+            included_in_subscription=included_in_subscription,
         )
         actual_or_estimated = (
-            actual_usd_micros if actual_usd_micros is not None else estimated_usd_micros
+            0 if included_in_subscription
+            else actual_usd_micros if actual_usd_micros is not None else estimated_usd_micros
         )
         reserved_amount = int(reservation["amount_usd_micros"])
         if actual_or_estimated > reserved_amount:
@@ -1055,6 +1093,7 @@ class BudgetGovernor:
                 """
                 SELECT id, project_id, reservation_id, receipt_id, category,
                        skill_or_model_id, estimated_usd_micros, actual_usd_micros,
+                       equivalent_usd_micros, included_in_subscription,
                        status, created_at
                 FROM cost_receipts
                 WHERE id = :cost_receipt_id
@@ -1161,18 +1200,33 @@ class BudgetGovernor:
         skill_or_model_id: str,
         estimated_usd_micros: int,
         actual_usd_micros: Optional[int],
+        *,
+        included_in_subscription: bool = False,
     ) -> str:
+        """Record a cost receipt and consume the reservation.
+
+        MONEY ONLY IN THE MONEY COLUMN. With `included_in_subscription` the call ran on flat-rate
+        or local capacity: `actual_usd_micros` (what the provider or the price table says it
+        would cost at list price) is kept as `equivalent_usd_micros`, and the money settled is
+        $0 — the daily, monthly, allocation and burst caps never see it (included_spend.py)."""
+        equivalent: Optional[int] = None
+        if included_in_subscription:
+            equivalent = int(actual_usd_micros if actual_usd_micros is not None
+                             else estimated_usd_micros)
+            actual_usd_micros = 0
         cost_receipt_id = make_id("cost")
         connection.execute(
             text(
                 """
                 INSERT INTO cost_receipts (
                     id, project_id, reservation_id, receipt_id, category, skill_or_model_id,
-                    estimated_usd_micros, actual_usd_micros, status
+                    estimated_usd_micros, actual_usd_micros, status,
+                    equivalent_usd_micros, included_in_subscription
                 )
                 VALUES (
                     :id, :project_id, :reservation_id, :receipt_id, :category, :skill_or_model_id,
-                    :estimated_usd_micros, :actual_usd_micros, :status
+                    :estimated_usd_micros, :actual_usd_micros, :status,
+                    :equivalent_usd_micros, :included
                 )
                 """
             ),
@@ -1186,6 +1240,8 @@ class BudgetGovernor:
                 "estimated_usd_micros": estimated_usd_micros,
                 "actual_usd_micros": actual_usd_micros,
                 "status": "actual" if actual_usd_micros is not None else "estimated",
+                "equivalent_usd_micros": equivalent,
+                "included": bool(included_in_subscription),
             },
         )
         connection.execute(

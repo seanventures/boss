@@ -3591,6 +3591,8 @@ class IntentRouter:
                     usage.get("model") or "intent-router",
                     self.settings.agent_router_budget_usd_micros,
                     estimate_cost_usd_micros(usage),
+                    included_in_subscription=model_routing.call_is_included(
+                        connection, self.settings, project_id, usage),
                 )
                 return None
             call = calls[0]
@@ -3610,6 +3612,8 @@ class IntentRouter:
                 usage.get("model") or "intent-router",
                 self.settings.agent_router_budget_usd_micros,
                 estimate_cost_usd_micros(usage),
+                included_in_subscription=model_routing.call_is_included(
+                    connection, self.settings, project_id, usage),
             )
             if result["name"] not in {item["function"]["name"] for item in _TOOL_SCHEMAS}:
                 return None

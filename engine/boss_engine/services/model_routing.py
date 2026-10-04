@@ -244,6 +244,34 @@ class ModelSpendDeferred(RuntimeError):
 UNMETERED = frozenset({"claude_code", "codex", "ollama", "vllm"})
 
 
+def turn_is_included(choice: ModelChoice, usage: Optional[dict] = None) -> bool:
+    """Whether a turn on `choice` cost no money (included_spend.py).
+
+    The adapter's own word wins when it gives one (`usage["billing"]`: the Claude CLI on an
+    ANTHROPIC_API_KEY is metered even though its engine is claude_code); otherwise the engine
+    decides — a subscription CLI or a local model is included."""
+    from .included_spend import usage_is_included
+
+    if isinstance(usage, dict) and usage.get("billing"):
+        return usage_is_included(usage)
+    return choice.engine in UNMETERED
+
+
+def call_is_included(connection: Any, settings: Any, project_id: Optional[str],
+                     usage: Optional[dict]) -> bool:
+    """Whether a call this project's model answered cost no money — for a caller that settles
+    a call's cost itself. The usage's `billing` stamp wins; otherwise the source `choose` picks
+    for the project decides. Never raises: unknown is money, the safe side."""
+    if isinstance(usage, dict) and usage.get("billing"):
+        return turn_is_included(ModelChoice("", ""), usage)
+    try:
+        choice = choose(connection, routed_settings(connection, settings, project_id),
+                        project_id)
+    except Exception:  # noqa: BLE001 — a lookup failure is not a reason to call it free
+        return False
+    return turn_is_included(choice, usage)
+
+
 def turn_estimate_usd_micros(choice: ModelChoice, settings: Any) -> int:
     """What one model turn on `choice` reserves before it is sent."""
     if not choice.engine or choice.engine in UNMETERED:
@@ -261,7 +289,8 @@ class GovernedChatAdapter:
     """
 
     def __init__(self, inner: Any, connection: Any, settings: Any, project_id: str, *,
-                 skill_id: str, ref: str, estimate_usd_micros: int):
+                 skill_id: str, ref: str, estimate_usd_micros: int,
+                 choice: Optional[ModelChoice] = None):
         self._inner = inner
         self._connection = connection
         self._settings = settings
@@ -269,6 +298,7 @@ class GovernedChatAdapter:
         self._skill_id = skill_id
         self._ref = ref
         self._estimate = max(0, int(estimate_usd_micros))
+        self._choice = choice or ModelChoice("", "unknown")
         self._turn = 0
 
     def __getattr__(self, name: str) -> Any:
@@ -330,11 +360,17 @@ class GovernedChatAdapter:
             raise
         usage = result[usage_at] if isinstance(result, tuple) and len(result) > usage_at else {}
         usage = usage if isinstance(usage, dict) else {}
-        actual = estimate_cost_usd_micros(usage)
+        # What the turn is worth at list price; on a subscription that is not money
+        # (included_spend.py) — settled $0, the value kept as its API equivalent.
+        worth = estimate_cost_usd_micros(usage)
+        included = turn_is_included(self._choice, usage)
         receipts.mark_succeeded(connection, receipt["id"], str(usage.get("model") or ""),
-                                {"usage": usage, "actual_usd_micros": actual})
+                                {"usage": usage, "actual_usd_micros": 0 if included else worth,
+                                 **({"included_in_subscription": True,
+                                     "equivalent_usd_micros": worth} if included else {})})
         budget.settle(connection, project_id, reservation["reservation_id"], receipt["id"],
-                      "model", self._skill_id, self._estimate, actual)
+                      "model", self._skill_id, self._estimate, worth,
+                      included_in_subscription=included)
         return result
 
 
@@ -352,7 +388,8 @@ def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
     choice = choose(connection, routed_settings(connection, settings, project_id), project_id)
     return GovernedChatAdapter(adapter, connection, settings, project_id,
                                skill_id=skill_id, ref=ref,
-                               estimate_usd_micros=turn_estimate_usd_micros(choice, settings))
+                               estimate_usd_micros=turn_estimate_usd_micros(choice, settings),
+                               choice=choice)
 
 
 # ── Provider-specific capabilities ─────────────────────────────────────────────────────────────
