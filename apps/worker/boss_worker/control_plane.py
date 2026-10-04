@@ -297,6 +297,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def recheck_setup(self, project_id: str) -> dict[str, Any]:
+        """Re-prove Repo and models' rows whose last check is over a day old."""
+        response = self._client.post(
+            "/v1/setup/checks",
+            json={"project_id": project_id, "actor": "system", "target": "stale"},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def tick_agent_processes(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Advance waiting/running agent-process handoffs."""
         response = self._client.post(

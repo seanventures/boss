@@ -9,6 +9,8 @@ Connect button, and `setup_status` counted a model as connected only when a cred
 reference had been stored. A subscription has no credential to store a reference to, so the
 one thing the operator had actually finished was the one thing the screen never showed.
 
+Repo and models now renders one server view (setup_view); these tests read that view.
+
 These tests run against a real database rather than reading the source, because the defect was
 in what a query returned, and a test that greps for the clause would have passed the moment the
 clause was written regardless of whether it was right.
@@ -18,7 +20,8 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import create_engine, text
 
-from boss_engine.services.setup_service import setup_status, with_recorded_connections
+from boss_engine.services import setup_view
+from boss_engine.services.setup_service import with_recorded_connections
 
 
 class _Settings:
@@ -33,14 +36,11 @@ class _Settings:
 
 
 @pytest.fixture()
-def connection(entitlement_tables):
-    # The shared stub (conftest): "a model is connected" is now the router's answer
-    # (model_routing.choose → connected_engines), which reads the table's capacity columns.
+def connection(entitlement_tables, setup_tables):
+    # The shared stubs (conftest): the rows Repo and models reads.
     engine = create_engine("sqlite+pysqlite:///:memory:")
     with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE github_repository_bindings "
-                          "(project_id TEXT, status TEXT)"))
-        conn.execute(text("CREATE TABLE github_connections (project_id TEXT, status TEXT)"))
+        setup_tables(conn)
         entitlement_tables(conn)
     with engine.begin() as conn:
         yield conn
@@ -55,15 +55,24 @@ def _add(conn, **row):
     row.setdefault("credential_secret_ref_id", None)
     row.setdefault("connection_metadata", "{}")
     row.setdefault("updated_at", datetime(2026, 9, 18, 2, 15, tzinfo=timezone.utc))
+    row.setdefault("created_at", row["updated_at"])
+    row.setdefault("cost_mode", "subscription" if row["connection_status"] == "connected"
+                   and not row["credential_secret_ref_id"] else "usage_based_api")
     conn.execute(text(
         "INSERT INTO entitlement_sources (project_id, source_id, provider, auth_method,"
-        " connection_status, status, credential_secret_ref_id, connection_metadata, updated_at)"
+        " connection_status, status, credential_secret_ref_id, connection_metadata, updated_at,"
+        " created_at, cost_mode)"
         " VALUES (:project_id, :source_id, :provider, :auth_method, :connection_status,"
-        " :status, :credential_secret_ref_id, :connection_metadata, :updated_at)"), row)
+        " :status, :credential_secret_ref_id, :connection_metadata, :updated_at, :created_at,"
+        " :cost_mode)"), row)
 
 
-def _model_step(status):
-    return next(s for s in status["steps"] if s["id"] == "model")
+def _view(connection):
+    return setup_view.build_basics(connection, _Settings(), "p")
+
+
+def _models(connection):
+    return _view(connection)["models"]
 
 
 def test_a_connected_subscription_is_a_connected_model(connection):
@@ -73,10 +82,9 @@ def test_a_connected_subscription_is_a_connected_model(connection):
     _add(connection, source_id="openai_codex_chatgpt", auth_method="official_cli_oauth",
          connection_status="connected")
 
-    status = setup_status(connection, _Settings(), "p")
-
-    assert _model_step(status)["done"] is True
-    assert status["model_sources"] == 1
+    [model] = _models(connection)
+    assert model["kind"] == "subscription" and model["pill"]["label"] == "Working"
+    assert setup_view.basics(_view(connection))["model"] is True
 
 
 def test_a_catalogue_row_nobody_connected_is_not_a_connection(connection):
@@ -85,10 +93,8 @@ def test_a_catalogue_row_nobody_connected_is_not_a_connection(connection):
     _add(connection, source_id="cursor_cli", auth_method="official_cli_oauth")
     _add(connection, source_id="google_gemini_cli", auth_method="official_cli_oauth")
 
-    status = setup_status(connection, _Settings(), "p")
-
-    assert _model_step(status)["done"] is False
-    assert status["model_saved"] == []
+    assert _models(connection) == []
+    assert setup_view.basics(_view(connection))["model"] is False
 
 
 def test_a_stored_api_key_still_counts(connection):
@@ -96,66 +102,66 @@ def test_a_stored_api_key_still_counts(connection):
     _add(connection, source_id="setup-openrouter", provider="openrouter",
          credential_secret_ref_id="ref_1")
 
-    status = setup_status(connection, _Settings(), "p")
+    [model] = _models(connection)
+    assert model["label"] == "OpenRouter" and model["kind"] == "metered"
+    assert setup_view.basics(_view(connection))["model"] is True
 
-    assert _model_step(status)["done"] is True
 
-
-def test_a_saved_key_is_configured_but_explicitly_unverified(connection):
+def test_a_key_saved_before_checks_existed_says_not_checked(connection):
+    """No green tick over a key nobody proved: grey `Not checked`, with Test as its action."""
     _add(connection, source_id="setup-openai", credential_secret_ref_id="ref_1",
-         status="verified",
          connection_metadata='{"verification_state": "unverified"}')
 
-    status = setup_status(connection, _Settings(), "p")
-
-    assert status["ready"] is False  # A repository is still required.
-    assert _model_step(status)["done"] is True
-    assert status["model_saved"][0]["verified"] is False
-    assert status["model_probe_available"] is False
+    [model] = _models(connection)
+    assert model["pill"]["label"] == "Not checked" and model["pill"]["action"] == "test"
 
 
-def test_the_status_says_which_one_was_saved_and_when(connection):
+def test_a_failed_check_is_the_rows_one_verdict(connection):
+    _add(connection, source_id="setup-openai", credential_secret_ref_id="ref_1",
+         connection_metadata='{"last_check": {"ok": false, "state": "key_rejected",'
+                             ' "at": "2026-09-18T02:15:00+00:00"}}')
+
+    [model] = _models(connection)
+    assert (model["pill"]["label"], model["pill"]["tone"]) == ("Key rejected", "red")
+    assert model["checked_at"].startswith("2026-09-18")
+
+
+def test_the_view_says_which_one_was_saved_and_when(connection):
     """A tick beside "Connect a model" and nothing else is a wizard that has forgotten what it
     was told: the operator cannot tell whether what they connected is what is saved."""
     _add(connection, source_id="openai_codex_chatgpt", auth_method="official_cli_oauth",
          connection_status="connected")
 
-    saved = setup_status(connection, _Settings(), "p")["model_saved"]
-
-    assert len(saved) == 1
-    assert saved[0]["source_id"] == "openai_codex_chatgpt"
-    assert saved[0]["kind"] == "subscription"
-    assert saved[0]["connected"] is True
-    assert saved[0]["saved_at"].startswith("2026-09-18")
+    [model] = _models(connection)
+    assert model["source_id"] == "openai_codex_chatgpt"
+    assert model["provider"] == "codex" and model["label"] == "Codex"
+    assert model["checked_at"].startswith("2026-09-18")
 
 
-def test_the_last_saved_one_comes_first(connection):
-    """"Can you pick up the one that's last saved" — so the order is the answer, and the
-    console reselects the head of this list."""
+def test_rows_keep_their_order_when_a_check_updates_one(connection):
+    """Ordered by when each was connected, so a re-check does not shuffle the list."""
     _add(connection, source_id="setup-openrouter", provider="openrouter",
          credential_secret_ref_id="ref_1",
-         updated_at=datetime(2026, 9, 1, tzinfo=timezone.utc))
+         created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+         updated_at=datetime(2026, 9, 20, tzinfo=timezone.utc))
     _add(connection, source_id="openai_codex_chatgpt", auth_method="official_cli_oauth",
          connection_status="connected",
-         updated_at=datetime(2026, 9, 18, tzinfo=timezone.utc))
+         created_at=datetime(2026, 9, 18, tzinfo=timezone.utc))
 
-    saved = setup_status(connection, _Settings(), "p")["model_saved"]
+    assert [m["source_id"] for m in _models(connection)] == [
+        "setup-openrouter", "openai_codex_chatgpt"]
 
-    assert [s["source_id"] for s in saved] == ["openai_codex_chatgpt", "setup-openrouter"]
 
-
-def test_a_saved_source_names_the_dropdown_entry_it_is(connection):
-    """A source_id is not a wizard provider key: the API-key route writes `setup-<key>` and the
-    CLI route writes the harness's entitlement id. The console must not have to guess."""
+def test_a_saved_source_names_the_provider_it_is(connection):
+    """A source_id is not a provider key: the API-key route writes `setup-<key>` and the CLI
+    route writes the harness's entitlement id. The console must not have to guess."""
     _add(connection, source_id="openai_codex_chatgpt", auth_method="official_cli_oauth",
          connection_status="connected")
     _add(connection, source_id="setup-anthropic", provider="anthropic",
          credential_secret_ref_id="ref_1",
          updated_at=datetime(2026, 9, 2, tzinfo=timezone.utc))
 
-    saved = setup_status(connection, _Settings(), "p")["model_saved"]
-    keys = {s["source_id"]: s["wizard_provider"] for s in saved}
-
+    keys = {m["source_id"]: m["provider"] for m in _models(connection)}
     assert keys["openai_codex_chatgpt"] == "codex"
     assert keys["setup-anthropic"] == "anthropic"
 
@@ -227,57 +233,53 @@ def test_another_projects_connection_is_not_this_projects(connection):
     assert agents["codex"]["connected"] is False
 
 
-# -- "What BOSS is running on" must name what BOSS will run on ---------------------------------
+# -- The repository row names the repository BOSS will run on ---------------------------------
 
-def test_the_card_reports_the_connected_repository_not_the_environment():
-    """Measured, with a connection that was tested and passing:
-
-        REPOSITORY  CHECK FAILED
-        example-org/boss-sandbox · token …ThOQ — GitHub has no example-org/boss-sandbox
-        visible to this token.
-
-    The project was bound to example-user/boss, every build would use it, and the card showed a
-    shipped default failing instead. A screen called "What BOSS is running on" has to name the
-    repository BOSS will run on.
-    """
-    import inspect
-
-    from boss_engine.services import setup_service
-
-    source = inspect.getsource(setup_service.setup_status)
-    assert "check_github_for_project(connection, settings, project_id)" in source
+def _bind(conn, *, full_name="example-user/boss", checks=None, role="primary"):
+    conn.execute(text(
+        "INSERT INTO github_connections (id, project_id, connection_label, auth_method,"
+        " status, account_login, created_at, updated_at) VALUES ('ghc1', 'p', 'GitHub',"
+        " 'personal_access_token', 'active', 'example-user', :at, :at)"),
+        {"at": datetime(2026, 9, 18, tzinfo=timezone.utc)})
+    conn.execute(text(
+        "INSERT INTO github_repository_bindings (id, project_id, connection_id, full_name, role,"
+        " status, checks, checked_at, created_at) VALUES ('ghb1', 'p', 'ghc1', :fn, :role,"
+        " 'active', :checks, :at, :at)"),
+        {"fn": full_name, "role": role, "checks": checks,
+         "at": datetime.now(timezone.utc) if checks else None})
 
 
-def test_and_says_which_of_the_two_it_is():
-    """They are different facts. A card that shows one while implying the other is how an
-    operator concludes their working connection did not take."""
-    import inspect
+def test_the_row_reports_the_connected_repository_not_the_environment(connection):
+    """Measured, with a connection that was tested and passing: the card showed a shipped
+    default failing instead of the repository every build used."""
+    class _EnvToo(_Settings):
+        github_token = "ghp_env"
+        target_github_owner = "example-org"
+        target_github_repo = "boss-sandbox"
 
-    from boss_engine.services.setup_service import check_github_for_project
-
-    source = inspect.getsource(check_github_for_project)
-    assert '"source": "connected"' in source
-    assert "return check_github(settings)" in source          # nothing bound: the env IS it
-
-
-def test_it_checks_with_the_credential_the_repository_was_connected_with():
-    """Checking a connected repository with the environment's token would report a failure
-    about a credential the project does not use."""
-    import inspect
-
-    from boss_engine.services.setup_service import check_github_for_project
-
-    source = inspect.getsource(check_github_for_project)
-    assert "_resolve_secret(secret, connection)" in source
-    assert 'permissions.get("push")' in source
+    _bind(connection)
+    view = setup_view.build_basics(connection, _EnvToo(), "p")
+    assert [r["full_name"] for r in view["repository"]["repos"]] == ["example-user/boss"]
+    assert view["repository"]["connection"]["source"] == "connected"
+    assert view["repository"]["connection"]["account_login"] == "example-user"
 
 
-def test_a_404_on_a_private_repository_is_explained_here_too():
-    import inspect
+def test_and_its_pill_is_its_last_check(connection):
+    _bind(connection, checks='{"state": "working", "read": {"ok": true}, "write": {"ok": true},'
+                             ' "pull_requests": {"ok": true}}')
+    [repo] = _view(connection)["repository"]["repos"]
+    assert repo["pill"]["label"] == "Working"
+    assert repo["checks"]["pull_requests"]["ok"] is True
 
-    from boss_engine.services.setup_service import check_github_for_project
 
-    assert "for a private" in inspect.getsource(check_github_for_project)
+def test_a_404_on_a_private_repository_is_named_as_access(connection):
+    """GitHub answers 404 for a private repository the token cannot see; that is a scope
+    answer, and the pill says which repository to add to the token."""
+    _bind(connection, checks='{"state": "no_access", "read": {"ok": false, "state": '
+                             '"no_access"}}')
+    [repo] = _view(connection)["repository"]["repos"]
+    assert repo["pill"]["label"] == "No access"
+    assert "example-user/boss" in repo["pill"]["tip"]
 
 
 def test_no_install_ships_pointed_at_somebody_elses_repository():

@@ -240,11 +240,9 @@ _STORED_KEY = "sk-stored-in-the-console-not-real"
 
 
 @pytest.fixture()
-def project(sources, monkeypatch):
-    """`sources` plus the GitHub tables readiness counts, and a secret store that answers."""
-    sources.execute(text("CREATE TABLE github_repository_bindings (project_id TEXT, status TEXT,"
-                         " full_name TEXT, role TEXT, created_at TIMESTAMP)"))
-    sources.execute(text("CREATE TABLE github_connections (project_id TEXT, status TEXT)"))
+def project(sources, monkeypatch, setup_tables):
+    """`sources` plus the GitHub tables readiness reads, and a secret store that answers."""
+    setup_tables(sources)
     from boss_engine.services import credential_resolve, secret_backends
 
     def resolve(_connection, ref_id, _settings):
