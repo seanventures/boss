@@ -48,6 +48,7 @@ from typing import Any, Iterable, Iterator, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .agent_persona import persona_of
 from .agent_world_types import ALIASES, EDGE_LABELS
 
 log = logging.getLogger("boss.agent_acts")
@@ -1327,7 +1328,7 @@ def _agent_name(connection: Connection, project_id: str, role_key: str) -> str:
     ).mappings().first()
     if not row:
         return role_key.replace("_", " ").title()
-    persona = (_json(row["spec"], {}) or {}).get("persona") or {}
+    persona = persona_of({"role_key": role_key, "spec": _json(row["spec"], {}) or {}})
     return str(persona.get("callsign") or row["display_name"] or role_key)
 
 

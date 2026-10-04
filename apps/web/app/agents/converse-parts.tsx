@@ -12,8 +12,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../agent-avatar";
-import { agentIdentity } from "../../lib/agent-identity";
-import { CAST_BY_KEY } from "../../lib/avatar-kit/cast";
 import { Markdown } from "../markdown";
 import type { AvatarState, ModelFailure } from "../../lib/agent-world-types";
 import {
@@ -43,23 +41,14 @@ export function useSeat(roleKey: string | null | undefined): SeatInfo | null {
  * ("Vera" · "QA Lead"), never the role instead of a callsign it has (§13.9). The header, each
  * author line, the room's seats, its To chips, the @ menu and the summary all ask this.
  *
- * The callsign is the seat's own; one never set (null — a role installed before personas
- * travelled with it) falls back to the install's identity, then to the shipped cast, so Vera
- * is Vera whichever door opened the talk. One the operator cleared ("") stays cleared.
+ * The callsign is the server's (seat_info, from agent_persona.persona_of): the same one the
+ * agent's prompt, the room's peers and the conversation's title use, so the face and the voice
+ * never disagree. Nothing is filled in here.
  */
 export function seatName(seat: SeatInfo | null): { name: string; role?: string } {
   if (!seat) return { name: "Agent" };
-  const callsign = seat.callsign === "" ? "" : (seat.callsign?.trim() || knownCallsign(seat.roleKey));
+  const callsign = seat.callsign?.trim() ?? "";
   return callsign && callsign !== seat.name ? { name: callsign, role: seat.name } : { name: seat.name };
-}
-
-function knownCallsign(roleKey: string): string {
-  if (!roleKey) return "";
-  try {
-    const loaded = agentIdentity(roleKey);
-    if (loaded.roleKey === roleKey && loaded.callsign) return loaded.callsign;
-  } catch { /* fall through to the cast */ }
-  return Object.prototype.hasOwnProperty.call(CAST_BY_KEY, roleKey) ? CAST_BY_KEY[roleKey].callsign ?? "" : "";
 }
 
 /** How the operator @-mentions a seat: its callsign when it has one, else its role key. */

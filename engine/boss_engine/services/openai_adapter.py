@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 import time
-from typing import Optional, Tuple
+from typing import Any, Iterator, Optional, Tuple
 
 from openai import (
     APIConnectionError,
@@ -384,6 +384,81 @@ class OpenAIAdapter:
         usage = _usage_from_response(response, used_model)
         usage["retries"] = stats.get("retries", 0)
         return response.id, response.output_text, usage
+
+    def stream_text_response(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> Iterator[Any]:
+        """`create_text_response` with `stream=True`: yields each piece of text as the model
+        writes it, then the usage dict (agent_converse._call reads exactly this). Same
+        endpoint choice as the one-shot form: Azure, a compatible base URL, or OpenAI's
+        Responses API. Only opening the stream is retried; a reply cut off mid-way raises."""
+        if self._azure_enabled():
+            client: Any = AzureOpenAI(
+                api_key=self.settings.azure_openai_key,
+                azure_endpoint=self.settings.azure_openai_endpoint,
+                api_version=self.settings.azure_openai_api_version,
+            )
+            used_model, base_url = self.settings.azure_openai_deployment or "gpt-4o", ""
+        else:
+            if not self._resolved_api_key():
+                raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
+            client = self._openai_client()
+            used_model = model or self.settings.openai_model
+            base_url = self._resolved_base_url()
+        stats: dict = {}
+        if self._azure_enabled() or base_url:
+            messages: list[dict] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            def open_stream(with_usage: bool):
+                extra = {"stream_options": {"include_usage": True}} if with_usage else {}
+                return _with_retry(lambda: client.chat.completions.create(
+                    model=used_model, messages=messages, stream=True, **extra), stats=stats)
+
+            try:
+                stream = open_stream(True)
+            except BadRequestError as error:
+                # An older compatible server that does not know stream_options: stream without
+                # the usage chunk rather than not at all.
+                if "stream_options" not in str(error):
+                    raise
+                stream = open_stream(False)
+            usage: dict = {"model": used_model, "prompt_tokens": 0, "completion_tokens": 0,
+                           "total_tokens": 0}
+            for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    usage = _usage_from_response(chunk, used_model)
+                for choice in getattr(chunk, "choices", None) or []:
+                    piece = getattr(getattr(choice, "delta", None), "content", None)
+                    if piece:
+                        yield piece
+            usage["retries"] = stats.get("retries", 0)
+            if base_url:
+                usage["base_url"] = base_url
+            yield usage
+            return
+
+        stream = _with_retry(lambda: client.responses.create(
+            model=used_model, instructions=system_prompt, input=prompt, stream=True,
+        ), stats=stats)
+        usage = {"model": used_model, "prompt_tokens": 0, "completion_tokens": 0,
+                 "total_tokens": 0}
+        for event in stream:
+            kind = getattr(event, "type", "")
+            if kind == "response.output_text.delta" and getattr(event, "delta", None):
+                yield event.delta
+            elif kind == "response.completed":
+                usage = _usage_from_response(getattr(event, "response", None), used_model)
+            elif kind in ("response.failed", "error"):
+                failure = getattr(getattr(event, "response", None), "error", None) or event
+                raise RuntimeError(f"the model stopped mid-reply: {failure}")
+        usage["retries"] = stats.get("retries", 0)
+        yield usage
 
     def create_chat_completion(
         self,

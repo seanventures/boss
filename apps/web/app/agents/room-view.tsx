@@ -27,9 +27,12 @@ import {
   mentionsIn, useConversation, type ConversationView, type SeatInfo, type SummaryView, type TurnView,
 } from "../../lib/agent-converse";
 
-/** The room's title: its first question, on one line. */
-export function roomTitle(turns: TurnView[], pending?: string): { text: string; full: string } {
-  const first = turns.find((t) => t.speakerKind === "person" && t.content.trim())?.content ?? pending ?? "";
+/**
+ * The room's title, on one line: its first question once one is asked; before that, the name
+ * it opened with (a preset's label, or who is seated), never a blank "New room".
+ */
+export function roomTitle(turns: TurnView[], pending?: string, opened?: string): { text: string; full: string } {
+  const first = turns.find((t) => t.speakerKind === "person" && t.content.trim())?.content ?? pending ?? opened ?? "";
   const line = first.trim().replace(/\s+/g, " ");
   if (!line) return { text: "New room", full: "" };
   return { text: line.length > 72 ? `${line.slice(0, 70)}…` : line, full: line };
@@ -93,7 +96,7 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
     const who = seatName(info);
     return { ...info, callsign: who.role ? who.name : null };
   });
-  const title = roomTitle(turns, question);
+  const title = roomTitle(turns, question, conversation?.title);
   const toggle = (k: string) => setTo((all) => all.includes(k) ? all.filter((x) => x !== k) : [...all, k]);
 
   const send = (message: string) => {

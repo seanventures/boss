@@ -65,6 +65,8 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .agent_persona import persona_of
+
 #: The one participant BOSS cannot run. Only an approval gate may name it.
 HUMAN = "human"
 
@@ -311,8 +313,8 @@ def project_agents(connection: Connection, project_id: str,
             "mcp_ids": list((held.get(role) or {}).get("mcp_ids") or []),
             # Agent World: a paused or retired agent is never picked (see `resolve`).
             "lifecycle": str(_get(row, "lifecycle") or "active"),
-            "callsign": str(((spec or {}).get("persona") or {}).get("callsign") or "")
-            if isinstance((spec or {}).get("persona"), dict) else "",
+            "callsign": str(persona_of({"role_key": role, "spec": spec}).get("callsign") or "")
+            if isinstance(spec, dict) else "",
         })
     return out
 
@@ -778,7 +780,7 @@ def _lifecycle_of(connection: Connection, project_id: str,
     if row is None:
         return None
     spec = row["spec"] if isinstance(row["spec"], dict) else {}
-    persona = spec.get("persona") if isinstance(spec.get("persona"), dict) else {}
+    persona = persona_of({"role_key": role_key, "spec": spec})
     return (str(row["lifecycle"] or "active"),
             str(persona.get("callsign") or row["display_name"] or role_key))
 
