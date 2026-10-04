@@ -312,7 +312,12 @@ def requirements(
         approver = str((step.get("approval") or {}).get("approver_role") or "").strip()
         if key in caps.CAPABILITY_KEYS and caps.get(key).answered_by != "person":
             approver = ""
-        for named in (str(step.get("captain") or binding.get("agent") or "").strip(), approver):
+        from .step_agents import is_default_captain
+
+        # A catalogue default captain is not a need: without it the step runs on Auto.
+        captain = ("" if is_default_captain(dict(step))
+                   else str(step.get("captain") or binding.get("agent") or "").strip())
+        for named in (captain, approver):
             if named and named not in caps.HUMAN_ROLES:
                 needed.add(f"role:{named}")
         if step.get("kind") == "subworkflow" and connection is not None and _depth < 3:

@@ -354,8 +354,13 @@ def test_every_catalogue_step_of_a_staffed_kind_names_its_default_agent():
         for step in entry["steps"]:
             capability = (step.get("binding") or {}).get("capability")
             if capability in wc.DEFAULT_STEP_AGENTS:
-                assert step.get("captain") == wc.DEFAULT_STEP_AGENTS[capability], (
-                    entry["key"], step["id"])
+                # The build goes to the engineer for what is being built (by app kind).
+                expected = (wc.BUILD_AGENT_BY_ENTRY.get(entry["key"])
+                            if capability in ("build", "retry_build") else None)
+                expected = expected or wc.DEFAULT_STEP_AGENTS[capability]
+                assert step.get("captain") == expected, (entry["key"], step["id"])
+                # And it is marked as the catalogue's soft default, not somebody's choice.
+                assert step.get("default_captain") == expected, (entry["key"], step["id"])
                 named += 1
             elif capability in ("spec_review", "ux_review", "security_review", "deploy"):
                 # Gates name their approver where they always did; deploy runs as the run.

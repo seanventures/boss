@@ -132,6 +132,25 @@ def named_agent(step: dict[str, Any]) -> str:
     return str(raw or "").strip().lower()
 
 
+def is_default_captain(step: dict[str, Any]) -> bool:
+    """Is the agent on this step only the catalogue's SOFT default, not somebody's choice?
+
+    The catalogue marks the agents it puts on built-in steps with `default_captain`
+    (workflow_catalogue.DEFAULT_STEP_AGENTS). The mark counts only while it still matches the
+    named agent — an operator who picks someone else has made a real choice — and only on a
+    built-in capability step, whose tool is BOSS's own and needs no grant: falling back to Auto
+    there is falling back to what every catalogue run did before agents were named. An agent or
+    custom step's named agent is always a real choice, whatever the spec says.
+    """
+    binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+    if str(step.get("kind") or "capability") != "capability":
+        return False
+    if binding.get("agent_work") or binding.get("custom_step") or not binding.get("capability"):
+        return False
+    default = str(step.get("default_captain") or "").strip().lower()
+    return bool(default) and default == named_agent(step)
+
+
 def is_gate(step: dict[str, Any]) -> bool:
     """A step whose whole purpose is that somebody answers it."""
     if str(step.get("kind") or "") == "decision":
@@ -599,6 +618,8 @@ def assignment_problems(connection: Connection, project_id: str,
         named = named_agent(step)
         if legacy and not binding.get("agent_work"):
             continue
+        if named and is_default_captain(step) and named not in roster:
+            continue  # a catalogue default the project lacks: the step runs on Auto (resolve)
         if named and named != HUMAN and named not in roster:
             problems.append(
                 f"step '{step_id}' names agent '{named}', which this project does not have. "
@@ -728,9 +749,21 @@ def resolve(
     binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
     named = named_agent(step)
     if named:
-        # A PAUSED AGENT NAMED ON A STEP FAILS THE STEP FAST, with its name — it does not run,
-        # and nobody else is silently put in its place.
         off = _lifecycle_of(connection, project_id, named)
+        # A CATALOGUE DEFAULT THAT IS OFF DUTY OR GONE HANDS THE STEP BACK TO AUTO (§0.1.4:
+        # "Auto still allowed"). Pausing Juno must not fail every stock run at its research
+        # step: nobody chose Juno there, BOSS did, and the step ran without a name before.
+        if is_default_captain(step) and (off is None or off[0] != "active"):
+            unnamed = {k: v for k, v in step.items() if k not in ("captain", "default_captain")}
+            record = resolve(connection, settings, project_id, unnamed, actor=actor,
+                             instructions=instructions)
+            state = "is not on this project" if off is None else f"is {off[0]}"
+            who = named if off is None else off[1]
+            return {**record, "why": f"{who}, this step's default agent, {state}, so it ran on "
+                                     f"Auto: {record['why']}",
+                    "default_skipped": named}
+        # A PAUSED AGENT AN OPERATOR NAMED ON A STEP FAILS THE STEP FAST, with its name — it
+        # does not run, and nobody else is silently put in its place.
         if off and off[0] != "active":
             from .agent_identity import paused_message
 

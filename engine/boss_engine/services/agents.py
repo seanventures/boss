@@ -608,6 +608,7 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
     statuses in which nothing runs again — now counts.
     """
     from . import workflows
+    from .step_agents import is_default_captain, named_agent
     from .workflow_run_actions import CLOSED_RUN_STATES
 
     role = str(role_key or "").strip().lower()
@@ -640,9 +641,15 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
         for step in spec.get("steps") or []:
             if not isinstance(step, dict):
                 continue
-            how = _names_in_step(step).get(role)
+            names = _names_in_step(step)
+            how = names.get(role)
             if not how:
                 continue
+            # ONLY THE CATALOGUE'S DEFAULT, and nothing else on the step names it: deleting or
+            # pausing the agent hands the step to Auto (step_agents.resolve), so it never blocks.
+            soft = (is_default_captain(step) and named_agent(step) == role
+                    and not _names_in_step({k: v for k, v in step.items()
+                                            if k != "captain"}).get(role))
             key = (str(row["workflow_key"]), int(row["version"]), str(step.get("id")))
             entry = seen.get(key)
             if entry is None:
@@ -652,6 +659,7 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
                     "step_id": str(step.get("id") or ""),
                     "step": str(step.get("label") or step.get("name") or step.get("id") or ""),
                     "how": how, "because": row["why"], "reasons": [], "pointed_by": [],
+                    "soft": soft,
                 }
                 seen[key] = entry
                 out.append(entry)
@@ -1233,7 +1241,10 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
     role = _require_role(connection, project_id, key)
 
     named = steps_naming(connection, project_id, key)
-    blocking = [n for n in named if not (retire_older_versions and n["retirable"])]
+    # A step that names it only as the catalogue's default never blocks: the delete re-staffs
+    # those workflows without it, and any run still on an older version runs that step on Auto.
+    blocking = [n for n in named
+                if not n.get("soft") and not (retire_older_versions and n["retirable"])]
     if blocking:
         shown = "; ".join(
             f"workflow '{n['workflow']}' step '{n['step']}' ({n['where']}, {n['how']})"
@@ -1268,7 +1279,7 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
             "keeps. Take its skills and MCP servers away instead — an agent holding nothing is "
             "never picked for a step and is refused if one names it.", status=409)
 
-    planned = {n["version_id"] for n in named if n["retirable"]}
+    planned = {n["version_id"] for n in named if n["retirable"] and not n.get("soft")}
     retired = workflows.retire_versions(
         connection, project_id, planned,
         actor=actor, reason=f"named agent '{key}', which was deleted") if named else []
@@ -1279,6 +1290,11 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
             f"{role['display_name']} was not deleted: a workflow changed while it was being "
             "deleted, so a version that names it is no longer an older one. Open the agent "
             "again to see what names it now, then delete again.", status=409)
+
+    from .workflow_catalogue import restaff_without
+
+    restaffed = restaff_without(connection, project_id, key, actor=actor) if any(
+        n.get("soft") for n in named) else []
 
     connection.execute(text("UPDATE kpis SET owner_role_id = NULL WHERE owner_role_id = :id"),
                        {"id": role["id"]})
@@ -1319,9 +1335,11 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
     emit_event(connection, project_id, "agent.deleted", actor, "role", key,
                {"skills": list(skills), "mcp_servers": list(mcp),
                 "studio_profiles_retired": [p["agent_key"] for p in profiles],
-                "reports_moved_up": list(moved), "workflow_versions_retired": retired})
+                "reports_moved_up": list(moved), "workflow_versions_retired": retired,
+                "workflows_restaffed": restaffed})
     return {"role_key": key, "deleted": True, "skills_released": sorted(skills),
             "workflow_versions_retired": retired,
+            "workflows_restaffed": restaffed,
             "mcp_servers_released": sorted(mcp),
             "studio_profiles_retired": [p["agent_key"] for p in profiles],
             "reports_moved_to": role["reports_to"], "reports_moved": sorted(moved)}

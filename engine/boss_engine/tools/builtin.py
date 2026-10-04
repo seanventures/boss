@@ -598,6 +598,29 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         return {"project_id": pid, "deployments": [_json_safe(dict(r)) for r in rows]}
 
 
+def _building_agent(connection, project_id: str, actor: str) -> dict | None:
+    """{role_key, agent_id} when `actor` is an agent on this project (not a person), else None."""
+    from sqlalchemy import text as _text
+
+    key = str(actor or "").strip().lower()
+    if not key or key in ("human", "workflow_runner"):
+        return None
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                _text("SELECT r.role_key, r.agent_id FROM roles r WHERE r.project_id = :p "
+                      "AND r.role_key = :k AND NOT EXISTS (SELECT 1 FROM project_members m "
+                      "WHERE m.project_id = :p AND m.member_id = :k "
+                      "AND m.member_type = 'human')"), {"p": project_id, "k": key},
+            ).mappings().first()
+    except Exception:  # noqa: BLE001 — attribution only: never stop the build over it
+        return None
+    if row is None:
+        return None
+    return {"role_key": str(row["role_key"]),
+            **({"agent_id": str(row["agent_id"])} if row["agent_id"] else {})}
+
+
 # ===========================================================================
 # WRITE TOOLS — create workflow tasks
 # ===========================================================================
@@ -698,6 +721,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                         "Make the smallest change that satisfies the request, preserving all "
                         "current features.\n\n" + instructions
                     )
+            # WHO BUILDS IT. A workflow step that names an agent runs this tool AS that agent
+            # (step_agents.resolve → `actor`), so a build step naming the Frontend Engineer
+            # hands the code task to the Frontend Engineer, recorded where the run's stages
+            # read their context. Only an agent this project has — a person or the workflow
+            # runner starting a task records nothing — and never from `args`, which a model
+            # writes: who a task is for is decided by who was named, not by what was claimed.
+            agent = _building_agent(c, pid, actor)
+            if agent:
+                finalize_ctx = {**finalize_ctx, "agent": agent}
             run_id = cts.start_code_task(
                 c,
                 project_id=pid,
