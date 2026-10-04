@@ -41,6 +41,18 @@ describe("the board stays within the copy budget", () => {
     });
   }
 
+  it("a model that does every job", async () => {
+    const view = board();
+    view.models = [{ ...view.models[0], used_for: ["Build", "Review", "Chat", "Decisions",
+                                                   "Hard problems", "Routine work"] }];
+    fakeApi(view);
+    mounted = await mountBoard(view);
+    audit(document.body);
+    const used = q(document.body, "su-model-used")!;
+    expect(used.textContent).toBe("Build · Review · Chat +3");
+    expect(used.getAttribute("data-tip")).toContain("Hard problems, Routine work");
+  });
+
   it("with More jobs open and the budget being edited", async () => {
     fakeApi(board());
     mounted = await mountBoard(board());

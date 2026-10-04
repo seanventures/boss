@@ -97,8 +97,8 @@ function ModelLine({ entry, menuOpen, onReplace }: {
                className="su-chip">From install</Tip>
         ) : null}
         {entry.model ? <span className="su-faint su-mono" data-user-text>{entry.model}</span> : null}
-        <Tip tip="Jobs this model does now, including Auto picks." className="su-used">
-          {entry.used_for.length ? entry.used_for.join(" · ") : "—"}
+        <Tip tip={usedForTip(entry.used_for)} className="su-used" testid="su-model-used">
+          {usedForLabel(entry.used_for)}
         </Tip>
         {entry.checked_at ? (
           <Tip tip={`Last checked ${ageLabel(entry.checked_at)} ago.`} className="su-faint su-age">
@@ -229,3 +229,16 @@ export const ModelsRow = forwardRef<HTMLElement, {
     </SetupRow>
   );
 });
+
+/** A model that does every job lists six names (eight words): the row shows three and a count,
+ *  and the tooltip names them all, so the line stays inside the copy budget. */
+const USED_SHOWN = 3;
+export function usedForLabel(jobs: string[]): string {
+  if (!jobs.length) return "—";
+  const shown = jobs.slice(0, USED_SHOWN).join(" · ");
+  return jobs.length > USED_SHOWN ? `${shown} +${jobs.length - USED_SHOWN}` : shown;
+}
+function usedForTip(jobs: string[]): string {
+  return jobs.length > USED_SHOWN ? `Used for ${jobs.join(", ")}.`
+                                  : "Jobs this model does now, including Auto picks.";
+}
