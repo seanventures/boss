@@ -5,6 +5,7 @@
  * guess), clock and duration words, and the act popover a face press opens.
  */
 import { Hourglass } from "@phosphor-icons/react";
+import { createPortal } from "react-dom";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { AvatarState } from "../../lib/agent-world-types";
@@ -84,6 +85,11 @@ export function money(usd: number): string {
   return `$${usd.toFixed(usd >= 10 ? 0 : 2)}`;
 }
 
+/** Cost only when there is some to say (walk D16): a spend that rounds to `$0.00` says nothing. */
+export function costWord(usd: number): string {
+  return usd > 0 && money(usd) !== "$0.00" && money(usd) !== "$0" ? money(usd) : "";
+}
+
 export function kilo(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
 }
@@ -114,9 +120,14 @@ export function ActPopover({ projectId, actId, viewer, anchor, onClose }: {
     if (!box.current) return;
     const r = anchor?.getBoundingClientRect();
     const vw = window.innerWidth || 1024;
+    const vh = window.innerHeight || 768;
     const w = box.current.offsetWidth || 320;
+    const h = box.current.offsetHeight || 280;
     const left = r ? Math.max(16, Math.min(vw - w - 16, r.left + r.width / 2 - w / 2)) : 16;
-    setAt({ left: Math.round(left), top: Math.round(r ? r.bottom + 8 : 80) });
+    // Beside the face: below it, or above when below would run off the screen.
+    const below = r ? r.bottom + 8 : 80;
+    const top = r && below + h > vh - 8 && r.top - h - 8 > 8 ? r.top - h - 8 : below;
+    setAt({ left: Math.round(left), top: Math.round(top) });
   }, [anchor, act]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
@@ -131,11 +142,12 @@ export function ActPopover({ projectId, actId, viewer, anchor, onClose }: {
       document.removeEventListener("mousedown", onDown);
     };
   }, [anchor, onClose]);
-  return (
+  // Portalled: placed against the viewport, not a filtered or transformed ancestor (walk D19).
+  return createPortal(
     <div ref={box} role="dialog" aria-label="Who did this" className="ag-act-pop fx-act-pop" data-testid="fx-act-pop"
          data-act-id={actId} style={at ? { left: at.left, top: at.top } : { visibility: "hidden" }}>
       {act ? <ActCard act={act} viewer={viewer} onClose={onClose} />
         : <span className="fx-muted">{failed ? "Not found" : "Loading"}</span>}
-    </div>
+    </div>, document.body,
   );
 }

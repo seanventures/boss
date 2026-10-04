@@ -80,7 +80,7 @@ export type BuildRow = {
   attentionId: string | null;
   preview: PreviewFlag | null;
   origin: Origin | null;
-  /** BOSS's own housekeeping build (the Captain's quality pass). */
+  /** BOSS's own build (the Captain's quality passes): still a build, drawn with a BOSS tag. */
   internal?: boolean;
 };
 

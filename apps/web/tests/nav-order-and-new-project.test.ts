@@ -89,6 +89,12 @@ describe("New build, from anywhere", () => {
     expect(CSS).toContain(".bx-new-project");
   });
 
+  it("is ONE button on the Factory: the area's own, with no second strip of builds (walk D19)", () => {
+    expect(SHELL).toMatch(/active !== "code_tasks" \? <button[\s\S]{0,80}className="bx-new-project"/);
+    expect(SHELL).toMatch(/active !== "code_tasks" \? <ProjectStrip/);
+    expect(CT).toContain('data-testid="fx-new-build"');
+  });
+
   it("presses the same first door as the Factory: Plan it with Juno", () => {
     // Operator decision (factory spec §10.1): a PRD first. The Factory's menu keeps the others.
     const btn = SHELL.slice(SHELL.indexOf('data-testid="topbar-new-project"'),

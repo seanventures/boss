@@ -203,7 +203,30 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
   const firstIds = useRef<Set<string> | null>(null);
   if (floor && firstIds.current === null) firstIds.current = new Set(floor.attention.map((a) => a.id));
 
-  const attention = useMemo(() => (floor?.attention ?? []).filter((a) => !gone.has(a.id)), [floor, gone]);
+  // Find a build filters the cards too (walk D17): a card is about a build (its app, its title).
+  const attention = useMemo(() => (floor?.attention ?? []).filter((a) => !gone.has(a.id)
+    && matches(query, a.build?.app, a.title, a.run?.subject, a.detail)), [floor, gone, query]);
+  const box = useRef<HTMLDivElement>(null);
+  // J / K move between cards and rows from anywhere on the Floor — no click first (walk D17).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if ((key !== "j" && key !== "k") || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+      const root = box.current;
+      if (!root || !root.isConnected) return;
+      const all = [...root.querySelectorAll<HTMLElement>("[data-att-card], .fx-row-open")];
+      if (!all.length) return;
+      const at = all.findIndex((el) => el.contains(document.activeElement) || el === document.activeElement);
+      const next = at < 0 ? (key === "j" ? 0 : all.length - 1)
+        : key === "j" ? Math.min(all.length - 1, at + 1) : Math.max(0, at - 1);
+      e.preventDefault();
+      all[next]?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   useEffect(() => {
     if (!floor) return;
     setGone((g) => {
@@ -270,18 +293,6 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
     if (moves && budget > 0) budget -= 1;
   }
 
-  function onKeys(e: React.KeyboardEvent<HTMLElement>) {
-    const key = e.key.toLowerCase();
-    if ((key !== "j" && key !== "k") || e.metaKey || e.ctrlKey || e.altKey) return;
-    if ((e.target as HTMLElement).closest("input, textarea, select")) return;
-    const all = [...e.currentTarget.querySelectorAll<HTMLElement>("[data-att-card], .fx-row-open")];
-    if (!all.length) return;
-    const at = all.findIndex((el) => el.contains(document.activeElement) || el === document.activeElement);
-    const next = key === "j" ? Math.min(all.length - 1, at + 1) : Math.max(0, at - 1);
-    e.preventDefault();
-    all[next]?.focus();
-  }
-
   const renderRow = (b: Build) => (
     <BuildRow key={b.runId} build={b} band={band} now={paused ? null : now} still={stillRow.get(b.runId)} onOpen={onOpen} />
   );
@@ -289,7 +300,7 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
   const approvalsPatch = { area: "decisions", decision_filter: "needs_action", role: null, view: null };
 
   return (
-    <div className="fx-floor" data-testid="fx-floor" data-band={band} onKeyDown={onKeys}>
+    <div ref={box} className="fx-floor" data-testid="fx-floor" data-band={band}>
       {paused ? (
         <span className="ag-live-paused" data-testid="fx-paused"
               title="Live updates are paused. Press Live in the top bar.">Paused</span>

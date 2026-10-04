@@ -43,7 +43,8 @@ export type StoryYou = {
   what: "steered" | "approved_plan" | "waived" | "retried" | "stopped" | string;
   actor: string; text?: string; at: string;
   appliedAt?: string; appliedActId?: string; appliedRole: string | null; count?: number;
-  /** Steer: `Queued for next station` · `Read by <name>` · `Not read · build ended` (server). */
+  /** The server's word for a steer: `Queued for next station` · `Read by <name>` ·
+   *  `Not read · build ended`. Absent from an older API (then derived from appliedAt). */
   word?: string;
 };
 export type StoryBoss = {

@@ -73,6 +73,12 @@ function Card({ card }: { card: CreditsCard }) {
   );
 }
 
+/** A build's credits are its own acts; a workflow run's, its chain. */
+function chainPath(id: string): string {
+  return id.startsWith("crun_") ? `/v1/code-tasks/${encodeURIComponent(id)}/chain`
+    : `/v1/workflow-runs/${encodeURIComponent(id)}/chain`;
+}
+
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const params = new URL(req.url).searchParams;
@@ -80,7 +86,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!ID.test(id)) return NextResponse.json({ error: "missing run id" }, { status: 400 });
   let chain: Chain;
   try {
-    const r = await fetch(`${API_URL}/v1/workflow-runs/${encodeURIComponent(id)}/chain?project_id=${encodeURIComponent(projectId)}`,
+    const r = await fetch(`${API_URL}${chainPath(id)}?project_id=${encodeURIComponent(projectId)}`,
       { headers: authHeaders({ "Content-Type": "application/json" }), cache: "no-store" });
     if (!r.ok) return NextResponse.json({ error: "no credits for this run" }, { status: r.status });
     chain = toChain(await r.json());

@@ -1168,7 +1168,8 @@ export default function ConsoleShell({
               The same first press as the Factory's `+ New build`: Plan it with Juno — a PRD
               first, then the build. The Factory's menu keeps the other doors (a workflow, a
               direct change, a benchmark); one primary press in both places. */}
-          <button
+          {/* ONE PRODUCT (walk D19): on the Factory its own header holds `+ New build`. */}
+          {active !== "code_tasks" ? <button
             type="button"
             className="bx-new-project"
             data-testid="topbar-new-project"
@@ -1176,7 +1177,7 @@ export default function ConsoleShell({
             onClick={() => openPlan("pm", { from: "palette" })}
           >
             <span aria-hidden>+</span> New build
-          </button>
+          </button> : null}
 
           <div className="bx-topbar-title" id="boss-console-title">
             {activeDef.label}
@@ -1283,7 +1284,8 @@ export default function ConsoleShell({
           </div>
         ) : null}
 
-        <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} />
+        {/* The Factory's Floor IS the list of builds (walk D19): no second strip of them. */}
+        {active !== "code_tasks" ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath

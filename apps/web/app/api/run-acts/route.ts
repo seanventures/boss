@@ -23,7 +23,10 @@ export async function GET(req: Request) {
   if (view === "chain") {
     const runId = (params.get("run_id") ?? "").trim();
     if (!ID.test(runId)) return NextResponse.json({ error: "missing run_id" }, { status: 400 });
-    path = `/v1/workflow-runs/${encodeURIComponent(runId)}/chain`;
+    // A build (crun_…) has its own chain: its acts, in the workflow chain shape (GET /v1/code-tasks/{id}/chain).
+    path = runId.startsWith("crun_")
+      ? `/v1/code-tasks/${encodeURIComponent(runId)}/chain`
+      : `/v1/workflow-runs/${encodeURIComponent(runId)}/chain`;
   } else if (view === "act") {
     const actId = (params.get("act_id") ?? "").trim();
     if (!ID.test(actId)) return NextResponse.json({ error: "missing act_id" }, { status: 400 });

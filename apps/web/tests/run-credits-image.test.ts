@@ -36,6 +36,17 @@ describe("the Credits image", () => {
     expect(asked[0]).toMatch(/\/v1\/workflow-runs\/wfr_1\/chain\?project_id=p1$/);
   }, 60_000);
 
+  it("credits a build from the build's own chain, not the run around it", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+      asked.push(String(input));
+      return Response.json(shipItChain());
+    }));
+    const r = await call("crun_1");
+    expect(r.status).toBe(200);
+    expect(asked[0]).toMatch(/\/v1\/code-tasks\/crun_1\/chain\?project_id=p1$/);
+  }, 60_000);
+
   it("refuses a run with nobody to credit, and a malformed id", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ acts: [], totals: {}, credits: [] })));
     expect((await call("wfr_2")).status).toBe(404);

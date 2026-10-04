@@ -49,7 +49,9 @@ function usePreviewLog(previewId: string | null, on: boolean): { text: string; s
   return { text, state };
 }
 
-export function LogsDrawer({ projectId, runId, previewId, deployId, tab, onTab, onClose }: {
+export function LogsDrawer({ projectId, runId, previewId, previewStatus, deployId, tab, onTab, onClose }: {
+  /** The preview's own status: a live preview with no output yet is not "Waiting". */
+  previewStatus?: string;
   projectId: string; runId: string; previewId: string | null; deployId: string | null;
   tab: LogTab; onTab: (t: LogTab) => void; onClose: () => void;
 }) {
@@ -101,7 +103,8 @@ export function LogsDrawer({ projectId, runId, previewId, deployId, tab, onTab, 
         {tab === "preview" ? (
           previewId
             ? <pre className="fx-log" data-user-text data-state={preview.state} data-testid="preview-log">
-                {preview.text || (preview.state === "failed" ? "Lost the stream" : preview.state === "ended" ? "No output" : "Waiting")}
+                {preview.text || (preview.state === "failed" ? "Lost the stream" : preview.state === "ended" ? "No output"
+                  : previewStatus === "running" ? "Live · no output yet" : "Waiting")}
               </pre>
             : <span className="fx-muted">Not running</span>
         ) : null}
