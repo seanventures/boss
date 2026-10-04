@@ -1,10 +1,45 @@
 "use client";
 
 /**
- * A build's cockpit (factory spec §4.5). Phase 0 stub: the interface the Floor's shell mounts.
- * S3 replaces the body; the props stay.
+ * A build's cockpit (factory spec §4.5): one page, not twelve stacked blocks.
+ *
+ *   header      ← Floor · app · state word · k of n · elapsed · cost · Steer · Stop · ⋯
+ *               title · attempt n ▾ · from <origin> ↗ · faces · Credits
+ *   needs you   the Floor's own AttentionCards for this build (absent when nothing waits)
+ *   the Line    stations staffed by faces; a bay filters the Story, a face opens its Act card
+ *   Story       what each agent did, oldest first          │ Outputs: 8 rows, one open at a time
+ *   Logs ▾      the only place raw text appears
+ *
+ * Everything said is the server's (`/v1/code-tasks/{id}/cockpit`, lib/cockpit.ts): the state
+ * word, `k of n`, each station's word, each output's word. Elapsed ticks here from `started_at`;
+ * there is no percent and no ETA anywhere.
  */
-import React from "react";
+import { DotsThree, SpinnerGap } from "@phosphor-icons/react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+
+import type { AvatarState } from "../../lib/agent-world-types";
+import { useCockpit, type Cockpit as CockpitData } from "../../lib/cockpit";
+import type { StationKey } from "../../lib/factory-floor";
+import { openDockAbout } from "../../lib/dock-subject";
+import { previewWebHref } from "../../lib/browser-links";
+import { isConsoleLive, subscribeConsoleLive } from "../../lib/console-live";
+import { callAction } from "../../lib/call-action";
+import { retryCodeTaskWithStateAction } from "../actions";
+import { showToast } from "../client-forms";
+import { notifyChanged } from "../changed";
+import { AgFaceStack } from "../agents/agent-face";
+import { AttentionCard } from "../agents/attention-card";
+import { useNow, useBand } from "../agents/live-util";
+import { CreditsButton } from "../agents/run-credits";
+import { useRunChain } from "../agents/run-acts";
+import { nameOf } from "../agents/run-face";
+import { ChangeIt } from "./change-it";
+import { stopBuild, steerBuild } from "./cockpit-actions";
+import { ActPopover, StationFaceView, money, secondsWord, spanOf } from "./cockpit-util";
+import { LogsDrawer, type LogTab } from "./logs-drawer";
+import { Outputs, defaultOpen, type OutputKey } from "./outputs";
+import { StationLine } from "./station-line";
+import { Story, bayLabel } from "./story";
 
 export type CockpitProps = {
   projectId: string;
@@ -18,10 +53,355 @@ export type CockpitProps = {
   onOpenBuild: (runId: string) => void;
 };
 
-export function Cockpit({ runId, onClose }: CockpitProps) {
+const AGENT_STATES = new Set(["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck", "paused", "retired"]);
+const quietish = (s: string) => s === "quiet" || s === "budget_wait" || s === "blocked";
+
+function originHref(kind: string, id: string): string {
+  if (kind === "workflow_run") return `?area=delivery_workflows&wfr=${encodeURIComponent(id)}`;
+  if (kind === "meeting") return `?area=meetings&meeting=${encodeURIComponent(id)}`;
+  return `?area=discoveries&discovery=${encodeURIComponent(id)}`;
+}
+
+function usePaused(): boolean {
+  const [paused, setPaused] = useState(false);
+  useEffect(() => {
+    setPaused(!isConsoleLive());
+    return subscribeConsoleLive((on) => setPaused(!on));
+  }, []);
+  return paused;
+}
+
+export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: CockpitProps) {
+  const { data, error, loading, refresh } = useCockpit(projectId, runId);
+  if (!data) {
+    if (error && !loading) {
+      return (
+        <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId}>
+          <button type="button" className="ag-link fx-back" onClick={onClose}>← Floor</button>
+          <span className="fx-unreachable" data-testid="fx-unreachable">
+            <span>Can&apos;t reach BOSS</span>
+            <button type="button" className="ag-btn" title={error} onClick={refresh}>Retry</button>
+          </span>
+        </section>
+      );
+    }
+    return <CockpitSkeleton runId={runId} onClose={onClose} />;
+  }
+  return <CockpitView key={data.run.id} c={data} projectId={projectId} runId={runId} actor={actor}
+                      onClose={onClose} onOpenBuild={onOpenBuild} refresh={refresh} />;
+}
+
+function CockpitSkeleton({ runId, onClose }: { runId: string; onClose: () => void }) {
+  const labels = ["Pull request", "Checks", "Tests", "Changes", "Comments", "Preview", "Deploy", "Cost"];
   return (
-    <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId}>
-      <button type="button" className="ag-link" onClick={onClose}>← Floor</button>
+    <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId} aria-busy="true">
+      <span className="ag-sr" role="status">Loading</span>
+      <button type="button" className="ag-link fx-back" onClick={onClose}>← Floor</button>
+      <div className="fx-skel-line" aria-hidden>{Array.from({ length: 8 }, (_, i) => <span key={i} className="fx-skel-bay" />)}</div>
+      <div className="fx-body">
+        <div className="fx-story" aria-hidden>{Array.from({ length: 4 }, (_, i) => <span key={i} className="fx-skel-bar" />)}</div>
+        <ul className="fx-outputs fx-out-list">
+          {labels.map((l) => <li key={l} className="fx-out"><span className="fx-out-head"><span className="fx-out-label">{l}</span><span className="fx-out-value">—</span></span></li>)}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh }: {
+  c: CockpitData; projectId: string; runId: string; actor: string;
+  onClose: () => void; onOpenBuild: (runId: string) => void; refresh: () => void;
+}) {
+  const h1 = useRef<HTMLHeadingElement>(null);
+  const root = useRef<HTMLElement>(null);
+  const now = useNow(1000);
+  const band = useBand();
+  const paused = usePaused();
+  const menuId = useId();
+  const [filter, setFilter] = useState<StationKey | null>(null);
+  const [open, setOpen] = useState<OutputKey | null>(() => defaultOpen(c));
+  const [logs, setLogs] = useState<LogTab | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [attempts, setAttempts] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [steering, setSteering] = useState(false);
+  const [guidance, setGuidance] = useState("");
+  const [pending, setPending] = useState<{ id: string; text: string; at: string }[]>([]);
+  const [changeIt, setChangeIt] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+  const [pop, setPop] = useState<{ actId: string; anchor: HTMLElement | null } | null>(null);
+  const [announce, setAnnounce] = useState("");
+  const lastWord = useRef(c.state.word);
+  const quietOpened = useRef(false);
+  const gPressed = useRef(false);
+
+  // Opening the cockpit focuses its title (spec §7 Focus).
+  useEffect(() => { h1.current?.focus({ preventScroll: true }); }, []);
+
+  // One polite announcement per state word change; never the `Now:` line.
+  useEffect(() => {
+    if (c.state.word !== lastWord.current) {
+      lastWord.current = c.state.word;
+      setAnnounce(c.state.word);
+    }
+  }, [c.state.word]);
+
+  // A quiet build opens Logs on its own, once.
+  useEffect(() => {
+    if (c.state.state === "quiet" && !quietOpened.current) {
+      quietOpened.current = true;
+      setLogs((t) => t ?? "build");
+    }
+  }, [c.state.state]);
+
+  // A newly failed check opens Checks; the PR opens when it starts waiting on you.
+  const lastState = useRef(c.state.state);
+  useEffect(() => {
+    if (lastState.current !== c.state.state) {
+      lastState.current = c.state.state;
+      const d = defaultOpen(c);
+      if (d) setOpen(d);
+    }
+  }, [c]);
+
+  const onFace = useCallback((actId: string, anchor?: HTMLElement) => setPop({ actId, anchor: anchor ?? null }), []);
+
+  const doStop = async () => {
+    setConfirmStop(false);
+    setBusy("stop");
+    setErr("");
+    const r = await stopBuild(runId, actor);
+    setBusy(null);
+    if (r.ok) { showToast("success", "Build stopped"); notifyChanged("code-tasks"); refresh(); }
+    else { setErr(r.error ?? ""); refresh(); }
+  };
+
+  const doRetry = async () => {
+    setMenu(false);
+    setBusy("retry");
+    setErr("");
+    const form = new FormData();
+    form.set("run_id", runId);
+    form.set("actor", actor);
+    const r = await callAction(retryCodeTaskWithStateAction)(null, form);
+    setBusy(null);
+    if (r?.error) { setErr(r.error); return; }
+    showToast("success", r?.attempt ? `Attempt ${r.attempt} started` : "Attempt started");
+    notifyChanged("code-tasks");
+    if (r?.runId) onOpenBuild(r.runId);
+  };
+
+  const doSteer = async () => {
+    const text = guidance.trim();
+    if (!text || busy) return;
+    setBusy("steer");
+    setErr("");
+    const r = await steerBuild(runId, actor, text);
+    setBusy(null);
+    if (r.ok) {
+      setPending((p) => [...p, { id: `pending-${Date.now()}`, text, at: new Date().toISOString() }]);
+      setGuidance("");
+      setSteering(false);
+      showToast("success", "Guidance queued");
+      refresh();
+    } else setErr(r.error ?? "");
+  };
+
+  const copyLink = () => {
+    setMenu(false);
+    try { void navigator.clipboard?.writeText(window.location.href); showToast("success", "Link copied"); } catch { /* nothing */ }
+  };
+
+  // Keyboard (spec §7): L toggles Logs, G then O focuses Outputs, Esc closes drawer → clears the
+  // filter → back to the Floor. Never while typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.altKey || e.metaKey || e.ctrlKey) return;
+      if (t?.closest?.("input, textarea, select, [contenteditable='true']")) {
+        if (e.key === "Escape" && steering) { setSteering(false); e.preventDefault(); }
+        return;
+      }
+      if (e.defaultPrevented) return;
+      const key = e.key;
+      if (key === "Escape") {
+        if (pop || changeIt) return;
+        e.preventDefault();
+        if (menu || attempts || confirmStop) { setMenu(false); setAttempts(false); setConfirmStop(false); return; }
+        if (logs) { setLogs(null); return; }
+        if (filter) { setFilter(null); return; }
+        onClose();
+        return;
+      }
+      if (key === "l" || key === "L") { setLogs((v) => (v ? null : "build")); return; }
+      if (key === "g" || key === "G") { gPressed.current = true; window.setTimeout(() => { gPressed.current = false; }, 800); return; }
+      if ((key === "o" || key === "O") && gPressed.current) {
+        gPressed.current = false;
+        root.current?.querySelector<HTMLElement>(".fx-outputs")?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pop, changeIt, menu, attempts, confirmStop, logs, filter, steering, onClose]);
+
+  const s = c.state;
+  const still = paused || quietish(s.state);
+  const elapsed = c.startedAt ? spanOf(c.startedAt, c.live ? null : c.run.updatedAt ?? null, c.live ? now : null) : "";
+  const current = c.stations.find((st) => st.key === s.station);
+  const currentAgent = current?.roleKey ? nameOf(current.roleKey).name : "the agents";
+  const faceStates = new Map<string, AvatarState>(c.agents.map((a) => [a.roleKey,
+    (still && (a.state === "working" || a.state === "needs_you") ? "idle" : AGENT_STATES.has(a.state) ? a.state : "idle") as AvatarState]));
+  const attempt = c.lineage.find((l) => l.runId === c.run.id)?.attempt ?? c.run.attempt;
+  const workflowRun = c.origin?.kind === "workflow_run" ? c.origin.id : null;
+  const { chain } = useRunChain(projectId, workflowRun, c.live);
+  const latestDeploy = (c.outputs.deploy.items[0]?.id as string | undefined) ?? null;
+  const stopTip = "Keeps the work so far. Retry resumes it.";
+  const steerTip = "Guide the agents. They read it between stations.";
+
+  return (
+    <section ref={root} className="fx-cockpit" data-testid="fx-cockpit" data-run={c.run.id} data-state={s.state}
+             data-still={still || undefined} data-band={band}>
+      <span className="ag-sr" aria-live="polite" data-testid="fx-announce">{announce}</span>
+      <header className="fx-head">
+        <div className="fx-head-1">
+          <button type="button" className="ag-link fx-back" onClick={onClose} data-testid="fx-back">← Floor</button>
+          <h1 ref={h1} tabIndex={-1} className="fx-app ag-trunc" title={c.app} data-user-text>{c.app}</h1>
+          <span className="fx-state" data-state={s.state} data-testid="fx-state">
+            <span className="fx-state-word" title={s.tip || undefined}>{s.word}</span>
+            {s.n ? <span className="fx-k" title="Stations done. BOSS doesn't guess finish times." data-testid="fx-k">{s.k} of {s.n}</span> : null}
+            {elapsed ? <span className="fx-elapsed" data-testid="fx-elapsed">{elapsed}</span> : null}
+            {c.metered && c.costUsd > 0 ? <span className="fx-cost" title="Metered model spend so far" data-testid="fx-cost">{money(c.costUsd)}</span> : null}
+            {s.preview === "running" && c.outputs.preview ? (
+              <a className="fx-flag" href={previewWebHref(c.outputs.preview.id)}
+                 target="_blank" rel="noreferrer" data-testid="fx-preview-flag">Preview live ↗</a>
+            ) : null}
+            {paused ? <span className="fx-flag" title="Live updates are paused. Press Live in the top bar.">Paused</span> : null}
+          </span>
+          <span className="fx-spacer" />
+          <span className="fx-actions">
+            {c.stoppable ? (
+              <button type="button" className="ag-btn fx-wide-only" title={steerTip} aria-expanded={steering}
+                      data-testid="fx-steer" onClick={() => setSteering((v) => !v)}>Steer</button>
+            ) : null}
+            {c.stoppable ? (
+              <span className="fx-pop-anchor">
+                <button type="button" className="ag-btn fx-wide-only" title={stopTip} data-testid="fx-stop"
+                        disabled={busy !== null} onClick={() => setConfirmStop(true)}>
+                  {busy === "stop" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}Stop
+                </button>
+              </span>
+            ) : null}
+            <span className="fx-pop-anchor">
+              <button type="button" className="ag-btn ag-btn-icon" aria-label="More" aria-haspopup="menu" aria-expanded={menu}
+                      aria-controls={menu ? menuId : undefined} data-testid="fx-more" onClick={() => setMenu((v) => !v)}>
+                <DotsThree size={16} weight="bold" aria-hidden />
+              </button>
+              {menu ? (
+                <span id={menuId} role="menu" className="fx-menu" data-testid="fx-menu">
+                  {c.stoppable ? <button type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</button> : null}
+                  {c.stoppable ? <button type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</button> : null}
+                  {c.retryable ? <button type="button" role="menuitem" data-testid="fx-menu-retry" onClick={() => void doRetry()}>Retry</button> : null}
+                  <button type="button" role="menuitem" data-testid="fx-menu-change" onClick={() => { setMenu(false); setChangeIt(true); }}>Change it</button>
+                  <button type="button" role="menuitem" onClick={() => { setMenu(false); openDockAbout({ subject: { kind: "code_task", id: c.run.id }, question: "", role: null, history: "push" }); }}>Ask BOSS</button>
+                  <a role="menuitem" href={`?area=activity&run=${encodeURIComponent(c.run.id)}`}>Activity log ↗</a>
+                  <button type="button" role="menuitem" onClick={copyLink}>Copy link</button>
+                </span>
+              ) : null}
+            </span>
+            {confirmStop ? (
+              <span role="alertdialog" aria-label="Stop this build?" className="fx-confirm" data-testid="fx-stop-confirm">
+                <span>Stop this build?</span>
+                <button type="button" className="ag-btn" data-tone="reject" title={stopTip} data-testid="fx-stop-yes" onClick={() => void doStop()}>Stop</button>
+                <button type="button" className="ag-link" onClick={() => setConfirmStop(false)}>Cancel</button>
+              </span>
+            ) : null}
+          </span>
+        </div>
+        <div className="fx-head-2">
+          <span className="fx-title ag-trunc" title={c.run.title} data-user-text>{c.run.title}</span>
+          {c.lineage.length > 1 ? (
+            <span className="fx-pop-anchor">
+              <button type="button" className="ag-link" aria-haspopup="menu" aria-expanded={attempts} data-testid="fx-attempts"
+                      title="Each retry is a new attempt on the same branch" onClick={() => setAttempts((v) => !v)}>
+                attempt {attempt} ▾
+              </button>
+              {attempts ? (
+                <span role="menu" className="fx-menu" data-testid="fx-attempts-menu">
+                  {c.lineage.map((l) => (
+                    <button key={l.runId} type="button" role="menuitem" aria-current={l.runId === c.run.id || undefined}
+                            onClick={() => { setAttempts(false); if (l.runId !== c.run.id) onOpenBuild(l.runId); }}>
+                      Attempt {l.attempt} · {l.word}{l.at ? ` · ${secondsWord(Math.max(0, Math.round(((now ?? Date.parse(l.at)) - Date.parse(l.at)) / 1000)))}` : ""}
+                    </button>
+                  ))}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+          {c.origin ? (
+            <a className="ag-link" href={originHref(c.origin.kind, c.origin.id)} data-testid="fx-origin">
+              from <span data-user-text>{c.origin.label}</span> ↗
+            </a>
+          ) : null}
+          <span className="fx-spacer" />
+          {c.agents.length ? <AgFaceStack roleKeys={c.agents.map((a) => a.roleKey)} size={24} max={6} states={faceStates} /> : null}
+          {workflowRun ? (
+            <CreditsButton chain={chain} runId={workflowRun} projectId={projectId} viewer={actor} title={c.app} live={c.live} />
+          ) : null}
+        </div>
+        {steering ? (
+          <form className="fx-steer" onSubmit={(e) => { e.preventDefault(); void doSteer(); }} data-testid="fx-steer-box">
+            <input className="input" autoFocus value={guidance} onChange={(e) => setGuidance(e.target.value)}
+                   placeholder={`Tell ${currentAgent} …`} aria-label="Guidance" data-testid="fx-steer-input" />
+            <button type="submit" className="ag-btn ag-btn-primary" disabled={!guidance.trim() || busy !== null}>Send</button>
+          </form>
+        ) : null}
+        {err ? <span className="fx-err" role="alert" data-user-text data-testid="fx-error">{err}</span> : null}
+      </header>
+
+      {c.attention.length ? (
+        <div className="fx-strip" data-testid="fx-strip" aria-label="Needs you" role="region">
+          {c.attention.map((item) => (
+            <AttentionCard key={item.id} item={item} projectId={projectId} actor={actor} still={still}
+                           onDone={refresh} onRefresh={refresh} />
+          ))}
+        </div>
+      ) : null}
+
+      <div className="fx-line-wrap">
+        <StationLine stations={c.stations} density="header" still={still}
+                     onBay={(k) => setFilter((f) => (f === k ? null : k))} onFace={onFace} />
+      </div>
+      <ol className="fx-stations-v" aria-label="Stations" data-testid="fx-stations-v">
+        {c.stations.map((st) => (
+          <li key={st.key} className="fx-vstation" data-status={st.status} aria-label={bayLabel(st)}>
+            <button type="button" className="fx-vstation-btn" onClick={() => setFilter((f) => (f === st.key ? null : st.key))}>
+              <span className="fx-vstation-label">{st.label}</span>
+              <StationFaceView station={st} size={24} still={still} />
+              <span className="fx-vstation-word">{[st.word, spanOf(st.startedAt, st.endedAt)].filter(Boolean).join(" · ")}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+
+      <div className="fx-body">
+        <Story projectId={projectId} runId={c.run.id} viewer={actor} rows={c.story} stations={c.stations} now={c.now}
+               comments={c.outputs.comments.items} filter={filter} onClearFilter={() => setFilter(null)}
+               onFace={onFace} onLogs={() => setLogs("build")} pending={pending} still={still} />
+        <Outputs projectId={projectId} actor={actor} cockpit={c} open={open} onOpen={setOpen}
+                 onLogs={(t) => setLogs(t)} onRefresh={refresh} />
+      </div>
+
+      <button type="button" className="ag-link fx-logs-toggle" aria-expanded={!!logs} data-testid="fx-logs-toggle"
+              onClick={() => setLogs((v) => (v ? null : "build"))}>
+        Logs {logs ? "▴" : "▾"}
+      </button>
+      {logs ? (
+        <LogsDrawer projectId={projectId} runId={c.run.id} previewId={c.outputs.preview?.id ?? null} deployId={latestDeploy}
+                    tab={logs} onTab={setLogs} onClose={() => setLogs(null)} />
+      ) : null}
+      {changeIt ? <ChangeIt projectId={projectId} runId={c.run.id} actor={actor} onClose={() => setChangeIt(false)} onStarted={onOpenBuild} /> : null}
+      {pop ? <ActPopover projectId={projectId} actId={pop.actId} viewer={actor} anchor={pop.anchor} onClose={() => setPop(null)} /> : null}
     </section>
   );
 }
