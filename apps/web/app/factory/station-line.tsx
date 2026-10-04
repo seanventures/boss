@@ -18,6 +18,7 @@ import React, { useRef } from "react";
 import type { Act, ActStatus, AvatarState } from "../../lib/agent-world-types";
 import type { Station, StationStatus } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+
 import { ActFace } from "../agents/act-card";
 import { AgFace } from "../agents/agent-face";
 import { RunFace, nameOf } from "../agents/run-face";
@@ -74,8 +75,18 @@ function seconds(s: Station, now: number | null): number | null {
   return Math.max(0, (end - start) / 1000);
 }
 
+/** BOSS waiting on a worker or on budget: an hourglass, never a face that claims work (walk D22). */
+export function WaitGlyph({ size = 24, tip }: { size?: number; tip?: string }) {
+  return (
+    <span className="fx-wait" data-face="waiting" title={tip || "Waiting for a worker"} style={{ width: size, height: size }}>
+      <Hourglass size={Math.max(12, size - 10)} weight="bold" aria-hidden />
+    </span>
+  );
+}
+
 function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; still: boolean; viewer: string }) {
   const state = still && (s.status === "working" || s.status === "needs_you") ? "idle" : AVATAR[s.status];
+  if (s.status === "waiting" && s.face !== "agent") return <WaitGlyph size={size} tip={s.tip} />;
   if (s.key === "review" && s.seats.length > 1) {
     // One face per seat, each in its own state — two seats of one role are two faces.
     const seats = s.seats.filter((x) => x.roleKey);
@@ -178,7 +189,8 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
         const secs = header ? seconds(s, now) : null;
         const time = secs !== null && s.status !== "pending" && s.status !== "skipped" ? span(secs) : "";
         const isActive = s === active;
-        const size: 16 | 24 | 32 = header ? 32 : s.status === "done" ? 16 : 24;
+        // Row density: every face 24px, so the storm reads at a glance (walk D22).
+        const size: 16 | 24 | 32 = header ? 32 : 24;
         const ariaLabel = [s.label, who, s.word.toLowerCase(), time].filter(Boolean).join(", ");
         const dot = !header && (s.status === "pending" || s.status === "skipped") && !(s.key === "review" && s.seats.length > 1);
         return (

@@ -12,6 +12,7 @@
  * Labels, not sentences: every explanation is a `data-tip`.
  */
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { Act, AvatarState } from "../../lib/agent-world-types";
 import { openDockAbout, type DockSubject } from "../../lib/dock-subject";
@@ -263,11 +264,13 @@ export function ActFace({ act, viewer, size = 24, label, children, state }: {
         <RunFace roleKey={who.roleKey} variant={who.variant} personId={who.personId} size={size} state={state ?? actState(act)} />
         {children}
       </button>
-      {open ? (
+      {/* PORTALLED to <body> (walk D19): a fixed card inside an ancestor with a filter or a
+          transform is placed against THAT box, and opened far from the face that was pressed. */}
+      {open ? createPortal(
         <div ref={card} id={id} role="dialog" aria-label={`${named.name}'s work`} className="ag-act-pop"
              style={at ? { left: at.left, top: at.top } : { visibility: "hidden" }}>
           <ActCard act={act} viewer={viewer} onClose={close} />
-        </div>
+        </div>, document.body,
       ) : null}
     </>
   );

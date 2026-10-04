@@ -15,7 +15,7 @@ import React from "react";
 import type { BuildRow as Build } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { localTime, span, type Band } from "../agents/live-util";
-import { StationLine, activeStation, stationMoves } from "./station-line";
+import { StationLine, WaitGlyph, activeStation, stationMoves } from "./station-line";
 
 /** States whose face never moves: motion would claim work that is not happening. */
 export const STILL_STATES = new Set(["quiet", "budget_wait", "blocked", "budget_refused", "needs_waiver", "queued"]);
@@ -82,8 +82,12 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
           <span data-user-text>{density === "compact" ? `Attempt ${b.attempt}` : b.app}</span>
         </button>
       </span>
-      <StationLine stations={b.stations} density="row" band={band} still={frozen}
-                   label={`Stations of ${b.app}`} />
+      <span className="fx-row-line">
+        {(b.state === "queued" || b.state === "budget_wait") && !activeStation(b.stations)
+          ? <WaitGlyph size={24} tip={b.tip || (b.state === "queued" ? "Waiting for a worker" : b.word)} /> : null}
+        <StationLine stations={b.stations} density="row" band={band} still={frozen}
+                     label={`Stations of ${b.app}`} />
+      </span>
       <span className="fx-row-now">
         {parts.map((p, i) => (
           <React.Fragment key={i}>
