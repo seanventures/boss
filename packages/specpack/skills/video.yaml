@@ -40,7 +40,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
 
   - id: video.watermark
@@ -71,7 +74,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
       # A fixed vocabulary, because this value becomes part of a filter expression.
       allowed_values:
@@ -106,7 +112,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
 
   - id: video.cut
@@ -138,7 +147,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
 
   - id: video.reframe
@@ -171,7 +183,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
       allowed_values:
         aspect: ["9:16", "16:9", "1:1", "4:5"]
@@ -208,7 +223,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
       allowed_values:
         position: [center, top_right, top_left, bottom_right, bottom_left]
@@ -242,7 +260,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
       allowed_values:
         style: [lower_third, bottom, top]
@@ -346,7 +367,10 @@ skills:
       required_permissions: [workflow_execute]
     policy:
       requires_receipt: true
-      requires_connection: google
+      # STORAGE, NOT GOOGLE. The file is kept in BOSS's own artifact storage unless the
+      # workflow asks for Drive; a Drive-kept source needs Google, which readiness finds from
+      # the link itself (workflow_readiness: a Drive link is the need, not this skill).
+      requires_capabilities: [storage.read, storage.write]
       requires_connection_health: healthy
 
   - id: media.fetch_link
@@ -371,7 +395,9 @@ skills:
       url: string
       output_name: string?
       output_folder_id: string?
-      # Where the fetched copy is kept. Google today; the port takes others as they are built.
+      # Where the fetched copy is kept. Blank: BOSS's own artifact storage, no account needed.
+      # `google` (or an output_folder_id) keeps it in Drive when Google is connected, and
+      # falls back to BOSS's storage, saying so, when it is not.
       store_provider: string?
     output_schema:
       media_artifact_id: string

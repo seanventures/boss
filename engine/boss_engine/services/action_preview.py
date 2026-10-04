@@ -235,7 +235,11 @@ def preview_publish(inputs: dict[str, Any], redact: _Redactor, lookup: _Lookup,
     content = found.get("content") or {}
     media_name = (content.get("filename") or content.get("name") or found.get("title")
                   or media_id or None)
-    link = (content.get("web_view_link") or content.get("drive_url") or content.get("url")
+    # `view_url` is what a media artifact records: the console's own media route for a file BOSS
+    # keeps itself, or the Drive link for one kept in Drive. Either way it is the exact file the
+    # approver is about to publish, so they can watch it before saying yes.
+    link = (content.get("view_url") or content.get("web_view_link") or content.get("drive_url")
+            or content.get("url")
             or inputs.get("video_url") or inputs.get("media_url") or None)
     description, truncated = _clip(redact.text(_text(inputs.get("description"))), MAX_BODY_CHARS)
     tags = inputs.get("tags") or []

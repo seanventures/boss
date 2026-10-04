@@ -53,10 +53,21 @@ is the only thing that says what you meant.
 **A connected model.** The editing step is an agent working from your sentence. Connect one in
 Settings if `connected_engines` is empty.
 
-**A connected YouTube channel** for publishing: **Channels → Connect** in the console. Without a
-channel, publishing refuses. The editing agent can fetch a link you provide; private Google Drive
-source links also need an account that can read them, while a public HTTPS source can be fetched
-without Drive sign-in.
+**Google only to publish — and for Drive links.** Fetching, editing and reviewing need no Google
+account: the fetched source and every rendered edit are kept in BOSS's own artifact storage (the
+install's artifacts volume), and you watch the result from the console. Connect Google
+(**Skills and MCP → Channels → Connect**) when you want to:
+
+- **publish to YouTube** — the last step. Without a channel, publishing refuses; and
+- **edit a video from a Google Drive link** — reading it needs an account that can see it.
+
+A direct HTTPS link to the file (`https://…/clip.mp4`) needs no connection. The start checklist
+says the same thing: Google is listed against the publish step, and against the editing step only
+when the link you gave is a Drive link. Because publishing stops for you anyway, you can start a
+run, review the edit, and connect Google before you approve.
+
+To keep the files in Drive as well, give the step a `store_provider` of `google` (or an
+`output_folder_id`); without a Google connection they stay in BOSS and the step says so.
 
 *Several channels?* Connect each one; they get their own keys (`youtube_default`, `youtube_2`, …),
 each with its own token. To pin a step to a particular channel, open that step's **inputs** in the
@@ -111,6 +122,10 @@ Each option can also come from the environment: `BOSS_API`, `BOSS_API_KEY`, `BOS
 The editing step runs, then **Publish** stops and waits. Open the agent step to see **which skills
 it chose, in what order, and why**. That record answers "what did it actually do", and it is what
 to read before approving.
+
+**Watch the edit before you approve.** The publish approval shows the file it will upload as a
+link: for a video BOSS keeps itself that opens `/v1/artifacts/<id>/media` in the console, behind
+the same sign-in as the rest of the project, and plays in the browser.
 
 ---
 
@@ -240,6 +255,7 @@ skill does accept.
 | *"this ffmpeg has no drawtext filter"* | Captions need `libavfilter-extra` and a font. The BOSS images have both |
 | *"an edit plan must be a non-empty list"* | The instruction asked for no changes. Say what you want done |
 | Publish fails with a connection error | No channel connected. Channels → Connect |
+| The start checklist lists *Google (Drive link)* | Your link is a Drive link. Connect Google, or use a direct HTTPS link to the file |
 
 ---
 
