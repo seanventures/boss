@@ -13,7 +13,7 @@
  */
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
-import type { Act } from "../../lib/agent-world-types";
+import type { Act, AvatarState } from "../../lib/agent-world-types";
 import { openDockAbout, type DockSubject } from "../../lib/dock-subject";
 import { openTalk } from "../../lib/agent-converse";
 import { shortLabel, whoDid, actState } from "./chain-model";
@@ -212,8 +212,10 @@ function place(trigger: HTMLElement, card: HTMLElement): { left: number; top: nu
  * A face that opens its work's card. Fixed-positioned, so a lane or a strip that scrolls inside
  * itself cannot clip it. Escape and a click elsewhere close it.
  */
-export function ActFace({ act, viewer, size = 24, label, children }: {
+export function ActFace({ act, viewer, size = 24, label, children, state }: {
   act: Act; viewer: string; size?: 20 | 24 | 32 | 48; label?: string; children?: React.ReactNode;
+  /** The face's drawn state when the caller holds it still (ring budget, quiet, Paused). */
+  state?: AvatarState;
 }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const [open, setOpen] = useState(false);
@@ -253,7 +255,7 @@ export function ActFace({ act, viewer, size = 24, label, children }: {
               aria-label={`${label ?? named.name}: ${shortLabel(act.label)}`}
               data-tip={`${named.name}${act.edgeLabel ? `\n${act.edgeLabel}` : ""}`}
               onClick={() => setOpen((v) => !v)}>
-        <RunFace roleKey={who.roleKey} variant={who.variant} personId={who.personId} size={size} state={actState(act)} />
+        <RunFace roleKey={who.roleKey} variant={who.variant} personId={who.personId} size={size} state={state ?? actState(act)} />
         {children}
       </button>
       {open ? (

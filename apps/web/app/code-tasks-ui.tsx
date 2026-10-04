@@ -247,7 +247,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previ
     setUrl((u) => ({ ...u, view }));
   };
 
-  // `/` finds a build; Esc leaves the cockpit (when nothing inside it took the key first).
+  // `/` finds a build.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -255,10 +255,9 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previ
       if (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !url.build) {
         e.preventDefault();
         find.current?.focus();
-      } else if (e.key === "Escape" && url.build && !e.defaultPrevented && !typing
-                 && !document.querySelector("[role=dialog]")) {
-        closeBuild();
       }
+      // Esc inside the cockpit is the cockpit's own chain (drawer → filter → Floor): it calls
+      // onClose last. Handling it here too raced the cockpit's listener and skipped the chain.
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
