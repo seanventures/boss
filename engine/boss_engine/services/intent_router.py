@@ -1318,7 +1318,8 @@ def _remembered_context(
         return ""
 
 
-def _role_identity(role: Optional[str]) -> str:
+def _role_identity(role: Optional[str], connection: Any = None,
+                   project_id: Optional[str] = None) -> str:
     """Answer as a named member of the workforce, from what that member has actually done.
 
     The Agents page's "Ask" put "@QA Lead: " into the general agent's box. The name was prose
@@ -1366,7 +1367,43 @@ def _role_identity(role: Optional[str]) -> str:
         "asked what you have done before, or if it genuinely changes the answer.\n"
         "Stay in role: give the view that role is in the room to give, and name where you "
         "disagree with what the rest of the panel decided."
+        + _agent_voice(role, connection, project_id)
     )
+
+
+def _agent_voice(role: str, connection: Any, project_id: Optional[str]) -> str:
+    """WHO IS ANSWERING: the agent's own identity and voice (agent_persona L1 + L3).
+
+    The block above says how to answer as a member of the workforce; this says which member,
+    in its own voice — the persona an operator sees on its Passport is the persona the reply
+    is written in. L1 is there for every agent, found or not: whoever answers says it is an
+    AI and never claims to be a real person. Never raises: a chat must still answer.
+    """
+    from . import agent_identity, agent_persona
+
+    row: dict[str, Any] = {"display_name": role}
+    if connection is not None and project_id:
+        try:
+            with connection.begin_nested():
+                key = agent_identity.resolve_in(connection, project_id, role)
+                found = connection.execute(
+                    text("SELECT role_key, display_name, spec, agent_id, identity_version "
+                         "FROM roles WHERE project_id = :p AND role_key = :r"),
+                    {"p": project_id, "r": key or ""},
+                ).mappings().first()
+            if found:
+                row = dict(found)
+        except Exception:  # noqa: BLE001 — the dock answers in the generic voice instead
+            _log.warning("agent voice lookup failed for %s", role, exc_info=True)
+    if "spec" not in row:
+        row = agent_persona.shipped_role(agent_identity.resolve(role) or "") or row
+    try:
+        voice = agent_persona.identity_and_voice(row, mode="chat")
+    except Exception:  # noqa: BLE001
+        from .agent_world_types import AI_DISCLOSURE
+
+        voice = f"You are the {role}, an AI agent in BOSS. {AI_DISCLOSURE}"
+    return "\n\n=== WHO YOU ARE ===\n" + voice
 
 
 def _no_button_was_promised(reply: str, proposed: list) -> str:
@@ -2070,7 +2107,7 @@ class IntentRouter:
             "or the same offer again is not caution, it is a refusal wearing caution's clothes. "
             "If something genuinely blocks the action, name that ONE thing and what would "
             "unblock it — do not re-derive the design around it."
-            + _role_identity(role)
+            + _role_identity(role, connection, project_id)
             # WHAT THIS PROJECT ALREADY KNOWS, AND WHERE THIS SESSION HAD GOT TO.
             #
             # Before this, every thread started cold: a correction changed one turn and was

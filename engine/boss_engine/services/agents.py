@@ -30,6 +30,12 @@ can already do what it was given. The API, the console and the chat tools all wr
 WHAT AN OPERATOR REMOVES STAYS REMOVED. Every removal and edit here records a seed exclusion
 (services/seed_exclusions.py), because the install/upgrade seed used to put back what a person
 took away.
+
+EVERY AGENT IS SOMEBODY (Agent World, services/agent_identity.py). A create gives the agent an
+immutable agt_ id, a birth (who made it, from what), a sponsor and a v1 seal; every change to
+what it is or holds — voice, remit, a grant, a revoke — seals a new version, once per request
+however many things changed. The persona (`spec.persona`) is how it speaks, never what it may
+do: services/agent_persona.py lints it and refuses one that tries to grant anything.
 """
 from __future__ import annotations
 
@@ -40,7 +46,7 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import seed_exclusions
+from . import agent_identity, seed_exclusions
 from .core import emit_event, make_id
 
 
@@ -207,9 +213,14 @@ def grant_mcp(connection: Connection, project_id: str, *, actor: str, role_key: 
         {"id": make_id("rmcp"), "p": project_id, "r": role, "s": server["id"],
          "tools": json.dumps(allow), "by": actor},
     ).scalar()
+    # GIVEN BY HAND, so an earlier removal no longer keeps the seed from granting it.
+    seed_exclusions.lift(connection, project_id, "role_skill",
+                         role_mcp_subject(role, server["name"]))
     emit_event(connection, project_id, "mcp.assigned_to_agent", actor, "role_mcp_server",
                str(row), {"role_key": role, "mcp_server_id": server["id"],
                           "server": server["name"], "tools": allow})
+    agent_identity.quietly(connection, agent_identity.seal_identity, project_id, role,
+                           "grant", actor)
     return {"role_key": role, "mcp_server_id": server["id"], "server": server["name"],
             "tools": allow, "assigned": True,
             "enabled": bool(server["enabled"])}
@@ -227,11 +238,83 @@ def revoke_mcp(connection: Connection, project_id: str, *, actor: str, role_key:
     if not removed:
         raise AgentError(f"{role} does not hold the MCP server {server['name']!r}.",
                          status=404)
+    # A REMOVAL THE NEXT SEED MUST NOT UNDO: role specs now name the servers their agent holds
+    # (permissions.mcp_servers), and sync_role_mcp grants them on every install and upgrade.
+    seed_exclusions.exclude(connection, project_id, "role_skill",
+                            role_mcp_subject(role, server["name"]), actor=actor,
+                            reason="MCP server taken off the agent")
     emit_event(connection, project_id, "mcp.unassigned_from_agent", actor, "role_mcp_server",
                str(removed), {"role_key": role, "mcp_server_id": server["id"],
                               "server": server["name"]})
+    agent_identity.quietly(connection, agent_identity.seal_identity, project_id, role,
+                           "revoke", actor)
     return {"role_key": role, "mcp_server_id": server["id"], "server": server["name"],
             "assigned": False}
+
+
+def role_mcp_subject(role_key: str, server_name: str) -> str:
+    """The seed-exclusion subject for "this agent no longer holds this server".
+
+    Recorded under the `role_skill` kind (the schema's CHECK allows four kinds) with an `mcp:`
+    prefix no skill id can have — skill ids are dotted (`mcp.<server>.<tool>`), never colons.
+    By server NAME, because built-in servers are ensured by name and a re-registered one gets a
+    new id.
+    """
+    return seed_exclusions.role_skill_subject(role_key, f"mcp:{str(server_name).strip()}")
+
+
+def sync_role_mcp(connection: Connection, *, project_id: str,
+                  actor: str = "system") -> dict[str, Any]:
+    """Give every installed agent the MCP servers its role spec names. The seed's half of the
+    MCP grant, exactly as sync_role_skills is for skills.
+
+    A role spec names servers by NAME under `permissions.mcp_servers` ({server, tools}). Additive
+    only: a grant that already exists is left as the operator set it (its tool list included),
+    a server the operator took off the agent stays off (seed_exclusions), and a server this
+    project has not registered is reported, never invented.
+    """
+    from .mcp_registry import list_mcp_servers
+
+    removed = seed_exclusions.excluded(connection, project_id, "role_skill")
+    servers = {str(s["name"]).strip().lower(): s
+               for s in list_mcp_servers(connection, project_id)}
+    held = {(r["role_key"], r["mcp_server_id"]) for r in connection.execute(
+        text("SELECT role_key, mcp_server_id FROM role_mcp_servers WHERE project_id = :p"),
+        {"p": project_id}).mappings().all()}
+    granted: list[dict[str, Any]] = []
+    missing: list[dict[str, str]] = []
+    kept_off: list[dict[str, str]] = []
+    roles = connection.execute(
+        text("SELECT role_key, spec FROM roles WHERE project_id = :p ORDER BY role_key"),
+        {"p": project_id},
+    ).mappings().all()
+    for row in roles:
+        spec = row["spec"] if isinstance(row["spec"], dict) else {}
+        wanted = ((spec.get("permissions") or {}).get("mcp_servers")) or []
+        for entry in wanted if isinstance(wanted, list) else []:
+            if isinstance(entry, str):
+                entry = {"server": entry}
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("server") or "").strip()
+            if not name:
+                continue
+            if role_mcp_subject(row["role_key"], name) in removed:
+                kept_off.append({"role_key": row["role_key"], "server": name})
+                continue
+            server = servers.get(name.lower())
+            if server is None:
+                missing.append({"role_key": row["role_key"], "server": name,
+                                "reason": "not registered on this project"})
+                continue
+            if (row["role_key"], server["id"]) in held:
+                continue
+            tools = [str(t) for t in entry.get("tools") or [] if str(t).strip()]
+            grant_mcp(connection, project_id, actor=actor, role_key=row["role_key"],
+                      mcp_server_id=server["id"], tools=tools)
+            granted.append({"role_key": row["role_key"], "server": name, "tools": tools})
+    return {"granted": granted, "granted_count": len(granted), "unavailable": missing,
+            "kept_off_by_operator": kept_off}
 
 
 def held_mcp_servers(connection: Connection, project_id: str, role_key: str, *,
@@ -525,6 +608,7 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
     statuses in which nothing runs again — now counts.
     """
     from . import workflows
+    from .step_agents import is_default_captain, named_agent
     from .workflow_run_actions import CLOSED_RUN_STATES
 
     role = str(role_key or "").strip().lower()
@@ -557,9 +641,15 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
         for step in spec.get("steps") or []:
             if not isinstance(step, dict):
                 continue
-            how = _names_in_step(step).get(role)
+            names = _names_in_step(step)
+            how = names.get(role)
             if not how:
                 continue
+            # ONLY THE CATALOGUE'S DEFAULT, and nothing else on the step names it: deleting or
+            # pausing the agent hands the step to Auto (step_agents.resolve), so it never blocks.
+            soft = (is_default_captain(step) and named_agent(step) == role
+                    and not _names_in_step({k: v for k, v in step.items()
+                                            if k != "captain"}).get(role))
             key = (str(row["workflow_key"]), int(row["version"]), str(step.get("id")))
             entry = seen.get(key)
             if entry is None:
@@ -569,6 +659,7 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
                     "step_id": str(step.get("id") or ""),
                     "step": str(step.get("label") or step.get("name") or step.get("id") or ""),
                     "how": how, "because": row["why"], "reasons": [], "pointed_by": [],
+                    "soft": soft,
                 }
                 seen[key] = entry
                 out.append(entry)
@@ -734,6 +825,7 @@ def list_agents(connection: Connection, project_id: str) -> list[dict[str, Any]]
         text(
             """
             SELECT r.role_key, r.display_name, r.spec, r.reports_to, r.autonomy_level,
+                   r.agent_id, r.lifecycle, r.identity_version,
                    (SELECT count(*) FROM role_skills s
                      WHERE s.project_id = r.project_id AND s.role_key = r.role_key) AS skills,
                    (SELECT count(*) FROM role_mcp_servers m
@@ -748,9 +840,21 @@ def list_agents(connection: Connection, project_id: str) -> list[dict[str, Any]]
          "mission": str(((r["spec"] or {}) if isinstance(r["spec"], dict) else {})
                         .get("mission") or ""),
          "reports_to": r["reports_to"], "autonomy_level": int(r["autonomy_level"] or 0),
-         "skill_count": int(r["skills"] or 0), "mcp_server_count": int(r["mcp"] or 0)}
+         "skill_count": int(r["skills"] or 0), "mcp_server_count": int(r["mcp"] or 0),
+         # WHO IT IS, for the pickers: a retired agent is left out of them, a paused one is
+         # shown as paused (Auto skips it).
+         "agent_id": r["agent_id"], "lifecycle": r["lifecycle"] or "active",
+         "version": int(r["identity_version"] or 1),
+         **_voice_summary(r["spec"])}
         for r in rows
     ]
+
+
+def _voice_summary(spec: Any) -> dict[str, Any]:
+    persona = (spec or {}).get("persona") if isinstance(spec, dict) else None
+    persona = persona if isinstance(persona, dict) else {}
+    return {"callsign": persona.get("callsign"), "tagline": persona.get("tagline"),
+            "archetype": persona.get("archetype")}
 
 
 def get_agent(connection: Connection, project_id: str, role_key: str) -> dict[str, Any]:
@@ -774,6 +878,8 @@ def get_agent(connection: Connection, project_id: str, role_key: str) -> dict[st
         "mcp": role_mcp_detail(connection, project_id, key),
         "named_on_steps": steps_naming(connection, project_id, key),
         "studio_profiles": studio_profiles(connection, project_id, key),
+        # Agent World: id, version, lifecycle, sponsor, persona, avatar (agent_identity).
+        **agent_identity.summary(connection, project_id, key),
     }
 
 
@@ -792,8 +898,16 @@ def create_agent(
     mcp_servers: Iterable[Any] = (),
     reports_to: Optional[str] = None,
     boundaries: Optional[dict[str, Any]] = None,
+    persona: Optional[dict[str, Any]] = None,
+    born_from: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Make an agent and give it what it holds, in one transaction.
+
+    BORN, NOT JUST INSERTED. The agent gets its agt_ id, `born_by`/`sponsor` = the actor, its
+    `born_from` (blank, a template role or an archetype) and one `agent.born` + `agent.sealed`
+    v1 — after its grants, so v1 is the agent as created. From a template or an archetype, what
+    the operator left empty (purpose, boundaries, skills, MCP servers, voice) comes from that
+    role's YAML; what they wrote wins.
 
     REFUSES AN EXISTING KEY. The wizard derived a role key from the name and register_role took
     its UPDATE path, so a new agent called "QA" silently replaced the bundled qa role's mission,
@@ -820,6 +934,31 @@ def create_agent(
             f"an agent {key!r} already exists on this project. Open it to change it, or give "
             "the new one a different name.", status=409)
 
+    origin, blueprint = _blueprint(born_from)
+    if blueprint:
+        purpose = purpose or str(blueprint.get("mission") or "")
+        if boundaries is None and isinstance(blueprint.get("boundaries"), dict):
+            boundaries = blueprint["boundaries"]
+        permissions = blueprint.get("permissions") or {}
+        if not list(skills or []):
+            from .skill_definitions import _skill_exists
+
+            forbidden = set(permissions.get("forbidden_skills") or [])
+            skills = [s for s in permissions.get("allowed_skills") or []
+                      if "*" not in str(s) and s not in forbidden
+                      and _skill_exists(connection, project_id, str(s)) is not None]
+        if not list(mcp_servers or []):
+            mcp_servers = _blueprint_servers(connection, project_id,
+                                             permissions.get("mcp_servers") or [])
+        base = dict(blueprint.get("persona") or {}) if isinstance(blueprint.get("persona"),
+                                                                    dict) else {}
+        # A NEW AGENT GETS ITS OWN FACE. The blueprint's avatar seed is the shipped agent's
+        # (Vera's, Nova's); a second agent wearing it would be two agents with one face. The
+        # face is seeded by the new agt_ id instead; `archetype` stays, so the kit can theme it.
+        base.pop("avatar", None)
+        persona = {**base, **(persona or {})} if (base or persona) else None
+    voice, warnings = _clean_persona(connection, project_id, persona)
+
     skill_ids = _validate_skills(connection, project_id, skills)
     servers = [{**_resolve_server(connection, project_id, e["server"]), "tools": e["tools"]}
                for e in _mcp_entries(mcp_servers)]
@@ -834,6 +973,8 @@ def create_agent(
         "permissions": {"allowed_skills": [], "forbidden_skills": []},
         "source": "operator",
     }
+    if voice:
+        spec["persona"] = voice
     connection.execute(
         text(
             "INSERT INTO roles (id, project_id, role_key, display_name, autonomy_level, "
@@ -849,14 +990,101 @@ def create_agent(
     seed_exclusions.lift(connection, project_id, "role", key)
     seed_exclusions.exclude(connection, project_id, "role_spec", key, actor=actor,
                             reason="created in the console")
-    _grant_skills(connection, project_id, key, skill_ids, actor)
-    for server in servers:
-        grant_mcp(connection, project_id, actor=actor, role_key=key,
-                  mcp_server_id=server["id"], tools=server["tools"])
+    with agent_identity.sealing_once():
+        agent_identity.birth(connection, project_id, key, born_by=actor, born_from=origin,
+                             sponsor=actor if agent_identity.is_person(actor) else None,
+                             actor=actor)
+        _grant_skills(connection, project_id, key, skill_ids, actor)
+        for server in servers:
+            grant_mcp(connection, project_id, actor=actor, role_key=key,
+                      mcp_server_id=server["id"], tools=server["tools"])
     emit_event(connection, project_id, "agent.created", actor, "role", key,
                {"skills": skill_ids, "mcp_servers": [s["id"] for s in servers],
-                "reports_to": parent})
-    return get_agent(connection, project_id, key)
+                "reports_to": parent, "born_from": origin})
+    return {**get_agent(connection, project_id, key), "warnings": warnings}
+
+
+#: The kinds of birth POST /v1/agents accepts. `pack` is the seed's; `clone` is phase 2.
+BIRTH_KINDS = ("blank", "template", "archetype")
+
+
+def _blueprint(born_from: Optional[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(born_from as stored, the role YAML it starts from — {} for a blank agent)."""
+    if not born_from:
+        return {"kind": "blank"}, {}
+    if not isinstance(born_from, dict):
+        raise AgentError("born_from must be {kind: blank|template|archetype, …}.")
+    kind = str(born_from.get("kind") or "blank").strip().lower()
+    if kind not in BIRTH_KINDS:
+        raise AgentError(f"born_from.kind must be one of {', '.join(BIRTH_KINDS)}.")
+    if kind == "blank":
+        return {"kind": "blank"}, {}
+    from .agent_persona import ARCHETYPES, _specpack_root
+
+    field = "archetype" if kind == "archetype" else "template_key"
+    name = str(born_from.get(field) or born_from.get("key") or "").strip().lower()
+    if kind == "archetype" and name not in ARCHETYPES:
+        raise AgentError(f"no archetype {name!r}. Pick one of: {', '.join(ARCHETYPES)}.")
+    if not _KEY.match(name):
+        raise AgentError(f"born_from.{field} must name a shipped role, like qa.")
+    path = _specpack_root() / "roles" / f"{name}.yaml"
+    if not path.is_file():
+        raise AgentError(f"no template {name!r}. Templates are the shipped roles, like qa or "
+                         "backend_engineer.")
+    import yaml
+
+    blueprint = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return {"kind": kind, field: name}, blueprint
+
+
+def _blueprint_servers(connection: Connection, project_id: str,
+                       wanted: Iterable[Any]) -> list[dict[str, Any]]:
+    """The template's MCP servers this project actually has, as create_agent entries."""
+    from .mcp_registry import list_mcp_servers
+
+    servers = {str(s["name"]).strip().lower(): s["id"]
+               for s in list_mcp_servers(connection, project_id)}
+    out = []
+    for entry in wanted or []:
+        entry = {"server": entry} if isinstance(entry, str) else entry
+        if not isinstance(entry, dict):
+            continue
+        server_id = servers.get(str(entry.get("server") or "").strip().lower())
+        if server_id:
+            out.append({"server_id": server_id, "tools": list(entry.get("tools") or [])})
+    return out
+
+
+def _clean_persona(connection: Connection, project_id: str,
+                   persona: Optional[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+    """The persona as stored, and its warnings — or a 422 naming the field.
+
+    The permission lint also knows this project's own skill ids, so "you hold deploy_app"
+    and "github.merge_pr_real is yours" are refused whatever the skill is called here.
+    """
+    from .agent_persona import PersonaError, clean_persona
+
+    if persona is None:
+        return {}, []
+    try:
+        from .skill_catalogue import entries
+
+        with connection.begin_nested():
+            names = list(entries(connection, project_id))
+    except Exception:  # noqa: BLE001 — the lint still knows every engine tool and skill id
+        names = []
+    try:
+        return clean_persona(persona, extra_names=names)
+    except PersonaError as error:
+        raise PersonaInvalid(error.field, error.message) from error
+
+
+class PersonaInvalid(AgentError):
+    """A persona refused by the lint: 422 with {field, message}."""
+
+    def __init__(self, field: str, message: str):
+        super().__init__(message)
+        self.field = field
 
 
 def update_agent(
@@ -873,8 +1101,13 @@ def update_agent(
     mcp_servers: Any = _UNSET,
     grant_skills: Iterable[str] = (),
     grant_mcp_servers: Iterable[Any] = (),
+    persona: Any = _UNSET,
 ) -> dict[str, Any]:
     """Change what is given, and nothing else.
+
+    ONE SEAL PER SAVE. Whatever changed — the voice, the remit, five grants — the agent's
+    version goes up once (agent_identity.sealing_once), and not at all when nothing really
+    changed. The answer carries `version`, `fingerprint` and the persona lint's `warnings`.
 
     A FIELD LEFT OUT IS LEFT ALONE. POST /v1/roles used as an update wrote autonomy_level=0 and
     reports_to=NULL whenever they were omitted, so fixing a typo in a mission demoted the agent
@@ -885,88 +1118,104 @@ def update_agent(
     profile on an agent that already holds things.
     """
     key = str(role_key or "").strip().lower()
-    role = _require_role(connection, project_id, key)
-    spec = dict(role["spec"] if isinstance(role["spec"], dict) else {})
-    changed: dict[str, Any] = {}
+    with agent_identity.sealing_once():
+        role = _require_role(connection, project_id, key)
+        spec = dict(role["spec"] if isinstance(role["spec"], dict) else {})
+        changed: dict[str, Any] = {}
+        warnings: list[str] = []
 
-    if display_name is not _UNSET:
-        name = str(display_name or "").strip()
-        if not name:
-            raise AgentError("an agent needs a name; leave the field out to keep the current one.")
-        changed["display_name"] = name
-        spec["display_name"] = name
-    if mission is not _UNSET:
-        spec["mission"] = str(mission or "").strip()[:2000]
-        changed["mission"] = spec["mission"]
-    if boundaries is not _UNSET:
-        spec["boundaries"] = _boundaries(boundaries)
-        changed["boundaries"] = spec["boundaries"]
-    parent = role["reports_to"]
-    if reports_to is not _UNSET:
-        parent = _check_reports_to(connection, project_id, key, reports_to)
-        changed["reports_to"] = parent
+        if display_name is not _UNSET:
+            name = str(display_name or "").strip()
+            if not name:
+                raise AgentError(
+                    "an agent needs a name; leave the field out to keep the current one.")
+            changed["display_name"] = name
+            spec["display_name"] = name
+        if mission is not _UNSET:
+            spec["mission"] = str(mission or "").strip()[:2000]
+            changed["mission"] = spec["mission"]
+        if persona is not _UNSET:
+            voice, warnings = _clean_persona(connection, project_id, persona or {})
+            if voice != (spec.get("persona") or {}):
+                if voice:
+                    spec["persona"] = voice
+                else:
+                    spec.pop("persona", None)
+                changed["persona"] = voice
+        if boundaries is not _UNSET:
+            spec["boundaries"] = _boundaries(boundaries)
+            changed["boundaries"] = spec["boundaries"]
+        parent = role["reports_to"]
+        if reports_to is not _UNSET:
+            parent = _check_reports_to(connection, project_id, key, reports_to)
+            changed["reports_to"] = parent
 
-    forbidden = ((spec.get("permissions") or {}).get("forbidden_skills")) or []
-    desired_skills = (None if skills is _UNSET
-                      else set(_validate_skills(connection, project_id, skills or [], forbidden)))
-    added_skills = set(_validate_skills(connection, project_id, grant_skills, forbidden))
-    desired_mcp = (None if mcp_servers is _UNSET
-                   else _mcp_entries(mcp_servers or []))
-    added_mcp = _mcp_entries(grant_mcp_servers)
+        forbidden = ((spec.get("permissions") or {}).get("forbidden_skills")) or []
+        desired_skills = (None if skills is _UNSET else set(
+            _validate_skills(connection, project_id, skills or [], forbidden)))
+        added_skills = set(_validate_skills(connection, project_id, grant_skills, forbidden))
+        desired_mcp = (None if mcp_servers is _UNSET
+                       else _mcp_entries(mcp_servers or []))
+        added_mcp = _mcp_entries(grant_mcp_servers)
 
-    if {"display_name", "mission", "boundaries"} & changed.keys():
-        connection.execute(
-            text("UPDATE roles SET display_name = :name, spec = CAST(:spec AS JSONB) "
-                 "WHERE project_id = :p AND role_key = :k"),
-            {"p": project_id, "k": key, "name": spec.get("display_name") or role["display_name"],
-             "spec": json.dumps(spec)},
-        )
-        # AN EDITED BUNDLED AGENT STAYS EDITED. The role installer rewrites a bundled role's
-        # spec whenever it differs from the pack's YAML, which is every time somebody edits it.
-        seed_exclusions.exclude(connection, project_id, "role_spec", key, actor=actor,
-                                reason="edited in the console")
-    if "reports_to" in changed:
-        connection.execute(
-            text("UPDATE roles SET reports_to = :r WHERE project_id = :p AND role_key = :k"),
-            {"p": project_id, "k": key, "r": parent},
-        )
+        if {"display_name", "mission", "boundaries", "persona"} & changed.keys():
+            connection.execute(
+                text("UPDATE roles SET display_name = :name, spec = CAST(:spec AS JSONB) "
+                     "WHERE project_id = :p AND role_key = :k"),
+                {"p": project_id, "k": key,
+                 "name": spec.get("display_name") or role["display_name"],
+                 "spec": json.dumps(spec)},
+            )
+            # AN EDITED BUNDLED AGENT STAYS EDITED. The role installer rewrites a bundled role's
+            # spec whenever it differs from the pack's YAML, which is every time somebody edits it.
+            seed_exclusions.exclude(connection, project_id, "role_spec", key, actor=actor,
+                                    reason="edited in the console")
+        if "reports_to" in changed:
+            connection.execute(
+                text("UPDATE roles SET reports_to = :r WHERE project_id = :p AND role_key = :k"),
+                {"p": project_id, "k": key, "r": parent},
+            )
 
-    from .skill_definitions import unassign_skill_from_role
+        from .skill_definitions import unassign_skill_from_role
 
-    held = _held_skill_ids(connection, project_id, key)
-    if desired_skills is not None:
-        for skill in sorted(held - desired_skills - added_skills):
-            unassign_skill_from_role(connection, project_id=project_id, actor=actor,
-                                     role_key=key, skill_id=skill)
-        to_add = (desired_skills | added_skills) - held
-        changed["skills"] = sorted(desired_skills | added_skills)
-    else:
-        to_add = added_skills - held
-        if to_add:
-            changed["skills_added"] = sorted(to_add)
-    _grant_skills(connection, project_id, key, sorted(to_add), actor)
+        held = _held_skill_ids(connection, project_id, key)
+        if desired_skills is not None:
+            for skill in sorted(held - desired_skills - added_skills):
+                unassign_skill_from_role(connection, project_id=project_id, actor=actor,
+                                         role_key=key, skill_id=skill)
+            to_add = (desired_skills | added_skills) - held
+            changed["skills"] = sorted(desired_skills | added_skills)
+        else:
+            to_add = added_skills - held
+            if to_add:
+                changed["skills_added"] = sorted(to_add)
+        _grant_skills(connection, project_id, key, sorted(to_add), actor)
 
-    if desired_mcp is not None:
-        wanted = {_resolve_server(connection, project_id, e["server"])["id"]: e["tools"]
-                  for e in desired_mcp + added_mcp}
-        for grant in list_role_mcp(connection, project_id, key):
-            if grant["mcp_server_id"] not in wanted:
-                revoke_mcp(connection, project_id, actor=actor, role_key=key,
-                           mcp_server_id=grant["mcp_server_id"])
-        for server_id, tools in wanted.items():
-            grant_mcp(connection, project_id, actor=actor, role_key=key,
-                      mcp_server_id=server_id, tools=tools)
-        changed["mcp_servers"] = sorted(wanted)
-    elif added_mcp:
-        for entry in added_mcp:
-            granted = grant_mcp(connection, project_id, actor=actor, role_key=key,
-                                mcp_server_id=entry["server"], tools=entry["tools"])
-            changed.setdefault("mcp_servers_added", []).append(granted["mcp_server_id"])
+        if desired_mcp is not None:
+            wanted = {_resolve_server(connection, project_id, e["server"])["id"]: e["tools"]
+                      for e in desired_mcp + added_mcp}
+            for grant in list_role_mcp(connection, project_id, key):
+                if grant["mcp_server_id"] not in wanted:
+                    revoke_mcp(connection, project_id, actor=actor, role_key=key,
+                               mcp_server_id=grant["mcp_server_id"])
+            for server_id, tools in wanted.items():
+                grant_mcp(connection, project_id, actor=actor, role_key=key,
+                          mcp_server_id=server_id, tools=tools)
+            changed["mcp_servers"] = sorted(wanted)
+        elif added_mcp:
+            for entry in added_mcp:
+                granted = grant_mcp(connection, project_id, actor=actor, role_key=key,
+                                    mcp_server_id=entry["server"], tools=entry["tools"])
+                changed.setdefault("mcp_servers_added", []).append(granted["mcp_server_id"])
 
-    if changed:
-        emit_event(connection, project_id, "agent.updated", actor, "role", key,
-                   {"changed": sorted(changed)})
-    return get_agent(connection, project_id, key)
+        if changed:
+            emit_event(connection, project_id, "agent.updated", actor, "role", key,
+                       {"changed": sorted(changed)})
+            if "persona" in changed:
+                agent_identity.seal_identity(connection, project_id, key, "persona", actor)
+            if {"display_name", "mission", "boundaries", "reports_to"} & changed.keys():
+                agent_identity.seal_identity(connection, project_id, key, "remit", actor)
+    return {**get_agent(connection, project_id, key), "warnings": warnings}
 
 
 def delete_agent(connection: Connection, project_id: str, role_key: str, *,
@@ -992,7 +1241,10 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
     role = _require_role(connection, project_id, key)
 
     named = steps_naming(connection, project_id, key)
-    blocking = [n for n in named if not (retire_older_versions and n["retirable"])]
+    # A step that names it only as the catalogue's default never blocks: the delete re-staffs
+    # those workflows without it, and any run still on an older version runs that step on Auto.
+    blocking = [n for n in named
+                if not n.get("soft") and not (retire_older_versions and n["retirable"])]
     if blocking:
         shown = "; ".join(
             f"workflow '{n['workflow']}' step '{n['step']}' ({n['where']}, {n['how']})"
@@ -1027,7 +1279,7 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
             "keeps. Take its skills and MCP servers away instead — an agent holding nothing is "
             "never picked for a step and is refused if one names it.", status=409)
 
-    planned = {n["version_id"] for n in named if n["retirable"]}
+    planned = {n["version_id"] for n in named if n["retirable"] and not n.get("soft")}
     retired = workflows.retire_versions(
         connection, project_id, planned,
         actor=actor, reason=f"named agent '{key}', which was deleted") if named else []
@@ -1038,6 +1290,11 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
             f"{role['display_name']} was not deleted: a workflow changed while it was being "
             "deleted, so a version that names it is no longer an older one. Open the agent "
             "again to see what names it now, then delete again.", status=409)
+
+    from .workflow_catalogue import restaff_without
+
+    restaffed = restaff_without(connection, project_id, key, actor=actor) if any(
+        n.get("soft") for n in named) else []
 
     connection.execute(text("UPDATE kpis SET owner_role_id = NULL WHERE owner_role_id = :id"),
                        {"id": role["id"]})
@@ -1078,9 +1335,11 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
     emit_event(connection, project_id, "agent.deleted", actor, "role", key,
                {"skills": list(skills), "mcp_servers": list(mcp),
                 "studio_profiles_retired": [p["agent_key"] for p in profiles],
-                "reports_moved_up": list(moved), "workflow_versions_retired": retired})
+                "reports_moved_up": list(moved), "workflow_versions_retired": retired,
+                "workflows_restaffed": restaffed})
     return {"role_key": key, "deleted": True, "skills_released": sorted(skills),
             "workflow_versions_retired": retired,
+            "workflows_restaffed": restaffed,
             "mcp_servers_released": sorted(mcp),
             "studio_profiles_retired": [p["agent_key"] for p in profiles],
             "reports_moved_to": role["reports_to"], "reports_moved": sorted(moved)}

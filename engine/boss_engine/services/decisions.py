@@ -444,6 +444,10 @@ class DecisionService:
             self._handle_approved_follow_on(
                 connection, refreshed, actor, note=note, force=force
             )
+            # The person's approval is signed now, under the step it releases — not a tick later.
+            from . import agent_acts
+
+            agent_acts.quietly(connection, "sign an approval", agent_acts.on_decision, decision_id)
             return self.get_row(connection, decision_id)
 
         if action == "reject":

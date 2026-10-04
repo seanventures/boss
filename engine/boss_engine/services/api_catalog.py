@@ -279,6 +279,8 @@ RESOURCE_DOMAINS = {
     "outputs": "delivery",
     "integrations": "governance",
     "meeting-rooms": "agents",
+    # Talking with agents: a 1:1 talk, a plan, a room of SMEs (agent_converse).
+    "conversations": "agents",
     "prd": "delivery",
     "web-app": "delivery",
     "feedback-threads": "work",

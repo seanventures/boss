@@ -34,7 +34,7 @@ from typing import Optional
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
-from . import design_prompts, plane_sync, review_comments, verification_target
+from . import agent_acts, design_prompts, plane_sync, review_comments, verification_target
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
     stage_fixture as stage_bakeoff_fixture,
@@ -4591,7 +4591,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 dedupe_key=f"code:task:{run_id}", title=title,
                 branch_name=work_branch,
                 summary=(f"Governed pipeline: tests by qa, impl by SE, adversarial review SURVIVED. "
-                         f"QualityGate {qg_id} PASS.\n\n{r2.get('summary','')}"),
+                         f"QualityGate {qg_id} PASS.\n\n{r2.get('summary','')}"
+                         + agent_acts.pr_trailers(c, run_id)),
                 files=([FileChange(path=p, content=content) for p, content in accumulated.items()]
                        if use_microvm else sandbox.diff()),
                 created_by_job_id=job_id, actual_usd_micros=cost,
@@ -4639,7 +4640,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         dedupe_key=f"code:task:{run_id}", title=title,
                         branch_name=work_branch,
                         summary=(f"Governed pipeline: tests by qa, impl by SE. "
-                                 f"QualityGate {qg_id}.\n\n{r2.get('summary','')}"),
+                                 f"QualityGate {qg_id}.\n\n{r2.get('summary','')}"
+                                 + agent_acts.pr_trailers(c, run_id)),
                         files=([FileChange(path=p, content=content)
                                 for p, content in accumulated.items()]
                                if use_microvm else sandbox.diff()),
@@ -4902,6 +4904,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 result = {**result, "decision_id": decision_id}
             return result
     finally:
+        # Its stages end with it: a build that finished, failed or now waits on a person stops
+        # showing its agents as working (agent_acts; never raises).
+        from .agent_acts import settle_code_task
+
+        settle_code_task(engine, run_id)
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.
         clear_llm_context()

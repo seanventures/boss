@@ -1,0 +1,384 @@
+{
+  "kit": "boss-v1",
+  "hats": [
+    "none",
+    "antenna",
+    "twin",
+    "dome",
+    "halo",
+    "crown",
+    "propeller",
+    "fin",
+    "cap"
+  ],
+  "cast_hats": {
+    "captain": "engineering_captain",
+    "rack": "backend_engineer",
+    "pixel": "frontend_engineer",
+    "headlamp": "operations_engineer",
+    "siren": "sre",
+    "northstar": "pm",
+    "hardhat": "chief_architect",
+    "headphones": "software_engineer",
+    "rook": "adversarial_reviewer",
+    "crest": "security_reviewer",
+    "magnifier": "qa",
+    "flag": "release_manager",
+    "beret": "design_critic",
+    "quill": "docs_writer",
+    "coins": "finops_sentinel",
+    "goggles": "first_principles_researcher",
+    "comet": "visionary_founder",
+    "headset": "relentless_operator",
+    "mortarboard": "teacher_who_simplifies",
+    "clapper": "video_editor"
+  },
+  "emblems": [
+    "chevrons",
+    "layers",
+    "brackets",
+    "wrench",
+    "pulse",
+    "compass",
+    "blueprint",
+    "braces",
+    "target",
+    "lock",
+    "check",
+    "rocket",
+    "nib",
+    "page",
+    "dollar",
+    "atom",
+    "spark",
+    "stopwatch",
+    "bulb",
+    "gear",
+    "shield",
+    "eye",
+    "play",
+    "cloud",
+    "key",
+    "cycle",
+    "chart",
+    "people",
+    "bolt",
+    "chip",
+    "star",
+    "chalk"
+  ],
+  "palettes": [
+    "teal",
+    "blue",
+    "mint",
+    "purple",
+    "amber",
+    "pink",
+    "green",
+    "slate",
+    "coral"
+  ],
+  "visors": [
+    "band",
+    "lens",
+    "slit",
+    "grid",
+    "shield",
+    "scope",
+    "monocle",
+    "glasses"
+  ],
+  "cast": {
+    "engineering_captain": {
+      "kit": "boss-v1",
+      "seed": "engineering_captain",
+      "hat": "captain",
+      "emblem": "chevrons",
+      "palette": "blue",
+      "visor": "band",
+      "callsign": "Helm"
+    },
+    "backend_engineer": {
+      "kit": "boss-v1",
+      "seed": "backend_engineer",
+      "hat": "rack",
+      "emblem": "layers",
+      "palette": "purple",
+      "visor": "lens",
+      "callsign": "Strata"
+    },
+    "frontend_engineer": {
+      "kit": "boss-v1",
+      "seed": "frontend_engineer",
+      "hat": "pixel",
+      "emblem": "brackets",
+      "palette": "coral",
+      "visor": "band",
+      "callsign": "Pixel"
+    },
+    "operations_engineer": {
+      "kit": "boss-v1",
+      "seed": "operations_engineer",
+      "hat": "headlamp",
+      "emblem": "wrench",
+      "palette": "amber",
+      "visor": "slit",
+      "callsign": "Relay"
+    },
+    "sre": {
+      "kit": "boss-v1",
+      "seed": "sre",
+      "hat": "siren",
+      "emblem": "pulse",
+      "palette": "mint",
+      "visor": "scope",
+      "callsign": "Beacon"
+    },
+    "pm": {
+      "kit": "boss-v1",
+      "seed": "pm",
+      "hat": "northstar",
+      "emblem": "compass",
+      "palette": "teal",
+      "visor": "band",
+      "callsign": "Juno"
+    },
+    "chief_architect": {
+      "kit": "boss-v1",
+      "seed": "chief_architect",
+      "hat": "hardhat",
+      "emblem": "blueprint",
+      "palette": "blue",
+      "visor": "grid",
+      "callsign": "Atlas"
+    },
+    "software_engineer": {
+      "kit": "boss-v1",
+      "seed": "software_engineer",
+      "hat": "headphones",
+      "emblem": "braces",
+      "palette": "blue",
+      "visor": "band",
+      "callsign": "Forge"
+    },
+    "adversarial_reviewer": {
+      "kit": "boss-v1",
+      "seed": "adversarial_reviewer",
+      "hat": "rook",
+      "emblem": "target",
+      "palette": "amber",
+      "visor": "monocle",
+      "callsign": "Rook"
+    },
+    "security_reviewer": {
+      "kit": "boss-v1",
+      "seed": "security_reviewer",
+      "hat": "crest",
+      "emblem": "lock",
+      "palette": "slate",
+      "visor": "shield",
+      "callsign": "Sentry"
+    },
+    "qa": {
+      "kit": "boss-v1",
+      "seed": "qa",
+      "hat": "magnifier",
+      "emblem": "check",
+      "palette": "green",
+      "visor": "lens",
+      "callsign": "Vera"
+    },
+    "release_manager": {
+      "kit": "boss-v1",
+      "seed": "release_manager",
+      "hat": "flag",
+      "emblem": "rocket",
+      "palette": "green",
+      "visor": "slit",
+      "callsign": "Pilot"
+    },
+    "design_critic": {
+      "kit": "boss-v1",
+      "seed": "design_critic",
+      "hat": "beret",
+      "emblem": "nib",
+      "palette": "pink",
+      "visor": "band",
+      "callsign": "Muse"
+    },
+    "docs_writer": {
+      "kit": "boss-v1",
+      "seed": "docs_writer",
+      "hat": "quill",
+      "emblem": "page",
+      "palette": "slate",
+      "visor": "glasses",
+      "callsign": "Quill"
+    },
+    "finops_sentinel": {
+      "kit": "boss-v1",
+      "seed": "finops_sentinel",
+      "hat": "coins",
+      "emblem": "dollar",
+      "palette": "mint",
+      "visor": "grid",
+      "callsign": "Ledger"
+    },
+    "first_principles_researcher": {
+      "kit": "boss-v1",
+      "seed": "first_principles_researcher",
+      "hat": "goggles",
+      "emblem": "atom",
+      "palette": "purple",
+      "visor": "lens",
+      "callsign": "Axiom"
+    },
+    "visionary_founder": {
+      "kit": "boss-v1",
+      "seed": "visionary_founder",
+      "hat": "comet",
+      "emblem": "spark",
+      "palette": "teal",
+      "visor": "scope",
+      "callsign": "Nova"
+    },
+    "relentless_operator": {
+      "kit": "boss-v1",
+      "seed": "relentless_operator",
+      "hat": "headset",
+      "emblem": "stopwatch",
+      "palette": "coral",
+      "visor": "slit",
+      "callsign": "Tempo"
+    },
+    "teacher_who_simplifies": {
+      "kit": "boss-v1",
+      "seed": "teacher_who_simplifies",
+      "hat": "mortarboard",
+      "emblem": "bulb",
+      "palette": "pink",
+      "visor": "glasses",
+      "callsign": "Sage"
+    },
+    "metatron": {
+      "kit": "boss-v1",
+      "seed": "metatron",
+      "hat": "halo",
+      "emblem": "star",
+      "palette": "teal",
+      "visor": "scope"
+    },
+    "cto": {
+      "kit": "boss-v1",
+      "seed": "cto",
+      "hat": "crown",
+      "emblem": "chip",
+      "palette": "teal",
+      "visor": "band"
+    },
+    "coo": {
+      "kit": "boss-v1",
+      "seed": "coo",
+      "hat": "crown",
+      "emblem": "gear",
+      "palette": "amber",
+      "visor": "band"
+    },
+    "cao": {
+      "kit": "boss-v1",
+      "seed": "cao",
+      "hat": "crown",
+      "emblem": "blueprint",
+      "palette": "slate",
+      "visor": "grid"
+    },
+    "vp_agents": {
+      "kit": "boss-v1",
+      "seed": "vp_agents",
+      "hat": "crown",
+      "emblem": "people",
+      "palette": "pink",
+      "visor": "glasses"
+    },
+    "program_manager": {
+      "kit": "boss-v1",
+      "seed": "program_manager",
+      "hat": "cap",
+      "emblem": "people",
+      "palette": "teal",
+      "visor": "band"
+    },
+    "deployment_manager": {
+      "kit": "boss-v1",
+      "seed": "deployment_manager",
+      "hat": "cap",
+      "emblem": "rocket",
+      "palette": "green",
+      "visor": "slit"
+    },
+    "infra_steward": {
+      "kit": "boss-v1",
+      "seed": "infra_steward",
+      "hat": "dome",
+      "emblem": "cloud",
+      "palette": "slate",
+      "visor": "band"
+    },
+    "integration_validator": {
+      "kit": "boss-v1",
+      "seed": "integration_validator",
+      "hat": "twin",
+      "emblem": "check",
+      "palette": "mint",
+      "visor": "lens"
+    },
+    "media_publisher": {
+      "kit": "boss-v1",
+      "seed": "media_publisher",
+      "hat": "antenna",
+      "emblem": "play",
+      "palette": "pink",
+      "visor": "band"
+    },
+    "video_editor": {
+      "kit": "boss-v1",
+      "seed": "video_editor",
+      "hat": "clapper",
+      "emblem": "play",
+      "palette": "coral",
+      "visor": "lens"
+    },
+    "model_spend_analyst": {
+      "kit": "boss-v1",
+      "seed": "model_spend_analyst",
+      "hat": "fin",
+      "emblem": "chart",
+      "palette": "mint",
+      "visor": "grid"
+    },
+    "providerops_manager": {
+      "kit": "boss-v1",
+      "seed": "providerops_manager",
+      "hat": "twin",
+      "emblem": "cycle",
+      "palette": "purple",
+      "visor": "slit"
+    },
+    "resource_janitor": {
+      "kit": "boss-v1",
+      "seed": "resource_janitor",
+      "hat": "propeller",
+      "emblem": "cycle",
+      "palette": "green",
+      "visor": "band"
+    },
+    "secrets_steward": {
+      "kit": "boss-v1",
+      "seed": "secrets_steward",
+      "hat": "dome",
+      "emblem": "key",
+      "palette": "amber",
+      "visor": "shield"
+    }
+  }
+}

@@ -44,6 +44,8 @@ NOT_AN_AGENT_ON_A_STEP = {
     (("binding", "agent_work"), "services/workflow_drafting.py"): "the same flag",
     (("binding", "agent_work"), "services/command_center.py"):
         "the same flag, read to say BOSS will pick the agent when the step starts",
+    # Agent World: read to name the step "Agent task" on its signed work, never as an agent.
+    (("binding", "agent_work"), "services/agent_acts.py"): "the same flag",
     (("binding", "agent_group_version_id"), "services/workflows.py"):
         "an agent GROUP version id, not a role key",
     (("role_key",), "services/agent_loop.py"):
@@ -52,6 +54,14 @@ NOT_AN_AGENT_ON_A_STEP = {
     (("roles",), "services/agent_process.py"): "an agent PROCESS template step, not a workflow",
     (("role",), "services/console_v2_platform.py"): "displays agent PROCESS template steps",
     (("roles",), "services/console_v2_platform.py"): "displays agent PROCESS template steps",
+    # A MARK ON `captain`, not a second name: it counts only while it equals the captain, which
+    # the guard reads. A step named only by it is a soft catalogue default — a delete re-staffs
+    # it (agents.delete_agent → workflow_catalogue.restaff_without) instead of being refused.
+    (("default_captain",), "services/step_agents.py"): "marks the captain as a soft default",
+    (("default_captain",), "services/workflow_catalogue.py"): "sets and re-staffs that mark",
+    # A conversation's start card reads the Library OUTLINE of a step (workflows._step_outline:
+    # `agent` is the captain the guard already reads), never a workflow step of its own.
+    (("agent",), "services/agent_converse.py"): "the library outline's copy of the captain",
 }
 
 

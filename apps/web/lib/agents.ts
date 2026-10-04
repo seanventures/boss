@@ -13,6 +13,10 @@
  * an agent and fails on any literal actor.
  */
 import { apiWrite } from "./api-write";
+import type { Persona } from "./agent-world-types";
+
+/** Where a new agent came from, recorded on its passport (Agent World spec §5.4). */
+export type BornFrom = { kind: "blank" | "template" | "archetype"; archetype?: string; template_key?: string };
 
 export type GrantableSkill = {
   skill_id: string; label: string; summary: string; source: string;
@@ -91,6 +95,8 @@ export async function loadGrantable(projectId: string): Promise<AgentResult<Gran
 export function createAgent(projectId: string, actor: string, input: {
   name: string; purpose: string; skills: string[]; mcpServers: McpGrant[];
   reportsTo?: string | null; roleKey?: string;
+  /** Its birth record and voice. Sent only when given, so an older API sees the old body. */
+  bornFrom?: BornFrom; persona?: Persona;
 }) {
   return send("/v1/agents", "POST", {
     project_id: projectId, actor, name: input.name, purpose: input.purpose,
@@ -98,13 +104,17 @@ export function createAgent(projectId: string, actor: string, input: {
     mcp_servers: input.mcpServers.map((g) => ({ server_id: g.server_id, tools: g.tools ?? [] })),
     reports_to: input.reportsTo || null,
     ...(input.roleKey ? { role_key: input.roleKey } : {}),
-  }, { scope: "agent-create", label: "Create agent" });
+    ...(input.bornFrom ? { born_from: input.bornFrom } : {}),
+    ...(input.persona ? { persona: input.persona } : {}),
+  }, { scope: "agent-create", label: "Create agent" }) as Promise<AgentResult<{ role_key?: string; agent_id?: string }>>;
 }
 
 /** Only the fields present are sent, and the API changes only those. */
 export function updateAgent(projectId: string, actor: string, roleKey: string, changes: {
   display_name?: string; mission?: string;
   boundaries?: { must: string[]; must_not: string[] }; reports_to?: string | null;
+  /** Saving it seals a new version once; the answer carries version, fingerprint, warnings. */
+  persona?: Persona;
 }) {
   return send(`/v1/agents/${enc(roleKey)}`, "PATCH",
     { project_id: projectId, actor, ...changes },

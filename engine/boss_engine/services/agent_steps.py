@@ -384,13 +384,19 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
     """
     role = str(role_key or "").strip().lower()
     row = connection.execute(
-        text("SELECT display_name, spec FROM roles WHERE project_id = :p AND role_key = :r"),
+        text("SELECT role_key, display_name, spec, agent_id, identity_version FROM roles "
+             "WHERE project_id = :p AND role_key = :r"),
         {"p": project_id, "r": role},
     ).mappings().first()
     spec = (row["spec"] if row and isinstance(row["spec"], dict) else {}) or {}
     name = (row["display_name"] if row else None) or role.replace("_", " ")
 
-    lines = [f"You are {name}, an agent in BOSS."]
+    # WHO IT IS, from the one persona compiler (agent_persona L1 + L3): the same name line,
+    # AI disclosure and voice the agent has in chat and on a panel. The rules below stay the
+    # authority on what it may do; the outcome it must declare is asked for in the user turn
+    # (OUTCOME_ASK). A persona that cannot compile falls back to the plain name line.
+    lines = [_agent_voice(dict(row) if row else {"role_key": role, "spec": spec})
+             or f"You are {name}, an AI agent in BOSS."]
     if spec.get("mission"):
         lines.append(f"\nYOUR MISSION\n  {spec['mission']}")
 
@@ -419,6 +425,15 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
         "  say what is missing. Never report work you did not verify."
     )
     return "\n".join(lines)
+
+
+def _agent_voice(role: dict[str, Any]) -> str:
+    from .agent_persona import identity_and_voice
+
+    try:
+        return identity_and_voice(role, mode="work")
+    except Exception:  # noqa: BLE001 — a work prompt must still compile
+        return ""
 
 
 def candidates(connection: Connection, settings: Settings,

@@ -240,10 +240,18 @@ def list_project_roles(connection, project_id: str) -> list[dict]:
         ).mappings().all()
     return [
         {"key": r["role_key"], "title": r["title"], "lens": r["lens"],
+         # The agent behind the seat, in the one namespace (agent_identity.resolve).
+         "role_key": _seat_role_key(r["role_key"], r["title"]),
          "risk_tier": int(r["risk_tier"]), "data_boundary": r["data_boundary"],
          "is_default": bool(r["is_default"]), "enabled": bool(r["enabled"])}
         for r in rows
     ]
+
+
+def _seat_role_key(key: str, title: str) -> Optional[str]:
+    from .agent_identity import resolve
+
+    return resolve(key) or resolve(title)
 
 
 def load_role_map(connection, project_id: str) -> dict[str, dict]:
@@ -318,11 +326,16 @@ def resolve_roles(role_keys: Optional[list[str]], role_map: Optional[dict] = Non
 
 
 def _persona_system(p: dict) -> str:
+    # THE SEAT IS AN AGENT. `agent_voice` (agent_persona.seat_voices) is the agent behind the
+    # seat in its own voice — its callsign, that it is an AI, how it speaks, who else is in the
+    # room — so a position reads as Vera's, not as "the QA / Test" in general.
+    voice = str(p.get("agent_voice") or "").strip()
     return (
         f"You are the {p['title']} in a cross-functional product meeting at the company BOSS runs. "
         f"Your lens: {p['lens']} "
         "Speak only from your role. Be concrete, cite specifics from the shared research, and keep "
         "it to tight bullet points. Do not write the whole PRD — contribute your part of the thinking."
+        + (f"\n\n{voice}" if voice else "")
     )
 
 
@@ -386,8 +399,15 @@ def _make_base(directive: str, constraints: dict, research: dict, url: str) -> s
     )
 
 
+def _seat_label(p: dict) -> str:
+    """"Vera (QA / Test)" when an agent with a callsign holds the seat, else the title."""
+    callsign = str(p.get("callsign") or "").strip()
+    return f"{callsign} ({p['title']})" if callsign else p["title"]
+
+
 def _panel_blob(personas: list[dict], rnd: dict) -> str:
-    return "\n\n".join(f"--- {p['title']} ---\n{(rnd or {}).get(p['title'], '')}" for p in personas)
+    return "\n\n".join(f"--- {_seat_label(p)} ---\n{(rnd or {}).get(p['title'], '')}"
+                         for p in personas)
 
 
 def _ask(adapter, system_prompt: str, user_prompt: str) -> tuple[str, int, Optional[str]]:
@@ -769,7 +789,19 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     )
     emit_event(connection, project_id, "meeting.started", "boss", "meeting_run", run_id,
                {"task_id": task_id, "participants": [p["title"] for p in personas]})
+    _sign_seats(connection, run_id)
     return run_id
+
+
+def _sign_seats(connection, run_id: str) -> None:
+    """Each seat is signed work (agent_acts): seated when the panel opens, closed when it ends.
+
+    Never waits on the panel's lock: a tick holding it would hold it to the end of its own long
+    transaction, and this panel's phase would stall behind it. Skipped, the holder signs it."""
+    from . import agent_acts
+
+    agent_acts.quietly(connection, "sign a panel's seats", agent_acts.sync_meeting, run_id,
+                       wait=False)
 
 
 #: The blocks request_meeting wraps around a directive so every seat reads them — the SAME
@@ -808,11 +840,16 @@ def convene_prd_meeting_core(
     project_id: str, directive: str, url: str = "",
     constraints: Optional[dict] = None, role_keys: Optional[list] = None,
     task_id: Optional[str] = None, title: Optional[str] = None,
+    origin: Optional[dict] = None,
 ) -> dict:
     """Shared core for convening a durable multi-agent PRD meeting: create the
     task (if needed), reserve budget, start the run, enqueue the first step.
     Used by the /v1/meetings/prd endpoint and the Plane ``boss:design`` intake so
-    both routes are governed identically."""
+    both routes are governed identically.
+
+    `origin` is who convened it — {act_id} for a chat turn, {workflow_run_id, step_run_id}
+    for a workflow step, and the accountable {actor} — so its seats are signed under that
+    work (agent_acts.sync_meeting), never under a made-up person."""
     constraints = dict(constraints or {})
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
@@ -890,7 +927,8 @@ def convene_prd_meeting_core(
         connection, project_id=project_id, task_id=task_id,
         directive=directive, url=url, constraints=constraints,
         role_keys=role_keys or [],
-        finalize_ctx={"reservation_id": reservation_id, "meeting_fingerprint": fingerprint},
+        finalize_ctx={"reservation_id": reservation_id, "meeting_fingerprint": fingerprint,
+                      **({"origin": dict(origin)} if origin else {})},
         title=title,
     )
     job = jobs.create_job(
@@ -914,6 +952,7 @@ def _save_phase(connection, run_id, state, add_cost, model, next_phase) -> None:
         {"state": json.dumps(state), "phase": next_phase, "addc": int(add_cost or 0),
          "model": model, "id": run_id},
     )
+    _sign_seats(connection, run_id)
 
 
 def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
@@ -938,6 +977,10 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
 
     with begin(engine) as c:
         personas = resolve_roles(run["role_keys"], load_role_map(c, run["project_id"]))
+        # Each seat in the voice of the agent behind it (agent_persona.seat_voices).
+        from .agent_persona import seat_voices
+
+        personas = seat_voices(c, run["project_id"], personas)
     state = dict(run["state"])
     # THE SETTING SAYS "AND MEETINGS", AND THIS LINE WAS NOT READING IT.
     #
@@ -1146,6 +1189,7 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     )
     emit_event(connection, project_id, "meeting.completed", "boss", "meeting", meeting_id,
                {"minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id})
+    _sign_seats(connection, run_id)
     return {"meeting_id": meeting_id, "minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id}
 
 

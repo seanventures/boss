@@ -1,0 +1,513 @@
+# WELL-KNOWN REAL PEOPLE, for the persona real-name lint (services/agent_persona.py).
+#
+# A persona that mentions one of these is SAVED, with a warning: "Mentions a real person · the
+# agent won't claim to be them". It is never refused — an operator may write "explains things
+# the way a good physics teacher would" or quote a book — but the agent's fixed L1 line still
+# says it is an AI and never claims to be, or to be endorsed by, a real person.
+#
+# One name per line, matched case-insensitively on word boundaries. Full names, plus a few
+# single names that are unambiguous on their own. Lines starting with # are ignored.
+# Technology and business
+Elon Musk
+Bill Gates
+Steve Jobs
+Steve Wozniak
+Mark Zuckerberg
+Jeff Bezos
+Larry Page
+Sergey Brin
+Sundar Pichai
+Satya Nadella
+Tim Cook
+Sam Altman
+Greg Brockman
+Ilya Sutskever
+Dario Amodei
+Daniela Amodei
+Demis Hassabis
+Mustafa Suleyman
+Jensen Huang
+Lisa Su
+Andy Grove
+Gordon Moore
+Robert Noyce
+Michael Dell
+Larry Ellison
+Marc Benioff
+Marc Andreessen
+Ben Horowitz
+Peter Thiel
+Reid Hoffman
+Paul Graham
+Jessica Livingston
+Jack Dorsey
+Evan Spiegel
+Brian Chesky
+Travis Kalanick
+Dara Khosrowshahi
+Susan Wojcicki
+Sheryl Sandberg
+Marissa Mayer
+Meg Whitman
+Ginni Rometty
+Arvind Krishna
+Andy Jassy
+Werner Vogels
+Eric Schmidt
+Reed Hastings
+Ted Sarandos
+Patrick Collison
+John Collison
+Tobi Lutke
+Stewart Butterfield
+Drew Houston
+Daniel Ek
+Jan Koum
+Kevin Systrom
+Biz Stone
+Pierre Omidyar
+Jerry Yang
+David Filo
+Paul Allen
+Steve Ballmer
+Masayoshi Son
+Jack Ma
+Pony Ma
+Robin Li
+Lei Jun
+Ren Zhengfei
+Zhang Yiming
+Linus Torvalds
+Guido van Rossum
+Bjarne Stroustrup
+Dennis Ritchie
+Ken Thompson
+Brian Kernighan
+James Gosling
+Anders Hejlsberg
+Brendan Eich
+Tim Berners-Lee
+Vint Cerf
+Bob Kahn
+Richard Stallman
+Eric Raymond
+Donald Knuth
+Edsger Dijkstra
+Alan Kay
+Grace Hopper
+Margaret Hamilton
+John Carmack
+Yukihiro Matsumoto
+Rasmus Lerdorf
+David Heinemeier Hansson
+Kent Beck
+Martin Fowler
+Robert C. Martin
+Uncle Bob
+Andrej Karpathy
+Geoffrey Hinton
+Yann LeCun
+Yoshua Bengio
+Fei-Fei Li
+Andrew Ng
+Ian Goodfellow
+Jeff Dean
+Sebastian Thrun
+Ray Kurzweil
+Warren Buffett
+Charlie Munger
+Ray Dalio
+George Soros
+Jamie Dimon
+Larry Fink
+Michael Bloomberg
+Carl Icahn
+Bill Ackman
+Cathie Wood
+Howard Schultz
+Indra Nooyi
+Jack Welch
+Lee Iacocca
+Henry Ford
+Walt Disney
+Bob Iger
+Richard Branson
+Bernard Arnault
+Phil Knight
+Oprah Winfrey
+Oprah
+Mukesh Ambani
+Gautam Adani
+Ratan Tata
+Azim Premji
+Narayana Murthy
+Nandan Nilekani
+Akio Morita
+Soichiro Honda
+Ingvar Kamprad
+Sam Walton
+Steve Blank
+Eric Ries
+Clayton Christensen
+Peter Drucker
+Jim Collins
+Simon Sinek
+Seth Godin
+Tim Ferriss
+Gary Vaynerchuk
+Naval Ravikant
+Balaji Srinivasan
+Chamath Palihapitiya
+Vitalik Buterin
+Satoshi Nakamoto
+Changpeng Zhao
+Sam Bankman-Fried
+Elizabeth Holmes
+Adam Neumann
+Mary Barra
+Whitney Wolfe Herd
+Melinda French Gates
+MacKenzie Scott
+Arianna Huffington
+Safra Catz
+Ursula Burns
+Anne Wojcicki
+Jony Ive
+Dieter Rams
+Don Norman
+Jakob Nielsen
+Steve Krug
+Edward Tufte
+# Science and history
+Albert Einstein
+Isaac Newton
+Galileo Galilei
+Charles Darwin
+Marie Curie
+Nikola Tesla
+Thomas Edison
+Richard Feynman
+Stephen Hawking
+Carl Sagan
+Neil deGrasse Tyson
+Niels Bohr
+Werner Heisenberg
+Erwin Schrodinger
+Max Planck
+Enrico Fermi
+J. Robert Oppenheimer
+Robert Oppenheimer
+Alan Turing
+John von Neumann
+Claude Shannon
+Ada Lovelace
+Charles Babbage
+Leonardo da Vinci
+Michelangelo
+Aristotle
+Plato
+Socrates
+Confucius
+Sun Tzu
+Archimedes
+Pythagoras
+Euclid
+Srinivasa Ramanujan
+C. V. Raman
+APJ Abdul Kalam
+Abdul Kalam
+Homi Bhabha
+Vikram Sarabhai
+Jane Goodall
+Rosalind Franklin
+James Watson
+Francis Crick
+Louis Pasteur
+Alexander Fleming
+Gregor Mendel
+Dmitri Mendeleev
+Johannes Kepler
+Nicolaus Copernicus
+Michael Faraday
+James Clerk Maxwell
+Katherine Johnson
+Sally Ride
+Neil Armstrong
+Buzz Aldrin
+Yuri Gagarin
+Jacques Cousteau
+David Attenborough
+Noam Chomsky
+Daniel Kahneman
+Amos Tversky
+Richard Thaler
+Steven Pinker
+Yuval Noah Harari
+Jared Diamond
+Malcolm Gladwell
+Nassim Taleb
+Nassim Nicholas Taleb
+Jordan Peterson
+Sigmund Freud
+Carl Jung
+Adam Smith
+John Maynard Keynes
+Milton Friedman
+Karl Marx
+Friedrich Nietzsche
+Immanuel Kant
+Rene Descartes
+Jean-Paul Sartre
+Simone de Beauvoir
+# Politics and public life
+Barack Obama
+Michelle Obama
+Joe Biden
+Kamala Harris
+Donald Trump
+Melania Trump
+Hillary Clinton
+Bill Clinton
+George W. Bush
+George H. W. Bush
+Ronald Reagan
+Jimmy Carter
+John F. Kennedy
+Abraham Lincoln
+George Washington
+Thomas Jefferson
+Benjamin Franklin
+Franklin D. Roosevelt
+Theodore Roosevelt
+Winston Churchill
+Margaret Thatcher
+Tony Blair
+Boris Johnson
+Rishi Sunak
+Keir Starmer
+Theresa May
+David Cameron
+Angela Merkel
+Olaf Scholz
+Emmanuel Macron
+Justin Trudeau
+Vladimir Putin
+Volodymyr Zelenskyy
+Xi Jinping
+Narendra Modi
+Rahul Gandhi
+Indira Gandhi
+Mahatma Gandhi
+Jawaharlal Nehru
+Nelson Mandela
+Martin Luther King
+Martin Luther King Jr.
+Malcolm X
+Rosa Parks
+Mother Teresa
+Dalai Lama
+Pope Francis
+Queen Elizabeth
+King Charles
+Prince Harry
+Prince William
+Kim Jong Un
+Shinzo Abe
+Jacinda Ardern
+Lula da Silva
+Recep Tayyip Erdogan
+Benjamin Netanyahu
+Mohammed bin Salman
+Greta Thunberg
+Malala Yousafzai
+Ruth Bader Ginsburg
+Alexandria Ocasio-Cortez
+Bernie Sanders
+Nancy Pelosi
+Mitt Romney
+Ron DeSantis
+Napoleon Bonaparte
+Julius Caesar
+Alexander the Great
+Genghis Khan
+Cleopatra
+Che Guevara
+Fidel Castro
+Mao Zedong
+Joseph Stalin
+Adolf Hitler
+Lee Kuan Yew
+# Entertainment, arts and media
+Taylor Swift
+Beyonce
+Beyoncé
+Rihanna
+Lady Gaga
+Madonna
+Michael Jackson
+Elvis Presley
+Freddie Mercury
+David Bowie
+Paul McCartney
+John Lennon
+Ringo Starr
+Mick Jagger
+Bob Dylan
+Bruce Springsteen
+Elton John
+Adele
+Ed Sheeran
+Justin Bieber
+Billie Eilish
+Ariana Grande
+Drake
+Kanye West
+Jay-Z
+Eminem
+Snoop Dogg
+Shakira
+Celine Dion
+Whitney Houston
+Dolly Parton
+Bad Bunny
+A. R. Rahman
+Lata Mangeshkar
+Ilaiyaraaja
+Tom Hanks
+Tom Cruise
+Brad Pitt
+Angelina Jolie
+Leonardo DiCaprio
+Meryl Streep
+Denzel Washington
+Morgan Freeman
+Will Smith
+Keanu Reeves
+Scarlett Johansson
+Jennifer Lawrence
+Jennifer Aniston
+Robert Downey Jr.
+Johnny Depp
+Margot Robbie
+Zendaya
+Dwayne Johnson
+Arnold Schwarzenegger
+Sylvester Stallone
+Jackie Chan
+Bruce Lee
+Shah Rukh Khan
+Amitabh Bachchan
+Aamir Khan
+Salman Khan
+Rajinikanth
+Kamal Haasan
+Priyanka Chopra
+Deepika Padukone
+Steven Spielberg
+Christopher Nolan
+Quentin Tarantino
+Martin Scorsese
+James Cameron
+George Lucas
+Stanley Kubrick
+Alfred Hitchcock
+Hayao Miyazaki
+Satyajit Ray
+Mani Ratnam
+Charlie Chaplin
+Marilyn Monroe
+Audrey Hepburn
+Ellen DeGeneres
+Jimmy Fallon
+Stephen Colbert
+Trevor Noah
+Joe Rogan
+Lex Fridman
+MrBeast
+PewDiePie
+Kim Kardashian
+Kylie Jenner
+Paris Hilton
+Martha Stewart
+Gordon Ramsay
+Anthony Bourdain
+J. K. Rowling
+Stephen King
+George R. R. Martin
+Neil Gaiman
+Haruki Murakami
+Toni Morrison
+Maya Angelou
+Ernest Hemingway
+Mark Twain
+William Shakespeare
+Jane Austen
+Charles Dickens
+Leo Tolstoy
+Fyodor Dostoevsky
+Franz Kafka
+Rabindranath Tagore
+Thiruvalluvar
+Subramania Bharati
+Paulo Coelho
+Dan Brown
+Agatha Christie
+Pablo Picasso
+Vincent van Gogh
+Frida Kahlo
+Andy Warhol
+Banksy
+Salvador Dali
+Claude Monet
+# Sport
+Michael Jordan
+LeBron James
+Kobe Bryant
+Stephen Curry
+Shaquille O'Neal
+Magic Johnson
+Serena Williams
+Venus Williams
+Roger Federer
+Rafael Nadal
+Novak Djokovic
+Andy Murray
+Lionel Messi
+Cristiano Ronaldo
+Neymar
+Kylian Mbappe
+Pele
+Pelé
+Diego Maradona
+David Beckham
+Zinedine Zidane
+Usain Bolt
+Michael Phelps
+Simone Biles
+Tiger Woods
+Muhammad Ali
+Mike Tyson
+Tom Brady
+Peyton Manning
+Wayne Gretzky
+Lewis Hamilton
+Michael Schumacher
+Ayrton Senna
+Max Verstappen
+Sachin Tendulkar
+Virat Kohli
+MS Dhoni
+Mahendra Singh Dhoni
+Rohit Sharma
+Kapil Dev
+Viswanathan Anand
+Magnus Carlsen
+Garry Kasparov
+Bobby Fischer
+Naomi Osaka
+Sania Mirza
+P. V. Sindhu
+Neeraj Chopra
+Shane Warne
+Don Bradman
+Brian Lara

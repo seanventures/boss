@@ -664,6 +664,10 @@ def assign_skill_to_role(
                          seed_exclusions.role_skill_subject(role, skill))
     emit_event(connection, project_id, "skill.assigned_to_agent", actor, "role_skill",
                str(row["id"]), {"role_key": role, "skill_id": skill, "source": source})
+    # A NEW GRANT IS A NEW VERSION of the agent (agent_identity; once per request when batched).
+    from .agent_identity import quietly, seal_identity
+
+    quietly(connection, seal_identity, project_id, role, "grant", actor)
     # SAY NOW WHAT THE RUN WOULD SAY LATER. A skill that calls an MCP tool runs only for an
     # agent that also holds the server (agents.mcp_reach_gap). The grant is kept — a person
     # may be about to give the server next — but the answer names the missing half.
@@ -763,6 +767,9 @@ def unassign_skill_from_role(
                             reason="taken off the agent")
     emit_event(connection, project_id, "skill.unassigned_from_agent", actor, "role_skill",
                str(removed[0]), {"role_key": role, "skill_id": skill_id})
+    from .agent_identity import quietly, seal_identity
+
+    quietly(connection, seal_identity, project_id, role, "revoke", actor)
     return {"role_key": role, "skill_id": skill_id, "assigned": False}
 
 

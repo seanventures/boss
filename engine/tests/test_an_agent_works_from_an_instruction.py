@@ -145,6 +145,9 @@ def test_the_agents_own_boundaries_reach_it_as_rules(db):
     # than approximating with a tool meant for something else.
     assert "the whole of" in brief
     assert "say so plainly and stop" in brief
+    # WHO IT IS comes from the persona compiler, disclosure line and all.
+    from boss_engine.services.agent_world_types import AI_DISCLOSURE
+    assert AI_DISCLOSURE in brief
 
 
 # --------------------------------------------------------------------------- #
@@ -425,7 +428,11 @@ def test_a_bounded_run_is_offered_the_granted_skills_AND_NOTHING_ELSE(db, monkey
         assert forbidden not in offered, f"a bounded run was handed {forbidden}"
 
     # And the agent was told who it is and what it was asked for.
-    assert "an agent in BOSS" in recorder.seen_system
+    assert "an AI agent in BOSS" in recorder.seen_system
+    from boss_engine.services.agent_world_types import AI_DISCLOSURE
+    assert AI_DISCLOSURE in recorder.seen_system
+    # Both reach the model: the persona in the system prompt, the outcome ask in the brief.
+    assert agent_steps.OUTCOME_ASK in recorder.seen_user
     assert "Do whatever you can" in recorder.seen_user
     assert result["agent"] == "qa"
     assert sorted(result["skills_offered"]) == sorted(two)

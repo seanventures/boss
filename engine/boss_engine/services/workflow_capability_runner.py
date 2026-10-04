@@ -27,7 +27,8 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import change_record, workflow_custom_steps as custom_steps, workflows
+from . import agent_acts, change_record, step_agents, workflows
+from . import workflow_custom_steps as custom_steps
 from .core import create_blocking_decision, emit_event, now_utc
 # Named import so "who approved this" is compared against one constant rather than a
 # string literal repeated wherever the question is asked.
@@ -1545,6 +1546,9 @@ def execute_step(
     """
     context = dict(context)
     context.pop(SKIPPED_INPUTS, None)
+    # A run started from a conversation's start card runs each step as the agent the card named
+    # (step_agents.with_run_agent says which steps a card may fill).
+    step = step_agents.with_run_agent(connection, project_id, step, context.get("input"))
     output = _execute_step(connection, ctx, project_id=project_id, actor=actor,
                            step=step, context=context)
     if (step.get("binding") or {}).get("agent_work") and isinstance(output, dict) \
@@ -3875,6 +3879,10 @@ def tick(
         else:
             savepoint.commit()
 
+    # Work that ended elsewhere — a build, a panel, a run finished from another screen — stops
+    # showing its agents as busy. It never waits on a lock: this whole tick is one transaction.
+    agent_acts.quietly(connection, "close finished work", agent_acts.reconcile, project_id)
+
     for run in runs:
         if len(performed) >= limit:
             break
@@ -3997,6 +4005,14 @@ def tick(
                 else:
                     gate_point.commit()
 
+            # SIGNED AS IT MOVES. Gates opened, work resumed, answers given since the last tick
+            # all show in the run's chain before the next step is claimed. Never waits: a run
+            # another tick holds is that tick's to sign, and its lock would be held to the end
+            # of this one — through every step it runs.
+            phase = "sign the run's work"
+            agent_acts.quietly(connection, "sign a run's work", agent_acts.sync_run, run_id,
+                               wait=False)
+
             phase = "claim a step to run"
             claimed = workflows.claim_step(
                 connection, project_id=project_id, run_id=run_id,
@@ -4024,25 +4040,34 @@ def tick(
             # Rolling back to the savepoint first restores a working connection, so the handlers
             # below record the ORIGINAL failure instead of dying on the attempt.
             step_point = connection.begin_nested()
+            step_agents.forget_resolved()
+            # WHO STARTED WHAT THIS STEP STARTS. A build or a panel is created by a tool in its
+            # own transaction, before this step's act is committed; this is how it records the
+            # step (and the run's person) as its origin, so its stages and seats are signed
+            # under this step rather than a root of their own. The step, not its run: a run id
+            # in a build's origin would mark the build as governed by this run.
             try:
                 try:
-                    output = execute_step(
-                        connection, ctx, project_id=project_id,
-                        actor=run.get("actor") or "workflow",
-                        step=spec_step,
-                        spec_steps=spec_steps,
-                        context={
-                            **_run_context(connection, run_id),
-                            "step_attempt": int(claimed.get("attempt") or 1),
-                            "worker_id": worker_id,
-                            # Set only on a step a gate released (_resume_answered_gates keeps
-                            # decision_id on the row); read by a custom step's MCP effect.
-                            "approval_decision_id": claimed.get("decision_id"),
-                            # The stack target this step's gate was waived for, if any.
-                            STACK_GATE_TARGET: (claimed.get("binding_snapshot") or {}).get(
-                                STACK_GATE_TARGET),
-                        },
-                    )
+                    with agent_acts.origin(step_run_id=claimed["id"],
+                                           actor=run.get("actor") or None):
+                        output = execute_step(
+                            connection, ctx, project_id=project_id,
+                            actor=run.get("actor") or "workflow",
+                            step=spec_step,
+                            spec_steps=spec_steps,
+                            context={
+                                **_run_context(connection, run_id),
+                                "step_attempt": int(claimed.get("attempt") or 1),
+                                "worker_id": worker_id,
+                                # Set only on a step a gate released (_resume_answered_gates
+                                # keeps decision_id on the row); read by a custom step's MCP
+                                # effect.
+                                "approval_decision_id": claimed.get("decision_id"),
+                                # The stack target this step's gate was waived for, if any.
+                                STACK_GATE_TARGET: (claimed.get("binding_snapshot") or {}).get(
+                                    STACK_GATE_TARGET),
+                            },
+                        )
                 except BaseException:
                     try:
                         step_point.rollback()
@@ -4144,6 +4169,7 @@ def tick(
                         "capability": output.get("capability"), "outcome": "succeeded",
                     })
             except CapabilityExecutionError as error:
+                agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
                 wait = _as_wait(error)
                 if wait is not None:
                     # NOT YET, NOT FAILED. No `continue` here: it would skip the run's savepoint
@@ -4195,6 +4221,7 @@ def tick(
                     "capability step %s of run %s raised %s",
                     claimed["step_id"], run_id, type(error).__name__,
                 )
+                agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
                 workflows.fail_step(
                     connection, project_id=project_id, step_run_id=claimed["id"],
                     worker_id=worker_id,
@@ -4205,6 +4232,9 @@ def tick(
                     "run_id": run_id, "step_id": claimed["step_id"],
                     "outcome": "failed", "error": f"{type(error).__name__}: {error}",
                 })
+            # The step just settled (succeeded, failed, parked, waiting on a person): signed now.
+            agent_acts.quietly(connection, "sign a step", agent_acts.sync_run, run_id,
+                               wait=False)
         except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
             # ROLL BACK TO THE SAVEPOINT FIRST. Until that happens the connection is unusable,
             # so even the logging below would fail if it touched the database.

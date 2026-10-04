@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.routing import Match
 from sqlalchemy import text
@@ -1237,6 +1238,27 @@ def _warm_read_paths() -> None:
         print(f"[lifespan] warm-up not started: {exc}")
 
 
+def _backfill_agent_identities() -> int:
+    """EVERY PROJECT'S AGENTS ARE SOMEBODY, not only the default project's.
+
+    bootstrap.seed backfills the default project and onboarding a new one; an upgraded
+    install with other projects kept agent_id NULL there, so their faces were seeded by
+    role_key until a Passport was opened (agent_identity.backfill; idempotent and quiet —
+    no `agent.born` dated at the upgrade). Never blocks boot.
+    """
+    from boss_engine.services import agent_identity
+
+    try:
+        with begin(engine) as connection:
+            changed = agent_identity.quietly(connection, agent_identity.backfill) or 0
+        if changed:
+            print(f"[lifespan] agent identity backfill: {changed} agent(s)")
+        return int(changed)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] agent identity backfill skipped: {exc}")
+        return 0
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
@@ -1294,6 +1316,7 @@ async def lifespan(_: FastAPI):
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
+    _backfill_agent_identities()
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
     # per-command durations, the queueing-vs-work split, why a preview refused — went to a
     # container log an operator cannot open. From here it also lands in `app_logs`, which the
@@ -1324,6 +1347,21 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] delivery catalogue: {result['count']} workflows for {project}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a seed
         print(f"[lifespan] delivery catalogue seed skipped: {exc}")
+    # SIGNED WORK FOR WHAT RAN BEFORE THE LEDGER. Without this, every Passport, Lineage and
+    # Credits screen is empty for existing work until somebody knows to call /v1/acts/backfill.
+    # In a thread, one short transaction per run, panel or build with try-locks, so it never
+    # delays the boot or a live tick; idempotent, so every boot after the first finds nothing.
+    try:
+        def _backfill_acts() -> None:
+            from boss_engine.services.agent_acts import backfill_all
+
+            written = backfill_all(engine)
+            if any(written.values()):
+                print(f"[lifespan] signed work reconstructed: {written}")
+
+        threading.Thread(target=_backfill_acts, name="boss-acts-backfill", daemon=True).start()
+    except Exception as exc:  # noqa: BLE001 — never block boot on a backfill
+        print(f"[lifespan] signed-work backfill not started: {exc}")
     # FLOWS THE OLDER STUDIO FILED UNDER THE SYSTEM NAMESPACE come back where the customer's
     # work lives, once, before anyone reads. This ran inside a GET of the Studio catalog, so a
     # read wrote and the flows reappeared in Workflow only after someone had opened Studio.
@@ -5994,7 +6032,8 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             project_id=payload.project_id, task_id=task_id,
             directive=payload.directive, url=payload.url,
             constraints=payload.constraints, role_keys=payload.roles,
-            finalize_ctx={"reservation_id": reservation_id},
+            # Who convened it: the person its seats are accountable to (agent_acts).
+            finalize_ctx={"reservation_id": reservation_id, "origin": {"actor": payload.actor}},
             title=meeting_title,
         )
         job = jobs.create_job(
@@ -11286,7 +11325,8 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.Discove
         task_id = task["task_id"]
         meeting_run_id = start_meeting_run(
             connection, project_id=project_id, task_id=task_id, directive=directive, url=None,
-            constraints={}, role_keys=None, finalize_ctx={"reservation_id": reservation_id},
+            constraints={}, role_keys=None,
+            finalize_ctx={"reservation_id": reservation_id, "origin": {"actor": actor}},
         )
         jobs.create_job(connection, project_id=project_id, task_id=task_id,
                         kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": meeting_run_id})
@@ -11902,6 +11942,7 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
                 role=payload.role,
                 mode=payload.mode,
                 depth=payload.depth,
+                context=payload.context,
                 attachments=[
                     {"name": a.name, "media_type": a.media_type, "kind": a.kind,
                      "data": a.data}
@@ -13633,7 +13674,8 @@ def console_v2_workforce_endpoint(project_id: str, hours: int = 24) -> dict:
 
 
 @app.get("/v1/console/v2/agents/{role_key}")
-def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720) -> dict:
+def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720,
+                            viewer: Optional[str] = None) -> dict:
     """One agent: every app it has worked on, its metrics, and the spec that governs it.
 
     The roster's card was an `<article>` — not a link, no detail view behind it — so an agent
@@ -13646,7 +13688,8 @@ def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720) ->
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         return agent_detail(connection, project_id, role_key,
-                            hours=max(1, min(int(hours), 24 * 90)))
+                            hours=max(1, min(int(hours), 24 * 90)),
+                            viewer=_acts_viewer(viewer))
 
 
 @app.get("/v1/projects/{project_id}/agents")
@@ -14209,6 +14252,8 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
     console reported exactly that on five agents running most of the PRD pipeline, with no way
     to act on it.
     """
+    from boss_engine.services.agents import PersonaInvalid
+
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
@@ -14225,6 +14270,10 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
                 reports_to_given="reports_to" in body.model_fields_set,
                 actor=actor,
             )
+        except PersonaInvalid as refused:
+            # The same {field, message} PATCH /v1/agents answers with.
+            raise HTTPException(status_code=422, detail={"field": refused.field,
+                                                         "message": str(refused)}) from refused
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         emit_event(
@@ -27492,6 +27541,379 @@ app.include_router(
     )
 )
 mount_platform_routers(app)
+# --- agent world: identity ---
+# WHO AN AGENT IS (agent-world spec §5.4): the light identities list the web resolver loads
+# once, the Passport, lifecycle, the A2A card, and hearing the voice (Draft it, Test). Mounted
+# BEFORE the agent resource router, whose GET /v1/agents/{role_key} would otherwise take
+# /v1/agents/identities as an agent called "identities".
+
+
+class AgentLifecycleBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    state: Literal["active", "paused", "retired"]
+    reason: str = ""
+
+
+class AgentPersonaDraftBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    field: Literal["about_me", "tagline"]
+    persona: Optional[dict[str, Any]] = None
+
+
+class AgentVoiceTestBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    probe: Literal["intro", "push_back", "out_of_scope"]
+    persona: Optional[dict[str, Any]] = None
+
+
+def _identity_http(error: Exception):
+    from boss_engine.services.agent_identity import IdentityError
+
+    if isinstance(error, IdentityError):
+        raise HTTPException(status_code=error.status, detail=str(error)) from error
+    raise error
+
+
+def _agent_voice_row(connection, project_id: str, role_key: str) -> dict[str, Any]:
+    row = connection.execute(
+        text("SELECT role_key, display_name, spec, agent_id, identity_version, fingerprint "
+             "FROM roles WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": role_key},
+    ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no agent {role_key!r} on this project.")
+    return dict(row)
+
+
+def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
+                      persona: Optional[dict[str, Any]], effect: str, reason: str):
+    """Everything checked before a voice call spends anything: who, which agent, a model, the
+    budget. Returns (actor, role row with any unsaved persona, the request's VoiceSpend —
+    which the caller must close(), in a finally, so the spend is settled or released)."""
+    from boss_engine.services import agent_voice
+
+    with begin(engine) as connection:
+        who = require_project_write_actor(connection, project_id, actor, "role_review")
+        row = _agent_voice_row(connection, project_id, role_key)
+        problems = agent_voice.lint_unsaved(persona)
+        if problems:
+            raise HTTPException(status_code=422, detail=problems[0])
+        if not agent_voice.model_ready(connection, settings, project_id):
+            raise HTTPException(status_code=409, detail=agent_voice.NEEDS_MODEL)
+        try:
+            spend = agent_voice.open_spend(connection, engine, settings, project_id, effect,
+                                           reason, {"role_key": role_key, "actor": who})
+        except agent_voice.VoiceError as refused:
+            raise HTTPException(status_code=409, detail=refused.payload) from refused
+    return who, agent_voice.voiced_role(row, persona), spend
+
+
+@app.get("/v1/agents/identities")
+def agent_identities_endpoint(project_id: str, request: Request):
+    """Every agent's face and name, plus the alias table, for the one web resolver. ETag'd."""
+    import hashlib
+
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        payload = {"project_id": project_id,
+                   "items": agent_identity.identities(connection, project_id),
+                   "aliases": agent_identity.aliases(connection, project_id)}
+    tag = '"' + hashlib.sha256(json.dumps(payload, sort_keys=True, default=str)
+                               .encode("utf-8")).hexdigest()[:32] + '"'
+    if request.headers.get("if-none-match") == tag:
+        return Response(status_code=304, headers={"ETag": tag})
+    return JSONResponse(jsonable_encoder(payload), headers={"ETag": tag})
+
+
+@app.get("/v1/agents/{role_key}/passport")
+def agent_passport_endpoint(role_key: str, project_id: str):
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return jsonable_encoder(agent_identity.passport(connection, project_id, role_key))
+        except Exception as error:  # noqa: BLE001 — typed mapping in _identity_http
+            _identity_http(error)
+
+
+@app.post("/v1/agents/{role_key}/lifecycle")
+def agent_lifecycle_endpoint(role_key: str, body: AgentLifecycleBody):
+    """Pause, resume or retire. The sponsor, or an owner (a CEO member), and nobody else."""
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        who = require_project_write_actor(connection, body.project_id, body.actor,
+                                          "role_review")
+        # AN OWNER IS A PERSON: the ceo role on a HUMAN member, as require_autonomy_operator
+        # decides it. A ceo role key alone let an agent or system principal count as an owner.
+        try:
+            member = members.require_member(connection, body.project_id, who,
+                                             role_keys_any=["ceo"])
+            owner = member.get("member_type") == "human"
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+            owner = False
+        try:
+            return jsonable_encoder(agent_identity.set_lifecycle(
+                connection, body.project_id, role_key, body.state, who, body.reason,
+                is_owner=owner))
+        except Exception as error:  # noqa: BLE001
+            _identity_http(error)
+
+
+@app.get("/v1/agents/{role_key}/card")
+def agent_card_endpoint(role_key: str, project_id: str):
+    """A2A Agent Card v1.0 + x-boss. Unsigned; carries no repos, servers or costs."""
+    from boss_engine.services import agent_identity
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return jsonable_encoder(agent_identity.agent_card(connection, project_id, role_key))
+        except Exception as error:  # noqa: BLE001
+            _identity_http(error)
+
+
+@app.post("/v1/agents/{role_key}/persona/draft")
+def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
+    """`Draft it`: one model call in the agent's own composed voice. Saves nothing."""
+    from boss_engine.services import agent_voice
+    from boss_engine.services.agent_persona import lint_persona
+    from boss_engine.services.core import emit_event
+    from boss_engine.services.model_failures import explain
+
+    who, row, spend = _agent_voice_gate(
+        body.project_id, role_key, body.actor, body.persona, "model.agent_persona_draft",
+        f"Draft {body.field} for {role_key}")
+    try:
+        raw, usage = spend.ask(system=agent_voice.system_prompt(row),
+                               prompt=agent_voice.draft_prompt(body.field))
+    except Exception as error:  # noqa: BLE001 — explained, never a bare 500
+        spend.close(error=str(error))
+        raise HTTPException(status_code=502, detail={"code": "model_failed",
+                                                     "error": explain(error)}) from error
+    finally:
+        spend.close()
+    draft = agent_voice.clip_draft(body.field, raw)
+    errors, warnings = lint_persona({body.field: draft})
+    with begin(engine) as connection:
+        emit_event(connection, body.project_id, "agent.persona_drafted", who, "agent",
+                   str(row.get("agent_id") or role_key),
+                   {"role_key": role_key, "field": body.field, "receipt_id": spend.receipt_id,
+                    "usage": usage})
+    return {"role_key": role_key, "field": body.field, "draft": draft,
+            "problems": errors, "warnings": warnings, "receipt_id": spend.receipt_id}
+
+
+@app.post("/v1/agents/{role_key}/test")
+def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
+    """`Test`: a probe, answered through the agent's exact composed prompt, streamed as SSE.
+
+    Events: `token` {text}* then `result` {voice 0-5, in_remit, says_ai, fingerprint, …};
+    or `error` {error: model_failures.explain()}. Refusals (no model, budget, a persona that
+    fails the lint) are answered before the stream opens, as plain HTTP errors.
+    """
+    from boss_engine.services import agent_voice
+    from boss_engine.services.core import emit_event
+    from boss_engine.services.model_failures import explain
+
+    who, row, spend = _agent_voice_gate(
+        body.project_id, role_key, body.actor, body.persona, "model.agent_voice_test",
+        f"Test {body.probe} for {role_key}")
+
+    def sse(event: str, data: dict[str, Any]) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+    def stream():
+        # A finally, not a trailing call: a client that drops mid-stream closes this generator
+        # at a yield, and the spend must still be settled (or the hold released) right then.
+        try:
+            try:
+                reply, usage = spend.ask(system=agent_voice.system_prompt(row),
+                                         prompt=agent_voice.PROBES[body.probe]["prompt"])
+            except Exception as error:  # noqa: BLE001
+                spend.close(error=str(error))
+                yield sse("error", {"error": explain(error)})
+                return
+            for piece in agent_voice.chunks(reply):
+                yield sse("token", {"text": piece})
+            judgement = None
+            try:
+                raw, _ = spend.ask(system="You grade replies. You output JSON only.",
+                                   prompt=agent_voice.judge_prompt(row, body.probe, reply))
+                judgement = agent_voice.parse_judgement(raw)
+            except Exception:  # noqa: BLE001 — the plain checks still score it
+                judgement = None
+            spend.close()
+            result = {**agent_voice.score(row, body.probe, reply, judgement),
+                      "probe": body.probe, "fingerprint": row.get("fingerprint") or "",
+                      "version": int(row.get("identity_version") or 1),
+                      "draft": body.persona is not None, "receipt_id": spend.receipt_id}
+            try:
+                with begin(engine) as connection:
+                    emit_event(connection, body.project_id, "agent.tested", who, "agent",
+                               str(row.get("agent_id") or role_key),
+                               {"role_key": role_key, **result, "usage": usage,
+                                "model_calls": spend.calls,
+                                "cost_usd_micros": spend.actual_usd_micros,
+                                "reply": reply[:2000]})
+            except Exception:  # noqa: BLE001 — the operator still gets the result
+                logging.getLogger(__name__).warning("agent.tested not recorded", exc_info=True)
+            yield sse("result", result)
+        finally:
+            spend.close()
+
+    # The background close covers a stream that was never started at all (idempotent).
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                             background=BackgroundTask(spend.close))
+# --- end agent world: identity ---
+
+
+# --- agent world: acts ---
+# Signed work (spec §4.3, §5.4): an agent's acts and lineage, a run's chain, one act, who is live.
+# Registered BEFORE the agents router so `/v1/agents/live` is not read as an agent called "live".
+
+
+class ActsBackfillRequest(BaseModel):
+    project_id: str
+    actor: str = "executive_console"
+
+
+def _acts_reader(project_id: str):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    return project_id.strip()
+
+
+def _acts_viewer(viewer: Optional[str]) -> Optional[str]:
+    """Who is reading, so an edge a person made says "you" only to that person.
+
+    The authenticated principal when there is one — a request cannot claim to be someone else.
+    With API auth off every caller is the same process, so the console names its operator with
+    `?viewer=`; with neither, every person is named, which is never wrong."""
+    principal = current_api_principal.get()
+    if principal:
+        return str(principal)
+    if current_transport_authenticated.get():
+        return None
+    return (viewer or "").strip() or None
+
+
+@app.get("/v1/agents/live")
+def agents_live(project_id: str, request: Request, response: Response):
+    """Who is working, in a panel, or waiting on you right now. ETag'd for a cheap 4s poll."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        live = agent_acts.live(connection, project_id)
+    if request.headers.get("if-none-match") == live["etag"]:
+        return Response(status_code=304, headers={"ETag": live["etag"]})
+    response.headers["ETag"] = live["etag"]
+    response.headers["Cache-Control"] = "no-cache"
+    return {"project_id": project_id, "items": live["items"]}
+
+
+@app.get("/v1/agents/{role_key}/acts")
+def agent_acts_feed(role_key: str, project_id: str, kind: Optional[str] = None, days: int = 30,
+                    cursor: Optional[str] = None, limit: int = 50,
+                    viewer: Optional[str] = None) -> dict:
+    """An agent's signed work, newest first: each act with who handed it over and to whom."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return agent_acts.acts_for_agent(
+                connection, project_id, agent_acts.resolve_role(role_key) or role_key,
+                kind=kind or None, days=max(1, min(int(days), 365)), cursor=cursor,
+                limit=limit, viewer=_acts_viewer(viewer))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/agents/{role_key}/lineage")
+def agent_lineage(role_key: str, project_id: str, days: int = 30,
+                  mode: str = "observed", viewer: Optional[str] = None) -> dict:
+    """Who hands this agent work and who it hands work to (observed), or its declared line."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return agent_acts.lineage(
+                connection, project_id, agent_acts.resolve_role(role_key) or role_key,
+                days=max(1, min(int(days), 365)), mode=mode, viewer=_acts_viewer(viewer))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/workflow-runs/{run_id}/chain")
+def workflow_run_chain(run_id: str, project_id: str, viewer: Optional[str] = None) -> dict:
+    """A run's acts as one ordered tree, rooted at the person who started it, with Credits.
+
+    Synced from the run's rows first, so the chain is never a tick behind what the run shows."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        owner = connection.execute(
+            text("SELECT project_id FROM workflow_runs WHERE id = :r"), {"r": run_id}).scalar()
+        if owner != project_id:
+            raise HTTPException(status_code=404, detail="Workflow run not found.")
+        agent_acts.quietly(connection, "sign a run's work", agent_acts.sync_run, run_id,
+                           wait=False)
+        found = agent_acts.chain(connection, project_id, run_id, viewer=_acts_viewer(viewer))
+    if found is None:
+        raise HTTPException(status_code=404, detail="This run has no signed work.")
+    return found
+
+
+@app.get("/v1/acts/{act_id}")
+def get_signed_act(act_id: str, project_id: str, viewer: Optional[str] = None) -> dict:
+    """One act: who, how, why, scope and cost, its last turns, receipt and children."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        found = agent_acts.get_act(connection, project_id, act_id, viewer=_acts_viewer(viewer))
+    if found is None:
+        raise HTTPException(status_code=404, detail="Act not found.")
+    return found
+
+
+@app.post("/v1/acts/backfill")
+def backfill_signed_acts(payload: ActsBackfillRequest) -> dict:
+    """Reconstruct acts from work done before the ledger existed. Idempotent; every act it
+    writes is marked reconstructed. The API boots this on its own (lifespan); this is for
+    running it again by hand. One short transaction per run, panel or build — live work wins."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(payload.project_id)
+    with begin(engine) as connection:
+        actor = require_project_write_actor(connection, project_id, payload.actor,
+                                            "workflow_manage")
+    written = agent_acts.backfill(engine, project_id)
+    with begin(engine) as connection:
+        emit_event(connection, project_id, "agent_acts.backfilled", actor, "project",
+                   project_id, {"acts": written})
+    return {"project_id": project_id, "reconstructed": written}
+
+
+# --- end agent world: acts ---
+
+
 # THE ONE AGENT MODEL: create/read/edit/delete an agent and its MCP grants (routers/agents.py).
 from .routers.agents import build_agents_router
 
@@ -27504,6 +27926,221 @@ from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)
 register_community_cloud_routes(app, engine, cloud_product, require_project_actor)
+# --- agent world: converse ---
+# Talking with agents (spec §0.2 A): a 1:1 talk, "plan it with <agent>" and the room of 2-5
+# SMEs. Every agent reply is a governed model call recorded as an act; nothing starts work but
+# the operator's press on a proposal, which goes through start_delivery_workflow — the
+# composer's own door — so readiness refusals reach the console exactly as they do there.
+from boss_engine.services import agent_converse as _converse
+
+
+class ConversationCreateBody(open_bodies.ProjectBody):
+    kind: str | None = None
+    seats: list[str] | None = None
+    lead_role_key: str | None = None
+    preset: str | None = None
+    title: str | None = None
+    context: dict[str, Any] | None = None
+
+
+class ConversationTurnBody(open_bodies.ProjectBody):
+    message: str | None = None
+    to: list[str] | None = None
+    rounds: int | None = None
+
+
+class ConversationStartBody(open_bodies.ProjectBody):
+    proposal_id: str | None = None
+    start_anyway: list[str] | None = None
+    #: The card's inputs as the operator edited them before pressing Start.
+    inputs: dict[str, Any] | None = None
+
+
+class ConversationDecisionBody(open_bodies.ProjectBody):
+    #: The summary turn the next action belongs to (every summary card opens its own).
+    turn_id: str | None = None
+    index: int | None = None
+
+
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+def _converse_actor(connection, project_id: str, claimed: Optional[str]) -> str:
+    actor = str(current_api_principal.get() or claimed or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    require_project_actor(connection, project_id, actor, "agent_chat")
+    return actor
+
+
+def _converse_refused(error: "_converse.ConverseError") -> HTTPException:
+    return HTTPException(status_code=error.status, detail=error.detail())
+
+
+@app.get("/v1/conversations/presets")
+def conversation_presets(project_id: str, actor: Optional[str] = None) -> dict:
+    """The room presets (each naming the seats this project lacks) and the agents a room can
+    seat."""
+    with begin(engine) as connection:
+        _converse_actor(connection, project_id, actor)
+        return _converse.presets(connection, project_id)
+
+
+@app.get("/v1/conversations")
+def list_conversations_endpoint(project_id: str, actor: Optional[str] = None,
+                                kind: Optional[str] = None, limit: int = 20) -> dict:
+    with begin(engine) as connection:
+        who = _converse_actor(connection, project_id, actor)
+        try:
+            return {"items": _converse.list_conversations(connection, project_id, actor=who,
+                                                          kind=kind, limit=limit)}
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations", status_code=201)
+def create_conversation_endpoint(payload: ConversationCreateBody) -> dict:
+    """Open a talk, a plan or a room. No model call."""
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, str(payload.project_id or ""), payload.actor)
+        try:
+            return _converse.create_conversation(
+                connection, project_id=str(payload.project_id), actor=actor,
+                kind=str(payload.kind or ""), seats=list(payload.seats or []),
+                lead_role_key=payload.lead_role_key, preset=payload.preset,
+                title=str(payload.title or ""), context=payload.context)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.get("/v1/conversations/{conversation_id}")
+def get_conversation_endpoint(conversation_id: str, project_id: str,
+                              actor: Optional[str] = None) -> dict:
+    with begin(engine) as connection:
+        who = _converse_actor(connection, project_id, actor)
+        try:
+            conversation = _converse.get_conversation(connection, project_id, conversation_id)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+        if conversation["actor"] != who:
+            raise HTTPException(status_code=404, detail={"code": "not_found",
+                                                         "message": "No such conversation."})
+        return conversation
+
+
+def _converse_stream(request: Request, project_id: str, claimed: Optional[str], endpoint: str,
+                     open_stream) -> StreamingResponse:
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, claimed)
+    _enforce_high_cost_rate_limit(request, project_id, actor, endpoint=endpoint)
+    try:
+        events = open_stream(actor)
+    except _converse.ConverseError as error:
+        raise _converse_refused(error) from error
+    return StreamingResponse(_converse.sse(events), media_type="text/event-stream",
+                             headers=_SSE_HEADERS)
+
+
+@app.post("/v1/conversations/{conversation_id}/turns")
+def conversation_turn_endpoint(conversation_id: str, payload: ConversationTurnBody,
+                               request: Request) -> StreamingResponse:
+    """Say something; each addressed seat answers in turn (SSE: ConverseEvent)."""
+    project_id = str(payload.project_id or "")
+    return _converse_stream(
+        request, project_id, payload.actor, "/v1/conversations/turns",
+        lambda actor: _converse.take_turn(
+            engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
+            message=str(payload.message or ""), to=list(payload.to or []),
+            rounds=int(payload.rounds or 1), settings=settings))
+
+
+@app.post("/v1/conversations/{conversation_id}/summary")
+def conversation_summary_endpoint(conversation_id: str, payload: open_bodies.ProjectBody,
+                                  request: Request) -> StreamingResponse:
+    """The room's lead sums it up: decisions, dissent and next actions (SSE)."""
+    project_id = str(payload.project_id or "")
+    return _converse_stream(
+        request, project_id, payload.actor, "/v1/conversations/summary",
+        lambda actor: _converse.summarize_room(
+            engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
+            settings=settings))
+
+
+@app.post("/v1/conversations/{conversation_id}/propose")
+def conversation_propose_endpoint(conversation_id: str, payload: open_bodies.ProjectBody,
+                                  request: Request) -> StreamingResponse:
+    """The plan as a card to review: workflow, directive, inputs, who runs each step (SSE)."""
+    project_id = str(payload.project_id or "")
+    return _converse_stream(
+        request, project_id, payload.actor, "/v1/conversations/propose",
+        lambda actor: _converse.propose_start(
+            engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
+            settings=settings))
+
+
+@app.post("/v1/conversations/{conversation_id}/start")
+def conversation_start_endpoint(conversation_id: str, payload: ConversationStartBody) -> dict:
+    """The operator's press on a proposal: one run, through the composer's start door."""
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+    with begin(engine) as connection:
+        try:
+            return _converse.start_from_proposal(
+                connection, project_id=project_id, conversation_id=conversation_id,
+                actor=actor, proposal_id=str(payload.proposal_id or ""),
+                start_anyway=list(payload.start_anyway or []), inputs=payload.inputs,
+                starter=lambda body: start_delivery_workflow(WorkflowStartBody(**body)))
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations/{conversation_id}/proposals/{proposal_id}/dismiss")
+def conversation_dismiss_endpoint(conversation_id: str, proposal_id: str,
+                                  payload: open_bodies.ProjectBody) -> dict:
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+        try:
+            return _converse.dismiss_proposal(connection, project_id=project_id,
+                                              conversation_id=conversation_id, actor=actor,
+                                              proposal_id=proposal_id)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations/{conversation_id}/decisions")
+def conversation_decision_endpoint(conversation_id: str,
+                                   payload: ConversationDecisionBody) -> dict:
+    """Open one of the room summary's `decision` next actions as a real decision."""
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+        try:
+            return _converse.open_decision(connection, project_id=project_id,
+                                           conversation_id=conversation_id, actor=actor,
+                                           index=int(payload.index if payload.index is not None
+                                                     else -1),
+                                           turn_id=payload.turn_id)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations/{conversation_id}/close")
+def conversation_close_endpoint(conversation_id: str, payload: open_bodies.ProjectBody) -> dict:
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+        try:
+            return _converse.close_conversation(connection, project_id=project_id,
+                                                conversation_id=conversation_id, actor=actor)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+# --- end agent world: converse ---
+
+
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)
 

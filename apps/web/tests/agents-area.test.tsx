@@ -227,7 +227,7 @@ describe("an agent's page", () => {
     expect(usedIn(undefined)).toEqual([]);
   });
 
-  it("draws Used in and its Profile, with a Test", async () => {
+  it("draws Used in and ONE Profile: one Test (the real one), the definition's compile is a Check", async () => {
     window.history.replaceState(null, "", "/?area=workforce&role=role_1");
     await mount();
     const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-testid="agent-used-in"] a')];
@@ -238,7 +238,13 @@ describe("an agent's page", () => {
     const profile = $('[data-testid="agent-profile"]');
     expect(profile?.textContent).toContain("qa profile");
     expect(profile?.textContent).toContain("v2");
-    expect($('[data-testid="agent-profile-test-qa"]')).not.toBeNull();
+    expect($('[data-testid="agent-profile-check-qa"]')?.textContent).toContain("Check");
+    // Not two Profiles, not two Tests: the Studio rows sit inside the Passport's Profile section.
+    const titles = [...document.querySelectorAll(".ct-block-title")].map((t) => t.firstChild?.textContent?.trim());
+    expect(titles.filter((t) => t === "Profile")).toHaveLength(1);
+    expect(document.querySelectorAll('[data-testid="ag-test"]')).toHaveLength(1);
+    expect($("#ag-sec-profile")?.contains(profile!)).toBe(true);
+    expect([...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Test")).toHaveLength(0);
   });
 });
 

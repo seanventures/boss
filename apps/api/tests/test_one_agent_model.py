@@ -388,7 +388,16 @@ def test_a_reseed_never_puts_back_what_an_operator_removed(client, engine):
     assert client.delete("/v1/role-skills", params={
         "project_id": PROJECT, "role_key": role, "skill_id": skill,
         "actor": "ceo"}).status_code == 200
-    # 2. Delete a built-in MCP server.
+    # 2. Delete a built-in MCP server. The shipped cast holds some (Agent World: role specs
+    #    name their servers), and a held server is not deleted out from under its agents —
+    #    so the operator takes it off them first, which is a removal the seed must keep too.
+    with engine.connect() as c:
+        holders = c.execute(text("SELECT role_key FROM role_mcp_servers WHERE project_id=:p "
+                                 "AND mcp_server_id=:s"), {"p": PROJECT, "s": builtin}).scalars().all()
+    for holder in holders:
+        assert client.delete("/v1/role-mcp-servers", params={
+            "project_id": PROJECT, "role_key": holder, "mcp_server_id": builtin,
+            "actor": "ceo"}).status_code == 200
     assert client.delete(f"/v1/mcp/servers/{builtin}",
                          params={"project_id": PROJECT}).status_code == 204
     # 3. Edit a bundled agent's mission.
