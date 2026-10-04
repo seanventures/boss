@@ -203,3 +203,31 @@ def test_boss_own_builds_have_a_home_and_their_apps_name(client, engine):
     row = _row(_floor(client).json(), run_id)
     assert row["internal"] is True
     assert row["app"] == "e2e-app"
+
+
+def test_one_merge_question_per_pull_request(client, engine):
+    """Walk D2: a retry reuses the open PR and asked to merge it again, so `Merge PR #1?` was
+    on the Floor, the pill and Approvals twice. When the newer attempt settles, the earlier
+    attempt's question about the same PR is superseded: one card, one count."""
+    from boss_engine.services.agent_acts import settle_code_task
+
+    first_dec, second_dec = (f"dec_{uuid.uuid4().hex[:12]}" for _ in range(2))
+    with engine.begin() as c:
+        for d in (first_dec, second_dec):
+            c.execute(text("INSERT INTO decisions (id, project_id, question, recommendation, status) "
+                           "VALUES (:i, :p, 'Approve code change (PR #7)', "
+                           "CAST(:r AS JSONB), 'pending')"),
+                      {"i": d, "p": fx.PROJECT, "r": '{"action": "review_pull_request"}'})
+    first = fx.new_run(engine, status="completed", phase="done", pr=7, decision_id=first_dec,
+                       title="Dup app")
+    second = fx.new_run(engine, status="completed", phase="done", pr=7, decision_id=second_dec,
+                        title="Dup app · retry 1",
+                        fctx={"root_run_id": first, "parent_run_id": first, "attempt": 2})
+    settle_code_task(engine, second)
+    with engine.begin() as c:
+        statuses = dict(c.execute(text("SELECT id, status FROM decisions WHERE id = ANY(:i)"),
+                                  {"i": [first_dec, second_dec]}).all())
+    assert statuses == {first_dec: "superseded", second_dec: "pending"}
+    body = _floor(client).json()
+    assert [a["id"] for a in body["attention"]].count(second_dec) <= 1
+    assert first_dec not in [a["id"] for a in body["attention"]]

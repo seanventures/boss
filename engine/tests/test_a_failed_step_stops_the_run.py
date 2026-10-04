@@ -21,6 +21,7 @@ So:
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -286,6 +287,37 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
         _assert_stopped(c, run["id"], steps)
         assert status in (steps["s"]["last_error"] or ""), steps["s"]["last_error"]
         c.execute(text(f"DELETE FROM {table} WHERE id=:i"), {"i": awaited_id})  # noqa: S608
+
+
+@pytest.mark.parametrize("phase,reason", [("awaiting_plan_approval", None),
+                                          ("awaiting_gate_override", None),
+                                          ("coding", "budget_denied")])
+def test_a_build_waiting_on_the_operator_has_not_failed_its_step(eng, project, monkeypatch,
+                                                                 phase, reason):
+    """Factory walk: a build blocked for a plan approval, a waiver or a budget is waiting on a
+    person — its own card says so. Failing the step above it added a second card for the same
+    wait ("Build, review and test failed on Payments plan")."""
+    key = next(k for k, kind in sorted(AWAITED.items()) if kind == "code_task")
+    awaited_id = f"aw_{key}_{uuid.uuid4().hex[:8]}"
+    field = runner._AWAIT_KINDS[key][1][0]
+    tool_name = CAPABILITIES[key].tool
+    tools = [RecordingTool(tool_name, {field: awaited_id})] if tool_name else []
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry(tools))
+    monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
+    with eng.begin() as c:
+        run = _two_step(c, project, key)
+        _tick_through_retries(eng, c, project, run["id"], times=2)
+        assert _steps(c, run["id"])["s"]["status"] == "waiting"
+        _insert_awaited(c, project, "code_task_runs", awaited_id, "blocked")
+        c.execute(text("UPDATE code_task_runs SET phase = :ph, finalize_ctx = "
+                       "COALESCE(finalize_ctx, '{}'::jsonb) || CAST(:fc AS JSONB) WHERE id = :i"),
+                  {"ph": phase, "fc": json.dumps({"reason_code": reason} if reason else {}),
+                   "i": awaited_id})
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        assert _steps(c, run["id"])["s"]["status"] == "waiting"
+        assert _run_status(c, run["id"]) not in {"failed", "deadlettered"}
+        c.execute(text("DELETE FROM code_task_runs WHERE id=:i"), {"i": awaited_id})
 
 
 @pytest.mark.parametrize("key", ["deploy", "redeploy"])
