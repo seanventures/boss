@@ -121,7 +121,7 @@ export type SetupView = {
   project_id: string;
   ready: boolean;
   next: "repository" | "model" | "try" | null;
-  verdict: { label: string; tone: Tone; tip: string };
+  verdict: { label: string; tone: Tone; tip: string; at?: string | null };
   problems: number;
   secrets: { backend: string; needs_consent: boolean };
   repository: { connection: RepoConnection | null; repos: RepoEntry[] };

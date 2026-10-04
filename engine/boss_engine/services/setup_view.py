@@ -867,6 +867,7 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         first = problems_list[0]
         verdict = setup_pills.pill("verdict", "problem" if problems == 1 else "problems",
                                    n=problems, headline=first["tip"])
+        verdict["at"] = first.get("at")
     elif ready:
         verdict = setup_pills.pill("verdict", "ready")
     else:
@@ -876,12 +877,14 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         waiting = next((row["pill"] for row in [*repository["repos"], *models]
                         if row["pill"]["tone"] in ("amber", "busy")), None)
         if waiting:
-            verdict["tip"] = waiting["tip"]
+            verdict["tip"], verdict["at"] = waiting["tip"], waiting.get("at")
     return {
         "project_id": project_id,
         "ready": ready,
         "next": next_step,
-        "verdict": {"label": verdict["label"], "tone": verdict["tone"], "tip": verdict["tip"]},
+        # `at` travels with any tip that names a time, so the console shows it in local time.
+        "verdict": {"label": verdict["label"], "tone": verdict["tone"], "tip": verdict["tip"],
+                    "at": verdict.get("at")},
         "problems": problems,
         "secrets": secrets_state(connection, settings, project_id),
         "repository": repository,
