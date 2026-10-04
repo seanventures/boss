@@ -48,19 +48,20 @@ def _signed_in_codex(monkeypatch):
     })
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", "enterprise"])
 def test_community_proves_a_connection_only_through_the_governed_path(edition, monkeypatch):
     """A connection is PROVED with one live turn before it is called connected — a wrong Claude
     credential "connected" unproved on boss-1 and failed later inside a workflow with a 401. In
-    Community that turn spends only through governed_proof (reservation and receipt first);
-    the ungoverned direct proof is never called."""
+    EVERY edition that turn spends only through governed_proof (reservation and receipt first,
+    a $0 gate for a subscription); the ungoverned direct proof is never called."""
     _signed_in_codex(monkeypatch)
     monkeypatch.setattr(setup_service, "prove_coding_agent",
                         lambda *_a, **_k: pytest.fail("ungoverned live proof in Community"))
     seen = []
     monkeypatch.setattr(setup_service, "governed_proof",
-                        lambda engine, settings, project, provider, actor: seen.append(
-                            (engine, provider, actor)) or {"ok": True, "replied": "BOSS_OK"})
+                        lambda engine, settings, project, provider, actor, prove=None,
+                        amount=None: seen.append(
+                            (engine, provider, actor, amount)) or {"ok": True, "replied": "BOSS_OK"})
 
     class _Broker:
         def __init__(self, _settings):
@@ -74,7 +75,7 @@ def test_community_proves_a_connection_only_through_the_governed_path(edition, m
     result = setup_service.connect_coding_agent(
         _Conn(), _Settings(edition), "project-a", "codex", actor="member")
     assert result["connected"] is True and result["proof"]["ok"] is True
-    assert seen == [(_Conn.engine, "codex", "member")]
+    assert seen == [(_Conn.engine, "codex", "member", 0)]
 
 
 def test_a_rejected_login_is_not_connected_and_says_what_to_do(monkeypatch):
@@ -91,7 +92,7 @@ def test_a_rejected_login_is_not_connected_and_says_what_to_do(monkeypatch):
 def test_the_agent_tool_proves_by_default(monkeypatch):
     seen = []
     monkeypatch.setattr(setup_service, "connect_coding_agent",
-                        lambda c, s, p, provider, *, actor, prove: seen.append(prove) or {"ok": True})
+                        lambda c, s, p, provider, *, actor, prove, **_k: seen.append(prove) or {"ok": True})
 
     class _OkCtx(_Ctx):
         def begin(self):

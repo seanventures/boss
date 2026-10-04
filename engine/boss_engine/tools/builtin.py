@@ -16,7 +16,6 @@ import os as _os
 import re
 import shlex
 import subprocess as _subprocess
-import uuid as _uuid
 from typing import Any, Optional as _Optional
 
 from .._compat import services_module
@@ -2104,21 +2103,12 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         # and then said "open BOSS's GitHub view, select the repository, and click Test
         # access" — an instruction to do by hand the one step it could have done itself.
         # "Just explaining the problem would not help anyone."
-        from ..services.github_connections import GitHubConnectionService
+        # THE SAME THREE PROBES AS REPO AND MODELS' Test (setup_actions.check_repository):
+        # read, write a blob, ask to open a pull request — never the account's role.
+        from ..services import setup_actions
 
         pid = args.get("project_id") or project_id
-        svc = GitHubConnectionService(ctx.settings)
         with ctx.begin() as c:
-            conn_id = str(args.get("connection_id") or "").strip()
-            if not conn_id:
-                row = c.execute(
-                    _text("SELECT id FROM github_connections WHERE project_id = :p "
-                          " ORDER BY created_at DESC LIMIT 1"), {"p": pid}).first()
-                if row is None:
-                    return {"ok": False,
-                            "error": f"{pid} has no GitHub connection to test — connect one "
-                                     f"in Setup first."}
-                conn_id = row[0]
             wanted = str(args.get("repository") or "").strip()
             binding = c.execute(
                 _text("SELECT id, full_name FROM github_repository_bindings "
@@ -2126,31 +2116,30 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                       "   AND (:w = '' OR lower(full_name) = lower(:w)) "
                       " ORDER BY (role = 'primary') DESC LIMIT 1"),
                 {"p": pid, "w": wanted}).mappings().first()
-            if binding is None:
+            target = binding["id"] if binding else None
+            if target is None:
+                env_repo = "/".join(str(getattr(ctx.settings, a, "") or "").strip()
+                                    for a in ("target_github_owner", "target_github_repo"))
+                if env_repo.strip("/") and getattr(ctx.settings, "github_token", None):
+                    target = "install"
+            if target is None:
                 return {"ok": False,
-                        "error": (f"no active repository binding on {pid}"
+                        "error": (f"no repository connected on {pid}"
                                   + (f" for {wanted}" if wanted else "")
-                                  + " — bind one in Setup first.")}
+                                  + " — connect one in Repo and models first."),
+                        "href": "/?area=setup&focus=repository"}
             try:
-                # A NEW dedupe key each time: this is deliberately repeatable, because the
-                # whole point is to re-ask a question whose answer has changed.
-                result = svc.test_connection(
-                    c, project_id=pid, connection_id=conn_id,
-                    binding_id=binding["id"],
-                    dedupe_key=f"agent-retest-{_uuid.uuid4().hex[:12]}",
-                    actor=actor)
+                found = setup_actions.check_repository(c, ctx.settings, pid, target, actor=actor)
             except Exception as exc:  # noqa: BLE001 — the reason is the answer
-                return {"ok": False, "repository": binding["full_name"],
-                        "error": f"{type(exc).__name__}: {exc}"[:400]}
-        detail = result.get("detail") or {}
-        passed = result.get("status") == "passed"
-        return {"ok": passed, "status": result.get("status"),
-                "repository": binding["full_name"],
-                "granted_permissions": detail.get("granted_permissions"),
-                "missing_permissions": detail.get("missing_permissions"),
-                "message": detail.get("message"),
-                "next": ("nothing — this connection works" if passed else
-                         "the message above is what GitHub said; fix that and test again")}
+                return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
+        from ..services.setup_pills import pill
+
+        shown = pill("repository", found["state"], repo=(binding or {}).get("full_name") or "")
+        return {"ok": found["state"] == "working", "state": shown["label"],
+                "fix": shown["tip"], "checks": {k: v.get("ok") for k, v in
+                                                (found.get("checks") or {}).items()},
+                "repository": (binding or {}).get("full_name"),
+                "href": "/?area=setup&focus=repository"}
 
     @reg.tool(
         "set_project_setting",
@@ -2196,109 +2185,51 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "diagnose_setup",
-        "EVERYTHING about whether this install is set up, in one call: which steps are done, "
-        "the GitHub connection and the REASON its last test failed, which coding agents are "
-        "installed/signed in/connected, which model answers chat and which builds, where "
-        "secrets are stored, and what to do next. Use this FIRST for any question about "
-        "setup, connecting a repository or a model, a token being rejected, or 'the check "
-        "failed' — it is the whole picture and it names the next action. Read-only; no "
-        "credential value is ever returned.",
+        "EVERYTHING about whether this install is set up, in one call — the same view Repo "
+        "and models renders: the repository and its read/write/pull-request checks, each "
+        "model and its last check, which model does each job (Build, Review, Chat, "
+        "Decisions), the budget, and what to fix first with a console link. Use this FIRST "
+        "for any question about setup, connecting a repository or a model, a token being "
+        "rejected, or 'the check failed'. Read-only; never calls GitHub or a provider and "
+        "never returns a credential.",
         _obj({}),
         kind="read",
     )
     def diagnose_setup(ctx, *, project_id, actor, args):
-        # WHY THIS EXISTS. Asked why a GitHub connection failed, the agent had to assemble the
-        # answer from `query_db` over events, source inspection and three tools that do not
-        # work in a container — and still could not say why, because the reason had been
-        # discarded. Setup is the one thing every customer touches first; answering it should
-        # not be an investigation.
+        # ONE SOURCE WITH THE PAGE. This assembled its own picture from setup_status, raw
+        # github_connections rows and CLI detection, so the chat and Repo and models could
+        # disagree about the same install. It now returns `setup_view.build` — the page's own
+        # state — plus the last check of each row and the fixes in order.
         pid = args.get("project_id") or project_id
-        from ..services.setup_service import (
-            build_engine_for,
-            connected_engines,
-            list_coding_agents,
-            setup_status,
-            with_recorded_connections,
-        )
+        from ..services import setup_view
 
-        out: dict = {"project_id": pid}
         with ctx.begin() as c:
-            try:
-                out["steps"] = setup_status(c, ctx.settings, pid)
-            except Exception as exc:  # noqa: BLE001 — a partial picture beats none
-                out["steps_error"] = f"{type(exc).__name__}: {exc}"[:200]
-            # THE REASON, not just the verdict. `last_error` is where the redacted message
-            # lives, and reading it is the difference between "the check failed" and "GitHub
-            # has no example-user/boss-sandbox visible to this token".
-            try:
-                out["github_connections"] = [dict(r) for r in c.execute(
-                    _text("SELECT id, connection_label, auth_method, status, "
-                          "       last_test_status, last_tested_at, last_error "
-                          "  FROM github_connections WHERE project_id = :p"),
-                    {"p": pid}).mappings().all()]
-                out["repositories"] = [dict(r) for r in c.execute(
-                    _text("SELECT full_name, role, status FROM github_repository_bindings "
-                          " WHERE project_id = :p"), {"p": pid}).mappings().all()]
-            except Exception as exc:  # noqa: BLE001
-                out["github_error"] = f"{type(exc).__name__}: {exc}"[:200]
-            try:
-                agents = with_recorded_connections(
-                    list_coding_agents(ctx.settings), c, pid)
-                out["coding_agents"] = [
-                    {k: a.get(k) for k in
-                     ("name", "installed", "version", "authenticated", "auth_detail",
-                      "ready", "connected", "connected_at", "next_step", "credential_kind")}
-                    for a in agents]
-                out["connected_engines"] = sorted(
-                    connected_engines(c, ctx.settings, pid))
-                # THE PROJECT'S CHOICES FIRST, or this reports the deployment default and
-                # contradicts the console: `build_engine_for` reads settings.code_agent_engine,
-                # which the pipeline layers before calling it.
-                from ..services.project_settings import applied as _applied
-
-                effective = _applied(c, pid, ctx.settings)
-                # The router's own answer — the source a step's model calls will go to.
-                from ..services.model_routing import choose as _choose_model
-
-                out["chat_model"] = _choose_model(c, effective, pid).describe()
-                out["build_model"] = build_engine_for(c, effective, pid)
-                out["role_models"] = {
-                    "implementer": effective.code_agent_engine,
-                    "adversarial_reviewer": effective.code_review_engine or "(the implementer)",
-                    "hard_problems": effective.code_agent_strong_engine or "(the implementer)",
-                    "routine_work": effective.code_agent_low_cost_engine or "(the implementer)",
-                }
-            except Exception as exc:  # noqa: BLE001
-                out["agents_error"] = f"{type(exc).__name__}: {exc}"[:200]
-        try:
-            from ..services.secret_backends import default_secret_backend
-
-            out["secret_store"] = default_secret_backend(ctx.settings)
-        except Exception as exc:  # noqa: BLE001
-            out["secret_store"] = f"unavailable ({type(exc).__name__})"
-
-        # WHAT TO DO NEXT, in order, so the answer is an instruction rather than a dump.
-        next_steps: list[str] = []
-        for step in (out.get("steps") or {}).get("steps", []):
-            if not step.get("done"):
-                next_steps.append(f"{step['title']}: {step['detail']}")
-        for conn in out.get("github_connections", []):
-            if conn.get("last_test_status") == "failed":
-                reason = (conn.get("last_error") or {}).get("message") or "no reason recorded"
-                next_steps.append(
-                    f"the GitHub connection {conn['id']} last failed its test: {reason}")
-        # ONLY THE ONES SOMEBODY IS TRYING TO USE. Listing every CLI that could be installed
-        # turned this into a to-do list of four vendors — "cursor: curl … | bash" is not a
-        # next step for an operator who has never wanted Cursor. An agent that is installed
-        # but not connected IS half-done and worth naming; so is having nothing at all.
-        any_connected = bool(out.get("connected_engines"))
-        for agent in out.get("coding_agents", []):
-            if agent.get("connected") or not agent.get("next_step"):
-                continue
-            if agent.get("installed") or not any_connected:
-                next_steps.append(f"{agent['name']}: {agent['next_step']}")
-        out["next_steps"] = next_steps or ["nothing outstanding — this install is set up."]
-        return out
+            view = setup_view.build(c, ctx.settings, pid)
+        next_steps: list[dict] = []
+        for repo in view["repository"]["repos"]:
+            if repo["pill"]["tone"] in ("red", "amber"):
+                next_steps.append({"row": "repository", "what": repo["full_name"],
+                                   "state": repo["pill"]["label"], "fix": repo["pill"]["tip"],
+                                   "href": "/?area=setup&focus=repository"})
+        if not view["repository"]["repos"]:
+            next_steps.append({"row": "repository", "state": "Not connected",
+                               "fix": "Paste a GitHub token in Repo and models.",
+                               "href": "/?area=setup&focus=repository"})
+        for model in view["models"]:
+            if model["pill"]["tone"] in ("red", "amber"):
+                next_steps.append({"row": "models", "what": model["label"],
+                                   "state": model["pill"]["label"], "fix": model["pill"]["tip"],
+                                   "href": f"/?area=setup&focus=models&source={model['source_id']}"})
+        if not view["models"]:
+            next_steps.append({"row": "models", "state": "Not connected",
+                               "fix": "Connect a subscription, an API key or a local model.",
+                               "href": "/?area=setup&focus=models"})
+        return {"project_id": pid, "view": view,
+                "verdict": view["verdict"],
+                "who_does_what": {j["job"]: (j["resolved"] or {}).get("label") or "nothing"
+                                  for j in view["jobs"]},
+                "next_steps": next_steps or [{"row": None, "state": "Ready",
+                                              "fix": "Nothing outstanding."}]}
 
     @reg.tool(
         "inspect_self",

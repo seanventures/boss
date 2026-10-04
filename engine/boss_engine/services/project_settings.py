@@ -157,6 +157,15 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "the API key from this install's environment when one is set.",
         "kind": "choice", "choices": "chat_engines",
     },
+    # THE CHAT'S MODEL ON A KEY OR A LOCAL MODEL. The Claude and Codex CLIs have their own
+    # model knobs above; every other chat engine reads `chat_model` (model_routing.adapter_for).
+    "chat_model": {
+        "attr": "chat_model",
+        "label": "Model for chat on a key",
+        "help": "Which model answers the chat when it runs on an API key or a local model. "
+                "Empty means the source's own default model.",
+        "kind": "choice", "choices": "models_for_harness:native",
+    },
     # WHO ANSWERS THE MULTIPLE-CHOICE QUESTIONS — a workflow's typed_decision step. "typesafe"
     # needs the project's own Jev key (Setup -> Model); without one, Claude decides. Every
     # attempt is reserved, leased and receipted before the call (BOSS-451).
@@ -186,12 +195,9 @@ MODEL_FOR_ENGINE = {
     "code_agent_low_cost_engine": "code_agent_low_cost_model",
 }
 
-#: Engines that can hold a CONVERSATION, as opposed to drive a coding CLI.
-#:
-#: Not the same set as the harnesses, and offering the harness list here would be a green tick
-#: over nothing: `make_agent_chat_adapter` honours exactly these three and sends everything
-#: else to the OpenAI adapter, so "openrouter" in this box would silently mean "OpenAI".
-CHAT_ENGINES = ("claude_code", "codex", "native")
+#: Engines that can hold a CONVERSATION, as opposed to drive a coding CLI: every engine
+#: `model_routing.adapter_for` builds a chat adapter for, on that source's own credential.
+from .model_routing import CHAT_ROUTABLE as CHAT_ENGINES  # noqa: E402
 
 def _harness_names() -> list[str]:
     try:

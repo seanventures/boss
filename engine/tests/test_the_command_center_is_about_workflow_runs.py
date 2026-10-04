@@ -155,7 +155,7 @@ def test_a_factory_build_out_of_model_capacity_is_a_notice_after_the_real_gates(
     first, last = out["needs_you"]
     assert first["decision_kind"] == "deploy_gate"
     assert last["decision_kind"] == "refusal" and last["actions"] == ["reject"]
-    assert last["fix_area"] == "setup" and last["fix_label"] == "Open Repo and model"
+    assert last["fix_area"] == "setup" and last["fix_label"] == "Fix in Repo and models"
 
 
 def test_an_unfinished_setup_step_is_a_readiness_gap():

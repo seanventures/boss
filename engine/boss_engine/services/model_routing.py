@@ -101,51 +101,236 @@ class ModelChoice:
 
 
 def choose(connection: Any, settings: Any, project_id: Optional[str]) -> ModelChoice:
-    """The source this project's model calls go to. Reads; never decrypts, never probes.
+    """The source this project's chat, agent and meeting calls go to — `resolve_job(..., "chat")`.
 
-    Order, most deliberate first:
-      1. the engine chosen for this project in the console (or `BOSS_CHAT_LLM_ENGINE`),
-      2. a subscription CLI the deployment named in `BOSS_LLM_ENGINE`,
-      3. an API key in the deployment's environment (an install configured the old way),
-      4. a source this project connected — a subscription or a stored key — preferring one
-         whose recorded capacity is not exhausted,
-      5. nothing: `engine == ""`.
+    Reads; never decrypts, never probes. The precedence is `resolve_job`'s, written down once.
     """
+    picked = resolve_job(connection, settings, project_id, "chat")
+    if not picked.engine:
+        return ModelChoice("", "nothing this project holds can answer")
+    return ModelChoice(picked.engine, picked.why, picked.source_id)
+
+
+# ── Who does what: one resolver for every job ─────────────────────────────────────────────────
+#
+# TWO RESOLVERS USED TO ANSWER "WHICH MODEL". `choose` (chat) preferred the deployment's
+# environment; `setup_service.build_engine_for` (builds) preferred the project's choice and then
+# a verified harness. So "which model writes my code, and does it cost money?" had two answers,
+# and a stale OPENAI_API_KEY in .env outranked the subscription the operator had just connected
+# in the console — Claude Code's own "stale key overrides subscription" trap. Now every job
+# resolves here, the console's job pickers show this answer as `Auto · <source>`, and the
+# precedence is:
+#
+#   1. the project's choice (a job picked in Repo and models), or the deployment's deliberate
+#      choice of engine, when that engine is connected;
+#   2. a working subscription with capacity;
+#   3. a working local model;
+#   4. a working metered key;
+#   5. a key in the install's environment (an install configured the old way);
+#   6. nothing.
+
+#: job -> (engine knob, model knob). Chat's model knob depends on its engine (`chat_model_knob`).
+JOB_KNOBS: dict[str, tuple[str, Optional[str]]] = {
+    "build": ("code_agent_engine", "code_agent_model"),
+    "review": ("code_review_engine", "code_review_model"),
+    "chat": ("chat_llm_engine", None),
+    "decisions": ("decision_backend", "decision_model"),
+    "hard": ("code_agent_strong_engine", "code_agent_strong_model"),
+    "routine": ("code_agent_low_cost_engine", "code_agent_low_cost_model"),
+}
+
+#: Jobs that, left on Auto, are done by whatever does Build — the runtime's own rule: an empty
+#: reviewer, hard-problems or routine lane means the implementer does it.
+FOLLOWS_BUILD = frozenset({"review", "hard", "routine"})
+
+#: Why a job resolved as it did.
+CHOSEN = "chosen for this project"
+AUTO = "auto"
+
+#: Tier order for Auto.
+_TIERS = ("subscription", "local", "metered")
+
+
+def chat_model_knob(engine: str) -> str:
+    """Which knob holds the chat job's model for `engine`."""
+    return {"claude_code": "claude_cli_model", "codex": "codex_cli_model"}.get(
+        _engine_name(engine), "chat_model")
+
+
+@dataclass(frozen=True)
+class JobResolution:
+    """Which source does a job, which model, and why."""
+
+    engine: str
+    model: Optional[str]
+    why: str
+    source_id: Optional[str] = None
+    #: subscription | local | metered | env | typesafe | "" — what the job costs to run.
+    kind: str = ""
+
+    @property
+    def metered(self) -> bool:
+        return self.kind in ("metered", "env", "typesafe")
+
+
+def _chosen(connection: Any, project_id: Optional[str], key: str) -> Any:
     from . import project_settings
 
+    if not project_id or connection is None:
+        return None
     try:
-        chosen = project_settings.effective(connection, project_id or "", settings,
-                                            "chat_llm_engine")
-    except Exception:  # noqa: BLE001 — an unreachable settings table is not an answer
-        chosen = getattr(settings, "chat_llm_engine", "")
-    chosen = _engine_name(chosen)
-    if chosen in CHAT_ROUTABLE:
-        return ModelChoice(chosen, "chosen for this project")
-    legacy = _engine_name(getattr(settings, "llm_engine", ""))
-    if legacy in ("claude_code", "codex"):
-        return ModelChoice(legacy, ENVIRONMENT)
-    if str(getattr(settings, "openai_api_key", "") or "").strip():
-        return ModelChoice("native", ENVIRONMENT)
-    if all(str(getattr(settings, a, "") or "").strip() for a in (
-            "azure_openai_key", "azure_openai_endpoint", "azure_openai_deployment")):
-        return ModelChoice("azure", ENVIRONMENT)
+        return project_settings.get_all(connection, project_id).get(key)
+    except Exception:  # noqa: BLE001 — an unreachable settings table is not a choice
+        return None
+
+
+def _env_kind(engine: str, found: dict[str, Any]) -> str:
+    if engine in ("ollama", "vllm"):
+        return "local"
+    if found.get("env_attr") == "claude_code_oauth_token":
+        return "subscription"
+    return "env"
+
+
+def _auto(connected: dict[str, dict[str, Any]], routable: Optional[tuple[str, ...]]
+          ) -> Optional[tuple[str, dict[str, Any]]]:
+    """Auto's pick from what this project has connected, by tier."""
+    order = list(CHAT_ROUTABLE) + sorted(e for e in connected if e not in CHAT_ROUTABLE)
+    names = [e for e in order if e in connected and (routable is None or e in routable)]
+    if not names:
+        return None
+    # A PROVEN HARNESS BEFORE A DECLARED ONE. `verified` means a governed task has completed
+    # on it; choosing an unproven adapter by default would present a hypothesis as a decision.
     try:
-        # Through the module: one lookup, patched in one place.
+        from .harness_registry import available_harnesses
+
+        unproven = {h["name"] for h in available_harnesses() if not h.get("verified")}
+    except Exception:  # noqa: BLE001
+        unproven = set()
+    names = [e for e in names if e not in unproven] + [e for e in names if e in unproven]
+    for group in ([e for e in names if e not in unproven], [e for e in names if e in unproven]):
+        for tier in _TIERS:
+            for engine in group:
+                found = connected[engine]
+                kind = found.get("kind") or "metered"
+                if kind != tier or found.get("working") is False:
+                    continue
+                if not (found.get("capacity") or {}).get("available", True):
+                    continue
+                return engine, found
+    for engine in names:                                   # 5. the environment
+        found = connected[engine]
+        if (found.get("kind") or "") == "env":
+            return engine, found
+    # Everything connected is at capacity or failing: the least-bad, so the failure the job
+    # meets names the source rather than "no model".
+    for engine in names:
+        found = connected[engine]
+        if found.get("working") is not False:
+            return engine, found
+    return names[0], connected[names[0]]
+
+
+def resolve_job(connection: Any, settings: Any, project_id: Optional[str], job: str
+                ) -> JobResolution:
+    """Which source does `job` on this project (see the precedence above). Reads only."""
+    if job not in JOB_KNOBS:
+        raise ValueError(f"unknown job {job!r}; one of: {', '.join(JOB_KNOBS)}")
+    if job == "decisions":
+        return _resolve_decisions(connection, settings, project_id)
+    if job in FOLLOWS_BUILD and not _chosen(connection, project_id, JOB_KNOBS[job][0]):
+        built = resolve_job(connection, settings, project_id, "build")
+        return JobResolution(built.engine, built.model, built.why if built.why != CHOSEN
+                             else "same as Build", built.source_id, built.kind)
+    try:
         from . import setup_service
 
         connected = setup_service.connected_engines(connection, settings, project_id or "")
     except Exception:  # noqa: BLE001 — a lookup failure must not fail the work it serves
-        connected = {}
-    candidates = [e for e in CHAT_ROUTABLE if e in connected]
-    # CAPACITY. A subscription recorded as exhausted (provider_limits) is connected and cannot
-    # answer until its window resets; another connected source can. Used only when one is.
-    ready = [e for e in candidates
-             if (connected[e].get("capacity") or {}).get("available", True)]
-    for engine in ready or candidates:
-        found = connected[engine]
-        return ModelChoice(engine, str(found.get("why") or "connected"),
-                           found.get("source_id"))
-    return ModelChoice("", "nothing this project holds can answer")
+        # The database could not say; the install's own settings still can.
+        from . import setup_service
+
+        connected = setup_service.environment_engines(settings)
+    engine_knob, model_knob = JOB_KNOBS[job]
+    routable = CHAT_ROUTABLE if job == "chat" else None
+
+    def kind_of(engine: str) -> str:
+        found = connected.get(engine) or {}
+        kind = found.get("kind") or ""
+        return _env_kind(engine, found) if kind == "env" else kind
+
+    def model_for(engine: str, knob: Optional[str]) -> Optional[str]:
+        if knob is None:
+            knob = chat_model_knob(engine)
+        chosen = _chosen(connection, project_id, knob)
+        return str(chosen) if chosen else None
+
+    # 1. The project's choice — or the deployment's own deliberate choice of engine.
+    # A choice is honoured while its engine is connected (or nothing is): a job pointed at a
+    # source this install holds no credential for would fail inside the run, so Auto stands in.
+    picked = _engine_name(_chosen(connection, project_id, engine_knob))
+    if picked and (picked in connected or not connected) \
+            and (routable is None or picked in routable):
+        return JobResolution(picked, model_for(picked, model_knob), CHOSEN,
+                             (connected.get(picked) or {}).get("source_id"), kind_of(picked))
+    deployment = _engine_name(getattr(settings, JOB_KNOBS[job][0], "") or "")
+    from .setup_service import _set_deliberately
+
+    if job == "chat":
+        if deployment in CHAT_ROUTABLE and _set_deliberately(settings, "chat_llm_engine"):
+            return JobResolution(deployment, model_for(deployment, None), CHOSEN,
+                                 (connected.get(deployment) or {}).get("source_id"),
+                                 kind_of(deployment))
+        legacy = _engine_name(getattr(settings, "llm_engine", ""))
+        if legacy in ("claude_code", "codex"):
+            return JobResolution(legacy, model_for(legacy, None), ENVIRONMENT,
+                                 (connected.get(legacy) or {}).get("source_id"), kind_of(legacy))
+    elif deployment and deployment in connected and _set_deliberately(settings, engine_knob):
+        return JobResolution(deployment, model_for(deployment, model_knob), ENVIRONMENT,
+                             (connected.get(deployment) or {}).get("source_id"),
+                             kind_of(deployment))
+    # 2-5. Auto.
+    found = _auto(connected, routable)
+    if found is None:
+        if job == "chat" and all(str(getattr(settings, a, "") or "").strip() for a in (
+                "azure_openai_key", "azure_openai_endpoint", "azure_openai_deployment")):
+            return JobResolution("azure", None, ENVIRONMENT, None, "env")
+        return JobResolution("", None, "nothing this project holds can answer")
+    engine, detail = found
+    why = ENVIRONMENT if (detail.get("kind") == "env") else str(detail.get("why") or "connected")
+    return JobResolution(engine, model_for(engine, model_knob), why, detail.get("source_id"),
+                         kind_of(engine))
+
+
+def _resolve_decisions(connection: Any, settings: Any, project_id: Optional[str]
+                       ) -> JobResolution:
+    """Decisions run on TypeSafe Jev (with a key) or the Claude Code subscription."""
+    from . import project_settings
+
+    chosen = str(_chosen(connection, project_id, "decision_backend") or "").strip().lower()
+    model = _chosen(connection, project_id, "decision_model")
+    try:
+        from .typed_decisions import typesafe_decides
+
+        effective = project_settings.applied(connection, project_id, settings)
+        jev = bool(typesafe_decides(effective))
+    except Exception:  # noqa: BLE001
+        jev = False
+    why = CHOSEN if chosen else AUTO
+    if jev and chosen != "claude":
+        return JobResolution("typesafe", None, why, "typesafe_jev", "typesafe")
+    try:
+        from . import setup_service
+
+        claude = setup_service.connected_engines(connection, settings, project_id or "") \
+            .get("claude_code")
+    except Exception:  # noqa: BLE001
+        claude = None
+    if not claude:
+        return JobResolution("", None, "nothing this project holds can decide")
+    kind = claude.get("kind") or "subscription"
+    return JobResolution("claude_code", str(model) if model else None, why,
+                         claude.get("source_id"), "metered" if kind == "env" else kind)
 
 
 def routed_settings(connection: Any, settings: Any, project_id: Optional[str]) -> Any:
@@ -465,7 +650,7 @@ class ProviderRequirement:
 
     @property
     def fix(self) -> str:
-        return (f"Connect an {self.provider} key for {self.capability} in Repo and model. "
+        return (f"Connect an {self.provider} key for {self.capability} in Repo and models. "
                 f"A subscription or another provider's key does not do {self.capability}.")
 
 
