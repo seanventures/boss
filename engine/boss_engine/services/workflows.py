@@ -2825,6 +2825,10 @@ def start_run(
     )
     _activate_step(connection, run_id, spec["entry_step"], 0)
     _drain_control_steps(connection, run_id)
+    # SIGNED FROM THE FIRST MOMENT: the person who started the run is the root of its chain.
+    from . import agent_acts
+
+    agent_acts.quietly(connection, "sign the run's start", agent_acts.sync_run, run_id)
     result = get_run(connection, project_id, run_id)
     result["duplicate"] = False
     return result

@@ -6334,6 +6334,21 @@ ALTER TABLE llm_calls   ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+-- THE LEDGER'S HOT PATHS, each served by an index rather than a scan of a table kept forever.
+-- close_act rolls up an act's calls on every close (each step settle, each build stage change
+-- inside a model call's commit, each chat turn); _live_cost and the Act card read the same way.
+CREATE INDEX IF NOT EXISTS idx_llm_calls_act ON llm_calls(act_id) WHERE act_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_turns_act ON agent_turns(act_id) WHERE act_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_messages_act ON agent_messages(act_id) WHERE act_id IS NOT NULL;
+-- stage_act runs on every model call a build makes; a panel's seats and its step; a subject's
+-- acts (a build's root, a panel's root, a step's act by its row); an approval by its decision.
+CREATE INDEX IF NOT EXISTS agent_acts_code_task ON agent_acts(code_task_run_id) WHERE code_task_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS agent_acts_meeting ON agent_acts(meeting_run_id) WHERE meeting_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS agent_acts_subject ON agent_acts(subject_kind, subject_id);
+CREATE INDEX IF NOT EXISTS agent_acts_decision ON agent_acts(decision_id) WHERE decision_id IS NOT NULL;
+-- Presence's idle line: each agent's last ended act, one probe per agent, never a sort of the
+-- project's whole history.
+CREATE INDEX IF NOT EXISTS agent_acts_role_ended ON agent_acts(project_id, role_key, ended_at DESC) WHERE ended_at IS NOT NULL;
 
 -- TALKING WITH AGENTS (spec §0.2 A, stream S-converse). A conversation is a 1:1 talk, a "plan it
 -- with <agent>" that ends in a start proposal, or a room of 2-5 SMEs. Its own tables rather than
