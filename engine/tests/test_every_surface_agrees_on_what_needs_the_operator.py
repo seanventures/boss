@@ -290,3 +290,118 @@ def test_the_shared_reader_adds_the_answerable_expired_ones_only_when_asked():
     got = {r["id"] for r in da.waiting_on_operator(_CandidateConn(), "p", now=NOW,
                                                    include_expired=True)}
     assert got == {r["id"] for r, where in CASES if where in ("needs_action", "expired")}
+
+
+# ---------------------------------------------------------------------------------------------
+# AGENTS › LIVE AND THE TOP-BAR PILL COUNT THE SAME LIST (agents-home spec §6.3, §8.1).
+#
+# The pill counted AGENTS in a needs-you state, from open acts: three gates on one agent said
+# "1 needs you" while Approvals said 3, and a pull request or a refusal with no agent was never
+# counted. Live's cards and the pill now read command_center.assemble().needs_you through
+# agents_live_board — attributed, never re-derived — so the counts are one number.
+# ---------------------------------------------------------------------------------------------
+
+def _failed_run():
+    run = {"id": "wfr_failed", "status": "failed", "workflow_key": "ship", "workflow_name": "Ship",
+           "input": {"title": "Ship it #180"}, "created_at": NOW - timedelta(hours=1),
+           "updated_at": NOW - timedelta(minutes=5), "completed_at": None,
+           "spec": {"steps": [{"id": "plan"}, {"id": "build"}, {"id": "test"}]}}
+    steps = [{"workflow_run_id": "wfr_failed", "step_id": "plan", "status": "succeeded"},
+             {"workflow_run_id": "wfr_failed", "step_id": "build", "status": "failed",
+              "last_error": "tests failed", "completed_at": NOW - timedelta(minutes=5)}]
+    answers = [{"key": "retry_step", "label": "Retry", "state": "enabled", "step_id": "build"},
+               {"key": "skip_step", "label": "Skip", "state": "enabled", "step_id": "build"}]
+    return run, steps, {"wfr_failed": [(steps[1], answers)]}
+
+
+def _board_attention(monkeypatch, needs_you, decisions, *, owner=None):
+    from boss_engine.services import agent_acts, agents_live_board
+
+    monkeypatch.setattr(agent_acts, "owners_of_decisions",
+                        lambda c, p, ids: {i: owner for i in ids})
+    monkeypatch.setattr(agent_acts, "step_owners",
+                        lambda c, p, pairs: {pair: "software_engineer" for pair in pairs})
+    return agents_live_board.attention_items(None, "p", needs_you, decisions)
+
+
+def test_live_and_the_pill_count_exactly_what_the_command_center_counts(monkeypatch):
+    rows = [row for row, _ in CASES]
+    # Three gates on ONE agent: the pill used to say 1.
+    rows += [decision(f"gate_{n}", "pending", recommendation={
+        "action": "workflow_step_gate", "workflow_run_id": "wfr_x"}) for n in range(3)]
+    run, steps, stopped = _failed_run()
+    out = cc.assemble(project_id="p", runs=[run], steps=steps, decisions=rows,
+                      readiness=[{"id": "model", "title": "Connect a model", "done": False}],
+                      names={}, now=NOW, stopped=stopped)
+    attention = _board_attention(monkeypatch, out["needs_you"], rows, owner="media_publisher")
+    assert [a["id"] for a in attention] == [n["id"] for n in out["needs_you"]]
+    assert len(attention) == out["counts"]["needs_you"]
+    inbox = {r["id"] for r in rows if da.describe(r, NOW)["attention"] == "needs_action"}
+    assert {a["id"] for a in attention if a["kind"] == "approval"} == inbox
+    assert out["counts"]["needs_you"] == len(inbox) + 1 + 1  # + the failed step + the setup gap
+    failed = next(a for a in attention if a["kind"] == "failed_step")
+    assert failed["id"] == "run:wfr_failed:build"
+    assert [x["label"] for x in failed["answers"]] == ["Retry", "Skip"]
+    assert failed["run"]["step_index"] == 2 and failed["run"]["step_count"] == 3
+
+
+def test_a_card_decides_in_place_only_where_the_server_allows(monkeypatch):
+    from boss_engine.services.agents_live_board import decide_inline
+
+    rows = [
+        decision("low_gate", "pending", risk_tier=1,
+                 recommendation={"action": "workflow_step_gate", "workflow_run_id": "r"}),
+        decision("high_gate", "pending", risk_tier=3,
+                 recommendation={"action": "workflow_step_gate", "workflow_run_id": "r"}),
+        decision("pr", "pending", risk_tier=1, recommendation={"action": "review_pull_request"}),
+        decision("unhashed", "pending", risk_tier=1, recommendation={
+            "action": "workflow_step_gate", "workflow_run_id": "r",
+            "action_preview": {"kind": "email", "title": "Weekly", "content_hash": None}}),
+        decision("hashed", "pending", risk_tier=2, recommendation={
+            "action": "workflow_step_gate", "workflow_run_id": "r",
+            "action_preview": {"kind": "email", "title": "Weekly", "content_hash": "sha:1"}}),
+    ]
+    out = cc.assemble(project_id="p", runs=[], steps=[], decisions=rows, readiness=[],
+                      names={}, now=NOW)
+    got = {a["id"]: a for a in _board_attention(monkeypatch, out["needs_you"], rows)}
+    assert got["low_gate"]["decide_inline"] is True
+    assert got["high_gate"]["decide_inline"] is False
+    assert got["pr"]["decide_inline"] is False
+    assert got["unhashed"]["decide_inline"] is False
+    assert got["hashed"]["decide_inline"] is True
+    assert got["hashed"]["content_hash"] == "sha:1" and got["hashed"]["preview"] == "Weekly"
+    # The buttons are the engine's own offer, label and effect included.
+    labels = [a["label"] for a in got["low_gate"]["actions"]]
+    assert labels and labels == [a["label"] for a in da.allowed_actions(rows[0])]
+    assert all(isinstance(a["needs"], list) for a in got["low_gate"]["actions"])
+    assert decide_inline("refusal", 1, got["low_gate"]["actions"], False, None) is False
+
+
+def test_a_decision_with_no_known_agent_is_nobodys():
+    """Attribution is the act linked to the decision, its parent, or the step's named captain;
+    otherwise None — a card shows BOSS or You, never a guessed face."""
+    from boss_engine.services import agents_live_board
+
+    out = cc.assemble(project_id="p", runs=[], steps=[], decisions=[decision("lonely", "pending")],
+                      readiness=[], names={}, now=NOW)
+
+    class Conn:
+        def execute(self, statement, params=None):
+            class _R:
+                def mappings(self):
+                    return self
+
+                def all(self):
+                    return []
+            return _R()
+
+    got = agents_live_board.attention_items(Conn(), "p", out["needs_you"], [])
+    assert got[0]["role_key"] is None
+
+
+def test_the_live_readers_are_in_the_scan():
+    """agents_live_board and agent_acts read attention; the scan above must cover them."""
+    found = {path for base in SCANNED for path in
+             (str(p.relative_to(ROOT)) for p in (ROOT / base).rglob("*.py"))}
+    assert "engine/boss_engine/services/agents_live_board.py" in found
+    assert "engine/boss_engine/services/agent_acts.py" in found

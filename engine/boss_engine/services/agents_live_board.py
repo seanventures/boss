@@ -16,7 +16,13 @@ payload (apps/api/tests/test_the_live_board_tells_the_truth.py scans for them).
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, TypedDict
+import hashlib
+import json
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal, Mapping, Optional, TypedDict
+
+from sqlalchemy import text
 
 MissionState = Literal["running", "waiting_you", "waiting_person", "waiting", "stopped",
                        "blocked", "done"]
@@ -69,6 +75,7 @@ class Hop(TypedDict, total=False):
     edge_label: str
     how: str
     inside: int                  # acts folded inside this hop
+    gate: bool                   # a gate's own act, waiting on a person (no agent)
     loop: dict[str, Any]         # {a, b, rounds} instead of a hop
     fold: dict[str, int]         # {hidden: n} — hops folded out of a long lane
 
@@ -159,6 +166,804 @@ class LiveBoard(TypedDict):
     agents: list[BoardAgent]
 
 
-def build(connection: Any, settings: Any, project_id: str) -> LiveBoard:
-    """The whole Live tab in one read. Implemented by stream S1."""
-    raise NotImplementedError("agents_live_board.build is S1's")
+# ── policy ───────────────────────────────────────────────────────────────────────────────────
+
+#: Decision kinds a card may approve or reject in place (spec §4.2). A pull request, a refusal
+#: (a notice with guidance) and anything else go to Approvals with `Review ↗`.
+INLINE_KINDS = frozenset({"workflow_gate", "deploy_gate", "general"})
+#: The highest risk tier a card may decide inline. Above it, the decision needs a closer look.
+INLINE_MAX_RISK = 2
+#: How long a finished run stays on Live, so a finish is seen.
+JUST_FINISHED = timedelta(minutes=10)
+#: Outcomes reach back this far.
+OUTCOME_WINDOW = timedelta(hours=24)
+#: The most runs whose chain one read draws. Past it a row keeps its words, not its faces.
+CHAIN_CAP = 25
+#: A lane longer than this folds: the first 2 hops, `+n`, the last 4 (spec §4.3).
+LANE_MAX = 7
+LANE_HEAD, LANE_TAIL = 2, 4
+OUTCOMES_MAX = 8
+NEXT_MAX = 4
+
+
+def _iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _aware(value: Any) -> Optional[datetime]:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _rec(decision: Mapping[str, Any]) -> dict[str, Any]:
+    rec = decision.get("recommendation")
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            rec = {}
+    return rec if isinstance(rec, dict) else {}
+
+
+def _needs(action: Mapping[str, Any]) -> list[str]:
+    needs = action.get("needs")
+    if isinstance(needs, (list, tuple)):
+        return [str(n) for n in needs if n]
+    return [str(needs)] if needs else []
+
+
+def _preview_line(preview: Mapping[str, Any]) -> Optional[str]:
+    """One short line naming what approving will do, from the preview's own fields."""
+    if not preview or preview.get("kind") == "unresolved":
+        return None
+    for key in ("title", "subject", "summary", "name", "filename"):
+        value = preview.get(key)
+        if isinstance(value, str) and value.strip():
+            line = value.strip().splitlines()[0]
+            return line if len(line) <= 120 else line[:119].rstrip() + "…"
+    return None
+
+
+def decide_inline(kind: Optional[str], risk_tier: Any, actions: list[dict[str, Any]],
+                  has_preview: bool, content_hash: Optional[str]) -> bool:
+    """THE INLINE-DECIDE RULE (spec §4.2), decided here and never by the web: a workflow gate,
+    deploy gate or general decision, at risk tier 2 or below, whose approve and reject need
+    nothing more (no note, no name), and — when approving is approving content — with the
+    hash of the content the card shows."""
+    if kind not in INLINE_KINDS:
+        return False
+    try:
+        if risk_tier is None or int(risk_tier) > INLINE_MAX_RISK:
+            return False
+    except (TypeError, ValueError):
+        return False
+    drawn = [a for a in actions if a.get("action") in ("approve", "reject")]
+    if not any(a.get("action") == "approve" for a in drawn):
+        return False
+    if any(_needs(a) for a in drawn):
+        return False
+    if has_preview and not content_hash:
+        return False
+    return True
+
+
+# ── attention: the Command Center's needs_you, attributed ────────────────────────────────────
+
+
+def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, Any]],
+                    decisions: list[Mapping[str, Any]]) -> list[AttentionItem]:
+    """`command_center.assemble().needs_you`, in its order, with who each is about and whether
+    the card may decide it. Nothing is re-derived: the fields pass through."""
+    from . import agent_acts
+
+    by_id = {str(d.get("id")): d for d in decisions}
+    owners = agent_acts.owners_of_decisions(
+        connection, project_id,
+        [str(n.get("decision_id")) for n in needs_you if n.get("kind") == "approval"])
+    step_owner = agent_acts.step_owners(
+        connection, project_id,
+        [(str(n.get("run_id")), str(n.get("step_id"))) for n in needs_you
+         if n.get("kind") == "failed_step"])
+    out: list[AttentionItem] = []
+    for n in needs_you:
+        kind = str(n.get("kind"))
+        item: AttentionItem = {
+            "id": str(n.get("id")), "kind": kind,  # type: ignore[typeddict-item]
+            "decision_kind": n.get("decision_kind"),
+            "decision_id": n.get("decision_id"),
+            "title": str(n.get("title") or ""),
+            "detail": str(n.get("detail") or ""),
+            "what_to_do": n.get("what_to_do"),
+            "role_key": None,
+            "run": n.get("run"),
+            "actions": [],
+            "answers": [],
+            "decide_inline": False,
+            "content_hash": None,
+            "preview": None,
+            "risk_tier": n.get("risk_tier"),
+            "fix": ({"area": str(n["fix_area"]), "label": "Fix"} if n.get("fix_area") else None),
+            "at": n.get("at"),
+        }
+        if kind == "approval":
+            decision = by_id.get(str(n.get("decision_id"))) or {}
+            actions = [{"action": str(a.get("action")), "label": str(a.get("label") or ""),
+                        "tone": str(a.get("tone") or ""), "effect": str(a.get("effect") or ""),
+                        "needs": _needs(a)} for a in n.get("allowed_actions") or []]
+            preview = _rec(decision).get("action_preview")
+            preview = preview if isinstance(preview, dict) else {}
+            content_hash = preview.get("content_hash") or None
+            item["actions"] = actions  # type: ignore[typeddict-item]
+            item["content_hash"] = content_hash
+            item["preview"] = _preview_line(preview)
+            item["role_key"] = owners.get(str(n.get("decision_id")))
+            item["decide_inline"] = decide_inline(
+                n.get("decision_kind"), n.get("risk_tier"), actions, bool(preview),
+                content_hash)
+        elif kind == "failed_step":
+            item["role_key"] = step_owner.get((str(n.get("run_id")), str(n.get("step_id"))))
+            item["answers"] = [
+                {"key": a.get("key"), "label": a.get("label"),
+                 "enabled": a.get("state", "enabled") == "enabled",
+                 **({"reason": a["reason"]} if a.get("reason") else {}),
+                 "step_id": a.get("step_id") or n.get("step_id")}
+                for a in n.get("answers") or []]
+        out.append(item)
+    return out
+
+
+def enrich(connection: Any, project_id: str, cc: dict[str, Any],
+           read: Mapping[str, Any]) -> dict[str, Any]:
+    """The Command Center's cards and running rows, attributed the way Live's are.
+
+    Each `needs_you` item gains `role_key`, `decide_inline`, `content_hash`, `preview` and the
+    full `allowed_actions` ({action, label, tone, effect, needs: [...]}) — `actions` stays the
+    list of names older readers use — and each `running` row gains `verb` (work_verb of its
+    newest open work) and `role_key`. In place; returns `cc`. Never fails the page."""
+    from . import agent_acts
+
+    try:
+        with connection.begin_nested():
+            items = attention_items(connection, project_id, cc.get("needs_you") or [],
+                                    read.get("decisions") or [])
+            for item, attributed in zip(cc.get("needs_you") or [], items):
+                item["role_key"] = attributed.get("role_key")
+                item["decide_inline"] = bool(attributed.get("decide_inline"))
+                item["content_hash"] = attributed.get("content_hash")
+                item["preview"] = attributed.get("preview")
+                if item.get("kind") == "approval":
+                    item["allowed_actions"] = attributed.get("actions") or []
+            running = cc.get("running") or []
+            ids = [str(r["run_id"]) for r in running]
+            newest: dict[str, dict[str, Any]] = {}
+            if ids:
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT DISTINCT ON (workflow_run_id) *
+                        FROM agent_acts
+                        WHERE project_id = :p AND workflow_run_id = ANY(:ids)
+                          AND ended_at IS NULL AND kind NOT IN ('run', 'approval')
+                        ORDER BY workflow_run_id, started_at DESC
+                        """
+                    ),
+                    {"p": project_id, "ids": ids},
+                ).mappings().all():
+                    newest[str(row["workflow_run_id"])] = dict(row)
+            verbs = agent_acts.verbs_for(connection, list(newest.values()))
+            waiting_you = {str(a.get("id")) for a in items}
+            for r in running:
+                act = newest.get(str(r["run_id"]))
+                status = str(r.get("status") or "")
+                step = r.get("step_status")
+                if status == "blocked":
+                    r["verb"] = "Blocked"
+                elif act is not None:
+                    r["verb"] = verbs.get(str(act["act_id"])) or agent_acts.work_verb(act)
+                elif step == "waiting":
+                    r["verb"] = "Waiting"
+                else:
+                    r["verb"] = "Working"
+                if r["verb"] == "Needs you" and not any(
+                        i.get("run", {}) and (i.get("run") or {}).get("id") == r["run_id"]
+                        and i["id"] in waiting_you for i in items):
+                    r["verb"] = "Waiting"
+                r["role_key"] = (act or {}).get("role_key") or (r.get("agent") or {}).get(
+                    "role_key")
+    except Exception:  # noqa: BLE001 — attribution is never worth a blank landing page
+        import logging
+
+        logging.getLogger("boss.agents_live_board").warning(
+            "could not attribute the Command Center", exc_info=True)
+    return cc
+
+
+# ── missions: one row per run on Live ────────────────────────────────────────────────────────
+
+
+def _person_of(act: Mapping[str, Any]) -> Optional[str]:
+    if act.get("kind") in ("run", "approval") and act.get("handed_by_kind") == "person":
+        return act.get("handed_by_id") or act.get("accountable")
+    return act.get("accountable") or act.get("handed_by_id")
+
+
+def act_state(act: Mapping[str, Any]) -> str:
+    """chain-model.ts actState: what an act's status looks like on a face."""
+    status = str(act.get("status") or "")
+    if act.get("kind") == "run" and status not in ("error", "stale"):
+        return "idle"
+    return {"active": "speaking" if act.get("kind") == "seat" else "working",
+            "awaiting_input": "needs_you", "complete": "done", "error": "stuck",
+            "stale": "stuck"}.get(status, "idle")
+
+
+def _short(label: Any) -> str:
+    text_value = str(label or "")
+    return (text_value.split(" · ")[0] or text_value).strip()
+
+
+def lane(acts: list[dict[str, Any]], *, viewer: Optional[str] = None) -> list[Hop]:
+    """A run's chain as Live's lane: depth-0 hops, folded the way chain-model.ts folds.
+
+    The root (whoever started it) first; then the work that stands on its own, in start order,
+    each with how much of its own inner work (stages, seats, a sub-run) folds under it; a
+    back-and-forth between two agents on the same work said once as a loop; and a lane longer
+    than LANE_MAX folded to its first LANE_HEAD hops, `+n`, and its last LANE_TAIL."""
+    from .agent_acts import _label_for
+
+    if not acts:
+        return []
+    by_id = {a["act_id"]: a for a in acts}
+    root = next((a for a in acts if a.get("kind") == "run"
+                 and (not a.get("parent_act_id") or a["parent_act_id"] not in by_id)), None) \
+        or next((a for a in acts if not a.get("parent_act_id")
+                 or a["parent_act_id"] not in by_id), acts[0])
+    children: dict[str, list[dict[str, Any]]] = {}
+    for a in acts:
+        if a is root or not a.get("parent_act_id"):
+            continue
+        children.setdefault(a["parent_act_id"], []).append(a)
+
+    def nested(a: Mapping[str, Any]) -> bool:
+        parent_id = a.get("parent_act_id")
+        if not parent_id or parent_id == root["act_id"]:
+            return False
+        parent = by_id.get(parent_id)
+        if parent is None:
+            return False
+        if parent.get("kind") in ("stage", "seat"):
+            return True
+        return a.get("kind") in ("stage", "seat", "run", "chat") and parent.get("kind") != "run"
+
+    def inside(act_id: str) -> int:
+        count, todo, seen = 0, [act_id], {act_id}
+        while todo:
+            for child in children.get(todo.pop(), []):
+                if nested(child) and child["act_id"] not in seen:
+                    seen.add(child["act_id"])
+                    count += 1
+                    todo.append(child["act_id"])
+        return count
+
+    def hop(a: Mapping[str, Any]) -> Hop:
+        out: Hop = {"act_id": a["act_id"], "role_key": a.get("role_key"),
+                    "state": act_state(a), "label": _short(a.get("label")),
+                    "edge_label": _label_for(dict(a), viewer), "how": str(a.get("how") or "")}
+        if not a.get("role_key"):
+            out["person"] = _person_of(a)
+            if a.get("kind") == "step" and a.get("status") == "awaiting_input":
+                # A gate waiting on a person: a real act, flagged so the lane draws it as the
+                # amber `You` hop rather than adding one of its own.
+                out["gate"] = True
+        n = inside(a["act_id"])
+        if n:
+            out["inside"] = n
+        return out
+
+    # CAUSAL ORDER, as agent_acts.chain walks it: each act after the act that handed it the
+    # work. A gate is never claimed, so its start is when its row was made — often before the
+    # step that released it — and a clock order put the gate ahead of the work it holds.
+    def started(a: Mapping[str, Any]) -> tuple:
+        return (_aware(a.get("started_at")) or datetime.max.replace(tzinfo=timezone.utc),
+                a["act_id"])
+
+    walk: dict[str, int] = {}
+    stack = [root]
+    while stack:  # depth first, iteratively: a long loop of rounds is a deep chain
+        a = stack.pop()
+        if a["act_id"] in walk:
+            continue
+        walk[a["act_id"]] = len(walk)
+        stack.extend(sorted(children.get(a["act_id"], []), key=started, reverse=True))
+    main = sorted((a for a in acts if a is not root and not nested(a)),
+                  key=lambda a: (walk.get(a["act_id"], len(walk)), started(a)))
+    first = hop(root)
+    if root.get("kind") == "run":
+        first["label"] = "Started"
+    items: list[Hop] = [hop(a) for a in main]
+
+    def key(h: Hop) -> str:
+        return str(h.get("role_key") or f"person:{h.get('person') or ''}")
+
+    def work(h: Hop, a: Mapping[str, Any]) -> str:
+        return str(a.get("step_id") or h.get("label") or "")
+
+    works = [work(h, a) for h, a in zip(items, main)]
+    collapsed: list[Hop] = []
+    i = 0
+    while i < len(items):
+        x = items[i]
+        y = items[i + 1] if i + 1 < len(items) else None
+        if y is not None and key(x) != key(y):
+            j = i + 2
+            while j < len(items) and key(items[j]) == key(items[j - 2]) \
+                    and works[j] == works[j - 2]:
+                j += 1
+            if j - i >= 4:
+                collapsed.append({"loop": {"a": x.get("role_key") or key(x),
+                                           "b": y.get("role_key") or key(y),
+                                           "rounds": (j - i + 1) // 2}})
+                i = j
+                continue
+        collapsed.append(x)
+        i += 1
+    whole = [first, *collapsed]
+    if len(whole) > LANE_MAX:
+        hidden = len(whole) - LANE_HEAD - LANE_TAIL
+        whole = [*whole[:LANE_HEAD], {"fold": {"hidden": hidden}}, *whole[-LANE_TAIL:]]
+    return whole
+
+
+def _chains(connection: Any, project_id: str,
+            run_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Every act of these runs' chains, in one read: {run_id: [act rows, by start]}."""
+    if not run_ids:
+        return {}
+    rows = [dict(r) for r in connection.execute(
+        text(
+            """
+            WITH roots AS (
+                SELECT DISTINCT ON (workflow_run_id) workflow_run_id, root_act_id
+                FROM agent_acts
+                WHERE project_id = :p AND kind = 'run' AND workflow_run_id = ANY(:ids)
+                ORDER BY workflow_run_id, started_at
+            )
+            SELECT roots.workflow_run_id AS chain_of, a.*
+            FROM roots JOIN agent_acts a ON a.root_act_id = roots.root_act_id
+            ORDER BY a.started_at, a.act_id
+            """
+        ),
+        {"p": project_id, "ids": run_ids},
+    ).mappings().all()]
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        out.setdefault(str(row.pop("chain_of")), []).append(row)
+    return out
+
+
+def _next_steps(spec_steps: Mapping[str, Mapping[str, Any]], started: set[str],
+                names_role: Any) -> list[NextHop]:
+    """Who the workflow names for the steps not started yet — the spec's captains, nothing
+    guessed. An agent step BOSS will pick for is `Auto` (role_key None)."""
+    from . import command_center
+
+    out: list[NextHop] = []
+    for sid, step in spec_steps.items():
+        if sid in started or len(out) >= NEXT_MAX:
+            continue
+        kind = str(step.get("kind") or "capability")
+        if kind not in ("capability", "subworkflow"):
+            continue
+        binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+        named = str(step.get("captain") or binding.get("agent") or "").strip().lower()
+        label = command_center.step_label(step, sid)
+        if named and named != "human":
+            out.append({"role_key": names_role(named), "step_label": label, "named": True})
+        elif binding.get("agent_work"):
+            out.append({"role_key": None, "step_label": label, "named": False})
+    return out
+
+
+_SORT = {"waiting_you": 0, "stopped": 1, "blocked": 2, "running": 3, "waiting_person": 3,
+         "waiting": 3, "done": 4}
+
+
+def missions(connection: Any, project_id: str, read: Mapping[str, Any],
+             attention: list[AttentionItem], *, now: datetime,
+             viewer: Optional[str] = None) -> list[Mission]:
+    """One row per run on Live: active, stopped and compensating runs, and runs completed in
+    the last JUST_FINISHED. From the rows command_center.read already holds; chains in one read."""
+    from . import agent_acts, command_center, workflows
+    from .workflow_run_actions import standing
+
+    by_run: dict[str, list[Mapping[str, Any]]] = {}
+    for step in read["steps"]:
+        by_run.setdefault(str(step.get("workflow_run_id")), []).append(step)
+    attention_ids = {str(a.get("id")) for a in attention}
+    rows: list[Mission] = []
+    for run in read["runs"]:
+        status = str(run.get("status") or "")
+        place = standing(status)
+        finished = _aware(run.get("completed_at")) or _aware(run.get("updated_at"))
+        just_done = status == "completed" and finished is not None \
+            and now - finished <= JUST_FINISHED
+        if place == "closed" and not just_done:
+            continue
+        spec = command_center._spec_steps(run)
+        order = {sid: i for i, sid in enumerate(spec)}
+        run_steps = sorted(command_center._latest_per_step(by_run.get(str(run["id"]), [])),
+                           key=lambda s: order.get(str(s.get("step_id")), len(order)))
+        done = sum(1 for s in run_steps if s.get("status") in ("succeeded", "skipped"))
+        count = max(len(spec), len(run_steps))
+        current = next((s for s in run_steps if s.get("status") in command_center.CURRENT_STEP),
+                       None)
+        failed = next((s for s in reversed(run_steps)
+                       if s.get("status") in command_center.FAILED_STEP), None)
+        here = current or (failed if place == "stopped" else None)
+        spec_step = spec.get(str(here.get("step_id")), {}) if here else {}
+        output = here.get("output") if here and isinstance(here.get("output"), dict) else {}
+        approval = here.get("approval") if here and isinstance(here.get("approval"), dict) else {}
+        state = "running"
+        waiting_on = waiting_role = None
+        attention_id = None
+        if just_done:
+            state = "done"
+        elif place == "stopped":
+            state = "stopped"
+            if failed is not None:
+                fid = f"run:{run['id']}:{failed.get('step_id')}"
+                attention_id = fid if fid in attention_ids else None
+        elif status == "blocked":
+            state = "blocked"
+        elif current is not None and current.get("status") == "waiting":
+            decision_id = str(current.get("decision_id") or "")
+            if decision_id and decision_id in attention_ids:
+                state, attention_id = "waiting_you", decision_id
+            elif decision_id and str(current.get("decision_status") or "") in (
+                    "approved", "executed"):
+                state = "running"  # answered; a worker picks the answer up next tick
+            elif decision_id:
+                state = "waiting_person"
+                waiting_role = str(approval.get("approver_role") or "") or None
+                waiting_on = waiting_role or str(current.get("decision_status") or "") or None
+            else:
+                state = "waiting"
+                waiting_on = workflows.waiting_on_label({
+                    "approval": approval, "decision_id": None, "output": output})
+        step_since = (_aware(here.get("started_at")) or _aware(here.get("updated_at"))
+                      if here else None)
+        created = _aware(run.get("created_at"))
+        rows.append({
+            "run_id": str(run["id"]),
+            "subject": command_center.run_subject(run) or str(run.get("workflow_name") or ""),
+            "workflow_key": str(run.get("workflow_key") or ""),
+            "workflow_name": str(run.get("workflow_name") or ""),
+            "version": run.get("version"),
+            "actor": run.get("actor"),
+            "state": state,  # type: ignore[typeddict-item]
+            "standing": place,
+            "step_index": command_center.step_index(done, count, status),
+            "step_count": count,
+            "step_label": (command_center.step_label(spec_step, str(here.get("step_id")))
+                           if here else None),
+            "verb": "Working",
+            "waiting_on": waiting_on,
+            "waiting_on_role": waiting_role,
+            "blocked_reason": command_center._first_line(run.get("blocked_reason")) or None,
+            "error": command_center._first_line(run.get("error")) or None,
+            "attention_id": attention_id,
+            "started_at": _iso(created),
+            "step_since": _iso(step_since),
+            "elapsed_seconds": int(((finished if just_done else now) - created).total_seconds())
+            if created else None,
+            "step_elapsed_seconds": int((now - step_since).total_seconds())
+            if step_since and not just_done else None,
+            "cost_usd": 0.0,
+            "hops": [],
+            "next": _next_steps(spec, {str(s.get("step_id")) for s in run_steps},
+                                lambda k: agent_acts.resolve_role(k) or k),
+            "finished_at": _iso(finished) if just_done else None,
+            "_capability": str(((spec_step.get("binding") or {}) if isinstance(
+                spec_step.get("binding"), dict) else {}).get("capability")
+                or spec_step.get("capability") or ""),
+            "_current_kind": str((here or {}).get("step_kind") or ""),
+        })
+
+    def last_hop_at(m: Mapping[str, Any]) -> str:
+        return str(m.get("step_since") or m.get("started_at") or "")
+
+    # Waiting on you, stopped, blocked, running (most recent hop first), just finished.
+    rows.sort(key=last_hop_at, reverse=True)
+    rows.sort(key=lambda m: _SORT.get(str(m["state"]), 3))
+    drawn = [m["run_id"] for m in rows[:CHAIN_CAP]]
+    chains = _chains(connection, project_id, drawn)
+    open_ids = [a["act_id"] for acts in chains.values() for a in acts if a.get("ended_at") is None]
+    live_cost = agent_acts._live_cost(connection, open_ids)
+    all_acts = [a for acts in chains.values() for a in acts]
+    verbs = agent_acts.verbs_for(connection, [a for a in all_acts if a.get("ended_at") is None])
+    for m in rows:
+        cap = m.pop("_capability", "")  # type: ignore[misc]
+        m.pop("_current_kind", None)  # type: ignore[misc]
+        acts = chains.get(m["run_id"])
+        if m["run_id"] not in drawn:
+            m["folded"] = True  # past CHAIN_CAP: its words, not its faces
+        elif acts:
+            m["hops"] = lane(acts, viewer=viewer)
+            m["cost_usd"] = round(sum(
+                float(a.get("cost_usd") or 0) + (live_cost.get(a["act_id"], (0, 0, 0.0))[2]
+                                                 if a.get("ended_at") is None else 0)
+                for a in acts), 6)
+        m["verb"] = _mission_verb(m, acts or [], verbs, cap)
+    return rows
+
+
+def _mission_verb(m: Mapping[str, Any], acts: list[dict[str, Any]], verbs: Mapping[str, str],
+                  capability: str) -> str:
+    """The run's one word now, from agent_acts.work_verb: the newest open work in its chain
+    (a build's stage says Coding, not its step's Working), else its step's capability."""
+    from .agent_acts import work_verb
+
+    state = m["state"]
+    if state == "done":
+        return "Finished"
+    if state == "stopped":
+        return "Stuck"
+    if state == "blocked":
+        return "Blocked"
+    if state == "waiting_you":
+        return "Needs you"
+    if state in ("waiting", "waiting_person"):
+        return "Waiting"
+    open_work = [a for a in acts if a.get("ended_at") is None
+                 and a.get("kind") not in ("run", "approval")]
+    if open_work:
+        newest = max(open_work, key=lambda a: (_aware(a.get("started_at"))
+                                               or datetime.min.replace(tzinfo=timezone.utc)))
+        return verbs.get(newest["act_id"]) or work_verb(newest)
+    return work_verb({"kind": "step", "status": "active"}, capability=capability or None)
+
+
+# ── outcomes ─────────────────────────────────────────────────────────────────────────────────
+
+_PR_NUMBER = re.compile(r"(?:#|/pull/)(\d+)")
+
+
+def outcomes(connection: Any, project_id: str, read: Mapping[str, Any], *,
+             now: datetime) -> list[Outcome]:
+    """What got done in the last day: pull requests, reports and minutes the agents' work
+    carries as artifacts, and runs that completed. Newest first, at most OUTCOMES_MAX.
+
+    `PR #n merged` only when the merge queue recorded the merge (github_merge_authorizations,
+    status merged) — never inferred from the PR being old or the run finishing."""
+    from .command_center import run_subject
+
+    since = now - OUTCOME_WINDOW
+    rows = connection.execute(
+        text(
+            """
+            SELECT act_id, role_key, artifacts, workflow_run_id, label, ended_at
+            FROM agent_acts
+            WHERE project_id = :p AND ended_at > :since
+              AND jsonb_typeof(artifacts) = 'array' AND jsonb_array_length(artifacts) > 0
+            ORDER BY ended_at DESC
+            LIMIT 60
+            """
+        ),
+        {"p": project_id, "since": since},
+    ).mappings().all()
+    found: list[Outcome] = []
+    seen: set[tuple[str, str]] = set()
+    pr_urls: list[str] = []
+    for r in rows:
+        artifacts = r["artifacts"] if isinstance(r["artifacts"], list) else []
+        for a in artifacts:
+            if not isinstance(a, dict):
+                continue
+            kind = str(a.get("kind") or "")
+            if kind not in ("pr", "report", "minutes"):
+                continue
+            ref = str(a.get("ref") or "")
+            url = str(a.get("url") or "") or None
+            dedupe = (kind, url or ref)
+            if dedupe in seen:
+                continue
+            seen.add(dedupe)
+            if kind == "pr":
+                number = _PR_NUMBER.search(ref) or _PR_NUMBER.search(url or "")
+                words = f"PR #{number.group(1)} opened" if number else "PR opened"
+                if url:
+                    pr_urls.append(url)
+            else:
+                words = "Report ready" if kind == "report" else "Minutes ready"
+            found.append({"act_id": r["act_id"], "role_key": r["role_key"], "kind": kind,
+                          "text": words, "url": url if url and url.startswith("http") else None,
+                          "run_id": r["workflow_run_id"], "label": r["label"],
+                          "at": _iso(r["ended_at"]) or ""})
+    if pr_urls:
+        merged = {str(m) for m in connection.execute(
+            text("SELECT pull_request_url FROM github_merge_authorizations "
+                 "WHERE project_id = :p AND status = 'merged' AND pull_request_url = ANY(:u)"),
+            {"p": project_id, "u": pr_urls},
+        ).scalars().all()}
+        for item in found:
+            if item["kind"] == "pr" and item.get("url") in merged:
+                item["kind"] = "pr_merged"
+                item["text"] = item["text"].replace(" opened", " merged")
+    for run in read["runs"]:
+        finished = _aware(run.get("completed_at"))
+        if str(run.get("status")) != "completed" or finished is None or finished < since:
+            continue
+        found.append({"act_id": None, "role_key": None, "kind": "run", "text": "Finished",
+                      "url": None, "run_id": str(run["id"]),
+                      "label": run_subject(run) or str(run.get("workflow_name") or ""),
+                      "at": _iso(finished) or ""})
+    found.sort(key=lambda o: str(o.get("at") or ""), reverse=True)
+    return found[:OUTCOMES_MAX]
+
+
+# ── teams and agents ─────────────────────────────────────────────────────────────────────────
+
+
+def force(connection: Any, project_id: str, attention: list[AttentionItem]
+          ) -> tuple[list[Team], list[BoardAgent]]:
+    """Every non-retired agent in its team, with its state: presence (open work) first, then a
+    failed step it is attributed (Stuck), then its lifecycle (Paused), else Idle."""
+    from . import agent_acts
+    from .agent_identity import TEAMS, team_of
+    from .agent_persona import persona_of
+
+    roles = connection.execute(
+        text("SELECT role_key, display_name, spec, lifecycle FROM roles "
+             "WHERE project_id = :p AND role_key <> 'human' ORDER BY role_key"),
+        {"p": project_id},
+    ).mappings().all()
+    presence = agent_acts.quietly(connection, "read presence", agent_acts.presence_map,
+                                  project_id) or {}
+    stuck = {str(a.get("role_key")): a for a in attention
+             if a.get("kind") == "failed_step" and a.get("role_key")}
+    agents: list[BoardAgent] = []
+    known: set[str] = set()
+    for r in roles:
+        key = str(r["role_key"])
+        known.add(key)
+        if str(r["lifecycle"] or "active") == "retired":
+            continue
+        named = persona_of({"role_key": key, "spec": r["spec"]})
+        agents.append(_agent(key, str(r["display_name"] or key), named.get("callsign"),
+                             team_of(r["spec"])["key"], presence.get(key), stuck.get(key),
+                             str(r["lifecycle"] or "active")))
+    # UNREGISTERED NAMES DOING WORK are on the floor too — in Yours, where an operator can see
+    # them and register them. Never hidden because nothing governs them.
+    for key, here in sorted(presence.items()):
+        if key in known or key == "human":
+            continue
+        agents.append(_agent(key, key.replace("_", " ").capitalize(), None, "yours", here,
+                             stuck.get(key), "active"))
+    order = [k for k, _, _ in TEAMS]
+    labels = {k: (label, tip) for k, label, tip in TEAMS}
+    custom = sorted({a["team"] for a in agents} - set(order))
+    teams: list[Team] = []
+    for key in [*order[:-1], *custom, order[-1]]:
+        members = [a for a in agents if a["team"] == key]
+        if key in labels:
+            label, tip = labels[key]
+        else:
+            resolved = team_of({"team": key})
+            label, tip = resolved["label"], None
+            # The label as an operator wrote it, from the first member whose spec says so.
+            for r in roles:
+                spec = r["spec"] if isinstance(r["spec"], dict) else {}
+                if team_of(spec)["key"] == key:
+                    label = team_of(spec)["label"]
+                    break
+        team: Team = {"key": key, "label": label, "members": [a["role_key"] for a in members],
+                      "working": sum(1 for a in members if a["state"] in ("working", "in_panel")),
+                      "needs_you": sum(1 for a in members if a["state"] == "needs_you"),
+                      "in_panel": sum(1 for a in members if a["state"] == "in_panel")}
+        if tip:
+            team["tip"] = tip
+        teams.append(team)
+    return teams, agents
+
+
+def _agent(key: str, name: str, callsign: Any, team: str, here: Optional[Mapping[str, Any]],
+           stuck: Optional[Mapping[str, Any]], lifecycle: str) -> BoardAgent:
+    state = str((here or {}).get("state") or "idle")
+    line = str((here or {}).get("line") or "")
+    since = (here or {}).get("since")
+    if state == "idle" and stuck is not None:
+        state = "stuck"
+        line = f"Stuck: {stuck.get('title') or ''}".rstrip(": ")
+        since = stuck.get("at")
+    elif state == "idle" and lifecycle == "paused":
+        state = "paused"
+    out: BoardAgent = {"role_key": key, "name": name, "team": team, "state": state,
+                       "line": line or ("No work yet" if state == "idle" else "")}
+    if callsign:
+        out["callsign"] = str(callsign)
+    if since:
+        out["since"] = since
+    return out
+
+
+# ── the board ────────────────────────────────────────────────────────────────────────────────
+
+
+def etag_of(board: Mapping[str, Any]) -> str:
+    """Over what the page shows changing — ids, states, steps, counts — and not over time: the
+    web ticks elapsed time from `step_since` itself, so a clock never costs a re-render."""
+    material = {
+        "attention": [(a.get("id"), a.get("decide_inline"), a.get("title")) for a in
+                      board["attention"]],
+        "missions": [(m["run_id"], m["state"], m["step_index"], m.get("step_count"),
+                      m.get("verb"), m.get("cost_usd"),
+                      [(h.get("act_id"), h.get("state"), h.get("inside")) if "act_id" in h
+                       else json.dumps(h, sort_keys=True) for h in m.get("hops") or []])
+                     for m in board["missions"]],
+        "outcomes": [(o.get("kind"), o.get("act_id"), o.get("run_id"), o.get("text"))
+                     for o in board["outcomes"]],
+        "teams": [(t["key"], len(t["members"]), t["working"], t["needs_you"], t["in_panel"])
+                  for t in board["teams"]],
+        "agents": [(a["role_key"], a["state"], a.get("team")) for a in board["agents"]],
+        "counts": board["counts"],
+    }
+    digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode())
+    return f'"lb-{digest.hexdigest()[:24]}"'
+
+
+def build(connection: Any, settings: Any, project_id: str, *,
+          viewer: Optional[str] = None, now: Optional[datetime] = None) -> LiveBoard:
+    """The whole Live tab in one read (spec §6.2). Composition only; see the module doc."""
+    from . import command_center
+
+    now = now or datetime.now(timezone.utc)
+    read = command_center.read(connection, settings, project_id, now)
+    cc = command_center.assemble(**read)
+    attention = attention_items(connection, project_id, cc["needs_you"], read["decisions"])
+    rows = missions(connection, project_id, read, attention, now=now, viewer=viewer)
+    teams, agents = force(connection, project_id, attention)
+    board: LiveBoard = {
+        "project_id": project_id,
+        "etag": "",
+        "generated_at": now.isoformat(),
+        "counts": {
+            "agents": len(agents),
+            "working": sum(1 for a in agents if a["state"] in ("working", "in_panel")),
+            # THE SAME NUMBER as the Command Center's counts.needs_you, the pill's attention
+            # count and Approvals' Needs action plus failed steps: one list, counted once.
+            "needs_you": len(attention),
+            "running": sum(1 for m in rows if m["state"] not in ("done", "stopped")),
+            "stopped": sum(1 for m in rows if m["state"] == "stopped"),
+        },
+        "attention": attention,
+        "missions": rows,
+        "outcomes": outcomes(connection, project_id, read, now=now),
+        "teams": teams,
+        "agents": agents,
+    }
+    board["etag"] = etag_of(board)
+    return board
+
+
+def pill(connection: Any, settings: Any, project_id: str, *,
+         now: Optional[datetime] = None) -> dict[str, Any]:
+    """The top-bar pill's slice (spec §6.3): how many things need the operator — the Command
+    Center's counts.needs_you, from the same list — and the first five, attributed."""
+    from . import command_center
+
+    now = now or datetime.now(timezone.utc)
+    read = command_center.read(connection, settings, project_id, now)
+    cc = command_center.assemble(**read)
+    items = attention_items(connection, project_id, cc["needs_you"][:5], read["decisions"])
+    return {"count": int(cc["counts"]["needs_you"]),
+            "items": [{"id": a["id"], "role_key": a.get("role_key"), "title": a.get("title"),
+                       "at": a.get("at"), "decide_inline": bool(a.get("decide_inline"))}
+                      for a in items]}

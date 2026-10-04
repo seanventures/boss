@@ -632,12 +632,14 @@ def test_the_score_looks_further_back_than_the_live_status():
 
 
 def test_an_idle_agent_does_not_claim_its_month_of_work_happened_today():
-    """"103 calls in this window" beside a screen headed "last 24h" reads as 103 calls today."""
+    """"103 calls in this window" beside a screen headed "last 24h" read as 103 calls today;
+    "103 calls in 30d" was a volume no other agent surface said. An idle card says what the
+    agent last did, in the one verb every surface uses (agents-home spec §6.5)."""
     out = workforce(FakeConn(roles=[role("software_engineer")],
                              spend=[lcall("solo", calls=103)]), "proj")
     task = by_id(out)["software_engineer"]["task"]
-    assert "30d" in task
-    assert "in this window" not in task
+    assert task == "Last: Coding · solo"
+    assert "in this window" not in task and "calls" not in task
 
 
 # --------------------------------------------------------------------------- #

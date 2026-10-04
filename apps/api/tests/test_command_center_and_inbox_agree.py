@@ -143,3 +143,27 @@ def test_the_command_center_applies_overdue_deadlines_before_it_reads(engine, cl
             "AND entity_id = 'dec_agree_overdue_reject'")).scalar_one()
     assert written == "expired"
     assert expired_events >= 1
+
+
+def test_agents_live_and_the_pill_count_what_the_inbox_and_command_center_count(engine, client):
+    """Agents home spec §6.3: the top-bar pill counted AGENTS in a needs-you state, so three
+    gates on one agent said 1 and a pull request with no agent was never counted, while
+    Approvals said the real number. The pill (`/v1/agents/live` attention) and Agents › Live
+    (`/v1/agents/live-board`) now read the Command Center's list, after the same expiry."""
+    pid = get_settings().default_project_id
+    _seed(engine, pid)
+    board = client.get("/v1/agents/live-board", params={"project_id": pid})
+    assert board.status_code == 200, board.text
+    board = board.json()
+    pill = client.get("/v1/agents/live", params={"project_id": pid}).json()["attention"]
+    cc = client.get("/v1/console/command-center", params={"project_id": pid}).json()
+    items = client.get("/v1/decisions/inbox", params={"project_id": pid}).json()["items"]
+    needs_action = {i["id"] for i in items if i["attention"] == "needs_action"}
+
+    assert board["counts"]["needs_you"] == len(board["attention"]) == pill["count"] \
+        == cc["counts"]["needs_you"]
+    assert {a["id"] for a in board["attention"] if a["kind"] == "approval"} == needs_action
+    assert "dec_agree_stuck_pr" in {a["id"] for a in board["attention"]}  # no agent, counted
+    # The overdue one was expired by the same sweep, so no surface lists it.
+    assert "dec_agree_overdue" not in {a["id"] for a in board["attention"]}
+    assert [i["id"] for i in pill["items"]] == [a["id"] for a in board["attention"]][:5]
