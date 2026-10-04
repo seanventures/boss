@@ -52,7 +52,7 @@ export async function fetchActivityLog(
  */
 export async function fetchActivityFacets(
   projectId: string,
-  scope: { run_id?: string; workflow_run_id?: string; agent?: string; service?: string } = {},
+  scope: { run_id?: string; workflow_run_id?: string; step_id?: string; agent?: string; service?: string } = {},
 ): Promise<ActivityFacets | null> {
   const params = new URLSearchParams({ project_id: resolveProjectId(projectId) });
   for (const [key, value] of Object.entries(scope)) if (value) params.set(key, value);

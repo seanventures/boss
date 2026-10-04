@@ -6,7 +6,6 @@ import { ActionPreview, actionPreviewOf } from "./action-preview";
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
-import { AgentChip } from "./agent-chip";
 import { AgentsOnThis } from "./agents-on-this";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
@@ -19,13 +18,14 @@ import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readi
 import { RunReportPanel } from "./run-report-ui";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
-import { RanAs, stepAgentChip } from "./step-agents-ui";
+import { stepAgentChip } from "./step-agents-ui";
 // Agent World (S-runs): who did each step, the chain, the Act card and Credits.
 import { approvalOf, laneAgentOf, stepActOf } from "./agents/chain-model";
 import { useRunChain } from "./agents/run-acts";
 import { RunChain } from "./agents/run-chain";
 import { CreditsButton } from "./agents/run-credits";
-import { StepSignedBy } from "./agents/step-signed-by";
+import { askAboutAct } from "./agents/act-card";
+import { StepActivity, StepDoneBy, StepSection, stepFacts, stepLogHref, useStepActivity } from "./workflows/step-run";
 import type { Act } from "../lib/agent-world-types";
 import { browserHref } from "../lib/browser-links";
 import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
@@ -1244,8 +1244,8 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
     || (output.capability === "build" ? str("run_id") : "");
   if (codeTask) {
     out.push({ label: "open the project", href: link({ area: "code_tasks", run: codeTask }) });
-    // Debugging a step means reading what it actually did, filtered to this work.
-    out.push({ label: "activity log", href: link({ area: "activity", run: codeTask }) });
+    // ITS LOG IS THE STEP'S, not the build's: the panel's Activity section links straight to
+    // this step's own rows and the work it started (`?area=activity&wfr=…&step=…`).
     // NOT "Ask BOSS" AGAIN. Every step already carries an "Ask BOSS about this step" button,
     // which opens the dock with the step's own state prefilled — strictly more than this link
     // did. Two controls with the same name, one worse, is a choice nobody should be asked to
@@ -2824,6 +2824,26 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
     .filter(([, v], i, all) =>
       typeof v !== "string" || all.findIndex(([, w]) => w === v) === i);
 
+  // THE STEP'S OWN LOG: its rows and the work it started, read once and shared by the Done-by
+  // line (model, cost) and the Activity section, so they cannot disagree.
+  const activity = useStepActivity(projectId, workflowRunId, step.step_id, phase === "now",
+                                   `${step.status}:${step.attempt}`);
+  const logHref = workflowRunId
+    ? stepLogHref(typeof window !== "undefined" ? window.location.search : "", workflowRunId, step.step_id)
+    : "";
+  const facts = stepFacts(step);
+  const finished = !["now", "ahead"].includes(phase);
+  const question = stepQuestion(step, capability?.label);
+  const ask = () => {
+    if (act?.roleKey) { askAboutAct(act, question); return; }
+    askBossAbout(
+      workflowRunId ? { kind: "workflow_step", id: workflowRunId, step: step.step_id }
+        : buildRunId ? { kind: "code_task", id: buildRunId } : null,
+      question, stepCaptain(step, capability));
+  };
+  const hasOutput = isPreviewStep(step) || visibleLinks.length > 0
+    || typeof (step.output || {}).document_id === "string" || produced.length > 0;
+
   return (
     <section className="dw-detail" data-phase={phase} data-testid="dw-detail">
       <header className="dw-detail-head">
@@ -2902,6 +2922,19 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         ) : null}
       </header>
 
+      {/* WHO, IN ONE LINE. The step's run leads this panel; the agent that did it is a face,
+          a name, what it cost and the model, with its whole card one press away (operator,
+          2026-10-04: "too much info about the agent"). */}
+      <StepDoneBy act={act} approval={gateAnswer} output={step.output} phase={phase}
+                  projectId={projectId} viewer={actor}
+                  failure={phase === "failed" ? step.error : null} question={question}
+                  cost={activity.cost} model={activity.model}
+                  assigned={stepCaptain(step, capability) || null} onAsk={ask} stepId={step.step_id} />
+      {facts.length ? (
+        <div className="wf-step-facts" data-testid="dw-step-facts">
+          {facts.map((f) => <span key={f}>{f}</span>)}
+        </div>
+      ) : null}
 
       {/* A STEP THAT SUCCEEDED IS NOT SHOWING YOU A FAILURE.
           `note` is written by whichever attempt last wrote one, and a step that was refused
@@ -3142,51 +3175,6 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         </ol>
       ) : null}
 
-      {/* WHO RAN IT AND WHY. When BOSS picked the agent the console never said which one, or
-          on what grounds; every executed step now records `ran_as`. */}
-      {act ? (
-        <StepSignedBy act={act} approval={gateAnswer} projectId={projectId} viewer={actor}
-                      failure={phase === "failed" ? step.error : null}
-                      question={stepQuestion(step, capability?.label)} />
-      ) : (
-        <RanAs output={step.output} stepId={step.step_id} />
-      )}
-
-      {/* ASK ABOUT THIS STEP, WITHOUT LEAVING IT.
-          A step that will not ship states its reason and then leaves the operator to act on
-          it alone. The dock can read the run, the code, the host and the logs — so the
-          question it opens with is this step's own words, not a blank box. */}
-      {act?.roleKey ? null : <div className="dw-step-ask">
-        {/* ASK THE PERSON WHOSE STEP THIS IS.
-            "Ask BOSS about this step" reached BOSS-in-general: no lens, no remit, no memory of
-            anything this kind of work has produced before. The role-addressed path already
-            existed and is strictly better — it reads the role's own definition and the positions
-            that role has actually taken on this project — it simply had nothing telling it that
-            a deploy belongs to the Deployment Manager and a security review to the Security
-            Reviewer. The engine says so now, per capability. */}
-        {stepCaptain(step, capability) ? (
-          <AgentChip roleKey={stepCaptain(step, capability)}
-                     note={stepAgentChip(step.captain, step.output, capability?.captain)?.note
-                       ?? ""} />
-        ) : null}
-        <button type="button" className="cap-btn" data-testid="dw-ask-boss"
-                title={stepCaptain(step, capability)
-                  ? `Opens the side dock addressed to the `
-                    + `${roleLabel(stepCaptain(step, capability))},`
-                    + " with this step's state already filled in"
-                  : "Opens the side dock with this step's state and message already filled in"}
-                onClick={() => askBossAbout(
-                  workflowRunId
-                    ? { kind: "workflow_step", id: workflowRunId, step: step.step_id }
-                    : buildRunId ? { kind: "code_task", id: buildRunId } : null,
-                  stepQuestion(step, capability?.label),
-                  stepCaptain(step, capability))}>
-          {stepCaptain(step, capability)
-            ? `Ask the ${roleLabel(stepCaptain(step, capability))}`
-            : "Ask BOSS about this step"}
-        </button>
-      </div>}
-
       {/* Try again / Skip and proceed — see FailedStepActions for why both sit together. */}
       {/* WHICH OF THE TWO, IF EITHER, IS THE SERVER'S CALL — `actions` is this step's slice of
           the run's list, and FailedStepActions renders nothing when it is empty.
@@ -3244,86 +3232,90 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         </div>
       ) : null}
 
-      {/* RUN IT, OR OPEN IT. The preview step reported what it had recorded and offered no way
-          to do anything: no button to start one, and — once the recorded preview expired — no
-          link either. Factory has had "Open preview" and a way to start one all along; this is
-          the same two controls, on the step whose whole subject is the preview. */}
-      {isPreviewStep(step) ? (
-        <div className="dw-step-decide" data-testid="dw-preview-controls">
-          {/* Pending until the URL arrives: the request was accepted in a second, the app
-              takes a minute. Cleared by the URL showing up, not by the POST returning. */}
-          {previewHref ? (
-            <a className="cap-btn primary" href={previewHref} target="_blank" rel="noreferrer"
-               data-testid="dw-preview-open">Open preview</a>
-          ) : null}
-          {buildRunId ? (
-            <button type="button" className="cap-btn"
-                    disabled={!!busy || starting}
-                    data-testid="dw-preview-run"
-                    onClick={() => { setFreshFrom(previewHref); onRunPreview(buildRunId); }}>
-              {starting ? "Starting…"
-                : previewHref ? "Start a fresh one" : "Run preview"}
-            </button>
-          ) : null}
-          {/* WHAT STAYS VISIBLE AND WHAT MOVES TO THE DOT.
-              Not everything grey is an explanation. Progress — "starting a preview, this takes
-              up to a minute" — is the whole reason a minute of silence does not read as a click
-              that did nothing, and a build MISMATCH is a warning: the link opens a different
-              build than the one on screen. Both stay. The two sentences that merely describe
-              what a preview is go on the dot. */}
-          {starting ? (
-            <span className="detail" data-testid="dw-preview-hint">
-              Starting a preview — this takes up to a minute. It will appear here on its own.
-            </span>
-          ) : previewHref && step.live_preview?.same_build === false ? (
-            <>
-              {/* A WARNING SHOULD BE SHORT AND LOUD, WHICH IS NOT WHAT I SHIPPED.
-                  I argued this had to stay visible — correct — and then left it as two lines of
-                  prose, which is the thing being complained about. Six words carry it; the
-                  explanation goes where every other explanation went. */}
-              <span className="dw-preview-warn" data-testid="dw-preview-hint">
-                Preview is from a later build
+      {/* OUTPUT, THEN ACTIVITY: what the step made, and what it did to make it. */}
+      <StepSection title="Output" testId="dw-step-output"
+                   empty={finished ? "Nothing recorded" : "No output yet"}>
+        {hasOutput ? (<>
+        {/* RUN IT, OR OPEN IT. The preview step reported what it had recorded and offered no way
+            to do anything: no button to start one, and — once the recorded preview expired — no
+            link either. Factory has had "Open preview" and a way to start one all along; this is
+            the same two controls, on the step whose whole subject is the preview. */}
+        {isPreviewStep(step) ? (
+          <div className="dw-step-decide" data-testid="dw-preview-controls">
+            {/* Pending until the URL arrives: the request was accepted in a second, the app
+                takes a minute. Cleared by the URL showing up, not by the POST returning. */}
+            {previewHref ? (
+              <a className="cap-btn primary" href={previewHref} target="_blank" rel="noreferrer"
+                 data-testid="dw-preview-open">Open preview</a>
+            ) : null}
+            {buildRunId ? (
+              <button type="button" className="cap-btn"
+                      disabled={!!busy || starting}
+                      data-testid="dw-preview-run"
+                      onClick={() => { setFreshFrom(previewHref); onRunPreview(buildRunId); }}>
+                {starting ? "Starting…"
+                  : previewHref ? "Start a fresh one" : "Run preview"}
+              </button>
+            ) : null}
+            {/* WHAT STAYS VISIBLE AND WHAT MOVES TO THE DOT.
+                Not everything grey is an explanation. Progress — "starting a preview, this takes
+                up to a minute" — is the whole reason a minute of silence does not read as a click
+                that did nothing, and a build MISMATCH is a warning: the link opens a different
+                build than the one on screen. Both stay. The two sentences that merely describe
+                what a preview is go on the dot. */}
+            {starting ? (
+              <span className="detail" data-testid="dw-preview-hint">
+                Starting a preview — this takes up to a minute. It will appear here on its own.
               </span>
-              <Explain label="What that means">
-                This build has no preview running. The link opens the same app built from a
-                later commit, so what you see may not match this step. Start a fresh one to
-                preview this build.
-              </Explain>
-            </>
-          ) : (
-            <Explain label="What this preview is">
-              {previewHref
-                ? "A live preview of this build, on a URL you can open."
-                : "Nothing is serving this build right now. Starting one takes a few seconds."}
-            </Explain>
-          )}
-        </div>
-      ) : null}
-
-      {/* WHERE THE WORK IT PRODUCED LIVES. Debugging a step means reading what it actually did. */}
-      {visibleLinks.length ? (
-        <div className="dw-step-links" data-testid="dw-step-links">
-          {visibleLinks.map((l) => (
-            l.external ? (
-              <a key={l.label} href={l.href} target="_blank" rel="noreferrer"
-                 className="dw-step-link">{l.label} ↗</a>
+            ) : previewHref && step.live_preview?.same_build === false ? (
+              <>
+                {/* A WARNING SHOULD BE SHORT AND LOUD, WHICH IS NOT WHAT I SHIPPED.
+                    I argued this had to stay visible — correct — and then left it as two lines of
+                    prose, which is the thing being complained about. Six words carry it; the
+                    explanation goes where every other explanation went. */}
+                <span className="dw-preview-warn" data-testid="dw-preview-hint">
+                  Preview is from a later build
+                </span>
+                <Explain label="What that means">
+                  This build has no preview running. The link opens the same app built from a
+                  later commit, so what you see may not match this step. Start a fresh one to
+                  preview this build.
+                </Explain>
+              </>
             ) : (
-              <a key={l.label} href={l.href} className="dw-step-link">{l.label}</a>
-            )
-          ))}
-        </div>
-      ) : null}
+              <Explain label="What this preview is">
+                {previewHref
+                  ? "A live preview of this build, on a URL you can open."
+                  : "Nothing is serving this build right now. Starting one takes a few seconds."}
+              </Explain>
+            )}
+          </div>
+        ) : null}
 
-      {/* THE DOCUMENT, ON THE STEP THAT WROTE IT. `GET /v1/artifacts/{id}` has existed all
-          along and nothing called it, so even a Document step that produced something had
-          nowhere to show it — an id in the output grid is not a document. */}
-      {typeof (step.output || {}).document_id === "string" ? (
-        <ChangeRecord documentId={String((step.output as Record<string, unknown>).document_id)} />
-      ) : null}
+        {/* WHERE THE WORK IT PRODUCED LIVES. Debugging a step means reading what it actually did. */}
+        {visibleLinks.length ? (
+          <div className="dw-step-links" data-testid="dw-step-links">
+            {visibleLinks.map((l) => (
+              l.external ? (
+                <a key={l.label} href={l.href} target="_blank" rel="noreferrer"
+                   className="dw-step-link">{l.label} ↗</a>
+              ) : (
+                <a key={l.label} href={l.href} className="dw-step-link">{l.label}</a>
+              )
+            ))}
+          </div>
+        ) : null}
 
-      {produced.length ? (
-        <details className="dw-step-out-wrap" data-testid="dw-step-out-wrap">
-          <summary>What this step recorded · {produced.length}</summary>
+        {/* THE DOCUMENT, ON THE STEP THAT WROTE IT. `GET /v1/artifacts/{id}` has existed all
+            along and nothing called it, so even a Document step that produced something had
+            nowhere to show it — an id in the output grid is not a document. */}
+        {typeof (step.output || {}).document_id === "string" ? (
+          <ChangeRecord documentId={String((step.output as Record<string, unknown>).document_id)} />
+        ) : null}
+
+        {produced.length ? (
+          // WHAT IT MADE, ON THE PAGE. This was filed under a closed "What this step recorded";
+          // the operator opens a step to see what it produced, so it is shown, de-duplicated.
           <dl className="dw-step-out" data-testid="dw-step-out">
             {produced.map(([k, v]) => (
               <div key={k}>
@@ -3332,8 +3324,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
               </div>
             ))}
           </dl>
-        </details>
-      ) : null}
+        ) : null}
+        </>) : undefined}
+      </StepSection>
+      {workflowRunId ? <StepActivity state={activity} href={logHref} live={phase === "now"} /> : null}
     </section>
   );
 }

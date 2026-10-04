@@ -168,7 +168,7 @@ describe("the agent is reachable from the step", () => {
     // The step itself travels now, and the server reads its whole record.
     expect(SOURCE).toContain('{ kind: "workflow_step", id: workflowRunId, step: step.step_id }');
     expect(SOURCE).toContain("stepQuestion(step, capability?.label)");
-    expect(SOURCE).toContain('data-testid="dw-ask-boss"');
+    expect(SOURCE).toContain("onAsk={ask}");
   });
 });
 
