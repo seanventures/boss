@@ -15,6 +15,7 @@ import { ActCard, askAboutAct } from "./act-card";
 import { whoDid } from "./chain-model";
 import { useActDetail } from "./run-acts";
 import { nameOf, RunFace } from "./run-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 const SAID_MAX = 280;
 
@@ -37,6 +38,7 @@ export function StepSignedBy({ act, approval, projectId, viewer, failure, questi
   /** What the operator is asking about this step, prefilled in the dock. */
   question: string;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const detail = useActDetail(projectId, act.actId);
   const who = whoDid(act, viewer);
   const named = nameOf(who.roleKey, who.variant, who.personId);

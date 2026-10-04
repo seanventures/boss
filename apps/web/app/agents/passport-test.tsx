@@ -14,7 +14,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { Flask } from "@phosphor-icons/react";
 
 import type { AvatarState, Persona } from "../../lib/agent-world-types";
-import { identityOf, runPersonaTest, type Probe, type TestResult } from "../../lib/agent-world";
+import { runPersonaTest, type Probe, type TestResult } from "../../lib/agent-world";
+import { useIdentity } from "../../lib/use-agent-identities";
 import { AgFace } from "./agent-face";
 
 export const PROBES: { key: Probe; label: string }[] = [
@@ -33,6 +34,7 @@ export function PassportTest({ projectId, actor, roleKey, persona }: {
   /** An unsaved voice to hear instead of the saved one. */
   persona?: Persona | null;
 }) {
+  const who = useIdentity(roleKey); // repaints when identities load
   const [probe, setProbe] = useState<Probe | null>(null);
   const [text, setText] = useState("");
   const [state, setState] = useState<AvatarState>("idle");
@@ -71,7 +73,6 @@ export function PassportTest({ projectId, actor, roleKey, persona }: {
   };
 
   const busy = state === "thinking" || state === "speaking";
-  const who = identityOf(roleKey);
   return (
     <div className="ag-test" data-testid="ag-test">
       <div className="ag-test-head">

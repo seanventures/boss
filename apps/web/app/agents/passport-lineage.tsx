@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { Act, LineageGraph } from "../../lib/agent-world-types";
 import { getLineage, identityOf, listActs } from "../../lib/agent-world";
 import { AgFace } from "./agent-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 const W = 640;
 const ROW = 64;
@@ -112,6 +113,7 @@ export async function actsAcross(projectId: string, graph: LineageGraph, edge: E
 }
 
 function NodeChip({ n, actor, center = false }: { n: Node & Pos; actor: string; center?: boolean }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const label = n.kind === "boss" ? "BOSS" : n.kind === "person" ? (n.id === actor ? "You" : n.id)
     : (identityOf(n.roleKey ?? n.id).callsign || identityOf(n.roleKey ?? n.id).name);
   const variant = n.kind === "boss" ? "boss" : n.kind === "person" ? (n.id === actor ? "you" : "person") : "agent";

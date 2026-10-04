@@ -20,6 +20,7 @@ import type { Act, Chain } from "../../lib/agent-world-types";
 import { ActFace } from "./act-card";
 import { chainItems, whoDid, type ChainItem, type Hop } from "./chain-model";
 import { nameOf } from "./run-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** The tooltip on the edge into an act: the server's words, then what scope came with it. */
 function edgeTip(acts: Act[]): string | undefined {
@@ -33,6 +34,7 @@ function edgeTip(acts: Act[]): string | undefined {
 }
 
 function Edge({ acts, parallel, fresh }: { acts: Act[]; parallel?: boolean; fresh: boolean }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const reconstructed = acts.some((a) => a.reconstructed);
   return (
     <span className="ag-chain-edge" data-testid="ag-chain-edge" data-tip={edgeTip(acts)}
@@ -45,6 +47,7 @@ function Edge({ acts, parallel, fresh }: { acts: Act[]; parallel?: boolean; fres
 }
 
 function Name({ act, viewer }: { act: Act; viewer: string }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const who = whoDid(act, viewer);
   const n = nameOf(who.roleKey, who.variant, who.personId);
   return <span className="ag-chain-name" data-tip={n.role !== n.name ? n.role : undefined}>{n.name}</span>;

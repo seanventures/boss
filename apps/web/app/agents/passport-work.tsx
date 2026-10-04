@@ -20,6 +20,7 @@ import {
 } from "../../lib/agent-world";
 import { consoleHref } from "../url-intent";
 import { AgFace, AgState } from "./agent-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 type Row = Act & { from?: { kind: string; id?: string; roleKey?: string } };
 
@@ -93,6 +94,7 @@ function elapsed(since: string | undefined, now: number): string {
 
 /** Who handed the work: a person, BOSS, or another agent's face. */
 function From({ row, actor }: { row: Row; actor: string }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const kind = row.from?.kind ?? row.handedBy.kind;
   const id = row.from?.roleKey ?? row.from?.id ?? row.handedBy.id;
   if (kind === "agent" && id) {

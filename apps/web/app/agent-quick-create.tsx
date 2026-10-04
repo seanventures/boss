@@ -41,6 +41,7 @@ import { FacePicker } from "./agents/face-picker";
 import type { BornFrom } from "../lib/agents";
 import { AgFace } from "./agents/agent-face";
 import { AgentBirth } from "./agents/agent-birth";
+import { useIdentityVersion } from "../lib/use-agent-identities";
 
 type Template = {
   id: string; name: string; description: string; role_key: string;
@@ -122,6 +123,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   /** Studio definitions no agent answers to yet, offered under From template. */
   orphans?: StudioAgent[];
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const [tab, setTab] = useState<"blank" | "template" | "archetype">("blank");
   // FACE & VOICE: the face a new agent is born with (Reroll keeps picked parts, re-seeds the rest).
   const [face, setFace] = useState<AvatarSpec>(() => seededSpec(newSeed()));
@@ -583,6 +585,7 @@ function FaceAndVoice({ name, face, onFace, callsign, onCallsign, tagline, onTag
   name: string; face: AvatarSpec; onFace: (next: AvatarSpec) => void;
   callsign: string; onCallsign: (v: string) => void; tagline: string; onTagline: (v: string) => void;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const taken = callsignTaken(callsign);
   return (
     <fieldset className="aq-group ag-fv" data-testid="aq-face-voice">
@@ -620,6 +623,7 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
   projectId: string; actor: string; existing: Set<string>;
   onBorn: (roleKey: string, agentId: string, name: string, persona?: Persona) => void;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const [pick, setPick] = useState("");
   const [name, setName] = useState("");
   const [about, setAbout] = useState("");
