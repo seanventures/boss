@@ -1207,6 +1207,10 @@
   .ag-home-search { flex: 0 1 200px; min-width: 120px; }
   .ag-home-head > .wf-btn { flex: none; white-space: nowrap; }
 }
+/* The counts are never clipped where there is room: the search gives way first. */
+@media (min-width: 1024px) {
+  .ag-home-sum { flex: none; overflow: visible; }
+}
 .ag-att-face[data-dim="true"], .ag-mission-hop[data-dim="true"] { opacity: 0.3; }
 .ag-zone-extra { font-size: 11px; font-weight: 700; color: var(--red); letter-spacing: 0.04em; }
 .ag-att-title {

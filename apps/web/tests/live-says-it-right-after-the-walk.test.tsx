@@ -226,5 +226,7 @@ describe("D7 the header stays on one row from 640px up", () => {
     const css = (await import("node:fs")).readFileSync("app/agents/agent-world.css", "utf8");
     const rule = css.slice(css.indexOf("@media (min-width: 640px) {\n  .ag-home-head { flex-wrap: nowrap; }"));
     expect(rule).toContain(".ag-home-head > .wf-btn { flex: none; white-space: nowrap; }");
+    // At desktop width the summary ("8 need you") is never clipped; the search shrinks instead.
+    expect(css).toMatch(/@media \(min-width: 1024px\) \{\s*\.ag-home-sum \{ flex: none; overflow: visible; \}/);
   });
 });
