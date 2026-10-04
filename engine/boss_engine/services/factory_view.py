@@ -560,6 +560,9 @@ class Facts:
         self.deploys: dict[str, list[dict[str, Any]]] = {}
         self.cost: dict[str, dict[str, Any]] = {}
         self.gates: dict[str, dict[str, Any]] = {}
+        #: The build's newest code.task job: a job the budget holds is `queued` with a later
+        #: run_after and `last_error.kind = budget_hold` — not "waiting for a worker".
+        self.jobs: dict[str, dict[str, Any]] = {}
         self.tool_calls: dict[str, int] = {}
 
 
@@ -624,6 +627,15 @@ def load_facts(connection: Any, project_id: str, runs: list[Mapping[str, Any]], 
         facts.cost[str(row["run_id"])] = {"metered_usd": int(row["metered"] or 0) / 1e6,
                                           "included": int(row["included"] or 0),
                                           "calls": int(row["calls"] or 0)}
+    for row in connection.execute(
+        text("SELECT DISTINCT ON (payload->>'run_id') payload->>'run_id' AS run_id, id, status, "
+             "last_error, run_after FROM jobs WHERE project_id = :p AND kind = 'code.task' "
+             "AND payload->>'run_id' = ANY(:ids) ORDER BY payload->>'run_id', created_at DESC"),
+        {"p": project_id, "ids": ids},
+    ).mappings().all():
+        job = dict(row)
+        job["last_error"] = _j(job.get("last_error"), {}) or {}
+        facts.jobs[str(row["run_id"])] = job
     if gates:
         for row in connection.execute(
             text("SELECT DISTINCT ON (code_task_run_id) code_task_run_id, id, status, "
@@ -740,7 +752,8 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
                 decision: Optional[Mapping[str, Any]] = None,
                 preview: Optional[Mapping[str, Any]] = None,
                 deploys: Optional[list[Mapping[str, Any]]] = None,
-                now: Optional[datetime] = None, viewer: Optional[str] = None) -> BuildState:
+                now: Optional[datetime] = None, viewer: Optional[str] = None,
+                job: Optional[Mapping[str, Any]] = None) -> BuildState:
     """THE ONE STATE of a build (§4.4), top-down precedence. The Floor, the cockpit, MCP
     get_code_task and Agents › Live all read this; none derives its own."""
     from . import agent_acts
@@ -785,7 +798,7 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
                        "Over the build budget. Raise it or retry.", "Blocked", here)
         return out("blocked", "Blocked", _first_line(run.get("error")) or None, "Blocked")
     if status in ("running", "repairing"):
-        if fctx.get("budget_wait_since"):
+        if fctx.get("budget_wait_since") or budget_held(job, now):
             return out("budget_wait", "Waiting · budget",
                        "Waiting for budget to free up. Costs nothing meanwhile.", "Waiting")
         if phase == "queued":
@@ -819,6 +832,19 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
     index, total = fctx.get("decomposition_index"), fctx.get("decomposition_total")
     tip = f"Part {index} of {total}" if index and total else None
     return out("done_no_pr", "Done · no PR", tip, "Working", "pr")
+
+
+def budget_held(job: Optional[Mapping[str, Any]], now: Optional[datetime] = None) -> bool:
+    """The job the budget is holding (jobs._defer_for_budget_state): queued, its last error a
+    `budget_hold`, its run_after still ahead. Read as `Waiting · budget`, never as a worker
+    that has not come (factory test D3: it read "Queued · Waiting for a worker" for 12 min)."""
+    if not job or str(job.get("status") or "") != "queued":
+        return False
+    err = _j(job.get("last_error"), {}) or {}
+    if str(err.get("kind") or "") != "budget_hold":
+        return False
+    after = _aware(job.get("run_after"))
+    return after is None or after > (now or _now())
 
 
 def section_of(state: str) -> str:
@@ -1280,7 +1306,7 @@ def build_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
     preview = facts.previews.get(rid)
     deploys = facts.deploys.get(rid, [])
     st = build_state(run, acts=acts, decision=decision, preview=preview, deploys=deploys,
-                     now=now, viewer=viewer)
+                     now=now, viewer=viewer, job=facts.jobs.get(rid))
     stations = stations_for(run, acts=acts, decision=decision, preview=preview,
                             deploys=deploys, bstate=st, now=now, viewer=viewer)
     k, n = k_of_n(stations)
@@ -1326,6 +1352,28 @@ def _attach_builds_to_their_runs(connection: Any, project_id: str,
     Approvals. Each such item gains the build it holds up — one query for all of them."""
     from .code_task_service import load_code_task_run
 
+    # A job the budget held raises its own decision ("Budget state red deferred job") — about
+    # that build, so it is that build's card (factory test D3), keyed through the held job.
+    held = [str(i.get("decision_id") or i.get("id")) for i in items
+            if not isinstance(i.get("build"), dict) and i.get("kind") == "approval"]
+    by_decision: dict[str, str] = {}
+    if held:
+        for r in connection.execute(
+            text("SELECT d.id, j.payload->>'run_id' AS run_id FROM decisions d "
+                 "JOIN jobs j ON j.id = d.cost_summary->>'job_id' "
+                 "WHERE d.project_id = :p AND d.id = ANY(:ids) AND j.kind = 'code.task' "
+                 "AND d.recommendation->>'action' = 'review_budget_policy'"),
+            {"p": project_id, "ids": held},
+        ).mappings().all():
+            if r["run_id"]:
+                by_decision[str(r["id"])] = str(r["run_id"])
+    for item in items:
+        rid = by_decision.get(str(item.get("decision_id") or item.get("id")))
+        if rid and not isinstance(item.get("build"), dict):
+            run = load_code_task_run(connection, rid)
+            if run:
+                item["build"] = {"run_id": rid, "app": app_name(run), "where": "Budget",
+                                 "failing": [], "retryable": False}
     wanted = {str((i.get("run") or {}).get("id")) for i in items
               if not isinstance(i.get("build"), dict) and (i.get("run") or {}).get("id")}
     if not wanted:
@@ -1563,7 +1611,8 @@ def _lineage(connection: Any, project_id: str, run: Mapping[str, Any], now: date
     for r in rows:
         acts = facts.acts.get(str(r["id"]), [])
         st = build_state(r, acts=acts, decision=facts.decisions.get(str(r.get("decision_id") or "")),
-                         preview=facts.previews.get(str(r["id"])), now=now, viewer=viewer)
+                         preview=facts.previews.get(str(r["id"])), now=now, viewer=viewer,
+                         job=facts.jobs.get(str(r["id"])))
         out.append({"run_id": r["id"], "attempt": int(r["finalize_ctx"].get("attempt") or 1),
                     "state": st["state"], "word": st["word"], "at": _iso(r.get("created_at"))})
     return out
