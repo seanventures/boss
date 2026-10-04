@@ -928,7 +928,8 @@ from .services.specpack import (
 )
 
 settings = get_settings()
-engine = get_engine(settings)
+engine = get_engine(
+    settings, idle_in_transaction_seconds=settings.api_db_idle_in_transaction_seconds)
 engine_ports = build_ports(settings, engine)
 configure_engine_ports(engine_ports)
 LOGGER = logging.getLogger("boss.api")
@@ -3026,7 +3027,24 @@ def skill_summary_from_service(payload) -> SkillSummary:
         policy=payload.get("policy") or {},
         publisher=payload.get("publisher") or {},
         provenance=payload.get("provenance") or {},
+        usable=payload.get("usable"),
+        reason=payload.get("reason"),
     )
+
+
+def skill_usability(skill: dict) -> tuple[bool, Optional[str]]:
+    """Can BOSS run this catalogue skill here? A skill with no executor (and not one BOSS runs
+    itself, nor an MCP or authored one) cannot, whatever its row says."""
+    from boss_engine.services.skill_executors import registered_executor_ids
+
+    if skill.get("system") or str(skill.get("source") or "module") not in (
+            "module", "catalog", "builtin"):
+        return True, None
+    if skill.get("mock_mode"):
+        return True, None
+    if str(skill.get("id")) in set(registered_executor_ids()):
+        return True, None
+    return False, "Agents can't run this skill on this install"
 
 
 def entitlement_source_summary_from_service(
@@ -5914,6 +5932,8 @@ def register_mcp(payload: McpServerRegisterRequest):
                 provenance=payload.provenance,
                 tool_risk_overrides=payload.tool_risk_overrides,
                 actor=payload.actor,
+                auth=payload.auth,
+                settings=get_settings(),
             )
         except McpServerConflict as error:
             # 409: the name is taken — a double-pressed Register used to make a second server
@@ -5987,7 +6007,7 @@ def toggle_mcp(
                                       actor=actor)
             else:
                 row = update_mcp_server(connection, project_id, server_id, actor=actor,
-                                        **changes)
+                                        settings=get_settings(), **changes)
         except McpServerConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
@@ -6416,6 +6436,8 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
                 repair_retries=payload.get("repair_retries"),
                 review_panel_size=payload.get("review_panel_size"),
                 simulated=simulated,
+                # RUN AS AN AGENT: its held MCP servers reach the harness (skills-mcp E6).
+                role_key=payload.get("role_key"),
             )
     except ValueError as error:
         # Preflight rejections (e.g. non-allowlisted test executables) are the CALLER's
@@ -15235,9 +15257,11 @@ def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
                 project_id,
                 connection=connection,
             )
-    return SkillListResponse(
-        items=[skill_summary_from_service(skill) for skill in skills]
-    )
+    items = []
+    for skill in skills:
+        usable, reason = skill_usability(skill)
+        items.append(skill_summary_from_service({**skill, "usable": usable, "reason": reason}))
+    return SkillListResponse(items=items)
 
 
 @app.get("/v1/skills/invocations")
@@ -24025,7 +24049,11 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
 
 def _editor_problems(problems: list) -> list[dict]:
     """Problems as the editor reads them: {step_id, field, message}."""
-    return [{"step_id": p.get("step_id"), "field": p.get("field"), "message": p.get("message")}
+    return [{"step_id": p.get("step_id"), "field": p.get("field"), "message": p.get("message"),
+             # A warning (an ability not set up yet) is said on the step and does not block Save;
+             # `ability` is what the Studio links to (?area=skills&ability=<key>).
+             **({"severity": p["severity"]} if p.get("severity") else {}),
+             **({"ability": p["ability"]} if p.get("ability") else {})}
             for p in problems]
 
 
@@ -25501,11 +25529,10 @@ def upsert_ranked_work_item(
                 source=payload.source,
                 actor=payload.actor,
             )
-            binding = work_orchestration.bind_tracker(
+            binding = work_orchestration.bind_default_tracker(
                 connection,
                 project_id=payload.project_id,
                 work_item_id=work_item["id"],
-                provider_key=None,
                 actor=payload.actor,
             )
             allocation = work_orchestration.ensure_allocation(
@@ -25514,11 +25541,15 @@ def upsert_ranked_work_item(
                 work_item_id=work_item["id"],
                 actor=payload.actor,
             )
-            sync_job = work_orchestration.enqueue_tracker_sync(
-                connection,
-                project_id=payload.project_id,
-                binding_id=binding["id"],
-                actor=payload.actor,
+            sync_job = (
+                work_orchestration.enqueue_tracker_sync(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=binding["id"],
+                    actor=payload.actor,
+                )
+                if binding
+                else {"status": "no_tracker", "binding_id": None, "job_id": None}
             )
             return {
                 "work_item": work_item,
@@ -25630,21 +25661,23 @@ def plan_resource_allocations(
 
 @app.get("/v1/work-trackers/catalog")
 def work_tracker_catalog() -> dict[str, Any]:
-    """Selectable bug/work trackers (Plane is the default option)."""
+    """Selectable bug/work trackers (GitHub Issues, reusing the repo connection, is the default
+    option — skills-mcp spec E10)."""
     return {
-        "default_provider_key": "plane",
+        "default_provider_key": "github_issues",
         "items": work_orchestration.tracker_catalog(),
     }
 
 
 @app.get("/v1/work-trackers")
 def list_work_trackers(project_id: str) -> dict[str, Any]:
-    """Installed tracker providers for a project (Plane seeded as default)."""
+    """Installed tracker providers for a project. None is the default until one is connected
+    (skills-mcp spec E10), and then `default_provider_key` says which."""
     with begin(engine) as connection:
         items = work_orchestration.list_tracker_providers(connection, project_id)
         default_key = next(
             (i["provider_key"] for i in items if i.get("is_default")),
-            "plane",
+            None,
         )
         return {
             "project_id": project_id,
@@ -27936,6 +27969,15 @@ from .routers.agents import build_agents_router
 
 app.include_router(build_agents_router(
     engine=engine,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# THE KIT: Skills & MCP's abilities, connections, tests, holders and tool policy (routers/kit.py).
+from .routers.kit import build_kit_router
+
+app.include_router(build_kit_router(
+    engine=engine,
+    settings=get_settings,
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))

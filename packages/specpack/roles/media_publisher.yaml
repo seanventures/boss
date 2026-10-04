@@ -28,7 +28,7 @@ permissions:
   # Bound per channel by assignment, not enumerated here: the platform-specific skill
   # (publish_youtube, publish_instagram) is given to the agent that owns that account, so a
   # YouTube publisher cannot reach an Instagram credential it was never given.
-  allowed_skills: [artifact.create, decision.create]
+  allowed_skills: []
   forbidden_skills: [secret.read, connection.export]
 output_contracts: [PublicationPlan, PrePublishCheck, PublishedPostRecord]
 autonomy:

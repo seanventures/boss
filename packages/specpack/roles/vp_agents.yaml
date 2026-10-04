@@ -12,7 +12,7 @@ boundaries:
   must_not:
     - Silently upgrade autonomy.
 permissions:
-  allowed_skills: [rolespec.review, eval.run_sandbox, artifact.create, decision.create]
+  allowed_skills: []
   forbidden_skills: [policy.apply_without_approval]
 output_contracts: [RoleReview, AutonomyRecommendation, EvalReport]
 autonomy:

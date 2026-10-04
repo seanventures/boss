@@ -90,6 +90,12 @@ CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 FROM python-runtime AS worker
 CMD ["python", "-m", "apps.worker.boss_worker.main"]
 
+# THE MCP SERVERS BOSS SHIPS (devops-reference, web-intel, doc-render), one process, three ports.
+# Every install seeds them and the cast holds them; without this service they were unreachable.
+FROM python-runtime AS mcp-tools
+EXPOSE 8765 8770 8771
+CMD ["python", "-m", "tools.mcp_tools_mux"]
+
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web-builder
 WORKDIR /app
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json

@@ -49,6 +49,7 @@ import { PassportPersona } from "./agents/passport-persona";
 import { PassportTest } from "./agents/passport-test";
 import { PassportWork } from "./agents/passport-work";
 import { ShareCardDialog } from "./agents/share-card-dialog";
+import { AgentAbilities } from "./skills/agent-abilities";
 
 type App = {
   app: string; raw_title?: string; calls: number; tokens: number; spend_usd: number;
@@ -418,6 +419,11 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                 nothing. Above the history deliberately: the first question about an agent is
                 what it is able to do, not what it has already done. */}
             <div id="ag-sec-skills" />
+            {/* ITS ABILITIES, as the Kit shows them (Skills & MCP), with the same grant. */}
+            {detail.registered ? (
+              <AgentAbilities projectId={projectId} roleKey={detail.role_key} actor={actor}
+                              onChanged={() => { void load(); void loadPassport(); }} />
+            ) : null}
             <AgentSkills projectId={projectId} roleKey={detail.role_key} actor={actor}
                          panel={detail.skills} spec={spec} onChanged={() => { void load(); void loadPassport(); }} />
 
@@ -705,7 +711,7 @@ export function AgentMcp({ projectId, roleKey, actor, panel, onChanged }: {
               <span className="detail"> · {m.tools.length ? `only ${m.tools.join(", ")}` : "every tool it offers"}</span>
               {!m.enabled ? (
                 <span className="ad-bad"> · disabled in this project, so it is not offered until
-                  enabled on the Skills and MCP page</span>
+                  turned on in Skills & MCP</span>
               ) : null}
               {m.risk_tier != null && m.risk_tier >= 2 ? (
                 <span className="detail"> · its calls wait for approval (tier {m.risk_tier})</span>

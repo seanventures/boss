@@ -77,9 +77,30 @@ def tracker_is_connected(provider_key: str, configuration: Any) -> bool:
     config = configuration if isinstance(configuration, dict) else {}
     if not WorkOrchestrationService._provider_looks_configured(provider_key, config):
         return False
+    # CONNECTED THROUGH SKILLS & MCP: the token is a secret-store reference, or the project's
+    # GitHub connection itself (GitHub Issues reuses it). Resolved where it is used
+    # (`with_credential`), never kept in the configuration.
+    if config.get("secret_ref_id") or config.get("credential") == "github_connection":
+        return True
     from .work_tracker_adapters import resolve_credential
 
     return bool(resolve_credential(config))
+
+
+def with_credential(connection: Connection, project_id: str,
+                    configuration: dict[str, Any]) -> dict[str, Any]:
+    """The configuration with its token resolved for ONE call: from the secret store, or from
+    the project's GitHub connection. The result is used and dropped, never stored."""
+    config = dict(configuration or {})
+    if config.get("api_token"):
+        return config
+    if config.get("credential") == "github_connection" or config.get("secret_ref_id"):
+        from ..config import get_settings
+        from .kit_connections import _tracker_config_with_token
+
+        return _tracker_config_with_token(connection, get_settings(), project_id,
+                                          str(config.get("provider_key") or ""), config)
+    return config
 
 
 def connected_tracker(connection: Connection, project_id: str,
@@ -155,8 +176,12 @@ class WorkOrchestrationService:
             "project_id": plane_project_id,
             "credential_ref": "secret:PLANE_API_KEY",
         }
+        # NO TRACKER IS THE DEFAULT UNTIL ONE IS CONNECTED (skills-mcp spec E10). Plane was
+        # seeded as the default while nothing was connected, so every install had a default
+        # that could not create a ticket. Skills & MCP › File tickets connects one (GitHub
+        # Issues, reusing the repo connection, first) and makes it the default.
         seed_rows = [
-            ("plane", "Plane", True, plane_configuration),
+            ("plane", "Plane", False, plane_configuration),
             (
                 "github_issues",
                 "GitHub Issues",
@@ -215,12 +240,15 @@ class WorkOrchestrationService:
                         :created_by
                     )
                     ON CONFLICT (project_id, provider_key) DO UPDATE
+                    -- THE SEED NEVER UNDOES AN OPERATOR. It refreshes what the product
+                    -- defines (name, capabilities) and adds configuration keys a row lacks;
+                    -- every value already stored wins (the seed's owner "" used to wipe the
+                    -- owner/repo a connect had just saved, so every later test failed), and
+                    -- the enforcement mode an operator chose is left alone.
                     SET display_name=EXCLUDED.display_name,
                         capabilities=EXCLUDED.capabilities,
-                        configuration=work_tracker_providers.configuration
-                          || EXCLUDED.configuration,
-                        enforcement_mode=EXCLUDED.enforcement_mode,
-                        updated_at=now()
+                        configuration=EXCLUDED.configuration
+                          || work_tracker_providers.configuration
                     """
                 ),
                 {
@@ -402,7 +430,7 @@ class WorkOrchestrationService:
             "test": test_result,
             "default_provider_key": next(
                 (p["provider_key"] for p in providers if p.get("is_default")),
-                "plane",
+                None,
             ),
         }
 
@@ -479,7 +507,8 @@ class WorkOrchestrationService:
         if provider_key not in providers:
             raise ValueError(f"Tracker provider '{provider_key}' is not installed.")
         adapter = get_adapter(provider_key)
-        config = dict(providers[provider_key].get("configuration") or {})
+        config = with_credential(connection, project_id,
+                                 dict(providers[provider_key].get("configuration") or {}))
         result = adapter.test_connection(config)
         return {
             "provider_key": provider_key,
@@ -500,7 +529,9 @@ class WorkOrchestrationService:
         )
         provider_key = context["provider"]["provider_key"]
         adapter = get_adapter(provider_key)
-        config = dict(context["provider"]["configuration"] or {})
+        # The token, resolved for this call only (never in `context`, which callers record).
+        config = with_credential(connection, project_id,
+                                 dict(context["provider"]["configuration"] or {}))
         # Binding can override project/workspace
         if context["binding"].get("external_project_id"):
             config.setdefault(
@@ -1300,23 +1331,30 @@ class WorkOrchestrationService:
     ) -> tuple[bool, str]:
         if not work_item_id:
             return True, "legacy_unscoped_job"
-        binding = connection.execute(
-            text(
-                """
-                SELECT b.id, b.sync_status, p.enforcement_mode,
-                       p.status AS provider_status
-                FROM work_tracker_bindings b
-                JOIN work_tracker_providers p ON p.id=b.provider_id
-                WHERE b.id=:binding_id AND b.project_id=:project_id
-                  AND b.work_item_id=:work_item_id
-                """
-            ),
-            {
-                "binding_id": tracker_binding_id,
-                "project_id": project_id,
-                "work_item_id": work_item_id,
-            },
-        ).mappings().first()
+        # TRACKED IN BOSS ALONE: work queued while the project had no default tracker carries no
+        # binding (bind_default_tracker, skills-mcp spec E10). It has no ticket to wait for, so
+        # only the allocation and the quotas below apply. A binding that IS named must exist.
+        if tracker_binding_id is None:
+            binding = {"provider_status": "active", "enforcement_mode": "advisory",
+                       "sync_status": "untracked"}
+        else:
+            binding = connection.execute(
+                text(
+                    """
+                    SELECT b.id, b.sync_status, p.enforcement_mode,
+                           p.status AS provider_status
+                    FROM work_tracker_bindings b
+                    JOIN work_tracker_providers p ON p.id=b.provider_id
+                    WHERE b.id=:binding_id AND b.project_id=:project_id
+                      AND b.work_item_id=:work_item_id
+                    """
+                ),
+                {
+                    "binding_id": tracker_binding_id,
+                    "project_id": project_id,
+                    "work_item_id": work_item_id,
+                },
+            ).mappings().first()
         if binding is None:
             return False, "work_tracking_binding_required"
         if binding["provider_status"] != "active":
@@ -1638,11 +1676,10 @@ class WorkOrchestrationService:
                 if key in inputs
             },
         )
-        binding = self.bind_tracker(
+        binding = self.bind_default_tracker(
             connection,
             project_id=project_id,
             work_item_id=work_item["id"],
-            provider_key=None,
             actor=actor,
         )
         allocation = self.ensure_allocation(
@@ -1656,6 +1693,31 @@ class WorkOrchestrationService:
             "tracker_binding": binding,
             "allocation": allocation,
         }
+
+    def bind_default_tracker(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        work_item_id: str,
+        actor: str = "system",
+    ) -> Optional[dict[str, Any]]:
+        """Bind work to the project's default tracker, or to nothing when there is none.
+
+        No tracker is the default until one is connected (skills-mcp spec E10), so work is
+        tracked in BOSS alone until then: it is never refused for want of a ticket, and never
+        bound to a tracker that cannot create one. An explicit provider still goes through
+        `bind_tracker`, which refuses one that is not active.
+        """
+        if self._tracker_provider(connection, project_id, None) is None:
+            return None
+        return self.bind_tracker(
+            connection,
+            project_id=project_id,
+            work_item_id=work_item_id,
+            provider_key=None,
+            actor=actor,
+        )
 
     def enqueue_tracker_sync(
         self,

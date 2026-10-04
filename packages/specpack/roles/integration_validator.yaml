@@ -19,7 +19,7 @@ decision_rights:
   must_escalate:
     - Pre-existing failures vs. regressions ambiguity.
 permissions:
-  allowed_skills: [test.run, ci.status, coding_pipeline.integration_validate, artifact.create]
+  allowed_skills: [ci.status, repo.read]
   forbidden_skills: [code.edit, github.merge_pr_real, infra.*]
 output_contracts: [IntegrationResults, RegressionReport]
 autonomy:

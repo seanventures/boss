@@ -22,15 +22,10 @@ decision_rights:
     - Breaking API changes.
     - Data loss risk or irreversible migrations.
 permissions:
-  allowed_skills:
-    - coding_pipeline.implement
-    - coding_pipeline.write_tests
-    - coding_pipeline.run_all_tests
-    - coding_pipeline.check_tests
-    - model.generate_code
-    - github.create_pr_sandbox
-    - software_factory.sandbox_validation
-    - model.generate_text
+  allowed_skills: [coding_pipeline.implement, coding_pipeline.write_tests, coding_pipeline.run_all_tests, coding_pipeline.check_tests, model.generate_code, github.create_pr_sandbox, software_factory.sandbox_validation, model.generate_text]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, open_prs, tests_ci, library_docs, watch_health]
+  recommended_abilities: [web_search]
   forbidden_skills: [github.merge_pr_real, infra.*]
   mcp_servers:
     - {server: boss-devops-reference, tools: [engineering_runbook]}

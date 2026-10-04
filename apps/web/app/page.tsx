@@ -68,7 +68,6 @@ import { DeliveryWorkflows } from "./delivery-workflows-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
-import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
 import { DecisionInbox } from "./decision-inbox-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
@@ -134,7 +133,6 @@ import { fetchAgentRuns } from "../lib/agent-runs";
 import { fetchTaskOutputs } from "../lib/outputs";
 import { fetchCapabilities } from "../lib/capabilities";
 import { CapabilitiesView } from "./capabilities-ui";
-import { McpServersPanel, type McpServerRow } from "./mcp-servers-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
@@ -166,8 +164,8 @@ import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
 import { SetupBoard } from "./setup/setup-board";
 import { fetchSetupSummary, landingArea } from "../lib/setup-server";
-import { SkillsHome } from "./skills-ui";
-import { ChannelsHome } from "./channels-ui";
+import { KitHome } from "./skills/kit-home";
+import { MemoryHome } from "./memory-ui";
 import { DeploymentManagerPanel } from "./deployment-manager-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
 import { PipelineView } from "./pipeline-ui";
@@ -1026,6 +1024,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <BossAgentHome projectId={activeProjectId} actor={activeActorId}
                          initialTaskId={requestedWorkTask || undefined}
                          roleName={requestedRole || undefined} />
+          {/* WHAT BOSS KNOWS — lessons and rules it keeps between sessions — beside the agent
+              that uses them (skills-mcp spec D-1; it used to sit inside Skills and MCP). */}
+          <MemoryHome projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
         {shows("dashboard") ? (
@@ -1460,15 +1461,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("skills") ? (
-        <section className="panel-stack" data-area="skills" aria-label="Skills and MCP">
-          {/* ORDER IS THE RECOMMENDATION. Authoring is what an operator came for, so it is
-              first; Channels is setup done once, so it sits below it; the catalogues are
-              reference and are shut. Channels is passed AS A CHILD rather than rendered
-              beside, so the whole order lives in one file instead of being split between
-              this mount and the component's own layout. */}
-          <SkillsHome projectId={activeProjectId} actor={activeActorId}>
-            <ChannelsHome projectId={activeProjectId} actor={activeActorId} />
-          </SkillsHome>
+        <section className="panel-stack" data-area="skills" aria-label="Skills & MCP">
+          {/* WHAT YOUR CREW CAN DO (skills-mcp spec §5): the Kit of abilities, Who can, and the
+              Library of every skill and MCP server. Email, tickets, team chat, web search and
+              YouTube are connected here; the GitHub repo stays in Setup and the Kit links to it. */}
+          <KitHome projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
 
@@ -1735,9 +1732,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               reads, and a link to where servers are managed. This said "Register one via POST
               /v1/mcp/servers" — an API call, on an operator's screen — and showed the three
               seeded servers as enabled while none of them answered. */}
+          {/* ONE HOME FOR MCP SERVERS: Skills & MCP › Library. This is a link to it. */}
           {mcpServers.apiReachable ? (
-            <McpServersPanel projectId={activeProjectId} actor={activeActorId} mode="summary"
-                             initial={mcpServers.items as unknown as McpServerRow[]} />
+            <a className="kit-link" href="?area=skills&tab=library&lib=mcp" data-testid="infra-mcp-link">
+              MCP servers · {(mcpServers.items as Array<{ enabled?: boolean; reachable?: boolean | null;
+                                                         trusted?: boolean }>)
+                .filter((s) => s.enabled !== false && s.reachable === true && s.trusted).length} ready ↗
+            </a>
           ) : (
             <p className="detail">{mcpServers.blockedReason ?? "MCP registry unavailable."}</p>
           )}
@@ -3575,33 +3576,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
 
             <article className="stack-card">
-              <h3>Community skill YAML</h3>
-              {!skills.apiReachable ? (
-                <p className="detail">
-                  {skills.blockedReason ?? "Skill API is unavailable."}
-                </p>
-              ) : skills.items.length === 0 ? (
-                <p className="detail">No skills are registered to export.</p>
-              ) : (
-                <div className="feed-list">
-                  {skills.items.slice(0, 6).map((skill) => (
-                    <div className="feed-row" key={skill.id}>
-                      <div>
-                        <h4>{skill.id}</h4>
-                        <p className="detail">
-                          {titleCaseToken(skill.kind)} / risk {skill.riskTier}
-                        </p>
-                      </div>
-                      <SkillExportButton
-                        projectId={activeProjectId}
-                        skillId={skill.id}
-                        actor={activeActorId}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-              <SkillImportForm projectId={activeProjectId} actor={activeActorId} />
+              <h3>Skill YAML</h3>
+              {/* ONE HOME: importing and exporting skills is Skills & MCP › Library › ⋯. */}
+              <a className="kit-link" href="?area=skills&tab=library" data-testid="org-skills-link">
+                Import or export in Skills &amp; MCP ↗
+              </a>
             </article>
 
             <article className="stack-card">

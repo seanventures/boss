@@ -3013,6 +3013,32 @@ WHERE EXISTS (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_servers_project_name
   ON mcp_servers (project_id, lower(name));
 
+-- HOW BOSS SIGNS IN TO A SERVER (skills-mcp spec E2): {type: none|bearer|header, header_name?,
+-- secret_ref_id?, last4?, headers?}. The token itself is written through to the secret store and
+-- only its reference is kept here; mcp_registry resolves it to a header at call time and never
+-- puts it in a list response. Every hosted MCP server (GitHub, Linear, Sentry, Context7 with a
+-- key) needs one, and before this column BOSS had nowhere to keep it.
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS auth JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- ALLOW / ASK / OFF PER TOOL (spec E7): {tool_name: allow|ask|off} as the operator chose. The
+-- runtime applies the floor (tier >= 2 always asks) and the defaults for tools not listed.
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS tool_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- EVERY KIT TEST, KEPT (spec §6.4). An ability's status is "ready" only on a passing test within
+-- freshness; the console shows the last one ("Tested 2m ago · 12 tools") and its error.
+CREATE TABLE IF NOT EXISTS kit_tests (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ability TEXT NOT NULL,
+  ok BOOLEAN NOT NULL,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  fact TEXT,
+  error TEXT,
+  field TEXT,
+  actor TEXT NOT NULL DEFAULT 'system',
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kit_tests_latest ON kit_tests(project_id, ability, at DESC);
+
 CREATE TABLE IF NOT EXISTS workflow_custom_steps (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
