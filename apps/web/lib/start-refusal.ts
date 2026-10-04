@@ -76,6 +76,16 @@ export function refusalFrom(status: number, parsed: unknown): ApiRefusal {
   return { error: firstProblem(body.problems) ?? `API returned ${status}`, ...structured(body, d) };
 }
 
+/** The machine-readable reason a refusal carries (`detail.code`: needs_model, budget, busy …),
+ *  for a console that acts on it; undefined when it has none. */
+export function refusalCode(parsed: unknown): string | undefined {
+  const body = (parsed && typeof parsed === "object") ? parsed as Record<string, unknown> : {};
+  const detail = body.detail;
+  const code = (detail && typeof detail === "object" && !Array.isArray(detail))
+    ? (detail as Record<string, unknown>).code : undefined;
+  return typeof code === "string" && code ? code : undefined;
+}
+
 /** A refusal made only of problems still reads as a sentence: the first problem's. */
 function firstProblem(problems: unknown): string | undefined {
   if (!Array.isArray(problems) || !problems.length) return undefined;
