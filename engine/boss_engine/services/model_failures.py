@@ -31,6 +31,14 @@ _PROVIDER_NAMES = {
 }
 
 
+#: What a model failure says when a call that was meant to WRITE an answer reached for a tool
+#: instead (claude_cli_adapter.ClaudeCliAdapter._judge_generation). The CLI's own result says
+#: so — a permission denial, a second turn, `stop_reason: tool_use`, `max_turns` — and the text
+#: it returns is a preamble ("I'll check memory for context…") or a tool name ("Read"), not the
+#: answer. A retry can succeed: it is the model's turn that failed, not the setup.
+NO_DIRECT_ANSWER = "reached for a tool instead of answering"
+
+
 #: Where an operator raises the cap.
 BUDGET_HREF = "/?area=budget"
 
@@ -300,6 +308,17 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "headline": "No connected model can run this work.",
             "action": "Connect a model in Setup → Model.",
             "href": SETUP_HREF, "retry": False,
+        }
+    if NO_DIRECT_ANSWER in lowered:
+        return {
+            "kind": "no_direct_answer",
+            "headline": "The model reached for a tool instead of writing the answer, so what "
+                        "came back was not an answer.",
+            "action": "Retry the step. A writing step has no tools, so this is the model's "
+                      "turn failing, not your setup; if it repeats, open the run's activity "
+                      "for what the model tried.",
+            "href": None, "retry": True,
+            "detail": text[:300],
         }
     if re.search(r"(?<![\w.])409(?![\w.])", lowered) and "conflict" in lowered:
         return {
