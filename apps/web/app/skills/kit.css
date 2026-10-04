@@ -128,8 +128,8 @@
 .kit-section { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 8px; }
 .kit-section[data-focus] { animation: kit-flash 1.2s ease-out 1; }
 @keyframes kit-flash { from { background: var(--accent-soft); } to { background: transparent; } }
-.kit-section-label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--faint); font: 700 0.6875rem/1.2 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
-.kit-info { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--faint); font: 700 0.5625rem var(--sans); text-transform: none; cursor: help; }
+/* Section labels are the shared `.section-label` (app/section-label.tsx, globals.css). */
+.kit-info { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid currentColor; font: 700 0.5625rem var(--sans); text-transform: none; letter-spacing: 0; cursor: help; }
 .kit-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-width: 0; font: 0.8125rem var(--sans); color: var(--ink-soft); }
 .kit-conn, .kit-tools, .kit-agents, .kit-try { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .kit-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }

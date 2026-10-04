@@ -260,7 +260,7 @@ describe("W5 · Setup's green label on the Passport and the Kit", () => {
     expect($$(".ct-block-title").map((e) => e.textContent?.trim())).not.toContain("Work");
   });
 
-  it("no other rule re-colours .eyebrow", () => {
+  it("no other rule re-colours .eyebrow, and the Kit's grey label is gone", () => {
     const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
     const eyebrow = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
       .filter(([, sel]) => sel.split(",").some((s) => /(^|\s)\.eyebrow\b/.test(s.trim()) || s.trim() === ".eyebrow"))
@@ -268,6 +268,10 @@ describe("W5 · Setup's green label on the Passport and the Kit", () => {
     for (const [, sel, body] of eyebrow) {
       expect(body, sel).toContain("var(--accent-text");
     }
+    const kit = readFileSync(join(__dirname, "..", "app", "skills", "kit.css"), "utf8");
+    expect(kit).not.toContain(".kit-section-label");
+    const drawer = readFileSync(join(__dirname, "..", "app", "skills", "ability-drawer.tsx"), "utf8");
+    expect(drawer).toContain("<SectionLabel as=\"h4\">");
   });
 });
 

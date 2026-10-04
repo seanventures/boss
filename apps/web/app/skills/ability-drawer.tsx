@@ -2,7 +2,7 @@
 
 /**
  * The ability drawer (spec §5.3): right, 420px; a bottom sheet under 720px. Header (icon, label,
- * the one status, provenance, ⋯), then five sections with 11px caps labels and an (i) tooltip —
+ * the one status, provenance, ⋯), then five sections with the shared green SectionLabel and an (i) tooltip —
  * Connection, Tools, Agents, Used in, Try it. No paragraphs: every write is immediate and toasted.
  */
 import React, { useEffect, useRef, useState } from "react";
@@ -11,6 +11,7 @@ import { DotsThree, X } from "@phosphor-icons/react";
 import type { Ability } from "../../lib/kit-types";
 import { kitApi, type CrewMember } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
+import { SectionLabel } from "../section-label";
 import { AbilityIcon } from "./ability-icons";
 import { StatusPill } from "./ability-card";
 import { AgentsSection } from "./agents-section";
@@ -30,10 +31,11 @@ export function Section({ id, label, tip, children, focus }: {
   useEffect(() => { if (focus) ref.current?.scrollIntoView?.({ block: "start", behavior: "smooth" }); }, [focus]);
   return (
     <section ref={ref} className="kit-section" data-testid={`kit-section-${id}`} data-focus={focus || undefined}>
-      <h5 className="kit-section-label">
+      {/* The shared green label (Setup's MODEL, the Passport's SKILLS): one look for one job. */}
+      <SectionLabel as="h4">
         <span>{label}</span>
         <span className="kit-info" data-tip={tip} aria-label={tip} role="img">i</span>
-      </h5>
+      </SectionLabel>
       {children}
     </section>
   );

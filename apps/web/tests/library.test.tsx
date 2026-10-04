@@ -52,7 +52,7 @@ describe("the Library", () => {
     await click('[data-testid="kit-lib-new-skill"]');
     expect($('[data-testid="kit-skill-drawer"]')).not.toBeNull();
     for (const id of ["skill-label", "skill-summary", "skill-behaviour"]) expect($(`[data-testid="${id}"]`)).not.toBeNull();
-    expect($$('[data-testid^="skill-how-"]').map((b) => b.textContent)).toEqual(["Command", "MCP tool", "Built-in", "Program"]);
+    expect($$('[data-testid^="skill-how-"]').map((b) => b.textContent)).toEqual(["Command", "MCP tool", "Built-in", "Program", "Guide"]);
   });
 
   it("the MCP list, and Import / Export all under ⋯", async () => {
