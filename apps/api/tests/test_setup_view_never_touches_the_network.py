@@ -109,6 +109,31 @@ def test_connected_then_expired_then_budget_red(client, engine, monkeypatch, off
     assert body["verdict"]["label"] != "Budget spent"
 
 
+@pytest.mark.parametrize("state", ["rate_limited", "unreachable"])
+def test_a_check_github_did_not_answer_is_not_ready(client, engine, monkeypatch, offline, state):
+    """READY MEANS PROVEN: "Repository and model checked" is false over a busy or unreachable
+    GitHub. The row is still usable (a build may start), but the header says why it waits."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    connect_repository(client)
+    assert connect_key(client).status_code == 200
+    offline()
+    assert view(client)["ready"] is True
+    unknown = {"ok": None, "state": state, "at": None}
+    checks = {"read": unknown, "write": unknown, "pull_requests": unknown, "state": state,
+              "retry_at": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()}
+    import json
+    with engine.begin() as c:
+        c.execute(text("UPDATE github_repository_bindings SET checks = CAST(:c AS jsonb) "
+                       " WHERE project_id = :p"), {"c": json.dumps(checks), "p": PROJECT})
+    body = view(client)
+    [repo] = body["repository"]["repos"]
+    assert repo["pill"]["state"] == state and body["ready"] is False
+    assert body["verdict"]["label"] == "1 to go" and body["verdict"]["tip"] == repo["pill"]["tip"]
+    from boss_engine.services import setup_view
+    assert setup_view.basics(body)["github"] is True      # usable: a build may still start
+
+
 def test_a_read_never_waits_for_a_cli_or_the_secret_store(client, monkeypatch):
     """Connecting Claude Code hung the console: each GET asked the CLI for its catalog on the
     request thread. Now every probe is answered from a cache refreshed in the background."""

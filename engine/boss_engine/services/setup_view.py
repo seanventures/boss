@@ -395,6 +395,11 @@ USABLE_REPOSITORY = frozenset({"working", "expiring", "checking", "rate_limited"
 #: Model states a job can still run on (a busy or unreachable provider recovers by itself).
 USABLE_MODEL = frozenset({"working", "not_checked", "rate_limited", "paused_budget",
                           "unreachable"})
+#: READY MEANS PROVEN. The header's "Repository and model checked" is only true of a row a check
+#: has answered: a busy or unreachable GitHub, a check not yet run and a model nobody has tried
+#: are still usable (a build may start) but they are not Ready.
+PROVEN_REPOSITORY = frozenset({"working", "expiring"})
+PROVEN_MODEL = frozenset({"working", "rate_limited", "paused_budget"})
 
 
 def repository_working(view_repo: dict[str, Any]) -> bool:
@@ -841,11 +846,10 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
     detected = _detected(settings)
     trying = _try(connection, project_id)
 
-    # READY MEANS CHECKED. A repository no check has run on yet ("Checking…") still lets a
-    # workflow start (basics), but the header does not say Ready over a check that has not run.
-    repo_ok = any(repository_working(r) and r["pill"]["state"] != "checking"
-                  for r in repository["repos"])
-    model_ok = any(model_working(m) for m in models)
+    # READY MEANS PROVEN (PROVEN_REPOSITORY / PROVEN_MODEL): a row a check has not answered
+    # still lets a workflow start (basics), but the header does not say Ready over it.
+    repo_ok = any(r["pill"]["state"] in PROVEN_REPOSITORY for r in repository["repos"])
+    model_ok = any(m["pill"]["state"] in PROVEN_MODEL for m in models)
     ready = repo_ok and model_ok
     problems_list = [r["pill"] for r in repository["repos"] if r["pill"]["tone"] == "red"] \
         + [m["pill"] for m in models if m["pill"]["tone"] == "red"]

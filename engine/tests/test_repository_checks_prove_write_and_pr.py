@@ -108,3 +108,15 @@ def test_a_rate_limit_that_has_reset_is_checked_again_not_shown_as_busy():
 def test_a_gateway_in_the_way_is_cant_reach_not_check_failed():
     for status in (0, 502, 503, 504):
         assert setup_checks.classify_model_failure(status, "") == "unreachable"
+
+
+def test_a_busy_github_leaves_the_permissions_unknown_not_refused(github_probes):
+    """A rate limit says nothing about the token: Read "–", not a ✗ the operator goes to fix."""
+    found = _probe(github_probes, "rate_limited")
+    assert [found["checks"][k]["ok"] for k in ("read", "write", "pull_requests")] \
+        == [None, None, None]
+    # ... and the recorded checks still read back as busy, not Working.
+    future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    recorded = {"read": found["checks"]["read"], "retry_at": future}
+    assert setup_checks.repository_state(
+        recorded, expires_at=None, checked_at=datetime.now(timezone.utc)) == "rate_limited"

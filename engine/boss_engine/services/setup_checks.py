@@ -151,6 +151,15 @@ def _gh_headers(token: str) -> dict[str, str]:
             "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-setup-check"}
 
 
+#: Answers that say nothing about the token: GitHub was busy or could not be reached, so the
+#: permission is UNKNOWN (`ok: None`, "–"), never a ✗ the operator would go and "fix".
+UNANSWERED = frozenset({"rate_limited", "unreachable"})
+
+
+def _check(state: str, at: str) -> dict[str, Any]:
+    return {"ok": None if state in UNANSWERED else False, "state": state, "at": at}
+
+
 def _failure_state(answer: HttpAnswer, *, refused: str) -> str:
     """What a non-success GitHub answer means, before the probe's own `refused` state."""
     if answer.status == 0:
@@ -223,7 +232,7 @@ def probe_repository(token: str, full_name: str, *, api_base: str = "https://api
         state = _failure_state(read, refused="no_access")
         if state == "rate_limited":
             out["retry_at"] = iso(_rate_reset(read))
-        out.update(state=state, checks={"read": {"ok": False, "state": state, "at": at},
+        out.update(state=state, checks={"read": _check(state, at),
                                         "write": dict(unknown), "pull_requests": dict(unknown)})
         return out
     out["expires_at"] = iso(parse_token_expiry(
@@ -239,8 +248,7 @@ def probe_repository(token: str, full_name: str, *, api_base: str = "https://api
     if blob.status in (201, 409):
         checks["write"] = {"ok": True, "state": "working", "at": at}
     else:
-        checks["write"] = {"ok": False, "state": _failure_state(blob, refused="cant_write"),
-                           "at": at}
+        checks["write"] = _check(_failure_state(blob, refused="cant_write"), at)
 
     head = f"boss-setup-check-{uuid.uuid4().hex[:8]}"
     pulls = http("POST", f"{base}/repos/{full_name}/pulls", headers=headers,
@@ -249,9 +257,7 @@ def probe_repository(token: str, full_name: str, *, api_base: str = "https://api
     if pulls.status in (422, 201):
         checks["pull_requests"] = {"ok": True, "state": "working", "at": at}
     else:
-        checks["pull_requests"] = {"ok": False,
-                                   "state": _failure_state(pulls, refused="cant_open_prs"),
-                                   "at": at}
+        checks["pull_requests"] = _check(_failure_state(pulls, refused="cant_open_prs"), at)
     out["checks"] = checks
     state = "working"
     for name in ("write", "pull_requests"):
@@ -276,7 +282,7 @@ def repository_state(checks: dict[str, Any], *, expires_at: Optional[datetime],
     if not recorded:
         for name in ("read", "write", "pull_requests"):
             part = checks.get(name) or {}
-            if part.get("ok") is False:
+            if part.get("ok") is False or part.get("state") in UNANSWERED:
                 recorded = str(part.get("state") or "")
                 break
         else:
