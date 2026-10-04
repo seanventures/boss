@@ -42,6 +42,59 @@ def work_class_label(work_class: str) -> str:
     return WORK_CLASS_LABELS.get(work_class, work_class)
 
 
+#: WHO DOES EACH KIND OF STEP, BY DEFAULT (agent-world spec §0.1 item 4). Every catalogue step
+#: of these kinds names its agent, so a stock run is staffed — Juno convenes the panel, Helm
+#: runs the build, Vera checks the preview, Beacon holds it to readiness and watches it — and
+#: the run's chain shows who did what instead of "You" on every step.
+#:
+#: Only steps whose work is BOSS's own: naming an agent there changes who the work is credited
+#: to and who answers for it, never what it may reach (a built-in needs no grant —
+#: step_agents). Gates keep naming their approver in `approval.approver_role`; the deploy step
+#: keeps running as the run's actor, since its stack plan records who asked. An operator who
+#: clears a step's agent in the Studio gets Auto, exactly as before.
+#:
+#: A CATALOGUE DEFAULT IS SOFT. Each such step also carries `default_captain` — the same key —
+#: which says "BOSS put this agent here, nobody chose it" (step_agents.is_default_captain). A
+#: soft default never pins its agent: the agent can still be deleted (the catalogue is
+#: re-staffed without it — agents.delete_agent), and a paused, retired or missing one hands the
+#: step back to Auto instead of failing every stock run (step_agents.resolve). An operator who
+#: picks a different agent in the Studio makes the marker stop matching, so their choice is a
+#: real one and holds like any other.
+DEFAULT_STEP_AGENTS: dict[str, str] = {
+    "research": "pm",
+    "meeting": "pm",
+    "build": "engineering_captain",
+    "retry_build": "engineering_captain",
+    "preview": "qa",
+    "review": "adversarial_reviewer",
+    "plrr": "sre",
+    "monitor": "sre",
+    "document": "docs_writer",
+}
+
+#: WHO BUILDS IT DEPENDS ON WHAT IS BEING BUILT (§0.1 item 4: "build → Engineering Captain /
+#: Backend or Frontend Engineer by app kind"). A template whose whole point is a screen is built
+#: by the Frontend Engineer; one whose point is a service, data or an integration by the
+#: Backend Engineer — so their skills, MCP servers and voice are the ones a stock run reaches.
+#: A general-purpose template keeps the Engineering Captain, who coordinates a full-stack build.
+BUILD_AGENT_BY_ENTRY: dict[str, str] = {
+    "ux_certification": "frontend_engineer",
+    "backend_service_setup": "backend_engineer",
+    "data_migration": "backend_engineer",
+    "third_party_integration": "backend_engineer",
+    "deprecation_sunset": "backend_engineer",
+}
+
+#: Who stands in for a specialist a project does not have, before falling back to Auto.
+DEFAULT_CAPTAIN_FALLBACK: dict[str, str] = {
+    "frontend_engineer": "engineering_captain",
+    "backend_engineer": "engineering_captain",
+}
+
+#: The capabilities BUILD_AGENT_BY_ENTRY re-staffs.
+_BUILD_CAPABILITIES = frozenset({"build", "retry_build"})
+
+
 def _step(
     step_id: str,
     capability: str,
@@ -57,12 +110,24 @@ def _step(
         "binding": {"capability": capability, "inputs": inputs or {}},
         "next": nxt or [],
     }
+    if capability in DEFAULT_STEP_AGENTS:
+        _set_default_captain(step, DEFAULT_STEP_AGENTS[capability])
     if approval or approver_role:
         step["approval"] = {}
         if approval:
             step["approval"]["mode"] = approval
         if approver_role:
             step["approval"]["approver_role"] = approver_role
+    return step
+
+
+def _set_default_captain(step: dict[str, Any], role_key: Optional[str]) -> dict[str, Any]:
+    """Name a SOFT default agent on a catalogue step (see DEFAULT_STEP_AGENTS), or clear it."""
+    step.pop("captain", None)
+    step.pop("default_captain", None)
+    if role_key:
+        step["captain"] = role_key
+        step["default_captain"] = role_key
     return step
 
 
@@ -468,8 +533,10 @@ CATALOGUE: list[dict[str, Any]] = [
             # report. And a run that stops even earlier is not left without one: the same
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
+            # THE RELEASE MANAGER DECIDES THE RELEASE (§0.1 item 4), here as in every other
+            # template: the CTO already approved the plan at spec_review.
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  approver_role="cto"),
+                  approver_role="release_manager"),
             _step("monitor", "monitor"),
             _step("document", "document", {"title": _in("title")}),
         ]),
@@ -597,6 +664,19 @@ CATALOGUE: list[dict[str, Any]] = [
         ],
     },
 ]
+
+
+
+def _staff_builds_by_app_kind() -> None:
+    """Apply BUILD_AGENT_BY_ENTRY to the catalogue's build steps, once, at import."""
+    for entry in CATALOGUE:
+        builder = BUILD_AGENT_BY_ENTRY.get(entry["key"])
+        for step in entry["steps"] if builder else ():
+            if (step.get("binding") or {}).get("capability") in _BUILD_CAPABILITIES:
+                _set_default_captain(step, builder)
+
+
+_staff_builds_by_app_kind()
 
 
 # ── What Start asks for ────────────────────────────────────────────────────────────────────────
@@ -885,6 +965,12 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
     than accumulating identical ones on every boot.
     """
     installed: list[dict[str, Any]] = []
+    # THE AGENTS THIS PROJECT ACTUALLY HAS, not the bundled roster: a step naming an agent
+    # with no roles row is refused at start ("there is no agent 'sre' on this project"), so a
+    # default agent is named only where it exists.
+    present = frozenset(str(k) for k in connection.execute(
+        text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id},
+    ).scalars().all())
     for entry in CATALOGUE:
         existing = connection.execute(
             text(
@@ -909,7 +995,7 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
             )
             definition_id = definition["id"]
 
-        spec = entry_spec(entry)
+        spec = entry_spec(_staffed_for(entry, present))
         try:
             version = workflows.publish_version(
                 connection, project_id=project_id, definition_id=definition_id,
@@ -923,6 +1009,75 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
     mapped = _seed_default_mappings(connection, project_id, actor=actor)
     return {"project_id": project_id, "installed": installed, "count": len(installed),
             "mapped": mapped}
+
+
+def _staffed_for(entry: dict[str, Any], present: frozenset[str]) -> dict[str, Any]:
+    """The entry with every default agent this project HAS; the rest left to Auto.
+
+    A project whose operator deleted a shipped agent, or that never installed the pack that
+    ships it, would otherwise be published a step naming an agent it does not have — refused
+    at publish for a deleted one (stopping the whole catalogue from seeding) and refused at
+    start for a missing one. Such a step is published unnamed (Auto) there, and only there;
+    the next seed after the agent appears names it again.
+    """
+    steps = []
+    for step in entry["steps"]:
+        default = step.get("default_captain")
+        if default and step.get("captain") == default and default not in present:
+            stand_in = DEFAULT_CAPTAIN_FALLBACK.get(default)
+            step = _set_default_captain(dict(step),
+                                        stand_in if stand_in in present else None)
+        elif step.get("captain") and step["captain"] not in present:
+            step = {k: v for k, v in step.items() if k != "captain"}
+        steps.append(step)
+    return {**entry, "steps": steps}
+
+
+def restaff_without(connection: Connection, project_id: str, role_key: str, *,
+                    actor: str) -> list[dict[str, Any]]:
+    """Take one agent off every catalogue step that names it only as a SOFT default.
+
+    Called when that agent is deleted (agents.delete_agent). For each catalogue workflow whose
+    ACTIVE version names it as a default, the same spec — operator edits and all — is published
+    again with that step handed to its stand-in or to Auto, so the Studio shows who runs it now
+    and a later edit does not trip over a name the project no longer has. A step an operator
+    named the agent on themselves is not touched here (and blocks the delete instead).
+    """
+    from .step_agents import is_default_captain
+
+    key = str(role_key or "").strip().lower()
+    present = frozenset(str(k) for k in connection.execute(
+        text("SELECT role_key FROM roles WHERE project_id = :p AND role_key <> :k"),
+        {"p": project_id, "k": key},
+    ).scalars().all())
+    rows = connection.execute(
+        text(
+            """
+            SELECT d.id AS definition_id, d.workflow_key, v.spec
+              FROM workflow_definitions d
+              JOIN workflow_versions v ON v.id = d.active_version_id
+             WHERE d.project_id = :p
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all()
+    republished: list[dict[str, Any]] = []
+    for row in rows:
+        spec = row["spec"] if isinstance(row["spec"], dict) else {}
+        steps = spec.get("steps") or []
+        if not any(isinstance(s, dict) and is_default_captain(s)
+                   and str(s.get("captain")).lower() == key for s in steps):
+            continue
+        staffed = _staffed_for({"steps": [dict(s) for s in steps]}, present)
+        try:
+            version = workflows.publish_version(
+                connection, project_id=project_id, definition_id=row["definition_id"],
+                spec={**spec, "steps": staffed["steps"]}, actor=actor)
+        except workflows.WorkflowConflictError:
+            continue
+        republished.append({"workflow_key": row["workflow_key"],
+                            "version": version.get("version")})
+    return republished
 
 
 #: EXACTLY THE ONE THE CONSOLE ALREADY CALLS THE DEFAULT, and nothing else.

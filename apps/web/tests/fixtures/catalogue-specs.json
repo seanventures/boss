@@ -22,6 +22,8 @@
             "next": [
               "meeting"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -48,6 +50,8 @@
             "next": [
               "spec_review"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -105,6 +109,8 @@
             "next": [
               "preview"
             ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -128,6 +134,8 @@
             "next": [
               "plrr"
             ],
+            "captain": "qa",
+            "default_captain": "qa",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -151,6 +159,8 @@
             "next": [
               "report"
             ],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -211,6 +221,8 @@
             "next": [
               "notify"
             ],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -326,6 +338,8 @@
             "next": [
               "build"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -364,6 +378,8 @@
             "next": [
               "preview"
             ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -387,6 +403,8 @@
             "next": [
               "report"
             ],
+            "captain": "qa",
+            "default_captain": "qa",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -544,6 +562,8 @@
             "next": [
               "meeting"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -570,6 +590,8 @@
             "next": [
               "spec_review"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -627,6 +649,8 @@
             "next": [
               "preview"
             ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -650,6 +674,8 @@
             "next": [
               "ux_review"
             ],
+            "captain": "qa",
+            "default_captain": "qa",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -727,6 +753,8 @@
               "inputs": {}
             },
             "next": [],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -823,6 +851,8 @@
             "next": [
               "report"
             ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -981,6 +1011,8 @@
             "next": [
               "meeting"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1007,6 +1039,8 @@
             "next": [
               "spec_review"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1046,6 +1080,8 @@
               }
             },
             "next": [],
+            "captain": "docs_writer",
+            "default_captain": "docs_writer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1107,6 +1143,8 @@
             "next": [
               "spec_review"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1164,6 +1202,8 @@
             "next": [
               "report"
             ],
+            "captain": "backend_engineer",
+            "default_captain": "backend_engineer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1224,6 +1264,8 @@
             "next": [
               "document"
             ],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1244,6 +1286,8 @@
               }
             },
             "next": [],
+            "captain": "docs_writer",
+            "default_captain": "docs_writer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1328,6 +1372,8 @@
             "next": [
               "build"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1366,6 +1412,8 @@
             "next": [
               "preview"
             ],
+            "captain": "frontend_engineer",
+            "default_captain": "frontend_engineer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1389,6 +1437,8 @@
             "next": [
               "ux_review"
             ],
+            "captain": "qa",
+            "default_captain": "qa",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1466,6 +1516,8 @@
               "inputs": {}
             },
             "next": [],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1550,6 +1602,8 @@
             "next": [
               "build"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1588,6 +1642,8 @@
             "next": [
               "review"
             ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1610,6 +1666,8 @@
             "next": [
               "security_review"
             ],
+            "captain": "adversarial_reviewer",
+            "default_captain": "adversarial_reviewer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1687,6 +1745,8 @@
               "inputs": {}
             },
             "next": [],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1771,6 +1831,8 @@
             "next": [
               "spec_review"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1828,6 +1890,8 @@
             "next": [
               "report"
             ],
+            "captain": "backend_engineer",
+            "default_captain": "backend_engineer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1872,7 +1936,7 @@
             "approval": {
               "mode": "manual",
               "on_timeout": "block",
-              "approver_role": "cto",
+              "approver_role": "release_manager",
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -1888,6 +1952,8 @@
             "next": [
               "document"
             ],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1908,6 +1974,8 @@
               }
             },
             "next": [],
+            "captain": "docs_writer",
+            "default_captain": "docs_writer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1992,6 +2060,8 @@
             "next": [
               "meeting"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2018,6 +2088,8 @@
             "next": [
               "spec_review"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2075,6 +2147,8 @@
             "next": [
               "security_review"
             ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2117,6 +2191,8 @@
             "next": [
               "report"
             ],
+            "captain": "qa",
+            "default_captain": "qa",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2177,6 +2253,8 @@
             "next": [
               "document"
             ],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2197,6 +2275,8 @@
               }
             },
             "next": [],
+            "captain": "docs_writer",
+            "default_captain": "docs_writer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2281,6 +2361,8 @@
             "next": [
               "meeting"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2307,6 +2389,8 @@
             "next": [
               "spec_review"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2364,6 +2448,8 @@
             "next": [
               "report"
             ],
+            "captain": "backend_engineer",
+            "default_captain": "backend_engineer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2422,6 +2508,8 @@
               "inputs": {}
             },
             "next": [],
+            "captain": "sre",
+            "default_captain": "sre",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2506,6 +2594,8 @@
             "next": [
               "announce"
             ],
+            "captain": "pm",
+            "default_captain": "pm",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2579,6 +2669,8 @@
             "next": [
               "report"
             ],
+            "captain": "backend_engineer",
+            "default_captain": "backend_engineer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2641,6 +2733,8 @@
               }
             },
             "next": [],
+            "captain": "docs_writer",
+            "default_captain": "docs_writer",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",

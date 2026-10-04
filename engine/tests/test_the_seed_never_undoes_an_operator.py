@@ -43,7 +43,7 @@ WRITERS = {
 
 #: Every place one of the writers above is called from, and why that is safe.
 CALLERS = {
-    "bootstrap.py::seed_project_defaults -> ensure_mcp_server": "seed path below",
+    "bootstrap.py::_seed_project_defaults -> ensure_mcp_server": "seed path below",
     "services/mcp_registry.py::ensure_mcp_server -> register_mcp_server": "seed path below",
     "services/skill_definitions.py::sync_role_skills -> assign_skill_to_role": "seed path below",
     "services/specpack.py::* -> _upsert_role_spec": "the writer itself asks seed_exclusions",
@@ -64,11 +64,15 @@ CALLERS = {
     "main.py::* -> register_role": "operator: POST /v1/roles",
     "routers/agents.py::* -> create_agent": "operator: POST /v1/agents",
     "routers/agents.py::* -> grant_mcp": "operator: POST /v1/role-mcp-servers",
+    # Agent World: role specs name the MCP servers their agent holds; the seed grants them the
+    # way sync_role_skills grants skills, and asks seed_exclusions first (SEED_PATHS below).
+    "services/agents.py::sync_role_mcp -> grant_mcp": "seed path below",
 }
 
 #: The seed paths, each of which must consult the exclusions before it writes.
 SEED_PATHS = [
     skill_definitions.sync_role_skills,
+    __import__("boss_engine.services.agents", fromlist=["agents"]).sync_role_mcp,
     mcp_registry.ensure_mcp_server,
     specpack.SpecPackService._upsert_role_spec,
     agent_studio.AgentStudioService._seed_agent,

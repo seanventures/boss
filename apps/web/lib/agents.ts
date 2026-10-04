@@ -13,6 +13,7 @@
  * an agent and fails on any literal actor.
  */
 import { apiWrite } from "./api-write";
+import type { Persona } from "./agent-world-types";
 
 export type GrantableSkill = {
   skill_id: string; label: string; summary: string; source: string;
@@ -91,6 +92,11 @@ export async function loadGrantable(projectId: string): Promise<AgentResult<Gran
 export function createAgent(projectId: string, actor: string, input: {
   name: string; purpose: string; skills: string[]; mcpServers: McpGrant[];
   reportsTo?: string | null; roleKey?: string;
+  /** Agent World: how it speaks (linted server-side; never widens what it may do). */
+  persona?: Persona;
+  /** What it starts from: a blank agent, a shipped role, or a "thinks like" archetype. */
+  bornFrom?: { kind: "blank" } | { kind: "template"; template_key: string }
+    | { kind: "archetype"; archetype: string };
 }) {
   return send("/v1/agents", "POST", {
     project_id: projectId, actor, name: input.name, purpose: input.purpose,
@@ -98,6 +104,8 @@ export function createAgent(projectId: string, actor: string, input: {
     mcp_servers: input.mcpServers.map((g) => ({ server_id: g.server_id, tools: g.tools ?? [] })),
     reports_to: input.reportsTo || null,
     ...(input.roleKey ? { role_key: input.roleKey } : {}),
+    ...(input.persona ? { persona: input.persona } : {}),
+    ...(input.bornFrom ? { born_from: input.bornFrom } : {}),
   }, { scope: "agent-create", label: "Create agent" });
 }
 
@@ -105,6 +113,8 @@ export function createAgent(projectId: string, actor: string, input: {
 export function updateAgent(projectId: string, actor: string, roleKey: string, changes: {
   display_name?: string; mission?: string;
   boundaries?: { must: string[]; must_not: string[] }; reports_to?: string | null;
+  /** Saving it seals a new version once; the answer carries version, fingerprint, warnings. */
+  persona?: Persona;
 }) {
   return send(`/v1/agents/${enc(roleKey)}`, "PATCH",
     { project_id: projectId, actor, ...changes },

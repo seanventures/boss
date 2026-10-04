@@ -244,6 +244,15 @@ class SpecPackService:
             if not isinstance(level, int) or level < 0:
                 errors.append("autonomy.level must be a non-negative integer")
 
+        # A pack's persona is held to the same lint as one typed into the console: it reaches
+        # the dock, the work prompt and every panel seat, so a pack cannot be the way round it.
+        persona = role_spec.get("persona")
+        if persona is not None:
+            from .agent_persona import lint_persona
+
+            for problem in lint_persona(persona)[0]:
+                errors.append(f"persona.{problem['field']}: {problem['message']}")
+
         if errors:
             raise ValueError(f"{source} is invalid: {'; '.join(errors)}")
 
@@ -334,6 +343,18 @@ class SpecPackService:
         role_spec.setdefault("permissions", {})
         role_spec.setdefault("output_contracts", [])
         role_spec.setdefault("autonomy", {"level": 0})
+        # WHO THE AGENT IS TRAVELS WITH THE ROLE, NOT THE MODULE. A default agent module
+        # (pm_product_planner_v1, qa_gatekeeper_v1, …) replaces its role's spec on install, and
+        # modules carry no persona and no MCP grants — so Juno and Vera came out of every
+        # install voiceless and holding nothing. The role YAML's persona and MCP servers are
+        # kept unless the module states its own.
+        shipped = self._shipped_role_identity(role_key)
+        if shipped.get("persona") and "persona" not in role_spec:
+            role_spec["persona"] = shipped["persona"]
+        if shipped.get("mcp_servers"):
+            permissions = dict(role_spec.get("permissions") or {})
+            permissions.setdefault("mcp_servers", shipped["mcp_servers"])
+            role_spec["permissions"] = permissions
         role_spec["agent_module"] = {
             "id": module_spec["id"],
             "version": module_spec.get("version", "0.0.0"),
@@ -355,6 +376,17 @@ class SpecPackService:
             )
         )
         return role_key, role_spec
+
+    def _shipped_role_identity(self, role_key: str) -> dict[str, Any]:
+        """The persona and MCP servers the role's own YAML gives it, if it has one."""
+        try:
+            payload = self._load_yaml(self._role_path(role_key))
+        except (FileNotFoundError, OSError, ValueError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {"persona": payload.get("persona"),
+                "mcp_servers": (payload.get("permissions") or {}).get("mcp_servers")}
 
     def _upsert_role_spec(
         self,
@@ -433,6 +465,16 @@ class SpecPackService:
                     "source_module_id": source_module_id,
                 },
             )
+            # BORN FROM THE PACK: an agt_ id, born_by 'spec-pack', no sponsor (its owners
+            # answer for it), and its v1 seal (agent_identity; the seed batches the seal so the
+            # grants that follow land in v1, not v2…v9).
+            from . import agent_identity
+
+            agent_identity.quietly(
+                connection, agent_identity.birth, project_id, role_key, born_by="spec-pack",
+                born_from={"kind": "pack", "module_id": source_module_id,
+                           "module_version": source_module_version},
+                actor=actor)
             status = "installed"
         elif operator_edited:
             pass
@@ -479,6 +521,11 @@ class SpecPackService:
                         "source_module_id": source_module_id,
                     },
                 )
+                # A NEW PACK VERSION IS A NEW AGENT VERSION, when it really changed the remit.
+                from . import agent_identity
+
+                agent_identity.quietly(connection, agent_identity.seal_identity, project_id,
+                                       role_key, "remit", actor)
                 status = "updated"
         return {
             "role_key": role_key,
@@ -729,6 +776,14 @@ class SpecPackService:
         key = (role_key or "").strip()
         if not key:
             raise ValueError("role_key is required")
+        # ONE LINT FOR EVERY WAY IN. A persona written here reaches the same prompts as one
+        # saved through PATCH /v1/agents, so it is cleaned (and refused) the same way: raises
+        # agents.PersonaInvalid, a 422 naming the field.
+        if isinstance(spec, dict) and spec.get("persona") is not None:
+            from .agents import _clean_persona
+
+            cleaned, _warnings = _clean_persona(connection, project_id, spec["persona"])
+            spec = {**spec, "persona": cleaned}
 
         existing = connection.execute(
             text("SELECT id FROM roles WHERE project_id = :p AND role_key = :k"),
@@ -758,6 +813,10 @@ class SpecPackService:
                  "given": bool(reports_to_given), "reports_to": reports_to,
                  "spec": json.dumps(spec) if spec is not None else None},
             )
+            from . import agent_identity
+
+            agent_identity.quietly(connection, agent_identity.seal_identity, project_id, key,
+                                   "remit", actor)
         else:
             connection.execute(
                 text(
@@ -775,6 +834,11 @@ class SpecPackService:
             )
             # Registering a key by hand is a new decision, over any earlier delete.
             seed_exclusions.lift(connection, project_id, "role", key)
+            # And a birth: the person who registered it made it and answers for it.
+            from . import agent_identity
+
+            agent_identity.quietly(connection, agent_identity.birth, project_id, key,
+                                   born_by=actor, born_from={"kind": "blank"}, actor=actor)
         # A SPEC OR NAME AN OPERATOR WROTE STAYS WRITTEN. This path recorded nothing, so editing
         # a bundled role through POST /v1/roles lasted until the next seed, which found the spec
         # differed from the pack's YAML and put the YAML back. An autonomy- or manager-only

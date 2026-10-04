@@ -1,0 +1,15 @@
+id: archetypes_pack
+version: 1.0.0
+description: >
+  The four "thinks like" agents — The First-Principles Researcher, The Visionary Founder, The
+  Relentless Operator and The Teacher Who Simplifies. Each is inspired by a way of thinking,
+  never by a person, and says it is an AI. Optional: New agent › From archetype makes one
+  without installing the pack.
+requires:
+  - default_safety
+installs:
+  roles: [first_principles_researcher, visionary_founder, relentless_operator, teacher_who_simplifies]
+  workflows: []
+  policies: [default_safety]
+  skills: [model_gateway]
+status: active
