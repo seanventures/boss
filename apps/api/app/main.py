@@ -1238,6 +1238,27 @@ def _warm_read_paths() -> None:
         print(f"[lifespan] warm-up not started: {exc}")
 
 
+def _backfill_agent_identities() -> int:
+    """EVERY PROJECT'S AGENTS ARE SOMEBODY, not only the default project's.
+
+    bootstrap.seed backfills the default project and onboarding a new one; an upgraded
+    install with other projects kept agent_id NULL there, so their faces were seeded by
+    role_key until a Passport was opened (agent_identity.backfill; idempotent and quiet —
+    no `agent.born` dated at the upgrade). Never blocks boot.
+    """
+    from boss_engine.services import agent_identity
+
+    try:
+        with begin(engine) as connection:
+            changed = agent_identity.quietly(connection, agent_identity.backfill) or 0
+        if changed:
+            print(f"[lifespan] agent identity backfill: {changed} agent(s)")
+        return int(changed)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] agent identity backfill skipped: {exc}")
+        return 0
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
@@ -1295,6 +1316,7 @@ async def lifespan(_: FastAPI):
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
+    _backfill_agent_identities()
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
     # per-command durations, the queueing-vs-work split, why a preview refused — went to a
     # container log an operator cannot open. From here it also lands in `app_logs`, which the

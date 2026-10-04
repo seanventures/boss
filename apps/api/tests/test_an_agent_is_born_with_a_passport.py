@@ -212,3 +212,52 @@ def test_identities_carry_an_etag_and_answer_304_when_nothing_changed(client):
     again = client.get("/v1/agents/identities", params={"project_id": PROJECT},
                        headers={"If-None-Match": first.headers["etag"]})
     assert again.status_code == 304
+
+
+# ── Every project's agents, not only the default one's ──────────────────────────────────────
+
+
+def _project_with_pre_identity_agents(engine) -> tuple[str, list[str]]:
+    """Another project on this install with roles from before Agent World: no agent_id."""
+    from uuid import uuid4
+
+    other = f"aw-other-{uuid4().hex[:8]}"
+    keys = [f"legacy_{uuid4().hex[:6]}", "qa"]
+    with engine.begin() as c:
+        workspace = c.execute(text("SELECT workspace_id FROM projects WHERE id = :p"),
+                              {"p": PROJECT}).scalar_one()
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                       "VALUES (:id, :w, 'Other', :id)"), {"id": other, "w": workspace})
+        for key in keys:
+            c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, spec) "
+                           "VALUES (:id, :p, :k, :k, '{}'::jsonb)"),
+                      {"id": f"role_{uuid4().hex[:16]}", "p": other, "k": key})
+    return other, keys
+
+
+def test_the_resolver_list_never_shows_an_agent_without_its_id(client, engine):
+    """identities() backfills as passport does, so a face never changes on first click."""
+    other, keys = _project_with_pre_identity_agents(engine)
+    items = {i["role_key"]: i for i in client.get(
+        "/v1/agents/identities", params={"project_id": other}).json()["items"]}
+    for key in keys:
+        assert AGENT_ID.match(items[key]["agent_id"] or ""), key
+        passport = client.get(f"/v1/agents/{key}/passport",
+                              params={"project_id": other}).json()
+        assert passport["agent_id"] == items[key]["agent_id"]
+        assert passport["avatar"] == items[key]["avatar"], "one agent, one face"
+
+
+def test_startup_backfills_every_project_on_the_install(engine):
+    from apps.api.app import main as api_main
+
+    other, keys = _project_with_pre_identity_agents(engine)
+    assert api_main._backfill_agent_identities() >= len(keys)
+    with engine.connect() as c:
+        missing = c.execute(text(
+            "SELECT count(*) FROM roles WHERE agent_id IS NULL OR fingerprint IS NULL")).scalar()
+    assert missing == 0, "every role row on every project has an agent_id after backfill"
+    with engine.connect() as c:
+        born = c.execute(text("SELECT count(*) FROM events WHERE project_id = :p "
+                              "AND event_type = 'agent.born'"), {"p": other}).scalar()
+    assert born == 0, "quiet: no birth dated at the upgrade"
