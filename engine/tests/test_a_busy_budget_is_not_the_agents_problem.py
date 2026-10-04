@@ -138,11 +138,14 @@ def test_the_loop_and_the_step_agree_on_the_word():
 def test_the_burst_window_is_measured_on_the_wall_clock():
     """A tick runs inside one transaction, whose `now()` stands still: measured with it, the
     minute never moved for a caller that waited and asked again."""
-    from boss_engine.services.budget import BudgetGovernor
+    from boss_engine.services import budget
 
-    source = inspect.getsource(BudgetGovernor.reserve)
-    assert "created_at >= clock_timestamp() - interval '60 seconds'" in source
-    assert "created_at >= now() - interval '60 seconds'" not in source
+    # The window lives in burst_window() since the cap measures actual spend (settled receipts).
+    source = inspect.getsource(budget)
+    window = source[source.index("def burst_window"):]
+    window = window[:window.index("\ndef ", 1) if "\ndef " in window[1:] else len(window)]
+    assert "clock_timestamp()" in window
+    assert "now()" not in window
 
 
 # --------------------------------------------------------------------------- #
