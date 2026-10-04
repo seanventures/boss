@@ -130,6 +130,9 @@ def test_a_check_github_did_not_answer_is_not_ready(client, engine, monkeypatch,
     [repo] = body["repository"]["repos"]
     assert repo["pill"]["state"] == state and body["ready"] is False
     assert body["verdict"]["label"] == "1 to go" and body["verdict"]["tip"] == repo["pill"]["tip"]
+    # The tip names a time, so the instant travels with it (the console shows it locally).
+    if state == "rate_limited":
+        assert body["verdict"]["at"] and body["verdict"]["at"] == repo["pill"]["at"]
     from boss_engine.services import setup_view
     assert setup_view.basics(body)["github"] is True      # usable: a build may still start
 

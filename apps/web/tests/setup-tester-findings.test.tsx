@@ -126,6 +126,30 @@ describe("times are the viewer's", () => {
   });
 });
 
+describe("every time on the board is the viewer's, not only the pill's", () => {
+  it("the verdict's tooltip and Try it's reason say the same local time as the pill", async () => {
+    // 99:99 is no real local time: if it survives anywhere, the server's clock leaked through.
+    const at = "2026-10-04T14:20:00Z";
+    const local = new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+    const busy = { state: "rate_limited", tone: "amber" as const, label: "GitHub busy · 99:99",
+                   tip: "GitHub rate limit. Checks resume at 99:99.", at };
+    const base = everyRed();
+    const view = { ...base, ready: false, problems: 0, next: "repository" as const,
+                   verdict: { label: "1 to go", tone: "amber" as const, tip: busy.tip, at },
+                   repository: { ...base.repository,
+                                 repos: [{ ...base.repository.repos[0], pill: busy }] },
+                   models: board().models, budget: board().budget,
+                   try: { workflow_key: "setup_first_pr", last_run: null, done: false } };
+    fakeApi(view);
+    mounted = await mountBoard(view, "?area=setup&focus=try");
+    const verdict = q(document.body, "su-verdict")!.getAttribute("title");
+    const reason = q(document.body, "su-try-blocked")?.getAttribute("data-tip");
+    expect(verdict).toBe(`GitHub rate limit. Checks resume at ${local}.`);
+    expect(reason).toBe(`GitHub rate limit. Checks resume at ${local}.`);
+    expect(document.body.innerHTML).not.toContain("99:99");
+  });
+});
+
 describe("Try it says why it cannot run", () => {
   it("the Open a PR tooltip is the failing row's fix", async () => {
     const view = { ...everyRed(), next: "repository" as const, try: { workflow_key: "setup_first_pr",

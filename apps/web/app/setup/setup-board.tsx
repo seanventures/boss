@@ -25,7 +25,7 @@ import { BudgetRow } from "./budget-row";
 import { JobsRow } from "./jobs-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
-import { Dot } from "./pill";
+import { Dot, localView } from "./pill";
 import { RepositoryRow } from "./repository-row";
 import { TryRow } from "./try-row";
 
@@ -43,7 +43,8 @@ function currentParams(): SetupParams {
 export function SetupBoard({ projectId, initialView = null }: {
   projectId: string; actor?: string; initialView?: SetupView | null;
 }) {
-  const [view, setView] = useState<SetupView | null>(initialView);
+  const [rawView, setView] = useState<SetupView | null>(initialView);
+  const view = useMemo(() => (rawView ? localView(rawView) : null), [rawView]);
   const [error, setError] = useState<string | null>(null);
   const [checking, setCheckingState] = useState<Set<string>>(new Set());
   const [params, setParams] = useState<SetupParams>({ focus: null, add: null, source: null });

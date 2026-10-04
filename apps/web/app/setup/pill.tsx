@@ -37,6 +37,21 @@ export function localPill<T extends PillT>(pill: T): T {
   return { ...pill, label: swap(pill.label), tip: swap(pill.tip) };
 }
 
+/** EVERY time in the view, local: any object carrying `at` beside a `label` or `tip` (pills, the
+ *  verdict, a run's last pill) is rewritten once where the view enters the board, so a tooltip,
+ *  the Try-it reason or Ask BOSS can never show the server's clock beside a local pill. */
+export function localView<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(localView) as unknown as T;
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = localView(v);
+  const o = out as { at?: unknown; label?: unknown; tip?: unknown };
+  if (typeof o.at === "string" && typeof o.label === "string" && typeof o.tip === "string") {
+    return localPill(out as unknown as PillT) as unknown as T;
+  }
+  return out as T;
+}
+
 export function Pill({ pill: raw, testid }: { pill: PillT; testid?: string }) {
   const pill = localPill(raw);
   return (
