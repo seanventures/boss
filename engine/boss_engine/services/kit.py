@@ -497,6 +497,10 @@ def sync_role_abilities(connection: Connection, settings: Any, project_id: str, 
     by_key = {a["key"]: a for a in defs["abilities"]}
     granted: list[dict[str, str]] = []
     unavailable: list[dict[str, str]] = []
+    # READ ONCE, re-read only after a write: this runs on every boot for every project, and a
+    # read per role per ability was hundreds of queries to find nothing to do.
+    skills, servers = _grants(connection, project_id)
+    by_name = _servers_by_name(connection, project_id)
     with sealing_once():
         for role, row in _roles(connection, project_id).items():
             keys, _ = role_abilities(row["spec"])
@@ -508,9 +512,7 @@ def sync_role_abilities(connection: Connection, settings: Any, project_id: str, 
                     continue
                 if ability_subject(role, key) in removed:
                     continue
-                skills, servers = _grants(connection, project_id)
-                if _holds(ability, role, skills, servers,
-                          _servers_by_name(connection, project_id)):
+                if _holds(ability, role, skills, servers, by_name):
                     continue
                 problems = _grant_quietly(connection, settings, project_id, ability, role,
                                           actor, removed)
@@ -519,6 +521,7 @@ def sync_role_abilities(connection: Connection, settings: Any, project_id: str, 
                                         "reason": problems[0]})
                 else:
                     granted.append({"role_key": role, "ability": key})
+                skills, servers = _grants(connection, project_id)
     return {"granted": granted, "unavailable": unavailable}
 
 

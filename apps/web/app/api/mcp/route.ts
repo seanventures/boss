@@ -75,7 +75,7 @@ export async function POST(req: Request) {
   }
   if (action === "test") {
     return forward("/v1/mcp/servers/test", { method: "POST", body: {
-      project_id: projectId, url: String(body.url ?? ""), auth: body.auth ?? null } });
+      project_id: projectId, actor, url: String(body.url ?? ""), auth: body.auth ?? null } });
   }
   if (action === "register") {
     return forward("/v1/mcp/servers", { method: "POST", body: {
