@@ -43,6 +43,12 @@ export type ActivityRiverProps = {
 export const RIVER_POLL_MS = 8000;
 const TOOL_CAP = 50;
 
+/** "You approved Approved · Notify" says the verb twice: an approval's label starts with it. */
+export function withoutVerb(label: string, verb: string): string {
+  const prefix = `${verb} · `;
+  return verb && label.startsWith(prefix) ? label.slice(prefix.length) : label;
+}
+
 const FILTERS: { key: ActivityFilter; label: string; tip: string }[] = [
   { key: "all", label: "All", tip: "Everything agents did" },
   { key: "needs_you", label: "Needs you", tip: "Work waiting on a person" },
@@ -305,7 +311,7 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
           ) : null}
           <span className="ag-river-who" data-user-text>{who.name}</span>{" "}
           <span className="ag-river-verb">{sentence}</span>{" "}
-          <span className="ag-river-label" data-user-text title={item.label}>{item.label}</span>
+          <span className="ag-river-label" data-user-text title={item.label}>{withoutVerb(item.label, item.verb)}</span>
         </span>
         <span className="ag-river-status" data-state={state}>
           <AgState state={state} compact />

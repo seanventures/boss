@@ -82,7 +82,10 @@ function OutcomeChip({ o, now, orgId }: { o: Outcome; now: number | null; orgId?
            if (!external && o.runId && plainClick(e)) { e.preventDefault(); navigate(runPatch(o.runId)); }
          }}>
         <RunFace roleKey={o.roleKey} variant={o.roleKey ? "agent" : "boss"} size={20} state="done" />
-        <span className="ag-out-text" data-user-text>{o.text}</span>
+        {/* A finished run reads `<subject> finished` (spec §4.4); an artifact reads as sent. */}
+        {o.kind === "run" && o.label
+          ? <span className="ag-out-text"><span data-user-text>{o.label}</span> finished</span>
+          : <span className="ag-out-text" data-user-text>{o.text}</span>}
         <span className="ag-out-age">{ago(o.at, now)}</span>
       </a>
     </li>

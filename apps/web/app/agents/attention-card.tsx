@@ -128,7 +128,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
       if (result.ok) {
         finish(action.action === "approve"
           ? (run ? `Approved · ${subject} continues` : "Approved")
-          : (run ? "Rejected · step failed" : "Rejected"));
+          : (run ? "Rejected · run stopped" : "Rejected"));
       } else {
         setError(result.error ?? "");
         onRefresh?.();
