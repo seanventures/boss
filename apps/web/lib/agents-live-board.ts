@@ -246,7 +246,9 @@ export function parseMission(w: unknown): Mission {
     startedAt: opt(o.started_at), stepSince: opt(o.step_since),
     elapsedSeconds: optNum(o.elapsed_seconds), stepElapsedSeconds: optNum(o.step_elapsed_seconds),
     costUsd: num(o.cost_usd),
-    hops: arr(o.hops).map(parseHop),
+    // A gate's own act comes as a hop flagged `gate` (it is real work: the wait). The lane draws
+    // it once, as the amber You / A person hop from the row's state, so it is not a face here.
+    hops: arr(o.hops).filter((h) => obj(h).gate !== true).map(parseHop),
     folded: o.folded === true || undefined,
     next: arr(o.next).map((n) => {
       const x = obj(n);
