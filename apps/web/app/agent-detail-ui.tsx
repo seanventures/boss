@@ -33,6 +33,7 @@ import { openPlan } from "../lib/agent-converse";
 import { formatDate } from "../lib/datetime";
 import { AgentProfile } from "./agent-profile-ui";
 import { HelpTip } from "./help-tip";
+import { AgentQuickCreate } from "./agent-quick-create";
 import {
   deleteAgent, grantMcp, grantSkill, loadGrantable, parseToolList, repointMapping, revokeMcp,
   revokeSkill, updateAgent, type AgentSummary,
@@ -152,6 +153,16 @@ export function usedIn(named: NamedOn[] | undefined): Array<{ workflow_key: stri
   return out;
 }
 
+/** Show another agent's Passport in place (the same `?role=` the roster opens). */
+function openRole(roleKey: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("role", roleKey);
+    window.history.pushState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
 export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, studio }: {
   projectId: string; roleKey: string;
   /** The Studio catalog, for this agent's Profile. */
@@ -192,6 +203,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
   const live = useLivePresence(projectId).get(roleKey);
   const [tab, setTab] = useState<SectionKey>("work");
   const [sharing, setSharing] = useState(false);
+  const [registering, setRegistering] = useState(false);
   const [draftPersona, setDraftPersona] = useState<Persona | null>(null);
   useEffect(() => {
     const t = readTab(window.location.search);
@@ -265,11 +277,21 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                               trust: detail.registered ? detail.trust_score : null,
                             }} />
             {/* An agent doing work with no registered role has nothing governing it. Said. */}
+            {/* Said as what to do about it, not as an error: Register makes it a governed agent
+                (skills, limits, a trust score) under the name it already works under. */}
             {!detail.registered ? (
-              <div className="ad-bad" data-testid="agent-unregistered"
-                   title="Ungoverned: no registered role, so no trust score, limits or violation tracking">
-                No registered role
+              <div className="ag-unreg" data-testid="agent-unregistered"
+                   title="Ungoverned: no registered role, so no limits or trust score">
+                <strong>Not registered</strong>
+                <button type="button" className="ag-btn ag-btn-primary" data-testid="agent-register"
+                        title="Make it an agent: skills, limits and a trust score"
+                        onClick={() => setRegistering(true)}>Register</button>
               </div>
+            ) : null}
+            {registering ? (
+              <AgentQuickCreate projectId={projectId} actor={actor} initialName={detail.name}
+                                onClose={() => setRegistering(false)}
+                                onCreated={(key) => { setRegistering(false); void load(); openRole(key); }} />
             ) : null}
             <PassportNav active={tab} onPick={pick} />
             {sharing && passport ? (
