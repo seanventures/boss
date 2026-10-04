@@ -627,7 +627,7 @@ def test_a_skill_nobody_may_run_is_refused_at_publish_with_what_to_do(eng, proje
             _publish_custom(c, project, "wf_nobody", "file_issue")
     said = str(error.value)
     assert "no agent on this project may run it" in said
-    assert "Give tracker.file_issue to an agent on the Agents page" in said
+    assert "Give tracker.file_issue to an agent in Agent Studio" in said
 
 
 def test_a_skill_that_names_an_agent_as_its_caller_is_run_by_that_agent(eng, project,

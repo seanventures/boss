@@ -4,7 +4,7 @@ WHY THIS MODULE EXISTS
 ----------------------
 BOSS grew four places an "agent" lived and none of them joined:
 
-* ``roles`` — the roster row the Agents page lists and workflow steps name as `captain`;
+* ``roles`` — the roster row Agent Studio lists and workflow steps name as `captain`;
 * ``role_skills`` — the grant the runtime actually checks before an agent may call a skill;
 * ``agent_definitions``/``agent_versions`` — Agent Studio's prompts, model policy and rules;
 * nothing at all for MCP servers.
@@ -422,21 +422,21 @@ def mcp_grant_gap(connection: Connection, project_id: str, role_key: str, *,
         # "workflow_runner", which the operator cannot open.
         return {**gap, "message": (
             f"this step runs as the workflow, and the workflow holds no MCP server: {skill_key} "
-            f"calls '{tool}' on '{server['name']}'. Give the server to an agent on the Agents "
-            "page (Give this agent an MCP server) and put that agent on the step, or leave the "
+            f"calls '{tool}' on '{server['name']}'. Give the server to an agent in Agent Studio "
+            "(Loadout › MCP › + Add) and put that agent on the step, or leave the "
             "step's agent empty so BOSS picks the one that holds it.")}
     if held is None:
         return {**gap, "message": (
             f"{who} may not run {skill_key}: it calls the MCP server '{server['name']}', and "
             f"{who} does not hold that server. Holding a skill does not carry a server's reach "
-            "— give the agent the server on the Agents page (Give this agent an MCP server), "
+            "— give the agent the server in Agent Studio (Loadout › MCP › + Add), "
             "or ask BOSS to offer assign_mcp_to_agent.")}
     allowed = [str(t) for t in (held[0] or [])]
     if allowed and tool not in allowed:
         return {**gap, "message": (
             f"{who} may not run {skill_key}: it calls '{tool}' on the MCP server "
             f"'{server['name']}', and {who} holds that server only for {', '.join(allowed)}. "
-            f"Add '{tool}' to its grant on the Agents page.")}
+            f"Add '{tool}' to its grant in Agent Studio.")}
     return None
 
 

@@ -231,8 +231,8 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
     <div className="tpl-page" data-testid="agent-detail" role="dialog" aria-modal="true"
          aria-label={detail?.name ?? roleKey}>
       <header className="tpl-page-head">
-        <button type="button" className="tpl-back" onClick={onClose}>← Back to agents</button>
-        <span className="tpl-crumb">Agents · {detail?.name ?? roleKey}</span>
+        <button type="button" className="tpl-back" onClick={onClose}>← Back to Agent Studio</button>
+        <span className="tpl-crumb">Agent Studio · {detail?.name ?? roleKey}</span>
         {/* PLAN SOMETHING WITH IT (agents/converse-host.tsx). Talking to it is the Passport's
             own Ask, below: one door for one action. */}
         {detail?.registered ? (

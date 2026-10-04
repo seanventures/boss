@@ -841,7 +841,7 @@ def execute_mcp_tool(
                if caller else {"message": (
                    f"{skill_key} calls the MCP server '{server['name']}' and this invocation "
                    "names no agent holding it. Run it as an agent that holds the server "
-                   "(Agents page, Give this agent an MCP server).")})
+                   "(Agent Studio, the agent's Loadout › MCP › + Add).")})
         if gap is not None:
             raise SkillExecutorConfigurationError(gap["message"])
 

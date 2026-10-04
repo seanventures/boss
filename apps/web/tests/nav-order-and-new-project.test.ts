@@ -66,7 +66,7 @@ describe("the Run group order", () => {
 
 describe("the renamed areas", () => {
   it.each([
-    ["workforce", "Agents"],
+    ["workforce", "Agent Studio"],
     ["delivery", "Infra"],
     ["delivery_workflows", "Workflows"],
     ["code_tasks", "Projects"],

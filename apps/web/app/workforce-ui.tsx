@@ -168,7 +168,7 @@ export function WorkforceArea(
   return (
     <div className="wf-agents" data-testid="agents-area">
       <header className="wf-lib-head">
-        <div className="wf-tabs" role="tablist" aria-label="Agents">
+        <div className="wf-tabs" role="tablist" aria-label="Agent Studio">
           <button type="button" role="tab" className="wf-tab" aria-selected={view === "roster"}
                   data-testid="agents-view-roster" onClick={() => setView("roster")}>
             Roster <em data-testid="wf-roster-count">({everyone.length})</em>

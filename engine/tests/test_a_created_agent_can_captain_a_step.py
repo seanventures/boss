@@ -45,7 +45,7 @@ def test_a_project_agent_is_a_valid_captain_when_the_roster_is_given():
 def test_without_the_roster_only_bundled_roles_pass_and_the_refusal_says_what_to_do():
     [problem] = validate_captain({"id": "s", "captain": "release_auditor"})
     assert "not a role this workforce has" in problem
-    assert "Agents page" in problem and "leave the captain empty" in problem
+    assert "Agent Studio" in problem and "leave the captain empty" in problem
 
 
 def test_a_spec_naming_a_project_agent_validates_with_its_roster():
@@ -92,7 +92,7 @@ def test_with_a_roster_a_bundled_role_missing_from_it_is_refused():
     failed at start or minutes into a run. With a roster, the roster is the whole answer (plus
     the human approver); project_roster is what keeps undeleted bundled roles in it."""
     [problem] = validate_captain({"id": "s", "captain": "qa"}, roster={"release_auditor"})
-    assert "not a role this workforce has" in problem and "Agents page" in problem
+    assert "not a role this workforce has" in problem and "Agent Studio" in problem
     # The human approver, on a gate — `human` is only ever accepted where a person can answer
     # (the steps stream's shape rule; a bare step with no kind is not a gate).
     assert validate_captain({"id": "s", "kind": "decision", "captain": "human"},

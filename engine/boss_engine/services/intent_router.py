@@ -1322,7 +1322,7 @@ def _role_identity(role: Optional[str], connection: Any = None,
                    project_id: Optional[str] = None) -> str:
     """Answer as a named member of the workforce, from what that member has actually done.
 
-    The Agents page's "Ask" put "@QA Lead: " into the general agent's box. The name was prose
+    Agent Studio's "Ask" put "@QA Lead: " into the general agent's box. The name was prose
     in a prompt, so the reply came from BOSS-in-general: no lens, no remit, and no memory of
     anything that role had argued. An operator asking their QA lead a question got a generic
     answer wearing a name badge, which is worse than no expert at all — it looks like expertise.
