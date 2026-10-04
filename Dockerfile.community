@@ -113,6 +113,10 @@ RUN pnpm --filter boss-web build
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
+# Only a host whose network/SSO already decides who gets in builds with "network"
+# (lib/console-session.ts networkTrustedConsole). Empty keeps the console's own sign-in.
+ARG BOSS_CONSOLE_AUTH=
+ENV BOSS_CONSOLE_AUTH=${BOSS_CONSOLE_AUTH}
 ENV NODE_ENV=production \
     PORT=3000 \
     NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
