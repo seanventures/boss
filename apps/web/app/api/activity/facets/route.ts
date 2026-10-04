@@ -11,7 +11,7 @@ import { API_URL, authHeaders } from "../../../../lib/client";
  */
 export const dynamic = "force-dynamic";
 
-const FORWARD = ["project_id", "since", "until", "run_id", "workflow_run_id", "agent", "service"] as const;
+const FORWARD = ["project_id", "since", "until", "run_id", "workflow_run_id", "step_id", "agent", "service"] as const;
 
 export async function GET(req: Request) {
   const incoming = new URL(req.url).searchParams;

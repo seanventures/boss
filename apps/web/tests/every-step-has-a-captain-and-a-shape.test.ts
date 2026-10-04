@@ -15,6 +15,7 @@ import { codeOnly } from "./_helpers/source";
  * general — no lens, no remit, no memory of what this kind of work has produced before.
  */
 const UI = codeOnly("app/delivery-workflows-ui.tsx");
+const STEP = codeOnly("app/workflows/step-run.tsx");
 const ICONS = codeOnly("app/step-icons.tsx");
 const CSS = codeOnly("app/globals.css");
 
@@ -32,13 +33,17 @@ describe("every step has somebody who answers for it", () => {
   });
 
   it("the button says who it reaches", () => {
-    expect(UI).toContain("`Ask the ${roleLabel(stepCaptain(step, capability))}`");
-    // And still works for a step with no captain at all.
-    expect(UI).toContain('"Ask BOSS about this step"');
+    // The panel's one Ask (StepDoneBy): it names the agent, and reaches BOSS when no agent has
+    // the step. The ask itself is addressed to the step's captain.
+    expect(STEP).toContain("`Ask ${named.name} about this step`");
+    expect(UI).toContain('askBossTip="Ask BOSS about this step"');
+    expect(UI).toContain("question, stepCaptain(step, capability));");
   });
 
   it("and the captain is shown, not only implied by a button label", () => {
-    expect(UI).toContain("<AgentChip roleKey={stepCaptain(step, capability)}");
+    // Shown as the Done-by line: who ran it, else the lane node's own planned view of it.
+    expect(UI).toContain("planned={planned}");
+    expect(STEP).toContain("const actor = stepActor(laneAgentOf(output, act, viewer), planned);");
   });
 
   it("one resolver decides who it is, so the override cannot be half-honoured", () => {
@@ -55,7 +60,7 @@ describe("every step has somebody who answers for it", () => {
     expect(UI).toContain("function stepCaptain(step: RunStep, capability?: Capability): string {");
     expect(UI).toContain(
       "return stepAgentChip(step.captain, step.output, capability?.captain)?.role ?? \"\";");
-    expect(UI).toContain("note={stepAgentChip(step.captain, step.output, capability?.captain)?.note");
+    expect(STEP).toContain("export function stepActor(");
   });
 });
 

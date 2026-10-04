@@ -11,7 +11,7 @@ export type Density = "comfortable" | "compact";
 
 export const NODE = {
   /** Three rows that always fit: a 2-line title beside the icon, the agent, the badges. */
-  comfortable: { w: 176, h: 104 },
+  comfortable: { w: 188, h: 116 },
   /** Compact fits more steps by geometry, never by smaller text: a narrower node, as tall as it
    *  needs for the same three rows (a full-width 2-line title, the agent, then the icon and
    *  badges). 104px wide is what lets 11 steps fit a 1262px lane at the readable minimum. */
@@ -19,10 +19,12 @@ export const NODE = {
 } as const;
 /** A Wait step only shows its duration, so it is drawn narrower. */
 export const WAIT_W = { comfortable: 96, compact: 80 } as const;
-/** The connector between two columns, which also holds the `+` button. */
-export const CONN = { comfortable: 36, compact: 16 } as const;
+/** The connector between two columns, which also holds the `+` button. Comfortable is the
+ *  roomy lane a run is always drawn in (and 100% in the editor): room to read each step as its
+ *  own thing, not a row of cards touching (operator, 2026-10-04). */
+export const CONN = { comfortable: 56, compact: 16 } as const;
 export const ROW_GAP = 16;
-export const PAD_X = 12;
+export const PAD_X = 20;
 export const PAD_Y = 14;
 /** The Start flag and the End cap (wider in Compact, whose text is larger). */
 export const FLAG_W = { comfortable: 36, compact: 44 } as const;
@@ -70,9 +72,9 @@ export function nodeWidth(type: StepView["type"] | undefined, density: Density):
 
 /** Positions for every node, column and gap at one density. */
 export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["type"]>,
-                             density: Density): LaneGeometry {
+                             density: Density, connector?: number): LaneGeometry {
   const node = NODE[density];
-  const conn = CONN[density];
+  const conn = connector ?? CONN[density];
   const flagW = FLAG_W[density];
   const columns = layout.columns;
   const colW: number[] = Array.from({ length: columns }, () => 0);
@@ -144,4 +146,24 @@ export function fitScale(natural: number, available: number, density: Density): 
 /** Whether the lane has to scroll at this scale (and so shows the minimap). */
 export function overflows(natural: number, scale: number, available: number): boolean {
   return available > 0 && natural * scale > available + 0.5;
+}
+
+/** The tightest connector a roomy lane closes to before it scrolls instead. */
+export const ROOMY_MIN_CONN = 24;
+
+/**
+ * A ROOMY LANE THAT FITS WHEN IT NEARLY DOES. Comfortable nodes at full size; the connectors
+ * close from 56px towards 24px when that is all it takes to fit, so a four-step flow 33px too
+ * wide does not get a scrollbar and arrows for 33px. Anything wider keeps its full spacing and
+ * scrolls inside the lane.
+ */
+export function roomyGeometry(layout: FlowLayout, types: Map<string, StepView["type"]>,
+                              available: number): LaneGeometry {
+  const full = laneGeometry(layout, types, "comfortable");
+  if (!(available > 0) || full.width <= available) return full;
+  for (let c = CONN.comfortable - 8; c >= ROOMY_MIN_CONN; c -= 8) {
+    const g = laneGeometry(layout, types, "comfortable", c);
+    if (g.width <= available) return g;
+  }
+  return full;
 }

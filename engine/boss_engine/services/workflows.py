@@ -5578,6 +5578,13 @@ _AWAIT_LABELS: dict[str, str] = {
 }
 
 
+#: A code task awaited by a step that is not the build, named after that step.
+_CODE_TASK_BY_CAPABILITY: dict[str, str] = {
+    "plrr": "the readiness fixes to finish",
+    "redeploy": "the rebuild to finish",
+}
+
+
 def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
     """What a waiting step is waiting FOR — or None when that is not recorded.
 
@@ -5602,7 +5609,13 @@ def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
         return "a decision"
     awaited = (step.get("output") or {}).get("await")
     if isinstance(awaited, dict):
-        label = _AWAIT_LABELS.get(str(awaited.get("kind") or "").strip())
+        kind = str(awaited.get("kind") or "").strip()
+        # NOT EVERY CODE TASK IS THE BUILD. Readiness extends the build's task, and its run
+        # said "waiting on the build to finish" beside a build step marked succeeded.
+        capability = str(step.get("capability") or (step.get("output") or {}).get("capability") or "")
+        if kind == "code_task" and capability and capability != "build":
+            return _CODE_TASK_BY_CAPABILITY.get(capability, "the code work to finish")
+        label = _AWAIT_LABELS.get(kind)
         if label:
             return label
     return None

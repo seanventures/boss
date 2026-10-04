@@ -23,6 +23,7 @@ import { standingOf } from "./_helpers/run-standing";
 const { RunsView } = await import("../app/delivery-workflows-ui");
 const { FlowLane } = await import("../app/workflows/flow/flow-lane");
 const { forgetRunDefinitions } = await import("../app/workflows/flow/run-lane");
+const { nameOf } = await import("../app/agents/run-face");
 
 /** Write the PRD (titled) → Trim the clip (your step) → parallel(review, test) → join → notify. */
 const DEF: Spec = {
@@ -134,9 +135,14 @@ describe("a run is drawn as its workflow is designed", () => {
     const run = drawn("run");
     const design = drawn("design");
     expect([...run.keys()].sort()).toEqual([...design.keys()].sort());
-    expect(run).toEqual(design);
+    // The same steps, titles and places. A named agent reads by its callsign on a run — the
+    // name the chain, the step panel and the node of a step it has run all use — and by its
+    // role in the designer.
+    const sameBut = (m: Map<string, Drawn>) => new Map([...m].map(([k, v]) => [k, { ...v, agent: null }]));
+    expect(sameBut(run)).toEqual(sameBut(design));
     expect(run.get("prd")!.title).toBe("Write the PRD");
-    expect(run.get("prd")!.agent).toBe("Software Engineer");
+    expect(design.get("prd")!.agent).toBe("Software Engineer");
+    expect(run.get("prd")!.agent).toBe(nameOf("software_engineer").name);
     expect(run.get("clip")!.title).toBe("Trim the clip");
     expect(run.get("clip")!.agent).toBe("Auto · QA Lead");
     // Parallel siblings share a column: the run is not drawn as a chain.
