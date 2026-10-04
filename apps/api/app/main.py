@@ -25538,11 +25538,10 @@ def upsert_ranked_work_item(
                 source=payload.source,
                 actor=payload.actor,
             )
-            binding = work_orchestration.bind_tracker(
+            binding = work_orchestration.bind_default_tracker(
                 connection,
                 project_id=payload.project_id,
                 work_item_id=work_item["id"],
-                provider_key=None,
                 actor=payload.actor,
             )
             allocation = work_orchestration.ensure_allocation(
@@ -25551,11 +25550,15 @@ def upsert_ranked_work_item(
                 work_item_id=work_item["id"],
                 actor=payload.actor,
             )
-            sync_job = work_orchestration.enqueue_tracker_sync(
-                connection,
-                project_id=payload.project_id,
-                binding_id=binding["id"],
-                actor=payload.actor,
+            sync_job = (
+                work_orchestration.enqueue_tracker_sync(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=binding["id"],
+                    actor=payload.actor,
+                )
+                if binding
+                else {"status": "no_tracker", "binding_id": None, "job_id": None}
             )
             return {
                 "work_item": work_item,
@@ -25667,21 +25670,23 @@ def plan_resource_allocations(
 
 @app.get("/v1/work-trackers/catalog")
 def work_tracker_catalog() -> dict[str, Any]:
-    """Selectable bug/work trackers (Plane is the default option)."""
+    """Selectable bug/work trackers (GitHub Issues, reusing the repo connection, is the default
+    option — skills-mcp spec E10)."""
     return {
-        "default_provider_key": "plane",
+        "default_provider_key": "github_issues",
         "items": work_orchestration.tracker_catalog(),
     }
 
 
 @app.get("/v1/work-trackers")
 def list_work_trackers(project_id: str) -> dict[str, Any]:
-    """Installed tracker providers for a project (Plane seeded as default)."""
+    """Installed tracker providers for a project. None is the default until one is connected
+    (skills-mcp spec E10), and then `default_provider_key` says which."""
     with begin(engine) as connection:
         items = work_orchestration.list_tracker_providers(connection, project_id)
         default_key = next(
             (i["provider_key"] for i in items if i.get("is_default")),
-            "plane",
+            None,
         )
         return {
             "project_id": project_id,

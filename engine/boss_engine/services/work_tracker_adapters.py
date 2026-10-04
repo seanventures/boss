@@ -173,10 +173,9 @@ class PlaneWorkTrackerAdapter:
         return TrackerCatalogEntry(
             provider_key=self.provider_key,
             display_name=self.display_name,
-            description="Plane — default BOSS system of record for issues and PRDs.",
+            description="Plane — an open-source system of record for issues and PRDs.",
             docs_url="https://docs.plane.so/",
             capabilities=self.capabilities,
-            is_default_option=True,
             connection_fields=(
                 ConnectionField("api_base_url", "API / web base URL", placeholder="https://plane.example.com"),
                 ConnectionField("workspace_slug", "Workspace slug", placeholder="your-workspace"),
@@ -600,6 +599,8 @@ class GitHubIssuesWorkTrackerAdapter:
             description="GitHub Issues — track work next to the code.",
             docs_url="https://docs.github.com/en/rest/issues",
             capabilities=self.capabilities,
+            # The default (skills-mcp spec E10): it reuses the repo's GitHub connection.
+            is_default_option=True,
             connection_fields=(
                 ConnectionField(
                     "owner",
@@ -886,7 +887,7 @@ TRACKER_ADAPTERS: dict[str, WorkTrackerAdapter] = {
 
 def list_catalog() -> list[dict[str, Any]]:
     entries = []
-    for key in ("plane", "jira", "linear", "github_issues", "azure_devops"):
+    for key in ("github_issues", "linear", "jira", "plane", "azure_devops"):
         adapter = TRACKER_ADAPTERS[key]
         entry = adapter.catalog_entry()
         entries.append(

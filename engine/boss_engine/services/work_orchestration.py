@@ -427,7 +427,7 @@ class WorkOrchestrationService:
             "test": test_result,
             "default_provider_key": next(
                 (p["provider_key"] for p in providers if p.get("is_default")),
-                "plane",
+                None,
             ),
         }
 
@@ -1328,23 +1328,30 @@ class WorkOrchestrationService:
     ) -> tuple[bool, str]:
         if not work_item_id:
             return True, "legacy_unscoped_job"
-        binding = connection.execute(
-            text(
-                """
-                SELECT b.id, b.sync_status, p.enforcement_mode,
-                       p.status AS provider_status
-                FROM work_tracker_bindings b
-                JOIN work_tracker_providers p ON p.id=b.provider_id
-                WHERE b.id=:binding_id AND b.project_id=:project_id
-                  AND b.work_item_id=:work_item_id
-                """
-            ),
-            {
-                "binding_id": tracker_binding_id,
-                "project_id": project_id,
-                "work_item_id": work_item_id,
-            },
-        ).mappings().first()
+        # TRACKED IN BOSS ALONE: work queued while the project had no default tracker carries no
+        # binding (bind_default_tracker, skills-mcp spec E10). It has no ticket to wait for, so
+        # only the allocation and the quotas below apply. A binding that IS named must exist.
+        if tracker_binding_id is None:
+            binding = {"provider_status": "active", "enforcement_mode": "advisory",
+                       "sync_status": "untracked"}
+        else:
+            binding = connection.execute(
+                text(
+                    """
+                    SELECT b.id, b.sync_status, p.enforcement_mode,
+                           p.status AS provider_status
+                    FROM work_tracker_bindings b
+                    JOIN work_tracker_providers p ON p.id=b.provider_id
+                    WHERE b.id=:binding_id AND b.project_id=:project_id
+                      AND b.work_item_id=:work_item_id
+                    """
+                ),
+                {
+                    "binding_id": tracker_binding_id,
+                    "project_id": project_id,
+                    "work_item_id": work_item_id,
+                },
+            ).mappings().first()
         if binding is None:
             return False, "work_tracking_binding_required"
         if binding["provider_status"] != "active":
@@ -1666,11 +1673,10 @@ class WorkOrchestrationService:
                 if key in inputs
             },
         )
-        binding = self.bind_tracker(
+        binding = self.bind_default_tracker(
             connection,
             project_id=project_id,
             work_item_id=work_item["id"],
-            provider_key=None,
             actor=actor,
         )
         allocation = self.ensure_allocation(
@@ -1684,6 +1690,31 @@ class WorkOrchestrationService:
             "tracker_binding": binding,
             "allocation": allocation,
         }
+
+    def bind_default_tracker(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        work_item_id: str,
+        actor: str = "system",
+    ) -> Optional[dict[str, Any]]:
+        """Bind work to the project's default tracker, or to nothing when there is none.
+
+        No tracker is the default until one is connected (skills-mcp spec E10), so work is
+        tracked in BOSS alone until then: it is never refused for want of a ticket, and never
+        bound to a tracker that cannot create one. An explicit provider still goes through
+        `bind_tracker`, which refuses one that is not active.
+        """
+        if self._tracker_provider(connection, project_id, None) is None:
+            return None
+        return self.bind_tracker(
+            connection,
+            project_id=project_id,
+            work_item_id=work_item_id,
+            provider_key=None,
+            actor=actor,
+        )
 
     def enqueue_tracker_sync(
         self,

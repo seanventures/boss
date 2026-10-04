@@ -65,6 +65,11 @@ class CatalogueAddBody(KitBody):
     token: Optional[str] = None
 
 
+class ToolPolicyBody(KitBody):
+    tool: str
+    policy: str
+
+
 #: Tests run side by side, at most this many at once (spec §6.4 `Test all`).
 TEST_CONCURRENCY = 4
 
@@ -260,11 +265,14 @@ def build_kit_router(
 
     @router.post("/v1/kit/test-crew")
     def test_crew(body: CrewBody) -> dict[str, Any]:
-        """Every Ready ability's test, then for each Essential: can an agent use it now?"""
+        """Every Ready ability's test, then for each Essential: can an agent use it now?
+
+        A Failing ability is tested again too: its failure is only the last test's, and a
+        server that has come back must not stay red until someone opens its drawer."""
         actor = _writer(body)
         with begin(engine) as connection:
             view = kit.kit_view(connection, settings(), body.project_id)
-        keys = [a["key"] for a in view["abilities"] if a["status"] == "ready"]
+        keys = [a["key"] for a in view["abilities"] if a["status"] in ("ready", "failing")]
         defs = {k: _ability(body.project_id, k) for k in keys}
         with ThreadPoolExecutor(max_workers=TEST_CONCURRENCY) as pool:
             list(pool.map(lambda k: _run_test(body.project_id, defs[k], actor), keys))
@@ -335,10 +343,6 @@ def build_kit_router(
         if row is None:
             raise HTTPException(status_code=404, detail="MCP server not found.")
         return row
-
-    class ToolPolicyBody(KitBody):
-        tool: str
-        policy: str
 
     @router.post("/v1/mcp/servers/{server_id}/policy")
     def server_tool_policy(server_id: str, body: ToolPolicyBody) -> dict[str, Any]:
