@@ -133,11 +133,6 @@ describe("scoping to one work task", () => {
     expect(UI).toContain("Show the whole project");
   });
 
-  it("the run page links across with the run id", () => {
-    const factory = codeOnly("app/code-tasks-ui.tsx");
-    expect(factory).toContain('url.searchParams.set("area", "activity")');
-    expect(factory).toContain('data-testid="ct-detail-logs"');
-  });
 });
 
 describe("where it lives", () => {

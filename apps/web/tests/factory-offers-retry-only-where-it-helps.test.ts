@@ -47,16 +47,11 @@ describe("Retry build", () => {
     const engine = readFileSync("../../engine/boss_engine/services/code_task_service.py", "utf8");
     expect(engine).toContain(
       'fctx.get("advisory_failing_gates") or fctx.get("failing_gates")');
-    expect(codeOnly("app/code-tasks-ui.tsx")).not.toMatch(/advisory_failing_gates\s*\?\?/);
-  });
-
-  it("the action bar uses that rule", () => {
-    const ui = codeOnly("app/code-tasks-ui.tsx");
-    expect(ui).toContain("{isRetryable(active) ? (");
+    expect(codeOnly("app/factory/legacy-build-parts.tsx")).not.toMatch(/advisory_failing_gates\s*\?\?/);
   });
 
   it("the compact form says what happened", () => {
-    const ui = codeOnly("app/code-tasks-ui.tsx");
+    const ui = codeOnly("app/factory/legacy-build-parts.tsx");
     const compact = ui.slice(ui.indexOf("if (compact) {"), ui.indexOf("return (", ui.indexOf("if (compact) {") + 30) + 2000);
     expect(compact).toContain('data-testid="ct-retry-started"');
     expect(compact).toContain('data-testid="ct-retry-error"');

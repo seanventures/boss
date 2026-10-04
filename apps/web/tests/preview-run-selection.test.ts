@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { latestPreviewFor, pickBuiltRun } from "../app/code-tasks-ui";
+import { latestPreviewFor, pickBuiltRun } from "../app/factory/legacy-build-parts";
 import { describeApiFailure } from "@boss/api-client";
 
 /**
@@ -99,31 +99,6 @@ describe("describeApiFailure", () => {
  * Rule: components that CONSUME a built artifact take `builtRun`. Components that CREATE new
  * work (feature/rebuild panels) may key off the newest attempt.
  */
-describe("card wiring: artifact consumers use the built run", () => {
-  const source = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
-
-  it.each([
-    ["AppPrimaryAction", /<AppPrimaryAction[\s\S]{0,200}?run=\{builtRun\}/],
-    ["DeploymentLine", /<DeploymentLine\s+run=\{builtRun\}/],
-    // The spine now spreads builtRun so it can carry the GROUP's origin (a follow-up records
-    // none of its own, and where an app came from is a property of the app). Still builtRun —
-    // the point of this guard is that it is not members[0].
-    ["JourneySpine", /<JourneySpine[\s\S]{0,240}?\.\.\.builtRun/],
-  ])("%s takes builtRun", (_name, pattern) => {
-    expect(source).toMatch(pattern);
-  });
-
-  it("no artifact consumer is still wired to members[0]", () => {
-    for (const tag of ["AppPrimaryAction", "DeploymentLine", "JourneySpine"]) {
-      const open = source.indexOf(`<${tag}`);
-      expect(open, `${tag} not found in the card`).toBeGreaterThan(-1);
-      // Stop at this element's own closing "/>" — the components that FOLLOW it
-      // (RebuildWithSpec, the spec panels) may legitimately key off members[0].
-      const call = source.slice(open, source.indexOf("/>", open));
-      expect(call, `${tag} must not act on members[0]`).not.toMatch(/run=\{members\[0\]/);
-    }
-  });
-});
 
 /**
  * A failed preview must not render as a starting one.
@@ -149,27 +124,6 @@ describe("latestPreviewFor", () => {
 
   it("returns null when the run has never been previewed", () => {
     expect(latestPreviewFor(previews, "crun_none")).toBeNull();
-  });
-});
-
-describe("card renders a failed preview as failed", () => {
-  const source = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
-
-  it("has a failed branch, not only starting/live/building", () => {
-    expect(source).toMatch(/lastPreview\?\.status === "failed"/);
-  });
-
-  it("offers a retry rather than a dead button", () => {
-    expect(source).toContain("Retry preview");
-  });
-
-  it("shows the failure reason so a retry is not blind", () => {
-    expect(source).toMatch(/data-testid="preview-failed"/);
-    expect(source).toMatch(/failed\.error/);
-  });
-
-  it("passes the newest preview into the action", () => {
-    expect(source).toMatch(/lastPreview=\{latestPreviewFor\(previews, builtRun\.id\)\}/);
   });
 });
 

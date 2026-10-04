@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const UI = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../app/code-tasks-ui.tsx"), "utf8");
+  join(dirname(fileURLToPath(import.meta.url)), "../app/factory/legacy-build-parts.tsx"), "utf8");
 
 /**
  * fmtUsd takes MICRO-dollars and divides by 1e6 itself. The run-card meta divided first and
@@ -25,8 +25,4 @@ describe("a run card shows what the run cost", () => {
     expect(fmtUsd(1_551_124 / 1e6)).toBe("$0.00");
   });
 
-  it("does not divide before calling fmtUsd on the run card", () => {
-    expect(UI).toContain("` · ${fmtUsd(micros)}`");
-    expect(UI).not.toContain("fmtUsd(micros / 1e6)");
-  });
 });

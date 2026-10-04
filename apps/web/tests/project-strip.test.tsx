@@ -24,7 +24,7 @@ describe("the strip never claims an empty company", () => {
     // in both cases — the false claim of absence this console has made before.
     const html = renderToStaticMarkup(<ProjectStrip projectId="boss-dogfood" />);
     expect(html).toContain('data-state="loading"');
-    expect(html).toContain("Software projects");
+    expect(html).toContain("Builds");
     expect(html).toContain("Loading…");
     expect(html).not.toContain("No software projects yet");
   });
@@ -88,11 +88,10 @@ describe("clicking a project opens it", () => {
   });
 
   it("the Factory reads that param, or the click lands nowhere", () => {
+    // The Factory reads `run=` as `build=` (and rewrites it), opening that build's cockpit.
     const factory = codeOnly("app/code-tasks-ui.tsx");
-    expect(factory).toContain('new URLSearchParams(window.location.search).get("run")');
-    // Only ever SETS: clearing on an absent param would fight the back button and snap the
-    // operator out of a run they opened by clicking a card.
-    expect(factory).toContain("if (run) setSelected(run)");
+    expect(factory).toContain('q.get("build") || q.get("run")');
+    expect(factory).toContain("window.addEventListener(\"popstate\", read)");
   });
 });
 

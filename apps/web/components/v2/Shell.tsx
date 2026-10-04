@@ -34,7 +34,7 @@ import type { CompanyOverview } from "../../lib/v2/overview";
  * differs, docs/product/console_v2_parity.yaml says why (tests/console-v2-surface.test.ts).
  */
 export const V2_NAV = [
-  { id: "missions", label: "Projects", href: "/v2", built: true, v1Area: "code_tasks" },
+  { id: "missions", label: "Factory", href: "/v2", built: true, v1Area: "code_tasks" },
   { id: "hive", label: "Hive", href: "/v2/hive", built: true, v1Area: "agent" },
   { id: "factory", label: "Agents", href: "/v2/factory", built: true, v1Area: "workforce" },
   { id: "org", label: "Team structure", href: "/v2/org", built: true, v1Area: "workforce" },

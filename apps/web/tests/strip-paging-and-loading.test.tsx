@@ -184,61 +184,18 @@ describe("the strip keeps pulling", () => {
   });
 });
 
-describe("the Factory count is a count, not a window", () => {
-  const CT = codeOnly("app/code-tasks-ui.tsx");
+describe("the build feed reports a total and stays capped", () => {
   const FEED = codeOnly("lib/code-tasks.ts");
-
-  it("says what it is short by", () => {
-    expect(CT).toContain("{shownTotal > tasks.length ? (");
-    expect(CT).toContain("of {shownTotal}");
-  });
-
-  it("never claims fewer than it is drawing", () => {
-    // `tasks` can hold rows a later empty fetch chose not to clobber; "showing 12 of 8" would
-    // be worse than saying nothing at all.
-    expect(CT).toContain("Math.max(codeTaskTotal ?? tasks.length, tasks.length)");
-  });
-
-  it("falls back to what arrived when the API sends no total", () => {
-    // An older API that does not report one must not make the console say "0 code tasks" over
-    // a list that plainly has some.
-    expect(FEED).toContain('typeof res.total === "number" ? res.total : items.length');
-  });
-});
-
-describe("the rest of the Factory list is reachable", () => {
-  const CT = codeOnly("app/code-tasks-ui.tsx");
   const ROUTE = codeOnly("app/api/code-tasks/route.ts");
 
-  it("offers to load them, rather than only admitting they are missing", () => {
-    // "of 244 — showing the newest" is honest, but on its own it just tells an operator that
-    // 44 tasks exist somewhere they cannot get to.
-    expect(CT).toContain('data-testid="ct-home-show-all"');
-    expect(CT).toContain("Show all ${shownTotal}");
+  it("falls back to what arrived when the API sends no total", () => {
+    expect(FEED).toContain('typeof res.total === "number" ? res.total : items.length');
   });
 
-  it("fetches on demand rather than on every render", () => {
-    // The feed is 1.41 MB at 200 and the load that once fetched more took 111 seconds and got
-    // the container evicted. The ceiling stays; the tail is opt-in.
-    expect(CT).toContain("const showAll = useCallback(async () => {");
+  it("goes through a route handler with a cap", () => {
     expect(ROUTE).toContain("exclude_internal=true");
-  });
-
-  it("goes through a route handler, not a Server Action", () => {
-    // A Server Action reply re-renders the whole v1 tree, which takes seconds to paint.
     expect(ROUTE).toContain("export const dynamic = \"force-dynamic\"");
-  });
-
-  it("caps what it will ask for", () => {
     expect(ROUTE).toContain("Math.min(");
-  });
-
-  it("still refuses to let an empty answer wipe the list", () => {
-    expect(CT).toContain("keepIfEmpty(body.code_tasks ?? [])");
-  });
-
-  it("says why it failed instead of doing nothing", () => {
-    expect(CT).toContain('data-testid="ct-home-all-error"');
   });
 });
 

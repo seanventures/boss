@@ -106,7 +106,7 @@ describe("datetime helpers are hydration-safe", () => {
   it("named BOSS-346 areas avoid locale DateTimeFormat / raw Date.now labels", () => {
     const files = [
       "work-orchestration-ui.tsx",
-      "code-tasks-ui.tsx",
+      "factory/legacy-build-parts.tsx",
       "shepherd-ui.tsx",
       "reports-ui.tsx",
       "pipeline-ui.tsx",
@@ -120,7 +120,7 @@ describe("datetime helpers are hydration-safe", () => {
       expect(src).not.toMatch(/toLocaleDateString\s*\(/);
       expect(src).not.toMatch(/toLocaleTimeString\s*\(/);
       expect(src).not.toMatch(/new Intl\.DateTimeFormat\s*\(/);
-      if (file === "code-tasks-ui.tsx") {
+      if (file === "factory/legacy-build-parts.tsx") {
         // Live phase duration is mount-gated (useState null + useEffect).
         expect(src).toContain("setCurrentPhaseMs");
         expect(src).not.toContain("suppressHydrationWarning");
@@ -139,7 +139,7 @@ describe("datetime helpers are hydration-safe", () => {
     const appRoot = resolve(__dirname, "../app");
     const allowDateNow = new Set([
       "client-relative-time.tsx",
-      "code-tasks-ui.tsx",
+      "factory/legacy-build-parts.tsx",
       "client-forms.tsx",
       "actions.ts",
       // This server-only route uses deadlines to bound upstream lookups; it renders no UI.

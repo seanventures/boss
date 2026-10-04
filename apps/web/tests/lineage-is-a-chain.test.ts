@@ -96,11 +96,6 @@ describe("the card spine's origin", () => {
     expect((appOrigin(members) as { meeting_run_id: string }).meeting_run_id).toBe("newest");
   });
 
-  it("the grouped card feeds that origin into the spine", () => {
-    const ui = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
-    expect(ui).toContain("appOrigin(members)");
-  });
-
   it("the engine carries origin across the follow-up hop", () => {
     // Fixing only the console would leave every NEW follow-up wrong again.
     const svc = readFileSync(

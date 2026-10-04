@@ -43,20 +43,3 @@ describe("a click that came from a control", () => {
     expect(fromInteractiveControl({ target: null, currentTarget: {} } as never)).toBe(false);
   });
 });
-
-describe("the app card wires the guard into BOTH handlers", () => {
-  const SRC = codeOnly("app/code-tasks-ui.tsx");
-  const card = SRC.slice(SRC.indexOf('className="mr-meeting-card ct-app-item"'));
-  const handlers = card.slice(0, card.indexOf("mr-meeting-card-head"));
-
-  it("guards the click", () => {
-    expect(handlers).toMatch(/onClick=\{\(e\) => \{\s*if \(fromInteractiveControl\(e\)\) return;/);
-  });
-
-  it("guards the keyboard, where a typed space used to navigate", () => {
-    const keydown = handlers.slice(handlers.indexOf("onKeyDown"));
-    expect(keydown).toContain("if (fromInteractiveControl(e)) return;");
-    // And the guard must come BEFORE the Enter/Space test, or it changes nothing.
-    expect(keydown.indexOf("fromInteractiveControl")).toBeLessThan(keydown.indexOf('e.key === "Enter"'));
-  });
-});

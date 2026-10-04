@@ -66,7 +66,7 @@ describe("the deploy failure reason", () => {
   });
 
   it("still keeps the full text reachable", () => {
-    const ui = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    const ui = readFileSync(resolve(__dirname, "../app/factory/legacy-build-parts.tsx"), "utf8");
     expect(ui).toContain("title={latest.failure_reason}");
   });
 });

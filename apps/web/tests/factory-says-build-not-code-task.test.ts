@@ -22,7 +22,7 @@ const FILES = [
 const visible = (f: string) => codeOnly(f);
 
 describe("the visible copy", () => {
-  it.each(FILES)("%s says Projects, not code tasks", (file) => {
+  it.each(FILES)("%s never says code task", (file) => {
     const src = visible(file)
       // Identifiers, routes and area keys are not copy.
       .replace(/data-testid="[^"]*"/g, "")
@@ -36,12 +36,12 @@ describe("the visible copy", () => {
     expect(src).not.toMatch(/code tasks?/i);
   });
 
-  it("names the primary action New project", () => {
-    expect(visible("app/code-tasks-ui.tsx")).toContain("New project");
+  it("names the primary action New build", () => {
+    expect(visible("app/code-tasks-ui.tsx")).toContain("+ New build");
   });
 
-  it("labels the nav area Projects", () => {
-    expect(visible("app/ConsoleShell.tsx")).toContain('label: "Projects"');
+  it("labels the nav area Factory", () => {
+    expect(visible("app/ConsoleShell.tsx")).toContain('label: "Factory"');
   });
 });
 

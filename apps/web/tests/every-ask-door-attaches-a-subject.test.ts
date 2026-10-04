@@ -78,7 +78,6 @@ describe("the doors that are about a record pass that record", () => {
     ["app/delivery-workflows-ui.tsx",
      '{ kind: "workflow_step", id: workflowRunId, step: step.step_id }'],
     ["app/boss-agent-home.tsx", "subject: itemSubject(item)"],
-    ["app/code-tasks-ui.tsx", 'subject: { kind: "code_task", id: m.id }'],
     ["app/monitoring-ui.tsx", '{ kind: "deployment", id: t.target_id }'],
   ];
   it.each(DOORS)("%s", (file, subject) => {

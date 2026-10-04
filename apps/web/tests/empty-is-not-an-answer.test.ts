@@ -21,7 +21,7 @@ import { resolve } from "node:path";
  * facts and must render as three different things.
  */
 
-const SOURCE = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+const SOURCE = readFileSync(resolve(__dirname, "../app/factory/legacy-build-parts.tsx"), "utf8");
 
 describe("a fetch-backed empty state", () => {
   it("does not claim absence before the fetch resolves", () => {
