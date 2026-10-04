@@ -50,7 +50,6 @@
   min-height: 28px;
   font-weight: 700;
 }
-.su-row-label strong { font-weight: 700; }
 .su-step { color: var(--accent-text); font-size: 1rem; }
 .su-done { color: var(--green); }
 .su-row-body { min-width: 0; }
