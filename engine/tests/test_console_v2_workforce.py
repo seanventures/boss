@@ -107,7 +107,7 @@ def test_the_roster_lists_every_agent_the_step_picker_offers():
     ids = [a["id"] for a in out["roster"]]
     assert sorted(ids) == ["architect", "cto", "product_manager"]
     by_id = {a["id"]: a for a in out["roster"]}
-    assert by_id["architect"]["task"] == "No work in 30 days"
+    assert by_id["architect"]["task"] == "No work yet"
     assert by_id["architect"]["status"] == IDLE and by_id["architect"]["registered"] is True
     assert by_id["product_manager"]["registered"] is False
     # Who worked comes first; the work feed itself is unchanged.

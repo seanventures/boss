@@ -25,4 +25,4 @@ def test_the_roster_and_the_picker_show_the_same_agents(client):
     assert roster - picker <= set(body["unregistered"]), sorted(roster - picker)
     for agent in body["roster"]:
         if agent["id"] not in {a["id"] for a in body["agents"]}:
-            assert agent["task"] == "No work in 30 days", agent
+            assert agent["task"] == "No work yet", agent
