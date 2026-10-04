@@ -12,7 +12,6 @@ import React from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 import { AgentAvatar } from "../agent-avatar";
-import { agentIdentity } from "../../lib/agent-identity";
 import type { Ability, AbilityStatus } from "../../lib/kit-types";
 import { AbilityIcon } from "./ability-icons";
 import { BUTTON, PILL, PILL_TONE, agentName } from "./kit-copy";

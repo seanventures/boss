@@ -10,7 +10,6 @@ import React, { useMemo, useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { DotsThree, X } from "@phosphor-icons/react";
 
-import { agentIdentity } from "../../lib/agent-identity";
 import { apiWrite } from "../../lib/api-write";
 import type { Ability } from "../../lib/kit-types";
 import type { CrewMember, McpServer } from "../../lib/kit-api";

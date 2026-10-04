@@ -1,5 +1,6 @@
 "use client";
 
+import { WhyAsked } from "./skills/why-asked";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { createDecisionDigestAction } from "./actions";
@@ -851,6 +852,7 @@ function DecisionInboxRow({
                                  projectId={projectId} />
             </>
           ) : null}
+          {isPending ? <WhyAsked recommendation={decision.recommendation} projectId={projectId} /> : null}
         </div>
       </div>
       <div className="dq-foot">
