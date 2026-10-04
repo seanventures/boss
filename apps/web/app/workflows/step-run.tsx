@@ -23,6 +23,7 @@ import type { StepView } from "../../lib/workflow-editor-types";
 import { fetchActivityLog } from "../../lib/activity-log-client";
 import type { ActivityLogItem } from "../../lib/activity-log";
 import { usd } from "../../lib/money";
+import { isLoopbackPreviewUrl } from "../../lib/code-tasks";
 import { consoleHref } from "../url-intent";
 import { laneAgentOf, type LaneAgent } from "../agents/chain-model";
 import { nameOf, RunFace } from "../agents/run-face";
@@ -81,9 +82,6 @@ const HUMAN: Array<[string, string]> = [
 const NEVER = new Set(["inputs", "ran_as", "act_id", "project_id", "capability", "tool", "status"]);
 const WORDS: Record<string, string> = { auto_approval: "Automatic", approved: "Approved", rejected: "Rejected" };
 
-function isLoopback(v: string): boolean {
-  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(v);
-}
 
 /** One value as a line of text, or "" when there is nothing to say (null, empty, a null id). */
 export function factText(value: unknown): string {
@@ -118,7 +116,8 @@ export function stepOutput(output: Record<string, unknown> | null | undefined,
   const seen = new Set<string>();
   const add = (list: OutputFact[], label: string, raw: unknown, tip?: string) => {
     const text = factText(raw);
-    if (!text || text === "—" || isLoopback(text)) return;
+    // A loopback address is where an app listens ON THE HOST; nobody else can open it.
+    if (!text || text === "—" || isLoopbackPreviewUrl(text)) return;
     // THE SAME TEXT IS ONE FACT. `await` and `run_id` held the same crun_ on every build step.
     if (seen.has(text)) return;
     seen.add(text);
@@ -144,7 +143,9 @@ export function stepOutput(output: Record<string, unknown> | null | undefined,
 
 /** The lifecycle bookkeeping every step emits, and raw process output: the step log keeps
  *  them, the panel does not. */
-const NOISE = new Set(["workflow.step_ready", "workflow.step_leased", "code_task.github_plane",
+// `workflow.step_succeeded` too: the step's own row says it, with how long it took.
+const NOISE = new Set(["workflow.step_ready", "workflow.step_leased", "workflow.step_succeeded",
+  "code_task.github_plane",
   "code_task.integration_ref", "code_task.work_checkpointed"]);
 
 const SENTENCES: Record<string, string> = {
@@ -288,7 +289,8 @@ export function actorVerb(phase: string, status: string): string {
 
 /** "Done by <face> <name> · $0.03 · model", the step's facts, and the agent's card below them. */
 export function StepDoneBy({ act, approval, output, phase, status, planned, viewer, projectId, failure,
-                             question, cost, calls, model, onAsk, stepId, facts, skipped }: {
+                             question, cost, calls, model, onAsk, stepId, facts, skipped,
+                             askBossTip = "Ask about this step" }: {
   act: Act | null; approval?: Act | null; output: unknown;
   /** phaseOf(step), and the raw status for Queued vs Doing. */
   phase: string; status: string;
@@ -298,6 +300,9 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
   /** Cost and count of the step's own model calls, for when the work record has no cost. */
   cost: number; calls: number; model: string;
   onAsk(): void; stepId: string;
+  /** The Ask's tooltip when no agent has the step: the caller's, since the caller owns the door
+   *  (it opens the dock through openDockAbout). */
+  askBossTip?: string;
   /** "Started 18:02Z", "Attempt 2". */
   facts: string[];
   /** Why a skipped step did not apply. */
@@ -338,12 +343,12 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
             </span>
           ) : null}
           <span className="wf-doneby-acts">
-            {actor.roleKey ? (
-              <button type="button" className="wf-link" data-testid="dw-step-ask"
-                      data-tip={`Ask ${named.name} about this step`} onClick={onAsk}>
-                Ask
-              </button>
-            ) : null}
+            {/* Always an Ask: the agent's own when an agent has the step, BOSS otherwise. */}
+            <button type="button" className="wf-link" data-testid="dw-step-ask"
+                    data-tip={actor.roleKey ? `Ask ${named.name} about this step` : askBossTip}
+                    onClick={onAsk}>
+              Ask
+            </button>
             {hasCard ? (
               <button type="button" className="wf-link" aria-expanded={open} data-testid="dw-step-agent-toggle"
                       data-tip="Who did it and how it reached them" onClick={() => setOpen((o) => !o)}>
@@ -378,7 +383,7 @@ export function StepOutputFacts({ facts, details }: { facts: OutputFact[]; detai
   return (
     <>
       {facts.length ? (
-        <dl className="wf-out" data-testid="dw-step-out">
+        <dl className="wf-stepout" data-testid="dw-step-out">
           {facts.map((f) => (
             <div key={`${f.label}:${f.value}`}>
               <dt>{f.label}</dt>
@@ -388,9 +393,9 @@ export function StepOutputFacts({ facts, details }: { facts: OutputFact[]; detai
         </dl>
       ) : null}
       {details.length ? (
-        <details className="wf-out-details" data-testid="dw-step-details">
+        <details className="wf-stepout-details" data-testid="dw-step-details">
           <summary>Details · {details.length}</summary>
-          <dl className="wf-out wf-out-mono">
+          <dl className="wf-stepout wf-stepout-mono">
             {details.map((f) => (
               <div key={`${f.label}:${f.value}`}>
                 <dt>{f.label}</dt>

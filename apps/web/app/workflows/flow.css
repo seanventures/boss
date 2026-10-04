@@ -21,14 +21,15 @@
 }
 .wf-lane-sizer { position: relative; margin: 0 auto; }
 .wf-lane-canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
-.wf-lane[data-mode="design"] .wf-lane-viewport { padding-bottom: 28px; }
+.wf-lane[data-mode="design"] .wf-lane-viewport { padding-bottom: 12px; }
 /* In the editor the lane is a region, not a strip: tall enough that the flow sits in the middle
    of a calm surface and reads at a glance, never taller than the window leaves room for (a deep
    branched flow scrolls inside it). The drawing is centred in it, top to bottom. A workflow
    with no steps keeps the plain Start → End strip, so the empty state's choices stay on top. */
 .wf-lane[data-mode="design"]:not([data-empty]) {
   display: flex; flex-direction: column; justify-content: center;
-  min-height: clamp(240px, 40vh, 360px);
+  /* Tall enough to read as a region, not so tall the flow floats in a dead canvas. */
+  min-height: clamp(180px, 26vh, 260px);
   max-height: max(360px, calc(100vh - 180px));
 }
 .wf-lane[data-mode="design"] .wf-lane-viewport { flex: 0 1 auto; min-height: 0; padding-top: 12px; }
@@ -308,8 +309,9 @@
 :root[data-wf-dragging] * { user-select: none; }
 
 /* Zoom toggle, bottom-right of the lane. */
+/* Top right, beside the flow it scales, not floating at the foot of the region. */
 .wf-zoom {
-  position: absolute; right: 8px; bottom: 6px;
+  position: absolute; right: 8px; top: 6px;
   display: inline-flex; border: 1px solid var(--border); border-radius: var(--r);
   background: var(--bg); overflow: hidden; z-index: 2;
 }
@@ -326,7 +328,7 @@
   background: color-mix(in srgb, var(--bg) 70%, transparent);
   cursor: pointer; touch-action: none;
 }
-.wf-lane[data-mode="design"] .wf-minimap { margin-right: 108px; }
+.wf-lane[data-mode="design"] .wf-lane-viewport { padding-top: 34px; }
 .wf-minimap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wf-minimap-dot {
   position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
@@ -415,16 +417,16 @@
 .wf-step-log li[data-level="warn"] .wf-step-log-title { color: var(--amber); }
 .wf-step-sec .dw-step-out dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-step-sec .dw-step-out > div { min-width: 0; }
-.wf-out {
+.wf-stepout {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 8px 16px; margin: 8px 0 0;
 }
-.wf-out > div { min-width: 0; }
-.wf-out dt { font-size: 0.75rem; color: var(--faint); }
-.wf-out dd { margin: 2px 0 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.wf-stepout > div { min-width: 0; }
+.wf-stepout dt { font-size: 0.75rem; color: var(--faint); }
+.wf-stepout dd { margin: 2px 0 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
              font-size: 0.8125rem; color: var(--ink); }
-.wf-out-mono dd { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
-.wf-out-details { margin-top: 10px; }
-.wf-out-details > summary { cursor: pointer; font-size: 0.75rem; color: var(--faint); }
+.wf-stepout-mono dd { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
+.wf-stepout-details { margin-top: 10px; }
+.wf-stepout-details > summary { cursor: pointer; font-size: 0.75rem; color: var(--faint); }
 .wf-step-sec-loud { font-size: 0.75rem; font-weight: 600; color: var(--amber); }
 .wf-step-sec-loud[data-level="error"] { color: var(--red); }

@@ -44,8 +44,9 @@ describe("the run view says who ran each step, how they were chosen and why", ()
   });
 
   it("is drawn on every step of a run", () => {
-    expect(codeOnly("app/delivery-workflows-ui.tsx"))
-      .toContain("<RanAs output={step.output} stepId={step.step_id} />");
+    // Behind the Done-by line's "Agent", when no work record exists for the step.
+    expect(codeOnly("app/workflows/step-run.tsx"))
+      .toContain("<RanAs output={output} stepId={stepId} />");
   });
 
   it("has words for every way the engine can say an agent was chosen", () => {
