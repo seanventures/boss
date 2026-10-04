@@ -1,0 +1,204 @@
+# THE KIT: what a software crew can do, as abilities (skills-mcp spec §3, §6.2).
+#
+# An ability is the unit the operator sees in Skills & MCP. It is one outcome, backed by at most
+# one connection, one or more skills and zero or more MCP servers/tools. Granting an ability to an
+# agent writes the role_skills and role_mcp_servers rows below — nothing is invented at run time.
+#
+# Roles name abilities under `permissions.abilities` (granted) and
+# `permissions.recommended_abilities` (offered, not granted); services/kit.py expands them.
+#
+# tools[].policy is the DEFAULT approval rule for that tool (allow | ask | off). Tier >= 2 is
+# always ask whatever is chosen; tier 3 starts off.
+kit: software_factory
+version: 1
+groups: [code, research, coordinate, ship]
+essentials: [open_prs, web_research, file_tickets, email]
+abilities:
+  - key: read_repo
+    group: code
+    label: Read the repo
+    tip: Read code, history and PRs in your repo.
+    icon: BookOpen
+    depends_on: [github]
+    skills: [repo.read]
+    tools:
+      - {ref: "skill:repo.read", label: Read code and history}
+    test: github_read
+    try: {tool: "skill:repo.read", field: {name: path, label: Path, placeholder: README.md}}
+
+  - key: open_prs
+    group: code
+    label: Open pull requests
+    tip: Branch, commit and open a PR on your repo.
+    icon: GitPullRequest
+    depends_on: [github]
+    skills: [github.create_pr_sandbox, github.create_pr_real]
+    tools:
+      - {ref: "skill:github.create_pr_real", label: Open a PR, policy: ask}
+      - {ref: "skill:github.create_pr_sandbox", label: Open a sandbox PR, policy: ask}
+      - {ref: "skill:github.merge_pr_real", label: Merge a PR, policy: "off"}
+    test: github_push_access
+    scopes_tip: repo, workflow
+
+  - key: tests_ci
+    group: code
+    label: Tests & CI
+    tip: Run tests and read CI results.
+    icon: TestTube
+    depends_on: [github]
+    skills: [ci.status]
+    tools:
+      - {ref: "skill:ci.status", label: Read CI results}
+    test: ci_checks
+
+  - key: library_docs
+    group: code
+    label: Library docs
+    tip: Up-to-date docs for the libraries you use.
+    icon: Books
+    connection:
+      providers:
+        - {key: context7, label: Context7, catalogue: context7}
+    mcp: [{server: context7}]
+    test: mcp_list_tools
+    try: {tool: "mcp:context7.resolve-library-id", arg: libraryName,
+          field: {name: libraryName, label: Library, placeholder: react}}
+
+  - key: web_research
+    group: research
+    label: Web research
+    tip: Read and study live websites.
+    icon: Globe
+    mcp: [{server: web-intel, tools: [fetch_page, study_site]}]
+    test: mcp_list_tools
+    try: {tool: "mcp:web-intel.fetch_page", arg: url,
+          field: {name: url, label: URL, placeholder: "https://example.com"}}
+
+  - key: web_search
+    group: research
+    label: Web search
+    tip: Search the web for sources.
+    icon: MagnifyingGlass
+    connection:
+      # Exa answers without a key (operator decision D-3), so Web search works on a fresh install.
+      default_provider: exa
+      providers:
+        - {key: exa, label: Exa, keyless: true, token_url: "https://dashboard.exa.ai/api-keys",
+           fields: [{name: api_key, label: API key, secret: true, optional: true}]}
+        - {key: tavily, label: Tavily, token_url: "https://app.tavily.com/home",
+           fields: [{name: api_key, label: API key, secret: true}]}
+        - {key: brave, label: Brave, token_url: "https://api-dashboard.search.brave.com/app/keys",
+           fields: [{name: api_key, label: API key, secret: true}]}
+    mcp: [{server: web-intel, tools: [search_web]}]
+    test: search_query
+    try: {tool: "mcp:web-intel.search_web", arg: query,
+          field: {name: query, label: Query, placeholder: "open source agent frameworks"}}
+
+  - key: render_docs
+    group: research
+    label: Render docs
+    tip: Turn drafts into formatted documents.
+    icon: FileText
+    skills: [docs.draft]
+    mcp: [{server: doc-render, tools: [render_markdown_pdf]}]
+    tools:
+      - {ref: "skill:docs.draft", label: Draft a document}
+    test: mcp_list_tools
+
+  - key: file_tickets
+    group: coordinate
+    label: File tickets
+    tip: Open and update issues in your tracker.
+    icon: Ticket
+    connection:
+      default_provider: github_issues
+      providers:
+        - {key: github_issues, label: GitHub Issues, reuses: github}
+        - {key: linear, label: Linear, token_url: "https://linear.app/settings/api",
+           fields: [{name: api_token, label: API key, secret: true},
+                    {name: team_key, label: Team, placeholder: ENG}]}
+        - {key: jira, label: Jira, token_url: "https://id.atlassian.com/manage-profile/security/api-tokens",
+           fields: [{name: base_url, label: Site URL, placeholder: "https://acme.atlassian.net"},
+                    {name: email, label: Email},
+                    {name: api_token, label: API token, secret: true},
+                    {name: project_key, label: Project key, placeholder: ENG}]}
+        - {key: plane, label: Plane, token_url: "https://app.plane.so/profile/api-tokens",
+           fields: [{name: api_base_url, label: Site URL, placeholder: "https://api.plane.so"},
+                    {name: workspace_slug, label: Workspace},
+                    {name: project_id, label: Project ID},
+                    {name: api_token, label: API key, secret: true}]}
+        - {key: azure_devops, label: Azure DevOps,
+           token_url: "https://dev.azure.com/_usersSettings/tokens",
+           fields: [{name: organization, label: Organization},
+                    {name: project, label: Project},
+                    {name: api_token, label: Token, secret: true}]}
+    skills: [work_tracker.issue.ensure, work_tracker.issue.update, tracker.issues.create]
+    tools:
+      - {ref: "skill:work_tracker.issue.ensure", label: Open an issue}
+      - {ref: "skill:work_tracker.issue.update", label: Update an issue}
+      - {ref: "skill:tracker.issues.create", label: File many issues, policy: ask}
+    test: tracker_auth_and_project
+
+  - key: email
+    group: coordinate
+    label: Email
+    tip: Send email from your address.
+    icon: EnvelopeSimple
+    connection:
+      default_provider: smtp
+      providers:
+        - {key: smtp, label: SMTP,
+           fields: [{name: host, label: Host, placeholder: smtp.example.com},
+                    {name: port, label: Port, placeholder: "587"},
+                    {name: from_address, label: Send as, placeholder: "you@example.com"},
+                    {name: username, label: User, optional: true},
+                    {name: password, label: Password, secret: true, optional: true}]}
+    skills: [email.send_real_guarded]
+    tools:
+      - {ref: "skill:email.send_real_guarded", label: Send an email, policy: ask}
+    test: smtp_send
+
+  - key: team_chat
+    group: coordinate
+    label: Team chat
+    tip: Post to Slack or Mattermost.
+    icon: ChatsCircle
+    connection:
+      providers:
+        - {key: slack, label: Slack, token_url: "https://api.slack.com/apps",
+           scopes_tip: "chat:write",
+           fields: [{name: bot_token, label: Bot token, secret: true},
+                    {name: channel, label: Channel, placeholder: "#eng-alerts"}]}
+        - {key: mattermost, label: Mattermost,
+           fields: [{name: base_url, label: Server URL, placeholder: "https://chat.example.com"},
+                    {name: token, label: Bot token, secret: true},
+                    {name: channel, label: Channel ID}]}
+    skills: [slack.post_real_guarded, mattermost.post_real]
+    tools:
+      - {ref: "skill:slack.post_real_guarded", label: Post to Slack, policy: ask}
+      - {ref: "skill:mattermost.post_real", label: Post to Mattermost, policy: ask}
+    test: chat_post
+
+  - key: deploy
+    group: ship
+    label: Deploy
+    tip: Plan and check deploys to your targets.
+    icon: RocketLaunch
+    depends_on: [deploy_target]
+    connect_href: "?area=infra"
+    skills: [deployment.run.plan, deployment.health.check]
+    tools:
+      - {ref: "skill:deployment.run.plan", label: Plan a deploy, policy: ask}
+      - {ref: "skill:deployment.health.check", label: Check a deploy}
+    test: deploy_target_preflight
+
+  - key: watch_health
+    group: ship
+    label: Watch health
+    tip: Check health and drift of running apps.
+    icon: Heartbeat
+    skills: [deployment.health.check]
+    mcp: [{server: boss-devops-reference, tools: [engineering_runbook]}]
+    tools:
+      - {ref: "skill:deployment.health.check", label: Check a deploy}
+    test: mcp_list_tools
