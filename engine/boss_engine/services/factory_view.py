@@ -1095,6 +1095,16 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
         if key == "ship" and state_key == "merged":
             s["word"] = "Merged"
         out.append(s)
+    if state_key in ("queued", "budget_wait") and not any(
+            x["status"] in ("working", "waiting", "stuck", "needs_you") for x in out):
+        # NOTHING HAS STARTED: the build waits at its first station for a worker (or budget),
+        # drawn as BOSS's hourglass — never an agent face claiming work (walk D22).
+        first = next((x for x in out if x["status"] == "pending"), None)
+        if first is not None:
+            first.update(status="waiting", face="boss", role_key=None, hollow_role=None,
+                         word="Waiting", tip=("Waiting for budget to free up"
+                                              if state_key == "budget_wait"
+                                              else "Waiting for a worker"))
     return out
 
 

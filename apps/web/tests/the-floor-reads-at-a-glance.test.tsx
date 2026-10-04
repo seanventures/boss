@@ -153,3 +153,12 @@ describe("D13: Direct change passes the panel size and test commands", () => {
 });
 
 void stations;
+
+describe("a build row's tooltip", () => {
+  it("cuts a long title to a tooltip's length", async () => {
+    const { shortTitle } = await import("../app/factory/build-row");
+    const long = "Captain: QUALITY IMPROVE PASS. Measured scorecard gaps: ui=not_scored, ux=not_scored. Do not invent";
+    expect(shortTitle(long).split(/\s+/).length).toBeLessThanOrEqual(8);
+    expect(shortTitle("Add CSV export")).toBe("Add CSV export");
+  });
+});

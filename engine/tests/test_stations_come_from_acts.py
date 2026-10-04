@@ -142,3 +142,13 @@ def test_a_pending_check_does_not_claim_boss_before_it_runs():
     got = line(run(), [act("implement", "software_engineer", "active", 2)])
     assert got["check"]["status"] == "pending" and got["check"]["face"] == "none"
     assert got["pr"]["face"] == "boss"
+
+
+def test_a_queued_build_waits_at_its_first_station_with_boss():
+    """Walk D22: a queued build drew an empty line. It waits at its first station for a worker,
+    as BOSS's hourglass — never an agent face claiming work."""
+    stations = line(run(phase="queued"), [])
+    first = next(iter(stations.values()))
+    assert first["status"] == "waiting" and first["face"] == "boss"
+    assert first["tip"] == "Waiting for a worker" and first.get("role_key") is None
+    assert not any(s["status"] == "working" for s in stations.values())
