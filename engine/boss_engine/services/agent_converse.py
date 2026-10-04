@@ -703,15 +703,17 @@ def _run(engine, settings: Any, plan: _Plan) -> Iterator[dict]:
                     yield event
             except Exception as error:  # noqa: BLE001 — one seat failing never ends the room
                 log.exception("converse speaker %s failed", speaker.role_key)
-                from .model_failures import explain
+                from .model_failures import explain_turn_failure
 
+                # One sentence, never the exception's own text (a database error's SQL).
+                said = explain_turn_failure(error)
                 # _speak has already settled its turn; say which one failed.
                 if started:
-                    yield {"type": "error", "turn_id": started, "error": explain(error)}
+                    yield {"type": "error", "turn_id": started, "error": said}
                     yield {"type": "turn_end", "turn_id": started, "status": "error",
                            "tokens_in": 0, "tokens_out": 0, "cost_usd": 0, "cited_acts": []}
                 else:
-                    yield {"type": "error", "error": explain(error)}
+                    yield {"type": "error", "error": said}
             finally:
                 # Closing the stream (Stop, a closed tab) closes the seat speaking with it, now,
                 # so its turn is settled before the floor is given back below.

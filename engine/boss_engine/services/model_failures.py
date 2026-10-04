@@ -182,10 +182,78 @@ def confirm_login_rejection(call, *, sleep=None):
     return call()
 
 
+#: A database failure, as text (a recorded last_error) — SQLAlchemy/psycopg's own wording.
+_STORAGE_TEXT = re.compile(
+    r"\((?:psycopg2?|sqlalchemy)\.(?:errors|exc)\.\w+\)|\[SQL: |sqlalche\.me/e/"
+    r"|duplicate key value violates unique constraint"
+    r"|violates (?:foreign key|not-null|check|exclusion) constraint"
+    r"|current transaction is aborted|could not serialize access|deadlock detected",
+    re.I,
+)
+
+
+def is_storage_failure(error: object) -> bool:
+    """A failure of BOSS's own database — not the model, not the operator's setup."""
+    seen = 0
+    current = error
+    while isinstance(current, BaseException) and seen < 5:
+        module = type(current).__module__ or ""
+        if module.startswith(("sqlalchemy", "psycopg")):
+            return True
+        current = current.__cause__
+        seen += 1
+    return bool(_STORAGE_TEXT.search(str(error or "")))
+
+
+def technical_summary(error: object) -> str:
+    """One or two lines for a collapsed "Details" and the log: the error class and the
+    database's own message, WITHOUT the statement, its parameters or the background link.
+    "IntegrityError: duplicate key value violates unique constraint "idx_…" · Key (…) already
+    exists." — never the SQL text a raw str(error) carries."""
+    text = str(error or "").strip()
+    for cut in ("[SQL:", "[parameters:", "(Background on this error"):
+        at = text.find(cut)
+        if at >= 0:
+            text = text[:at]
+    text = re.sub(r"^\([\w.]+\)\s*", "", text)   # "(psycopg.errors.UniqueViolation) "
+    text = " · ".join(line.strip() for line in text.splitlines() if line.strip())
+    name = type(error).__name__ if isinstance(error, BaseException) else ""
+    return (f"{name}: {text}" if name and text else name or text)[:300]
+
+
+def explain_turn_failure(error: object, *, source_id: Optional[str] = None) -> dict:
+    """THE ONE SENTENCE for an agent turn that failed — the dock, AgentChat, a room, a step.
+
+    shared-server showed the operator "BOSS could not complete that turn: IntegrityError:
+    (psycopg.errors.UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …"
+    — a database's diagnostics in a chat bubble. The visible message is `headline` + `action`
+    (`sentence`); `detail` is technical_summary, for a collapsed Details and the server log.
+    """
+    said = dict(explain(error, source_id=source_id))
+    if said["kind"] == "storage":
+        said["headline"] = "BOSS couldn't save this conversation."
+    elif said["kind"] == "failed":
+        said.update(kind="turn_failed", headline="BOSS couldn't finish this turn.",
+                    action="Try again. If it repeats, open Details for what broke.")
+    said["detail"] = technical_summary(error)
+    said["sentence"] = f"{said['headline']} {said['action']}".strip()
+    return said
+
+
 def explain(error: object, *, source_id: Optional[str] = None) -> dict:
     """{kind, headline, action, href, retry} for a failure. Never repeats a credential."""
     text = str(error or "")
     lowered = text.lower()
+    # BOSS'S OWN DATABASE, before every text check below: a statement naming a table such as
+    # `reconciliations` or `budget_caps` would otherwise read as that kind of failure.
+    if is_storage_failure(error):
+        return {
+            "kind": "storage",
+            "headline": "BOSS couldn't save this to its database.",
+            "action": "Try again. If it keeps happening, the details are in the server log.",
+            "href": None, "retry": True,
+            "detail": technical_summary(error),
+        }
     who = provider_name(source_id)
     #: "the Claude Code subscription", or "the model" when the source is not known.
     the_source = who if who.startswith("the ") else f"the {who}"

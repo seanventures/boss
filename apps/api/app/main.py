@@ -11991,6 +11991,30 @@ def propose_command(payload: CommandProposeRequest, request: Request) -> Command
         return CommandProposeResponse(**result)
 
 
+class AgentTurnFailed(Exception):
+    """An agent turn that failed, said as one sentence (see agent_turn_failed)."""
+
+    def __init__(self, error: BaseException):
+        super().__init__(str(error))
+        self.error = error
+
+
+@app.exception_handler(AgentTurnFailed)
+async def agent_turn_failed(_request: Request, exc: AgentTurnFailed):
+    """`detail` is the sentence every console error reader shows (lib/api-error.ts);
+    `failure` carries kind/action/retry and `technical`, the line for a collapsed Details —
+    never the SQL, the parameters or a traceback."""
+    from boss_engine.services.model_failures import explain_turn_failure
+
+    said = explain_turn_failure(exc.error)
+    return JSONResponse(status_code=500, content={
+        "detail": said["sentence"],
+        "failure": {"kind": said["kind"], "headline": said["headline"],
+                    "action": said["action"], "href": said.get("href"),
+                    "retry": bool(said.get("retry")), "technical": said["detail"]},
+    })
+
+
 def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: str) -> AgentChatResponse:
     """Shared handler for the BOSS chat interface. One brain (AgentService →
     IntentRouter) behind both the canonical endpoint and its deprecated alias, so
@@ -12033,21 +12057,15 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
         except HTTPException:
             raise
         except Exception as error:  # noqa: BLE001
-            # "Internal Server Error" IS THE FAILURE THIS WHOLE AREA IS ABOUT.
-            #
-            # The chat box is the only interface a customer has, and an unhandled exception
-            # reached it as five words that name nothing, suggest nothing, and cannot be acted
-            # on — the same emptiness as "the capability reported failure without a reason",
-            # arriving somewhere even more visible. Worse, the operator cannot tell a broken
-            # BOSS from a broken app, so they ask BOSS, which is also down.
-            #
-            # The class and message, not a stack trace: enough to act on, nothing leaked.
+            # "Internal Server Error" IS THE FAILURE THIS WHOLE AREA IS ABOUT — and so is its
+            # opposite. Five words that name nothing could not be acted on; the replacement,
+            # the exception's class and text, put "IntegrityError: (psycopg.errors.
+            # UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …" in the
+            # dock on shared-server. One explainer (model_failures.explain_turn_failure) turns any
+            # failure into a sentence; the technical line rides along for a collapsed Details,
+            # and the whole traceback goes to the log.
             LOGGER.exception("agent chat failed on %s", endpoint)
-            raise HTTPException(
-                status_code=500,
-                detail=f"BOSS could not complete that turn: {type(error).__name__}: "
-                       f"{str(error)[:300]}",
-            ) from error
+            raise AgentTurnFailed(error) from error
         return AgentChatResponse(**result)
 
 

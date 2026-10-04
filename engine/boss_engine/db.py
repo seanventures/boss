@@ -115,6 +115,152 @@ def _reconcile_columns(cursor, sql: str) -> tuple[int, list[str]]:
     return attempted, skipped
 
 
+#: `CREATE [UNIQUE] INDEX [IF NOT EXISTS] <name> ON [ONLY] <table> <rest>` — every index
+#: schema.sql declares has this shape (test_every_declared_index_converges pins it).
+_DECLARED_INDEX = re.compile(
+    r'^\s*CREATE\s+(?P<unique>UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?'
+    r'"?(?P<name>\w+)"?\s+ON\s+(?:ONLY\s+)?"?(?P<table>\w+)"?\s*(?P<rest>.*)$',
+    re.I | re.S,
+)
+#: What Postgres says an index IS (pg_get_indexdef), minus its own name and table — the part two
+#: indexes on different tables can share: uniqueness, method, columns, opclasses, predicate.
+_INDEXDEF_SHAPE = re.compile(
+    r'^CREATE\s+(?P<unique>UNIQUE\s+)?INDEX\s+\S+\s+ON\s+(?:ONLY\s+)?\S+\s+(?P<shape>USING\s.*)$',
+    re.S,
+)
+#: Above this many pages (8 KiB each: ~1 GiB) a drifted index is NOT rebuilt during a boot.
+#: CREATE INDEX inside a transaction blocks writes to the table for as long as the build takes,
+#: and CONCURRENTLY cannot run inside one; on a table this size the repair is reported (with the
+#: exact statements to run CONCURRENTLY by hand) instead of stalling every writer at startup.
+INDEX_REBUILD_MAX_PAGES = 131072
+#: How long a rebuild waits for its table lock before giving up and reporting instead.
+INDEX_REBUILD_LOCK_TIMEOUT = "5s"
+
+
+def declared_indexes(sql: str) -> list[dict[str, str]]:
+    """Every `CREATE [UNIQUE] INDEX` statement schema.sql declares, as {name, table, statement}."""
+    out = []
+    for stmt in split_statements(sql):
+        body = re.sub(r"--[^\n]*", "", stmt).strip()
+        m = _DECLARED_INDEX.match(body)
+        if m:
+            out.append({"name": m.group("name").lower(), "table": m.group("table").lower(),
+                        "unique": bool(m.group("unique")), "rest": m.group("rest").strip(),
+                        "statement": body})
+    return out
+
+
+def _index_shape(indexdef: str) -> Optional[tuple[bool, str]]:
+    m = _INDEXDEF_SHAPE.match(" ".join(str(indexdef or "").split()))
+    return (bool(m.group("unique")), m.group("shape")) if m else None
+
+
+def _converge_indexes(raw_connection, sql: str) -> tuple[list[str], list[str]]:
+    """INDEX DRIFT. `CREATE INDEX IF NOT EXISTS` never redefines an index that exists, so an
+    install whose database predates a change to an index keeps the OLD definition forever.
+
+    Seen on shared-server: schema.sql widened `idx_agent_threads_surface_external` from
+    (project_id, surface, external_ref) to (…, agent_role) so each agent keeps its own thread on
+    a shared subject; shared-server kept the 3-column index, and the second agent asked about a
+    subject hit a unique violation on every turn.
+
+    For each index schema.sql declares that exists under that name: build the DECLARED index on
+    an empty probe copy of its table (CREATE TEMP TABLE … (LIKE table) — no rows, no lock beyond
+    a read of the catalogue), ask Postgres for its definition, and compare it with the live
+    index's. Comparing Postgres's own rendering of both sides means casts, parentheses and
+    whitespace in the predicate can never read as drift. A different definition is dropped and
+    recreated in its own savepoint and committed at once (so its lock is held for that index
+    only), with a lock timeout; on a table over INDEX_REBUILD_MAX_PAGES it is reported, not
+    rebuilt. Indexes schema.sql does not declare are never looked at.
+
+    Returns (repairs, failures) — both recorded in schema_apply_runs.
+    """
+    repairs: list[str] = []
+    failures: list[str] = []
+    declared = declared_indexes(sql)
+    if not declared:
+        return repairs, failures
+    try:
+        with raw_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT indexname, tablename, indexdef, pg_relation_size("
+                "(quote_ident(schemaname) || '.' || quote_ident(tablename))::regclass) / 8192 "
+                "FROM pg_indexes WHERE schemaname = current_schema()")
+            live = {str(r[0]).lower(): (str(r[1]).lower(), str(r[2]), int(r[3] or 0))
+                    for r in cursor.fetchall()}
+        raw_connection.commit()
+    except Exception as exc:  # noqa: BLE001 — a convergence that cannot look never blocks a boot
+        try:
+            raw_connection.rollback()
+        except Exception:
+            pass
+        failures.append(f"index convergence could not read the catalogue -> {str(exc)[:160]}")
+        return repairs, failures
+
+    for index in declared:
+        name, table = index["name"], index["table"]
+        if name not in live:
+            continue  # absent: the CREATE … IF NOT EXISTS above already made it (or said why not)
+        live_table, live_def, pages = live[name]
+        unique = "UNIQUE " if index["unique"] else ""
+        try:
+            with raw_connection.cursor() as cursor:
+                cursor.execute("SAVEPOINT _idx_probe")
+                try:
+                    cursor.execute(
+                        f'CREATE TEMP TABLE "_boss_idx_probe" (LIKE "{table}") ON COMMIT DROP')
+                    cursor.execute(f'CREATE {unique}INDEX "_boss_idx_probe_ix" '
+                                   f'ON "_boss_idx_probe" {index["rest"]}')
+                    cursor.execute("SELECT pg_get_indexdef('_boss_idx_probe_ix'::regclass)")
+                    declared_def = str(cursor.fetchone()[0])
+                finally:
+                    cursor.execute("ROLLBACK TO SAVEPOINT _idx_probe")
+                    cursor.execute("RELEASE SAVEPOINT _idx_probe")
+        except Exception as exc:  # noqa: BLE001 — cannot judge this index; leave it and say so
+            try:
+                raw_connection.rollback()
+            except Exception:
+                pass
+            failures.append(f"index {name}: could not compare with schema.sql -> "
+                            f"{str(exc).strip()[:160]}")
+            continue
+        if live_table == table and _index_shape(live_def) == _index_shape(declared_def):
+            continue
+        was = " ".join(live_def.split())
+        if pages > INDEX_REBUILD_MAX_PAGES:
+            concurrently = index["statement"].replace("INDEX", "INDEX CONCURRENTLY", 1)
+            failures.append(
+                f"index {name} differs from schema.sql (live: {was[:160]}) but {table} is too "
+                f"large to rebuild during a boot; run outside a transaction: DROP INDEX "
+                f"CONCURRENTLY {name}; {concurrently}")
+            continue
+        try:
+            with raw_connection.cursor() as cursor:
+                cursor.execute("SAVEPOINT _idx_fix")
+                try:
+                    cursor.execute(f"SET LOCAL lock_timeout = '{INDEX_REBUILD_LOCK_TIMEOUT}'")
+                    cursor.execute(f'DROP INDEX IF EXISTS "{name}"')
+                    cursor.execute(index["statement"])
+                    cursor.execute("RELEASE SAVEPOINT _idx_fix")
+                except Exception:
+                    cursor.execute("ROLLBACK TO SAVEPOINT _idx_fix")
+                    raise
+            raw_connection.commit()
+            repairs.append(f"index {name} redefined to match schema.sql (was: {was[:200]})")
+        except Exception as exc:  # noqa: BLE001 — the old index stays; name why
+            try:
+                raw_connection.rollback()
+            except Exception:
+                pass
+            failures.append(f"index {name} differs from schema.sql and could not be rebuilt "
+                            f"(kept as is) -> {str(exc).strip()[:160]}")
+    try:
+        raw_connection.commit()   # close the probes' transaction; they left nothing behind
+    except Exception:  # noqa: BLE001
+        pass
+    return repairs, failures
+
+
 def get_engine(settings: Optional[Settings] = None, *,
                idle_in_transaction_seconds: Optional[int] = None) -> Engine:
     """The SQLAlchemy engine. `idle_in_transaction_seconds` (the API passes its setting) has
@@ -216,7 +362,8 @@ def split_statements(sql: str) -> list[str]:
     return out
 
 
-def _record_schema_apply(raw_connection, total: int, failures: list[str]) -> None:
+def _record_schema_apply(raw_connection, total: int, failures: list[str],
+                         repairs: Optional[list[str]] = None) -> None:
     """Leave the result of this apply where a person can read it.
 
     "Did the schema actually migrate?" was answerable only by opening the API container's
@@ -236,10 +383,14 @@ def _record_schema_apply(raw_connection, total: int, failures: list[str]) -> Non
                 " failed INT NOT NULL,"
                 " failures TEXT[] NOT NULL DEFAULT '{}')"
             )
+            # WHAT THE APPLY CHANGED BESIDES RUNNING THE SCRIPT — an index redefined to match
+            # schema.sql (_converge_indexes). A repair nobody can see is a change nobody made.
+            cursor.execute("ALTER TABLE schema_apply_runs "
+                           "ADD COLUMN IF NOT EXISTS repairs TEXT[] NOT NULL DEFAULT '{}'")
             cursor.execute(
-                "INSERT INTO schema_apply_runs (statements, failed, failures) "
-                "VALUES (%s, %s, %s)",
-                (total, len(failures), failures[:50]),
+                "INSERT INTO schema_apply_runs (statements, failed, failures, repairs) "
+                "VALUES (%s, %s, %s, %s)",
+                (total, len(failures), failures[:50], (repairs or [])[:50]),
             )
             # Keep the last 50 boots: enough to see when a failure first appeared, not enough
             # to become a table anyone has to think about.
@@ -298,14 +449,20 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
                     failures.append(f"{head} -> {str(exc).strip()[:160]}")
         raw_connection.commit()
 
-        _record_schema_apply(raw_connection, len(statements), failures)
+        # AFTER the script: the tables and columns an index names exist by now.
+        repairs, index_failures = _converge_indexes(raw_connection, sql)
+
+        _record_schema_apply(raw_connection, len(statements), failures + index_failures,
+                             repairs)
 
         print(f"[ensure_schema] applied {len(statements) - len(failures)}/{len(statements)} "
               f"statements")
         if skipped:
             print(f"[ensure_schema] column reconcile: {attempted} checked, "
                   f"{len(skipped)} skipped (non-fatal): {skipped[:8]}")
-        for failure in failures:
+        for repair in repairs:
+            print(f"[ensure_schema] REPAIRED: {repair}")
+        for failure in failures + index_failures:
             # Loud, one per line, with the statement AND the database's own message. The
             # previous version could not tell you which statement broke because it never knew.
             print(f"[ensure_schema] FAILED: {failure}")

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from ..config import Settings
 from .capability_manifest import build_manifest
 from .core import emit_event, make_id
 from .intent_router import IntentRouter
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AgentThreadNotFoundError(ValueError):
@@ -138,7 +143,79 @@ class AgentService:
                 return dict(row)
 
         new_id = make_id("athr")
+        params = {
+            "id": new_id,
+            "project_id": project_id,
+            "actor": actor,
+            "surface": surface,
+            "external_ref": external_ref,
+            "agent_role": agent_role,
+        }
+        # A SHARED THREAD THAT ALREADY EXISTS IS USED, NEVER A CRASH.
+        #
+        # shared-server's database kept the old 3-column unique index on (project, surface,
+        # external_ref) — `CREATE INDEX IF NOT EXISTS` never redefines one (db._converge_indexes
+        # now does) — so the lookup above, keyed on the agent too, found nothing, this INSERT hit
+        # the stale index, and "Ask Program Manager" failed on every turn with a raw
+        # UniqueViolation. Two first turns racing on one subject end the same way. Inside a
+        # savepoint so the refusal does not abort the caller's transaction; then the thread the
+        # index says exists is read back and used.
+        try:
+            with connection.begin_nested():
+                row = self._insert_thread(connection, params)
+        except IntegrityError:
+            if not external_ref:
+                raise
+            row = self._existing_shared_thread(connection, project_id=project_id,
+                                               surface=surface, external_ref=external_ref,
+                                               agent_role=agent_role)
+            if row is None:
+                raise
+            if (row["agent_role"] or "") != agent_role:
+                LOGGER.warning(
+                    "agent_threads: a unique index refused %s's own thread on %s/%s; using %s. "
+                    "The index predates agent_role in its key — ensure_schema rebuilds it.",
+                    agent_role or "the general agent", surface, external_ref, row["id"])
+            return dict(row)
+        emit_event(
+            connection,
+            project_id,
+            "agent.thread_started",
+            actor,
+            "agent_thread",
+            new_id,
+            {"surface": surface, "external_ref": external_ref},
+        )
+        return dict(row)
+
+    @staticmethod
+    def _existing_shared_thread(connection: Connection, *, project_id: str, surface: str,
+                                external_ref: str, agent_role: str):
+        """The thread a unique violation says is already there: this agent's own (a race), else
+        the one a stale 3-column index keys on (project, surface, external_ref) — the only
+        conversation that index allows on this subject."""
+        select = """
+            SELECT id, project_id, actor, surface, external_ref, status,
+                   agent_role, pending_plan_id, pending_plan_summary,
+                   created_at, updated_at
+            FROM agent_threads
+            WHERE project_id = :project_id AND surface = :surface
+              AND external_ref = :external_ref {extra}
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+        keys = {"project_id": project_id, "surface": surface, "external_ref": external_ref}
         row = connection.execute(
+            text(select.format(extra="AND agent_role = :agent_role")),
+            {**keys, "agent_role": agent_role},
+        ).mappings().first()
+        if row is None:
+            row = connection.execute(text(select.format(extra="")), keys).mappings().first()
+        return row
+
+    @staticmethod
+    def _insert_thread(connection: Connection, params: dict[str, Any]):
+        return connection.execute(
             text(
                 """
                 INSERT INTO agent_threads (
@@ -150,25 +227,8 @@ class AgentService:
                           created_at, updated_at
                 """
             ),
-            {
-                "id": new_id,
-                "project_id": project_id,
-                "actor": actor,
-                "surface": surface,
-                "external_ref": external_ref,
-                "agent_role": agent_role,
-            },
+            params,
         ).mappings().one()
-        emit_event(
-            connection,
-            project_id,
-            "agent.thread_started",
-            actor,
-            "agent_thread",
-            new_id,
-            {"surface": surface, "external_ref": external_ref},
-        )
-        return dict(row)
 
     def append_message(
         self,
