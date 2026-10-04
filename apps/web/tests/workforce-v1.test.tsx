@@ -40,7 +40,8 @@ describe("v1 Workforce", () => {
     // Grouped by what it is doing (Agent World roster zones): an idle agent is under IDLE.
     expect(out).toContain("IDLE");
     expect(out).toContain("Last: solo");
-    expect(out).toContain(">Open<");
+    // The whole card opens the agent; its name is the card's own button.
+    expect(out).toContain('data-testid="wf-open-software_engineer"');
     expect(out).not.toContain("96%");
     expect(out).not.toContain("17,474");
   });

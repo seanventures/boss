@@ -53,7 +53,8 @@ class TestTheChatAgentHasItsOwnBrain:
         assert adapter.primary.model_override == "opus"
 
     def test_the_model_is_passed_to_the_cli(self):
-        body = inspect.getsource(ClaudeCliAdapter._invoke)
+        # One command builder for the one-shot and the streaming call (`_command`).
+        body = inspect.getsource(ClaudeCliAdapter._command)
         assert "self.model_override or getattr(self.settings" in body
         assert '"--model", model' in body
 
@@ -995,7 +996,8 @@ class TestALongConversationIsNotAnArgument:
     def test_a_large_prompt_goes_on_stdin(self):
         from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter
 
-        body = inspect.getsource(ClaudeCliAdapter._invoke)
+        body = (inspect.getsource(ClaudeCliAdapter._command)
+                + inspect.getsource(ClaudeCliAdapter._invoke))
         assert 'via_stdin = len(prompt.encode("utf-8", "ignore")) > 96_000' in body
         assert '*(("-p",) if via_stdin else ("-p", prompt))' in body
         assert "input=(prompt if via_stdin else None)" in body

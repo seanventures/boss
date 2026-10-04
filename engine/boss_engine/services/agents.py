@@ -934,6 +934,23 @@ def create_agent(
             f"an agent {key!r} already exists on this project. Open it to change it, or give "
             "the new one a different name.", status=409)
 
+    # REGISTERING A SHIPPED AGENT REGISTERS THE SHIPPED AGENT. The roster's Register on a key
+    # BOSS ships a definition for (software_engineer, video_editor) made a blank operator row:
+    # no persona, no remit, no grants, and marked operator-edited so the seed never filled it.
+    # born_from {kind: shipped} (the Register dialog, untouched) — or no born_from and nothing
+    # authored — installs the shipped role instead. A key with no shipped YAML is a blank agent.
+    skills, mcp_servers = list(skills or []), list(mcp_servers or [])
+    asked = str(born_from.get("kind") or "").strip().lower() if isinstance(born_from, dict) else ""
+    authored = bool(str(purpose or "").strip() or skills or mcp_servers or boundaries
+                    or reports_to or {k: v for k, v in (persona or {}).items()
+                                      if k != "avatar" and v})
+    if asked == "shipped" or (born_from is None and not authored):
+        shipped = _shipped_role(key)
+        if shipped is not None:
+            return _install_shipped(connection, project_id, key, shipped, actor)
+        if asked == "shipped":
+            born_from = {"kind": "blank"}
+
     origin, blueprint = _blueprint(born_from)
     if blueprint:
         purpose = purpose or str(blueprint.get("mission") or "")
@@ -1004,8 +1021,42 @@ def create_agent(
     return {**get_agent(connection, project_id, key), "warnings": warnings}
 
 
+def _shipped_role(key: str) -> Optional[dict[str, Any]]:
+    """The role YAML BOSS ships for `key`, loaded and validated; None when it ships none."""
+    from ..config import get_settings
+    from .specpack import RoleNotFoundError, SpecPackService
+
+    try:
+        return SpecPackService(get_settings()).load_role_spec(key)
+    except (RoleNotFoundError, ValueError):
+        return None
+
+
+def _install_shipped(connection: Connection, project_id: str, key: str,
+                     shipped: dict[str, Any], actor: str) -> dict[str, Any]:
+    """Install the shipped role as the seed would: its persona, remit and grants, born from its
+    pack. The operator asked for it, so an earlier delete of the key no longer holds."""
+    from ..config import get_settings
+    from .shipped_cast import _grant, home_pack
+    from .specpack import SpecPackService
+
+    settings = get_settings()
+    specpack = SpecPackService(settings)
+    for kind in ("role", "role_spec"):
+        seed_exclusions.lift(connection, project_id, kind, key)
+    pack_id, version = home_pack(specpack, key, settings)
+    origin = {"kind": "pack", "pack_id": pack_id, "module_version": version}
+    with agent_identity.sealing_once():
+        specpack._upsert_role_spec(connection, project_id, key, shipped, actor,
+                                   born_from=origin)
+        _grant(connection, project_id, actor)
+    emit_event(connection, project_id, "agent.created", actor, "role", key,
+               {"skills": [], "mcp_servers": [], "reports_to": None, "born_from": origin})
+    return {**get_agent(connection, project_id, key), "warnings": []}
+
+
 #: The kinds of birth POST /v1/agents accepts. `pack` is the seed's; `clone` is phase 2.
-BIRTH_KINDS = ("blank", "template", "archetype")
+BIRTH_KINDS = ("blank", "template", "archetype", "shipped")
 
 
 def _blueprint(born_from: Optional[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:

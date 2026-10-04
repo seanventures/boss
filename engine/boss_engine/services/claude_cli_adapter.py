@@ -21,8 +21,9 @@ import logging
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Iterator, Optional, Tuple
 
 from ..config import Settings
 from .scheduling import low_priority
@@ -399,13 +400,9 @@ class ClaudeCliAdapter(CliChatBrain):
     def _invoke_plain(self, system_prompt: str, prompt: str) -> dict:
         return self._invoke(prompt, system_prompt=system_prompt)
 
-    def _invoke(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
-        own_timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
-        # NO CALL OUTLIVES ITS TURN (call_deadline.py): the CLI's own 240 s is a ceiling, and
-        # inside a chat turn the turn's remaining time is the real one.
-        from .call_deadline import TurnDeadlineExceeded, bounded_timeout, deadline_cut
-
-        timeout = bounded_timeout(own_timeout)
+    def _command(self, prompt: str, system_prompt: Optional[str], *,
+                 output: tuple[str, ...] = ("--output-format", "json")) -> tuple[list[str], bool]:
+        """The `claude -p` command for one call, and whether the prompt goes on stdin."""
         # A LONG CONVERSATION IS NOT AN ARGUMENT. Linux caps a single argv entry at
         # MAX_ARG_STRLEN (128 KiB), and this prompt is the whole conversation plus ~48 tool
         # schemas — so a thread that had been going a while died with
@@ -416,7 +413,7 @@ class ClaudeCliAdapter(CliChatBrain):
         cmd = [
             self._claude_bin(),
             *(("-p",) if via_stdin else ("-p", prompt)),
-            "--output-format", "json",
+            *output,
             # NOT 2. A TURN SPENT REACHING FOR A BLOCKED TOOL WAS FATAL.
             #
             # BOSS drives the loop and this process is meant to be pure reasoning, so Claude
@@ -438,6 +435,28 @@ class ClaudeCliAdapter(CliChatBrain):
         model = self.model_override or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
+        return cmd, via_stdin
+
+    def _timeouts(self) -> tuple[float, int]:
+        own_timeout = int(getattr(self.settings, "claude_cli_timeout", 240) or 240)
+        # NO CALL OUTLIVES ITS TURN (call_deadline.py): the CLI's own 240 s is a ceiling, and
+        # inside a chat turn the turn's remaining time is the real one.
+        from .call_deadline import bounded_timeout
+
+        return bounded_timeout(own_timeout), own_timeout
+
+    def _timed_out(self, timeout: float, own_timeout: int) -> Exception:
+        from .call_deadline import TurnDeadlineExceeded, deadline_cut
+
+        if deadline_cut(timeout, own_timeout):
+            return TurnDeadlineExceeded(
+                f"the turn's time ran out while the model was still working "
+                f"({int(timeout)}s for this call)")
+        return RuntimeError(f"claude CLI timed out after {int(timeout)}s")
+
+    def _invoke(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
+        timeout, own_timeout = self._timeouts()
+        cmd, via_stdin = self._command(prompt, system_prompt)
         try:
             # Mostly network wait, but it is still a node process in the API's container and
             # nothing here is latency-critical. See services/scheduling.py.
@@ -456,11 +475,7 @@ class ClaudeCliAdapter(CliChatBrain):
                 "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
             ) from exc
         except subprocess.TimeoutExpired as exc:
-            if deadline_cut(timeout, own_timeout):
-                raise TurnDeadlineExceeded(
-                    f"the turn's time ran out while the model was still working "
-                    f"({int(timeout)}s for this call)") from exc
-            raise RuntimeError(f"claude CLI timed out after {int(timeout)}s") from exc
+            raise self._timed_out(timeout, own_timeout) from exc
         if proc.returncode != 0:
             raise RuntimeError(
                 f"claude CLI exited {proc.returncode}: {(proc.stderr or proc.stdout or '')[:300]}"
@@ -472,6 +487,96 @@ class ClaudeCliAdapter(CliChatBrain):
         if data.get("is_error"):
             raise RuntimeError(f"claude CLI error: {data.get('result') or data.get('subtype')}")
         return data
+
+    # ---------------------------------------------------------------- streaming
+    #: `stream-json` with partial messages: one JSON event per line, the reply's text arriving
+    #: as `content_block_delta`/`text_delta` events while the model writes it, then a `result`
+    #: event shaped exactly like `--output-format json`'s single object (so `_usage` reads it).
+    _STREAM_OUTPUT = ("--output-format", "stream-json", "--verbose", "--include-partial-messages")
+
+    def stream_text_response(self, prompt: str, system_prompt: Optional[str] = None,
+                             model: Optional[str] = None) -> Iterator[Any]:
+        """`create_text_response`, as the model writes it: yields each piece of text as it
+        arrives, then the usage dict. A talk shows the words as they come instead of thinking
+        dots for the whole of a 20-60 s reply (agent_converse._call).
+
+        Same prompt, flags, credential, timeout and capacity observation as the one-shot form;
+        closing the generator (the person pressed Stop, or left) ends the CLI process.
+        """
+        full = (f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
+        try:
+            yield from self._stream(full)
+        except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged
+            self._observe_capacity(ok=False, error=str(exc))
+            raise
+        self._observe_capacity(ok=True, error=None)
+
+    def _stream(self, prompt: str) -> Iterator[Any]:
+        timeout, own_timeout = self._timeouts()
+        cmd, via_stdin = self._command(prompt, None, output=self._STREAM_OUTPUT)
+        try:
+            proc = subprocess.Popen(
+                low_priority(cmd),
+                stdin=(subprocess.PIPE if via_stdin else subprocess.DEVNULL),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+                cwd=self._scratch_dir(), env=self._child_env(),
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
+            ) from exc
+        expired = threading.Event()
+
+        def expire() -> None:
+            expired.set()
+            proc.kill()
+
+        timer = threading.Timer(timeout, expire)
+        timer.daemon = True
+        # stderr is drained on the side: a chatty CLI must not fill the pipe and stall stdout.
+        errors: list[str] = []
+        drain = threading.Thread(target=lambda: errors.append(proc.stderr.read() or ""),
+                                 daemon=True)
+        timer.start()
+        drain.start()
+        result: Optional[dict] = None
+        raw: list[str] = []
+        try:
+            if via_stdin:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    raw.append(line)
+                    continue
+                kind = event.get("type")
+                if kind == "stream_event":
+                    delta = (event.get("event") or {}).get("delta") or {}
+                    if delta.get("type") == "text_delta" and delta.get("text"):
+                        yield str(delta["text"])
+                elif kind == "result":
+                    result = event
+            proc.wait()
+        finally:
+            timer.cancel()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        drain.join(timeout=1)
+        if expired.is_set():
+            raise self._timed_out(timeout, own_timeout)
+        if result is None:
+            said = ("".join(errors) or "\n".join(raw))[:300]
+            raise RuntimeError(f"claude CLI exited {proc.returncode}: {said}")
+        if result.get("is_error"):
+            raise RuntimeError(
+                f"claude CLI error: {result.get('result') or result.get('subtype')}")
+        yield self._usage(result)
 
     def _child_env(self) -> dict:
         """The CLI's environment, with the credential this install actually holds.
@@ -631,6 +736,52 @@ class FallingBackAdapter:
                 f"{primary_error} (and the fallback failed too: {fallback_exc})") from primary_error
         self.last_backend = type(self.fallback).__name__
         return str(msg.get("content") or ""), usage
+
+    @property
+    def stream_text_response(self):
+        """The primary's stream, on the same fallback terms: a backend that is not available
+        before its first word falls back (streaming if the fallback can, else its whole
+        answer). Once words have reached the person, a failure is the answer's, never a cue
+        to start again on another backend. None when the primary cannot stream."""
+        primary = getattr(self.primary, "stream_text_response", None)
+        if not callable(primary):
+            return None
+
+        def stream(prompt, system_prompt=None, model=None):
+            spoke = False
+            try:
+                for piece in primary(prompt, system_prompt=system_prompt, model=model):
+                    spoke = spoke or not isinstance(piece, dict)
+                    yield piece
+                self.last_backend = type(self.primary).__name__
+                return
+            except Exception as exc:  # noqa: BLE001
+                if spoke or not self._unavailable(exc):
+                    raise
+                primary_error = exc
+                _log.warning("chat brain unavailable (%s); falling back to %s",
+                             exc, type(self.fallback).__name__)
+                if self._on_fallback:
+                    try:
+                        self._on_fallback(exc)
+                    except Exception:  # noqa: BLE001 — reporting must not break answering
+                        pass
+            try:
+                other = getattr(self.fallback, "stream_text_response", None)
+                if callable(other):
+                    yield from other(prompt, system_prompt=system_prompt, model=model)
+                else:
+                    reply = self.fallback.create_text_response(
+                        prompt, system_prompt=system_prompt, model=model)
+                    yield str(reply[1] if isinstance(reply, tuple) and len(reply) > 1 else reply)
+                    if isinstance(reply, tuple) and len(reply) > 2 and isinstance(reply[2], dict):
+                        yield reply[2]
+            except Exception as fallback_exc:  # noqa: BLE001
+                raise RuntimeError(f"{primary_error} (and the fallback failed too: "
+                                   f"{fallback_exc})") from primary_error
+            self.last_backend = type(self.fallback).__name__
+
+        return stream
 
     def create_text_response(self, prompt, system_prompt=None, model=None):
         """The one-shot completion, on the same terms as the chat one.

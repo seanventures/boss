@@ -274,6 +274,31 @@ class GovernedChatAdapter:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
+    @property
+    def stream_text_response(self) -> Any:
+        """The inner adapter's stream, governed like every other call: reserved before the
+        first word, settled with the real usage after the last, released if it fails or is
+        cut off. None when the inner adapter cannot stream (the caller then asks for the whole
+        answer) — `__getattr__` would otherwise hand out the inner stream ungoverned."""
+        inner = getattr(self._inner, "stream_text_response", None)
+        if not callable(inner):
+            return None
+
+        def stream(*args: Any, **kwargs: Any):
+            held = self._open()
+            usage: dict = {}
+            try:
+                for piece in inner(*args, **kwargs):
+                    if isinstance(piece, dict):
+                        usage = piece
+                    yield piece
+            except BaseException as error:  # GeneratorExit too: a reply cut off spends nothing
+                self._fail(held, error)
+                raise
+            self._settle(held, usage)
+
+        return stream
+
     def create_chat_completion(self, *args: Any, **kwargs: Any):
         return self._governed("create_chat_completion", args, kwargs, usage_at=1)
 
@@ -281,16 +306,27 @@ class GovernedChatAdapter:
         return self._governed("create_text_response", args, kwargs, usage_at=2)
 
     def _governed(self, method: str, args: tuple, kwargs: dict, *, usage_at: int):
+        held = self._open()
+        try:
+            result = getattr(self._inner, method)(*args, **kwargs)
+        except Exception as error:
+            self._fail(held, error)
+            raise
+        usage = result[usage_at] if isinstance(result, tuple) and len(result) > usage_at else {}
+        self._settle(held, usage)
+        return result
+
+    def _open(self) -> tuple[str, str]:
+        """Reserve one turn and open its receipt: (reservation_id, receipt_id), or raise."""
         import uuid
 
-        from .budget import BudgetGovernor
-        from .openai_adapter import estimate_cost_usd_micros
-        from .receipts import ReceiptService
         from sqlalchemy import text
+
+        from .budget import BudgetGovernor
+        from .receipts import ReceiptService
 
         connection, project_id = self._connection, self._project_id
         budget = BudgetGovernor(self._settings)
-        receipts = ReceiptService()
         reservation = budget.reserve(
             connection, project_id, "model", self._estimate,
             f"{self._skill_id}: one model turn ({self._ref})", 15)
@@ -314,28 +350,39 @@ class GovernedChatAdapter:
             raise IntegrationConfigurationError(
                 f"project {project_id!r} has no tenant scope; a model turn cannot be receipted")
         self._turn += 1
-        receipt, _ = receipts.create_or_reuse(
+        receipt, _ = ReceiptService().create_or_reuse(
             connection, str(scope["org_id"]), str(scope["workspace_id"]), project_id,
             f"{self._skill_id}:{self._ref}:{self._turn}:{uuid.uuid4().hex[:12]}",
             self._skill_id, {"data_boundary": "internal", "ref": self._ref},
             {"turn": self._turn}, data_boundary="internal",
         )
-        try:
-            result = getattr(self._inner, method)(*args, **kwargs)
-        except Exception as error:
-            receipts.mark_failed(connection, receipt["id"],
-                                 {"message": str(error)[:500], "skill_id": self._skill_id})
-            budget.release(connection, project_id, reservation["reservation_id"],
-                           f"{self._skill_id} turn failed")
-            raise
-        usage = result[usage_at] if isinstance(result, tuple) and len(result) > usage_at else {}
+        return reservation["reservation_id"], receipt["id"]
+
+    def _fail(self, held: tuple[str, str], error: BaseException) -> None:
+        from .budget import BudgetGovernor
+        from .receipts import ReceiptService
+
+        reservation_id, receipt_id = held
+        ReceiptService().mark_failed(self._connection, receipt_id,
+                                     {"message": str(error)[:500] or type(error).__name__,
+                                      "skill_id": self._skill_id})
+        BudgetGovernor(self._settings).release(self._connection, self._project_id,
+                                               reservation_id, f"{self._skill_id} turn failed")
+
+    def _settle(self, held: tuple[str, str], usage: Any) -> None:
+        from .budget import BudgetGovernor
+        from .openai_adapter import estimate_cost_usd_micros
+        from .receipts import ReceiptService
+
+        reservation_id, receipt_id = held
         usage = usage if isinstance(usage, dict) else {}
         actual = estimate_cost_usd_micros(usage)
-        receipts.mark_succeeded(connection, receipt["id"], str(usage.get("model") or ""),
-                                {"usage": usage, "actual_usd_micros": actual})
-        budget.settle(connection, project_id, reservation["reservation_id"], receipt["id"],
-                      "model", self._skill_id, self._estimate, actual)
-        return result
+        ReceiptService().mark_succeeded(self._connection, receipt_id,
+                                        str(usage.get("model") or ""),
+                                        {"usage": usage, "actual_usd_micros": actual})
+        BudgetGovernor(self._settings).settle(self._connection, self._project_id,
+                                              reservation_id, receipt_id, "model",
+                                              self._skill_id, self._estimate, actual)
 
 
 def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,

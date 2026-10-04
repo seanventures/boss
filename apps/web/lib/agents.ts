@@ -16,7 +16,9 @@ import { apiWrite } from "./api-write";
 import type { Persona } from "./agent-world-types";
 
 /** Where a new agent came from, recorded on its passport (Agent World spec §5.4). */
-export type BornFrom = { kind: "blank" | "template" | "archetype"; archetype?: string; template_key?: string };
+/** `shipped`: register the definition BOSS ships for this key (persona, remit, grants); the API
+ *  makes a blank agent when it ships none. */
+export type BornFrom = { kind: "blank" | "template" | "archetype" | "shipped"; archetype?: string; template_key?: string };
 
 export type GrantableSkill = {
   skill_id: string; label: string; summary: string; source: string;

@@ -97,6 +97,13 @@ export function birthPersona(o: { face?: AvatarSpec; callsign?: string; tagline?
   return p;
 }
 
+/** Register (from the roster) with nothing written: ask for the shipped definition. */
+export function asShipped(o: { registering: boolean; purpose: string; skills: string[]; mcpServers: unknown[];
+                               reportsTo: string; callsign: string; tagline: string }): boolean {
+  return o.registering && !o.purpose.trim() && o.skills.length === 0 && o.mcpServers.length === 0
+    && !o.reportsTo && !o.callsign.trim() && !o.tagline.trim();
+}
+
 /** Where a cast face came from: one of the four "thinks like" archetypes, or a role template. */
 export function bornFromFor(key: string): BornFrom {
   return (ARCHETYPE_KEYS as readonly string[]).includes(key)
@@ -226,10 +233,14 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
       return;
     }
     const persona = birthPersona({ face, callsign, tagline });
+    // REGISTER ON A SHIPPED AGENT REGISTERS THE SHIPPED AGENT: from the roster, with nothing
+    // written here, the API installs BOSS's own definition for the key (Splice for
+    // video_editor), and a blank agent only when BOSS ships none.
+    const shipped = asShipped({ registering: !!initialName, purpose, skills, mcpServers, reportsTo, callsign, tagline });
     const r = await createAgent(projectId, actor, {
       name: name.trim(), purpose: purpose.trim(), skills, mcpServers, reportsTo: reportsTo || null,
       ...(nameMakesNoKey && key ? { roleKey: key } : {}),
-      bornFrom: { kind: "blank" }, persona,
+      ...(shipped ? { bornFrom: { kind: "shipped" } } : { bornFrom: { kind: "blank" }, persona }),
     });
     setBusy(false);
     if (!r.ok) { setFailed(r.error); return; }
@@ -251,7 +262,8 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
       <section className="aw-dialog aq-dialog" role="dialog" aria-modal="true"
                aria-labelledby="aq-title" data-testid="agent-quick-create">
         <header className="aw-header">
-          <h2 id="aq-title">New agent</h2>
+          <h2 id="aq-title" title={initialName ? "Leave the rest empty to register BOSS's own definition, if it ships one" : undefined}>
+            {initialName ? "Register agent" : "New agent"}</h2>
           <div className="wf-seg" role="tablist" aria-label="Start from">
             <button type="button" role="tab" aria-selected={tab === "blank"} data-active={tab === "blank"}
                     data-testid="aq-tab-blank" onClick={() => setTab("blank")}>Blank</button>
@@ -437,7 +449,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                 <button type="button" className="wf-btn" onClick={onClose} disabled={busy}>Cancel</button>
                 <button type="submit" className="wf-btn wf-btn-primary"
                         disabled={busy || !name.trim() || taken || keyInvalid || callsignTaken(callsign)} data-testid="aq-create">
-                  {busy ? "Creating…" : "Create"}
+                  {busy ? "Creating…" : initialName ? "Register" : "Create"}
                 </button>
               </div>
             </footer>
