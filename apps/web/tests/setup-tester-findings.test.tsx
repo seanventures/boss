@@ -126,6 +126,30 @@ describe("times are the viewer's", () => {
   });
 });
 
+describe("Replace asks for the key only", () => {
+  it("an Other key's Replace keeps its URL and model, and sends the one source", async () => {
+    const view = board();
+    view.models = [view.models[0], {
+      source_id: "setup-custom", provider: "custom", label: "Other · 127.0.0.1:8766",
+      kind: "metered", model: "e2e-stub", used_for: [], pill: everyRed().models[1].pill,
+      checked_at: null, source: "connected", retry_at: null, stale: false,
+      base_url: "http://127.0.0.1:8766/v1" }];
+    const api = fakeApi(view);
+    mounted = await mountBoard(view, "?area=setup&focus=models&source=setup-custom");
+    // `source=` opens that row's menu (the Command Center's deep link).
+    await click(q(document.body, "su-menu-replace"));
+    await flush();
+    expect((q(document.body, "su-model-base-url") as HTMLInputElement).value)
+      .toBe("http://127.0.0.1:8766/v1");
+    expect((q(document.body, "su-model-name") as HTMLInputElement).value).toBe("e2e-stub");
+    await type(q(document.body, "su-model-key"), "sk-a-new-key-0123456789");
+    await click(q(document.body, "su-model-connect"));
+    const sent = api.calls.find((c) => c.op === "models")?.body;
+    expect(sent).toMatchObject({ provider: "custom", source_id: "setup-custom",
+                                 base_url: "http://127.0.0.1:8766/v1", model: "e2e-stub" });
+  });
+});
+
 describe("every time on the board is the viewer's, not only the pill's", () => {
   it("the verdict's tooltip and Try it's reason say the same local time as the pill", async () => {
     // 99:99 is no real local time: if it survives anywhere, the server's clock leaked through.

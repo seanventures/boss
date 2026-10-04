@@ -71,8 +71,12 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   useEffect(() => {
     // A new provider is a new form: nothing typed for the last one carries over.
     setSecret(""); setFile(""); setFileName(""); setModels([]); setRefusal(null);
-    setModel(entry?.example_model ?? "");
-    setBaseUrl(provider === "ollama" ? (detected?.base_url ?? "") : "");
+    // REPLACE ASKS FOR THE KEY ONLY: the model and URL of the connection it replaces stay.
+    const replacing = view.models.find((m) => m.source_id === replaceSourceId
+                                              && m.provider === provider);
+    setModel(replacing?.model ?? entry?.example_model ?? "");
+    setBaseUrl(replacing?.base_url
+               ?? (provider === "ollama" ? (detected?.base_url ?? "") : ""));
     if (provider === "ollama" && detected?.found === "found") void list("", detected.base_url ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
