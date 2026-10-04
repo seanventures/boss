@@ -196,6 +196,10 @@
    cards no narrower than 260px, as many columns as fit. The callsign never truncates (it wraps);
    the role, tagline and presence line give way, each with its full text as a tooltip. The
    actions live in the card's own footer row, so nothing ever sits on top of the text. */
+/* ...and the width it is given is the whole console. The shell caps every area at 1440px and
+   centres it (design-system.css .bx-content), which suits reading; a floor of faces is a gallery,
+   so on a wide screen the cap left it a centred column (2560px viewport: 1388px of 2316px). */
+.bx-content[data-active="workforce"]:has(.ag-roster) { max-width: none; }
 .ag-roster-sum { display: inline-flex; align-items: center; gap: 8px; margin-left: 12px; font-size: 0.8rem; color: var(--muted); }
 .ag-roster { display: flex; flex-direction: column; gap: 28px; width: 100%; min-width: 0; margin-top: 16px; }
 .ag-zone { min-width: 0; }

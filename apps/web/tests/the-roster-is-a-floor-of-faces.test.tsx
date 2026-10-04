@@ -2,7 +2,8 @@
 /**
  * The roster and the Passport, as the lead walked them live (1549x784) — and what was wrong:
  *
- *  (a) the roster sat in a narrow centred column: it now takes the width it is given, as a
+ *  (a) the roster sat in a narrow centred column (the shell's 1440px cap on a 2560px viewport):
+ *      the Agents area is uncapped, and the roster takes the width it is given, as a
  *      responsive grid of cards no narrower than 260px;
  *  (b) faces were ~36px: a roster face is 64px and moves (idle breathes, working sweeps), the
  *      Passport hero is 128px;
@@ -19,6 +20,7 @@
  * Rendered and asserted on the DOM and on the stylesheet rules that drive it — happy-dom does no
  * layout, so the rules that MAKE the layout are what is held.
  */
+import { readFileSync } from "node:fs";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -96,7 +98,36 @@ async function roster(agents: V2Agent[] = CAST.map((k) => agent(k, { name: ident
   return { opened, asked, registered };
 }
 
+/** Every stylesheet the console loads, in app/layout.tsx's order, so the cascade is the real one. */
+function consoleStyles(): HTMLStyleElement {
+  const order = [...readFileSync("app/layout.tsx", "utf8").matchAll(/^import "\.\/([^"]+\.css)";/gm)].map((m) => m[1]);
+  expect(order).toContain("design-system.css");
+  expect(order).toContain("agents/agent-world.css");
+  const style = document.createElement("style");
+  style.textContent = order.map((f) => readFileSync(`app/${f}`, "utf8")).join("\n");
+  document.head.appendChild(style);
+  return style;
+}
+
 describe("(a) the roster uses the width it is given", () => {
+  it("is not held in the shell's centred 1440px column: on the Agents area the content box is uncapped", () => {
+    // Walked live at a 2560px viewport (the 1549x784 screenshot frame is 0.605 of it): the shell's
+    // .bx-content { max-width: 1440px; margin: 0 auto } held the roster to 1388px of 2316px,
+    // centred — the ~840px column in the screenshot. Every other area keeps its reading width.
+    const style = consoleStyles();
+    try {
+      document.body.innerHTML = `
+        <main class="bx-content" data-active="workforce" data-testid="roster-area"><div class="frame">
+          <section class="panel-stack"><div class="wf-agents"><div class="roster"><div class="ag-roster"></div></div></div></section>
+        </div></main>
+        <main class="bx-content" data-active="decisions" data-testid="reading-area"><div class="frame"><section></section></div></main>`;
+      expect(getComputedStyle($('[data-testid="roster-area"]')!).maxWidth).toBe("none");
+      expect(getComputedStyle($('[data-testid="reading-area"]')!).maxWidth).toBe("1440px");
+    } finally {
+      style.remove();
+    }
+  });
+
   it("is a responsive grid of cards no narrower than 260px, with nothing capping its width", () => {
     const grid = rules(CSS, ".ag-zone-grid").join(";");
     expect(grid).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*260px\),\s*1fr\)\)/);
@@ -273,12 +304,45 @@ describe("(g) the Passport's certificate explains itself", () => {
     expect(box.classList.contains("ad-bad")).toBe(false);
     const register = $('[data-testid="agent-register"]')!;
     expect(register.tagName).toBe("BUTTON");
+    expect(overBudget(box)).toEqual([]);
+    expect(box.querySelector("p")).toBeNull();
     await act(async () => { register.click(); });
     await settle();
     // It opens New agent, already named after the agent it registers.
-    expect($('[data-testid="aq-archetypes"], .aw-form, [role="dialog"][aria-label*="agent" i]')).not.toBeNull();
-    expect(overBudget(box)).toEqual([]);
-    expect(box.querySelector("p")).toBeNull();
+    expect($('[data-testid="agent-quick-create"]')).not.toBeNull();
+    expect(($('[data-testid="aq-name"]') as HTMLInputElement).value).toBe(DETAIL.name);
+  });
+
+  it("registering lands on the new agent's Passport: ?role= moves to the key it was given", async () => {
+    window.history.replaceState(null, "", "/?area=workforce&role=qa");
+    const { calls } = installAgentWorldApi([
+      (url) => (url.startsWith("/api/agents/qa") ? Response.json({ ...DETAIL, registered: false }) : undefined),
+      (url, init) => (url === "/v1/agents" && init.method === "POST"
+        ? Response.json({ role_key: "qa_lead", agent_id: "agt_registered1" }, { status: 201 }) : undefined),
+    ]);
+    const popped: string[] = [];
+    const onPop = () => popped.push(new URL(window.location.href).searchParams.get("role") ?? "");
+    window.addEventListener("popstate", onPop);
+    try {
+      await render(<AgentDetail projectId="p1" roleKey="qa" actor="ceo" onClose={() => {}} />);
+      await act(async () => { $('[data-testid="agent-register"]')!.click(); });
+      await settle();
+      await act(async () => { $('[data-testid="aq-create"]')!.click(); });
+      await settle();
+      expect(calls.filter((c) => c.method === "POST" && c.url === "/v1/agents")[0]?.body)
+        .toMatchObject({ name: DETAIL.name });
+      const loadsBefore = calls.filter((c) => c.url.startsWith("/api/agents/qa")).length;
+      await act(async () => { $('[data-testid="ag-birth"]')!.click(); });
+      await settle();
+      const url = new URL(window.location.href);
+      expect(url.searchParams.get("role")).toBe("qa_lead");
+      expect(url.searchParams.get("area")).toBe("workforce");
+      expect(popped).toEqual(["qa_lead"]);
+      expect($('[data-testid="agent-quick-create"]')).toBeNull();
+      expect(calls.filter((c) => c.url.startsWith("/api/agents/qa")).length).toBeGreaterThan(loadsBefore);
+    } finally {
+      window.removeEventListener("popstate", onPop);
+    }
   });
 });
 
