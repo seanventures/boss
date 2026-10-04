@@ -61,6 +61,22 @@ function describe(detail: unknown): string {
   return "";
 }
 
+/**
+ * The technical line behind a failed agent turn, for a collapsed Details — never the sentence.
+ *
+ * The API says a failed turn as one sentence in `detail` and puts the database's or the
+ * exception's own line in `failure.technical` (model_failures.explain_turn_failure). The raw
+ * text used to BE the message: goldeneye's dock showed "IntegrityError: (psycopg.errors.
+ * UniqueViolation) … [SQL: INSERT INTO agent_threads …" to the operator.
+ */
+export function apiErrorTechnical(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const failure = (body as Record<string, unknown>).failure;
+  if (!failure || typeof failure !== "object") return "";
+  const technical = (failure as Record<string, unknown>).technical;
+  return typeof technical === "string" ? technical.trim() : "";
+}
+
 /** The same reading, with a sentence for the statuses an operator meets most when the API
  *  gave none. Kept as a name because the skills-mcp stream's Skills/MCP route and its tests
  *  call it; it is NOT a second parser (integration of the skills-mcp and console-b streams,

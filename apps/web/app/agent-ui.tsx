@@ -24,7 +24,9 @@ import { useIdentityVersion } from "../lib/use-agent-identities";
 type RecordedAction = { kind?: string; tool?: string; ok?: boolean };
 
 type Msg = { role: string; content: string; actions?: RecordedAction[]; created_at?: string;
-             attachments?: Array<{ name: string; kind: string }> };
+             attachments?: Array<{ name: string; kind: string }>;
+             /** A failed turn's technical line, shown only under a collapsed Details. */
+             technical?: string };
 
 /** A file the operator attached to the message they are writing. */
 type Attached = { name: string; media_type: string; kind: "image" | "text"; data: string };
@@ -920,8 +922,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         setTrail(Array.isArray(d.tool_calls) ? (d.tool_calls as ToolCall[]) : []);
         refreshThreads();
       } else {
-        setMessages((m) => [...m, { role: "assistant", content:
-          "⚠ \n\n```\n" + (r.error ?? "request failed") + "\n```" }]);
+        // THE SENTENCE, NOT THE EXCEPTION. This fenced the raw error as code, and on goldeneye
+        // that was "IntegrityError: (psycopg.errors.UniqueViolation) … [SQL: INSERT INTO …".
+        // The API now says a failed turn in one sentence; its technical line sits under a
+        // collapsed Details below the message.
+        const technical = typeof r.data?.technical === "string" ? r.data.technical : undefined;
+        setMessages((m) => [...m, { role: "assistant",
+          content: "⚠ " + (r.error ?? "request failed"), technical }]);
       }
     });
   }, [projectId, actor, threadId, sel, roleRef, roleName, refreshThreads, dockAgent, aboutAct, speakChunk]);
@@ -1302,6 +1309,12 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 <>
                   <Markdown className="agent-md"
                             text={stripAppFacts(withoutBrief(m.content))} />
+                  {m.technical ? (
+                    <details className="agent-technical" data-testid="agent-message-technical">
+                      <summary>Details</summary>
+                      <pre>{m.technical}</pre>
+                    </details>
+                  ) : null}
                   {/* THE CONVERSATION BECOMES THE THING YOU BUILD.
                       A discussion that ends with "now go and type all that into the composer"
                       wastes the part that took the effort. When the agent hands back a brief,

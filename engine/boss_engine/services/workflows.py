@@ -5258,6 +5258,15 @@ def fail_step(
     explained = settled_failure(error)
     if explained is not None:
         error, retryable = explained, False
+    # BOSS'S OWN DATABASE FAILING IS SAID AS THAT, NOT AS ITS SQL. A step's last_error is what
+    # the run screen shows; the database's diagnostics go to the step's output and the log.
+    from .model_failures import explain, is_storage_failure
+
+    if is_storage_failure(error):
+        said = explain(error)
+        logger.warning("workflow step %s failed on the database: %s", step_run_id, error)
+        output = {**(output or {}), "error_detail": said["detail"]}
+        error = f"{said['headline']} {said['action']}"
     can_retry = retryable and int(row["attempt"]) < int(row["max_attempts"])
     status = "ready" if can_retry else "deadlettered"
     run_after = now_utc() + timedelta(seconds=max(0, int(retry_delay_seconds)))

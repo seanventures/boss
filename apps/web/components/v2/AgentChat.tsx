@@ -26,7 +26,8 @@ import { apiWrite } from "../../lib/api-write";
  * five answers ABOVE their own question in the v1 transcript.
  */
 
-type Turn = { role: "you" | "agent" | "error"; text: string };
+/** `technical` is the failure's own line, shown only under a collapsed Details. */
+type Turn = { role: "you" | "agent" | "error"; text: string; technical?: string };
 
 export function AgentChat({
   agent,
@@ -71,7 +72,9 @@ export function AgentChat({
       });
       const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
-        setTurns((t) => [...t, { role: "error", text: String(data.error ?? `HTTP ${res.status}`) }]);
+        const technical = typeof data.technical === "string" ? data.technical : undefined;
+        setTurns((t) => [...t, { role: "error", text: String(data.error ?? `HTTP ${res.status}`),
+                                 technical }]);
         return;
       }
       if (typeof data.thread_id === "string") setThreadId(data.thread_id);
@@ -127,6 +130,12 @@ export function AgentChat({
             >
               <span className="v2-chat-who">{t.role === "you" ? "you" : t.role === "agent" ? agent.name : "error"}</span>
               {t.text}
+              {t.technical ? (
+                <details className="v2-chat-technical" data-testid={`v2-chat-technical-${i}`}>
+                  <summary>Details</summary>
+                  {t.technical}
+                </details>
+              ) : null}
             </p>
           ))
         )}

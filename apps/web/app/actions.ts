@@ -11,6 +11,7 @@ import { apiWrite, pressToken } from "../lib/api-write";
 import { act, apiFetch } from "../lib/server-action";
 import { missingInput, type ActionResult } from "../lib/action-result";
 import { previewWebHref } from "../lib/browser-links";
+import { apiErrorTechnical } from "../lib/api-error";
 
 export async function setPipelineDefaultAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
@@ -103,10 +104,15 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
     });
     if (!r.ok) {
       let detail = "";
+      let technical = "";
       try {
-        detail = String((await r.json()).detail ?? "");
+        const body = await r.json();
+        detail = String(body.detail ?? "");
+        // A failed agent turn's technical line, kept apart from the sentence (lib/api-error.ts).
+        technical = apiErrorTechnical(body);
       } catch {}
-      return { ok: false, error: detail || `HTTP ${r.status}` };
+      return { ok: false, error: detail || `HTTP ${r.status}`,
+               ...(technical ? { data: { technical } } : {}) };
     }
     return { ok: true, data: await r.json() };
   } catch (e) {

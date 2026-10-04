@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
-import { apiErrorText } from "../../../lib/api-error";
+import { apiErrorTechnical, apiErrorText } from "../../../lib/api-error";
 
 /**
  * Talk to an agent, from the v2 chat drawer.
@@ -59,8 +59,10 @@ export async function POST(req: Request) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
+      // The sentence to show, and apart from it the technical line for a collapsed Details.
+      const technical = apiErrorTechnical(data);
       return NextResponse.json(
-        { error: apiErrorText(data, r.status) },
+        { error: apiErrorText(data, r.status), ...(technical ? { technical } : {}) },
         { status: r.status },
       );
     }
