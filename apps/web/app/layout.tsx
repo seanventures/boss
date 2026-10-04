@@ -10,6 +10,8 @@ import "./workflows/inspector.css";
 import "./workflows/library.css";
 // Agent World (avatars, motion, Passport, Roster, Chain, conversations): ag- classes, agav- keyframes.
 import "./agents/agent-world.css";
+// Factory (Floor, Line, Apps): fx- classes.
+import "./factory/factory.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 

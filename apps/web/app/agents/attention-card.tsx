@@ -19,6 +19,9 @@ import { CaretDown, CaretRight, SpinnerGap } from "@phosphor-icons/react";
 import React, { useEffect, useId, useRef, useState } from "react";
 
 import { resolveDecisionAction } from "../actions";
+import { callAction } from "../../lib/call-action";
+import { retryBuildAction } from "../factory/floor-actions";
+import { WaiveSheet } from "../factory/waive-sheet";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { sendRunAnswer, type RunAction } from "../delivery-workflows-ui";
@@ -39,6 +42,8 @@ const KIND_WORD: Record<string, string> = {
 export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind">): string {
   if (item.kind === "readiness") return "Setup";
   if (item.kind === "failed_step") return "Failed";
+  if (item.kind === "gate_override") return "Checks";
+  if (item.kind === "budget_refused") return "Budget";
   return KIND_WORD[item.decisionKind ?? ""] ?? "Gate";
 }
 
@@ -46,7 +51,8 @@ export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind">): st
 export function cardWho(item: Pick<AttentionItem, "roleKey" | "kind" | "decisionKind" | "id">):
     { roleKey: string | null; variant: "agent" | "boss" | "you" } {
   if (item.roleKey) return { roleKey: item.roleKey, variant: "agent" };
-  if (item.kind === "readiness" || item.decisionKind === "refusal" || item.id.startsWith("ready:")) {
+  if (item.kind === "readiness" || item.kind === "budget_refused" || item.kind === "gate_override"
+      || item.decisionKind === "refusal" || item.id.startsWith("ready:")) {
     return { roleKey: null, variant: "boss" };
   }
   return { roleKey: null, variant: "you" };
@@ -73,6 +79,10 @@ export type AttentionCardProps = {
 
 type Busy = null | string;
 
+/** The cockpit of a build, as a console link (`?area=code_tasks&build=`). */
+export const buildPatch = (runId: string) => ({ area: "code_tasks", build: runId, run: null, view: null, role: null });
+const STUCK_KINDS = new Set(["failed_step", "gate_override", "budget_refused"]);
+
 export function AttentionCard({ item, projectId, actor, density = "card", focusKey, enter, still, onDone, onRefresh, orgId }: AttentionCardProps) {
   useIdentityVersion();
   const titleId = useId();
@@ -85,6 +95,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const [confirming, setConfirming] = useState<AttentionAction | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [pulse, setPulse] = useState(false);
+  const [waiving, setWaiving] = useState(false);
 
   useEffect(() => {
     if (!focusKey || !box.current) return undefined;
@@ -124,7 +135,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     if (item.contentHash) form.set("content_hash", item.contentHash);
     if (run?.id) form.set("workflow_run_id", run.id);
     try {
-      const result = await resolveDecisionAction(form);
+      const result = await callAction(resolveDecisionAction)(form);
       if (result.ok) {
         finish(action.action === "approve"
           ? (run ? `Approved · ${subject} continues` : "Approved")
@@ -162,6 +173,26 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     }
   }
 
+  async function retryBuild() {
+    const b = item.build;
+    if (!b || busy || !b.retryable) return;
+    setBusy("retry");
+    setError("");
+    const form = new FormData();
+    form.set("run_id", b.runId);
+    form.set("project_id", projectId);
+    form.set("actor", actor);
+    try {
+      const r = await callAction(retryBuildAction)(form);
+      if (r.ok) finish(r.attempt ? `Attempt ${r.attempt} started` : "Retrying");
+      else { setError(r.error ?? ""); onRefresh?.(); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function press(a: AttentionAction) {
     if (a.action === "reject") setConfirming(a); else void decide(a);
   }
@@ -182,6 +213,10 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const named = who.roleKey ? nameOf(who.roleKey).name : who.variant === "boss" ? "BOSS" : "You";
   const age = ago(item.at, now);
   const runHref = run?.id ? linkTo(runPatch(run.id), orgId) : "";
+  const build = item.build;
+  const buildHref = build ? linkTo(buildPatch(build.runId), orgId) : "";
+  const stuck = STUCK_KINDS.has(item.kind);
+  const planHref = build?.planUrl && /^https?:/i.test(build.planUrl) ? build.planUrl : buildHref;
 
   return (
     <div ref={box} className="ag-att" role="group" aria-labelledby={titleId} tabIndex={-1}
@@ -193,16 +228,22 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         <span className="ag-att-face" title={named}>
           {who.roleKey
             ? <AgFace roleKey={who.roleKey} size={density === "row" ? 24 : 32}
-                      state={item.kind === "failed_step" ? "stuck" : "needs_you"} />
+                      state={stuck ? "stuck" : "needs_you"} />
             : <RunFace roleKey={null} variant={who.variant} size={density === "row" ? 24 : 32}
-                       state={item.kind === "failed_step" ? "stuck" : "needs_you"} standalone />}
+                       state={stuck ? "stuck" : "needs_you"} standalone />}
         </span>
         <span id={titleId} className="ag-att-title ag-trunc" title={item.title} data-user-text>{item.title}</span>
         {age ? <span className="ag-att-age" title={`Waiting since ${localTime(item.at)}`}>{age}</span> : null}
       </div>
 
       <div className="ag-att-context">
-        {run?.id ? (
+        {build && !run?.id ? (
+          <a className="ag-att-run" href={buildHref} data-testid="ag-att-build"
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(buildPatch(build.runId)); } }}>
+            <span data-user-text>{build.app}</span>
+            {build.where ? <span className="ag-att-step"> · {build.where}</span> : null}
+          </a>
+        ) : run?.id ? (
           <a className="ag-att-run" href={runHref}
              onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(runPatch(run.id)); } }}>
             <span data-user-text>{subject}</span>
@@ -234,6 +275,33 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
              title="Needs a closer look in Approvals"
              onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(decisionPatch(decisionId)); } }}>
             Review ↗
+          </a>
+        ) : null}
+        {item.kind === "approval" && build?.prUrl ? (
+          <a className="ag-btn" href={build.prUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-pr">Open PR ↗</a>
+        ) : null}
+        {item.kind === "approval" && build?.previewUrl ? (
+          <a className="ag-btn" href={build.previewUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-preview">Open preview ↗</a>
+        ) : null}
+        {(item.kind === "gate_override" || item.kind === "budget_refused") && build ? (
+          <button type="button" className="ag-btn" data-testid="ag-att-retry"
+                  disabled={!build.retryable || busy !== null} title={!build.retryable ? build.retryReason : undefined}
+                  aria-busy={busy === "retry" || undefined} onClick={() => void retryBuild()}>
+            {busy === "retry" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
+            Retry
+          </button>
+        ) : null}
+        {item.kind === "gate_override" && build ? (
+          <button type="button" className="ag-btn" data-testid="ag-att-waive" disabled={busy !== null}
+                  title="Open the PR anyway. The merge still needs you." onClick={() => setWaiving(true)}>
+            Waive…
+          </button>
+        ) : null}
+        {item.kind === "budget_refused" ? (
+          <a className="ag-btn" data-testid="ag-att-raise-budget" href={linkTo({ area: "budget", view: null, role: null }, orgId)}
+             title="Raise the build budget in Cost"
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: "budget", view: null, role: null }); } }}>
+            Raise budget ↗
           </a>
         ) : null}
         {item.kind === "failed_step" ? item.answers.map((a) => (
@@ -282,6 +350,17 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
             </dd></>
           ) : null}
           {item.preview ? <><dt>Preview</dt><dd data-user-text>{item.preview}</dd></> : null}
+          {build && build.failing.length ? (
+            <><dt>Failed</dt><dd>{build.failing.map((g) => g.label).join(" · ")}</dd></>
+          ) : null}
+          {build && item.kind === "approval" && item.decisionKind !== "pull_request" ? (
+            <><dt className="ag-sr">Plan</dt><dd>
+              <a className="ag-link" href={planHref} data-testid="ag-att-open-plan"
+                 onClick={(e) => { if (planHref === buildHref && plainClick(e)) { e.preventDefault(); navigate(buildPatch(build.runId)); } }}>
+                Open plan ↗
+              </a>
+            </dd></>
+          ) : null}
           {typeof item.riskTier === "number" ? (
             <><dt>Risk</dt><dd><span title="Higher tiers need a closer look before approving">Tier {item.riskTier}</span></dd></>
           ) : null}
@@ -294,6 +373,11 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
             </dd></>
           ) : null}
         </dl>
+      ) : null}
+
+      {waiving && build ? (
+        <WaiveSheet runId={build.runId} app={build.app} failing={build.failing} projectId={projectId} actor={actor}
+                    onClose={() => setWaiving(false)} onDone={() => { setLeaving(true); window.setTimeout(() => onDone?.(), 200); }} />
       ) : null}
     </div>
   );

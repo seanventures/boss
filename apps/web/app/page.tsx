@@ -155,7 +155,6 @@ import { AiSreHome } from "./ai-sre-ui";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
-import { AgentOrb } from "./agent-orb";
 import { buildAgentRoster } from "../lib/roster";
 import { fetchCommandCenter } from "../lib/command-center";
 import { CommandCenter } from "./command-center-ui";
@@ -5007,14 +5006,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             hand. This groups the runs into apps and puts each one's life on a single row. */}
         {shows("code_tasks") ? (
         <section className="panel-stack" data-area="code_tasks" aria-label="Factory">
-          <div className="section-head">
-            <div>
-              {/* The rail calls this Factory in Community (communityNavCopy); the screen said
-                  "Projects", so the operator arrived somewhere with a different name. */}
-              <span className="eyebrow">Factory</span>
-              <h2>An agent clones the repo, edits code, runs your tests — then opens a gated PR.</h2>
-            </div>
-          </div>
           <CodeTasksHome
             projectId={activeProjectId}
             orgId={activeOrgId}

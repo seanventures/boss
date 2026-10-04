@@ -65,7 +65,7 @@ describe("the signal", () => {
 
 describe("all three places both send and listen", () => {
   it("the Factory card announces a target it set, and reloads on other people's", () => {
-    const UI = codeOnly("app/code-tasks-ui.tsx");
+    const UI = codeOnly("app/factory/legacy-build-parts.tsx");
     expect(UI).toContain('notifyChanged("factory"');
     expect(UI).toContain('onChanged(() => { void reload(); }, "factory")');
   });

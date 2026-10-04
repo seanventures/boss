@@ -9,17 +9,15 @@ import { codeOnly } from "./_helpers/source";
  * button, a badge, a ghost button — with meaning carried by typed glyphs (↗ ▶ ↻) that render
  * differently on every platform and mean nothing to a screen reader.
  */
-const SRC = codeOnly("app/code-tasks-ui.tsx");
+const SRC = codeOnly("app/factory/legacy-build-parts.tsx");
 const CSS = codeOnly("app/globals.css");
 
 describe("every control on the bar has an icon", () => {
   it.each([
-    ["the PR link", "GitPullRequest"],
     ["Open preview", "ArrowSquareOut"],
     ["Startup logs", "TerminalWindow"],
     ["Rebuild preview", "ArrowsClockwise"],
     ["Run preview", "PlayCircle"],
-    ["Ask BOSS", "ChatCircleDots"],
   ])("%s uses <%s>", (_label, icon) => {
     expect(SRC).toContain(`<${icon} `);
   });
@@ -27,7 +25,7 @@ describe("every control on the bar has an icon", () => {
   it("imports them all from the icon set already in use", () => {
     const imports = SRC.slice(SRC.indexOf("@phosphor-icons/react") - 400,
                               SRC.indexOf("@phosphor-icons/react"));
-    for (const icon of ["GitPullRequest", "TerminalWindow", "ArrowSquareOut", "ChatCircleDots"]) {
+    for (const icon of ["TerminalWindow", "ArrowSquareOut"]) {
       expect(imports).toContain(icon);
     }
   });

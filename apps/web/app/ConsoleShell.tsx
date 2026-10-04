@@ -1,6 +1,6 @@
 "use client";
 
-import { IDENTITY_PARAMS, searchForNewProject } from "./url-intent";
+import { IDENTITY_PARAMS } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
 import { resolveLegacyArea } from "./legacy-areas";
 import { onChanged } from "./changed";
@@ -15,6 +15,7 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
+import { openPlan } from "../lib/converse-doors";
 import { setConsoleLive } from "../lib/console-live";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
@@ -180,7 +181,7 @@ const AREAS: AreaDef[] = [
   // then where it ships and whether it is alive. Discovery and Meetings are ways IN and follow
   // after; they were first only because they come first chronologically, which is not the same
   // as being what an operator opens the console to look at.
-  { id: "code_tasks", label: "Projects", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
+  { id: "code_tasks", label: "Factory", sub: "Builds, apps and gated PRs", group: "Run", icon: ICONS.code_tasks },
   // ONE HOME PER OBJECT. Workflow, Agent work, Team structure and Agent Studio were four rows
   // for two things: workflows (built, run and watched in one area) and the agents that work
   // them (roster, team and panels in one area). Old links to the retired two still land —
@@ -1135,35 +1136,18 @@ export default function ConsoleShell({
             <List size={18} aria-hidden />
           </button>
 
-          {/* START A PROJECT FROM ANYWHERE.
-              v2 puts this in the top bar and v1 buried it inside the Factory page, so starting
-              work meant first navigating to the place work is listed. The area is where you go
-              to WATCH; this is how you BEGIN, and it should not be reachable only from one of
-              the twenty-two screens.
-              `?new=1` rather than component state: the Factory area owns the form, and the
-              shell must be able to ask for it from outside without either knowing about the
-              other. Same handoff the console already uses for `?run=` and `?agent=`. */}
+          {/* START A BUILD FROM ANYWHERE (factory spec §4.1, operator decision 2026-10-04).
+              The same first press as the Factory's `+ New build`: Plan it with Juno — a PRD
+              first, then the build. The Factory's menu keeps the other doors (a workflow, a
+              direct change, a benchmark); one primary press in both places. */}
           <button
             type="button"
             className="bx-new-project"
             data-testid="topbar-new-project"
-            title="Start a new project — an agent clones the repo, edits code, runs your tests"
-            onClick={() => {
-              go("delivery_workflows");
-              try {
-                // CLEAR WHAT YOU WERE LOOKING AT. `?run=` and `?agent=` name a specific
-                // project, and the Factory area's `?run=` reader only ever SETS so as not to
-                // fight the back button — so a stale one survives this navigation and re-opens
-                // that project's detail page. Pressing "New project" then landed on somebody
-                // else's app instead of an empty form.
-                const search = searchForNewProject(window.location.search);
-                window.history.replaceState(null, "",
-                  `${window.location.pathname}${search}${window.location.hash}`);
-                window.dispatchEvent(new PopStateEvent("popstate"));
-              } catch { /* non-browser — the area still opens */ }
-            }}
+            title="Plan it with Juno: a PRD first, then the build"
+            onClick={() => openPlan("pm", { from: "palette" })}
           >
-            <span aria-hidden>+</span> New project
+            <span aria-hidden>+</span> New build
           </button>
 
           <div className="bx-topbar-title" id="boss-console-title">
@@ -1271,7 +1255,7 @@ export default function ConsoleShell({
           </div>
         ) : null}
 
-        <ProjectStrip projectId={scope.projectId ?? scope.project} />
+        <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} />
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath

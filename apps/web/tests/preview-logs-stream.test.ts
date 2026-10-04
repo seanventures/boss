@@ -16,7 +16,7 @@ import { codeOnly } from "./_helpers/source";
  *     "Waiting…". So a stream that had already failed was indistinguishable from one about to
  *     deliver, and it claimed to be waiting indefinitely.
  */
-const SRC = codeOnly("app/code-tasks-ui.tsx");
+const SRC = codeOnly("app/factory/legacy-build-parts.tsx");
 const ROUTE = codeOnly("app/api/preview-logs/route.ts");
 
 /** Bound the slice FORWARD from the declaration: `return (` also appears earlier in this

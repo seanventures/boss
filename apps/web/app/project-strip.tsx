@@ -27,11 +27,11 @@ type StripProject = {
 
 /** ALL first, because most of the time you want the whole picture; the others narrow it. */
 const FILTERS = ["ALL", "RUNNING", "GATED", "DONE"] as const;
-const STRIP_LABEL = "Software projects";
+const STRIP_LABEL = "Builds";
 type Filter = (typeof FILTERS)[number];
 const FILTER_LABELS: Record<Filter, string> = {
   ALL: "All",
-  RUNNING: "Active projects",
+  RUNNING: "Building",
   GATED: "Gated",
   DONE: "Shipped",
 };
@@ -46,7 +46,9 @@ const ADMITS: Record<Filter, (status: string) => boolean> = {
   DONE: (s) => s === "DONE",
 };
 
-export function ProjectStrip({ projectId }: { projectId: string }) {
+export function ProjectStrip({ projectId, area }: { projectId: string; area?: string }) {
+  // On the Factory the Floor's sections ARE the filter (factory spec §4.1): no second set here.
+  const filtersShown = area !== "code_tasks";
   const [projects, setProjects] = useState<StripProject[]>([]);
   // LOADING, FAILED AND EMPTY ARE THREE DIFFERENT THINGS.
   //
@@ -139,14 +141,14 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
 
   const shown = useMemo(
     () => projects
-      .filter((p) => ADMITS[filter](p.status))
+      .filter((p) => ADMITS[filtersShown ? filter : "ALL"](p.status))
       .filter((p) => p.title.toLowerCase().includes(query.trim().toLowerCase()))
       .sort((a, b) => {
         const priority = (status: string) =>
           status === "STUCK" || status === "GATED" ? 0 : status === "RUNNING" ? 1 : 2;
         return priority(a.status) - priority(b.status);
       }),
-    [projects, filter, query],
+    [projects, filter, query, filtersShown],
   );
 
   useEffect(() => {
@@ -330,11 +332,11 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
       </span>
 
       {expanded ? <div className="bx-project-picker" id="boss-project-picker"
-                       role="region" aria-label="Find a project" data-testid="bx-project-picker">
-      <label className="bx-project-search-label" htmlFor="boss-project-search">Find a project</label>
+                       role="region" aria-label="Find a build" data-testid="bx-project-picker">
+      <label className="bx-project-search-label" htmlFor="boss-project-search">Find a build</label>
       <input ref={searchRef} id="boss-project-search" type="search" value={query}
-             placeholder="Search projects" onChange={(event) => setQuery(event.target.value)} />
-      <div className="bx-strip-filters" role="group" aria-label="Filter projects by status">
+             placeholder="Find a build" onChange={(event) => setQuery(event.target.value)} />
+      {filtersShown ? <div className="bx-strip-filters" role="group" aria-label="Filter builds by status">
         {FILTERS.map((f) => (
           <button type="button" key={f} className="bx-strip-filter"
             data-active={filter === f} aria-pressed={filter === f}
@@ -342,7 +344,7 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
             {FILTER_LABELS[f]} <span className="bx-strip-filter-n">{counts[f]}</span>
           </button>
         ))}
-      </div>
+      </div> : null}
       <div className="bx-strip-scroll" ref={scroller}>
         {shown.map((p) => (
           <button

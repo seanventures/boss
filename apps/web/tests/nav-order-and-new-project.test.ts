@@ -22,7 +22,7 @@ const step = (over: Partial<RunStep>): RunStep => ({
   evidence: [], error: null, approval: {}, due_at: null, timeout_applied: null, attempt: 1,
   started_at: null, completed_at: null, decision_id: null, ...over,
 } as RunStep);
-const CT = codeOnly("app/code-tasks-ui.tsx");
+const CT = codeOnly("app/code-tasks-ui.tsx") + codeOnly("app/factory/legacy-build-parts.tsx");
 const CSS = codeOnly("app/globals.css");
 
 /** Area ids in the order the Run group declares them. */
@@ -69,7 +69,7 @@ describe("the renamed areas", () => {
     ["workforce", "Agents"],
     ["delivery", "Infra"],
     ["delivery_workflows", "Workflows"],
-    ["code_tasks", "Projects"],
+    ["code_tasks", "Factory"],
   ])("%s is labelled %s", (id, label) => {
     expect(SHELL).toMatch(new RegExp(`id: "${id}", label: "${label}"`));
   });
@@ -82,18 +82,20 @@ describe("the renamed areas", () => {
   });
 });
 
-describe("New project, from anywhere", () => {
+describe("New build, from anywhere", () => {
   it("is in the top bar", () => {
     expect(SHELL).toContain('data-testid="topbar-new-project"');
-    expect(SHELL).toContain("New project");
+    expect(SHELL).toContain("New build");
     expect(CSS).toContain(".bx-new-project");
   });
 
-  it("opens the Workflow area and asks it to start something", () => {
+  it("presses the same first door as the Factory: Plan it with Juno", () => {
+    // Operator decision (factory spec §10.1): a PRD first. The Factory's menu keeps the others.
     const btn = SHELL.slice(SHELL.indexOf('data-testid="topbar-new-project"'),
                             SHELL.indexOf('className="bx-topbar-spacer"'));
-    expect(btn).toContain('go("delivery_workflows")');
-    expect(btn).toContain("searchForNewProject(window.location.search)");
+    expect(btn).toContain('openPlan("pm"');
+    expect(CT).toContain('openPlan("pm"');
+    expect(CT).toContain('new: "1"');
   });
 
   it("is answered by the area that watches the work", () => {
@@ -124,13 +126,12 @@ describe("New project, from anywhere", () => {
     expect(reader.slice(0, 700)).toContain("intent.nextSearch");
   });
 
-  it("Factory offers ONE way to start a project, and it is not a second form", () => {
-    // Starting a project moved to Workflow and the Factory form stayed, so there were two
-    // ways to do it on two pages — one of which showed the steps that follow and one of which
-    // did not. Two entry points for one act is how somebody ends up unsure which is real.
+  it("Factory offers one button with its doors behind it, not a second form", () => {
+    // + New build ▾: Plan it with Juno, From a workflow, Direct change, From a benchmark.
     expect(CT).not.toContain("NewCodeTaskForm");
-    expect(CT).toContain('data-testid="ct-start-in-workflow"');
-    expect(CT).toContain("function startAProjectHref");
+    expect(CT).toContain('data-testid="fx-new-build"');
+    expect(CT).toContain('data-testid="fx-new-menu"');
+    expect(CT).toContain("startDirectChangeAction");
   });
 });
 
@@ -425,7 +426,7 @@ describe("the workflow drawn as a path", () => {
 });
 
 describe("a phase that was restarted says so", () => {
-  const CT_SRC = codeOnly("app/code-tasks-ui.tsx");
+  const CT_SRC = codeOnly("app/factory/legacy-build-parts.tsx");
 
   it("does not call a replayed phase 'BOSS's own machinery'", () => {
     // When a run is re-delivered the same phase appears twice, and the second copy finds no
@@ -467,7 +468,7 @@ describe("following a link never logs you out", () => {
 });
 
 describe("adding a feature to a project", () => {
-  const CT_UI = codeOnly("app/code-tasks-ui.tsx");
+  const CT_UI = codeOnly("app/factory/legacy-build-parts.tsx");
   const CSS_IT = codeOnly("app/globals.css");
 
   it("offers starting points instead of a blank box", () => {
