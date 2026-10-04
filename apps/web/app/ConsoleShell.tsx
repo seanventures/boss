@@ -15,6 +15,7 @@ import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
 import { ConverseHost } from "./agents/converse-host";
+import { useLoadIdentities } from "../lib/use-agent-identities";
 import { CONVERSE_COMMANDS } from "../lib/agent-converse";
 
 import React, {
@@ -308,6 +309,8 @@ export default function ConsoleShell({
 }: ConsoleShellProps) {
   const resolvedEdition = normalizeEditionId(editionId);
   const community = isCommunityEdition(resolvedEdition);
+  // Every agent name and face in the console reads the install's identities from one store.
+  useLoadIdentities(scope.projectId ?? scope.project);
   const switchOrg = () => {
     try {
       window.localStorage.removeItem("boss.area");
