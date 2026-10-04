@@ -523,13 +523,16 @@ const PANEL_PRESSES = "delivery-workflows-panel";
  * stopped_for_operator) and it is sent here, keyed by the press like every other write.
  */
 export async function sendRunAnswer(projectId: string, actor: string, runId: string,
-                                    answer: RunAction) {
+                                    answer: RunAction, reason?: string) {
+  // SKIP NEEDS A REASON: the engine keeps it on the step (skip-step 422s without one).
+  const why = (reason ?? "").trim();
   return runPress({
     press: { scope: `run-answer:${runId}`, label: answer.label },
-    fingerprint: JSON.stringify([answer.key, runId, answer.step_id ?? null]),
+    fingerprint: JSON.stringify([answer.key, runId, answer.step_id ?? null, why]),
   }, (key) => post(answer.key, {
     project_id: projectId, actor, run_id: runId,
     ...(answer.step_id ? { step_id: answer.step_id } : {}),
+    ...(why ? { reason: why } : {}),
   }, key));
 }
 

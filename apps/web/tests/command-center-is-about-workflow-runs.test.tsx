@@ -107,7 +107,7 @@ describe("what needs you", () => {
     expect(html).toContain("No model had credit.");
     expect(html).toContain(decisionHref("dec_9", "org_1").replace(/&/g, "&amp;"));
     expect(html).not.toContain('data-testid="ag-att-approve"');
-    expect(html).toContain('data-testid="ag-att-fix"');
+    expect(html).toContain('data-testid="cc2-setup"');
     expect(html).toContain("area=setup");
   });
 
