@@ -951,8 +951,7 @@ def setup_first_run(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """J1: a fresh install → token → pick a repository → three checks → a model → Try it.
 
     Pass: every check is ✓, the model row says Working after one governed question, the header
-    says Ready, and Open a PR starts a run whose pill moves. The PR itself is the build's job
-    (the factory journeys prove that); this proves setup hands over to it.
+    says Ready, and Open a PR ends at `PR #n ↗` linking to a pull request the fake opened.
     """
     goto("setup")
     _visible(page, "su-board")
@@ -977,8 +976,15 @@ def setup_first_run(page, ctx: Context, goto: Callable[[str], None]) -> str:
     _setup_pill(page, "su-verdict", r"ready")
     _visible(page, "su-try-input").fill(f"Fix the typo in README ({ctx.stamp})")
     _visible(page, "su-try-open").click()
-    progress = _setup_pill(page, "su-try-progress", r"planning|building|testing|PR #")
-    return f"repository {said}; model {model}; Try it: {progress}"
+    _setup_pill(page, "su-try-progress", r"planning|building|testing|PR #")
+    # THE FINISH LINE IS THE PULL REQUEST, not "Planning…": a Try it that never left Planning
+    # (its run was never ticked) passed this journey once.
+    progress = _setup_pill(page, "su-try-progress", r"PR #\d+", timeout_s=RUN_TIMEOUT_SECONDS)
+    pr = page.locator('[data-testid="su-try-pr"]').first.get_attribute("href") or ""
+    if not re.search(r"/pull/\d+$", pr):
+        raise JourneyFailed(f"Try it said {progress!r} but its link is {pr!r}")
+    _setup_pill(page, "su-verdict", r"ready")
+    return f"repository {said}; model {model}; Try it: {progress} ({pr})"
 
 
 def setup_replace_token(page, ctx: Context, goto: Callable[[str], None]) -> str:

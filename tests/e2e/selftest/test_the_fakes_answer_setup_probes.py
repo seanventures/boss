@@ -23,12 +23,12 @@ def test_every_profile_answers_the_five_probes():
     probes = _load("github_probes")
     assert {"full", "contents_read_only", "no_pull_requests", "expired", "org_approval_pending",
             "rate_limited", "no_access"} <= set(probes.PROFILES)
+    probe = {"head": "boss-setup-check-00000000", "base": "main"}
     for profile in probes.PROFILES:
         token = f"ghp_e2e_{profile}"
-        for method, path in (("GET", "/user"), ("GET", "/user/repos"), ("GET", "/repos/e2e/app"),
-                             ("POST", "/repos/e2e/app/git/blobs"),
-                             ("POST", "/repos/e2e/app/pulls")):
+        for method, path in (("GET", "/user"), ("GET", "/user/repos"), ("GET", "/repos/e2e/app")):
             assert probes.answer(token, method, path) is not None, (profile, method, path)
+        assert probes.answer(token, "POST", "/repos/e2e/app/pulls", body=probe) is not None
     # Not a probe, not a profile token: the git-backed fake answers as before.
     assert probes.answer("ghp_real", "GET", "/user") is None
     assert probes.answer("ghp_e2e_full", "POST", "/repos/e2e/app/git/refs") is None
@@ -36,12 +36,24 @@ def test_every_profile_answers_the_five_probes():
 
 def test_the_write_and_pr_probes_say_what_the_docs_say():
     probes = _load("github_probes")
-    assert probes.answer("ghp_e2e_full", "POST", "/repos/o/r/git/blobs")[0] == 201
-    assert probes.answer("ghp_e2e_full", "POST", "/repos/o/r/pulls")[0] == 422
+    probe = {"title": "boss setup check", "head": "boss-setup-check-1a2b3c4d", "base": "main"}
+    assert probes.answer("ghp_e2e_full", "POST", "/repos/o/r/pulls", body=probe)[0] == 422
     assert probes.answer("ghp_e2e_contents_read_only", "POST", "/repos/o/r/git/blobs")[0] == 403
-    assert probes.answer("ghp_e2e_no_pull_requests", "POST", "/repos/o/r/pulls")[0] == 403
+    assert probes.answer("ghp_e2e_no_pull_requests", "POST", "/repos/o/r/pulls", body=probe)[0] == 403
     status, headers, _ = probes.answer("ghp_e2e_expiring", "GET", "/repos/o/r")
     assert status == 200 and headers["github-authentication-token-expiration"].endswith("UTC")
+
+
+def test_a_build_on_a_full_token_writes_and_opens_a_real_pull_request():
+    """Only the probe's own PR (a head that does not exist) gets the canned 422: a build's
+    real blob and real pull request reach the git-backed fake, so Try it ends at PR #n."""
+    probes = _load("github_probes")
+    real = {"title": "Fix the typo", "head": "ai/fix-the-typo", "base": "main"}
+    assert probes.answer("ghp_e2e_full", "POST", "/repos/o/r/git/blobs") is None
+    assert probes.answer("ghp_e2e_full", "POST", "/repos/o/r/pulls", body=real) is None
+    # A profile that denies a write denies the build's too.
+    assert probes.answer("ghp_e2e_no_pull_requests", "POST", "/repos/o/r/pulls", body=real)[0] == 403
+    assert probes.answer("ghp_e2e_contents_read_only", "POST", "/repos/o/r/git/blobs")[0] == 403
 
 
 def test_the_model_stub_key_modes():
@@ -58,6 +70,5 @@ def test_the_model_stub_key_modes():
 def test_the_running_fakes_route_through_them():
     fakes = (STUBS / "fakes.py").read_text()
     stub = (STUBS / "model_stub.py").read_text()
-    assert "github_probes.answer(token, method, path)" in fakes
-    assert "a setup check must never create a branch" in fakes
+    assert "github_probes.answer(token, method, path, body=body)" in fakes
     assert "model_probes.answer(key, method, path)" in stub

@@ -38,9 +38,18 @@ def _load(profile: str) -> dict[str, Any]:
     return json.loads((FIXTURES / f"github_probe_{profile}.json").read_text())
 
 
-def answer(token: str, method: str, path: str, *, now: Optional[datetime] = None
-           ) -> Optional[tuple[int, dict[str, str], Any]]:
-    """(status, headers, body) for a probe, or None when this token/path is not a probe."""
+#: The head branch Repo and models' pull-request probe names (setup_checks.probe_repository).
+PROBE_HEAD = "boss-setup-check-"
+
+
+def answer(token: str, method: str, path: str, *, body: Any = None,
+           now: Optional[datetime] = None) -> Optional[tuple[int, dict[str, str], Any]]:
+    """(status, headers, body) for a probe, or None when the git-backed fake should answer.
+
+    A profile that ALLOWS a write lets real writes through: a build on `ghp_e2e_full` makes real
+    blobs and opens a real pull request in the fake. Only the probe's own pull request (a head
+    named boss-setup-check-…, which does not exist) gets GitHub's 422, and a profile that DENIES
+    a write denies every one, build included."""
     profile = profile_of(token)
     if profile is None:
         return None
@@ -59,6 +68,13 @@ def answer(token: str, method: str, path: str, *, now: Optional[datetime] = None
     else:
         return None
     entry = data[key]
+    allowed = int(entry["status"]) in (201, 422) and key in ("blobs", "pulls")
+    if allowed and key == "blobs":
+        return None                                   # a real blob in the fake's repository
+    if allowed and key == "pulls":
+        head = str((body or {}).get("head") or "") if isinstance(body, dict) else ""
+        if not head.split(":")[-1].startswith(PROBE_HEAD):
+            return None                               # a real pull request: the fake opens it
     headers = {k.lower(): v for k, v in (entry.get("headers") or {}).items()}
     if profile == "expiring" and "github-authentication-token-expiration" in headers:
         when = (now or datetime.now(timezone.utc)) + timedelta(days=2, hours=1)
@@ -87,7 +103,9 @@ def http_for_tests(calls: Optional[list] = None):
         if calls is not None:
             calls.append((method, path))
         assert "/git/refs" not in path, "a setup check must never create a branch"
-        found = answer(token, method, path)
+        found = answer(token, method, path, body=json_body)
+        if found is None and method == "POST" and path.endswith("/git/blobs"):
+            return HttpAnswer(201, {}, {"sha": "0" * 40})          # the fake would store it
         if found is None:
             return HttpAnswer(401, {}, {"message": "Bad credentials"})
         status, out_headers, body = found

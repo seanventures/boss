@@ -1021,7 +1021,11 @@ def try_spec() -> dict[str, Any]:
 
 
 def ensure_try_workflow(connection: Connection, project_id: str) -> str:
-    """Install (or update) the Try it workflow under BOSS's own namespace. Its version id."""
+    """Install (or update) the Try it workflow. Its version id.
+
+    PRODUCT namespace — it is the operator's work on their repository, and the capability
+    runner advances product runs only — and hidden from the Library (workflows.HIDDEN_PRODUCT_KEYS),
+    because it is not a template to choose."""
     from . import workflows
 
     key = setup_view.SETUP_TRY_WORKFLOW
@@ -1032,14 +1036,21 @@ def ensure_try_workflow(connection: Connection, project_id: str) -> str:
         definition = workflows.create_definition(
             connection, project_id=project_id, workflow_key=key, name="First PR",
             description="Repo and models › Try it: one sentence to a pull request.",
-            actor="boss", namespace=workflows.SYSTEM_NAMESPACE, made_by_boss=True)
+            actor="boss", namespace=workflows.PRODUCT_NAMESPACE, made_by_boss=True)
         existing = definition["id"]
+    else:
+        # An install that made it before it ran under product: the capability runner ticks
+        # product runs only, so a system-namespace Try it sat ready and unleased forever.
+        connection.execute(
+            text("UPDATE workflow_definitions SET namespace = 'product', updated_at = now() "
+                 "WHERE id = :id AND COALESCE(namespace, 'system') <> 'product'"),
+            {"id": existing})
     try:
         workflows.publish_version(connection, project_id=project_id, definition_id=existing,
                                   spec=try_spec(), actor="boss")
     except workflows.WorkflowConflictError:
         pass                                      # same content: already published
-    running = workflows.running_version(connection, project_id, key, namespace=None)
+    running = workflows.running_version(connection, project_id, key)
     if not running:
         raise SetupActionError(503, "failed", "Try it", "The Try it workflow is not installed.")
     return str(running["version_id"])
