@@ -2940,7 +2940,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   status={step.status} planned={planned} projectId={projectId} viewer={actor}
                   failure={phase === "failed" ? step.error : null} question={question}
                   cost={activity.cost} calls={activity.calls} model={activity.model}
-                  onAsk={ask} stepId={step.step_id} facts={facts}
+                  onAsk={ask} askBossTip="Ask BOSS about this step" stepId={step.step_id} facts={facts}
                   skipped={phase === "skipped" ? (skippedBy(step) || skipReason(step) || "Did not apply to this run") : undefined} />
 
       {/* A STEP THAT SUCCEEDED IS NOT SHOWING YOU A FAILURE.

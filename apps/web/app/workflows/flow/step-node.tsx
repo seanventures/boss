@@ -100,6 +100,8 @@ export function StepNode(p: {
   detail?: NodeDetail;
 }): React.JSX.Element {
   const { view, mode, selected, problem, run, onSelect, detail } = p;
+  // A run names a named agent by callsign (below), resolved at render: repaint when identities load.
+  useIdentityVersion();
 
   if (mode === "dot") {
     return (

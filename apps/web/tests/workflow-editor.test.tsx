@@ -637,6 +637,14 @@ describe("the whole flow in view", () => {
     expect(byTest("wf-palette").dataset.collapsed).toBe("true");
   });
 
+  it("folds the palette when the flow scrolls with it open, even if it still scrolls folded", async () => {
+    // Ten steps beside the full console nav: folding does not make it fit, but shows more of it.
+    api.workflows[0].spec = linear(10);
+    bodyWidth = 1440 - 244 - 32 - 66;
+    await mount();
+    expect(byTest("wf-palette").dataset.collapsed).toBe("true");
+  });
+
   it("keeps the palette open when the flow fits anyway", async () => {
     bodyWidth = 1440 - 84 - 32;
     await mount();

@@ -85,8 +85,10 @@ describe("a button that says what it does needs no sentence", () => {
   it("the ask explains itself in a tooltip", () => {
     // The label now names the step's captain, so the tooltip does too — and says the dock
     // arrives addressed to them rather than to BOSS in general.
-    expect(UI).toContain("Opens the side dock addressed to the ");
-    expect(UI).toContain("with this step's state already filled in");
+    // The panel's one Ask is a word with a tooltip naming who it reaches (StepDoneBy).
+    const STEP = codeOnly("app/workflows/step-run.tsx");
+    expect(STEP).toContain("`Ask ${named.name} about this step`");
+    expect(UI).toContain('askBossTip="Ask BOSS about this step"');
   });
 
   it("and the sentence is gone from the body", () => {

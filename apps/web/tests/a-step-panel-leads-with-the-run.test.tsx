@@ -183,6 +183,8 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     expect(s.cost).toBeCloseTo(0.02, 6);
     expect(s.calls).toBe(2);
     expect(stepLogSentence({ source: "event", kind: "workflow.step_ready", level: "info", title: "x", data: {} })).toBeNull();
+    // Said once, by the step's own row with its duration — not also as "Step finished".
+    expect(stepLogSentence({ source: "event", kind: "workflow.step_succeeded", level: "info", title: "x", data: {} })).toBeNull();
   });
 
   it("asks the API for this step of this run, and links to the step's own log", async () => {

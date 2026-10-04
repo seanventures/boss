@@ -8314,15 +8314,6 @@ a.agent-chip-name:hover { text-decoration: underline; }
   background: color-mix(in srgb, var(--amber, #d29922) 10%, transparent);
 }
 
-/* What the step recorded: evidence, kept and filed rather than printed. */
-.dw-step-out-wrap { margin-top: 10px; }
-.dw-step-out-wrap > summary {
-  cursor: pointer; width: fit-content;
-  font-size: .72rem; letter-spacing: .07em; text-transform: uppercase;
-  color: var(--faint, #8092B3);
-}
-.dw-step-out-wrap > summary:hover { color: var(--muted, #B4C4E0); }
-.dw-step-out-wrap[open] > summary { margin-bottom: 8px; }
 
 /* A STEP THAT IS WORKING SHOULD LOOK LIKE IT IS WORKING.
    The rail already animates the CONNECTOR into the running step, which says work is flowing
