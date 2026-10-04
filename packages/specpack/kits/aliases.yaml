@@ -1,0 +1,21 @@
+# Role skill ids that name a skill by another name (skills-mcp spec E5, Appendix A).
+#
+# Kept beside the kit files, not under skills/ (where every file is a bundle an edition installs).
+#
+# A role spec's `permissions.allowed_skills` is what sync_role_skills grants. Every id there must
+# resolve — to a shipped skill, or through this file to one — or the role "holds" something it
+# can never use and the grant is silently dropped. test_every_role_skill_exists enforces it.
+# Ids that meant nothing runnable were removed from the role specs rather than aliased to
+# something they are not.
+aliases:
+  # Reviewing code is reading it: a reviewer's step reads the repo through repo.read.
+  code.review: repo.read
+  coding_pipeline.adversarial_review: repo.read
+  coding_pipeline.design_critique: repo.read
+  coding_pipeline.integration_validate: repo.read
+  coding_pipeline.security_review: repo.read
+  # Test results are read from CI (Tests & CI). Running a suite happens inside a code task.
+  test.run: ci.status
+  deployment.plan: deployment.run.plan
+  health.check: deployment.health.check
+  task.create: work_tracker.issue.ensure

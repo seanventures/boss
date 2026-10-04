@@ -26,6 +26,11 @@ fields:
       # to some tools (empty = every tool). Granted by the seed like allowed_skills; a grant an
       # operator takes away stays away (seed_exclusions).
       mcp_servers: { array: object, optional: true, item_fields: { server: string, tools: { array: string } } }
+      # The Kit's abilities (packages/specpack/kits/*.yaml), by key: `abilities` are granted on
+      # install (expanded into skills and MCP grants by services/kit.py), `recommended_abilities`
+      # are offered in Skills & MCP as Recommended and granted only when a person applies them.
+      abilities: { array: string, optional: true }
+      recommended_abilities: { array: string, optional: true }
   comms_contract: object
   output_contracts: { array: string }
   eval_rubric: object

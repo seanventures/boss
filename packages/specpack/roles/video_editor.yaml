@@ -24,8 +24,7 @@ permissions:
   # this role executes end to end, and splitting the operations across roles would put a handoff
   # in the middle of a single person's instruction.
   allowed_skills: [media.fetch_link, media.fetch_image, media.read_document, video.plan_edit, video.apply_plan, video.trim, video.cut, video.reframe, video.overlay_image, video.caption,
-                   video.watermark, video.bookend, drive.list_videos, drive.import_video,
-                   artifact.create]
+                   video.watermark, video.bookend, drive.list_videos, drive.import_video]
   forbidden_skills: [publish_youtube, secret.read]
 output_contracts: [EditPlan, RenderedVideo, RenderDefectReport]
 autonomy:

@@ -47,12 +47,23 @@ def _agents(engine) -> dict[str, dict]:
 def test_each_cast_role_holds_the_mcp_servers_its_yaml_names(engine, key):
     from boss_engine.services import agents
 
-    wanted = {g["server"]: sorted(g["tools"])
-              for g in _yaml(key)["permissions"].get("mcp_servers") or []}
+    from boss_engine.config import get_settings
+    from boss_engine.services import kit
+    from boss_engine.services.mcp_registry import list_mcp_servers
+
+    # WHAT THE ROLE NAMES: its `mcp_servers`, plus what the Kit abilities it is granted expand
+    # to (skills-mcp §6.2) — for the servers this project has registered.
+    permissions = _yaml(key)["permissions"]
+    wanted: dict[str, set] = {g["server"]: set(g["tools"])
+                              for g in permissions.get("mcp_servers") or []}
+    for entry in kit.expand(get_settings(), permissions.get("abilities") or [])["mcp"]:
+        wanted.setdefault(entry["server"], set()).update(entry["tools"])
     with engine.begin() as c:
+        registered = {s["name"] for s in list_mcp_servers(c, PROJECT)}
         held = {s["name"]: sorted(s["granted_tools"])
                 for s in agents.held_mcp_servers(c, PROJECT, key, enabled_only=False)}
-    assert held == wanted, f"{key} holds {held}, its role says {wanted}"
+    wanted_sorted = {name: sorted(tools) for name, tools in wanted.items() if name in registered}
+    assert held == wanted_sorted, f"{key} holds {held}, its role says {wanted_sorted}"
 
 
 @pytest.mark.parametrize("key", ("engineering_captain", "backend_engineer", "frontend_engineer",

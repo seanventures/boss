@@ -103,6 +103,7 @@ export function primeIdentities(items: Wire[], aliases: Record<string, string> =
 /** Forget what was loaded (tests; a project switch). */
 export function resetIdentities(): void {
   generation++;
+  retries = 0;
   loadedFor = null;
   loadedOk = false;
   inflight = null;
@@ -223,6 +224,7 @@ export function loadIdentities(projectId: string, fetcher: typeof fetch = fetch)
     if (loadedOk) return Promise.resolve();
   } else {
     generation++;
+    retries = 0;
     loadedFor = projectId;
     loadedOk = false;
     inflight = null;
@@ -232,15 +234,18 @@ export function loadIdentities(projectId: string, fetcher: typeof fetch = fetch)
   const p: Promise<void> = (async () => {
     try {
       const r = await fetcher(`/v1/agents/identities?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
-      if (!r.ok) return;
+      if (!r.ok) { retryLater(projectId, fetcher, mine); return; }
       const data = await r.json() as unknown;
       if (mine !== generation) return; // a switch or refresh came after this request
       const d = data as { items?: Wire[]; identities?: Wire[]; aliases?: Record<string, string> } | Wire[];
       const items = Array.isArray(d) ? d : (d.items ?? d.identities ?? []);
       primeIdentities(Array.isArray(items) ? items : [], Array.isArray(d) ? {} : (d.aliases ?? {}));
       loadedOk = true;
+      retries = 0;
     } catch {
-      // The API is down or older than Agent World: the shipped cast is the answer until a retry.
+      // The API is down, the request was aborted (a navigation), or the API is older than Agent
+      // World: the shipped cast is the answer until the retry below lands.
+      retryLater(projectId, fetcher, mine);
     }
   })();
   inflight = p;
@@ -248,10 +253,28 @@ export function loadIdentities(projectId: string, fetcher: typeof fetch = fetch)
   return p;
 }
 
+/**
+ * A FAILED LOAD IS RETRIED ON ITS OWN (K19). Nothing else asks again once the page is drawn, so
+ * an aborted request left every screen on the bundled names — role labels, and callsigns the
+ * install had renamed — until a reload. A few retries, backing off, for the same project only.
+ */
+const RETRY_MS = [1500, 4000, 10000, 30000];
+let retries = 0;
+function retryLater(projectId: string, fetcher: typeof fetch, mine: number): void {
+  if (retries >= RETRY_MS.length) return;
+  const wait = RETRY_MS[retries];
+  retries += 1;
+  setTimeout(() => {
+    if (mine !== generation || loadedOk || loadedFor !== projectId) return;
+    void loadIdentities(projectId, fetcher);
+  }, wait);
+}
+
 /** Load a project's identities again, after a persona or face is saved (the Passport calls it). */
 export function refreshIdentities(projectId: string, fetcher: typeof fetch = fetch): Promise<void> {
   if (loadedFor === projectId) {
     generation++;
+    retries = 0;
     loadedOk = false;
     inflight = null;
   }

@@ -19,9 +19,7 @@ import type {
   WorkOrchestrationFeed,
 } from "../lib/work-orchestration";
 import {
-  connectWorkTrackerAction,
   planResourceAllocationsAction,
-  setDefaultWorkTrackerAction,
   syncTrackerBindingAction,
   upsertDeliveryBotAction,
   upsertRankedWorkAction,
@@ -286,79 +284,13 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   {provider.is_default ? "default" : "available"} ·{" "}
                   {provider.binding_count} bound
                 </small>
-                {!provider.is_default ? (
-                  <ActionForm action={setDefaultWorkTrackerAction} className="wo-inline-sync">
-                    <input type="hidden" name="project_id" value={feed.projectId} />
-                    <input type="hidden" name="actor" value={actor} />
-                    <input type="hidden" name="provider_key" value={provider.provider_key} />
-                    <SubmitButton className="button secondary" type="submit">
-                      Make default
-                    </SubmitButton>
-                  </ActionForm>
-                ) : null}
               </div>
             ))}
           </div>
-          <details className="wo-editor" data-testid="work-tracker-connect">
-            <summary>Connect work tracker (Plane default · Jira · Linear · GitHub · Azure DevOps)</summary>
-            <ActionForm action={connectWorkTrackerAction}>
-              <input type="hidden" name="project_id" value={feed.projectId} />
-              <input type="hidden" name="actor" value={actor} />
-              <label>
-                System
-                <select name="provider_key" defaultValue="plane" required>
-                  <option value="plane">Plane (default)</option>
-                  <option value="jira">Jira Cloud</option>
-                  <option value="linear">Linear</option>
-                  <option value="github_issues">GitHub Issues</option>
-                  <option value="azure_devops">Azure DevOps</option>
-                </select>
-              </label>
-              <p className="wo-empty">
-                Fill the fields for your system. Leave blank fields unused.
-                Tokens are stored on the project config (prefer env SecretRefs in production).
-              </p>
-              <div className="wo-form-pair">
-                <label>API / site URL<input name="api_base_url" placeholder="Plane URL or Jira site" /></label>
-                <label>Base URL (Jira)<input name="base_url" placeholder="https://x.atlassian.net" /></label>
-              </div>
-              <div className="wo-form-pair">
-                <label>Workspace slug (Plane)<input name="workspace_slug" placeholder="workspace" /></label>
-                <label>Plane project UUID<input name="project_id_external" placeholder="3f2a9c1e-…" /></label>
-              </div>
-              <div className="wo-form-pair">
-                <label>Jira email<input name="email" type="email" placeholder="you@company.com" /></label>
-                <label>Jira project key<input name="project_key" placeholder="BOSS" /></label>
-              </div>
-              <div className="wo-form-pair">
-                <label>Linear team id<input name="team_id" placeholder="uuid" /></label>
-                <label>Linear team key<input name="team_key" placeholder="ENG" /></label>
-              </div>
-              <div className="wo-form-pair">
-                <label>GitHub owner<input name="owner" placeholder="acme" /></label>
-                <label>GitHub repo<input name="repo" placeholder="product" /></label>
-              </div>
-              <div className="wo-form-pair">
-                <label>Azure org<input name="organization" placeholder="my-org" /></label>
-                <label>Azure project<input name="project" placeholder="Product" /></label>
-              </div>
-              <label>
-                API token / PAT
-                <input name="api_token" type="password" autoComplete="off" placeholder="••••••••" />
-              </label>
-              <label className="check-row">
-                <input type="checkbox" name="set_as_default" value="true" />
-                <span>Set as project default tracker</span>
-              </label>
-              <label className="check-row">
-                <input type="checkbox" name="skip_test" value="true" />
-                <span>Skip live connection test</span>
-              </label>
-              <SubmitButton className="button" type="submit">
-                Connect tracker
-              </SubmitButton>
-            </ActionForm>
-          </details>
+          {/* ONE HOME FOR CONNECTING A TRACKER: Skills & MCP › File tickets tests what is typed
+              and stores the token by reference. Here it is read-only, with the way there. */}
+          <a className="button secondary" href="?area=skills&ability=file_tickets"
+             data-testid="work-tracker-manage">Manage ↗</a>
           <div className="wo-binding-list">
             {feed.trackerBindings.slice(0, 8).map((binding) => (
               <div className="wo-binding" key={binding.id}>

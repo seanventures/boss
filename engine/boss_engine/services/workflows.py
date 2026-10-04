@@ -905,7 +905,22 @@ def check_spec(
 
     normalized, shape, binding = spec_problems(connection, project_id, spec,
                                                namespace=namespace)
-    problems = shape + binding
+    # WHAT A STEP NEEDS SET UP IN SKILLS & MCP (skills-mcp spec §3.3): a built-in step whose
+    # ability is not set up — `build` with no repo connected says "Needs Open pull requests set
+    # up". A WARNING here, not a refusal: the workflow is fine to save, it just cannot run yet,
+    # and the problem links to the ability.
+    try:
+        from ..config import get_settings
+        from .kit import ability_problems
+
+        with connection.begin_nested():
+            needs = [{**problem(p["step_id"], "ability", p["message"]), "severity": "warning",
+                      "ability": p["ability"]}
+                     for p in ability_problems(connection, get_settings(), project_id, normalized)]
+    except Exception:  # noqa: BLE001 — the Kit must never be why a check fails
+        logger.debug("ability problems could not be read", exc_info=True)
+        needs = []
+    problems = shape + binding + needs
     steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict)]
     agents: list[str] = []
     for step in steps:
@@ -928,7 +943,7 @@ def check_spec(
     except Exception:  # noqa: BLE001 — nor a needs list on a half-written spec
         logger.debug("needs of an unfinished spec could not be read", exc_info=True)
     return {
-        "ok": not problems,
+        "ok": not (shape + binding),
         "problems": problems,
         "summary": {"steps": len(steps), "agents": agents, "approvals": approvals,
                     "typical_minutes": minutes, "needs": needs},

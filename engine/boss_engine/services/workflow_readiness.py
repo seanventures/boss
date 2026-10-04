@@ -82,24 +82,24 @@ NEEDS: dict[str, Need] = {
         "step then puts the app there; until there is one, the deploy step cannot run.",
         "delivery"),
     # The fix names a console form, not an API call, and the form is drawn inline on the start
-    # checklist beside this item. Outgoing email lives in Skills and MCP (the Email ability),
-    # not in Repo and models: Repo and models is where BOSS writes code and what it thinks with.
+    # checklist beside this item. Outgoing email lives in Skills & MCP › Email (the Kit;
+    # skills-mcp spec §5.1), not in Repo and models.
     "email": Need(
         "email", "Outgoing email (SMTP)",
-        "Enter your mail server in Skills and MCP → Email — its host, port, the address mail "
-        "comes from, and its password.", "skills", (("ability", "email"),)),
+        "Connect your mail server in Skills & MCP → Email — its host, port, the address mail "
+        "comes from, and its password. Save & test sends you a test message.", "skills",
+        (("ability", "email"),)),
     "mattermost": Need(
         "mattermost", "A Mattermost bot BOSS can post as",
-        "Set BOSS_MATTERMOST_BASE_URL and BOSS_MATTERMOST_BOT_TOKEN, and "
-        "BOSS_MATTERMOST_REAL_SEND_ALLOWED=true, on the API and worker.", None),
+        "Connect Mattermost in Skills & MCP → Team chat — the server URL, a bot token and the "
+        "channel. Save & test posts a test message there.", "skills"),
     "work_tracker": Need(
         "work_tracker", "A connected work tracker",
-        "Connect Plane, Jira, Linear, GitHub Issues or Azure DevOps in Work allocation → "
-        "Connect work tracker. A tracker listed there but not connected cannot create "
-        "tickets.", "portfolio"),
+        "Connect GitHub Issues, Linear, Jira, Plane or Azure DevOps in Skills & MCP → File "
+        "tickets. A tracker listed but not connected cannot create tickets.", "skills"),
     "google": Need(
         "google", "A Google connection (Drive and YouTube)",
-        "Connect your Google account in Skills and MCP → Channels.", "skills"),
+        "Connect your Google account in Skills & MCP → YouTube.", "skills"),
     # A DRIVE LINK, NOT AN EDIT. Editing keeps its files in BOSS's own artifact storage, so a
     # step that edits a video from a direct link needs no Google at all; one handed a Drive link
     # (or told to write to Drive) does. Its own key, so the checklist says WHY Google is wanted
@@ -540,6 +540,12 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
                            "false, so nothing would be sent")
         return False, "no SMTP server is configured for this project"
     if key == "mattermost":
+        # CONNECTED IN SKILLS & MCP › Team chat (tested when saved), or the environment.
+        from .kit_connections import TEAM_CHAT_KEY, _config
+
+        chat = _config(connection, project_id, TEAM_CHAT_KEY) or {}
+        if chat.get("provider") == "mattermost" and chat.get("secret_ref_id"):
+            return True, f"Mattermost is connected ({chat.get('acts_as') or 'tested'})"
         ok = bool(getattr(settings, "mattermost_real_send_allowed", False)
                   and getattr(settings, "mattermost_base_url", "")
                   and getattr(settings, "mattermost_bot_token", ""))

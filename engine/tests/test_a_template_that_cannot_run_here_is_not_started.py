@@ -414,8 +414,9 @@ def test_a_notify_to_a_channel_it_cannot_use_fails_with_the_fix(eng, project, mo
     error = step["last_error"] or step["output"].get("error") or ""
     assert "BOSS_EMAIL_SMTP_HOST is not configured" in error
     # REWRITTEN: this asserted the fix was "/v1/email/config" — an API call, which an operator
-    # at the console cannot make (review of the readiness change). It names the console form.
-    assert "Repo and model → Outgoing email" in error
+    # at the console cannot make (review of the readiness change). It names the console form,
+    # which moved to Skills & MCP › Email (skills-mcp spec §5.1).
+    assert "Skills & MCP → Email" in error
 
 
 def test_a_notify_is_sent_once_and_carries_the_outcome(eng, project, monkeypatch):

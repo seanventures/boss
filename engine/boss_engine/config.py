@@ -17,6 +17,11 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://boss:boss@localhost:5432/boss",
         alias="DATABASE_URL",
     )
+    # A request that leaves its transaction open (an unclosed generator, a hung network call
+    # between statements) is ended by Postgres after this long, so it cannot hold its locks
+    # for hours and stall every later request behind a schema change. 0 turns it off.
+    api_db_idle_in_transaction_seconds: int = Field(
+        default=300, alias="BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS", ge=0)
     app_base_url: Optional[str] = Field(default=None, alias="APP_BASE_URL")
     admin_url: Optional[str] = Field(default=None, alias="ADMIN_URL")
     redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")

@@ -1,0 +1,120 @@
+import { NextResponse } from "next/server";
+
+import { describeApiError } from "../../../lib/api-error";
+import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite, type WriteMethod } from "../../../lib/api-write";
+
+/**
+ * MCP servers for the Library (skills-mcp spec §5.5): list, the curated catalogue, test what was
+ * TYPED (stores nothing), register, edit, review, remove. The one door every MCP write in the
+ * console goes through; a server id goes into a path only after the id-shape check.
+ *
+ * A token typed into a form travels here once, inside `auth.secret`, and is written through to
+ * the secret store by the API. Nothing here or upstream ever returns it.
+ */
+export const dynamic = "force-dynamic";
+
+const q = encodeURIComponent;
+const ID = /^[A-Za-z0-9_-]{1,80}$/;
+
+async function forward(path: string, init: { method: "GET" | WriteMethod; body?: unknown }) {
+  try {
+    const headers = authHeaders({ "Content-Type": "application/json" });
+    const body = init.body === undefined ? {} : { body: JSON.stringify(init.body) };
+    const r = init.method === "GET"
+      ? await fetch(`${API_URL}${path}`, { headers, cache: "no-store" })
+      : await apiWrite(`${API_URL}${path}`, { method: init.method, headers, ...body, cache: "no-store" });
+    const data = r.status === 204 ? {} : await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const detail = (data as { detail?: unknown }).detail;
+      const field = detail && typeof detail === "object" ? (detail as { field?: string }).field ?? null : null;
+      const message = detail && typeof detail === "object" && "message" in (detail as object)
+        ? String((detail as { message?: string }).message) : describeApiError(data, r.status);
+      return NextResponse.json({ error: message, field }, { status: r.status });
+    }
+    return NextResponse.json(data);
+  } catch (e) {
+    return NextResponse.json(
+      { error: `Could not reach the BOSS API: ${String((e as Error)?.message ?? e)}` }, { status: 502 });
+  }
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const projectId = (url.searchParams.get("project_id") ?? "").trim();
+  if (url.searchParams.get("view") === "catalogue") {
+    return forward(`/v1/mcp/catalogue?project_id=${q(projectId)}`, { method: "GET" });
+  }
+  if (url.searchParams.get("view") === "grants") {
+    const role = (url.searchParams.get("role") ?? "").trim();
+    return forward(`/v1/role-mcp-servers?project_id=${q(projectId)}&role_key=${q(role)}`, { method: "GET" });
+  }
+  const check = ["none", "stale", "now"].includes(url.searchParams.get("check") ?? "")
+    ? String(url.searchParams.get("check")) : "none";
+  return forward(`/v1/mcp/servers?project_id=${q(projectId)}&check=${check}`, { method: "GET" });
+}
+
+const ACTIONS = ["test", "register", "update", "review", "delete", "catalogue_add", "role_tools",
+                 "policy", "grant", "revoke"] as const;
+
+export async function POST(req: Request) {
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+  const action = String(body.action ?? "");
+  if (!ACTIONS.includes(action as (typeof ACTIONS)[number])) {
+    return NextResponse.json({ error: `unknown action ${action}` }, { status: 400 });
+  }
+  const projectId = String(body.project_id ?? "").trim();
+  const actor = String(body.actor ?? "").trim();
+  if (!projectId || !actor) {
+    return NextResponse.json({ error: "project_id and actor are required" }, { status: 400 });
+  }
+  if (action === "test") {
+    return forward("/v1/mcp/servers/test", { method: "POST", body: {
+      project_id: projectId, actor, url: String(body.url ?? ""), auth: body.auth ?? null } });
+  }
+  if (action === "register") {
+    return forward("/v1/mcp/servers", { method: "POST", body: {
+      ...(body.server as object ?? {}), project_id: projectId, actor } });
+  }
+  if (action === "catalogue_add") {
+    const key = String(body.key ?? "");
+    if (!/^[a-z0-9_-]{1,40}$/.test(key)) return NextResponse.json({ error: "bad key" }, { status: 400 });
+    return forward(`/v1/mcp/catalogue/${q(key)}`, { method: "POST", body: {
+      project_id: projectId, actor, token: body.token ? String(body.token) : null } });
+  }
+  const serverId = String(body.server_id ?? "");
+  if (!ID.test(serverId)) return NextResponse.json({ error: "server_id is required" }, { status: 400 });
+  if (action === "role_tools") {
+    // One agent's tools on one server it holds (the drawer's `Tools ▾`, rarely used).
+    return forward("/v1/role-mcp-servers", { method: "POST", body: {
+      project_id: projectId, actor, role_key: String(body.role_key ?? ""), mcp_server_id: serverId,
+      tools: Array.isArray(body.tools) ? body.tools.map(String) : [] } });
+  }
+  const where = `/v1/mcp/servers/${q(serverId)}`;
+  if (action === "policy") {
+    return forward(`${where}/policy`, { method: "POST", body: {
+      project_id: projectId, actor, tool: String(body.tool ?? ""), policy: String(body.policy ?? "") } });
+  }
+  if (action === "grant") {
+    return forward("/v1/role-mcp-servers", { method: "POST", body: {
+      project_id: projectId, actor, role_key: String(body.role_key ?? ""), mcp_server_id: serverId,
+      tools: Array.isArray(body.tools) ? body.tools.map(String) : [] } });
+  }
+  if (action === "revoke") {
+    return forward(`/v1/role-mcp-servers?project_id=${q(projectId)}&role_key=${q(String(body.role_key ?? ""))}`
+      + `&mcp_server_id=${q(serverId)}&actor=${q(actor)}`, { method: "DELETE" });
+  }
+  if (action === "review") {
+    return forward(`${where}/review`, { method: "POST", body: { project_id: projectId, actor } });
+  }
+  if (action === "update") {
+    return forward(`${where}?project_id=${q(projectId)}`, { method: "PATCH", body: body.changes ?? {} });
+  }
+  const release = body.release_grants === true ? "&release_grants=true" : "";
+  return forward(`${where}?project_id=${q(projectId)}${release}`, { method: "DELETE" });
+}

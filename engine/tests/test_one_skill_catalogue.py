@@ -476,7 +476,7 @@ def test_an_agent_holding_an_mcp_tool_skill_can_run_it(eng, project, monkeypatch
 
     calls = []
     monkeypatch.setattr(MCPClient, "call_tool",
-                        lambda self, url, tool, args: calls.append((url, tool, args))
+                        lambda self, url, tool, args, headers=None: calls.append((url, tool, args))
                         or {"issue": 42})
     with eng.begin() as c:
         sid = _server(c, project, tools=[{"name": "create_issue"}])

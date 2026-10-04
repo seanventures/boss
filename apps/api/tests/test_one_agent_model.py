@@ -334,7 +334,7 @@ def test_a_bounded_agent_step_is_offered_exactly_its_granted_mcp_tools(
         def __init__(self, _settings):
             pass
 
-        def list_tools(self, url):
+        def list_tools(self, url, headers=None):
             return [{"name": "post", "description": "post"},
                     {"name": "delete_channel", "description": "delete"}]
 

@@ -5,6 +5,58 @@ from sqlalchemy import text
 from apps.api.app.config import get_settings
 from apps.api.app.services.jobs import JobLeaseService
 from apps.api.app.services.work_orchestration import WorkOrchestrationService
+import pytest
+
+
+@pytest.fixture
+def plane_is_the_default(engine):
+    """These tests prove the Plane plugin end to end, so Plane is made the default the way an
+    operator would. Nothing is seeded as the default any more (skills-mcp spec E10); the
+    default there was before is put back afterwards."""
+    settings = get_settings()
+    project_id = settings.default_project_id
+    with engine.begin() as connection:
+        before = [r[0] for r in connection.execute(text(
+            "SELECT provider_key FROM work_tracker_providers "
+            "WHERE project_id = :p AND is_default = true"), {"p": project_id})]
+        WorkOrchestrationService(settings).set_default_tracker(
+            connection, project_id=project_id, provider_key="plane", actor="ceo")
+    yield
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE work_tracker_providers SET is_default = (provider_key = ANY(:keys)) "
+            "WHERE project_id = :p"), {"p": project_id, "keys": before})
+
+
+def test_work_is_tracked_in_boss_alone_while_no_tracker_is_the_default(engine):
+    """No default tracker is not a reason to refuse work: it is tracked in BOSS, unbound, and
+    no sync job is queued for a ticket nothing can create."""
+    settings = get_settings()
+    service = WorkOrchestrationService(settings)
+    project_id = settings.default_project_id
+    with engine.begin() as connection:
+        before = [r[0] for r in connection.execute(text(
+            "SELECT provider_key FROM work_tracker_providers "
+            "WHERE project_id = :p AND is_default = true"), {"p": project_id})]
+        connection.execute(text(
+            "UPDATE work_tracker_providers SET is_default = false WHERE project_id = :p"),
+            {"p": project_id})
+        try:
+            tracked = service.ensure_tracked_work(
+                connection,
+                project_id=project_id,
+                subject_type="agent_run",
+                subject_id="no-tracker-proof",
+                title="Work with no tracker connected",
+                actor="product_manager",
+            )
+            assert tracked["work_item"]["id"]
+            assert tracked["tracker_binding"] is None
+            assert tracked["allocation"]["id"]
+        finally:
+            connection.execute(text(
+                "UPDATE work_tracker_providers SET is_default = (provider_key = ANY(:keys)) "
+                "WHERE project_id = :p"), {"p": project_id, "keys": before})
 
 
 def test_ranked_portfolio_is_explainable_and_confidence_weighted(engine):
@@ -112,7 +164,7 @@ def test_allocator_grants_ranked_capacity_and_throttles_lower_work(engine):
     assert by_work[lower["id"]]["status"] == "throttled"
 
 
-def test_tracked_agent_work_consumes_and_releases_job_quota(engine):
+def test_tracked_agent_work_consumes_and_releases_job_quota(engine, plane_is_the_default):
     settings = get_settings()
     service = WorkOrchestrationService(settings)
     jobs = JobLeaseService(settings)
@@ -216,7 +268,7 @@ def test_tracked_agent_work_consumes_and_releases_job_quota(engine):
         }
 
 
-def test_global_quota_caps_jobs_across_ranked_work_items(engine):
+def test_global_quota_caps_jobs_across_ranked_work_items(engine, plane_is_the_default):
     settings = get_settings()
     service = WorkOrchestrationService(settings)
     jobs = JobLeaseService(settings)
@@ -292,7 +344,7 @@ def test_global_quota_caps_jobs_across_ranked_work_items(engine):
     assert visible_quota["used_units"] == 1
 
 
-def test_plane_tracker_and_delivery_presence_plugins_feed_embedded_overview(engine):
+def test_plane_tracker_and_delivery_presence_plugins_feed_embedded_overview(engine, plane_is_the_default):
     settings = get_settings()
     service = WorkOrchestrationService(settings)
 
@@ -397,7 +449,7 @@ def test_plane_tracker_and_delivery_presence_plugins_feed_embedded_overview(engi
 
 
 def test_plane_sync_executes_only_through_lease_and_persists_receipt(
-    client, engine, monkeypatch
+    client, engine, monkeypatch, plane_is_the_default
 ):
     settings = get_settings()
     service = WorkOrchestrationService(settings)
