@@ -30,6 +30,7 @@ add the deployment host while the panel runs — a choice they make out loud
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -91,6 +92,15 @@ NEEDS: dict[str, Need] = {
     "google": Need(
         "google", "A Google connection (Drive and YouTube)",
         "Connect your Google account in Skills and MCP → Channels.", "skills"),
+    # A DRIVE LINK, NOT AN EDIT. Editing keeps its files in BOSS's own artifact storage, so a
+    # step that edits a video from a direct link needs no Google at all; one handed a Drive link
+    # (or told to write to Drive) does. Its own key, so the checklist says WHY Google is wanted
+    # and that a direct link is the way round it.
+    "google_drive": Need(
+        "google_drive", "Google (Drive link)",
+        "This run reads or writes a Google Drive file. Connect your Google account in Skills "
+        "and MCP → Channels — or give a direct HTTPS link to the file instead, which needs no "
+        "connection.", "skills"),
     "agent_pool": Need(
         "agent_pool", "An agent that holds at least one skill",
         "Give an agent a skill in Agents. A step that lets BOSS pick the agent can only "
@@ -249,6 +259,32 @@ def _resolved_literal(value: Any, input_data: Mapping[str, Any]) -> Optional[str
     return None
 
 
+_URL = re.compile(r"https?://[^\s<>\"'()\[\]]+", re.I)
+
+
+def _uses_drive(inputs: Mapping[str, Any], input_data: Mapping[str, Any]) -> bool:
+    """Whether a step's inputs, as far as they are known before the run, touch Google Drive.
+
+    A Drive link anywhere in a value the step will receive — a `video_url`, an `asset_url`, a
+    link pasted into an agent's instruction — or an explicit request to keep the result in
+    Drive (`store_provider: google`, an `output_folder_id`). Decided from the link's host alone
+    (`media_providers.is_drive_link`), so no input costs a network round trip here.
+    """
+    from .media_providers import is_drive_link
+
+    for name, value in (inputs or {}).items():
+        literal = _resolved_literal(value, input_data)
+        if not literal:
+            continue
+        if name == "store_provider" and literal.strip().lower() == "google":
+            return True
+        if name == "output_folder_id":
+            return True
+        if any(is_drive_link(found) for found in _URL.findall(literal)):
+            return True
+    return False
+
+
 def _step_order(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Steps in the order a run reaches them: from the entry, following `next`."""
     steps = [s for s in (spec.get("steps") or []) if isinstance(s, dict)]
@@ -374,6 +410,8 @@ def requirements(
         for named in (str(step.get("captain") or binding.get("agent") or "").strip(), approver):
             if named and named not in caps.HUMAN_ROLES:
                 needed.add(f"role:{named}")
+        if _uses_drive(binding.get("inputs") or {}, input_data):
+            needed.add("google_drive")
         if step.get("kind") == "subworkflow" and connection is not None and _depth < 3:
             child = _child_spec(connection, project_id, binding)
             if child:
@@ -493,7 +531,7 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
             return True, f"{tracker['display_name']} is connected"
         return False, ("no work tracker is connected — the ones listed are not configured, "
                        "so a ticket could not be created")
-    if key == "google":
+    if key in ("google", "google_drive"):
         found = _scalar(
             connection,
             "SELECT count(*) FROM integration_connections c "

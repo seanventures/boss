@@ -161,8 +161,11 @@ def main() -> None:
                     "format": "uri",
                     # WHAT IT ACCEPTS, SAID WHERE IT IS TYPED. A YouTube watch link was pasted
                     # here on a live run; it is a web page, not a file, and the run failed.
-                    "description": "Optional. A Google Drive share link, or a direct link to "
-                                   "the video file (.mp4, .mov) — not a YouTube or Vimeo page. "
+                    # WHICH LINK NEEDS GOOGLE, said where the link is typed: a direct link needs
+                    # no connection at all; a Drive link needs Google to read it.
+                    "description": "Optional. A direct link to the video file (.mp4, .mov) — "
+                                   "needs no Google account — or a Google Drive share link, "
+                                   "which needs Google connected. Not a YouTube or Vimeo page. "
                                    "Or leave it blank and put the link in your instructions.",
                     "examples": ["https://drive.google.com/file/d/FILE_ID/view"],
                 },
@@ -228,8 +231,8 @@ def main() -> None:
 
   Start a run: Workflows → Library → "Video edit and publish" → ⋯ → Start.
 
-    video_url      a link to the video — Google Drive, or a direct link to the file
-                   (.mp4, .mov). Not a YouTube or Vimeo page: those are web pages.
+    video_url      a link to the video — a direct link to the file (.mp4, .mov), or a
+                   Google Drive link. Not a YouTube or Vimeo page: those are web pages.
     instructions   what you want, in plain English. For example:
                    "Keep 0:28 to 1:48, make it portrait for phones, and put the
                     ending slide on the end."
@@ -241,6 +244,9 @@ def main() -> None:
 
   The last step stops and waits. That is not a setting — publish_youtube is
   risk tier 3, and BOSS requires a person at or above the floor.
+
+  Google is needed only to publish (and to read a Google Drive link). Editing a
+  direct link, and watching the result from the approval, needs no Google at all.
 """)
 
 

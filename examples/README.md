@@ -144,8 +144,9 @@ approval before it reaches your channel.
 - **Skills the editing agent holds:** `media.fetch_link`, `media.fetch_image`,
   `media.read_document`, `video.trim`, `video.cut`, `video.reframe`, `video.caption`,
   `video.overlay_image`, `video.watermark`, `video.bookend`
-- **Needs:** a connected model, a Google account for the first and last step, and the
-  `video_editor` and `media_publisher` agents (setup adds them from the media pack)
+- **Needs:** a connected model and the `video_editor` and `media_publisher` agents (setup adds
+  them from the media pack). A Google account only to **publish** to YouTube, or when the source
+  is a Google Drive link — editing a direct link and reviewing the result needs no Google at all
 
 **What it demonstrates:** a step that binds no skill at all. The editing step carries your
 sentence, and the agent composes its own skills to satisfy it. "Trim it" and "trim it, make it

@@ -683,6 +683,19 @@ def record_artifact(
     traced back to the source it was cut from.
     """
     artifact_id = make_id("art")
+    # KEPT IN BOSS'S OWN STORAGE (media_storage.store_local) rather than in Drive: the artifact
+    # records the stored path, and its link is the console's authenticated media route, so the
+    # reviewer opens it with the same sign-in that lets them read the project.
+    stored_locally = bool(drive_file.get("local_path"))
+    if stored_locally:
+        from .media_storage import media_url
+
+        view_url = media_url(artifact_id)
+        where = {"storage": "boss", "local_path": drive_file.get("local_path"),
+                 "mime_type": drive_file.get("mime_type")}
+    else:
+        view_url = drive_file.get("view_url")
+        where = {"storage": "google"}
     connection.execute(
         text(
             """
@@ -698,11 +711,12 @@ def record_artifact(
             # and "art_9f3c…" does not.
             "title": str(drive_file.get("name") or "media"),
             # The Drive link, on the row, so a reviewer can watch it without a second lookup.
-            "uri": drive_file.get("view_url"),
+            "uri": view_url,
             "content": json.dumps({
                 "drive_file_id": drive_file.get("file_id"),
+                **where,
                 "name": drive_file.get("name"),
-                "view_url": drive_file.get("view_url"),
+                "view_url": view_url,
                 "bytes": drive_file.get("bytes"),
                 "source_artifact_id": source_artifact_id,
                 # WHO MADE IT, in the blob rather than in a column.
