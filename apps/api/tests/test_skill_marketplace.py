@@ -254,11 +254,12 @@ def test_mcp_registry_exposes_provenance_and_tool_risk_overrides(engine):
     ]["destroy"] == 3
     builtin = next(item for item in listed if item["name"] == "boss-devops-reference")
     assert builtin["publisher"]["id"] == "boss"
-    assert builtin["provenance"] == {
-        "source": "builtin",
-        "version": "1",
-        "trusted": True,
-    }
+    from boss_engine.bootstrap import builtin_provenance
+
+    # Seeded first-party servers carry BOSS's own review (skills-mcp spec E3: version 2 moved
+    # them to mcp-tools and marked them reviewed by "boss (first-party)").
+    assert builtin["provenance"] == builtin_provenance()
+    assert builtin["provenance"]["source"] == "builtin" and builtin["provenance"]["trusted"]
 
 
 def test_high_risk_mcp_tool_override_is_deferred(engine, monkeypatch):
@@ -273,6 +274,9 @@ def test_high_risk_mcp_tool_override_is_deferred(engine, monkeypatch):
         "publisher": {"id": "test"},
         "provenance": {"trusted": True},
         "tool_risk_overrides": {"destroy": 3},
+        # Tier 3 starts Off in Skills & MCP (spec §5.3) and is then never offered; the operator
+        # set it to Ask, so it is offered and every call waits for a person.
+        "tool_policy": {"destroy": "ask"},
     }
     monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: adapter)
     monkeypatch.setattr(
@@ -393,10 +397,13 @@ def test_on_demand_skill_lazily_attaches_for_remainder_of_run(engine, monkeypatc
             },
         )
 
-    assert result["status"] == "completed"
-    assert invoked == ["github.create_pr_sandbox"]
+    # Loaded on demand, it is offered from the next turn on...
     assert "skill_github_create_pr_sandbox" not in adapter.seen_tools[0]
     assert "skill_github_create_pr_sandbox" in adapter.seen_tools[1]
+    # ...and, as a tier-2 tool of Open pull requests, the call waits for a person whatever the
+    # autonomy setting (skills-mcp spec E7: tier >= 2 always asks).
+    assert result["status"] == "suspended"
+    assert invoked == []
 
 
 def test_role_change_is_rechecked_and_violation_recorded_on_hot_path(

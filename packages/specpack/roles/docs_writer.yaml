@@ -16,7 +16,9 @@ boundaries:
     - Merge or publish documentation without human review.
     - Modify non-documentation files.
 permissions:
-  allowed_skills: [artifact.read, docs.draft, github.create_pr_sandbox, model.generate_text]
+  allowed_skills: [docs.draft, github.create_pr_sandbox, model.generate_text]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, open_prs, library_docs, render_docs]
   forbidden_skills: [github.merge_pr_real, infra.*, code.execute]
   mcp_servers:
     - {server: doc-render, tools: [render_markdown_pdf]}

@@ -126,34 +126,36 @@ def claude_credential() -> str:
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
-    # PROVED, NOT ASSUMED. BOSS runs one trivial turn on the subscription — reserved and
-    # receipted like any model call — before it calls it connected. Recording it unproved let a
-    # wrong Claude credential look connected until a workflow failed on it with a 401.
+    # PROVED, NOT ASSUMED. Repo and models' one connect (POST /v1/setup/models) runs one trivial
+    # turn on the subscription — reserved and receipted like any model call — before it calls
+    # it connected, and answers with the whole setup view.
     request = urllib.request.Request(
-        f"{api_url.rstrip('/')}/v1/setup/coding-agents/connect", method="POST",
+        f"{api_url.rstrip('/')}/v1/setup/models", method="POST",
         data=json.dumps({"project_id": "boss-dogfood", "actor": "ceo",
-                         "provider": provider, "prove": True}).encode(),
+                         "provider": provider, "kind": "subscription"}).encode(),
         headers={"x-boss-api-key": api_key, "Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            result = json.loads(response.read().decode() or "{}")
+        with urllib.request.urlopen(request, timeout=180) as response:
+            view = json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
-        # BOSS's own 422 explanation says what to do and never contains the credential. Any
-        # other body is not echoed: a provider error could contain private data.
+        # BOSS's own refusal is one pill — what is wrong and the fix — and never contains the
+        # credential. Any other body is not echoed: a provider error could hold private data.
         detail = ""
-        if exc.code == 422:
+        if exc.code in (409, 422):
             try:
-                detail = str(json.loads(exc.read().decode() or "{}").get("detail") or "")
-            except (ValueError, OSError):
+                body = json.loads(exc.read().decode() or "{}").get("detail")
+                detail = (f"{body.get('headline')} — {body.get('fix')}"
+                          if isinstance(body, dict) else str(body or ""))
+            except (ValueError, OSError, AttributeError):
                 detail = ""
         raise RuntimeError(f"BOSS did not connect {provider}: {detail or f'HTTP {exc.code}'}") from None
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"BOSS connection check could not finish for {provider}") from exc
-    if not result.get("connected") or not result.get("entitlement_recorded"):
+    row = next((m for m in view.get("models") or [] if m.get("provider") == provider), None)
+    if row is None:
         raise RuntimeError(f"BOSS did not record the {provider} connection")
-    proof = result.get("proof")
-    if not isinstance(proof, dict) or proof.get("ok") is not True or proof.get("skipped"):
+    if (row.get("pill") or {}).get("state") != "working":
         raise RuntimeError(f"BOSS did not prove the {provider} connection with a live turn")
     print(f"  {provider}: connected — it answered a test turn")
 

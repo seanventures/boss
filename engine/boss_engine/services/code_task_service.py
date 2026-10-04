@@ -404,8 +404,12 @@ def start_code_task(
     allow_duplicate: bool = False, simulated: bool = False,
     job_priority: Optional[int] = None,
     reference_links: Optional[list[str]] = None,
+    role_key: Optional[str] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
+
+    ``role_key`` runs the task AS that agent: its held MCP servers reach the harness
+    (code_task_mcp). It must name an agent of this project.
 
     ``simulated=True`` is the no-spend fixture: persist a clearly labeled run with
     fixture evidence and do **not** enqueue a job, reserve budget, or call a model.
@@ -500,6 +504,14 @@ def start_code_task(
         # coding agent had to guess and kept authoring commands that were rejected at
         # validation time. Carry it on the spec so the stage prompts can state it.
         spec["allowed_test_executables"] = sorted(_allowed_sandbox_commands(settings))
+    role = str(role_key or "").strip().lower()
+    if role:
+        known = connection.execute(
+            sql("SELECT 1 FROM roles WHERE project_id = :p AND role_key = :r"),
+            {"p": project_id, "r": role}).first()
+        if not known:
+            raise ValueError(f"no agent {role!r} on this project to run this task as.")
+        spec["role_key"] = role
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
     if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
@@ -1170,6 +1182,7 @@ def retry_code_task(
             owner=spec.get("owner") or settings.target_github_owner,
             repo=spec.get("repo") or settings.target_github_repo,
             base_branch=spec.get("base_branch") or "main",
+            role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
                           # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.
                           # A retry inherits its parent's run; a change the operator chose a
@@ -1841,14 +1854,24 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                 _set_phase(c, run_id, "coding")
             # VAG Phase 0: attribute the host agent's model calls to this run.
             set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id, stage="solo")
-            agent = make_code_agent(settings)
+            # RUN AS AN AGENT: its held MCP servers reach the harness (code_task_mcp, E6).
+            from .code_task_mcp import prepare as _prepare_mcp
+
+            with _transaction(engine) as c:
+                harness_mcp = _prepare_mcp(c, settings, project_id, spec.get("role_key"))
+            agent = make_code_agent(settings, mcp=harness_mcp)
             code_spec = CodeTaskSpec(
                 task_id=run_id, title=run["title"],
                 instructions=spec.get("instructions", ""),
                 acceptance_criteria=spec.get("acceptance_criteria", []),
                 test_commands=spec.get("test_commands", []),
             )
-            result = agent.run(code_spec, RepoContext(owner=owner, repo=repo, base_branch=base_branch), sandbox)
+            try:
+                result = agent.run(code_spec, RepoContext(owner=owner, repo=repo,
+                                                          base_branch=base_branch), sandbox)
+            finally:
+                if harness_mcp is not None:
+                    harness_mcp.cleanup()
 
         # 5) Record agent outcome (governance metadata only — never the patch).
         with _transaction(engine) as c:

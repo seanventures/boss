@@ -28,7 +28,7 @@ export function trimSaid(text: string, max = SAID_MAX): string {
   return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[,;:.\s]+$/, "")}…`;
 }
 
-export function StepSignedBy({ act, approval, projectId, viewer, failure, question }: {
+export function StepSignedBy({ act, approval, projectId, viewer, failure, question, askless }: {
   act: Act;
   /** The person's answer to this step's gate, when it had one. */
   approval?: Act | null;
@@ -37,6 +37,8 @@ export function StepSignedBy({ act, approval, projectId, viewer, failure, questi
   failure?: string | null;
   /** What the operator is asking about this step, prefilled in the dock. */
   question: string;
+  /** Leave out the Ask buttons: the step panel's Done-by line carries the one Ask. */
+  askless?: boolean;
 }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const detail = useActDetail(projectId, act.actId);
@@ -54,7 +56,7 @@ export function StepSignedBy({ act, approval, projectId, viewer, failure, questi
           <span className="ag-stuck-line">{named.name}: stuck on {reason || "an error"}</span>
         </span>
       ) : null}
-      <ActCard act={act} viewer={viewer} inline />
+      <ActCard act={act} viewer={viewer} inline askless={askless} />
       {approval ? (
         <div className="ag-signed-approval" data-testid="ag-signed-approval">
           <ActCard act={approval} viewer={viewer} inline />
@@ -71,7 +73,7 @@ export function StepSignedBy({ act, approval, projectId, viewer, failure, questi
           ))}
         </div>
       ) : null}
-      {who.roleKey ? (
+      {who.roleKey && !askless ? (
         <button type="button" className="cap-btn ag-signed-ask" data-testid="ag-signed-ask"
                 data-tip={`Talk with ${named.name} about this step`}
                 onClick={() => askAboutAct(act, question)}>

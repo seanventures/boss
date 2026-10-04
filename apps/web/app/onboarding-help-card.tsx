@@ -54,7 +54,7 @@ export function OnboardingHelpCard() {
           <h3 className="help-h">Before you start, and the limits</h3>
           <ul className="help-list">
             <li>
-              A build needs a connected repository and model — <b>Repo and model</b>.
+              A build needs a connected repository and model — <b>Repo and models</b>.
             </li>
             <li>
               Deploying needs a <b>host and a target</b>: register the host in <b>Infra</b>,

@@ -38,7 +38,7 @@ export const CAST: readonly CastMember[] = [
   // The §0.1 cast, in the order the operator named it.            hat           emblem       palette   visor
   hand("engineering_captain", "Engineering Captain", "Helm", "Who owns it, and what ships next?", ["captain", "chevrons", "blue", "band"]),
   hand("backend_engineer", "Backend Engineer", "Strata", "Data first, then the endpoint.", ["rack", "layers", "purple", "lens"]),
-  hand("frontend_engineer", "Frontend Engineer", "Pixel", "If it janks, it isn't done.", ["pixel", "brackets", "coral", "band"]),
+  hand("frontend_engineer", "Frontend Engineer", "Prism", "If it janks, it isn't done.", ["pixel", "brackets", "coral", "band"]),
   hand("operations_engineer", "Operations Engineer", "Relay", "Every deploy has a way back.", ["headlamp", "wrench", "amber", "slit"]),
   hand("sre", "Site Reliability Engineer", "Beacon", "What's the SLO, and are we in it?", ["siren", "pulse", "mint", "scope"]),
   hand("pm", "Product Manager", "Juno", "What problem, for whom, by when?", ["northstar", "compass", "teal", "band"]),

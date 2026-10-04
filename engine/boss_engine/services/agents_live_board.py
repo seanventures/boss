@@ -291,7 +291,10 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
             "content_hash": None,
             "preview": None,
             "risk_tier": n.get("risk_tier"),
-            "fix": ({"area": str(n["fix_area"]), "label": "Fix"} if n.get("fix_area") else None),
+            # Lands on the Repo and models row that needs it (`?area=setup&focus=<row>`).
+            "fix": ({"area": str(n["fix_area"]), "label": "Fix in Repo and models",
+                     **({"focus": str(n["fix_focus"])} if n.get("fix_focus") else {})}
+                    if n.get("fix_area") else None),
             "at": n.get("at"),
         }
         if kind == "approval":

@@ -251,9 +251,9 @@ _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
             "instead of retrying for ever."),
         "what_to_do": (
             "Add credit or raise the limit on the model account, or connect another model, in "
-            "Repo and model. If the budget was the limit, raise it in Govern. " + _RETRY),
+            "Repo and models. If the budget was the limit, raise it in Govern. " + _RETRY),
         "area": "setup",
-        "link_label": "Open Repo and model",
+        "link_label": "Fix in Repo and models",
     },
     "budget": {
         "what_happened": (

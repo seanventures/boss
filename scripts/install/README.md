@@ -65,13 +65,13 @@ Connecting an Ollama that is already running does the following:
 
 1. The API and worker containers reach the host as `host.docker.internal`. The Compose file maps that name with `extra_hosts: host-gateway`; Docker Desktop resolves it already. No port is published.
 2. The API container checks that it can read Ollama's model list at `http://host.docker.internal:11434`. If it cannot, nothing is changed, and the fix is printed.
-3. BOSS registers Ollama through the same route as the setup screen's **Anything OpenAI-compatible** form (`POST /v1/setup/model`), with:
+3. BOSS registers Ollama as an OpenAI-compatible model (`POST /v1/setup/model`, kept for one release beside Repo and models' `POST /v1/setup/models`), with:
    - the base URL `http://host.docker.internal:11434/v1`
    - the first model Ollama lists, or `--local-model` or `BOSS_OLLAMA_MODEL` when that model is pulled
    - the placeholder key `ollama`, because the form requires a key and Ollama ignores it
 4. When no hosted model is connected (no provider key in `.env`, no recorded subscription, and no API-key connection), Ollama becomes the model for every role: implementer, reviewer, hard problems, and routine work. This goes through the project's role settings. A role you already chose is left alone. Chat, meetings, and the other surfaces that read `OPENAI_*` then use it too: BOSS sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL` to the local address, and `OPENAI_MODEL` in `.env`, but only when `.env` holds no hosted OpenAI key. With a hosted model connected, chat is untouched. When a hosted model is connected, Ollama is added but not made the default. The summary card's `Default` and `Chat` rows show which applies.
 5. The model is priced at zero for the local endpoint only: the `BOSS_MODEL_PRICES_JSON` key is `<local base URL>#<model>`, for example `http://host.docker.internal:11434/v1#qwen2.5-coder:7b`, so the same model name on a hosted provider keeps its normal price. Other entries are kept, and only api and worker are recreated so they read `.env`.
-6. The API container checks that it sees the model in Ollama. No completion is run, because Community setup makes no model calls until model spend has its reservation, lease, and receipt path. The first governed job is what verifies the model.
+6. BOSS asks the model one tiny question before it records the connection — reserved against the budget (as a $0 gate: a local model costs nothing) and receipted, like every model check. A model that does not answer is not connected, and the reason is printed.
 
 An existing **Anything OpenAI-compatible** connection to another address is never replaced; replace it in Mission Control if you want Ollama instead. A local Ollama never takes the native (OpenAI-compatible) lane from a hosted connection: with an OpenAI key saved in the setup screen or in `.env`, that key is used whichever was saved last; Ollama is used there only when nothing hosted is connected.
 

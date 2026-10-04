@@ -361,9 +361,12 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "kind": "readiness",
             "title": str(gap.get("title") or "Finish setting up"),
             "detail": str(gap.get("detail") or ""),
-            "what_to_do": "Nothing can be built until this is done. It takes a minute.",
+            "what_to_do": gap.get("what_to_do") or (
+                "Nothing can be built until this is done. It takes a minute."),
             "fix_area": "setup",
-            "fix_label": "Open Repo and model",
+            # Lands on the row that needs it (`?area=setup&focus=<row>`), not the page top.
+            "fix_focus": gap.get("focus"),
+            "fix_label": "Fix in Repo and models",
             "actions": [],
             "at": None,
         })
@@ -487,11 +490,9 @@ def read(connection, settings, project_id: str,
     }
     readiness: list[dict[str, Any]] = []
     try:
-        from .setup_service import setup_status
-
         with connection.begin_nested():
-            readiness = list(setup_status(connection, settings, project_id).get("steps") or [])
-    except Exception:  # noqa: BLE001 - a setup probe must never blank the landing page
+            readiness = setup_gaps(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 - a setup read must never blank the landing page
         readiness = []
     from .workflow_run_actions import load_runs, stopped_for_operator
 
@@ -541,3 +542,40 @@ def needs_you_count(connection, settings, project_id: str,
     Center's `counts.needs_you`, Approvals' badge and Needs action (agents-home D2). The top-bar pill, Agents › Live and
     the Command Center all say this number; none of them counts its own (spec §6.3)."""
     return int(build(connection, settings, project_id, now)["counts"]["needs_you"])
+
+
+def setup_gaps(connection: Any, settings: Any, project_id: str) -> list[dict[str, Any]]:
+    """What Repo and models says still stops work: unfinished rows, failing rows, and a token
+    that stops working within three days. Read from the same view the page renders, so the
+    Command Center and the page cannot disagree (and nothing here calls GitHub)."""
+    from . import setup_view
+
+    view = setup_view.build_basics(connection, settings, project_id)
+    found = setup_view.basics(view)
+    gaps: list[dict[str, Any]] = []
+    if not found["github"]:
+        failing = next((r for r in view["repository"]["repos"]
+                        if r["pill"]["tone"] == "red"), None)
+        gaps.append({
+            "id": "github", "done": False, "focus": "repository",
+            "title": (f"Repository: {failing['pill']['label']}" if failing
+                      else "Connect a repository"),
+            "detail": failing["pill"]["tip"] if failing else
+            "BOSS needs a repository to open pull requests."})
+    if not found["model"]:
+        failing = next((m for m in view["models"] if m["pill"]["tone"] == "red"), None)
+        gaps.append({
+            "id": "model", "done": False, "focus": "models",
+            "title": (f"{failing['label']}: {failing['pill']['label']}" if failing
+                      else "Connect a model"),
+            "detail": failing["pill"]["tip"] if failing else
+            "A subscription, an API key or a local model."})
+    soon = setup_view.expiring_within({"repository": view["repository"], "models": []}, 3)
+    if soon:
+        days = soon["days"]
+        gaps.append({
+            "id": "expiring", "done": False, "focus": "repository",
+            "title": f"Token expires in {days} day{'s' if days != 1 else ''}",
+            "detail": "Builds stop when it expires. Make a new token now.",
+            "what_to_do": "Paste a new token in Repo and models before it expires."})
+    return gaps

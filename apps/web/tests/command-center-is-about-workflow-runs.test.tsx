@@ -44,10 +44,10 @@ const DATA: CommandCenterData = commandCenterFrom({
       at: null },
     { kind: "approval", decision_kind: "refusal", title: "Model capacity refused",
       detail: "No model had credit.", what_to_do: "Add credit, then Retry the step.",
-      fix_area: "setup", fix_label: "Open Repo and model", decision_id: "dec_9",
+      fix_area: "setup", fix_label: "Fix in Repo and models", decision_id: "dec_9",
       actions: ["reject"], at: null },
     { kind: "readiness", title: "Connect a repository", detail: "", fix_area: "setup",
-      fix_label: "Open Repo and model", actions: [], at: null },
+      fix_focus: "repository", fix_label: "Fix in Repo and models", actions: [], at: null },
   ],
   recent: [{ run_id: "wfr_done", workflow_name: "Standard Product Delivery", subject: "Bug box",
              outcome: "succeeded", finished_at: "2026-10-01T09:00:00+00:00", error: null }],
@@ -103,16 +103,20 @@ describe("what needs you", () => {
     expect(without).toContain('title="a newer attempt is running"');
   });
 
-  it("a refusal is reviewed in Approvals, never approved from here; setup links to its fix", () => {
+  it("a refusal is reviewed in Approvals, never approved from here; setup links to its row", () => {
     expect(html).toContain("No model had credit.");
     expect(html).toContain(decisionHref("dec_9", "org_1").replace(/&/g, "&amp;"));
     expect(html).not.toContain('data-testid="ag-att-approve"');
     expect(html).toContain('data-testid="cc2-setup"');
+    // Setup's own words and target: the line lands on the Repo and models row that needs it.
+    expect(html).toContain("Fix in Repo and models");
+    expect(html).toContain("focus=repository");
     expect(html).toContain("area=setup");
   });
 
-  it("a setup gap is listed", () => {
+  it("a setup gap is listed, and lands on its row in Repo and models", () => {
     expect(html).toContain("Connect a repository");
+    expect(html).toContain("area=setup&amp;focus=repository");
   });
 });
 

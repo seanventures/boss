@@ -139,8 +139,8 @@ export function CommandCenter({ projectId, orgId, actor, initial }: {
                     <ul className="ag-live-setup" data-testid="cc2-setup">
                       {setup.map((a) => (
                         <li key={a.id}>
-                          <a className="ag-link" href={linkTo({ area: a.fix?.area || "setup", view: null, role: null }, orgId)}
-                             title={a.whatToDo || undefined}>
+                          <a className="ag-link" href={linkTo({ area: a.fix?.area || "setup", view: null, role: null, focus: a.fix?.focus ?? null }, orgId)}
+                             title={a.fix?.label || a.whatToDo || undefined}>
                             Setup: <span data-user-text>{a.title}</span> ↗
                           </a>
                         </li>

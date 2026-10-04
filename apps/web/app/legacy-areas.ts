@@ -22,6 +22,9 @@ const OLD_WORKFLOW_TABS: Record<string, Record<string, string>> = {
   steps: { tab: "library", lib: "steps" },
 };
 
+/** Setup's old `step=` names, and the board row each one is. */
+const SETUP_STEPS: Record<string, string> = { github: "repository", model: "models" };
+
 function copyWithout(params: URLSearchParams, drop: string[]): URLSearchParams {
   const next = new URLSearchParams();
   params.forEach((value, key) => {
@@ -65,6 +68,25 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
     return next;
   }
 
+  // REPO AND MODELS LANDS ON THE ROW. `step=` was read by nothing, so every deep link into
+  // setup landed at the top of the page; the board reads `focus=`.
+  if (area === "setup" && params.get("step")) {
+    const focus = SETUP_STEPS[params.get("step") ?? ""];
+    const next = copyWithout(params, ["step"]);
+    if (focus && !next.get("focus")) next.set("focus", focus);
+    return next;
+  }
+
+  if (area === "capabilities") {
+    // Skills & MCP folded Capabilities in (skills-mcp spec §5.1): its MCP servers are managed in
+    // the Library's MCP list, the one place servers are managed.
+    const next = copyWithout(params, []);
+    next.set("area", "skills");
+    next.set("tab", "library");
+    next.set("lib", "mcp");
+    return next;
+  }
+
   if (area === "delivery_workflows") {
     const tab = params.get("tab") ?? "";
     const becomes = OLD_WORKFLOW_TABS[tab];
@@ -83,6 +105,8 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
 
 /** The v2 routes that became console areas, by path. */
 const V2_ROUTES: Record<string, Record<string, string>> = {
+  // v2 Settings (roles, "what this deployment does not have") is Repo and models now.
+  "/v2/settings": { area: "setup" },
   "/v2/boss": { area: "delivery_workflows", tab: "library" },
   "/v2/factory": { area: "workforce" },
   "/v2/org": { area: "workforce", view: "team" },

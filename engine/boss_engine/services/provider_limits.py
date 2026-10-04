@@ -217,7 +217,8 @@ def record_call_outcome(connection, settings, project_id: str, engine_name: str,
                      "   SET observed_capacity = COALESCE(observed_capacity, '{}'::jsonb) "
                      "                           || CAST(:patch AS jsonb), "
                      "       updated_at = now() "
-                     " WHERE project_id = :p AND source_id = :s"),
+                     " WHERE project_id = :p AND (source_id = :s "
+                     "      OR (source_id LIKE 'setup-%' AND source_id LIKE :s || '-%'))"),
                 {"p": project_id, "s": source_id, "patch": _json.dumps(patch)},
             )
         return signal

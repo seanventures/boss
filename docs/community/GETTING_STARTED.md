@@ -182,7 +182,7 @@ boss connect ollama --local-model qwen2.5-coder:7b --yes
   Chat and the other OPENAI_* surfaces now use qwen2.5-coder:7b too (no hosted model is connected)
 ```
 
-The build roles BOSS set (the **Implementer**, the **Reviewer**, **Hard problems**, and **Routine work**) move to the new model with chat. A role you set yourself in **Settings → Repo and model → Who does what** stays as you set it; the second line then ends with `1 role(s) you chose were left alone`. See [Model connections](MODEL_CONNECTIONS.md#ollama).
+The jobs BOSS set (**Build**, **Review**, **Hard problems**, and **Routine work**) move to the new model with chat. A job you chose yourself in **Settings → Repo and models → Who does what** stays as you set it; the second line then ends with `1 role(s) you chose were left alone`. See [Model connections](MODEL_CONNECTIONS.md#ollama).
 
 ### If something goes wrong
 
@@ -194,27 +194,22 @@ The build roles BOSS set (the **Implementer**, the **Reviewer**, **Hard problems
 BOSS writes code on a branch named `boss/code/...` and opens a pull request. It never pushes to your default branch. It needs a repository that already exists and a token that can push branches and open pull requests in it.
 
 1. On GitHub, create a repository for BOSS to build in. Tick **Add a README file** so the repository has a default branch.
-2. Create a fine-grained personal access token at `https://github.com/settings/personal-access-tokens/new`:
-    - **Repository access**: *Only select repositories*, then pick the one repository.
-    - **Permissions → Repository permissions**: set **Contents** and **Pull requests** to *Read and write*. Leave everything else at no access.
-    - Copy the token. GitHub shows it once.
-3. In Mission Control, open **Settings → Repo and model**. The page is headed **Connect a repo and model**.
-4. In the **Repository** card, paste the token into **Token**, enter `owner/name` in **Repository**, and press **Connect and test**. BOSS checks that it can push before it saves anything. **How do I get a token?** on the same card repeats the token steps.
+2. In Mission Control, open **Settings → Repo and models**. Until setup is finished it is a three-step page: **1 Repository**, **2 Model**, **3 Try it**.
+3. In **Repository**, press **Create token ↗**. GitHub opens a new fine-grained token with **Contents** and **Pull requests** already set to *Read and write*. Under **Repository access** choose *Only select repositories* and pick the repository (for an organization's repository, pick the organization as the owner first), then generate the token and copy it. GitHub shows it once.
+4. Paste the token into **Paste token**. BOSS shows **Signed in as @you** and lists the repositories the token can see. Pick one and press **Connect**.
+5. BOSS runs three checks against the repository — **Read**, **Write** (a blob nothing references, so no branch moves and no CI runs) and **Pull requests** (asking to open one for a branch that does not exist, so none is created) — and the row says **Working**.
 
-**Check that it worked:** the **Connect a repository** step on that page is marked done, and `boss doctor` no longer warns about the repository.
-
-!!! note "Verify this part on your own repository"
-    The install used to check this guide had no GitHub repository, so this step was not run for it. The labels above are the ones on the **Repo and model** page.
+**Check that it worked:** the Repository row reads **Working** with **Read ✓ Write ✓ Pull requests ✓**, and `boss doctor` reports the repository.
 
 !!! note "Use the console, not `.env`"
-    Setting `BOSS_GITHUB_OWNER` and `BOSS_GITHUB_REPO` in `.env` does not choose where builds go. Connect the repository on **Settings → Repo and model**.
+    Setting `BOSS_GITHUB_OWNER` and `BOSS_GITHUB_REPO` in `.env` does not choose where builds go. Connect the repository on **Settings → Repo and models**. A repository an older install configured in `.env` shows there with the chip **From install**; **Replace token** moves it into BOSS.
 
 ### If something goes wrong
 
 Without a connected repository, a build gets through the panel and the PRD, then stops at the build step with:
 
 ```text
-No repository registered for project boss-dogfood and no legacy default configured. Connect a GitHub repository in Mission Control, Settings, Repo and model, Repository, then rerun this step.
+No repository registered for project boss-dogfood. Connect a GitHub repository in Repo and models (/?area=setup&focus=repository), then rerun this step.
 ```
 
 The **+ New project** form says the same before you start: with no repository connected, its **Which repository?** step reads "This project has no repository connected yet, and a build needs one" and links to the **Repository** card.

@@ -59,7 +59,7 @@ export class ConverseRefusal extends Error {
 }
 
 /** The one sentence a missing model is said with, everywhere (the Studio's NO_MODEL_TIP). */
-export const NEEDS_MODEL = "Needs a model. Set one in Settings.";
+export const NEEDS_MODEL = "Needs a model. Connect one in Repo and models.";
 
 // ── Mapping the wire ───────────────────────────────────────────────────────────────────────
 

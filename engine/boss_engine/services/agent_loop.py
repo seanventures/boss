@@ -15,6 +15,7 @@ from . import decision_actions
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .mcp_client import MCPClient
+from .mcp_registry import auth_headers
 from .mcp_registry import list_mcp_servers
 from .role_governance import RoleGovernanceService
 from .model_routing import governed, project_chat_adapter
@@ -274,6 +275,60 @@ def _append_skill_tools(
         )
         skill_map[name] = skill
     return skill_map
+
+
+def _skill_policy(connection: Connection, settings: Settings, project_id: str,
+                  skill: dict[str, Any]) -> Optional[str]:
+    """Allow / Ask / Off for one skill (kit.skill_policy), or None when nobody set one."""
+    from .kit import skill_policy
+
+    try:
+        return skill_policy(connection, settings, project_id, str(skill.get("id") or ""),
+                            int(skill.get("risk_tier") or 0))
+    except Exception:  # noqa: BLE001 — no kit file means no operator rule, not a broken run
+        return None
+
+
+def _append_repo_read_tools(
+    schemas: list[dict[str, Any]],
+    occupied: set[str],
+    spec: Optional[dict[str, Any]],
+) -> dict[str, tuple[dict[str, Any], str]]:
+    """Offer `repo.read`'s tools under their own names: {offered name: (skill spec, tool)}."""
+    if spec is None:
+        return {}
+    from ..tools.builtin import build_discuss_read_registry
+    from .skill_executors import REPO_READ_TOOLS
+
+    registry = build_discuss_read_registry(edition="community")
+    offered: dict[str, tuple[dict[str, Any], str]] = {}
+    for tool in REPO_READ_TOOLS:
+        if tool not in registry.names():
+            continue
+        found = registry.get(tool)
+        name = _unique_tool_name(tool, occupied, f"skill:repo.read:{tool}")
+        parameters = dict(found.parameters or {"type": "object", "properties": {}})
+        properties = dict(parameters.get("properties") or {})
+        if "repo" in properties:
+            properties["repo"] = {"type": "string",
+                                  "description": "owner/name; leave out for this project's repo"}
+        parameters["properties"] = properties
+        schemas.append({"type": "function", "function": {
+            "name": name,
+            "description": f"[BOSS Skill · Read the repo] {found.description}",
+            "parameters": parameters}})
+        offered[name] = (spec, tool)
+    return offered
+
+
+def _mcp_tool_policy(server: dict[str, Any], tool: dict[str, Any]) -> str:
+    """Allow / Ask / Off for one offered tool: mcp_registry.tool_policy, the one statement."""
+    from .mcp_registry import tool_policy
+
+    annotations = tool.get("annotations") or {}
+    return tool_policy(server, str(tool.get("name") or ""),
+                       declared=tool.get("risk_tier", annotations.get("risk_tier")
+                                         if isinstance(annotations, dict) else None))
 
 
 def _mcp_tool_risk(server: dict[str, Any], tool: dict[str, Any]) -> int:
@@ -1806,7 +1861,9 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 tool = next(
                     (
                         item
-                        for item in MCPClient(settings).list_tools(server["url"])
+                        for item in MCPClient(settings).list_tools(
+                            server["url"], headers=auth_headers(
+                                connection, settings, project_id, server))
                         if item.get("name") == pending.get("tool_name")
                     ),
                     None,
@@ -2009,7 +2066,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             # failure for a minute; the screens show it with what to do about it.
             continue
         try:
-            server_tools = mcp.list_tools(server["url"])
+            server_tools = mcp.list_tools(
+                server["url"], headers=auth_headers(connection, settings, project_id, server))
         except Exception as exc:
             record_reachability_quietly(connection, project_id, server, reachable=False,
                                         error=f"{type(exc).__name__}: {exc}")
@@ -2029,6 +2087,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         for t in server_tools:
             tool_name = str(t.get("name") or "tool")
             if allow and tool_name not in allow:
+                continue
+            if _mcp_tool_policy(server, t) == "off":
+                # TURNED OFF IN SKILLS & MCP: never offered, so the model cannot even ask.
                 continue
             ns = _unique_tool_name(
                 "mcp_" + _slug(server["name"]) + "_" + _slug(tool_name),
@@ -2052,10 +2113,18 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             mcp_map[ns] = (server, t)
 
     skill_resolution = _skill_resolution_for_run(connection, settings, run)
+    # OFF IN SKILLS & MCP MEANS NOT OFFERED (kit.skill_policy): the model cannot call what the
+    # operator turned off, so it does not spend a turn finding out.
+    eager = [spec for spec in skill_resolution["eager"]
+             if _skill_policy(connection, settings, project_id, spec) != "off"]
+    # READ THE REPO IS FIVE TOOLS, ONE SKILL (kit E11): holding `repo.read` offers the engine's
+    # read tools by their own names and schemas; each call is a call of that one skill.
+    repo_map = _append_repo_read_tools(
+        schemas, occupied, next((s for s in eager if str(s["id"]) == "repo.read"), None))
     skill_map = _append_skill_tools(
         schemas,
         occupied,
-        skill_resolution["eager"],
+        [spec for spec in eager if str(spec["id"]) != "repo.read"],
     )
     on_demand_loader: Optional[str] = None
     if skill_resolution["on_demand"]:
@@ -2233,7 +2302,10 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 # registered URL and an unattended call. Round-1 review: a chat-registered
                 # tier-0 server's tools ran in every chat without anyone being asked.
                 unreviewed = needs_person(server)
-                if risk > threshold or unreviewed:
+                # ASK IS THE OPERATOR'S RULE, and tier >= 2 always asks (spec E7): a tier-2 tool
+                # waits for a person even on an install that raised the autonomy threshold.
+                asks = _mcp_tool_policy(server, tool) == "ask"
+                if risk > threshold or unreviewed or asks:
                     decision_id = create_blocking_decision(
                         connection,
                         project_id,
@@ -2315,6 +2387,24 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                             "step": step,
                         },
                     )
+            elif name in repo_map:
+                spec, tool = repo_map[name]
+                held_now = any(str(item["id"]) == "repo.read" for item in
+                               _skill_resolution_for_run(connection, settings, run)["eager"])
+                if not held_now:
+                    result = {"status": "denied", "skill_id": "repo.read",
+                              "reason": "Read the repo is no longer held by this agent"}
+                else:
+                    caller = str(spec.get("caller") or skill_resolution.get("role_key")
+                                 or "agent_loop")
+                    result, exhausted = waiter.invoke(lambda: _invoke_agent_skill(
+                        connection, settings, project_id, "repo.read", caller,
+                        {"tool": tool, **args}, actor="agent_loop", skill_spec=spec))
+                    if exhausted is not None and bounded:
+                        budget_wait = exhausted
+                    emit_event(connection, project_id, "agent.skill_invoked", "agent_loop",
+                               "agent_run", run_id,
+                               {"skill_id": "repo.read", "tool": tool, "step": step})
             elif name in skill_map:
                 skill = skill_map[name]
                 skill_id = str(skill["id"])
@@ -2387,13 +2477,18 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 # once it was wrapped in a skill the agent held.
                 person_reason = str(
                     (skill.get("policy") or {}).get("requires_person") or "")
+                unreviewed_server = bool(person_reason)
+                if not person_reason and _skill_policy(
+                        connection, settings, project_id, skill) == "ask":
+                    # SET TO ASK IN SKILLS & MCP (and tier >= 2 always is): a person decides.
+                    person_reason = "It is set to ask a person each time in Skills & MCP."
                 if risk > threshold or person_reason:
                     decision_id = create_blocking_decision(
                         connection,
                         project_id,
                         task_id,
                         f"Approve agent skill: {skill_id}"
-                        + (" (its MCP server is not reviewed yet)" if person_reason else ""),
+                        + (" (its MCP server is not reviewed yet)" if unreviewed_server else ""),
                         {
                             "action": "resume_agent_run",
                             "run_id": run_id,

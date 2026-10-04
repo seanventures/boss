@@ -59,7 +59,7 @@ def test_without_a_model_the_test_is_refused_with_where_to_fix_it(client):
     refused = _test(client, "qa", "intro")
     assert refused.status_code == 409
     assert refused.json()["detail"] == {"code": "needs_model",
-                                        "message": "Needs a model. Set one in Settings."}
+                                        "message": "Needs a model. Connect one in Repo and models."}
 
 
 def test_intro_streams_the_reply_in_the_agents_own_voice(client, engine, model):

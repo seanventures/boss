@@ -21,14 +21,10 @@ decision_rights:
   must_escalate:
     - New design patterns or copy that changes product meaning.
 permissions:
-  allowed_skills:
-    - coding_pipeline.implement
-    - coding_pipeline.write_tests
-    - coding_pipeline.run_all_tests
-    - model.generate_code
-    - github.create_pr_sandbox
-    - software_factory.sandbox_validation
-    - model.generate_text
+  allowed_skills: [coding_pipeline.implement, coding_pipeline.write_tests, coding_pipeline.run_all_tests, model.generate_code, github.create_pr_sandbox, software_factory.sandbox_validation, model.generate_text]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, open_prs, tests_ci, library_docs, web_research]
+  recommended_abilities: [web_search]
   forbidden_skills: [github.merge_pr_real, infra.*]
   mcp_servers:
     - {server: web-intel, tools: [render_mockup, study_site, fetch_page]}

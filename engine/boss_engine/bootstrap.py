@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 
 from sqlalchemy import text
@@ -22,32 +23,106 @@ from .services.work_orchestration import WorkOrchestrationService
 _log = logging.getLogger(__name__)
 
 
-# Built-in MCP servers BOSS ships with — idempotently registered so they're
-# always present in the capability catalog (the processes are launched
-# separately, e.g. via tools/mcp_*_server.py).
+# Built-in MCP servers BOSS ships with — idempotently registered so they're always present in
+# the capability catalog. They are SERVED by the `mcp-tools` compose service
+# (tools/mcp_tools_mux.py, scripts/install/community-compose.yml), so the seeded address is that
+# service's, never 127.0.0.1: inside the API container 127.0.0.1 is the API itself, and every
+# install that seeded the loopback address opened on three dead servers (skills-mcp spec RC3).
+# `BOSS_MCP_TOOLS_HOST` names the host for a BOSS run outside compose (a developer's machine).
+# test_seeded_mcp_servers_are_in_compose keeps every seeded host a compose service.
+MCP_TOOLS_HOST = os.environ.get("BOSS_MCP_TOOLS_HOST", "mcp-tools").strip() or "mcp-tools"
+
+
+def mcp_tools_ports() -> tuple[int, int, int]:
+    """(devops-reference, web-intel, doc-render) ports; BOSS_MCP_TOOLS_PORTS overrides them for a
+    machine where the defaults are taken. tools/mcp_tools_mux.py reads the same variable."""
+    raw = os.environ.get("BOSS_MCP_TOOLS_PORTS", "").strip()
+    try:
+        ports = tuple(int(p) for p in raw.split(",")) if raw else (8765, 8770, 8771)
+    except ValueError:
+        ports = (8765, 8770, 8771)
+    return ports if len(ports) == 3 else (8765, 8770, 8771)  # type: ignore[return-value]
+
+
+_DEVOPS_PORT, _WEB_INTEL_PORT, _DOC_RENDER_PORT = mcp_tools_ports()
+
+#: The release's own review of the servers it ships, recorded as such (not as a person's).
+FIRST_PARTY_REVIEW = "boss (first-party)"
+
+#: Bumped when the seeded rows change; a row on an older version, untouched by any person, is
+#: brought up to date on the next boot (`migrate_builtin_mcp_servers`).
+BUILTIN_MCP_VERSION = "2"
+
 BUILTIN_MCP_SERVERS = [
     {
         "name": "boss-devops-reference",
-        "url": "http://127.0.0.1:8765/mcp",
-        "risk_tier": 1,
+        "url": f"http://{MCP_TOOLS_HOST}:{_DEVOPS_PORT}/mcp",
+        "risk_tier": 0,
         "data_boundary": "public",
         "description": "External DevOps reference data: cloud_reference_pricing, engineering_runbook",
     },
     {
         "name": "web-intel",
-        "url": "http://127.0.0.1:8770/mcp",
-        "risk_tier": 2,
+        "url": f"http://{MCP_TOOLS_HOST}:{_WEB_INTEL_PORT}/mcp",
+        # READS ONLY: fetching, studying and searching public pages and rendering a mockup change
+        # nothing anywhere. Tier 2 made every call wait for a person.
+        "risk_tier": 0,
         "data_boundary": "public",
-        "description": "Render & study external websites + screenshot HTML mockups with Playwright: fetch_page, study_site, render_mockup",
+        "description": "Render, study and search external websites, and screenshot HTML mockups: "
+                       "fetch_page, study_site, search_web, render_mockup",
     },
     {
         "name": "doc-render",
-        "url": "http://127.0.0.1:8771/mcp",
-        "risk_tier": 1,
+        "url": f"http://{MCP_TOOLS_HOST}:{_DOC_RENDER_PORT}/mcp",
+        "risk_tier": 0,
         "data_boundary": "internal",
         "description": "Render Markdown to PDF: render_markdown_pdf",
     },
 ]
+
+
+def builtin_provenance() -> dict:
+    return {"source": "builtin", "version": BUILTIN_MCP_VERSION, "trusted": True,
+            "reviewed_by": FIRST_PARTY_REVIEW}
+
+
+def migrate_builtin_mcp_servers(connection, project_id) -> list[str]:
+    """Bring the servers BOSS seeded up to the current release: the `mcp-tools` address, the
+    tier, and the first-party review. Returns the names moved.
+
+    ONLY ROWS NO PERSON TOUCHED: provenance source "builtin" (an edit makes it
+    "builtin_edited") and no `edited_by`. A server an operator re-pointed or removed stays as
+    they left it (seed_exclusions is asked by ensure_mcp_server). The recorded reachability is
+    cleared, because it described the old address."""
+    import json as _json
+
+    moved: list[str] = []
+    wanted = {s["name"].lower(): s for s in BUILTIN_MCP_SERVERS}
+    rows = connection.execute(
+        text("SELECT id, name, url, risk_tier, provenance FROM mcp_servers "
+             "WHERE project_id = :p"), {"p": project_id}).mappings().all()
+    for row in rows:
+        srv = wanted.get(str(row["name"]).lower())
+        if srv is None:
+            continue
+        provenance = row["provenance"] if isinstance(row["provenance"], dict) else \
+            _json.loads(row["provenance"] or "{}")
+        if provenance.get("source") != "builtin" or provenance.get("edited_by"):
+            continue
+        if (row["url"] == srv["url"] and int(row["risk_tier"]) == srv["risk_tier"]
+                and provenance.get("version") == BUILTIN_MCP_VERSION):
+            continue
+        from .services.mcp_registry import migrate_seeded_server
+
+        migrate_seeded_server(connection, project_id, str(row["id"]), url=srv["url"],
+                              risk_tier=srv["risk_tier"], description=srv["description"],
+                              provenance={**provenance, **builtin_provenance(),
+                                          "seeded_url_before": row["url"]})
+        emit_event(connection, project_id, "mcp.builtin_server_migrated", "bootstrap",
+                   "mcp_server", str(row["id"]), {"name": row["name"], "from": row["url"],
+                                                   "to": srv["url"]})
+        moved.append(str(row["name"]))
+    return moved
 
 
 def seed_project_defaults(
@@ -191,11 +266,7 @@ def _seed_project_defaults(
             data_boundary=srv["data_boundary"],
             description=srv["description"],
             publisher={"id": "boss", "name": "BOSS", "kind": "system"},
-            provenance={
-                "source": "builtin",
-                "version": "1",
-                "trusted": True,
-            },
+            provenance=builtin_provenance(),
             # A re-seed must not undo the operator: a server they edited keeps their URL and
             # tier, and one they removed stays removed. See ensure_mcp_server.
             respect_operator=True,

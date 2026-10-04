@@ -19,7 +19,7 @@ decision_rights:
     - Merge approvals for Tier-2+.
     - Budget increases.
 permissions:
-  allowed_skills: [github.create_branch, github.create_pr_sandbox, ci.run_real, code.review, software_factory.codex_pr_proposal]
+  allowed_skills: [github.create_pr_sandbox, repo.read, software_factory.codex_pr_proposal]
   forbidden_skills: [github.merge_pr_real, infra.create_node_real]
 output_contracts: [TechDesign, ImplementationPlan, ReviewPacket]
 autonomy:

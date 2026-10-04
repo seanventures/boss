@@ -16,7 +16,7 @@ boundaries:
     - Recommend rate-limit evasion.
     - Pool personal subscriptions across tenants.
 permissions:
-  allowed_skills: [model.routing.inspect, cost.inspect, capacity.receipt.inspect, budget.recommend, artifact.create]
+  allowed_skills: []
   forbidden_skills: [provider.limit.bypass, credential_share]
 output_contracts: [ModelSpendReport, RoutingEfficiencyBrief, CapacityAlert]
 autonomy:

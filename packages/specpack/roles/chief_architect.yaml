@@ -23,12 +23,9 @@ decision_rights:
     - Platform or vendor changes with cost or lock-in impact.
     - Breaking changes to a public contract.
 permissions:
-  allowed_skills:
-    - coding_pipeline.refine
-    - coding_pipeline.review_plan
-    - model.generate_text
-    - typed_decision
-    - discovery.research
+  allowed_skills: [coding_pipeline.refine, coding_pipeline.review_plan, model.generate_text, typed_decision, discovery.research]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, library_docs, web_research, web_search, watch_health]
   forbidden_skills: [github.merge_pr_real, infra.*]
   # THE MCP SERVERS IT HOLDS (role_mcp_servers), granted by the seed exactly like
   # allowed_skills and kept off once an operator takes one away (seed_exclusions).
