@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { askAgent, identityOf, isLive, zoneOf } from "../../lib/agent-world";
 import { useLivePresence, type LiveMap } from "../../lib/agents-live";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFace, AgFaceStack, AgState } from "./agent-face";
 import { presenceLine } from "./roster-zones";
 
@@ -57,7 +58,8 @@ const TITLE_PREFIX = /^\(\d+\) /;
 export function PresencePill({ projectId, live: given }: { projectId: string; live?: LiveMap }) {
   const polled = useLivePresence(given ? "" : projectId);
   const live = given ?? polled;
-  const rows = useMemo(() => crewOf(live), [live]);
+  const v = useIdentityVersion(); // the crew is named at render: repaint when identities load
+  const rows = useMemo(() => crewOf(live), [live, v]); // eslint-disable-line react-hooks/exhaustive-deps -- `v` versions the store crewOf reads
   const needs = rows.filter((r) => r.zone === "needs_you").length;
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);

@@ -17,6 +17,7 @@ import {
 import { AgentAvatar } from "../agent-avatar";
 import type { AgentIdentity, AvatarSize, AvatarSpec, AvatarState, AvatarVariant } from "../../lib/agent-world-types";
 import { STATE_WORD, identityOf } from "../../lib/agent-world";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export function AgFace({ roleKey, identity, spec, size, state = "idle", variant = "agent", decorative = false,
                          aiBadge, motion, className }: {
@@ -49,6 +50,7 @@ export function AgFaceStack({ roleKeys, size = 24, max = 4, states, label, decor
   /** Inside a control that already says who: hidden from screen readers. */
   decorative?: boolean;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const shown = roleKeys.slice(0, max);
   const more = roleKeys.length - shown.length;
   return (

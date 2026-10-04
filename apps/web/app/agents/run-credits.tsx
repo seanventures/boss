@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { AvatarVariant, Chain } from "../../lib/agent-world-types";
 import { costLabel, creditWho, minutesLabel } from "./chain-model";
 import { AiBadge, nameOf, RunFace } from "./run-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export type CreditRow = { roleKey: string | null; variant: AvatarVariant; name: string; role: string; line: string };
 
@@ -85,6 +86,7 @@ function markShown(runId: string): void {
 export function CreditsDialog({ chain, runId, projectId, viewer, title, onClose }: {
   chain: Chain; runId: string; projectId: string; viewer: string; title: string; onClose(): void;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const [said, setSaid] = useState("");
   const [busy, setBusy] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);

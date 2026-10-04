@@ -15,7 +15,8 @@ import { ChatCircleDots, CheckCircle, ShieldCheck } from "@phosphor-icons/react"
 
 import type { V2Agent } from "../../lib/v2/workforce";
 import type { AvatarState } from "../../lib/agent-world-types";
-import { ZONES, identityOf, zoneOf, type Zone } from "../../lib/agent-world";
+import { ZONES, zoneOf, type Zone } from "../../lib/agent-world";
+import { useIdentity } from "../../lib/use-agent-identities";
 import type { LiveMap, LivePresence } from "../../lib/agents-live";
 import { AgFace, AgFaceStack, AgState } from "./agent-face";
 
@@ -150,7 +151,7 @@ function RosterCard({ placed, onOpen, onAsk, onRegister }: {
   onRegister?: (name: string) => void;
 }) {
   const { agent: a, presence, zone } = placed;
-  const who = identityOf(a.id, a.name);
+  const who = useIdentity(a.id, a.name); // a card drawn before identities load re-renders when they do
   const primary = who.callsign || a.name;
   const state: AvatarState = presence.inPanel ? "speaking" : presence.state;
   const runs = a.successful_runs ?? 0;
