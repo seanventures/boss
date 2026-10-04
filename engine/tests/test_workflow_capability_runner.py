@@ -648,6 +648,60 @@ def test_an_agent_that_stops_for_approval_does_not_release_the_next_step(
     assert publish.calls, "the next step did not run once the agent had actually finished"
 
 
+def test_an_agent_that_stopped_for_the_busy_budget_waits_and_runs_again(eng, project,
+                                                                        monkeypatch):
+    """An agent step whose tool calls hit the per-minute cap past the wait bound ends
+    `budget_wait` (agent_loop.BudgetWaiter). The STEP waits — not failed, not deadlettered,
+    nothing for a person — and the next tick after the wait runs it and it completes."""
+    from boss_engine.services import agent_steps
+
+    publish = RecordingTool("get_costs", {"spend_usd": 0})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([publish]))
+    outcomes = [
+        {"status": agent_steps.BUDGET_WAIT, "agent_run_id": "arun_busy",
+         "agent": "video_editor", "summary": "", "retry_after_seconds": 20,
+         "budget": {"refusal": "burst", "transient": True, "retry_after_seconds": 20,
+                    "message": "Burst cap exceeded ($/min). Retry shortly."}},
+        {"status": "completed", "agent_run_id": "arun_done", "agent": "video_editor",
+         "media_artifact_id": "art_done", "summary": "trimmed"},
+    ]
+    monkeypatch.setattr(agent_steps, "run", lambda *_a, **_k: outcomes.pop(0))
+
+    with eng.begin() as c:
+        _editor(c, project)
+        _, version = _publish(c, project, "agent_budget_wait", [
+            {"id": "edit", "kind": "capability",
+             "binding": {"agent_work": True, "inputs": {"instructions": "trim it"}},
+             "next": ["ship"]},
+            {"id": "ship", "kind": "capability",
+             "binding": {"capability": "cost_check", "inputs": {}},
+             "next": []},
+        ], "edit")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        assert steps["edit"]["status"] == "ready", steps["edit"]
+        assert steps["edit"]["output"]["waiting"]["kind"] == "budget_wait"
+        assert "per-minute budget" in steps["edit"]["output"]["waiting"]["reason"]
+        run_row = c.execute(text("SELECT status FROM workflow_runs WHERE id=:r"),
+                            {"r": run["id"]}).scalar()
+        assert run_row == "waiting"
+        assert not c.execute(text("SELECT 1 FROM deadletters WHERE project_id=:p"),
+                             {"p": project}).first()
+        assert not publish.calls
+
+        # The wait is over (the tick's transaction clock stands still, so bring it back).
+        c.execute(text("UPDATE workflow_step_runs SET run_after = now() - interval '1 second' "
+                       "WHERE workflow_run_id = :r AND status = 'ready'"), {"r": run["id"]})
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["edit"]["status"] == "succeeded", steps["edit"]
+    assert steps["edit"]["output"]["media_artifact_id"] == "art_done"
+    assert publish.calls
+
+
 def test_an_agent_that_finishes_still_completes_its_step(eng, project, monkeypatch):
     """Waiting is only for a run that stopped. A finished agent must not sit parked."""
     from boss_engine.services import agent_steps

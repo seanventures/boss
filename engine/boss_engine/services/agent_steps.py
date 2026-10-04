@@ -77,6 +77,9 @@ DEFAULT_MAX_STEPS = 24
 # there (`verdict`). Prose is read for one line of explanation, never for the decision.
 
 COMPLETED, BLOCKED, FAILED = "completed", "blocked", "failed"
+#: How a run that stopped to wait for the per-minute budget ends (agent_loop.BUDGET_WAIT): the
+#: workflow step waits and runs again; the agent never judged it.
+BUDGET_WAIT = "budget_wait"
 OUTCOMES = (COMPLETED, BLOCKED, FAILED)
 #: The keys of the outcome the agent declares, in its final JSON object.
 OUTCOME_KEYS = ["outcome", "reason", "needs"]
@@ -779,6 +782,11 @@ def run(
         # Set when the agent reached a skill that needs a person. The step waits on this, the
         # same way a tier-3 capability step does.
         "decision_id": result.get("decision_id"),
+        # Set when the run stopped for the per-minute budget (status `budget_wait`): the
+        # refusal and when to look again, which the runner turns into a wait, not a verdict.
+        **({"budget": result.get("budget"),
+            "retry_after_seconds": result.get("retry_after_seconds")}
+           if result.get("status") == BUDGET_WAIT else {}),
         "transcript": result.get("transcript") or [],
     }
 
