@@ -194,6 +194,29 @@ def test_a_talk_greets_in_character_streams_and_signs_every_reply(client, engine
     assert receipts >= 2 and consumed >= 2
 
 
+def test_a_conversation_is_named_by_the_agents_callsign(client, engine, seated):
+    """"Talk with Vera", not "Talk with QA Lead": the default title names the agent the way the
+    console's header does, and seat_info carries the callsign beside the role's name."""
+    with engine.begin() as c:
+        before = c.execute(text("SELECT spec FROM roles WHERE project_id = :p AND role_key = 'qa'"),
+                           {"p": PROJECT}).scalar()
+        c.execute(text("UPDATE roles SET spec = jsonb_set(COALESCE(spec::jsonb, '{}'::jsonb), "
+                       "'{persona}', COALESCE(spec::jsonb->'persona', '{}'::jsonb) || "
+                       "'{\"callsign\": \"Vera\"}'::jsonb) "
+                       "WHERE project_id = :p AND role_key = 'qa'"), {"p": PROJECT})
+    try:
+        talk = _open(client, "talk", ["qa"])
+        assert talk["title"] == "Talk with Vera"
+        assert talk["seat_info"][0]["callsign"] == "Vera"
+        assert talk["seat_info"][0]["name"] != "Vera"
+    finally:
+        with engine.begin() as c:
+            c.execute(text("UPDATE roles SET spec = CAST(:s AS JSONB) "
+                           "WHERE project_id = :p AND role_key = 'qa'"),
+                      {"p": PROJECT, "s": json.dumps(before) if not isinstance(before, str)
+                       else before})
+
+
 def test_a_seat_that_fails_is_explained_and_the_room_moves_on(client, engine, model, seated):
     model.fail_for = {"QA Lead"}
     conv = _open(client, "room", SEATS)
@@ -216,7 +239,9 @@ def test_a_seat_that_fails_is_explained_and_the_room_moves_on(client, engine, mo
 def test_plan_it_with_an_agent_ends_in_a_card_one_press_starts(client, engine, model, seated):
     workflow_key = _workflow(client, "Talked into it")
     conv = _open(client, "plan", ["pm"], context={"from": "palette"})
-    assert conv["title"] == "Plan with " + conv["seat_info"][0]["name"]
+    # Named as the console names the agent: its callsign when it has one.
+    seat = conv["seat_info"][0]
+    assert conv["title"] == "Plan with " + (seat.get("callsign") or seat["name"])
 
     greeting = _say(client, conv["conversation_id"], "")
     assert "ask the ONE question" in model.calls[0]["prompt"]

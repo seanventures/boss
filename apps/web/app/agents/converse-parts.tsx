@@ -12,8 +12,10 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../agent-avatar";
+import { agentIdentity } from "../../lib/agent-identity";
+import { CAST_BY_KEY } from "../../lib/avatar-kit/cast";
 import { Markdown } from "../markdown";
-import type { AvatarSize, AvatarState, ModelFailure } from "../../lib/agent-world-types";
+import type { AvatarState, ModelFailure } from "../../lib/agent-world-types";
 import {
   ConverseRefusal, NEEDS_MODEL, splitCitations, type ConverseProblem, type ProposalView,
   type SeatInfo, type TurnView,
@@ -36,11 +38,34 @@ export function useSeat(roleKey: string | null | undefined): SeatInfo | null {
   return book.get(roleKey) ?? { roleKey, name: humanise(roleKey), lifecycle: "active" };
 }
 
-/** "Vera · QA Lead" when there is a callsign, else the role's name. Callsigns sit beside the
- *  role, never instead of it (§13.9). */
+/**
+ * ONE NAME PER AGENT, EVERYWHERE IN A CONVERSATION: its callsign first, its role beside it
+ * ("Vera" · "QA Lead"), never the role instead of a callsign it has (§13.9). The header, each
+ * author line, the room's seats, its To chips, the @ menu and the summary all ask this.
+ *
+ * The callsign is the seat's own; one never set (null — a role installed before personas
+ * travelled with it) falls back to the install's identity, then to the shipped cast, so Vera
+ * is Vera whichever door opened the talk. One the operator cleared ("") stays cleared.
+ */
 export function seatName(seat: SeatInfo | null): { name: string; role?: string } {
   if (!seat) return { name: "Agent" };
-  return seat.callsign ? { name: seat.callsign, role: seat.name } : { name: seat.name };
+  const callsign = seat.callsign === "" ? "" : (seat.callsign?.trim() || knownCallsign(seat.roleKey));
+  return callsign && callsign !== seat.name ? { name: callsign, role: seat.name } : { name: seat.name };
+}
+
+function knownCallsign(roleKey: string): string {
+  if (!roleKey) return "";
+  try {
+    const loaded = agentIdentity(roleKey);
+    if (loaded.roleKey === roleKey && loaded.callsign) return loaded.callsign;
+  } catch { /* fall through to the cast */ }
+  return Object.prototype.hasOwnProperty.call(CAST_BY_KEY, roleKey) ? CAST_BY_KEY[roleKey].callsign ?? "" : "";
+}
+
+/** How the operator @-mentions a seat: its callsign when it has one, else its role key. */
+export function mentionHandle(seat: SeatInfo): string {
+  const who = seatName(seat);
+  return who.role && /^[A-Za-z0-9_]+$/.test(who.name) ? who.name : seat.roleKey;
 }
 
 // ── Faces ──────────────────────────────────────────────────────────────────────────────────
@@ -59,17 +84,19 @@ const STATE_GLYPH: Partial<Record<AvatarState, string>> = {
  */
 export function ConverseFace({ roleKey, size = 32, state = "idle", label, badge }: {
   /** A role key; "boss" for BOSS's own turns. */
-  roleKey: string; size?: AvatarSize; state?: AvatarState;
-  /** Set when the face stands alone, without its name beside it. */
+  roleKey: string; size?: number; state?: AvatarState;
+  /** Set when the face stands alone, without its name beside it: who it is, in seatName's
+   *  words (the kit's own label would say the role, not the callsign). */
   label?: string;
   /** Show the state word under the face (seats in the room). */
   badge?: boolean;
 }) {
   const boss = roleKey === "boss";
+  const named = label ? { role: "img", "aria-label": `${label}, AI agent, ${STATE_WORD[state]}` } : {};
   return (
-    <span className="ag-cv-face" data-state={state} data-testid={`ag-face-${roleKey}`}>
+    <span className="ag-cv-face" data-state={state} data-testid={`ag-face-${roleKey}`} {...named}>
       <AgentAvatar agent={boss ? undefined : roleKey} variant={boss ? "boss" : "agent"} size={size}
-                   state={state} standalone={Boolean(label)} aiBadge={false} className="ag-face" />
+                   state={state} aiBadge={false} className="ag-face" />
       {badge && state !== "idle" ? (
         <span className="ag-cv-badge" aria-hidden>
           {STATE_GLYPH[state] ? <b>{STATE_GLYPH[state]}</b> : null}{STATE_WORD[state]}
@@ -252,12 +279,12 @@ export function ProposalCard({ proposal, onStart, onDismiss, compact }: {
 }
 
 function StepAgent({ label, roleKey }: { label: string; roleKey: string | null }) {
-  const seat = useSeat(roleKey);
+  const who = seatName(useSeat(roleKey));
   return (
     <span className="ag-step" data-testid={`ag-step-${label}`}>
       <span className="ag-step-label">{label}</span>
       {roleKey ? (
-        <span className="ag-step-agent"><ConverseFace roleKey={roleKey} size={20} />{seatName(seat).name}</span>
+        <span className="ag-step-agent" title={who.role}><ConverseFace roleKey={roleKey} size={20} />{who.name}</span>
       ) : <span className="ag-step-agent ag-muted" title="BOSS picks the agent holding the step's skills">Auto</span>}
     </span>
   );
@@ -323,13 +350,15 @@ function ToChip({ roleKey }: { roleKey: string }) {
 
 /** A text box that sends on Enter (Shift+Enter for a new line), with an @-mention menu when
  *  there are seats to mention. */
-export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocus, onStop, initial }: {
+export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocus, onStop, initial, onMention }: {
   placeholder: string; disabled?: boolean; onSend: (message: string) => void;
   /** What the box starts with (a door's question); the operator sends it. */
   initial?: string;
   seats?: SeatInfo[]; extra?: React.ReactNode; autoFocus?: boolean;
-  /** While an answer streams: Send becomes Stop. */
+  /** Only while a reply streams: Send becomes Stop. Absent otherwise. */
   onStop?: () => void;
+  /** A seat picked from the @ menu (the room lights its To chip). */
+  onMention?: (roleKey: string) => void;
 }) {
   const [value, setValue] = useState(initial ?? "");
   const [menu, setMenu] = useState<SeatInfo[]>([]);
@@ -345,7 +374,7 @@ export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocu
   const refreshMenu = (text: string, caret: number) => {
     const at = seats?.length ? mentionAt(text, caret) : null;
     setMenu(at ? (seats ?? []).filter((s) => s.roleKey.includes(at.query)
-      || s.name.toLowerCase().includes(at.query) || (s.callsign ?? "").toLowerCase().includes(at.query)) : []);
+      || s.name.toLowerCase().includes(at.query) || seatName(s).name.toLowerCase().includes(at.query)) : []);
     setPick(0);
   };
   const choose = (seat: SeatInfo) => {
@@ -353,9 +382,10 @@ export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocu
     const caret = el?.selectionStart ?? value.length;
     const at = mentionAt(value, caret);
     if (!at) return;
-    const next = `${value.slice(0, at.start)}@${seat.roleKey} ${value.slice(caret)}`;
+    const next = `${value.slice(0, at.start)}@${mentionHandle(seat)} ${value.slice(caret)}`;
     setValue(next);
     setMenu([]);
+    onMention?.(seat.roleKey);
     requestAnimationFrame(() => el?.focus());
   };
   const send = () => {
@@ -369,15 +399,19 @@ export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocu
   return (
     <div className="ag-composer">
       {menu.length ? (
-        <ul className="ag-mention-menu" role="listbox" aria-label="Mention a seat">
-          {menu.map((s, i) => (
-            <li key={s.roleKey} role="option" aria-selected={i === pick}>
-              <button type="button" onMouseDown={(e) => { e.preventDefault(); choose(s); }}>
-                <ConverseFace roleKey={s.roleKey} size={20} />
-                <span>{seatName(s).name}</span><code>@{s.roleKey}</code>
-              </button>
-            </li>
-          ))}
+        <ul className="ag-mention-menu" role="listbox" aria-label="Mention a seat" data-testid="ag-mention-menu">
+          {menu.map((s, i) => {
+            const who = seatName(s);
+            return (
+              <li key={s.roleKey} role="option" aria-selected={i === pick}>
+                <button type="button" data-testid={`ag-mention-${s.roleKey}`}
+                        onMouseDown={(e) => { e.preventDefault(); choose(s); }}>
+                  <ConverseFace roleKey={s.roleKey} size={32} />
+                  <span className="ag-pick-name"><strong>{who.name}</strong>{who.role ? <em>{who.role}</em> : null}</span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       <textarea ref={box} rows={2} value={value} placeholder={placeholder} aria-label={placeholder}

@@ -135,7 +135,10 @@ function mapContext(w: unknown): ConversationContext {
 }
 
 function mapSeat(w: Wire): SeatInfo {
-  return { roleKey: str(w.role_key), name: str(w.name || w.role_key), callsign: opt(w.callsign) ?? null,
+  // A callsign the operator cleared ("") stays cleared; one never set (null) may fall back to
+  // the shipped cast's (seatName in app/agents/converse-parts.tsx).
+  return { roleKey: str(w.role_key), name: str(w.name || w.role_key),
+           callsign: w.callsign === "" ? "" : opt(w.callsign) ?? null,
            tagline: opt(w.tagline) ?? null, agentId: opt(w.agent_id) ?? null,
            lifecycle: str(w.lifecycle) || "active" };
 }
@@ -203,18 +206,23 @@ export async function* readEvents(body: ReadableStream<Uint8Array>): AsyncGenera
       if (mapped) yield mapped;
     } catch { /* a malformed block is skipped, never fatal to the room */ }
   };
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-    let cut = buffer.indexOf("\n\n");
-    while (cut !== -1) {
-      yield* flush(buffer.slice(0, cut));
-      buffer = buffer.slice(cut + 2);
-      cut = buffer.indexOf("\n\n");
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      let cut = buffer.indexOf("\n\n");
+      while (cut !== -1) {
+        yield* flush(buffer.slice(0, cut));
+        buffer = buffer.slice(cut + 2);
+        cut = buffer.indexOf("\n\n");
+      }
     }
+    if (buffer.trim()) yield* flush(buffer);
+  } finally {
+    // A reader that stops early (after `done`) lets go of the body, so the connection closes.
+    reader.cancel().catch(() => undefined);
   }
-  if (buffer.trim()) yield* flush(buffer);
 }
 
 // ── Transport ──────────────────────────────────────────────────────────────────────────────
@@ -464,6 +472,9 @@ export function useConversation(projectId: string, conversationId: string | null
         if (event.type === "turn_start") unfinished.add(event.turnId);
         if (event.type === "turn_end") unfinished.delete(event.turnId);
         apply(event);
+        // `done` is the last word. A connection a proxy holds open after it must not keep the
+        // conversation looking busy (Stop showing, Send disabled) with nothing running.
+        if (event.type === "done") break;
       }
       await reload();
     } catch (e) {
@@ -536,7 +547,11 @@ export function useConversation(projectId: string, conversationId: string | null
   /** Stop the answering now: the seat speaking is cut off (Stopped), the rest do not speak. */
   const stop = useCallback(() => abort.current?.abort(), []);
 
-  return { conversation, speaking: live.speaking, thinking: live.thinking, queue: live.queue, busy,
+  // A reply is on its way: a seat is thinking or speaking, or seats are still to answer. Stop
+  // shows only then — never merely because a request is open.
+  const answering = busy && (live.speaking !== null || live.thinking.length > 0 || live.queue.length > 0);
+
+  return { conversation, speaking: live.speaking, thinking: live.thinking, queue: live.queue, busy, answering,
            problem, setProblem, send, summarize, propose, start, dismiss, openDecision, reload, stop };
 }
 
@@ -551,11 +566,13 @@ export function splitCitations(content: string, cited: string[]): { text: string
   return { text, acts };
 }
 
-/** `@role_key` mentions the operator typed that name a seat. */
-export function mentionsIn(message: string, seats: string[]): string[] {
+/** `@role_key` (or `@Callsign`, when `info` says who each seat is) mentions that name a seat. */
+export function mentionsIn(message: string, seats: string[], info: SeatInfo[] = []): string[] {
+  const byCallsign = new Map(info.filter((s) => s.callsign).map((s) => [String(s.callsign).toLowerCase(), s.roleKey]));
   const found: string[] = [];
   for (const m of message.toLowerCase().matchAll(/@([a-z0-9_]+)/g)) {
-    if (seats.includes(m[1]) && !found.includes(m[1])) found.push(m[1]);
+    const key = seats.includes(m[1]) ? m[1] : byCallsign.get(m[1]);
+    if (key && seats.includes(key) && !found.includes(key)) found.push(key);
   }
   return found;
 }
