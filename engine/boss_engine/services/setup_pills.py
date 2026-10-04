@@ -145,6 +145,15 @@ class _Blank(dict):
         return ""
 
 
+def _untimed(template: str, values: dict[str, Any]) -> str:
+    """A tip that names a time nobody knows drops the phrase ("until ." never reaches a page)."""
+    if values.get("time") or "{time}" not in template:
+        return template
+    import re
+
+    return re.sub(r"\s+(?:until|at)\s+\{time\}", "", template)
+
+
 def pill(kind: str, state: str, **values: Any) -> dict[str, Any]:
     """The pill for `state` in catalogue `kind`, with its slots filled. Unknown state: KeyError,
     so a new state cannot reach the page without a label and a tip."""
@@ -154,7 +163,7 @@ def pill(kind: str, state: str, **values: Any) -> dict[str, Any]:
         "state": state,
         "tone": entry["tone"],
         "label": entry["label"].format_map(fill).strip(),
-        "tip": " ".join(entry["tip"].format_map(fill).split()),
+        "tip": " ".join(_untimed(entry["tip"], values).format_map(fill).split()),
     }
     if entry.get("action"):
         out["action"] = entry["action"]

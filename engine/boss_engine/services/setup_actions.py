@@ -511,6 +511,10 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
             str(proof.get("error") or ""), subscription=True)
         if proof["state"] == "unreachable":
             proof["state"] = "failed"
+        if proof["state"] == "rate_limited":
+            # The CLI names when the plan resets ("Try again at …"): the pill shows it, and
+            # Auto knows when to come back.
+            proof["retry_at"] = setup_checks._retry_after({}, str(proof.get("error") or ""))
     return proof
 
 
