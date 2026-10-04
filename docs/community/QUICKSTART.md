@@ -80,7 +80,7 @@ boss password
 
 Without the `boss` command, run `python3 scripts/install/console_password.py show` from the install directory.
 
-After you sign in, BOSS opens on **Repo and models** until a repository and a model are connected: paste a GitHub token, connect a model, and open your first PR from **Try it**. Then open **Command Center**. On a new install, the planned layout in **Agents → Team** is empty, and **Agents → + New agent → From template** offers the starter definitions. Installing a definition does not start any work. For session details and remote access, see [Sign in to Mission Control](CONSOLE_AUTH.md).
+After you sign in, BOSS opens on **Repo and models** until a repository and a model are connected: paste a GitHub token, connect a model, and open your first PR from **Try it**. Then open **Command Center**. On a new install, the planned layout in **Agent Studio → Team** is empty, and **Agent Studio → + New agent → From template** offers the starter definitions. Installing a definition does not start any work. For session details and remote access, see [Sign in to Mission Control](CONSOLE_AUTH.md).
 
 ## Create your first task
 

@@ -191,10 +191,10 @@ def test_an_agent_holding_the_skill_but_not_the_server_is_refused_when_it_runs(e
                                         role_key="publisher", skill_id="announce")
         assert given["assigned"] is True
         assert given["needs_mcp_server"]["server"] == "mattermost"
-        assert "Agents page" in given["warning"]
+        assert "Agent Studio" in given["warning"]
         result = _invoke(c, project)
     assert result["status"] == "denied", result
-    assert "does not hold that server" in result["reason"] and "Agents page" in result["reason"]
+    assert "does not hold that server" in result["reason"] and "Agent Studio" in result["reason"]
     assert calls == []
 
 
@@ -223,7 +223,7 @@ def test_the_executor_refuses_a_caller_without_the_server_whatever_road_reached_
                                            project_id=project, actor="op", caller=caller)
             with pytest.raises(SkillExecutorConfigurationError) as refused:
                 execute_mcp_tool(context, {"_skill_key": "announce", "text": "x"})
-            assert "Agents page" in str(refused.value)
+            assert "Agent Studio" in str(refused.value)
     assert calls == []
 
 

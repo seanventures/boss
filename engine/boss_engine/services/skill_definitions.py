@@ -747,7 +747,7 @@ def sync_role_skills(
     Nothing connected the two. So every install had agents that were TOLD what they could use
     and HELD nothing, and every permission that worked did so because a skill happened to list
     the role in `allowed_callers` — never because an agent had been given anything. An operator
-    looking at the Agents page saw exactly what was there: agents with no skills.
+    looking at Agent Studio saw exactly what was there: agents with no skills.
 
     Idempotent, and additive only. It never removes an assignment: an operator who has granted
     something by hand has made a decision, and a sync that reverts it on the next run is a sync

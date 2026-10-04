@@ -243,7 +243,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         })
 
     # THE ROSTER IS EVERY AGENT A STEP CAN BE GIVEN TO — the picker's own list
-    # (step_agents.agent_keys) — plus the unregistered ones doing work. The Agents page said
+    # (step_agents.agent_keys) — plus the unregistered ones doing work. Agent Studio said
     # "All 5" while the step picker offered 34: it was this work feed, which is right for the
     # Hive and the chart and wrong for "who are my agents".
     from .step_agents import agent_keys

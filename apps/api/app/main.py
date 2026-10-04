@@ -23051,7 +23051,7 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         # Control blocks the runtime has always supported and the builder never offered, so a
         # customer could only ever author a straight line.
         "blocks": blocks(),
-        # THE PROJECT'S AGENTS, not only the bundled ones: an agent made on the Agents page has
+        # THE PROJECT'S AGENTS, not only the bundled ones: an agent made in Agent Studio has
         # to be offered as a captain, or the builder cannot put it on the step it was made for.
         # And not a bundled one the operator deleted: project_roster leaves those out, so the
         # builder never offers a captain publish would then refuse. Before a project is chosen

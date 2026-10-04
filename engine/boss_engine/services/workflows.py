@@ -433,7 +433,7 @@ def normalise_workflow_spec(
         # reads them. Whether the named agent EXISTS, and whether it holds what the step needs,
         # is `step_agents.assignment_problems`, run at publish and at start with the project in
         # hand. That used to be a hard-coded set of role keys checked here, which refused every
-        # agent made on the Agents page.
+        # agent made in Agent Studio.
         captain_shape = step_agent_captain_problems(step) if check_agents else []
         for detail in captain_shape:
             bad("captain", detail)

@@ -186,7 +186,7 @@ const AREAS: AreaDef[] = [
   // them (roster, team and panels in one area). Old links to the retired two still land —
   // app/legacy-areas.ts.
   { id: "delivery_workflows", label: "Workflows", sub: "Build, run and watch workflows", group: "Run", icon: ICONS.delivery_workflows },
-  { id: "workforce", label: "Agents", sub: "Who does the work", group: "Run", icon: ICONS.org },
+  { id: "workforce", label: "Agent Studio", sub: "Who does the work", group: "Run", icon: ICONS.org },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "delivery", label: "Infra", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   // TOP LEVEL, NOT NESTED. Grouping these under an "Observability" heading put the two screens

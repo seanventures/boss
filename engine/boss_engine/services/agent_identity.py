@@ -693,7 +693,7 @@ def paused_message(name: str, lifecycle: str) -> str:
     if lifecycle == "retired":
         return (f"{name} is retired. Give the step to another agent, or leave it for BOSS "
                 "to pick.")
-    return (f"{name} is paused. Resume it on its Agents page, or give the step to another "
+    return (f"{name} is paused. Resume it on its page in Agent Studio, or give the step to another "
             "agent.")
 
 
