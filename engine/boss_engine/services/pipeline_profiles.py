@@ -303,6 +303,12 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
     # profile — cost caps must not silently de-risk auth/payments/secrets/migrations/deploys.
     if sensitive:
         clamped = max(clamped, 2)
+    # AN OPERATOR WHO ASKED FOR TIER 3 ASKED TO SIGN THE PLAN (factory test D7). Community's
+    # default `lean` profile caps at 1, so an explicit `risk_tier: 3` became 2 and the build
+    # wrote code without the plan approval it was asked to wait for. A cost profile limits what
+    # BOSS infers; it never removes a human gate a person requested.
+    if isinstance(explicit, int) and explicit >= 3:
+        clamped = 3
     return clamped
 
 
@@ -366,6 +372,8 @@ def model_risk_tier(spec: dict, profile: dict, decider) -> dict:
     clamped = max(int(profile.get("tier_floor", 0)), min(int(profile.get("tier_cap", 3)), tier))
     if sensitive:
         clamped = max(clamped, 2)
+    if isinstance(explicit, int) and explicit >= 3:
+        clamped = 3  # a requested human plan gate is never capped away (see infer_risk_tier)
     return {"tier": clamped, "raw_tier": tier, "sensitive": sensitive, "ok": ok, "batch": batch}
 
 
