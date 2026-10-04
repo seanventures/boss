@@ -31,11 +31,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #: is scanned.
 SCAN_ROOTS = ("engine/boss_engine", "apps/api/app", "apps/worker")
 #: Calls that create a decision. The two sinks are excluded by their own definitions below.
-PRODUCER_CALLS = {"create_blocking_decision", "create_blocking"}
-#: The sinks themselves: they pass `recommendation` straight through.
+PRODUCER_CALLS = {"create_blocking_decision", "create_blocking", "open_step_decision"}
+#: The sinks themselves: they pass `recommendation` straight through. open_step_decision is the
+#: one way a step's decision is opened (ONE GATE, ONE RUN); it adds the run identity only.
 SINKS = {
     ("engine/boss_engine/services/core.py", "create_blocking_decision"),
     ("engine/boss_engine/defaults/events.py", "create_blocking"),
+    ("engine/boss_engine/services/run_decisions.py", "open_step_decision"),
 }
 
 #: A decision that writes no `action` at all. Each is listed with why it is safe: a new one
@@ -276,6 +278,9 @@ def _producer_findings() -> list[Found]:
                 if item.none and func is not None \
                         and (module.rel, func.name) in NO_ACTION_BY_DESIGN:
                     continue
+                if item.none and _called_name(node) == "open_step_decision":
+                    # It writes the run and step itself: a workflow gate.
+                    item = Found(item.where, gate=True)
                 found.append(item)
     return found
 
