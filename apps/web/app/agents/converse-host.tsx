@@ -23,7 +23,7 @@ import { RoomView } from "./room-view";
 import { TalkSheet } from "./talk-sheet";
 
 type View =
-  | { kind: "talk" | "plan"; conversationId: string; greet: boolean }
+  | { kind: "talk" | "plan"; conversationId: string; greet: boolean; draft?: string }
   | { kind: "room"; conversationId: string; question?: string }
   | { kind: "pick"; mode: "talk" | "plan" | "room" };
 
@@ -87,10 +87,12 @@ export function ConverseHost({ projectId, actor }: { projectId: string; actor: s
         const recent = await api.listConversations(projectId, { kind: "talk", limit: 20 });
         const same = recent.find((c) => c.seats[0] === roleKey && c.status === "open"
           && Date.now() - Date.parse(c.updatedAt || "0") < RESUME_WITHIN_MS);
-        if (same) { setView({ kind: "talk", conversationId: same.conversationId, greet: false }); return; }
+        if (same) { setView({ kind: "talk", conversationId: same.conversationId, greet: false, draft: o.draft }); return; }
       }
       const id = await create(o.kind, [roleKey], { context: o.context });
-      setView({ kind: o.kind, conversationId: id, greet: true });
+      // A talk opened with a question to ask (an Act card's "Ask about this") waits for it; one
+      // opened empty lets the agent say hello first.
+      setView({ kind: o.kind, conversationId: id, greet: !o.draft, draft: o.draft });
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e));
     }
@@ -113,7 +115,7 @@ export function ConverseHost({ projectId, actor }: { projectId: string; actor: s
               conversationId={view.conversationId} question={view.question} book={book} onClose={close} />
   ) : (
     <TalkSheet key={`${view.conversationId}:${opened}`} projectId={projectId} actor={actor}
-               conversationId={view.conversationId} greet={view.greet} book={book} onClose={close}
+               conversationId={view.conversationId} greet={view.greet} draft={view.draft} book={book} onClose={close}
                onPlan={(roleKey, c) => void open({ kind: "plan", roleKey, context: c.context, fresh: true })}
                onNew={(roleKey) => void open({ kind: "talk", roleKey, fresh: true })} />
   );

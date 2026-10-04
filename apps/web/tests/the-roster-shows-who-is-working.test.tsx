@@ -168,10 +168,13 @@ describe("the presence pill and the crew", () => {
     const rows = [...document.querySelectorAll<HTMLElement>('[data-testid^="ag-crew-"]')]
       .map((r) => r.dataset.testid).filter((t) => t !== "ag-crew-roster");
     expect(rows).toEqual(["ag-crew-qa", "ag-crew-software_engineer"]);
+    const opened: { kind: string; roleKey?: string; context?: { from: string } }[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent<(typeof opened)[number]>).detail);
+    window.addEventListener("boss:converse", onOpen);
     await act(async () => { $('[data-testid="ag-crew-qa"]')!.click(); });
-    // Until S-converse lands, the talk is the side dock addressed to that agent.
-    const q = new URLSearchParams(window.location.search);
-    expect(q.get("dock_role")).toBe("QA Lead");
+    window.removeEventListener("boss:converse", onOpen);
+    // Pressing an agent opens the 1:1 talk with it.
+    expect(opened).toEqual([expect.objectContaining({ kind: "talk", roleKey: "qa", context: { from: "presence" } })]);
     expect($('[data-testid="ag-crew"]')).toBeNull();
   });
 

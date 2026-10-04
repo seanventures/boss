@@ -485,43 +485,8 @@
 
 /* ── [runs] ag-chain / ag-act / ag-dock ────────────────────────────────────────── */
 
-/* The run surfaces' face: a ring that says the real state, with a word beside it elsewhere.
-   (When the kit's AgentAvatar replaces the fallback disc, its own ring takes over: .ag-face-kit
-   hides this one.) Keyframes are agav-run-* so they cannot collide with the kit's agav-*. */
-.ag-face { position: relative; display: inline-flex; align-items: center; justify-content: center;
-  flex: none; width: var(--ag-size, 24px); height: var(--ag-size, 24px); border-radius: 50%; }
-.ag-face .ag-face-disc { width: 100%; height: 100%; margin: 0; font-size: calc(var(--ag-size, 24px) * 0.38); }
-.ag-face-glyph { display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%;
-  border-radius: 50%; background: var(--surface-3); color: var(--muted); border: 1px solid var(--border-strong); }
-.ag-face[data-variant="you"] .ag-face-glyph { color: var(--ink); }
-.ag-face[data-variant="boss"] .ag-face-glyph { color: var(--accent-text); }
-.ag-face-kit, .ag-face-kit svg { display: block; width: 100%; height: 100%; }
-.ag-face-ring { position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
-.ag-face:has(.ag-face-kit) .ag-face-ring { display: none; }
-.ag-face[data-state="working"] .ag-face-ring { border-color: var(--border-strong); border-top-color: var(--accent-text);
-  animation: agav-run-spin 2.4s linear infinite; }
-.ag-face[data-state="thinking"] .ag-face-ring { border-style: dotted; border-color: var(--accent-text);
-  animation: agav-run-spin 1.6s linear infinite; }
-.ag-face[data-state="speaking"] .ag-face-ring { border-color: var(--accent-text); animation: agav-run-talk .3s ease-out; }
-.ag-face[data-state="needs_you"] .ag-face-ring { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft);
-  animation: agav-run-halo 1s ease-in-out infinite alternate; }
-.ag-face[data-state="done"] .ag-face-ring { border-color: var(--green); }
-.ag-face[data-state="stuck"] .ag-face-ring { border-color: var(--red); }
-.ag-face[data-state="stuck"] > :not(.ag-face-ring) { transform: rotate(4deg); }
-.ag-face[data-state="paused"] .ag-face-ring, .ag-face[data-state="retired"] .ag-face-ring { border-style: dashed; border-color: var(--faint); }
-.ag-face[data-size="48"][data-state="paused"], .ag-face[data-size="96"][data-state="paused"],
-.ag-face[data-size="48"][data-state="retired"], .ag-face[data-size="96"][data-state="retired"] { filter: grayscale(1); }
-.ag-ai { position: absolute; right: -4px; bottom: -3px; font: 700 8px/1 var(--sans); letter-spacing: .04em; padding: 2px 3px;
-  border-radius: 4px; background: var(--surface); color: var(--accent-text); border: 1px solid var(--border-strong); }
-.ag-ai-badge { display: inline-flex; align-items: center; font: 700 9px/1 var(--sans); letter-spacing: .06em; padding: 2px 4px;
-  border-radius: 4px; color: var(--accent-text); border: 1px solid var(--border-strong); background: var(--surface-2); }
-.ag-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
-.ag-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
-.ag-state[data-state="working"] i, .ag-state[data-state="thinking"] i, .ag-state[data-state="speaking"] i { background: var(--accent-text); }
-.ag-state[data-state="needs_you"] i { background: var(--amber); }
-.ag-state[data-state="done"] i { background: var(--green); }
-.ag-state[data-state="stuck"] i { background: var(--red); }
-
+/* The run surfaces draw the kit's face (AgentAvatar, class ag-face): its ring, badge and motion
+   are the kit's, so a step node, a chain hop and the Passport show one character, one way. */
 /* How the work reached the agent: a glyph on the node's status row; the words are a tooltip. */
 .ag-how { display: inline-flex; align-items: center; margin-right: 4px; color: var(--faint); vertical-align: -1px; }
 .ag-how[data-how="captain"] { color: var(--amber); }
@@ -530,7 +495,7 @@
 /* Auto → the picked agent: the sparkle fades out as the face fades in, once. */
 .ag-morph { position: relative; display: inline-flex; }
 .ag-morph-from { position: absolute; inset: 0; display: inline-flex; opacity: 0; animation: agav-run-fade-out .2s ease-out; }
-[data-morph="true"] .ag-morph > .ag-face { animation: agav-run-fade-in .2s ease-out; }
+[data-morph="true"] .ag-morph > .ag-avatar { animation: agav-run-fade-in .2s ease-out; }
 
 /* ── The Act card ── */
 .ag-face-btn { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit;
@@ -652,16 +617,13 @@
 .ag-cite[data-loading="true"] { padding-left: 8px; color: var(--faint); }
 .ag-cite-text { white-space: nowrap; }
 
-@keyframes agav-run-spin { to { transform: rotate(360deg); } }
-@keyframes agav-run-talk { from { transform: scale(1.12); } to { transform: scale(1); } }
-@keyframes agav-run-halo { from { opacity: .35; } to { opacity: .8; } }
 @keyframes agav-run-fade-in { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: scale(1); } }
 @keyframes agav-run-fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes agav-run-draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes agav-run-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .ag-face-ring, .ag-morph-from, .ag-morph > .ag-face, .ag-act-pop, .ag-chain-line, .ag-credits, .ag-credits-row {
+  .ag-morph-from, .ag-morph > .ag-avatar, .ag-act-pop, .ag-chain-line, .ag-credits, .ag-credits-row {
     animation: none !important;
   }
   .ag-morph-from { opacity: 0; }
@@ -678,44 +640,22 @@
 /* Talk (1:1 and plan), the room, the start card, the picker. A face's state is a ring AND a
  * word; only live states move (thinking, speaking), and only while they are true. */
 .ag-converse { --ag-z: 260; }
-.ag-converse .tone-accent, .ag-face .tone-accent { --ag-tone: var(--teal); }
-.ag-converse .tone-blue, .ag-face .tone-blue { --ag-tone: var(--blue); }
-.ag-converse .tone-pink, .ag-face .tone-pink { --ag-tone: var(--red); }
-.ag-converse .tone-amber, .ag-face .tone-amber { --ag-tone: var(--amber); }
-.ag-converse .tone-green, .ag-face .tone-green { --ag-tone: var(--green); }
-.ag-converse .tone-muted, .ag-face .tone-muted { --ag-tone: var(--faint); }
+.ag-converse .tone-accent { --ag-tone: var(--teal); }
+.ag-converse .tone-blue { --ag-tone: var(--blue); }
+.ag-converse .tone-pink { --ag-tone: var(--red); }
+.ag-converse .tone-amber { --ag-tone: var(--amber); }
+.ag-converse .tone-green { --ag-tone: var(--green); }
+.ag-converse .tone-muted { --ag-tone: var(--faint); }
 
-/* Face */
-.ag-face { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; }
-.ag-face > svg, .ag-face-kit, .ag-face-kit > svg { width: 100%; height: 100%; display: block; }
-.ag-bot { overflow: visible; }
-.ag-bot-head { fill: color-mix(in srgb, var(--ag-tone, var(--teal)) 26%, var(--surface-3)); stroke: var(--border-strong); stroke-width: 1; }
-.ag-bot-visor { fill: var(--bg); }
-.ag-bot-eye, .ag-bot-bar, .ag-bot-tip { fill: var(--ag-tone, var(--teal)); }
-.ag-bot-line { stroke: var(--border-strong); stroke-width: 1.4; }
-.ag-bot-bar, .ag-bot-eye { transform-box: fill-box; transform-origin: center; }
-.ag-face-ring { position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
-.ag-face[data-state="thinking"] .ag-face-ring { border: 2px dashed var(--accent-text); animation: agav-cv-orbit 1.6s linear infinite; }
-.ag-face[data-state="thinking"] .ag-bot-eye { transform: translate(1px, -1px); }
-.ag-face[data-state="speaking"] .ag-face-ring { border-color: var(--ag-tone, var(--teal)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ag-tone, var(--teal)) 22%, transparent); }
-.ag-face[data-state="speaking"] .ag-bot-bar { animation: agav-cv-talk 0.42s ease-in-out infinite alternate; }
-.ag-face[data-state="speaking"] .ag-bot-bar:nth-child(2) { animation-delay: 0.14s; }
-.ag-face[data-state="speaking"] .ag-bot-bar:nth-child(3) { animation-delay: 0.28s; }
-.ag-face[data-state="done"] .ag-face-ring { border-color: var(--green); }
-.ag-face[data-state="working"] .ag-face-ring { border-color: var(--accent); }
-.ag-face[data-state="needs_you"] .ag-face-ring { border-color: var(--amber); }
-.ag-face[data-state="stuck"] .ag-face-ring { border-color: var(--red); }
-.ag-face[data-state="stuck"] > svg { transform: rotate(4deg); }
-.ag-face[data-state="retired"] .ag-face-ring, .ag-face[data-state="paused"] .ag-face-ring { border: 2px dashed var(--faint); }
-.ag-face-48[data-state="retired"] > svg, .ag-face-96[data-state="retired"] > svg,
-.ag-face-48[data-state="paused"] > svg, .ag-face-96[data-state="paused"] > svg { filter: grayscale(1); opacity: 0.6; }
-.ag-face-badge {
+/* Face: the kit's AgentAvatar; a seat adds its state word under it. */
+.ag-cv-face { position: relative; display: inline-flex; flex: none; }
+.ag-cv-badge {
   position: absolute; left: 50%; bottom: -10px; transform: translateX(-50%); display: inline-flex; gap: 3px;
   align-items: center; white-space: nowrap; padding: 1px 6px; border-radius: 999px; font: 600 10px/1.4 var(--sans);
   background: var(--surface-3); border: 1px solid var(--border-strong); color: var(--ink-soft);
 }
-.ag-face[data-state="done"] .ag-face-badge { color: var(--green); animation: agav-cv-stamp 0.6s ease-out both; }
-.ag-face[data-state="speaking"] .ag-face-badge { color: var(--accent-text); }
+.ag-cv-face[data-state="done"] .ag-cv-badge { color: var(--green); animation: agav-cv-stamp 0.6s ease-out both; }
+.ag-cv-face[data-state="speaking"] .ag-cv-badge { color: var(--accent-text); }
 
 /* Shared bits */
 .ag-ai {
@@ -770,7 +710,7 @@
   border: 1px solid var(--accent-line); color: var(--ink); font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .ag-to { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.ag-turn-agent > .ag-face { margin-top: 2px; }
+.ag-turn-agent > .ag-cv-face { margin-top: 2px; }
 .ag-turn-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .ag-turn-who { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--ink); }
 .ag-reply { font-size: 12px; color: var(--accent-text); }
@@ -852,7 +792,7 @@
 .ag-seat:hover { background: var(--surface-2); }
 .ag-seat[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-soft); }
 .ag-seat[data-state="speaking"] { background: var(--surface-2); transform: translateY(calc(var(--lift, 0px) - 6px)); }
-.ag-seat .ag-face { margin-bottom: 8px; }
+.ag-seat .ag-cv-face { margin-bottom: 8px; }
 .ag-seat-name { font: 700 13px var(--sans); display: inline-flex; gap: 4px; align-items: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-seat-role { font-size: 11px; color: var(--faint); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-seat-role[data-next] { color: var(--accent-text); }
@@ -898,7 +838,7 @@
   display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 10px; align-items: center; text-align: left;
   padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); cursor: pointer;
 }
-.ag-pick > .ag-face { grid-row: span 2; }
+.ag-pick > .ag-cv-face { grid-row: span 2; }
 .ag-pick[aria-selected="true"] { border-color: var(--accent-line); background: var(--accent-soft); }
 .ag-pick:hover { border-color: var(--accent-line); }
 .ag-pick-name { display: flex; gap: 6px; align-items: baseline; min-width: 0; font-size: 13px; }
@@ -916,14 +856,10 @@
   .ag-proposal-rows { grid-template-columns: 1fr; }
 }
 
-@keyframes agav-cv-orbit { to { transform: rotate(360deg); } }
-@keyframes agav-cv-talk { from { transform: scaleY(1); } to { transform: scaleY(2.4); } }
 @keyframes agav-cv-stamp { from { transform: translateX(-50%) scale(0.6); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
 @keyframes agav-cv-dots { 0%, 100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 @keyframes agav-cv-caret { to { opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .ag-face-ring, .ag-bot-bar, .ag-face-badge, .ag-typing i, .ag-seat-dots i, .ag-caret, .ag-seat { animation: none !important; transition: none !important; }
-  .ag-face[data-state="thinking"] .ag-face-ring { border-style: dotted; }
-  .ag-face[data-state="speaking"] .ag-bot-bar { transform: scaleY(1.8); }
+  .ag-cv-badge, .ag-typing i, .ag-seat-dots i, .ag-caret, .ag-seat { animation: none !important; transition: none !important; }
 }

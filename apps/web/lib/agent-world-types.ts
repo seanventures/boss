@@ -198,27 +198,15 @@ export const ROOM_PRESETS: RoomPreset[] = [
   { key: "incident", label: "Incident", seats: ["sre", "operations_engineer", "backend_engineer", "security_reviewer"] },
 ];
 
-// ── Web entry points (owner in brackets). Stubs until the owning module lands. ─────────────
+// ── Web entry points (owner in brackets): the real modules, re-exported here. ──────────────
 
-function notYet(name: string): never {
-  throw new Error(`${name}: not implemented (agent world phase 0 stub)`);
-}
-
-// [kit] the real modules. Type-only imports there, so these re-exports make no runtime cycle.
+// [kit] Type-only imports there, so these re-exports make no runtime cycle.
 export { avatarSvg } from "./agent-avatar";
-export { agentIdentity, useAgentIdentities } from "./agent-identity";
-/** [agents] lib/agents-live.ts */
-export function useLivePresence(_projectId: string): Map<string, Presence> {
-  return notYet("useLivePresence");
-}
-/** [converse] lib/agent-converse.ts */
-export function useConversation(_projectId: string, _conversationId: string | null): {
-  conversation: Conversation | null; speaking: string | null; thinking: string[];
-  send(message: string, o?: { to?: string[]; rounds?: 1 | 2 }): Promise<void>;
-} {
-  return notYet("useConversation");
-}
-/** [converse] lib/agent-converse.ts — opens the 1:1 talk from any chip, Passport, run step or palette. */
-export function openTalk(_roleKey: string, _context?: ConversationContext): void {
-  return notYet("openTalk");
-}
+export { agentIdentity } from "./agent-identity";
+export { useAgentIdentities } from "./use-agent-identities";
+// [agents] presence, one shared poll.
+export { useLivePresence } from "./agents-live";
+// [converse] the 1:1 talk from any chip, Passport, run step or palette, and the hook every
+// converse surface draws from.
+export { openTalk } from "./converse-doors";
+export { useConversation } from "./agent-converse";

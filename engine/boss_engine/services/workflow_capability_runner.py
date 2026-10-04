@@ -1397,6 +1397,9 @@ def execute_step(
     """
     context = dict(context)
     context.pop(SKIPPED_INPUTS, None)
+    # A run started from a conversation's start card runs each step as the agent the card named
+    # (step_agents.with_run_agent says which steps a card may fill).
+    step = step_agents.with_run_agent(connection, project_id, step, context.get("input"))
     output = _execute_step(connection, ctx, project_id=project_id, actor=actor,
                            step=step, context=context)
     skipped = context.get(SKIPPED_INPUTS)

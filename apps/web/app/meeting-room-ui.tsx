@@ -22,7 +22,8 @@ import { ActionForm } from "./client-forms";
 
 import { callAction } from "../lib/call-action";
 import type { AvatarState } from "../lib/agent-world-types";
-import { seatAvatar, useIdentityVersion } from "../lib/agent-identity";
+import { seatAvatar } from "../lib/agent-identity";
+import { useIdentityVersion } from "../lib/use-agent-identities";
 import { AgentAvatar } from "./agent-avatar";
 
 export const ROLE_ORDER = [

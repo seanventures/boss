@@ -12,7 +12,6 @@
  * The alias table mirrors the engine's `agent_world_types.ALIASES` exactly; a test reads the
  * Python file and fails on any drift, so the two can never disagree about who a seat is.
  */
-import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import type { AgentIdentity, AvatarSpec, Lifecycle } from "./agent-world-types";
 import { CAST, CAST_BY_KEY, SEAT_LOOKS } from "./avatar-kit/cast";
@@ -203,10 +202,13 @@ function subscribe(l: () => void) {
 }
 const snapshot = () => version;
 
-/** Re-render when identities load. Every face subscribes, so a callsign or custom face lands everywhere at once. */
-export function useIdentityVersion(): number {
-  return useSyncExternalStore(subscribe, snapshot, () => 0);
-}
+/** Hear every identity load (useIdentityVersion, in lib/use-agent-identities.ts). */
+export function subscribeIdentities(l: () => void): () => void { return subscribe(l); }
+/** The store's version: it moves whenever identities load or change. */
+export function identityVersion(): number { return snapshot(); }
+
+/** Every identity loaded for the project, by role key (the shipped cast is added by callers). */
+export function loadedIdentities(): ReadonlyMap<string, AgentIdentity> { return loaded; }
 
 /**
  * Fetch the install's identities for a project. A load that succeeded is kept until
@@ -254,16 +256,4 @@ export function refreshIdentities(projectId: string, fetcher: typeof fetch = fet
     inflight = null;
   }
   return loadIdentities(projectId, fetcher);
-}
-
-/** The identities for a project, loading them on first use. */
-export function useAgentIdentities(projectId: string): Map<string, AgentIdentity> {
-  const v = useIdentityVersion();
-  useEffect(() => { void loadIdentities(projectId); }, [projectId]);
-  return useMemo(() => {
-    const out = new Map<string, AgentIdentity>();
-    for (const c of CAST) out.set(c.roleKey, agentIdentity(c.roleKey));
-    for (const [k, i] of loaded) out.set(k, i);
-    return out;
-  }, [v]); // eslint-disable-line react-hooks/exhaustive-deps -- `loaded` is the store `v` versions
 }

@@ -1364,6 +1364,7 @@ def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any
     invites exactly the question it was asked — "did you assign the agents or not?" — about a
     workflow where all three were assigned correctly.
     """
+    from .step_agents import is_default_captain
     from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
     if not isinstance(specs, list):
@@ -1397,6 +1398,9 @@ def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any
             # is the anonymous workflow runner; on an agent step it is "whichever agent fits",
             # which BOSS resolves per run. The console says which.
             "captain": str(step.get("captain") or "").strip(),
+            # Only the catalogue's soft default, not somebody's choice: a start card may replace
+            # it (step_agents.with_run_agent).
+            "default_captain": is_default_captain(step),
             # A step that binds nothing and works from an instruction. Worth flagging on the card
             # because it is the one kind whose behaviour is not fixed by its name.
             "agent_work": bool(binding.get("agent_work")),

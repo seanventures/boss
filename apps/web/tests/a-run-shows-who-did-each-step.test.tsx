@@ -135,7 +135,8 @@ describe("a run step's face", () => {
     const node = el.querySelector('[data-testid="wf-node-agent"]')!;
     expect(node.getAttribute("data-morph")).toBe("true");
     expect(node.getAttribute("data-ran-as")).toBe("adversarial_reviewer");
-    expect(node.querySelector(".wf-node-agent-name")?.textContent).toBe("Adversarial Reviewer");
+    // The agent's callsign, the name every surface gives it (the role is in the tooltip).
+    expect(node.querySelector(".wf-node-agent-name")?.textContent).toBe("Rook");
     expect(el.querySelector('[data-testid="ag-how"]')?.getAttribute("data-how")).toBe("model_pick");
   });
 
@@ -252,12 +253,17 @@ describe("the run view, signed", () => {
     // The old unsigned ask is replaced by the agent's own.
     expect(el.querySelector('[data-testid="dw-ask-boss"]')).toBeNull();
     const ask = signed.querySelector('[data-testid="ag-signed-ask"]') as HTMLButtonElement;
-    expect(ask.textContent).toBe("Ask Chief Architect");
+    expect(ask.textContent).toBe("Ask Atlas");
+    // The 1:1 talk with that agent, about this step: its first reply is signed under this act.
+    const opened: { kind: string; roleKey?: string; fresh?: boolean; context?: Record<string, string> }[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent<(typeof opened)[number]>).detail);
+    window.addEventListener("boss:converse", onOpen);
     act(() => ask.click());
-    const url = new URL(window.location.href);
-    expect(url.searchParams.get("agent")).toBe("workflow_step:wfr_1:plan");
-    expect(url.searchParams.get("dock_role_key")).toBe("chief_architect");
-    expect(url.searchParams.get("dock_act")).toBe("act_plan");
+    window.removeEventListener("boss:converse", onOpen);
+    expect(opened).toEqual([expect.objectContaining({
+      kind: "talk", roleKey: "chief_architect", fresh: true,
+      context: { from: "run_step", actId: "act_plan", workflowRunId: "wfr_1", stepId: "plan" },
+    })]);
   });
 
   it("flags scope wider than the step that handed it over", () => {

@@ -16,10 +16,12 @@ import {
 } from "./converse-parts";
 import type { SeatInfo } from "../../lib/agent-converse";
 
-export function TalkSheet({ projectId, actor, conversationId, greet, book, onClose, onPlan, onNew }: {
+export function TalkSheet({ projectId, actor, conversationId, greet, draft, book, onClose, onPlan, onNew }: {
   projectId: string; actor: string; conversationId: string;
   /** A new talk: let the agent open it (a greeting through its composed prompt, never canned). */
   greet?: boolean;
+  /** A question to start from, left in the composer (never sent without the operator). */
+  draft?: string;
   book: Map<string, SeatInfo>;
   onClose: () => void;
   /** "Plan it": continue this talk as a plan with the same agent and context. */
@@ -73,6 +75,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, book, onClo
           placeholder={plan ? "What do you want to start?" : `Message ${seatName(merged.get(roleKey) ?? null).name}`}
           disabled={busy || !conversation || conversation.status === "closed"}
           autoFocus
+          initial={draft}
           onSend={(message) => void live.send(message)}
           onStop={busy ? live.stop : undefined}
           extra={plan ? (

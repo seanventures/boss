@@ -88,11 +88,15 @@ describe("Blank: born with a face and a voice", () => {
     expect(birth!.textContent).toContain("AI agent");
     expect(onCreated).not.toHaveBeenCalled();
 
+    const opened: { kind: string; roleKey?: string }[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent<{ kind: string; roleKey?: string }>).detail);
+    window.addEventListener("boss:converse", onOpen);
     await click(birth);
+    window.removeEventListener("boss:converse", onOpen);
     expect(onCreated).toHaveBeenCalledWith("release_auditor");
     expect(toasts).toContain("Tally is born · agt_newb…");
-    // The agent is asked to introduce itself (the side dock until S-converse's talk lands).
-    expect(new URLSearchParams(window.location.search).get("dock_role")).toBe("Release Auditor");
+    // The agent introduces itself: its 1:1 talk opens, in its own voice.
+    expect(opened).toEqual([expect.objectContaining({ kind: "talk", roleKey: "release_auditor" })]);
   });
 
   it("the face is the kit's picker: Reroll re-seeds and keeps the parts picked by hand", async () => {

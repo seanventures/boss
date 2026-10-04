@@ -1,24 +1,19 @@
 """Agent World: the frozen engine contract (spec §5, §0.2 A), written in Phase 0.
 
 Five streams build against this at once, so the shapes here are the ones they agree on:
-TypedDicts for what crosses a module boundary, the stub signatures each owning module must
-implement with the same name and parameters, and the two tables that are data rather than code
+TypedDicts for what crosses a module boundary, and the tables that are data rather than code
 (EDGE_LABELS, the §9 vocabulary; ALIASES, the one namespace for seat titles, captain ids and
-stage roles). A stub raises NotImplementedError until its owner's module replaces it:
+stage roles; ROOM_PRESETS). The behaviour lives in its owning modules:
 
-    agent_acts      → services/agent_acts.py      (S-acts)
-    agent_identity  → services/agent_identity.py  (S-identity)
-    agent_persona   → services/agent_persona.py   (S-identity)
-    agent_converse  → services/agent_converse.py  (S-converse)
-
-Two stubs carry a suffix only because they share this module: backfill_acts and
-backfill_identity are each module's `backfill`. Nothing imports this module at runtime yet;
-Phase 0 changes no behaviour.
+    agent_acts      → services/agent_acts.py      (the act ledger)
+    agent_identity  → services/agent_identity.py  (identity, passport, lifecycle, resolver)
+    agent_persona   → services/agent_persona.py   (the persona compiler)
+    agent_converse  → services/agent_converse.py  (talk, plan, room)
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Iterator, Literal, NoReturn, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 # ── Vocabularies ─────────────────────────────────────────────────────────────────────────────
 
@@ -317,138 +312,3 @@ class ConverseEvent(TypedDict, total=False):
     cited_acts: list[str]
     error: dict[str, Any]
     conversation: Conversation
-
-
-def _stub(name: str) -> NoReturn:
-    raise NotImplementedError(f"{name}: agent world phase 0 stub")
-
-
-# ── agent_acts (S-acts) ──────────────────────────────────────────────────────────────────────
-
-def open_act(conn, *, project_id: str, kind: str, role_key: Optional[str], how: str,
-             handed_by_kind: str, handed_by_id: Optional[str] = None,
-             parent_act_id: Optional[str] = None, root_act_id: Optional[str] = None,
-             why: Optional[str] = None, considered: Iterable[str] = (),
-             scope: Optional[dict] = None, accountable: str, subject_kind: Optional[str] = None,
-             subject_id: Optional[str] = None, label: str, **links: Any) -> str:
-    """Write one act; returns act_id."""
-    _stub("agent_acts.open_act")
-
-
-def close_act(conn, act_id: str, *, status: str, artifacts: Iterable[dict] = (),
-              tokens_in: int = 0, tokens_out: int = 0, cost_usd: float = 0) -> None:
-    _stub("agent_acts.close_act")
-
-
-def root_for_run(conn, workflow_run_id: str) -> str:
-    """The run's kind='run' root act, created on first use."""
-    _stub("agent_acts.root_for_run")
-
-
-def edge_label(how: str, considered_n: int) -> str:
-    """The §9 label for an edge, from EDGE_LABELS."""
-    _stub("agent_acts.edge_label")
-
-
-def backfill_acts(conn, project_id: str) -> int:
-    """agent_acts.backfill(project_id): reconstructed acts from legacy rows, idempotent."""
-    _stub("agent_acts.backfill")
-
-
-# ── agent_identity (S-identity) ──────────────────────────────────────────────────────────────
-
-def new_agent_id() -> str:
-    _stub("agent_identity.new_agent_id")
-
-
-def canonical(role_row: dict, grants: list, model_policy: dict) -> dict:
-    """RFC 8785 JCS canonical document the fingerprint is the sha256 of."""
-    _stub("agent_identity.canonical")
-
-
-def seal_identity(conn, project_id: str, role_key: str, change_kind: str,
-                  actor: str) -> tuple[int, str]:
-    """(version, fingerprint); a no-op when the hash is unchanged."""
-    _stub("agent_identity.seal_identity")
-
-
-def passport(conn, project_id: str, role_key: str) -> Passport:
-    _stub("agent_identity.passport")
-
-
-def resolve(key_or_title: str) -> Optional[str]:
-    """ALIASES lookup: a role key, seat title, captain id or stage role → role_key."""
-    _stub("agent_identity.resolve")
-
-
-def identities(conn, project_id: str) -> list[dict]:
-    _stub("agent_identity.identities")
-
-
-def set_lifecycle(conn, project_id: str, role_key: str, state: str, actor: str,
-                  reason: str) -> dict:
-    _stub("agent_identity.set_lifecycle")
-
-
-def agent_card(conn, project_id: str, role_key: str) -> dict:
-    """A2A Agent Card v1.0 + x-boss."""
-    _stub("agent_identity.agent_card")
-
-
-def backfill_identity(conn) -> int:
-    """agent_identity.backfill(conn)."""
-    _stub("agent_identity.backfill")
-
-
-# ── agent_persona (S-identity) ───────────────────────────────────────────────────────────────
-
-def compose_agent_prompt(role: dict, *, mode: PromptMode, act: Optional[dict],
-                         memory: list[dict]) -> list[PromptBlock]:
-    """Ordered L0..L5 blocks; the one place an agent's voice is built (chat, work, panel)."""
-    _stub("agent_persona.compose_agent_prompt")
-
-
-def lint_persona(persona: dict) -> tuple[list[dict], list[str]]:
-    """(errors[{field, message}], warnings[]): the permission lint (422) and real-name lint (warn)."""
-    _stub("agent_persona.lint_persona")
-
-
-# ── agent_converse (S-converse) ──────────────────────────────────────────────────────────────
-
-def create_conversation(conn, *, project_id: str, actor: str, kind: ConversationKind,
-                        seats: list[str], lead_role_key: Optional[str] = None,
-                        preset: Optional[str] = None, title: str = "",
-                        context: Optional[dict] = None) -> Conversation:
-    """No model call. 422 (ValueError) on seat count, unknown or retired agents."""
-    _stub("agent_converse.create_conversation")
-
-
-def get_conversation(conn, project_id: str, conversation_id: str) -> Conversation:
-    _stub("agent_converse.get_conversation")
-
-
-def list_conversations(conn, project_id: str, *, actor: Optional[str] = None,
-                       kind: Optional[str] = None, limit: int = 20) -> list[Conversation]:
-    _stub("agent_converse.list_conversations")
-
-
-def take_turn(engine, *, project_id: str, conversation_id: str, actor: str, message: str,
-              to: Optional[list[str]] = None, rounds: int = 1) -> Iterator[ConverseEvent]:
-    """Record the person's turn, then stream each addressed seat's reply in seat order."""
-    _stub("agent_converse.take_turn")
-
-
-def summarize_room(engine, *, project_id: str, conversation_id: str,
-                   actor: str) -> Iterator[ConverseEvent]:
-    _stub("agent_converse.summarize_room")
-
-
-def propose_start(engine, *, project_id: str, conversation_id: str,
-                  actor: str) -> Iterator[ConverseEvent]:
-    _stub("agent_converse.propose_start")
-
-
-def start_from_proposal(conn, *, project_id: str, conversation_id: str, actor: str,
-                        proposal_id: str, start_anyway: Optional[list[str]] = None) -> dict:
-    """{run_id, conversation}; starts through the composer's start path, readiness included."""
-    _stub("agent_converse.start_from_proposal")

@@ -92,10 +92,11 @@ async function mount(props: Record<string, unknown> = {}) {
 describe("the dock, with the agent in it", () => {
   it("heads the panel with the agent: face, name, AI, and what it is about", async () => {
     await mount();
-    expect(head().querySelector('[data-testid="ag-dock-name"]')?.textContent).toBe("QA");
+    // One identity everywhere: the agent's callsign, the same name its chip and Passport show.
+    expect(head().querySelector('[data-testid="ag-dock-name"]')?.textContent).toBe("Vera");
     expect(head().querySelector(".ag-face")?.getAttribute("data-role-key")).toBe("qa");
     expect(head().querySelector(".ag-face")?.getAttribute("role")).toBe("img");
-    expect(head().querySelector(".ag-ai-badge")?.textContent).toBe("AI");
+    expect(head().querySelector('[data-testid="ag-ai-badge"]')?.textContent).toBe("AI");
     expect(head().querySelector('[data-testid="ag-dock-about"]')?.textContent).toContain("About: Build");
     expect(headState()).toBe("idle");
   });
@@ -160,11 +161,13 @@ describe("the dock, with the agent in it", () => {
 
   it("sends no role key it had to guess from a display name", async () => {
     await mount({ roleName: "QA Lead", roleKey: undefined, actId: undefined });
-    expect(head().querySelector('[data-testid="ag-dock-name"]')?.textContent).toBe("QA Lead");
+    expect(head().querySelector('[data-testid="ag-dock-name"]')?.textContent).toBe("Vera");
     await act(async () => (host!.querySelector('[data-testid="agent-send"]') as HTMLButtonElement).click());
     await settle();
     expect(sent[0].role).toBe("QA Lead");
-    expect(sent[0].role_key).toBeUndefined();
+    // Resolved through the kit's one namespace (the seat title "QA Lead" is the agent `qa`),
+    // never made key-shaped from the name (`qa_lead` is nobody).
+    expect(sent[0].role_key).toBe("qa");
     await act(async () => { release?.(); });
     await settle();
   });

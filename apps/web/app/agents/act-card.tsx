@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState
 
 import type { Act } from "../../lib/agent-world-types";
 import { openDockAbout, type DockSubject } from "../../lib/dock-subject";
+import { openTalk } from "../../lib/agent-converse";
 import { shortLabel, whoDid, actState } from "./chain-model";
 import { AiBadge, nameOf, RunFace, StateWord } from "./run-face";
 
@@ -60,13 +61,19 @@ export function subjectOf(act: Act): DockSubject | null {
   return null;
 }
 
-/** Open the dock addressed to the agent that did this work, scoped to the work itself. */
+/** Talk to the agent that did this work, 1:1 and about the work itself: the conversation carries
+ *  the act, so the agent sees what it did and its reply is signed as a child of that act (it
+ *  shows in the run's lineage). Work no agent signed (a built-in, a person's) keeps the dock. */
 export function askAboutAct(act: Act, question = ""): void {
-  const named = act.roleKey ? nameOf(act.roleKey) : null;
-  openDockAbout({
-    subject: subjectOf(act), question, role: named ? named.role : null,
-    roleKey: act.roleKey, actId: act.actId, history: "push",
-  });
+  if (act.roleKey) {
+    openTalk(act.roleKey, {
+      from: "run_step", actId: act.actId,
+      ...(act.links.workflow_run_id ? { workflowRunId: act.links.workflow_run_id } : {}),
+      ...(act.links.step_id ? { stepId: act.links.step_id } : {}),
+    }, { fresh: true, draft: question || undefined });
+    return;
+  }
+  openDockAbout({ subject: subjectOf(act), question, role: null, actId: act.actId, history: "push" });
 }
 
 function Row({ label, tip, children, testId }: { label: string; tip?: string; children: React.ReactNode; testId?: string }) {
@@ -172,7 +179,7 @@ export function ActCard({ act, viewer, inline, onClose }: {
       </dl>
       <footer className="ag-act-foot">
         <button type="button" className="ag-act-btn" data-testid="ag-act-ask"
-                data-tip={`Opens the dock with ${named.name}, about this work`}
+                data-tip={`Talk with ${named.name} about this work`}
                 onClick={() => { askAboutAct(act, "What did you do here, and why?"); onClose?.(); }}>
           Ask about this
         </button>

@@ -20,12 +20,10 @@ in word groups as soon as it exists (`REVEAL_SECONDS` in total), after a `turn_s
 console draws as the seat thinking. An adapter that grows a `stream_text_response` streams for
 real with no change here.
 
-WHAT THIS MODULE LEANS ON FROM THE OTHER AGENT WORLD STREAMS, AND HOW IT COPES UNTIL THEY LAND:
-agent_persona.compose_agent_prompt (S-identity) builds the system prompt; agent_acts.open_act /
-close_act (S-acts) write the acts; agent_identity.resolve (S-identity) maps titles to role
-keys. Each is called through a tiny bridge that falls back to a faithful local version while
-the phase-0 stub raises NotImplementedError, so this works on any merge order and the fallbacks
-can be deleted at integration (`_bridge_*` below are the only places that know).
+WHAT THIS MODULE LEANS ON: agent_persona.compose_agent_prompt builds the system prompt (the
+same compiler as the dock, work and panel prompts); agent_acts.open_act / close_act write the
+acts, so every reply is in the agent's Work feed, lineage and presence; agent_identity.resolve
+maps titles and aliases to role keys.
 """
 from __future__ import annotations
 
@@ -38,7 +36,8 @@ from typing import Any, Callable, Iterator, Optional
 
 from sqlalchemy import text
 
-from .agent_world_types import AI_DISCLOSURE, ALIASES, ROOM_PRESETS
+from . import agent_acts, agent_identity, agent_persona
+from .agent_world_types import AI_DISCLOSURE, ROOM_PRESETS
 from .core import emit_event, make_id
 
 log = logging.getLogger("boss.agent_converse")
@@ -66,10 +65,6 @@ STALE_STREAMING_SECONDS = 600
 #: What a turn cut off mid-answer says (the operator pressed Stop or closed the room).
 STOPPED = {"kind": "stopped", "headline": "Stopped.", "action": "Ask again when ready.",
            "retry": True}
-#: Whether the workflow runtime reads `step_agents` from run input. Until it does, a proposal's
-#: agents are exactly who the workflow already names (or Auto) — a card never promises an agent
-#: the run will not use (spec §2.6, no promises before they exist). Flip at integration.
-RUNTIME_READS_STEP_AGENTS = False
 
 _CITE = re.compile(r"\[act:(act_[A-Za-z0-9_]+)\]")
 _MENTION = re.compile(r"@([a-z0-9_]+)")
@@ -142,173 +137,23 @@ def _engine_name(connection, settings: Any, project_id: str) -> str:
         return "native"
 
 
-def _bridge_resolve(key_or_title: str) -> Optional[str]:
+def _resolve(key_or_title: str) -> Optional[str]:
+    """One namespace (agent_identity.resolve): a role key, seat title, alias or stage role →
+    the role_key. A custom agent's own key is not in the shipped table and passes through."""
     value = str(key_or_title or "").strip()
     if not value:
         return None
-    try:
-        from . import agent_identity  # type: ignore[attr-defined]
-
-        found = agent_identity.resolve(value)
-        if found:
-            return found
-    except (ImportError, NotImplementedError, AttributeError):
-        pass
-    lowered = value.lower()
-    return ALIASES.get(lowered, lowered)
+    return agent_identity.resolve(value) or value.lower()
 
 
-def _bridge_compose(role: dict, *, mode: str, act: Optional[dict], memory: list[dict]) -> str:
-    try:
-        from . import agent_persona  # type: ignore[attr-defined]
-
-        blocks = agent_persona.compose_agent_prompt(role, mode=mode, act=act, memory=memory)
-        composed = "\n\n".join(str(b.get("text") or "") for b in blocks if b.get("text"))
-        if composed.strip():
-            # The disclosure is fixed whoever composed the rest (§0.1.3): never trust a
-            # composer to have kept it.
-            return composed if AI_DISCLOSURE in composed else f"{composed}\n\n{AI_DISCLOSURE}"
-    except (ImportError, NotImplementedError, AttributeError):
-        pass
-    return _fallback_prompt(role, mode=mode, act=act, memory=memory)
-
-
-def _bridge_open_act(connection, **fields: Any) -> Optional[str]:
-    try:
-        from . import agent_acts  # type: ignore[attr-defined]
-
-        return agent_acts.open_act(connection, **fields)
-    except (ImportError, NotImplementedError, AttributeError):
-        return _fallback_open_act(connection, **fields)
-
-
-def _bridge_close_act(connection, act_id: Optional[str], **fields: Any) -> None:
-    if not act_id:
-        return
-    try:
-        from . import agent_acts  # type: ignore[attr-defined]
-
-        agent_acts.close_act(connection, act_id, **fields)
-        return
-    except (ImportError, NotImplementedError, AttributeError):
-        pass
-    _fallback_close_act(connection, act_id, **fields)
-
-
-# ── Fallbacks: delete at integration once S-identity and S-acts have merged ─────────────────
-
-
-def _fallback_prompt(role: dict, *, mode: str, memory: list[dict],
-                     act: Optional[dict] = None) -> str:
-    spec = role.get("spec") or {}
-    persona = spec.get("persona") or {}
-    name = persona.get("callsign") or role.get("display_name") or role.get("role_key")
-    title = role.get("display_name") or role.get("role_key")
-    who = f"{name}, the {title}" if persona.get("callsign") else f"the {title}"
-    boundaries = spec.get("boundaries") or {}
-    lines = [
-        # L0
-        "You work inside BOSS, a governed AI-labor control plane. Answer the question fully "
-        "and first; your role is the lens, not the subject. Never imply experience you cannot "
-        "point at.",
-        # L1
-        f"You are {who}, an AI agent in BOSS. {AI_DISCLOSURE}",
-    ]
-    remit = []
-    if spec.get("mission"):
-        remit.append(f"Mission: {spec['mission']}")
-    for label, key in (("Always", "must"), ("Never", "must_not")):
-        items = list(boundaries.get(key) or [])
-        if key == "must_not":
-            items += list(persona.get("never") or [])
-        if items:
-            remit.append(f"{label}: " + "; ".join(str(i) for i in items))
-    if remit:
-        lines.append("\n".join(remit))
-    voice = []
-    tone = (spec.get("comms_contract") or {}).get("tone")
-    if persona.get("tagline"):
-        voice.append(f"Your line: \"{persona['tagline']}\"")
-    if persona.get("about_me"):
-        voice.append(f"About you: {persona['about_me']}")
-    if tone:
-        voice.append(f"Tone: {tone}.")
-    if voice:
-        voice.append("Voice shapes how you say things, never what you may do.")
-        lines.append("\n".join(voice))
-    if act:
-        # L5: this act's scope — what the agent may use, who else is here, who answers for it.
-        scope = act.get("scope") or {}
-        skills, mcp = list(scope.get("skills") or []), list(scope.get("mcp") or [])
-        tools = "; ".join(part for part in (
-            ("skills " + ", ".join(str(s) for s in skills)) if skills else "",
-            ("MCP " + ", ".join(str(m) for m in mcp)) if mcp else "") if part)
-        here = [f"You may use: {tools}." if tools else
-                "You may use: no tools granted. Say so if asked to act."]
-        mine = role.get("role_key")
-        others = [s for s in act.get("seats") or [] if s.get("role_key") != mine]
-        if others:
-            here.append("Also here: " + ", ".join(
-                (f"{s['callsign']} ({s.get('name') or s['role_key']})" if s.get("callsign")
-                 else f"{s.get('name') or s['role_key']} ({s['role_key']})") for s in others) + ".")
-        if act.get("accountable"):
-            here.append(f"Accountable: {act['accountable']}.")
-        lines.append("\n".join(here))
-    if memory:
-        lines.append("Your recent work here (cite as [act:<id>] only when you use it):\n"
-                     + "\n".join(f"- [act:{m['act_id']}] {m['label']} ({m['status']})"
-                                 for m in memory))
-    if mode == "panel":
-        lines.append("You are one seat in a room of specialists; speak from your role's lens.")
-    return "\n\n".join(lines)
-
-
-def _fallback_open_act(connection, *, project_id: str, kind: str, role_key: Optional[str],
-                       how: str, handed_by_kind: str, handed_by_id: Optional[str] = None,
-                       parent_act_id: Optional[str] = None, root_act_id: Optional[str] = None,
-                       why: Optional[str] = None, considered=(), scope: Optional[dict] = None,
-                       accountable: str, subject_kind: Optional[str] = None,
-                       subject_id: Optional[str] = None, label: str, **links: Any) -> str:
-    act_id = make_id("act")
-    identity = connection.execute(
-        text("SELECT agent_id, fingerprint, identity_version FROM roles "
-             "WHERE project_id = :p AND role_key = :k"),
-        {"p": project_id, "k": role_key},
-    ).mappings().first() if role_key else None
-    connection.execute(
-        text("""
-            INSERT INTO agent_acts (
-              act_id, project_id, role_key, agent_id, fingerprint, identity_version, kind,
-              status, parent_act_id, root_act_id, handed_by_kind, handed_by_id, how, why,
-              considered, scope, accountable, subject_kind, subject_id, thread_id,
-              workflow_run_id, step_id, label)
-            VALUES (:a, :p, :k, :agent, :fp, :iv, :kind, 'active', :parent, :root, :hk, :hid,
-                    :how, :why, CAST(:considered AS JSONB), CAST(:scope AS JSONB), :acc, :sk,
-                    :sid, :thread, :wfr, :step, :label)
-        """),
-        {"a": act_id, "p": project_id, "k": role_key,
-         "agent": (identity or {}).get("agent_id"), "fp": (identity or {}).get("fingerprint"),
-         "iv": (identity or {}).get("identity_version"), "kind": kind, "parent": parent_act_id,
-         "root": root_act_id or act_id, "hk": handed_by_kind, "hid": handed_by_id, "how": how,
-         "why": why, "considered": json.dumps(list(considered or [])),
-         "scope": json.dumps(scope or {}), "acc": accountable, "sk": subject_kind,
-         "sid": subject_id, "thread": links.get("thread_id"),
-         "wfr": links.get("workflow_run_id"), "step": links.get("step_id"), "label": label},
-    )
-    return act_id
-
-
-def _fallback_close_act(connection, act_id: str, *, status: str, artifacts=(), tokens_in: int = 0,
-                        tokens_out: int = 0, cost_usd: float = 0) -> None:
-    connection.execute(
-        text("""
-            UPDATE agent_acts SET status = :s, ended_at = now(), tokens_in = :ti,
-                   tokens_out = :to, cost_usd = :c, artifacts = CAST(:art AS JSONB)
-             WHERE act_id = :a
-        """),
-        {"s": status, "ti": int(tokens_in or 0), "to": int(tokens_out or 0),
-         "c": float(cost_usd or 0), "art": json.dumps(list(artifacts or [])), "a": act_id},
-    )
+def _compose(role: dict, *, mode: str, act: Optional[dict], memory: list[dict]) -> str:
+    """The agent's own prompt, L0..L5 (agent_persona.compose_agent_prompt): the same persona
+    compiler the dock, the work prompt and every panel seat use."""
+    blocks = agent_persona.compose_agent_prompt(role, mode=mode, act=act, memory=memory)
+    composed = "\n\n".join(str(b.get("text") or "") for b in blocks if b.get("text"))
+    # The disclosure is fixed whoever composed the rest (§0.1.3): never trust a composer to
+    # have kept it.
+    return composed if AI_DISCLOSURE in composed else f"{composed}\n\n{AI_DISCLOSURE}"
 
 
 # ── Reading ──────────────────────────────────────────────────────────────────────────────────
@@ -506,7 +351,7 @@ def create_conversation(connection, *, project_id: str, actor: str, kind: str,
     wanted = list(seats or []) or (list(preset_row["seats"]) if preset_row else [])
     resolved: list[str] = []
     for seat in wanted:
-        key = _bridge_resolve(str(seat))
+        key = _resolve(str(seat))
         if key and key not in resolved:
             resolved.append(key)
     low, high = SEATS[kind]
@@ -521,7 +366,7 @@ def create_conversation(connection, *, project_id: str, actor: str, kind: str,
     if unavailable:
         name = roles[unavailable[0]].get("display_name") or unavailable[0]
         raise _invalid(f"{name} is {roles[unavailable[0]].get('lifecycle')}")
-    lead = _bridge_resolve(lead_role_key) if lead_role_key else resolved[0]
+    lead = _resolve(lead_role_key) if lead_role_key else resolved[0]
     if lead not in resolved:
         raise _invalid("the lead must be one of the seats")
     names = [roles[k].get("display_name") or k for k in resolved]
@@ -629,7 +474,8 @@ def _settle_cut_off(connection, settings: Any, project_id: str, turn_id: str,
     if reservation_id:
         BudgetGovernor(settings).release(connection, project_id, reservation_id,
                                          "conversation turn did not finish")
-    _bridge_close_act(connection, act_id, status="error")
+    if act_id:
+        agent_acts.close_act(connection, act_id, status="error")
 
 
 def _sweep(connection, settings: Any, project_id: str, conversation_id: str) -> None:
@@ -701,7 +547,7 @@ def _addressed(conv: dict, message: str, to: Optional[list[str]]) -> list[str]:
     """Who this message is for: `to`, else every @mention that names a seat, else everyone."""
     named: list[str] = []
     for raw in list(to or []) + _MENTION.findall(message.lower()):
-        key = _bridge_resolve(raw)
+        key = _resolve(raw)
         if key in conv["seats"] and key not in named:
             named.append(key)
     return named
@@ -973,7 +819,8 @@ def _instruction(plan: _Plan, conv: dict, speaker: _Speaker, roles: dict[str, di
             '"acceptance_criteria": ["<testable>"], "why": "<why this workflow, one line>", '
             '"agents": {"<step_id>": "<role_key>"}}\n'
             "Fill only the inputs the workflow declares. Suggest agents only for steps marked "
-            "Auto, and only agents listed.\n\n" + _catalogue_text(catalogue)
+            "Auto or (default), and only agents listed; prefer the agents in this "
+            "conversation where their role fits the step.\n\n" + _catalogue_text(catalogue)
             + "\n\nAgents: " + ", ".join(f"{k} ({_speaker(r, k)})" for k, r in roles.items()))
     if conv["kind"] == "talk":
         if greeting:
@@ -1028,7 +875,9 @@ def _catalogue(connection, settings: Any, project_id: str) -> list[dict]:
             "required": list(schema.get("required") or []),
             "steps": [{"id": str(s["id"]), "label": str(s.get("title") or s.get("label")
                                                        or s["id"]),
-                       "agent": str(s.get("captain") or "") or None}
+                       "agent": str(s.get("captain") or "") or None,
+                       # The catalogue's soft default: the card may name someone else.
+                       "soft": bool(s.get("default_captain"))}
                       for s in steps if isinstance(s, dict) and s.get("id")],
         })
     return out
@@ -1039,7 +888,10 @@ def _catalogue_text(catalogue: list[dict]) -> str:
         return "Workflows this project can run: none."
     lines = ["Workflows this project can run:"]
     for w in catalogue:
-        steps = ", ".join(f"{s['id']} ({s['label']}; {s['agent'] or 'Auto'})" for s in w["steps"])
+        steps = ", ".join(
+            f"{s['id']} ({s['label']}; "
+            f"{(s['agent'] + ' (default)') if s['agent'] and s.get('soft') else s['agent'] or 'Auto'})"
+            for s in w["steps"])
         inputs = ", ".join(f"{k}{'*' if k in w['required'] else ''}" for k in w["inputs"])
         lines.append(f"- {w['workflow_key']}: {w['name']} — {w['description']} | inputs: "
                      f"{inputs or 'none'} | steps: {steps or 'none'}")
@@ -1166,7 +1018,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
         held = reservation.get("reservation_id") if reservation.get("status") == "reserved" \
             else None
         label_kind = {"talk": "Talk", "plan": "Plan", "room": "Room"}[conv["kind"]]
-        act_id = _bridge_open_act(
+        act_id = agent_acts.open_act(
             c, project_id=plan.project_id, kind="seat" if is_room else "chat",
             role_key=speaker.role_key,
             how="seated" if is_room and speaker.how == "seated" else "asked_by_person",
@@ -1190,7 +1042,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                             # Until it finishes, the turn carries its reservation, so whoever
                             # finds it cut off can give the budget back (_sweep).
                             payload={"reservation_id": held} if held else {})
-        system_prompt = _bridge_compose(
+        system_prompt = _compose(
             role, mode="panel" if is_room else "chat",
             act={"act_id": act_id, "label": f"{label_kind} · {conv['title']}",
                  "handed_by_kind": "person", "handed_by_id": plan.actor,
@@ -1334,10 +1186,11 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                                "status = 'summarized', updated_at = now() "
                                "WHERE conversation_id = :c"),
                           {"s": json.dumps(payload), "c": plan.conversation_id})
-            _bridge_close_act(c, act_id, status="complete",
-                              artifacts=[{"kind": "receipt", "ref": receipt_id}],
-                              tokens_in=tokens_in, tokens_out=tokens_out,
-                              cost_usd=cost / 1_000_000)
+            # Tokens and cost roll up from this act's llm_calls row (`record` above): the
+            # ledger counts a model call once, so nothing of the caller's own is added.
+            if act_id:
+                agent_acts.close_act(c, act_id, status="complete",
+                                     artifacts=[{"kind": "receipt", "ref": receipt_id}])
         finished = True
         yield from extra_events
         yield {"type": "turn_end", "turn_id": turn_id, "status": "complete",
@@ -1381,14 +1234,19 @@ def validate_proposal(connection, settings: Any, project_id: str, raw: dict,
     suggested = raw.get("agents") if isinstance(raw.get("agents"), dict) else {}
     agents = []
     for step in chosen["steps"]:
+        # Exactly what the run will do (step_agents.with_run_agent): a step the workflow names
+        # keeps its agent, a gate keeps its approver, and the suggestion fills a step that names
+        # nobody or replaces a soft catalogue default — never a promise the run will not keep.
         named = step["agent"]
         pick = None
-        if named and named != "human":
-            pick = named
-        elif RUNTIME_READS_STEP_AGENTS and not named:
-            candidate = _bridge_resolve(str(suggested.get(step["id"]) or ""))
+        if named and (named == "human" or not step.get("soft")):
+            pick = None if named == "human" else named
+        else:
+            candidate = _resolve(str(suggested.get(step["id"]) or ""))
             if candidate in roles and (roles[candidate].get("lifecycle") or "active") == "active":
                 pick = candidate
+            elif named:
+                pick = named
         agents.append({"step_id": step["id"], "step_label": step["label"], "role_key": pick})
     criteria = [str(c).strip()[:300] for c in (raw.get("acceptance_criteria") or [])
                 if str(c).strip()][:8]
@@ -1432,7 +1290,7 @@ def _validate_summary(connection, settings: Any, project_id: str, raw: dict, con
     def keys(values: Any) -> list[str]:
         out = []
         for v in values or []:
-            k = _bridge_resolve(str(v))
+            k = _resolve(str(v))
             if k in seats and k not in out:
                 out.append(k)
         return out
@@ -1448,7 +1306,7 @@ def _validate_summary(connection, settings: Any, project_id: str, raw: dict, con
     for a in (raw.get("next_actions") or [])[:6]:
         if not isinstance(a, dict) or not str(a.get("text") or "").strip():
             continue
-        owner = _bridge_resolve(str(a.get("owner_role_key") or ""))
+        owner = _resolve(str(a.get("owner_role_key") or ""))
         kind = a.get("kind") if a.get("kind") in ("start", "decision", "note") else "note"
         action: dict = {"text": str(a["text"]).strip()[:300],
                         "owner_role_key": owner if owner in seats else None, "kind": kind}

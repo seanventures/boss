@@ -5,18 +5,15 @@
  * turn, the start card, a failure said plainly, and the composer. The talk sheet and the room
  * are arrangements of these, so a turn reads the same in both.
  *
- * FACES. The avatar kit (S-kit: lib/agent-avatar.ts, lib/agent-identity.ts) draws every agent;
- * until it lands, `ConverseFace` draws a small robot in the agent's tone, with the same states.
- * `kitSvg` is the one line that switches — at integration it imports the real modules.
+ * FACES. The kit's <AgentAvatar> draws every agent here, as on every other surface; a seat in
+ * the room adds its state word under the face.
  */
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 
-import { agentMeta } from "../agent-chip";
+import { AgentAvatar } from "../agent-avatar";
 import { Markdown } from "../markdown";
-import {
-  agentIdentity, avatarSvg, type AvatarSize, type AvatarState, type ModelFailure,
-} from "../../lib/agent-world-types";
+import type { AvatarSize, AvatarState, ModelFailure } from "../../lib/agent-world-types";
 import {
   ConverseRefusal, NEEDS_MODEL, splitCitations, type ConverseProblem, type ProposalView,
   type SeatInfo, type TurnView,
@@ -55,56 +52,25 @@ const STATE_GLYPH: Partial<Record<AvatarState, string>> = {
   thinking: "…", speaking: "≋", working: "⚙", needs_you: "!", done: "✓", stuck: "!",
 };
 
-/** The kit's face when the kit is here; null until then. */
-function kitSvg(roleKey: string, size: AvatarSize, state: AvatarState): string | null {
-  try {
-    return avatarSvg(agentIdentity(roleKey).avatar, { size, state });
-  } catch {
-    return null;
-  }
-}
-
-function Bot({ tone }: { tone: string }) {
-  return (
-    <svg viewBox="0 0 40 40" className={`ag-bot tone-${tone}`} aria-hidden focusable="false">
-      <line x1="20" y1="4" x2="20" y2="9" className="ag-bot-line" />
-      <circle cx="20" cy="4" r="2.2" className="ag-bot-tip" />
-      <rect x="6" y="9" width="28" height="25" rx="9" className="ag-bot-head" />
-      <rect x="10" y="15" width="20" height="12" rx="6" className="ag-bot-visor" />
-      <rect x="14" y="18" width="3.2" height="3.2" rx="1.2" className="ag-bot-eye" />
-      <rect x="22.8" y="18" width="3.2" height="3.2" rx="1.2" className="ag-bot-eye" />
-      <g className="ag-bot-mouth">
-        <rect x="16" y="23" width="2" height="2" rx="1" className="ag-bot-bar" />
-        <rect x="19" y="23" width="2" height="2" rx="1" className="ag-bot-bar" />
-        <rect x="22" y="23" width="2" height="2" rx="1" className="ag-bot-bar" />
-      </g>
-    </svg>
-  );
-}
-
 /**
  * One agent's face, with its state carried by a ring AND a word (never colour alone, §7). Next
  * to a name it is decorative; on its own it is an image named "<name>, <state>".
  */
 export function ConverseFace({ roleKey, size = 32, state = "idle", label, badge }: {
+  /** A role key; "boss" for BOSS's own turns. */
   roleKey: string; size?: AvatarSize; state?: AvatarState;
   /** Set when the face stands alone, without its name beside it. */
   label?: string;
   /** Show the state word under the face (seats in the room). */
   badge?: boolean;
 }) {
-  const svg = kitSvg(roleKey, size, state);
-  const tone = agentMeta(roleKey).tone;
-  const a11y = label ? { role: "img", "aria-label": `${label}, ${STATE_WORD[state]}` }
-    : { "aria-hidden": true as const };
+  const boss = roleKey === "boss";
   return (
-    <span className={`ag-face ag-face-${size}`} data-state={state} data-testid={`ag-face-${roleKey}`}
-          style={{ width: size, height: size }} {...a11y}>
-      {svg ? <span className="ag-face-kit" dangerouslySetInnerHTML={{ __html: svg }} />
-        : <Bot tone={tone} />}
-      <span className="ag-face-ring" aria-hidden />
+    <span className="ag-cv-face" data-state={state} data-testid={`ag-face-${roleKey}`}>
+      <AgentAvatar agent={boss ? undefined : roleKey} variant={boss ? "boss" : "agent"} size={size}
+                   state={state} standalone={Boolean(label)} aiBadge={false} className="ag-face" />
       {badge && state !== "idle" ? (
-        <span className="ag-face-badge" aria-hidden>
+        <span className="ag-cv-badge" aria-hidden>
           {STATE_GLYPH[state] ? <b>{STATE_GLYPH[state]}</b> : null}{STATE_WORD[state]}
         </span>
       ) : null}
@@ -112,12 +78,7 @@ export function ConverseFace({ roleKey, size = 32, state = "idle", label, badge 
   );
 }
 
-export function AiBadge() {
-  return (
-    <span className="ag-ai" data-tip="An AI agent. Not a real person."
-          title="An AI agent. Not a real person.">AI</span>
-  );
-}
+export { AiBadge } from "./agent-face";
 
 // ── Failures and refusals ──────────────────────────────────────────────────────────────────
 
@@ -345,13 +306,15 @@ function ToChip({ roleKey }: { roleKey: string }) {
 
 /** A text box that sends on Enter (Shift+Enter for a new line), with an @-mention menu when
  *  there are seats to mention. */
-export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocus, onStop }: {
+export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocus, onStop, initial }: {
   placeholder: string; disabled?: boolean; onSend: (message: string) => void;
+  /** What the box starts with (a door's question); the operator sends it. */
+  initial?: string;
   seats?: SeatInfo[]; extra?: React.ReactNode; autoFocus?: boolean;
   /** While an answer streams: Send becomes Stop. */
   onStop?: () => void;
 }) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(initial ?? "");
   const [menu, setMenu] = useState<SeatInfo[]>([]);
   const [pick, setPick] = useState(0);
   const box = useRef<HTMLTextAreaElement>(null);

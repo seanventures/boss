@@ -53,7 +53,9 @@ export function AgentAvatar({ agent, size, state }: { agent: StepView["agent"]; 
 function RanBy({ view, ran }: { view: StepView["agent"]; ran: LaneAgent }) {
   const named = nameOf(ran.roleKey, ran.variant);
   const morph = view.kind === "auto" && ran.variant === "agent";
-  const tip = [named.name, ran.edgeLabel || (morph ? view.label : "")].filter(Boolean).join("\n");
+  // A callsign is shown beside its role, never instead of it: the tooltip says both.
+  const who = named.callsign && named.role !== named.name ? `${named.name} · ${named.role}` : named.name;
+  const tip = [who, ran.edgeLabel || (morph ? view.label : "")].filter(Boolean).join("\n");
   return (
     <span className="wf-node-agent" data-kind={ran.variant === "agent" ? "named" : ran.variant}
           data-tip={tip} data-testid="wf-node-agent" data-ran-as={ran.roleKey ?? ran.variant}
