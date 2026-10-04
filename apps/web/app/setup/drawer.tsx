@@ -14,12 +14,30 @@ export function Drawer({ title, onClose, children, testid }: {
   const ref = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
-  // Once per opening: focus moves in when the sheet opens, not on every keystroke inside it.
+  // Once per opening: focus goes to the first FIELD (not the Close button), Tab stays inside
+  // the sheet, Escape closes it, and focus returns to whatever opened it.
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") close.current(); };
-    document.addEventListener("keydown", escape);
-    ref.current?.querySelector<HTMLElement>("input, button, select")?.focus();
-    return () => document.removeEventListener("keydown", escape);
+    const opener = document.activeElement as HTMLElement | null;
+    const focusable = () => [...(ref.current?.querySelectorAll<HTMLElement>(
+      "input, select, textarea, button, a[href]") ?? [])].filter((el) => !el.hasAttribute("disabled"));
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); close.current(); return; }
+      if (event.key !== "Tab") return;
+      const all = focusable();
+      if (!all.length) return;
+      const first = all[0];
+      const last = all[all.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", keys);
+    (ref.current?.querySelector<HTMLElement>(
+      ".su-drawer-body input, .su-drawer-body select, .su-drawer-body button")
+      ?? focusable()[0])?.focus();
+    return () => {
+      document.removeEventListener("keydown", keys);
+      if (opener && document.contains(opener)) opener.focus();
+    };
   }, []);
   // On the page body, so a transformed ancestor in the console cannot clip the sheet.
   const target = typeof document !== "undefined" ? document.body : null;

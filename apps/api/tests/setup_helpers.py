@@ -24,7 +24,8 @@ def as_ceo(monkeypatch, *, edition: str = "community") -> None:
     monkeypatch.setattr(api_main.settings, "require_api_auth", True)
     monkeypatch.setattr(api_main.settings, "api_keys", "ceo-key")
     monkeypatch.setattr(api_main.settings, "api_key_principals", "ceo-key:ceo")
-    for attr in ("github_token", "target_github_owner", "target_github_repo", "openai_api_key",
+    for attr in ("github_token", "target_github_owner", "target_github_repo", "github_owner",
+                 "github_repo", "openai_api_key",
                  "anthropic_api_key", "claude_code_oauth_token", "openrouter_api_key"):
         monkeypatch.setattr(api_main.settings, attr, "", raising=False)
 

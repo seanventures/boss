@@ -318,9 +318,7 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
 
     source = "connected"
     if not rows:
-        owner = str(getattr(settings, "target_github_owner", "") or "").strip()
-        name = str(getattr(settings, "target_github_repo", "") or "").strip()
-        token = str(getattr(settings, "github_token", "") or "").strip()
+        owner, name, token = install_repository(settings)
         if owner and name and token:
             # AN INSTALL CONFIGURED FROM ITS SETTINGS FILE IS CONFIGURED. One row, chip
             # `From install`, checked like any other — never an empty form beside it.
@@ -354,6 +352,17 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
     return {"connection": connection_out, "repos": repos}
 
 
+def install_repository(settings: Any) -> tuple[str, str, str]:
+    """(owner, name, token) an install configured in its settings file: BOSS_TARGET_GITHUB_*
+    or the BOSS_GITHUB_OWNER / BOSS_GITHUB_REPO pair README installs set, with its token."""
+    owner = (str(getattr(settings, "target_github_owner", "") or "").strip()
+             or str(getattr(settings, "github_owner", "") or "").strip())
+    name = (str(getattr(settings, "target_github_repo", "") or "").strip()
+            or str(getattr(settings, "github_repo", "") or "").strip())
+    token = str(getattr(settings, "github_token", "") or "").strip()
+    return owner, name, token
+
+
 def _repo_entry(*, binding_id: Optional[str], full_name: str, default: bool,
                 private: Optional[bool], default_branch: Optional[str], checks: dict[str, Any],
                 state: str, expires: Optional[datetime], checked: Optional[datetime],
@@ -361,7 +370,8 @@ def _repo_entry(*, binding_id: Optional[str], full_name: str, default: bool,
     days = max(0, (expires - now).days) if expires else None
     pill = setup_pills.pill(
         "repository", state, repo=full_name, n=days,
-        date=expires.date().isoformat() if expires else "", time=_hhmm(retry_at))
+        date=expires.date().isoformat() if expires else "", time=_hhmm(retry_at),
+        at=_iso(retry_at))
 
     def part(name: str) -> dict[str, Any]:
         raw = checks.get(name) if isinstance(checks.get(name), dict) else {}
@@ -431,7 +441,7 @@ def _model_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any
 
     last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
     checked_at = last.get("at") or metadata.get("checked_at")
-    if last:
+    if last and last.get("state") != "paused_budget":
         state = str(last.get("state") or ("working" if last.get("ok") else "failed"))
     elif kind == "subscription" and connected:
         # Recorded before checks existed, and only after a governed proof turn: it worked.
@@ -529,6 +539,7 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
     entry = CATALOGUE_BY_PROVIDER.get(provider) or {}
     pill = setup_pills.pill(
         "model", state, age=_age(checked_at, now) or "a moment", time=_hhmm(retry_at),
+        at=_iso(retry_at),
         model=model or "That model", host=host or "the provider",
         provider_fix=setup_pills.LOGIN_FIX.get(provider, setup_pills.DEFAULT_LOGIN_FIX),
         fix_url=entry.get("billing_url") if state == "no_credit" else None)
@@ -699,34 +710,40 @@ def _option(engine: str, model: Optional[str], entry: dict[str, Any]) -> dict[st
 # ── Budget ────────────────────────────────────────────────────────────────────────────────────
 
 def _budget(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
+    """The budget row, the header's "Budget spent" and every metered model's "Paused · budget"
+    — ONE answer, and it is the gate's own: would the budget refuse one metered model check
+    (`BudgetGovernor.cap_refusal` with the check's reservation) on the money already spent?
+    A $0.01 cap read "OK" while every metered call was refused; now it reads Spent."""
     from .budget import BudgetGovernor
+    from .setup_service import PROOF_ESTIMATE_USD_MICROS
 
+    governor = BudgetGovernor(settings)
     try:
-        status = BudgetGovernor(settings).status_for_project(connection, project_id)
+        status = governor.status_for_project(connection, project_id)
     except Exception:  # noqa: BLE001
         status = {}
     periods = status.get("periods") or {}
     month = periods.get("month") or {}
-    day = periods.get("day") or {}
-    binding = month
-    for candidate in (day, month):
-        if candidate.get("budget_state") in ("red",):
-            binding = candidate
-    if not binding.get("budget_state") or binding.get("budget_state") == "green":
-        if day.get("budget_state") in ("orange", "yellow") \
-                and month.get("budget_state") in (None, "green", "unknown"):
-            binding = day
+    refusal = None
+    try:
+        refusal = governor.cap_refusal(status, PROOF_ESTIMATE_USD_MICROS) if periods else None
+    except Exception:  # noqa: BLE001
+        refusal = None
+    if refusal is not None and refusal.get("kind") == "cap":
+        binding, state = refusal, "spent"
+    else:
+        near = [p for p in periods.values() if p.get("budget_state") in ("orange", "yellow", "red")]
+        binding = (max(near, key=lambda p: p.get("utilization_ratio") or 0) if near else month)
+        state = "near" if near else "ok"
     cap_micros = int(binding.get("cap_usd_micros")
                      or getattr(settings, "monthly_cap_usd_micros", 200_000_000) or 0)
     spent_micros = int(binding.get("committed_usd_micros") or 0)
-    raw = str(binding.get("budget_state") or "green")
-    state = "spent" if raw == "red" else "near" if raw in ("orange", "yellow") else "ok"
     period = binding.get("period") or "month"
     resets = binding.get("resets_at") or status.get("resets_at") or ""
     spent, cap = spent_micros / 1_000_000, cap_micros / 1_000_000
+    when = parse_time(resets)
     pill = setup_pills.pill("budget", state, spent=_usd(spent), cap=_usd(cap),
-                            date=(parse_time(resets).date().isoformat()
-                                  if parse_time(resets) else "reset"))
+                            date=(when.astimezone().strftime("%b %-d") if when else "reset"))
     return {"period": period, "spent_usd": round(spent, 2), "cap_usd": round(cap, 2),
             "state": state, "resets_at": resets, "pill": pill,
             "monthly_cap_usd": round(int(month.get("cap_usd_micros") or cap_micros)
@@ -824,14 +841,20 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
     detected = _detected(settings)
     trying = _try(connection, project_id)
 
-    repo_ok = any(repository_working(r) for r in repository["repos"])
+    # READY MEANS CHECKED. A repository no check has run on yet ("Checking…") still lets a
+    # workflow start (basics), but the header does not say Ready over a check that has not run.
+    repo_ok = any(repository_working(r) and r["pill"]["state"] != "checking"
+                  for r in repository["repos"])
     model_ok = any(model_working(m) for m in models)
     ready = repo_ok and model_ok
     problems_list = [r["pill"] for r in repository["repos"] if r["pill"]["tone"] == "red"] \
         + [m["pill"] for m in models if m["pill"]["tone"] == "red"]
     problems = len(problems_list)
-    next_step = ("repository" if not repo_ok else "model" if not model_ok
-                 else None if trying["done"] else "try")
+    # THE STEPPER IS FOR THE FIRST RUN ONLY. Once a first PR exists the page is a board for
+    # good: a token that expires later is a red row on the board, not a return to step 1
+    # (rows renumbered, Who does what collapsed to its defaults mid-edit).
+    next_step = (None if trying["done"] else "repository" if not repo_ok
+                 else "model" if not model_ok else "try")
 
     if budget["state"] == "spent":
         verdict = setup_pills.pill("verdict", "budget_spent", date=budget["pill"]["tip"])
@@ -844,6 +867,12 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         verdict = setup_pills.pill("verdict", "ready")
     else:
         verdict = setup_pills.pill("verdict", "to_go", n=int(not repo_ok) + int(not model_ok))
+        # SAY WHY, not the generic line: an org approval pending, a busy GitHub, a check still
+        # running is the reason it is not ready, and the chip's tip names it.
+        waiting = next((row["pill"] for row in [*repository["repos"], *models]
+                        if row["pill"]["tone"] in ("amber", "busy")), None)
+        if waiting:
+            verdict["tip"] = waiting["tip"]
     return {
         "project_id": project_id,
         "ready": ready,

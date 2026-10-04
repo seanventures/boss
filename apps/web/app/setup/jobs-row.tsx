@@ -32,11 +32,16 @@ function AddKey({ onDone }: { onDone: () => void }) {
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const needs = view.secrets.needs_consent;
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onDone(); };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [onDone]);
   return (
     <div className="su-popover" role="dialog" aria-label="Add key" data-testid="su-jev-key">
       <label className="su-field">
         <span className="su-field-label">API key</span>
-        <input type="password" autoComplete="off" value={key} aria-label="API key"
+        <input type="password" autoComplete="off" value={key} aria-label="API key" autoFocus
                title="Stored in BOSS's secret store. Never shown again."
                onChange={(e) => setKey(e.target.value)} />
       </label>
@@ -113,6 +118,13 @@ function JobLine({ job }: { job: Job }) {
              className={`su-chip ${job.metered ? "su-chip-metered" : ""}`}>
           {job.metered ? "Metered" : "Included"}
         </Tip>
+      ) : !none && job.job === "decisions" ? (
+        // NOTHING HERE CAN DECIDE: decisions run on Claude Code or TypeSafe Jev, and an API key
+        // alone is neither. Said, with the one thing that fixes it.
+        <button type="button" className="su-btn su-btn-sm" data-testid="su-decisions-add-key"
+                title="Decisions run on Claude Code or TypeSafe Jev."
+                data-tip="Decisions run on Claude Code or TypeSafe Jev."
+                onClick={() => setAdding(true)}>Add key</button>
       ) : null}
       {adding ? <AddKey onDone={() => setAdding(false)} /> : null}
     </div>

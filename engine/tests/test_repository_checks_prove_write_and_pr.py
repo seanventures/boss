@@ -93,3 +93,18 @@ def test_inspecting_a_token_lists_its_repositories_and_owner(github_probes):
     assert found["repos"][2]["owner_type"] == "Organization"
     rejected = setup_checks.inspect_token("ghp_e2e_expired", http=github_probes.http_for_tests())
     assert rejected["ok"] is False and rejected["state"] == "token_rejected"
+
+
+def test_a_rate_limit_that_has_reset_is_checked_again_not_shown_as_busy():
+    now = datetime.now(timezone.utc)
+    past = {"state": "rate_limited", "retry_at": (now - timedelta(minutes=1)).isoformat()}
+    future = {"state": "rate_limited", "retry_at": (now + timedelta(minutes=5)).isoformat()}
+    assert setup_checks.repository_state(past, expires_at=None, checked_at=now) == "checking"
+    assert setup_checks.repository_state(future, expires_at=None, checked_at=now) == "rate_limited"
+    assert setup_checks.repository_state({"state": "rate_limited"}, expires_at=None,
+                                         checked_at=now) == "checking"
+
+
+def test_a_gateway_in_the_way_is_cant_reach_not_check_failed():
+    for status in (0, 502, 503, 504):
+        assert setup_checks.classify_model_failure(status, "") == "unreachable"
