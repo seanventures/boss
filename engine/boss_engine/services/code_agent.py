@@ -1815,7 +1815,8 @@ def choose_native_source(rows: list[dict], *, env_hosted: bool, metadata) -> dic
     saved last. A hosted key in the environment counts as hosted too: then the local row is
     skipped and the caller falls back to that key.
     """
-    local = [row for row in rows if row.get("source_id") == "setup-custom"
+    local = [row for row in rows
+             if str(row.get("source_id") or "").startswith("setup-custom")
              and is_local_model_endpoint(str(metadata(row).get("base_url") or ""))]
     hosted = [row for row in rows if row not in local]
     if hosted:
@@ -1836,16 +1837,23 @@ def _project_api_model_binding(
     """
     from .secret_backends import resolve_secret_ref
 
-    sources = ("setup-openai", "setup-custom") if lane == "native" else (
-        f"setup-{lane}", f"setup-{lane}"
-    )
-    rows = connection.execute(text(
-        "SELECT source_id, credential_secret_ref_id, supported_models, connection_metadata "
+    from .setup_service import api_source_provider, last_check_broken
+
+    providers = ("openai", "custom") if lane == "native" else (lane,)
+    # Every connection of the lane's provider (`setup-<p>` and `setup-<p>-<n>`): one source per
+    # connection. Newest first, but a connection whose last check was refused never wins over
+    # one that works.
+    rows = [row for row in connection.execute(text(
+        "SELECT source_id, credential_secret_ref_id, supported_models, connection_metadata, "
+        "observed_capacity "
         "FROM entitlement_sources WHERE project_id=:project_id "
-        "AND source_id IN (:source_a, :source_b) "
+        "AND source_id LIKE 'setup-%' "
         "AND credential_secret_ref_id IS NOT NULL "
         "ORDER BY updated_at DESC NULLS LAST, source_id"
-    ), {"project_id": project_id, "source_a": sources[0], "source_b": sources[1]}).mappings().all()
+    ), {"project_id": project_id}).mappings().all()
+        if api_source_provider(row["source_id"]) in providers]
+    rows.sort(key=lambda row: last_check_broken(row["connection_metadata"],
+                                                row["observed_capacity"]))
 
     def object_value(value, expected):
         if isinstance(value, str):

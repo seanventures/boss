@@ -129,6 +129,8 @@ export type SetupView = {
   jobs: Job[];
   budget: Budget;
   try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
+  /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
+  detecting?: boolean;
 };
 
 /** What a refused connect or check says: one pill's worth. */

@@ -4,6 +4,7 @@
  * model on that provider, `source` opens that model's menu, and the legacy `step=` still works.
  * Readiness, model failures, the composer and the dock all link this way.
  */
+import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { resolveLegacyArea } from "../app/legacy-areas";
@@ -62,5 +63,29 @@ describe("the legacy step= names", () => {
     expect(String(resolveLegacyArea(new URLSearchParams("area=setup&step=github"))))
       .toBe("area=setup&focus=repository");
     expect(resolveLegacyArea(new URLSearchParams("area=setup&focus=budget"))).toBeNull();
+  });
+});
+
+describe("a failed load", () => {
+  it("says so with Retry, and Retry loads the board", async () => {
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { SetupBoard } = await import("../app/setup/setup-board");
+    const api = fakeApi(board());
+    let fail = true;
+    api.answer = (call) => (call.method === "GET" && fail
+      ? { status: 502, body: { error: "Response.clone: Body has already been consumed" } } : null);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<SetupBoard projectId="p" />); });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(q(document.body, "su-load-error")?.textContent).toContain("Not loaded");
+    fail = false;
+    await act(async () => { (q(document.body, "su-load-retry") as HTMLElement).click(); });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(q(document.body, "su-verdict")?.textContent).toBe("Ready");
+    act(() => root.unmount());
+    container.remove();
   });
 });

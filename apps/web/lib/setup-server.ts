@@ -10,10 +10,15 @@ import type { SetupView } from "./setup-types";
 
 export { summarize, type SetupSummary };
 
+/** The most a page render waits for Repo and models' summary. */
+export const SUMMARY_TIMEOUT_MS = 1500;
+
 export async function fetchSetupSummary(projectId: string): Promise<SetupSummary | null> {
   try {
+    // TIME-BOXED: every console render asks this, and a render must never wait on it. A slow
+    // or hung answer means "nothing to say" — no landing redirect, no badge — this time.
     const r = await fetch(`${API_URL}/v1/setup?project_id=${encodeURIComponent(projectId)}`, {
-      headers: authHeaders({}), cache: "no-store",
+      headers: authHeaders({}), cache: "no-store", signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
     });
     if (!r.ok) return null;
     return summarize((await r.json()) as SetupView);

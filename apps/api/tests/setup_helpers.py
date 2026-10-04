@@ -47,7 +47,7 @@ def fakes(monkeypatch, *, github_calls=None, model_calls=None) -> None:
     monkeypatch.setattr(secret_backends, "default_secret_backend", lambda _s: "database")
     monkeypatch.setenv("BOSS_COMMUNITY_SECRET_STORE", "database")
     setup_view.forget_cached()
-    monkeypatch.setattr(setup_view, "_cli_detection", lambda _s: {})
+    monkeypatch.setattr(setup_view, "_detect_clis", lambda _s: {})
 
 
 def view(client) -> dict:
