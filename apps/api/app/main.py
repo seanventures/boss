@@ -27853,18 +27853,87 @@ def _acts_viewer(viewer: Optional[str]) -> Optional[str]:
 
 @app.get("/v1/agents/live")
 def agents_live(project_id: str, request: Request, response: Response):
-    """Who is working, in a panel, or waiting on you right now. ETag'd for a cheap 4s poll."""
-    from boss_engine.services import agent_acts
+    """Who is working, in a panel, or waiting on you right now. ETag'd for a cheap 4s poll.
+
+    `attention` is what the pill counts: the things that need the operator — the Command
+    Center's counts.needs_you, Agents › Live's cards and Approvals' Needs action plus failed
+    steps, from the one list (agents_live_board.pill). It used to count AGENTS in a needs-you
+    state, so three gates on one agent said 1 while Approvals said 3 (agents-home spec §6.3)."""
+    import hashlib as _hashlib
+
+    from boss_engine.services import agent_acts, agents_live_board
 
     project_id = _acts_reader(project_id)
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
         live = agent_acts.live(connection, project_id)
-    if request.headers.get("if-none-match") == live["etag"]:
-        return Response(status_code=304, headers={"ETag": live["etag"]})
-    response.headers["ETag"] = live["etag"]
+        attention = agents_live_board.pill(connection, settings, project_id)
+    etag = '"' + _hashlib.sha256(json.dumps(
+        [live["etag"], attention["count"], [i["id"] for i in attention["items"]]]
+    ).encode()).hexdigest()[:20] + '"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "no-cache"
-    return {"project_id": project_id, "items": live["items"]}
+    return {"project_id": project_id, "items": live["items"], "attention": attention}
+
+
+@app.get("/v1/agents/live-board")
+def agents_live_board_endpoint(project_id: str, request: Request, response: Response,
+                               viewer: Optional[str] = None):
+    """Agents › Live in one read: what needs you, what is moving, what got done, who is idle
+    (agents-home spec §6.2). ETag'd: the tab polls it every 8s while it is visible, and an
+    unchanged board is a 304. Composition only — see agents_live_board."""
+    from boss_engine.services import agents_live_board
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        board = agents_live_board.build(connection, settings, project_id,
+                                        viewer=_acts_viewer(viewer))
+    if request.headers.get("if-none-match") == board["etag"]:
+        return Response(status_code=304, headers={"ETag": board["etag"]})
+    response.headers["ETag"] = board["etag"]
+    response.headers["Cache-Control"] = "no-cache"
+    return board
+
+
+@app.get("/v1/agents/activity")
+def agents_activity(project_id: str, cursor: Optional[str] = None, limit: int = 50,
+                    kinds: Optional[str] = None, role: Optional[str] = None,
+                    run: Optional[str] = None, parent: Optional[str] = None, days: int = 1,
+                    viewer: Optional[str] = None) -> dict:
+    """What agents did on this project, newest first, each item's inner work and tool calls
+    folded under it (agents-home spec §4.9, §6.4). `kinds` is a comma list of needs_you,
+    handoffs, builds, panels, talks; `parent` reads one item's folded work."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return agent_acts.activity(
+                connection, project_id, cursor=cursor, limit=limit,
+                kinds=[k.strip() for k in (kinds or "").split(",") if k.strip()],
+                role_key=(agent_acts.resolve_role(role) or role) if role else None,
+                run_id=run or None, parent_act_id=parent or None, days=days,
+                viewer=_acts_viewer(viewer))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/acts/{act_id}/tools")
+def signed_act_tools(act_id: str, project_id: str, limit: int = 50) -> dict:
+    """The tool calls under one act: name, ok, latency — never their content."""
+    from boss_engine.services import agent_acts
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        found = agent_acts.tool_calls(connection, project_id, act_id, limit=limit)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Act not found.")
+    return found
 
 
 @app.get("/v1/agents/{role_key}/acts")

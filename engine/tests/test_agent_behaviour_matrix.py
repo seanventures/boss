@@ -808,7 +808,9 @@ def test_the_landing_panel_shows_started_work_not_the_event_log():
     assert "runHref(run.run_id, orgId)" in panel, "running rows do not open their run"
     from boss_engine.services import command_center
     import inspect
-    assert "FROM workflow_runs r" in inspect.getsource(command_center.build)
+    # build() is assemble() over read(); read() is where the runs are read (shared with
+    # Agents › Live, so both read the same rows).
+    assert "FROM workflow_runs r" in inspect.getsource(command_center.read)
 
 
 def test_in_flight_only_uses_columns_that_exist():

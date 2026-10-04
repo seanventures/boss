@@ -90,6 +90,10 @@ class Capability:
     #: What this step costs beyond its minutes, when that is the thing worth knowing before
     #: starting — PLRR is a second build pass, and nothing on the plan said so.
     cost_note: str = ""
+    #: WHAT KIND OF WORK IT IS, for the one verb every agent surface says (agent_acts.work_verb):
+    #: deploy (Deploying), publish (Publishing), monitor (Monitoring), research (Researching).
+    #: Empty = no family, and the verb is plain "Working" — never guessed from the label.
+    family: str = ""
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -103,6 +107,7 @@ CAPABILITIES: dict[str, Capability] = {
     for c in (
         _cap(
             key="research",
+            family="research",
             # is this worth building, and for whom
             captain="product_manager",
             label="Research",
@@ -231,6 +236,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="preview",
+            family="deploy",
             # a person has to be able to use it
             captain="qa",
             label="Preview",
@@ -292,6 +298,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="deploy",
+            family="deploy",
             # gets it onto a machine and keeps it there
             captain="deployment_manager",
             label="Deploy",
@@ -307,6 +314,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="video_edit",
+            family="publish",
             # OWNS WHAT THE FINISHED FILE LOOKS LIKE — the cut, the branding, the bookends.
             # Separate from the role that PUBLISHES it, so the agent that can put something in
             # front of an audience is not the one that assembled it.
@@ -329,6 +337,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="social_publish",
+            family="publish",
             # OWNS THE ACCOUNT AND ANSWERS FOR WHAT GOES OUT ON IT.
             #
             # One capability, one platform per STEP. A single step that published everywhere
@@ -369,6 +378,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="monitor",
+            family="monitor",
             # owns whether anyone would notice it break
             captain="infra_steward",
             label="Set up monitoring",
@@ -414,6 +424,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="redeploy",
+            family="deploy",
             # same hands as the first deploy
             captain="deployment_manager",
             label="Ship it again",
@@ -442,6 +453,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="teardown_preview",
+            family="deploy",
             # reclaims what the preview was holding
             captain="infra_steward",
             label="Stop the preview",
