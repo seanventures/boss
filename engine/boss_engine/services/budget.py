@@ -602,15 +602,23 @@ class BudgetGovernor:
         #
         # A refusal here CLEARS BY ITSELF, so it says so: `transient` and `retry_after_seconds`
         # tell the caller to wait and try again rather than fail or ask a person.
+        #
+        # THE MINUTE IS MEASURED ON THE WALL CLOCK, NOT THE TRANSACTION'S. `now()` is the
+        # transaction's start, and a workflow tick runs its steps — an agent's many tool calls
+        # among them — inside one transaction. Measured with `now()` the window never moved for
+        # a caller that waited out a refusal and asked again (agent_loop.BudgetWaiter), and a
+        # reservation made minutes into a tick was dated at its start, so it left the window
+        # early. clock_timestamp() on both sides: the row is dated when it is made, and the
+        # window is the real last sixty seconds.
         burst_cap = self._burst_cap(connection, project_id)
         if burst_cap:
             window = connection.execute(
                 text(
                     "SELECT COALESCE(SUM(amount_usd_micros), 0) AS recent, "
-                    "       EXTRACT(EPOCH FROM (MIN(created_at) + interval '60 seconds' - now())) "
+                    "       EXTRACT(EPOCH FROM (MIN(created_at) + interval '60 seconds' - clock_timestamp())) "
                     "         AS frees_in "
                     "FROM budget_reservations "
-                    "WHERE project_id = :p AND created_at >= now() - interval '60 seconds' "
+                    "WHERE project_id = :p AND created_at >= clock_timestamp() - interval '60 seconds' "
                     "AND status IN ('active', 'consumed')"
                 ),
                 {"p": project_id},
@@ -699,11 +707,11 @@ class BudgetGovernor:
                 """
                 INSERT INTO budget_reservations (
                     id, allocation_id, project_id, job_id, category, amount_usd_micros,
-                    status, reason, expires_at
+                    status, reason, expires_at, created_at
                 )
                 VALUES (
                     :id, :allocation_id, :project_id, :job_id, :category, :amount_usd_micros,
-                    'active', :reason, :expires_at
+                    'active', :reason, :expires_at, clock_timestamp()
                 )
                 """
             ),
