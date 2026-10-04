@@ -83,7 +83,8 @@ function clock(iso: string): string {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "";
   const d = new Date(t);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  // UTC, as the run's own "started 4 Oct 18:01Z" says it, so the two times can be compared.
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 }
 
 /** "Done by <face> <name> · $0.03 · model", and the agent's whole card behind one press. */
@@ -115,7 +116,11 @@ export function StepDoneBy({ act, approval, output, phase, projectId, viewer, fa
         <RunFace roleKey={roleKey} variant={variant} size={20} state={agent?.state ?? "idle"} />
         <strong className="wf-doneby-name" data-testid="dw-step-doneby-name"
                 data-tip={named.role !== named.name ? named.role : undefined}>{named.name}</strong>
-        {spent ? <span className="wf-doneby-fact" data-testid="dw-step-cost">{costLabel(spent)}</span> : null}
+        {spent ? (
+          <span className="wf-doneby-fact" data-testid="dw-step-cost">
+            {spent < 0.005 ? "<$0.01" : costLabel(spent)}
+          </span>
+        ) : null}
         {model ? <span className="wf-doneby-fact" data-testid="dw-step-model" data-user-text>{model}</span> : null}
         <span className="wf-doneby-acts">
           {roleKey ? (
@@ -191,7 +196,7 @@ export function StepSection({ title, testId, children, empty }: {
 /** "Started 18:01 · Attempt 2": when it began and whether it is a retry. */
 export function stepFacts(step: { started_at?: string | null; attempt?: number }): string[] {
   const out: string[] = [];
-  if (step.started_at && clock(step.started_at)) out.push(`Started ${clock(step.started_at)}`);
+  if (step.started_at && clock(step.started_at)) out.push(`Started ${clock(step.started_at)}Z`);
   if ((step.attempt ?? 0) > 1) out.push(`Attempt ${step.attempt}`);
   return out;
 }
