@@ -23,7 +23,7 @@ from sqlalchemy import text
 
 log = logging.getLogger("boss.llm_telemetry")
 
-# {db_engine (sqlalchemy), project_id, run_id, stage, act_id?, role_key?, workflow_run_id?}
+# {db_engine (sqlalchemy), project_id, run_id, stage, act_id?, role_key?, workflow_run_id?, settings?}
 _llm_ctx: ContextVar[dict] = ContextVar("llm_call_context", default={})
 
 
@@ -31,7 +31,8 @@ def set_llm_context(**kwargs) -> None:
     """Merge fields into the current thread's LLM-call context. Recognised keys:
     ``db_engine`` (SQLAlchemy engine for the insert), ``project_id``, ``run_id``, ``stage``,
     and the Agent World keys ``act_id`` / ``role_key`` / ``workflow_run_id`` (who is spending:
-    set by a caller that already holds its act; otherwise the stage's act is found per call).
+    set by a caller that already holds its act -- a chat turn, a room seat -- otherwise the
+    stage's act is found per call; role_for_stage() is only the fallback when no role is known).
     Pass a key as None to clear it."""
     ctx = dict(_llm_ctx.get())
     for k, v in kwargs.items():
@@ -103,18 +104,19 @@ def _signed_by(c, ctx: dict, stage: Optional[str]) -> tuple[Optional[str], Optio
     written on the row is the ACT's role: STAGE_ROLES is only the fallback when there is no act,
     because the agent the operator put on a build is who spent its implement stage.
     """
+    named = canonical_role(ctx.get("role_key"))
     if ctx.get("act_id"):
-        return str(ctx["act_id"]), ctx.get("role_key") or role_for_stage(stage)
+        return str(ctx["act_id"]), named or role_for_stage(stage)
     if not ctx.get("run_id"):
-        return None, ctx.get("role_key") or role_for_stage(stage)
+        return None, named or role_for_stage(stage)
     from . import agent_acts
 
     found = agent_acts.quietly(c, "sign a model call", agent_acts.stage_act,
                                project_id=ctx.get("project_id"),
                                code_task_run_id=str(ctx["run_id"]), stage=stage)
     if not found:
-        return None, ctx.get("role_key") or role_for_stage(stage)
-    return found["act_id"], found.get("role_key")
+        return None, named or role_for_stage(stage)
+    return found["act_id"], canonical_role(found.get("role_key"))
 
 
 def record_llm_call(

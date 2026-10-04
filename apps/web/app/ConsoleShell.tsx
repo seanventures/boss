@@ -14,6 +14,8 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
+import { ConverseHost } from "./agents/converse-host";
+import { CONVERSE_COMMANDS } from "../lib/agent-converse";
 
 import React, {
   useCallback,
@@ -1339,6 +1341,7 @@ export default function ConsoleShell({
         ) : null}
       </div>
 
+      <ConverseHost projectId={scope.projectId ?? scope.project} actor={scope.actorId ?? scope.actor} />
       {paletteOpen ? (
         <div className="bx-palette-backdrop" onClick={() => setPaletteOpen(false)}>
           <div
@@ -1375,7 +1378,21 @@ export default function ConsoleShell({
                   </button>
                 );
               })}
-              {filtered.length === 0 ? (
+              {/* TALKING WITH AGENTS: talk 1:1, plan a start, open a room (lib/agent-converse). */}
+              {CONVERSE_COMMANDS.filter((c) => !query.trim()
+                || c.label.toLowerCase().includes(query.trim().toLowerCase())).map((c) => (
+                <button key={c.key} type="button" className="bx-palette-item"
+                        data-testid={`palette-converse-${c.key}`}
+                        onClick={() => { setPaletteOpen(false); c.run(); }}>
+                  <UsersThree size={17} aria-hidden />
+                  <span>
+                    <span style={{ fontWeight: 600 }}>{c.label}</span>
+                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>{c.sub}</span>
+                  </span>
+                </button>
+              ))}
+              {filtered.length === 0 && !CONVERSE_COMMANDS.some((c) => c.label.toLowerCase()
+                .includes(query.trim().toLowerCase())) ? (
                 <div style={{ padding: "14px 12px", color: "var(--muted)" }}>No matching area.</div>
               ) : null}
             </div>

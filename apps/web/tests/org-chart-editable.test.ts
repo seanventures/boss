@@ -90,7 +90,7 @@ describe("you can say something to an agent", () => {
     // them — read-only, on a screen about a workforce.
     expect(ROSTER).toContain('data-testid={`wf-ask-${a.id}`}');
     expect(WF).toContain("function askAgent");
-    expect(WF).toContain("talkTo(roleKey, agentName");
+    expect(WF).toContain('talkTo(agent.id, agent.name, { from: "roster" })');
   });
 
   it("opens the side dock in place rather than leaving the page", () => {
@@ -99,13 +99,17 @@ describe("you can say something to an agent", () => {
     // as a run id.
     // Through the one door helper, which edits the current URL and fires the popstate the
     // shell listens for (lib/dock-subject.ts).
-    expect(ASK).toContain("openDockAbout({ subject: null, role: name || roleKey");
+    // Agent World: a registered agent opens its own talk sheet in place (by role key, its
+    // voice composed from its persona); an unregistered one, which has no voice yet, keeps the
+    // dock, addressed by name.
+    expect(ASK).toContain("openTalk(roleKey, context)");
+    expect(WF).toContain("openDockAbout({ subject: null, role: agent.name");
   });
 
   it("addresses the question to that agent, not to BOSS in general", () => {
     // The name used to be prose in a prefilled box, so the answer came from BOSS itself with
     // no lens, no remit and no memory of what that role had argued.
-    expect(ASK).toContain("`@${name || roleKey}: `");
+    expect(WF).toContain("`@${agent.name}: `");
     expect(CHAT).toContain('fd.set("role", roleName)');
   });
 
