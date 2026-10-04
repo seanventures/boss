@@ -33,6 +33,8 @@ const FORWARD = [
   // "Load older": the last row of the previous page. Without it forwarded, the button would
   // reload the newest page forever.
   "cursor", "workflow_run_id",
+  // One step of that workflow run (its own rows and the work task it started).
+  "step_id",
 ] as const;
 
 export async function GET(req: Request) {

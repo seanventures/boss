@@ -30,7 +30,7 @@ import type {
 import { canMove as modelCanMove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from "./drag-plan";
-import { chooseDensity, fitScale, overflows, type LaneGeometry } from "./geometry";
+import { chooseDensity, fitScale, laneGeometry, overflows, type LaneGeometry } from "./geometry";
 import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
 import type { LaneAgent } from "../../agents/chain-model";
@@ -181,9 +181,15 @@ export function FlowLane(p: {
   const [ownZoom, setOwnZoom] = useState<LaneZoom>("fit");
   const zoom = p.zoom ?? ownZoom;
   const setZoom = (z: LaneZoom) => { if (p.onZoomChange) p.onZoomChange(z); else setOwnZoom(z); };
-  const geometry = useMemo(() => chooseDensity(layout, types, available,
-    p.density === "compact" ? "compact" : undefined), [layout, types, available, p.density]);
-  const scale = zoom === "fit" ? fitScale(geometry.width, available, geometry.density) : 1;
+  // ROOMY OR FIT. A run is always drawn roomy: Comfortable nodes at full size, the lane
+  // scrolling sideways inside itself (never the page), with the step in flight kept in view.
+  // Shrinking eleven steps into one screen made them unreadable. The editor keeps Fit as its
+  // default, for seeing and dragging the whole flow, and 100% is the same roomy lane.
+  const roomy = p.density !== "compact" && (mode === "run" || zoom === "full");
+  const geometry = useMemo(() => (roomy ? laneGeometry(layout, types, "comfortable")
+    : chooseDensity(layout, types, available, p.density === "compact" ? "compact" : undefined)),
+  [roomy, layout, types, available, p.density]);
+  const scale = roomy ? 1 : fitScale(geometry.width, available, geometry.density);
   const scrolls = overflows(geometry.width, scale, available);
   // Under a drawer: when the drawing reaches under it, give the lane that much more to scroll,
   // so the last steps can be brought clear of it. Density and scale are untouched.
@@ -193,6 +199,29 @@ export function FlowLane(p: {
   const sizerW = drawn + spare;
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
+
+  // WHICH WAY IT CAN STILL SCROLL, for the fade and the arrow on that edge. Computed from the
+  // drawing's width and the viewport's scroll position, not measured from layout.
+  const [ends, setEnds] = useState({ left: false, right: false });
+  useEffect(() => {
+    const v = viewportRef.current;
+    if (!v) return;
+    const read = () => {
+      const max = Math.max(0, sizerW - available);
+      const next = { left: v.scrollLeft > 1, right: v.scrollLeft < max - 1 };
+      setEnds((e) => (e.left === next.left && e.right === next.right ? e : next));
+    };
+    read();
+    v.addEventListener("scroll", read, { passive: true });
+    return () => v.removeEventListener("scroll", read);
+  }, [sizerW, available]);
+  const nudge = (dir: -1 | 1) => {
+    const v = viewportRef.current;
+    if (!v) return;
+    const by = Math.max(160, Math.round(available * 0.7)) * dir;
+    if (typeof v.scrollBy === "function") v.scrollBy({ left: by, behavior: "smooth" });
+    else v.scrollLeft += by;
+  };
 
   const canMoveProp = p.canMove;
   const canMove = useCallback((id: string, to: number) =>
@@ -375,9 +404,12 @@ export function FlowLane(p: {
               </svg>
             ) : null}
 
-            <span className="wf-flag" data-kind="start" style={{ left: geometry.start.x, top: geometry.start.y,
-                                                                   width: geometry.start.w, height: geometry.start.h }}>
-              Start
+            <span className="wf-flag" data-kind="start" data-testid="wf-start"
+                  data-flow={mode === "run" ? (order.some((id) => phases.get(id) !== "future") ? "past" : "future") : undefined}
+                  style={{ left: geometry.start.x, top: geometry.start.y,
+                           width: geometry.start.w, height: geometry.start.h }}>
+              <i className="wf-bubble" aria-hidden />
+              <span className="wf-flag-label">Start</span>
             </span>
 
             {navOrder.map((id) => {
@@ -413,7 +445,11 @@ export function FlowLane(p: {
                 <i className="wf-conn" aria-hidden style={{ width: geometry.conn, left: -geometry.conn }}
                    data-flow={mode === "run" ? flowInto(lastPhase(order.length), "done") : undefined} />
               ) : null}
-              <span className="wf-flag" data-kind="end">End</span>
+              <span className="wf-flag" data-kind="end" data-testid="wf-end"
+                    data-flow={mode === "run" ? flowInto(lastPhase(order.length), "done") : undefined}>
+                <i className="wf-bubble" aria-hidden />
+                <span className="wf-flag-label">End</span>
+              </span>
             </div>
 
             {gaps.map((g) => (
@@ -427,6 +463,19 @@ export function FlowLane(p: {
           </div>
         </div>
       </div>
+
+      {scrolls ? (
+        <>
+          <span className="wf-lane-fade" data-side="left" data-on={ends.left || undefined} aria-hidden />
+          <span className="wf-lane-fade" data-side="right" data-on={ends.right || undefined} aria-hidden />
+          <button type="button" className="wf-lane-arrow" data-side="left" data-testid="wf-lane-left"
+                  aria-controls={viewportId} aria-label="Scroll the steps left" hidden={!ends.left}
+                  onClick={() => nudge(-1)}>‹</button>
+          <button type="button" className="wf-lane-arrow" data-side="right" data-testid="wf-lane-right"
+                  aria-controls={viewportId} aria-label="Scroll the steps right" hidden={!ends.right}
+                  onClick={() => nudge(1)}>›</button>
+        </>
+      ) : null}
 
       {scrolls ? (
         <Minimap viewport={viewportRef} controls={viewportId} width={geometry.width} scale={scale}

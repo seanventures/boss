@@ -246,6 +246,11 @@ describe("the run view, signed", () => {
 
   it("signs the open step's drawer, with what it said and Ask <Name>", async () => {
     const el = await mount();
+    // ONE LINE FIRST: the agent's whole card is behind "Agent", not the panel's lead.
+    expect(el.querySelector('[data-testid="ag-signed-by"]')).toBeNull();
+    expect(el.querySelector('[data-testid="dw-step-doneby-name"]')?.textContent).toBe("Atlas");
+    await act(async () => (el.querySelector('[data-testid="dw-step-agent-toggle"]') as HTMLButtonElement).click());
+    await settle();
     const signed = el.querySelector('[data-testid="ag-signed-by"]')!;
     expect(signed).not.toBeNull();
     expect(signed.querySelector('[data-testid="ag-act-how-label"]')?.textContent).toBe("Picked by BOSS over 3");

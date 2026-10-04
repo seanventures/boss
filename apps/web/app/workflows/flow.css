@@ -39,17 +39,58 @@
 .wf-slot[data-origin] { opacity: 0; pointer-events: none; }
 .wf-slot-end { align-items: center; }
 
+/* Start and End: a small bubble on each end of the line, its word under it. The start bubble
+   sits where the line leaves it and the end bubble where the line arrives, so the line touches
+   both. On a run they fill green once the work has reached them. */
 .wf-flag {
   position: absolute;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
+  display: inline-flex; align-items: center;
   color: var(--muted);
   font: 600 0.75rem/1 var(--sans);
   white-space: nowrap;
 }
+.wf-flag[data-kind="start"] { justify-content: flex-end; }
+.wf-flag[data-kind="end"] { justify-content: flex-start; }
 .wf-slot-end .wf-flag { position: static; width: 100%; height: 100%; }
+.wf-bubble {
+  flex: none; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--faint) 80%, transparent);
+  background: var(--bg);
+}
+.wf-flag[data-flow="past"] .wf-bubble, .wf-flag[data-flow="moving"] .wf-bubble { border-color: var(--green); background: var(--green); }
+.wf-flag-label {
+  position: absolute; top: calc(50% + 10px);
+  color: var(--faint); letter-spacing: 0.02em;
+}
+.wf-flag[data-kind="start"] .wf-flag-label { right: -6px; }
+.wf-flag[data-kind="end"] .wf-flag-label { left: -2px; }
+
+/* A lane wider than its box scrolls inside itself; each edge it can still scroll towards fades
+   and carries an arrow, so "there is more this way" is visible without a scrollbar. */
+.wf-lane-fade {
+  position: absolute; top: 1px; bottom: 34px; width: 48px; z-index: 2;
+  pointer-events: none; opacity: 0; transition: opacity 150ms ease;
+}
+.wf-lane-fade[data-side="left"] { left: 1px; border-radius: var(--r-xl) 0 0 0;
+  background: linear-gradient(90deg, var(--surface), transparent); }
+.wf-lane-fade[data-side="right"] { right: 1px; border-radius: 0 var(--r-xl) 0 0;
+  background: linear-gradient(270deg, var(--surface), transparent); }
+.wf-lane-fade[data-on] { opacity: 1; }
+.wf-lane-arrow {
+  position: absolute; top: calc((100% - 34px) / 2 - 16px); z-index: 3;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--border); border-radius: 50%;
+  background: var(--bg); color: var(--ink);
+  font: 600 1.125rem/1 var(--sans);
+  box-shadow: var(--shadow, 0 2px 8px rgba(0,0,0,.25));
+  cursor: pointer;
+}
+.wf-lane-arrow[data-side="left"] { left: 8px; }
+.wf-lane-arrow[data-side="right"] { right: 8px; }
+.wf-lane-arrow[hidden] { display: none; }
+.wf-lane-arrow:hover { border-color: var(--accent); color: var(--accent); }
+.wf-lane-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Connectors: in a linear flow each slot carries the line into it, so it moves with its node. */
 .wf-conn {
@@ -225,6 +266,7 @@
 [data-density="compact"] .wf-node[data-mode="run"] .wf-node-icon { display: contents; }
 [data-density="compact"] .wf-node[data-mode="run"] .wf-node-icon > svg { display: none; }
 [data-density="compact"] .wf-flag { font-size: 0.875rem; }
+[data-density="compact"] .wf-flag-label { font-size: 0.875rem; }
 [data-density="compact"] .wf-edge-label { font-size: 14px; }
 [data-density="compact"] .wf-gap-add { width: 18px; height: 18px; }
 
@@ -341,3 +383,31 @@
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
 
+
+/* ── A run step's panel: who in one line, then what it made and what it did ─────────── */
+.wf-doneby { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 10px; }
+.wf-doneby-line {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  font: 400 0.8125rem/1.3 var(--sans); color: var(--muted);
+}
+.wf-doneby-verb { color: var(--faint); }
+.wf-doneby-name { color: var(--ink); font-weight: 600; }
+.wf-doneby-fact { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
+.wf-doneby-fact::before { content: "·"; margin-right: 10px; color: var(--faint); }
+.wf-doneby-acts { display: inline-flex; gap: 12px; margin-left: auto; }
+.wf-doneby-card { border-top: 1px dashed var(--border); padding-top: 8px; }
+.wf-step-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 10px; font-size: 0.75rem; color: var(--faint); }
+.wf-step-sec { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+.wf-step-sec-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.wf-step-sec-count { font-size: 0.75rem; color: var(--faint); }
+.wf-step-sec-link { margin-left: auto; font-size: 0.8125rem; }
+.wf-step-empty { font-size: 0.8125rem; color: var(--faint); }
+.wf-step-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.wf-step-log li {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: baseline;
+  font-size: 0.8125rem; color: var(--muted);
+}
+.wf-step-log time { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--faint); }
+.wf-step-log-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-step-log li[data-level="error"] .wf-step-log-title { color: var(--red); }
+.wf-step-log li[data-level="warn"] .wf-step-log-title { color: var(--amber); }

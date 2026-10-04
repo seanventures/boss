@@ -224,8 +224,9 @@ describe("watching the outer workflow, step by step", () => {
     // the PR it opened or the panel it convened.
     expect(DW).toContain("function stepLinks");
     expect(DW).toContain("open the project");
-    expect(DW).toContain("activity log");
-    expect(DW).toContain("Ask BOSS");
+    // The log is the step's own now: the panel's Activity section links to it.
+    expect(DW).toContain("stepLogHref(");
+    expect(DW).toContain("onAsk={ask}");
     expect(DW).toContain("pull request");
   });
 

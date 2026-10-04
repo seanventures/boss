@@ -252,11 +252,15 @@ export function ActivityLog({
   // task, versus the whole governed run that task was a step of. Arriving from a workflow run
   // used to drop that scope on the floor and show the project's entire log.
   const [urlWorkflowRun, setUrlWorkflowRun] = useState("");
+  // `step=` narrows the workflow run to ONE of its steps: the step's own rows and the work task
+  // it started. A run step's "Step log" link lands here.
+  const [urlStep, setUrlStep] = useState("");
   useEffect(() => {
     const read = () => {
       const params = new URLSearchParams(window.location.search);
       setUrlRun(params.get("run") ?? "");
       setUrlWorkflowRun(params.get("wfr") ?? "");
+      setUrlStep(params.get("step") ?? "");
     };
     read();
     window.addEventListener("popstate", read);
@@ -264,6 +268,7 @@ export function ActivityLog({
   }, []);
   const scopedRun = runId || urlRun;
   const scopedWorkflowRun = workflowRunId || urlWorkflowRun;
+  const scopedStep = scopedWorkflowRun ? urlStep : "";
   const [sort, setSort] = useState<SortKey>("created_at");
   const [order, setOrder] = useState<SortOrder>("desc");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -308,12 +313,13 @@ export function ActivityLog({
     service: serviceFilter || undefined,
     run_id: scopedRun || undefined,
     workflow_run_id: scopedWorkflowRun || undefined,
+    step_id: scopedStep || undefined,
     sort: serverSort,
     order: serverOrder,
     // A transcript is dense. Fifty rows is barely a minute of a build.
     limit: 200,
   }), [debouncedSearch, kind, status, actorFilter, level, sourceParam, agentFilter,
-       serviceFilter, scopedRun, scopedWorkflowRun, serverSort, serverOrder]);
+       serviceFilter, scopedRun, scopedWorkflowRun, scopedStep, serverSort, serverOrder]);
 
   // THE CHIP COUNTS, FROM THE LOG. Fetched on their own so the first page never waits for the
   // classification they need; scoped like the list, but not by level or stream, because a chip
@@ -324,6 +330,7 @@ export function ActivityLog({
     void fetchActivityFacets(projectId, {
       run_id: scopedRun || undefined,
       workflow_run_id: scopedWorkflowRun || undefined,
+      step_id: scopedStep || undefined,
       agent: agentFilter || undefined,
       service: serviceFilter || undefined,
     }).then((result) => {
@@ -332,7 +339,7 @@ export function ActivityLog({
     return () => {
       alive = false;
     };
-  }, [projectId, scopedRun, scopedWorkflowRun, agentFilter, serviceFilter]);
+  }, [projectId, scopedRun, scopedWorkflowRun, scopedStep, agentFilter, serviceFilter]);
 
   /** "Load older": the next page behind the last row shown, with the same filters. */
   const loadOlder = async () => {
@@ -525,14 +532,33 @@ export function ActivityLog({
         // with both set, the work-task banner above already says the view is narrowed, and two
         // stacked banners saying "showing only" read as a bug rather than as more precision.
         <p className="alog-scope" data-testid="activity-scope-workflow">
-          <span>Showing only this workflow run</span>
+          <span>{scopedStep ? "Showing only step" : "Showing only this workflow run"}</span>
+          {scopedStep ? (
+            <strong className="alog-scope-name" data-testid="activity-scope-step">{scopedStep}</strong>
+          ) : null}
           <code className="mono">{scopedWorkflowRun}</code>
+          {scopedStep ? (
+            <button
+              type="button"
+              className="cap-btn"
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.delete("step");
+                window.history.pushState({}, "", url.toString());
+                window.dispatchEvent(new PopStateEvent("popstate"));
+              }}
+              data-testid="activity-scope-step-clear"
+            >
+              Whole run
+            </button>
+          ) : null}
           <button
             type="button"
             className="cap-btn"
             onClick={() => {
               const url = new URL(window.location.href);
               url.searchParams.delete("wfr");
+              url.searchParams.delete("step");
               window.history.pushState({}, "", url.toString());
               window.dispatchEvent(new PopStateEvent("popstate"));
             }}

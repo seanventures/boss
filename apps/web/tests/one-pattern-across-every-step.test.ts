@@ -116,9 +116,9 @@ describe("the step chrome stops being prose", () => {
 });
 
 describe("machine fields are evidence, not content", () => {
-  it("they are filed behind a disclosure", () => {
-    expect(UI).toContain('data-testid="dw-step-out-wrap"');
-    expect(UI).toContain("What this step recorded ·");
+  it("they are the step's Output, shown, not filed away (operator, 2026-10-04)", () => {
+    expect(UI).toContain('<StepSection title="Output" testId="dw-step-output"');
+    expect(UI).toContain('data-testid="dw-step-out"');
   });
 
   it("the same id is not printed under two headings", () => {
@@ -135,7 +135,7 @@ describe("machine fields are evidence, not content", () => {
 describe("one action has one control", () => {
   it("Ask BOSS is a button, not also a link of the same name", () => {
     expect(UI).not.toContain('label: "Ask BOSS",');
-    expect(UI).toContain('data-testid="dw-ask-boss"');
+    expect(UI).toContain("onAsk={ask}");
   });
 
   it("and the preview link is not both a button and a link", () => {

@@ -412,7 +412,10 @@ describe("every node says who runs it, at every density and in every mode", () =
     for (const [density, width] of [["comfortable", 4000], ["compact", LANE_AT_1512]] as const) {
       it(`${mode}, ${density}: an avatar and the name, and the name leads the tooltip`, () => {
         laneWidth = width;
-        const h = render(<FlowLane spec={MIXED} palette={PALETTE} mode={mode} runState={mode === "run" ? {} : undefined} />);
+        // A run is always drawn roomy; its Compact form is the forced one (a preview strip).
+        const forced = mode === "run" && density === "compact" ? "compact" : undefined;
+        const h = render(<FlowLane spec={MIXED} palette={PALETTE} mode={mode} density={forced}
+                                   runState={mode === "run" ? {} : undefined} />);
         expect(h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!.dataset.density).toBe(density);
         const rows = nodes(h).map((n) => n.querySelector<HTMLElement>('[data-testid="wf-node-agent"]'));
         expect(rows.every(Boolean)).toBe(true);

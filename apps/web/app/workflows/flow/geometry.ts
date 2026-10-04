@@ -19,10 +19,12 @@ export const NODE = {
 } as const;
 /** A Wait step only shows its duration, so it is drawn narrower. */
 export const WAIT_W = { comfortable: 96, compact: 80 } as const;
-/** The connector between two columns, which also holds the `+` button. */
-export const CONN = { comfortable: 36, compact: 16 } as const;
+/** The connector between two columns, which also holds the `+` button. Comfortable is the
+ *  roomy lane a run is always drawn in (and 100% in the editor): room to read each step as its
+ *  own thing, not a row of cards touching (operator, 2026-10-04). */
+export const CONN = { comfortable: 56, compact: 16 } as const;
 export const ROW_GAP = 16;
-export const PAD_X = 12;
+export const PAD_X = 20;
 export const PAD_Y = 14;
 /** The Start flag and the End cap (wider in Compact, whose text is larger). */
 export const FLAG_W = { comfortable: 36, compact: 44 } as const;
