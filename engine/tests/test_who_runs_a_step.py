@@ -400,7 +400,7 @@ def test_a_step_naming_a_server_its_agent_does_not_hold_is_refused_at_publish(en
             _publish(c, project, "unheld", [{**_agent_step(mcp=["billing"]),
                                              "captain": "researcher"}])
     assert "which researcher does not hold" in str(error.value)
-    assert "Agents page" in str(error.value)
+    assert "Agent Studio" in str(error.value)
 
 
 def test_a_scoped_skill_the_named_agent_lacks_is_refused_at_publish(eng, project):
@@ -411,7 +411,7 @@ def test_a_scoped_skill_the_named_agent_lacks_is_refused_at_publish(eng, project
         with pytest.raises(workflows.WorkflowBindingBlockedError) as error:
             _publish(c, project, "lacks", [{**_agent_step(skills=[second]), "captain": "editor"}])
     assert f"which editor does not hold" in str(error.value)
-    assert "Agents page" in str(error.value)
+    assert "Agent Studio" in str(error.value)
 
 
 def test_an_agent_the_project_made_can_be_named_on_a_custom_step(eng, project, monkeypatch):

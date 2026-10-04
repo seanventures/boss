@@ -1322,7 +1322,7 @@ def _role_identity(role: Optional[str], connection: Any = None,
                    project_id: Optional[str] = None) -> str:
     """Answer as a named member of the workforce, from what that member has actually done.
 
-    The Agents page's "Ask" put "@QA Lead: " into the general agent's box. The name was prose
+    Agent Studio's "Ask" put "@QA Lead: " into the general agent's box. The name was prose
     in a prompt, so the reply came from BOSS-in-general: no lens, no remit, and no memory of
     anything that role had argued. An operator asking their QA lead a question got a generic
     answer wearing a name badge, which is worse than no expert at all — it looks like expertise.
@@ -1397,8 +1397,12 @@ def _agent_voice(role: str, connection: Any, project_id: Optional[str]) -> str:
             _log.warning("agent voice lookup failed for %s", role, exc_info=True)
     if "spec" not in row:
         row = agent_persona.shipped_role(agent_identity.resolve(role) or "") or row
+    from .agent_instructions import for_prompt
+
+    instructions = (for_prompt(connection, project_id, row.get("role_key"), "chat")
+                    if connection is not None and project_id else [])
     try:
-        voice = agent_persona.identity_and_voice(row, mode="chat")
+        voice = agent_persona.identity_and_voice(row, mode="chat", instructions=instructions)
     except Exception:  # noqa: BLE001
         from .agent_world_types import AI_DISCLOSURE
 

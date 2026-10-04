@@ -1,0 +1,21 @@
+{
+ "role_key": "qa",
+ "items": [],
+ "budget": {
+  "work": {
+   "used_chars": 0,
+   "limit_chars": 16000
+  },
+  "chat": {
+   "used_chars": 0,
+   "limit_chars": 16000
+  },
+  "panel": {
+   "used_chars": 0,
+   "limit_chars": 16000
+  }
+ },
+ "version": 4,
+ "fingerprint": "9f3ac21e",
+ "can_edit": true
+}

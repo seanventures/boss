@@ -38,12 +38,23 @@ describe("the area exists in all the places an area has to exist", () => {
 });
 
 describe("a new skill", () => {
-  it("offers four ways to run, each explained in its tooltip", async () => {
+  it("offers five ways to run (a Guide only explains), each explained in its tooltip", async () => {
     installKitApi();
     await render(drawer());
     const how = $$('[data-testid^="skill-how-"]');
-    expect(how.map((b) => b.textContent)).toEqual(["Command", "MCP tool", "Built-in", "Program"]);
+    expect(how.map((b) => b.textContent)).toEqual(["Command", "MCP tool", "Built-in", "Program", "Guide"]);
     expect(how.every((b) => (b.dataset.tip ?? "").length > 0)).toBe(true);
+  });
+
+  it("a Guide shows only its knowledge, and is always Reads", async () => {
+    installKitApi();
+    await render(drawer());
+    await click('[data-testid="skill-how-guide"]');
+    for (const id of ["skill-inputs", "skill-produces", "skill-image", "skill-mcp-server", "skill-executor", "skill-risk"]) {
+      expect($(`[data-testid="${id}"]`), id).toBeNull();
+    }
+    expect($('[data-testid="skill-knowledge"]')).not.toBeNull();
+    expect($('[data-testid="skill-risk-guide"]')?.textContent).toBe("Reads");
   });
 
   it("a command's dangers are said on its fields: a pinned image, quoted inputs", async () => {

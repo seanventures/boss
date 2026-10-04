@@ -164,7 +164,7 @@ def test_the_chat_cannot_publish_an_mcp_step_that_no_agent_holds(eng, project, c
                    steps=[_drafted("s1")])
     assert refused["ok"] is False, refused
     assert "no agent holds MCP server 'mattermost'" in refused["error"], refused
-    assert "Agents page" in refused["error"]
+    assert "Agent Studio" in refused["error"]
     with eng.begin() as c:
         assert c.execute(text("SELECT count(*) FROM workflow_versions WHERE project_id=:p"),
                          {"p": project}).scalar() == 0
@@ -219,7 +219,7 @@ def test_a_named_agent_without_the_server_is_refused_at_publish_with_what_to_do(
                                            "binding": {"custom_step": "announce_it"}})
         said = str(refused.value)
         assert "publisher may not run" in said and "mattermost" in said, said
-        assert "Agents page" in said and "allowed_callers" not in said
+        assert "Agent Studio" in said and "allowed_callers" not in said
 
         agents.grant_mcp(c, project, actor="op", role_key="publisher", mcp_server_id=sid)
         _, version = _publish(c, project, "named2", {"captain": "publisher",
@@ -259,7 +259,7 @@ def test_a_scheduled_run_never_calls_an_mcp_tool_that_no_agent_holds(eng, projec
         row = c.execute(text("SELECT last_error FROM workflow_schedules WHERE id=:i"),
                         {"i": schedule["id"]}).mappings().one()
     assert calls == [], "a schedule called a server nobody was given"
-    assert fired and "Agents page" in (row["last_error"] or "") + str(fired), (fired, row)
+    assert fired and "Agent Studio" in (row["last_error"] or "") + str(fired), (fired, row)
 
 
 def test_the_runtime_refuses_the_workflow_a_server_except_on_the_legacy_road(eng, project,
@@ -274,7 +274,7 @@ def test_the_runtime_refuses_the_workflow_a_server_except_on_the_legacy_road(eng
             run_id="wfr_x", step=0, actor="op", caller="workflow_runner")
         assert denied["status"] == "denied", denied
         assert "workflow holds no MCP server" in denied["reason"]
-        assert "Agents page" in denied["reason"]
+        assert "Agent Studio" in denied["reason"]
         assert calls == []
         released = agent_loop._invoke_mcp_skill(
             c, Settings(), project, server, {"name": TOOL}, {"text": "x"},
@@ -303,7 +303,7 @@ def test_a_version_published_under_the_old_rules_still_runs_its_mcp_step_as_the_
         out = custom_steps.execute(c, Settings(), project_id=project, actor="ceo", step=legacy,
                                    inputs={"text": "hi"}, run_id="wfr_legacy")
         assert out["ran_as"]["how"] == "legacy_workflow_runner", out["ran_as"]
-        assert "Agents page" in out["ran_as"]["why"]
+        assert "Agent Studio" in out["ran_as"]["why"]
 
         current = {**legacy, step_agents.AGENT_RULES_KEY: step_agents.CURRENT_AGENT_RULES}
         with pytest.raises(custom_steps.CustomStepError) as refused:
@@ -316,7 +316,7 @@ def test_a_version_published_under_the_old_rules_still_runs_its_mcp_step_as_the_
 def test_a_named_agent_whose_server_was_taken_is_told_what_to_do_when_it_runs(eng, project,
                                                                               calls):
     """A grant can be taken away between publish and run. The runtime's refusal is the grant
-    rule's sentence, naming the Agents page — not the raw allowed_callers string."""
+    rule's sentence, naming Agent Studio — not the raw allowed_callers string."""
     with eng.begin() as c:
         _mcp_step(c, project, _server(c, project))
         with pytest.raises(custom_steps.CustomStepError) as refused:
@@ -325,6 +325,6 @@ def test_a_named_agent_whose_server_was_taken_is_told_what_to_do_when_it_runs(en
                                        "binding": {"custom_step": "announce_it"}},
                                  inputs={"text": "x"}, run_id="wfr_named")
     said = str(refused.value)
-    assert "publisher does not hold that server" in said and "Agents page" in said, said
+    assert "publisher does not hold that server" in said and "Agent Studio" in said, said
     assert "allowed_callers" not in said
     assert calls == []

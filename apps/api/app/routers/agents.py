@@ -68,6 +68,41 @@ class AgentUpdateBody(BaseModel):
     fingerprint: Optional[Any] = None
 
 
+class InstructionAddBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    name: Any = None
+    body: Any = None
+    source: str = "pasted"
+    modes: Optional[list[str]] = None
+    dry_run: bool = False
+
+
+class InstructionUpdateBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    name: Any = None
+    body: Any = None
+    modes: Optional[list[str]] = None
+    position: Optional[int] = None
+    dry_run: bool = False
+
+
+class SkillFromFileBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    filename: str = ""
+    text: Any = None
+    label: Optional[str] = None
+    summary: Optional[str] = None
+    grant_to: Optional[str] = None
+
+
+#: The prompt drawer's words for each layer (agent-loadout spec §3.3, "See its prompt").
+PROMPT_LABELS = {"L0": "Rules", "L1": "Identity", "L2": "Remit", "L2i": "Instructions",
+                 "L3": "Voice", "L4": "Memory", "L5": "Situation"}
+
+
 class RoleMcpBody(BaseModel):
     project_id: str
     actor: Optional[str] = None
@@ -81,6 +116,7 @@ def build_agents_router(
     engine,
     require_write_actor: Callable[..., str],
     require_reader: Callable[..., None],
+    actor_can: Optional[Callable[..., bool]] = None,
 ) -> APIRouter:
     from boss_engine.services import agents
 
@@ -197,6 +233,147 @@ def build_agents_router(
                                            retire_older_versions=retire_older_versions)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
+
+    # ── Instructions (agent-loadout spec §4.7) ─────────────────────────────────────────────
+    # Writes are a PERSON's (agent_instructions.ONLY_A_PERSON) with role_review, the permission
+    # a voice edit needs; the actor is the signed-in principal, as for PATCH /v1/agents.
+
+    def _ins_fail(error: Exception, *, dry_run: bool = False):
+        """A refusal. A DRY RUN's refusal is its answer, not an error: 200 {ok: false, …} — the
+        sheet asks on every keystroke and a 422 each time is a console full of red."""
+        from fastapi.responses import JSONResponse
+
+        from boss_engine.services.agent_instructions import InstructionError
+
+        if dry_run and isinstance(error, InstructionError) and error.status == 422:
+            return JSONResponse({"ok": False, **error.detail()}, status_code=200)
+        if isinstance(error, InstructionError):
+            raise HTTPException(status_code=error.status, detail=error.detail()) from error
+        raise error
+
+    @router.get("/v1/agents/{role_key}/instructions")
+    def list_instructions(role_key: str, project_id: str,
+                          actor: Optional[str] = None) -> dict[str, Any]:
+        """The documents, the per-mode budget and `can_edit` — whether this viewer may write
+        them (role_review), so a reader sees the rows and the preview, and no Add."""
+        from boss_engine.services import agent_instructions
+
+        with begin(engine) as connection:
+            require_reader(connection, project_id)
+            out = agent_instructions.listing(connection, project_id, role_key)
+            out["can_edit"] = bool(actor_can and actor_can(connection, project_id, actor,
+                                                           "role_review"))
+            return out
+
+    @router.get("/v1/agents/{role_key}/instructions/{ins_id}")
+    def get_instruction(role_key: str, ins_id: str, project_id: str) -> dict[str, Any]:
+        from boss_engine.services import agent_instructions
+
+        with begin(engine) as connection:
+            require_reader(connection, project_id)
+            try:
+                return agent_instructions.one(connection, project_id, role_key, ins_id)
+            except Exception as error:  # noqa: BLE001
+                _ins_fail(error)
+
+    @router.post("/v1/agents/{role_key}/instructions", status_code=201)
+    def add_instruction(role_key: str, body: InstructionAddBody):
+        from fastapi.responses import JSONResponse
+
+        from boss_engine.services import agent_instructions
+
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, body.project_id, body.actor, "role_review")
+            try:
+                out = agent_instructions.add(
+                    connection, body.project_id, role_key, actor=actor, name=body.name,
+                    body=body.body, source=body.source, modes=body.modes, dry_run=body.dry_run)
+            except Exception as error:  # noqa: BLE001
+                return _ins_fail(error, dry_run=body.dry_run)
+        return JSONResponse(out, status_code=200 if body.dry_run else 201)
+
+    @router.patch("/v1/agents/{role_key}/instructions/{ins_id}")
+    def update_instruction(role_key: str, ins_id: str, body: InstructionUpdateBody):
+        from boss_engine.services import agent_instructions
+
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, body.project_id, body.actor, "role_review")
+            try:
+                return agent_instructions.update(
+                    connection, body.project_id, role_key, ins_id, actor=actor, body=body.body,
+                    name=body.name, modes=body.modes, position=body.position,
+                    dry_run=body.dry_run)
+            except Exception as error:  # noqa: BLE001
+                return _ins_fail(error, dry_run=body.dry_run)
+
+    @router.delete("/v1/agents/{role_key}/instructions/{ins_id}")
+    def remove_instruction(role_key: str, ins_id: str, project_id: str,
+                           actor: Optional[str] = None) -> dict[str, Any]:
+        from boss_engine.services import agent_instructions
+
+        with begin(engine) as connection:
+            who = require_write_actor(connection, project_id, actor, "role_review")
+            try:
+                return agent_instructions.remove(connection, project_id, role_key, ins_id,
+                                                 actor=who)
+            except Exception as error:  # noqa: BLE001
+                _ins_fail(error)
+
+    @router.get("/v1/agents/{role_key}/versions/{version}/instructions")
+    def instructions_at_version(role_key: str, version: int, project_id: str) -> dict[str, Any]:
+        from boss_engine.services import agent_instructions
+
+        with begin(engine) as connection:
+            require_reader(connection, project_id)
+            return agent_instructions.at_version(connection, project_id, role_key, version)
+
+    @router.get("/v1/agents/{role_key}/prompt")
+    def agent_prompt(role_key: str, project_id: str, mode: str = "work",
+                     actor: Optional[str] = None) -> dict[str, Any]:
+        """`See its prompt`: the composed prompt by layer, without a task. It shows remit text,
+        so it needs role_review rather than plain reading."""
+        from sqlalchemy import text as sql_text
+
+        from boss_engine.services.agent_instructions import for_prompt
+        from boss_engine.services.agent_persona import compose_agent_prompt
+
+        if mode not in ("work", "chat", "panel"):
+            raise HTTPException(status_code=422, detail={"field": "mode",
+                                                         "message": "mode is work, chat or panel"})
+        with begin(engine) as connection:
+            require_write_actor(connection, project_id, actor, "role_review")
+            row = connection.execute(
+                sql_text("SELECT role_key, display_name, spec, agent_id, identity_version "
+                         "FROM roles WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": role_key.strip()},
+            ).mappings().first()
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"no agent {role_key!r} on this "
+                                                            "project.")
+            blocks = compose_agent_prompt(
+                dict(row), mode=mode,
+                instructions=for_prompt(connection, project_id, row["role_key"], mode))
+        return {"role_key": row["role_key"], "mode": mode,
+                "blocks": [{"layer": b["layer"], "label": PROMPT_LABELS.get(b["layer"], b["layer"]),
+                            "text": b["text"]} for b in blocks if b.get("text")]}
+
+    @router.post("/v1/skills/from-file", status_code=201)
+    def skill_from_file(body: SkillFromFileBody) -> dict[str, Any]:
+        """A SKILL.md-style file → a `guide` skill, given to `grant_to` in the same step."""
+        from boss_engine.services import agent_instructions
+
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, body.project_id, body.actor, "role_review")
+            if body.grant_to:
+                # Granting is the same permission everywhere it happens.
+                require_write_actor(connection, body.project_id, actor, "workflow_manage")
+            try:
+                return agent_instructions.skill_from_file(
+                    connection, body.project_id, actor=actor, filename=body.filename,
+                    text_=body.text, label=body.label, summary=body.summary,
+                    grant_to=body.grant_to)
+            except Exception as error:  # noqa: BLE001
+                _ins_fail(error)
 
     @router.get("/v1/role-mcp-servers")
     def list_role_mcp(project_id: str, role_key: Optional[str] = None) -> dict[str, Any]:

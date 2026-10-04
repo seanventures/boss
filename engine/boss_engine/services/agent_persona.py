@@ -14,6 +14,7 @@ operator wrote about how an agent should sound reached any of the three.
     L0 BOSS       safety, tools, answer-first, never imply experience you cannot point at
     L1 Identity   who it is, that it is an AI, and that it never claims to be a real person
     L2 Remit      mission, outcomes, must / must not (+ persona.never), decision rights, outputs
+    L2i Instructions  the operator's working instructions (agent_instructions), framed, ≤ ~4k tokens
     L3 Voice      archetype brief, voice sliders, about me, phrases, tone (capped, ~250 tokens)
     L4 Memory     up to 3 things it remembers, each with a source to cite
     L5 Situation  the work in hand: who handed it over, how, the scope, the accountable human
@@ -661,12 +662,15 @@ def persona_of(role: Any) -> dict[str, Any]:
 
 
 def compose_agent_prompt(role: dict, *, mode: str, act: Optional[dict] = None,
-                         memory: Optional[list[dict]] = None) -> list[PromptBlock]:
+                         memory: Optional[list[dict]] = None,
+                         instructions: Optional[list[dict]] = None) -> list[PromptBlock]:
     """Ordered L0..L5 blocks for one agent. Empty layers are left out; L0-L3 always appear.
 
     `role` is a roles row ({role_key, display_name, spec, agent_id, identity_version}) or a
     bare role spec. `act` is the work in hand (an agent_acts row, or {label, seats} for a
-    panel). `memory` is up to 3 recalled items ({text, act_id|source_id}).
+    panel). `memory` is up to 3 recalled items ({text, act_id|source_id}). `instructions` is
+    agent_instructions.for_prompt(…, mode) — the operator's working instructions, placed as L2i
+    AFTER the rules, identity and remit, so nothing uploaded can come before them.
     """
     if mode not in ("chat", "work", "panel"):
         raise ValueError(f"mode must be chat, work or panel, not {mode!r}")
@@ -677,8 +681,14 @@ def compose_agent_prompt(role: dict, *, mode: str, act: Optional[dict] = None,
         {"layer": "L0", "text": _l0(mode)},
         {"layer": "L1", "text": f"{_name_line(role, spec, persona)} {AI_DISCLOSURE}"},
         {"layer": "L2", "text": _l2(spec, persona)},
-        {"layer": "L3", "text": _l3(spec, persona)},
     ]
+    if instructions:
+        from .agent_instructions import frame
+
+        framed = frame(instructions)
+        if framed:
+            blocks.append({"layer": "L2i", "text": framed})
+    blocks.append({"layer": "L3", "text": _l3(spec, persona)})
     remembered = _l4(memory or [])
     if remembered:
         blocks.append({"layer": "L4", "text": remembered})
@@ -696,15 +706,20 @@ def render(blocks: Iterable[PromptBlock], *, layers: Optional[Iterable[str]] = N
 
 
 def identity_and_voice(role: dict, *, mode: str, act: Optional[dict] = None,
-                       memory: Optional[list[dict]] = None) -> str:
-    """L1 + L3 (+ L4/L5 when given): what a caller with its OWN L0 and remit adds.
+                       memory: Optional[list[dict]] = None,
+                       instructions: Optional[list[dict]] = None) -> str:
+    """L1 + L2i + L3 (+ L4/L5 when given): what a caller with its OWN L0 and remit adds.
+
+    L2i (the operator's instructions) is here, unlike L2: the dock, work prompts, agent steps
+    and panel seats all compose through this, so leaving it out would reach chat alone.
 
     The dock, the work prompt and the panel each keep their own operating instructions (their
     L0 and remit were written around real incidents); this is the part that makes the answer
     come from this agent.
     """
-    return render(compose_agent_prompt(role, mode=mode, act=act, memory=memory),
-                  layers=("L1", "L3", "L4", "L5"))
+    return render(compose_agent_prompt(role, mode=mode, act=act, memory=memory,
+                                       instructions=instructions),
+                  layers=("L1", "L2i", "L3", "L4", "L5"))
 
 
 def seat_voices(connection: Any, project_id: str, personas: list[dict]) -> list[dict]:
@@ -746,9 +761,12 @@ def seat_voices(connection: Any, project_id: str, personas: list[dict]) -> list[
         others = [{"callsign": s["callsign"], "title": s.get("title"),
                    "archetype": s.get("archetype")} for s in seats if s is not seat]
         try:
+            from .agent_instructions import for_prompt
+
             seat["agent_voice"] = identity_and_voice(
                 seat["_row"], mode="panel", act={"label": "a cross-functional panel",
-                                                 "seats": others})
+                                                 "seats": others},
+                instructions=for_prompt(connection, project_id, seat.get("role_key"), "panel"))
         except Exception:  # noqa: BLE001
             seat["agent_voice"] = ""
     for seat in seats:

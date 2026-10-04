@@ -841,7 +841,7 @@ def execute_mcp_tool(
                if caller else {"message": (
                    f"{skill_key} calls the MCP server '{server['name']}' and this invocation "
                    "names no agent holding it. Run it as an agent that holds the server "
-                   "(Agents page, Give this agent an MCP server).")})
+                   "(Agent Studio, the agent's Loadout › MCP › + Add).")})
         if gap is not None:
             raise SkillExecutorConfigurationError(gap["message"])
 
@@ -998,6 +998,35 @@ def _run_a_program(
         }
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@register_executor("skill.guide")
+def execute_guide(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a guide's body: an operator's playbook, read when the agent needs it.
+
+    NO NETWORK, NO SIDE EFFECTS, NO GRANT. The result says so in its first line, so a playbook
+    that reads like permission is still framed as an explanation (agent-loadout spec §4.6).
+    The body is re-checked with today's lint: one that fails is not handed to the model.
+    """
+    from .agent_instructions import trusted
+    from .skill_definitions import get_skill
+
+    skill_key = _required_text(inputs, "_skill_key")
+    skill = get_skill(context.connection, context.project_id, skill_key)
+    if skill is None:
+        raise SkillExecutorConfigurationError(f"no skill {skill_key!r} in this project.")
+    if not skill["enabled"]:
+        raise SkillExecutorConfigurationError(f"skill {skill_key!r} is disabled.")
+    body = str(skill.get("knowledge") or "")
+    refused = trusted(body)
+    if refused:
+        raise SkillExecutorConfigurationError(
+            f"guide {skill_key!r} fails the instructions check ({refused}); edit it first.")
+    label = str(skill.get("label") or skill_key)
+    return {"text": f"Guide: {label}. It explains how; it grants nothing.\n\n{body}"}
 
 
 @register_executor("skill.agent_program")

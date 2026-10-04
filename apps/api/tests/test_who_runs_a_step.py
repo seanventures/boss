@@ -304,7 +304,7 @@ def test_the_same_workflow_published_again_is_refused_with_what_to_do(client, en
         {"id": "do", "kind": "capability", "next": [], "approval": {"mode": "manual"},
          "binding": {"custom_step": "legacy_again_step", "inputs": {}}}])
     assert saved.status_code == 422
-    assert f"Give {skill} to an agent on the Agents page" in saved.json()["detail"]
+    assert f"Give {skill} to an agent in Agent Studio" in saved.json()["detail"]
 
 
 def test_publish_and_run_agree_on_what_an_agent_holds(client, engine):

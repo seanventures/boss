@@ -37,7 +37,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from sqlalchemy import text
 
-from . import agent_acts, agent_identity, agent_persona
+from . import agent_acts, agent_identity, agent_instructions, agent_persona
 from .agent_world_types import AI_DISCLOSURE, ROOM_PRESETS
 from .core import emit_event, make_id
 
@@ -149,10 +149,13 @@ def _resolve(key_or_title: str) -> Optional[str]:
     return agent_identity.resolve(value) or value.lower()
 
 
-def _compose(role: dict, *, mode: str, act: Optional[dict], memory: list[dict]) -> str:
+def _compose(role: dict, *, mode: str, act: Optional[dict], memory: list[dict],
+             instructions: Optional[list[dict]] = None) -> str:
     """The agent's own prompt, L0..L5 (agent_persona.compose_agent_prompt): the same persona
-    compiler the dock, the work prompt and every panel seat use."""
-    blocks = agent_persona.compose_agent_prompt(role, mode=mode, act=act, memory=memory)
+    compiler the dock, the work prompt and every panel seat use. `instructions`:
+    agent_instructions.for_prompt(…, mode) — the operator's working instructions (L2i)."""
+    blocks = agent_persona.compose_agent_prompt(role, mode=mode, act=act, memory=memory,
+                                                instructions=instructions)
     composed = "\n\n".join(str(b.get("text") or "") for b in blocks if b.get("text"))
     # The disclosure is fixed whoever composed the rest (§0.1.3): never trust a composer to
     # have kept it.
@@ -1110,7 +1113,9 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                  "seats": [{"title": f"{roles[k].get('display_name') or k} ({k})",
                             "callsign": _seat_info(roles[k]).get("callsign")}
                            for k in conv["seats"] if k in roles and k != speaker.role_key]},
-            memory=memory)
+            memory=memory,
+            instructions=agent_instructions.for_prompt(
+                c, plan.project_id, speaker.role_key, "panel" if is_room else "chat"))
         adapter = make_adapter(c, settings, plan.project_id)
         engine_name = _engine_name(c, settings, plan.project_id)
     turn_id = turn["turn_id"]

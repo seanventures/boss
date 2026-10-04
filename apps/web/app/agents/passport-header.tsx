@@ -23,12 +23,13 @@ import {
 } from "../../lib/agent-world";
 import { AgFace, AiBadge } from "./agent-face";
 
+/** Loadout first (agent-loadout spec §3.1): what it can do comes before what it has done. */
 export const SECTIONS = [
+  { key: "loadout", label: "Loadout" },
   { key: "work", label: "Work" },
   { key: "profile", label: "Profile" },
   { key: "used", label: "Used in" },
   { key: "lineage", label: "Lineage" },
-  { key: "skills", label: "Skills & MCP" },
   { key: "settings", label: "Settings" },
 ] as const;
 export type SectionKey = (typeof SECTIONS)[number]["key"];
@@ -79,7 +80,7 @@ export const CERT_TIPS = {
   by: "Who created it.",
   from: "What it was made from: a BOSS pack, a template or an archetype.",
   sponsor: "The person accountable for this agent.",
-  version: "Changes when its voice, remit or skills change.",
+  version: "Changes when its voice, remit, skills or instructions change.",
   reports: "Who it answers to.",
   identity: "Per-agent tokens and policies come in a later release.",
 } as const;
@@ -316,15 +317,17 @@ export function PassportNav({ active, onPick }: { active: SectionKey; onPick: (k
 }
 
 export function readTab(search: string): SectionKey {
-  const t = new URLSearchParams(search).get("tab");
-  return (SECTIONS.find((s) => s.key === t)?.key ?? "work") as SectionKey;
+  const raw = new URLSearchParams(search).get("tab");
+  // The Kit's `All abilities ↗` and `Who can` links still say `&tab=skills`: that is the Loadout.
+  const t = raw === "skills" ? "loadout" : raw;
+  return (SECTIONS.find((s) => s.key === t)?.key ?? "loadout") as SectionKey;
 }
 
 /** Scroll to a section and say so in the URL (replace: a tab is not a navigation). */
 export function goToSection(k: SectionKey): void {
   try {
     const url = new URL(window.location.href);
-    if (k === "work") url.searchParams.delete("tab"); else url.searchParams.set("tab", k);
+    if (k === "loadout") url.searchParams.delete("tab"); else url.searchParams.set("tab", k);
     window.history.replaceState(null, "", url.toString());
     const el = document.getElementById(`ag-sec-${k}`);
     if (el && typeof el.scrollIntoView === "function") {

@@ -36,7 +36,7 @@ import type { CompanyOverview } from "../../lib/v2/overview";
 export const V2_NAV = [
   { id: "missions", label: "Factory", href: "/v2", built: true, v1Area: "code_tasks" },
   { id: "hive", label: "Hive", href: "/v2/hive", built: true, v1Area: "agent" },
-  { id: "factory", label: "Agents", href: "/v2/factory", built: true, v1Area: "workforce" },
+  { id: "factory", label: "Agent Studio", href: "/v2/factory", built: true, v1Area: "workforce" },
   { id: "org", label: "Team structure", href: "/v2/org", built: true, v1Area: "workforce" },
   { id: "panels", label: "Approvals", href: "/v2/panels", built: true, v1Area: "decisions" },
   { id: "boss", label: "Workflows", href: "/v2/boss", built: true, v1Area: "delivery_workflows" },
