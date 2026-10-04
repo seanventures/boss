@@ -39,7 +39,7 @@ import {
   revokeSkill, updateAgent, type AgentSummary,
 } from "../lib/agents";
 import type { Passport, Persona } from "../lib/agent-world-types";
-import { askAgent, getPassport } from "../lib/agent-world";
+import { askAgent, getPassport, openAgent } from "../lib/agent-world";
 import { useLivePresence } from "../lib/agents-live";
 import {
   PassportHeader, PassportNav, goToSection, readTab, type SectionKey,
@@ -151,16 +151,6 @@ export function usedIn(named: NamedOn[] | undefined): Array<{ workflow_key: stri
                href: `?${q}` });
   }
   return out;
-}
-
-/** Show another agent's Passport in place (the same `?role=` the roster opens). */
-function openRole(roleKey: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("role", roleKey);
-    window.history.pushState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
 }
 
 export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, studio }: {
@@ -291,7 +281,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
             {registering ? (
               <AgentQuickCreate projectId={projectId} actor={actor} initialName={detail.name}
                                 onClose={() => setRegistering(false)}
-                                onCreated={(key) => { setRegistering(false); void load(); openRole(key); }} />
+                                onCreated={(key) => { setRegistering(false); void load(); openAgent(key); }} />
             ) : null}
             <PassportNav active={tab} onPick={pick} />
             {sharing && passport ? (

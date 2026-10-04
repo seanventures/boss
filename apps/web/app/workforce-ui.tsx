@@ -9,7 +9,7 @@ import { AgentQuickCreate } from "./agent-quick-create";
 import { FocusedAgents } from "./focused-agents-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
-import { askAgent as talkTo, identityOf } from "../lib/agent-world";
+import { askAgent as talkTo, identityOf, openAgent } from "../lib/agent-world";
 import { useLivePresence } from "../lib/agents-live";
 import { AgFace } from "./agents/agent-face";
 import { RosterSummary, RosterZones, placeAgents } from "./agents/roster-zones";
@@ -35,17 +35,6 @@ function humanise(key: string): string {
 
 function volumeOf(a: V2Agent): number {
   return (a.calls ?? 0) + (a.steps ?? 0);
-}
-
-/** Open one agent. Addressable, because a view nobody can link to is one nobody can send. */
-function openAgent(roleKey: string): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("area", "workforce");
-    url.searchParams.set("role", roleKey);
-    window.history.pushState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
 }
 
 /** Talk to this agent, 1:1, in its own voice (agents/talk-sheet.tsx). By role_key: the name
