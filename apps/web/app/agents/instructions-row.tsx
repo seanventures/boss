@@ -11,7 +11,7 @@
  * agent-editor rights: rows and preview only).
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, DotsThree, FileText, Plus } from "@phosphor-icons/react";
+import { Eye, DotsThree, FileText, Plus, X } from "@phosphor-icons/react";
 
 import {
   ago, firstLine, instructionsApi, isFull, LIMITS, meterLine, MODE_LABEL, MODES, readTextFile,
@@ -260,7 +260,7 @@ function PreviewDrawer({ projectId, actor, roleKey, item, startEditing, canEdit,
     <DrawerShell label={item.name} testId="instruction-drawer" onClose={onClose} float over>
       <div className="kit-drawer-head">
         <h3 className="kit-drawer-title">{item.name}</h3>
-        <button type="button" className="kit-link" aria-label="Close" onClick={onClose}>×</button>
+        <button type="button" className="ag-icon-btn" aria-label="Close" data-tip="Close" onClick={onClose}><X size={14} aria-hidden /></button>
         <span className="ld-drawer-facts">
           <span>{sizeLabel(item.sizeChars)} · ≈ {item.tokensEst.toLocaleString("en-US")} tokens</span>
           {item.sinceVersion ? <span className="kit-chip" data-tip={INSTRUCTION_TIPS.since}>Since v{item.sinceVersion}</span> : null}

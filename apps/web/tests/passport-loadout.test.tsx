@@ -86,6 +86,21 @@ describe("W1 · the Loadout comes first", () => {
   });
 });
 
+describe("Esc closes the sheet, not the Passport", () => {
+  it("an open Paste text sheet closes on Esc and the agent page stays", async () => {
+    api(insTwo);
+    const closed = vi.fn();
+    await mount(<AgentDetail projectId="p1" roleKey="qa" actor="ceo" onClose={closed} />);
+    await act(async () => { $('[data-testid="instructions-add"]')!.click(); });
+    await act(async () => { $('[data-testid="instructions-paste"]')!.click(); });
+    expect($('[data-testid="instruction-sheet"]')).not.toBeNull();
+    // A real key press is cancelable; the sheet marks it handled so the page under it stays.
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    expect($('[data-testid="instruction-sheet"]')).toBeNull();
+    expect(closed).not.toHaveBeenCalled();
+  });
+});
+
 describe("W2 · each grant appears once", () => {
   const held = (id: string) => ({ skill_id: id, label: id, summary: "", source: "authored", behaviour_kind: "guide", risk_tier: 0, enabled: true });
   const roleKey = "docs_writer"; // holds render_docs (skill + MCP), not web_search
