@@ -335,10 +335,15 @@ def test_live_and_the_pill_count_exactly_what_the_command_center_counts(monkeypa
                       names={}, now=NOW, stopped=stopped)
     attention = _board_attention(monkeypatch, out["needs_you"], rows, owner="media_publisher")
     assert [a["id"] for a in attention] == [n["id"] for n in out["needs_you"]]
-    assert len(attention) == out["counts"]["needs_you"]
     inbox = {r["id"] for r in rows if da.describe(r, NOW)["attention"] == "needs_action"}
     assert {a["id"] for a in attention if a["kind"] == "approval"} == inbox
-    assert out["counts"]["needs_you"] == len(inbox) + 1 + 1  # + the failed step + the setup gap
+    # ONE NUMBER (agents-home D2): decisions only. The failed step and the setup gap are listed
+    # and counted apart, so the pill can never say 3 while Approvals says 1.
+    assert out["counts"]["needs_you"] == len(inbox)
+    assert (out["counts"]["stopped"], out["counts"]["setup"]) == (1, 1)
+    # A stopped run first, then the gates, setup last (agents-home D12).
+    assert [a["kind"] for a in attention][0] == "failed_step"
+    assert [a["kind"] for a in attention][-1] == "readiness"
     failed = next(a for a in attention if a["kind"] == "failed_step")
     assert failed["id"] == "run:wfr_failed:build"
     assert [x["label"] for x in failed["answers"]] == ["Retry", "Skip"]

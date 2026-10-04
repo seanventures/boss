@@ -323,12 +323,11 @@ def unresolved(skill_id: Optional[str], reason: str, *, step_label: str = "") ->
 
 def run_title(run_input: Any, workflow_name: str = "") -> str:
     """The run in words: what it was started for, else the workflow's own name."""
-    run_input = run_input if isinstance(run_input, dict) else {}
-    for key in ("title", "name", "app_name", "subject"):
-        value = run_input.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()[:80]
-    return (workflow_name or "").strip()[:80] or "this run"
+    # ONE NAME FOR A RUN (agents-home D9): command_center.run_name.
+    from .command_center import run_name
+
+    return run_name({"input": run_input if isinstance(run_input, dict) else {},
+                     "workflow_name": workflow_name})[:80]
 
 
 def gate_question(step_label: str, title: str) -> str:
