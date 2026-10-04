@@ -711,7 +711,7 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
     """`prove_coding_agent`, spent only after its reservation and receipt commit.
 
     A proof is one real model turn. On its own committed connection, before the turn: a budget
-    reservation (never above the per-minute cap, so it can be granted) and an in-progress
+    reservation of the proof's estimate and an in-progress
     receipt. After the turn: the receipt succeeds or fails and the reservation settles at the
     actual cost or is released. A refused budget makes no call. `prove` is injectable for tests.
     """
@@ -726,8 +726,8 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
     # The reservation and the in-progress receipt commit on their own connection BEFORE the
     # turn, in this function, so the same function visibly closes the receipt it opened.
     with engine.begin() as connection:
-        burst = int(budget._burst_cap(connection, project_id) or 0)
-        amount = min(PROOF_ESTIMATE_USD_MICROS, burst) if burst > 0 else PROOF_ESTIMATE_USD_MICROS
+        # The full estimate: the per-minute cap measures actual spend, not reservations.
+        amount = PROOF_ESTIMATE_USD_MICROS
         reserved = budget.reserve(connection, project_id, "model", amount,
                                   f"Connection proof for {provider}", 15, risk_tier=1)
         refused = None
