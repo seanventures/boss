@@ -71,6 +71,9 @@ function usePaused(): boolean {
   return paused;
 }
 
+/** Credits open by themselves only when a build ships — never on a stop or a failure. */
+const SHIPPED_STATES = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
+
 export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: CockpitProps) {
   const { data, error, loading, refresh } = useCockpit(projectId, runId, actor);
   // Before the build has loaded (or while BOSS can't be reached) Esc still goes back.
@@ -353,7 +356,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           <span className="fx-spacer" />
           {c.agents.length ? <AgFaceStack roleKeys={c.agents.map((a) => a.roleKey)} size={24} max={6} states={faceStates} /> : null}
           {workflowRun ? (
-            <CreditsButton chain={chain} runId={workflowRun} projectId={projectId} viewer={actor} title={c.app} live={c.live} />
+            <CreditsButton chain={chain} runId={workflowRun} projectId={projectId} viewer={actor} title={c.app}
+                           live={c.live || !SHIPPED_STATES.has(c.state.state)} />
           ) : null}
         </div>
         {steering ? (
