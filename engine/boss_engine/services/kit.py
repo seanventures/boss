@@ -54,7 +54,8 @@ CAPABILITY_ABILITY = {
 }
 
 #: The order the Kit shows statuses' precedence in (spec §5.2).
-PRECEDENCE = ("testing", "failing", "review", "setup", "needs_repo", "off", "unheld", "ready")
+PRECEDENCE = ("testing", "failing", "review", "setup", "needs_repo", "off", "unheld", "untested",
+              "ready")
 
 
 class KitError(ValueError):
@@ -193,7 +194,11 @@ def _state(connection: Connection, project_id: str) -> dict[str, Any]:
 
     body = _config(connection, project_id, STATE_KEY) or {}
     return {"disabled": [str(k) for k in body.get("disabled") or []],
-            "skill_policy": dict(body.get("skill_policy") or {})}
+            "skill_policy": dict(body.get("skill_policy") or {}),
+            # {ability: [role, ...]}: who held an ability when its server was disconnected,
+            # so reconnecting gives it back to exactly them (restore_server_holders).
+            "kept_holders": {str(k): [str(r) for r in v or []]
+                             for k, v in (body.get("kept_holders") or {}).items()}}
 
 
 def _save_state(connection: Connection, project_id: str, state: dict[str, Any],
@@ -444,6 +449,59 @@ def set_holders(connection: Connection, settings: Any, project_id: str, key: str
     return ability_view(connection, settings, project_id, key)
 
 
+def abilities_on_server(settings: Any, server_name: str) -> list[dict[str, Any]]:
+    """Every ability (media included) whose kit entry names this MCP server."""
+    name = str(server_name or "").lower()
+    return [a for a in definitions(settings, media=True)["abilities"]
+            if any(e["server"].lower() == name for e in a["mcp"])]
+
+
+def remember_server_holders(connection: Connection, settings: Any, project_id: str,
+                            server_name: str, *, actor: str) -> None:
+    """Before a server is disconnected: who holds each ability it backs. Deleting the server
+    releases the grants; reconnecting reads this back so nobody has to re-grant by hand."""
+    abilities = abilities_on_server(settings, server_name)
+    if not abilities:
+        return
+    held = holders(connection, settings, project_id, abilities)
+    state = _state(connection, project_id)
+    for ability in abilities:
+        state["kept_holders"][ability["key"]] = list(held[ability["key"]])
+    _save_state(connection, project_id, state, actor)
+
+
+def restore_server_holders(connection: Connection, settings: Any, project_id: str,
+                           server_name: str, *, actor: str) -> dict[str, list[str]]:
+    """After a server is (re)connected: give each ability it backs to the agents that held it
+    before a disconnect — or, the first time, to the agents whose role recommends it (spec
+    §3.2: engineers hold Library docs). Returns {ability: roles granted}."""
+    from .agent_identity import sealing_once
+
+    abilities = abilities_on_server(settings, server_name)
+    if not abilities:
+        return {}
+    state = _state(connection, project_id)
+    roles = _roles(connection, project_id)
+    recs = recommended(roles)
+    held = holders(connection, settings, project_id, abilities)
+    out: dict[str, list[str]] = {}
+    with sealing_once():
+        for ability in abilities:
+            key = ability["key"]
+            wanted = state["kept_holders"].pop(key, None)
+            if wanted is None:
+                wanted = recs.get(key, [])
+            granted = []
+            for role in wanted:
+                if role not in roles or role in held[key]:
+                    continue
+                if not _grant(connection, settings, project_id, ability, role, actor):
+                    granted.append(role)
+            out[key] = granted
+    _save_state(connection, project_id, state, actor)
+    return out
+
+
 def apply_recommended(connection: Connection, settings: Any, project_id: str, *, actor: str,
                       roles: Optional[list[str]] = None) -> dict[str, Any]:
     """Give every agent (or only `roles`) its role's recommended abilities, in one press.
@@ -629,8 +687,11 @@ def _age(at: Optional[str]) -> tuple[str, float]:
 
 
 def compute_status(*, disabled: bool, needs_repo: bool, needs_setup: bool,
-                   failing: bool, review: bool, held: bool) -> str:
-    """The single status (spec §5.2), by precedence. `testing` is the console's alone."""
+                   failing: bool, review: bool, held: bool, tested: bool = True) -> str:
+    """The single status (spec §5.2), by precedence. `testing` is the console's alone.
+
+    READY MEANS IT PASSED A TEST. An ability that is set up and held but has never passed its
+    test is `untested`: it does not count toward "n of 12 ready", and its button is Test."""
     if failing:
         return "failing"
     if review:
@@ -643,6 +704,8 @@ def compute_status(*, disabled: bool, needs_repo: bool, needs_setup: bool,
         return "off"
     if not held:
         return "unheld"
+    if not tested:
+        return "untested"
     return "ready"
 
 
@@ -665,23 +728,34 @@ def _facts(connection: Connection, settings: Any, project_id: str, ability: dict
     last = tests.get(ability["key"])
     unreachable = next((s for s in present if s.get("enabled") and s.get("reachable") is False),
                        None)
-    failing = bool(last and not last["ok"]) or unreachable is not None
+    # SETUP'S GITHUB CHECK FAILED: the repo is connected (or was tried) and does not work, so
+    # every ability that needs it is Failing with that reason, not "Needs repo".
+    github_failing = dep["github"].get("failing") if "github" in ability["depends_on"] else None
+    if github_failing and not dep["github"]["connected"] and not dep["github"].get(
+            "has_connection"):
+        github_failing = None
+    if github_failing:
+        needs_repo = False
+    failing = bool(last and not last["ok"]) or unreachable is not None or bool(github_failing)
     untrusted = [s for s in present if s.get("enabled", True) and not s.get("trusted")]
     disabled = ability["key"] in state["disabled"] or any(
         s is not None and not s.get("enabled", True) for s in present)
     status = compute_status(disabled=disabled, needs_repo=needs_repo, needs_setup=needs_setup,
-                            failing=failing, review=bool(untrusted), held=bool(held))
+                            failing=failing, review=bool(untrusted), held=bool(held),
+                            tested=bool(last and last["ok"]))
     line: Optional[str] = None
     tip = ""
     if status == "failing":
         error = (last or {}).get("error") if last and not last["ok"] else (
             f"{unreachable['name']}: {unreachable.get('last_error') or 'no answer'}"
-            if unreachable else None)
+            if unreachable else (f"Setup's GitHub check failed: {github_failing}"
+                                 if github_failing else None))
         line = kit_connections.short_error(error)
         tip = f"Last test failed: {error or 'no answer'}"
     elif status == "review":
         count = sum(len(s.get("tools") or []) for s in untrusted)
-        line = f"{count} tools need review" if count else "Server needs review"
+        line = (f"{count} tool{'s' if count != 1 else ''} need"
+                f"{'' if count != 1 else 's'} review" if count else "Server needs review")
         tip = "Unreviewed: every call waits for a person"
     elif status == "setup":
         tip = "Needs an account or key first"
@@ -691,11 +765,11 @@ def _facts(connection: Connection, settings: Any, project_id: str, ability: dict
         tip = "No agent or step can use it"
     elif status == "unheld":
         tip = "Works, but no agent may use it yet"
+    elif status == "untested":
+        tip = "Not tested yet · Test"
     else:
         age, seconds = _age((last or {}).get("at"))
-        if not last:
-            tip = "Not tested yet · Test"
-        elif seconds > FRESH_SECONDS:
+        if seconds > FRESH_SECONDS:
             tip = f"Tested {age} · Test again"
         else:
             tip = f"Tested {age}" + (f" · {last['fact']}" if last.get("fact") else "")

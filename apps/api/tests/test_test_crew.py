@@ -8,8 +8,15 @@ def test_rows_report_holders_and_ok_without_a_model(client, engine, monkeypatch)
     from boss_engine.services import kit_connections, model_routing
     from boss_engine.services.agents import sync_role_mcp
 
+    from boss_engine.services import mcp_registry
+
     with engine.begin() as c:
         sync_role_mcp(c, project_id=PROJECT, actor="test-seed")
+        # Nothing here runs mcp-tools: record web-intel as answering, so the row is about the
+        # grant and the (faked) test, not a probe of a port this machine may give to anything.
+        server = mcp_registry.find_mcp_server(c, PROJECT, "web-intel")
+        mcp_registry.record_reachability(c, PROJECT, server["id"], reachable=True,
+                                         tools=server.get("tools") or [])
     ran = []
 
     def passes(begin, settings, project_id, ability, **kw):

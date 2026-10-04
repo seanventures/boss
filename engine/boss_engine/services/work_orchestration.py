@@ -240,12 +240,15 @@ class WorkOrchestrationService:
                         :created_by
                     )
                     ON CONFLICT (project_id, provider_key) DO UPDATE
+                    -- THE SEED NEVER UNDOES AN OPERATOR. It refreshes what the product
+                    -- defines (name, capabilities) and adds configuration keys a row lacks;
+                    -- every value already stored wins (the seed's owner "" used to wipe the
+                    -- owner/repo a connect had just saved, so every later test failed), and
+                    -- the enforcement mode an operator chose is left alone.
                     SET display_name=EXCLUDED.display_name,
                         capabilities=EXCLUDED.capabilities,
-                        configuration=work_tracker_providers.configuration
-                          || EXCLUDED.configuration,
-                        enforcement_mode=EXCLUDED.enforcement_mode,
-                        updated_at=now()
+                        configuration=EXCLUDED.configuration
+                          || work_tracker_providers.configuration
                     """
                 ),
                 {

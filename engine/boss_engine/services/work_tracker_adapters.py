@@ -662,10 +662,20 @@ class GitHubIssuesWorkTrackerAdapter:
         except WorkTrackerHttpError as error:
             return {"ok": False, "message": str(error), "status": error.status}
         full = data.get("full_name") if isinstance(data, dict) else None
+        # WHO the issues are filed as: the token's own login (an App token has none — then
+        # nothing is claimed rather than the repo shown as if it were an account).
+        login = None
+        try:
+            me = _http_json("GET", f"{base}/user", headers={
+                "Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"})
+            login = me.get("login") if isinstance(me, dict) else None
+        except WorkTrackerHttpError:
+            login = None
         return {
             "ok": True,
             "message": f"Connected to GitHub repo {full or f'{owner}/{repo}'}",
             "repository": full,
+            "account": f"@{login}" if login else None,
         }
 
     def create_issue(

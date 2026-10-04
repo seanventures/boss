@@ -928,7 +928,8 @@ from .services.specpack import (
 )
 
 settings = get_settings()
-engine = get_engine(settings)
+engine = get_engine(
+    settings, idle_in_transaction_seconds=settings.api_db_idle_in_transaction_seconds)
 engine_ports = build_ports(settings, engine)
 configure_engine_ports(engine_ports)
 LOGGER = logging.getLogger("boss.api")
