@@ -105,3 +105,46 @@ def test_a_waiver_needs_a_reason_and_never_waives_the_app_starting(client, engin
 def test_reads_need_a_known_build(client):
     for path in ("cockpit", "gates", "review-comments", "acts"):
         assert client.get(f"/v1/code-tasks/crun_nope/{path}").status_code == 404, path
+
+
+def test_stop_is_instant_while_the_worker_holds_the_run(client, engine):
+    """D1: the worker holds the run row while it checks. Stop must not wait for it: the request
+    is recorded at once, every reader says `Stopped by you`, and the worker finishes the stop at
+    its next boundary."""
+    import time
+
+    from boss_engine.services.code_task_service import honour_stop_request
+
+    run_id = fx.new_run(engine)
+    act = fx.stage(engine, run_id, "implement")
+    worker = engine.connect()
+    held = worker.begin()
+    worker.execute(text("SELECT id FROM code_task_runs WHERE id = :r FOR UPDATE"), {"r": run_id})
+    try:
+        started = time.monotonic()
+        res = client.post(f"/v1/code-tasks/{run_id}/cancel", json={"actor": fx.ACTOR})
+        took = time.monotonic() - started
+        assert res.status_code == 200, res.text
+        assert took < 2.0, f"Stop waited {took:.1f}s on the worker's lock"
+        assert res.json()["status"] == "stopping"
+        cockpit = client.get(f"/v1/code-tasks/{run_id}/cockpit",
+                             params={"project_id": fx.PROJECT, "viewer": fx.ACTOR}).json()
+        assert cockpit["state"]["word"] == "Stopped by you"
+        floor = client.get("/v1/factory/floor",
+                           params={"project_id": fx.PROJECT, "viewer": fx.ACTOR}).json()
+        assert any(s["run_id"] == run_id and s["word"] == "Stopped by you" for s in floor["stopped"])
+        again = client.post(f"/v1/code-tasks/{run_id}/cancel", json={"actor": fx.ACTOR})
+        assert again.status_code == 409
+    finally:
+        held.rollback()
+        worker.close()
+    with engine.begin() as c:
+        honour_stop_request(c, run_id)
+    with engine.begin() as c:
+        status = c.execute(text("SELECT status FROM code_task_runs WHERE id = :r"),
+                           {"r": run_id}).scalar()
+        act_status = c.execute(text("SELECT status FROM agent_acts WHERE act_id = :a"),
+                               {"a": act["act_id"]}).scalar()
+        honoured = c.execute(text("SELECT honoured_at FROM code_task_stop_requests "
+                                  "WHERE run_id = :r"), {"r": run_id}).scalar()
+    assert status == "cancelled" and act_status == "skipped" and honoured is not None

@@ -1025,6 +1025,13 @@ def cancel_run(connection, run_id: str, project_id: str, *, actor: str,
     shows as running forever), its open stage acts closed as skipped, and who stopped it at
     which phase recorded on the run so every surface says `Stopped by <actor>`.
 
+    INSTANT, WHATEVER THE WORKER IS DOING (factory test D1). The worker holds the run row while
+    it checks; a Stop that waited on that lock spun for 30s+ and said nothing. So the request is
+    recorded first in its own row (code_task_stop_requests), which every reader overlays
+    (`overlay_stop_requests`), and the run is finalized at once only when its rows are free
+    (NOWAIT). When they are not, the answer is `stopping` and the worker honours the request at
+    its next stage boundary (`honour_stop_request`).
+
     The one path for the console (POST /v1/code-tasks/{id}/cancel) and MCP cancel_code_task.
     Raises LookupError when there is no such run in the project, CancelRefused when it ended."""
     row = connection.execute(
@@ -1036,15 +1043,53 @@ def cancel_run(connection, run_id: str, project_id: str, *, actor: str,
     if row["status"] in TERMINAL_RUN_STATUSES:
         raise CancelRefused(f"run is already terminal: {row['status']}")
     reason = (reason or "").strip() or f"Stopped by {actor}"
+    recorded = connection.execute(
+        sql("INSERT INTO code_task_stop_requests (run_id, project_id, actor, reason, phase) "
+            "VALUES (:id, :p, :a, :r, :ph) ON CONFLICT (run_id) DO NOTHING RETURNING run_id"),
+        {"id": run_id, "p": project_id, "a": actor, "r": reason[:2000],
+         "ph": row.get("phase") or ""},
+    ).scalar()
+    if not recorded:
+        raise CancelRefused("this build is already stopping")
+    try:
+        with connection.begin_nested():
+            # Take the rows only if nobody holds them; never queue behind the worker.
+            connection.execute(sql("SELECT id FROM code_task_runs WHERE id=:id FOR UPDATE NOWAIT"),
+                               {"id": run_id})
+            connection.execute(
+                sql("SELECT id FROM jobs WHERE project_id=:p AND payload::text LIKE :pat "
+                    "AND status NOT IN ('succeeded','cancelled','deadlettered','failed') "
+                    "FOR UPDATE NOWAIT"),
+                {"p": project_id, "pat": f"%{run_id}%"})
+            return _finalize_cancel(connection, run_id, project_id, actor=actor, reason=reason,
+                                    phase=row.get("phase"))
+    except Exception as exc:  # noqa: BLE001 — the driver's lock error (55P03), nothing else
+        if not _lock_not_available(exc):
+            raise
+    emit_event(connection, project_id, "code_task.stop_requested", actor, "code_task_run",
+               run_id, {"reason": reason, "phase": row.get("phase")})
+    return {"ok": True, "run_id": run_id, "status": "stopping", "stopped_by": actor,
+            "jobs_cancelled": [], "reason": reason}
+
+
+def _lock_not_available(exc: Exception) -> bool:
+    orig = getattr(exc, "orig", None)
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return code == "55P03" or "lock not available" in str(exc).lower()
+
+
+def _finalize_cancel(connection, run_id: str, project_id: str, *, actor: str, reason: str,
+                     phase: Optional[str]) -> dict:
     stamp = datetime.now(timezone.utc).isoformat()
     connection.execute(
         sql("UPDATE code_task_runs SET status='cancelled', error=:e, updated_at=now(), "
             "finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
             "'cancelled_by', CAST(:a AS text), 'cancelled_at', CAST(:t AS text), "
             "'cancelled_phase', CAST(:ph AS text)) "
-            "WHERE id=:id AND project_id=:p"),
+            "WHERE id=:id AND project_id=:p AND status NOT IN "
+            "('completed','failed','cancelled','simulated')"),
         {"id": run_id, "e": reason[:2000], "p": project_id, "a": actor, "t": stamp,
-         "ph": row.get("phase") or ""},
+         "ph": phase or ""},
     )
     jobs = connection.execute(
         sql("SELECT id FROM jobs WHERE project_id=:p AND payload::text LIKE :pat "
@@ -1064,11 +1109,73 @@ def cancel_run(connection, run_id: str, project_id: str, *, actor: str,
             agent_acts.close_code_task(connection, run_id)
     except Exception:  # noqa: BLE001 — the stop stands even if the ledger can't say so
         logger.warning("could not close the acts of cancelled run %s", run_id, exc_info=True)
+    try:
+        with connection.begin_nested():
+            connection.execute(
+                sql("UPDATE code_task_stop_requests SET honoured_at = now() "
+                    "WHERE run_id = :id AND honoured_at IS NULL"), {"id": run_id})
+    except Exception:  # noqa: BLE001 — an older schema without the table still stops
+        pass
     emit_event(connection, project_id, "code_task.cancelled", actor, "code_task_run",
-               run_id, {"reason": reason, "phase": row.get("phase"),
+               run_id, {"reason": reason, "phase": phase,
                         "jobs_cancelled": [j["id"] for j in jobs]})
-    return {"ok": True, "run_id": run_id, "status": "cancelled",
+    return {"ok": True, "run_id": run_id, "status": "cancelled", "stopped_by": actor,
             "jobs_cancelled": [j["id"] for j in jobs], "reason": reason}
+
+
+def pending_stop(connection, run_id: str) -> Optional[dict]:
+    """The stop somebody asked for that the run has not taken yet, or None."""
+    if hasattr(connection, "get_run"):
+        return None
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                sql("SELECT run_id, project_id, actor, reason, phase, requested_at "
+                    "FROM code_task_stop_requests WHERE run_id = :id AND honoured_at IS NULL"),
+                {"id": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — no table on an older schema: nothing pending
+        return None
+    return dict(row) if row else None
+
+
+def honour_stop_request(connection, run_id: str) -> Optional[dict]:
+    """The worker, at a stage boundary with no lock of its own on the run: finish the stop."""
+    req = pending_stop(connection, run_id)
+    if not req:
+        return None
+    return _finalize_cancel(connection, run_id, str(req["project_id"]), actor=str(req["actor"]),
+                            reason=str(req["reason"] or f"Stopped by {req['actor']}"),
+                            phase=req.get("phase"))
+
+
+def overlay_stop_requests(connection, runs: list[dict]) -> list[dict]:
+    """Every reader says `Stopped by <actor>` the moment Stop is pressed, not when the worker
+    lets go of the run row: a pending request reads as the cancelled run it is becoming."""
+    live = [r for r in runs if r and r.get("status") not in TERMINAL_RUN_STATUSES]
+    if not live or hasattr(connection, "get_run"):
+        return runs
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(
+                sql("SELECT run_id, actor, phase, requested_at FROM code_task_stop_requests "
+                    "WHERE run_id = ANY(:ids) AND honoured_at IS NULL"),
+                {"ids": [str(r["id"]) for r in live]}).mappings().all()
+    except Exception:  # noqa: BLE001
+        return runs
+    by_id = {str(r["run_id"]): r for r in rows}
+    for run in live:
+        req = by_id.get(str(run["id"]))
+        if not req:
+            continue
+        fctx = dict(run.get("finalize_ctx") or {})
+        fctx.setdefault("cancelled_by", req["actor"])
+        fctx.setdefault("cancelled_at", req["requested_at"].isoformat()
+                        if hasattr(req["requested_at"], "isoformat") else str(req["requested_at"]))
+        fctx.setdefault("cancelled_phase", req.get("phase") or run.get("phase") or "")
+        fctx["stopping"] = True
+        run["finalize_ctx"] = fctx
+        run["status"] = "cancelled"
+    return runs
 
 
 def _comment_key(c: dict) -> tuple:

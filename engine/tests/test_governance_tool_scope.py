@@ -26,6 +26,9 @@ class _Result:
     def all(self):
         return list(self._rows)
 
+    def scalar(self):
+        return next(iter(self._row.values())) if self._row else None
+
 
 class _Conn:
     def __init__(self, *, run_project: Optional[str] = None, decision_project: Optional[str] = None,
@@ -36,6 +39,10 @@ class _Conn:
         self.meeting_project = meeting_project
         self.executed: list[tuple[str, dict]] = []
         self.updates = 0
+
+    @contextmanager
+    def begin_nested(self):
+        yield self
 
     def execute(self, statement: Any, params: Optional[dict] = None):
         sql = str(getattr(statement, "text", statement))
@@ -67,6 +74,9 @@ class _Conn:
             # scoped get_costs / get_run_activity — return empty for success path
             assert params.get("p"), f"llm_calls query missing project fence: {sql}"
             return _Result(rows=[])
+        if low.strip().startswith("insert"):
+            # The stop request (code_task_stop_requests): recorded, RETURNING its run id.
+            return _Result({"run_id": params.get("id")})
         if low.strip().startswith("update"):
             self.updates += 1
             return _Result(rows=[])
