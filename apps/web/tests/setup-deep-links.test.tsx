@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { resolveLegacyArea } from "../app/legacy-areas";
 import { fakeApi, mountBoard, q, type Mounted } from "./_helpers/setup-board";
-import { board, firstRun } from "./_helpers/setup-fixtures";
+import { board, firstRun, tryStep } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; });
@@ -87,5 +87,21 @@ describe("a failed load", () => {
     expect(q(document.body, "su-verdict")?.textContent).toBe("Ready");
     act(() => root.unmount());
     container.remove();
+  });
+});
+
+describe("the seam to Skills and MCP", () => {
+  it("a Ready board and a Ready stepper both say what is next, and nothing before", async () => {
+    for (const view of [board(), tryStep()]) {
+      fakeApi(view);
+      mounted = await mountBoard(view);
+      const next = q(document.body, "su-next-skills") as HTMLAnchorElement | null;
+      expect(next?.textContent).toBe("Next: give your crew skills");
+      expect(next?.getAttribute("href")).toBe("?area=skills&setup=1");
+      mounted.unmount(); mounted = null; document.body.innerHTML = "";
+    }
+    fakeApi(firstRun());
+    mounted = await mountBoard(firstRun());
+    expect(q(document.body, "su-next-skills")).toBeNull();
   });
 });
