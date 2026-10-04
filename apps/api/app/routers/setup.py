@@ -80,6 +80,18 @@ def build_setup_router(
                 fail(error)
         raise AssertionError("unreachable")
 
+    @router.get("/v1/setup/repository/repos")
+    def get_repository_repos(project_id: str, connection_id: str) -> dict[str, Any]:
+        """`+ Add repo`: what the stored token can see. Asks GitHub; the view never does."""
+        with begin(engine) as connection:
+            require_actor(connection, project_id, actor_for(None), "github_manage")
+            try:
+                return setup_actions.connection_repos(connection, get_settings(), project_id,
+                                                      connection_id)
+            except setup_actions.SetupActionError as error:
+                fail(error)
+        raise AssertionError("unreachable")
+
     @router.post("/v1/setup/repository/select", response_model=SetupView,
                  response_model_by_alias=True)
     def post_repository_select(body: RepositorySelectBody) -> dict[str, Any]:
