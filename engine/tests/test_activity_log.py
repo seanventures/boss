@@ -959,3 +959,58 @@ def test_an_unknown_source_in_the_set_is_refused_by_name(service):
         _call_list(service, conn, PROJECT_A, source="workflow_step,nonsense")
 
     assert "nonsense" in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# One step's log
+#
+# "activity log" on a run's step opened the whole build (or the whole run): there was no scope
+# narrower than a workflow run, and intersecting the workflow run with the step's work task
+# matched nothing, because the work's rows carry only the task.
+# ---------------------------------------------------------------------------
+
+
+def _step_log_conn() -> FakeActivityConn:
+    conn = FakeActivityConn()
+    build = _workflow_step(step_run_id="wsr_build", step_id="build")
+    build["output"] = {"code_task_run_id": "crun_build1"}
+    conn.add("workflow_step_runs", build)
+    preview = _workflow_step(step_run_id="wsr_preview", step_id="preview")
+    preview["output"] = {"run_id": "crun_other"}
+    conn.add("workflow_step_runs", preview)
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_build_elsewhere", workflow_run_id="wfr_two", step_id="build"))
+    conn.add("events", _event(
+        event_id="evt_build_ready", project_id=PROJECT_A, event_type="workflow.step_ready",
+        entity_type="workflow_run", entity_id="wfr_one", created_at=T_NEW,
+        data={"step_id": "build"}))
+    conn.add("events", _event(
+        event_id="evt_preview_ready", project_id=PROJECT_A, event_type="workflow.step_ready",
+        entity_type="workflow_run", entity_id="wfr_one", created_at=T_NEW,
+        data={"step_id": "preview"}))
+    conn.add("events", _event(
+        event_id="evt_build_work", project_id=PROJECT_A, event_type="code_task.stage_completed",
+        entity_type="code_task_run", entity_id="crun_build1", created_at=T_NEW))
+    conn.add("events", _event(
+        event_id="evt_other_work", project_id=PROJECT_A, event_type="code_task.stage_completed",
+        entity_type="code_task_run", entity_id="crun_other", created_at=T_NEW))
+    return conn
+
+
+def test_a_step_scope_is_the_steps_own_rows_and_the_work_it_started(service):
+    ids = set(_ids(_items(_call_list(service, _step_log_conn(), PROJECT_A,
+                                     workflow_run_id="wfr_one", step_id="build"))))
+    assert ids == {"wsr_build", "evt_build_ready", "evt_build_work"}
+
+
+def test_a_step_scope_needs_its_workflow_run(service):
+    with pytest.raises(ValueError):
+        _call_list(service, _step_log_conn(), PROJECT_A, step_id="build")
+
+
+def test_the_step_scope_counts_what_it_lists():
+    conn = _step_log_conn()
+    facets = ActivityLogService.facets(conn, PROJECT_A, workflow_run_id="wfr_one",
+                                       step_id="build")
+    assert facets["sources"]["workflow_step"] == 1
+    assert facets["sources"]["event"] == 2

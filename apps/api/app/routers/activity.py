@@ -128,6 +128,11 @@ def list_activity(
         description="which BOSS process said it: api | worker. Rows that do not record a "
                     "process are excluded rather than guessed at.",
     ),
+    step_id: Optional[str] = Query(
+        default=None,
+        description="one step of the workflow run named by workflow_run_id: its own rows and "
+                    "the work task it started.",
+    ),
     since: Optional[str] = Query(default=None),
     until: Optional[str] = Query(default=None),
     sort: str = Query(default="created_at"),
@@ -177,6 +182,7 @@ def list_activity(
                 workflow_run_id=_clean(workflow_run_id),
                 agent=_clean(agent),
                 service=_clean(service),
+                step_id=_clean(step_id),
                 since=_clean(since),
                 until=_clean(until),
                 sort=sort_key,
@@ -201,6 +207,7 @@ def activity_facets(
     workflow_run_id: Optional[str] = Query(default=None),
     agent: Optional[str] = Query(default=None),
     service: Optional[str] = Query(default=None),
+    step_id: Optional[str] = Query(default=None),
 ) -> dict[str, Any]:
     """How many rows the log holds per level and per stream, counted against the log.
 
@@ -223,6 +230,7 @@ def activity_facets(
                 workflow_run_id=_clean(workflow_run_id),
                 agent=_clean(agent),
                 service=_clean(service),
+                step_id=_clean(step_id),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -1206,6 +1206,77 @@ _LOADERS_BY_SOURCE = {
 }
 
 
+#: Where a step's output names the work task it started or adopted. A build step records it
+#: flat, an awaiting step under `await`, an adopted build under `run_id`.
+_STEP_WORK_KEYS = ("code_task_run_id", "run_id", "build_run_id")
+
+
+def _step_work_ids(connection: Connection, project_id: str, workflow_run_id: str,
+                   step_id: str) -> set[str]:
+    """The work tasks (crun_…) one workflow step started, across every attempt and iteration."""
+    rows = _fetch_rows(
+        connection,
+        """
+        SELECT workflow_run_id, step_id, output FROM workflow_step_runs
+        WHERE project_id = :project_id AND workflow_run_id = :w AND step_id = :s
+        """,
+        {"project_id": project_id, "w": workflow_run_id, "s": step_id},
+    )
+    found: set[str] = set()
+    for row in rows:
+        if _text(row.get("workflow_run_id")) != workflow_run_id or _text(row.get("step_id")) != step_id:
+            continue
+        out = _as_mapping(row.get("output"))
+        for key in _STEP_WORK_KEYS:
+            value = _text(out.get(key))
+            if value.startswith("crun_"):
+                found.add(value)
+        awaited = _as_mapping(out.get("await"))
+        if _text(awaited.get("kind")) == "code_task" and _text(awaited.get("id")).startswith("crun_"):
+            found.add(_text(awaited.get("id")))
+    return found
+
+
+def _item_step(item: Mapping[str, Any]) -> str:
+    """The workflow step a row is about: a step row's own id, or a workflow event's `step_id`."""
+    if item.get("source") == "workflow_step":
+        return _text(item.get("stage"))
+    return _text(_as_mapping(item.get("data")).get("step_id"))
+
+
+def _scope(connection: Connection, project_id: str, *, run_id: Optional[str],
+           workflow_run_id: Optional[str], step_id: Optional[str]):
+    """The run / workflow-run / STEP scope as one predicate, shared by the list and its counts.
+
+    ONE STEP'S LOG is two kinds of row that share no column: the workflow's own rows about that
+    step (its lifecycle, its events), which carry the workflow run and the step id, and the work
+    the step started (a build's turns, model calls and events), which carry only the work task.
+    Intersecting `workflow_run_id` with `run_id` found neither, so a step had no log of its own
+    and "activity log" on a step opened the whole build, or the whole run.
+    """
+    run_filter = _text(run_id)
+    wf_filter = _text(workflow_run_id)
+    step_filter = _text(step_id)
+    if step_filter and not wf_filter:
+        raise ValueError("step_id needs workflow_run_id: a step id is only unique within its run.")
+    if step_filter:
+        work = _step_work_ids(connection, project_id, wf_filter, step_filter)
+
+        def in_step(item: Mapping[str, Any]) -> bool:
+            if run_filter and item.get("run_id") != run_filter:
+                return False
+            if item.get("workflow_run_id") == wf_filter and _item_step(item) == step_filter:
+                return True
+            return bool(item.get("run_id")) and item.get("run_id") in work
+        return in_step
+
+    def in_run(item: Mapping[str, Any]) -> bool:
+        if run_filter and item.get("run_id") != run_filter:
+            return False
+        return not wf_filter or item.get("workflow_run_id") == wf_filter
+    return in_run
+
+
 class ActivityLogService:
     """Project-scoped, read-only union of ops activity rows."""
 
@@ -1229,6 +1300,7 @@ class ActivityLogService:
         workflow_run_id: Optional[str] = None,
         agent: Optional[str] = None,
         service: Optional[str] = None,
+        step_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """How many rows the log holds per LEVEL and per STREAM — server-side, not per page.
 
@@ -1246,7 +1318,9 @@ class ActivityLogService:
         project = _text(project_id)
         if not project:
             raise ValueError("project_id is required.")
-        scoped = any(_text(v) for v in (run_id, workflow_run_id, agent, service))
+        scoped = any(_text(v) for v in (run_id, workflow_run_id, agent, service, step_id))
+        in_scope = _scope(connection, project, run_id=run_id, workflow_run_id=workflow_run_id,
+                          step_id=step_id)
         levels = {name: 0 for name in LEVELS}
         sources: dict[str, int] = {}
         capped_sources: list[str] = []
@@ -1255,10 +1329,7 @@ class ActivityLogService:
                 connection, project, since=since, until=until, cap=FACET_SCAN_CAP, q=None)
             if len(loaded) >= FACET_SCAN_CAP:
                 capped_sources.append(source_name)
-            if _text(run_id):
-                loaded = [i for i in loaded if i["run_id"] == _text(run_id)]
-            if _text(workflow_run_id):
-                loaded = [i for i in loaded if i["workflow_run_id"] == _text(workflow_run_id)]
+            loaded = [i for i in loaded if in_scope(i)]
             if _text(agent):
                 loaded = [i for i in loaded if i["agent"] == _text(agent)]
             if _text(service):
@@ -1300,6 +1371,7 @@ class ActivityLogService:
         workflow_run_id: Optional[str] = None,
         agent: Optional[str] = None,
         service: Optional[str] = None,
+        step_id: Optional[str] = None,
         since: Any = None,
         until: Any = None,
         sort: Optional[str] = "created_at",
@@ -1371,8 +1443,10 @@ class ActivityLogService:
         filters_active = bool(
             needle or kind_filter or status_filter or actor_filter or entity_type_filter
             or level_filter or run_filter or workflow_run_filter or agent_filter
-            or service_filter
+            or service_filter or _text(step_id)
         )
+        in_scope = _scope(connection, project, run_id=run_filter,
+                          workflow_run_id=workflow_run_filter, step_id=step_id)
         exact = (
             not filters_active
             and parsed_sort == "created_at"
@@ -1409,12 +1483,8 @@ class ActivityLogService:
             items = [item for item in items if _matches_q(item, needle)]
         if level_filter:
             items = [item for item in items if item["level"] == level_filter]
-        if run_filter:
-            items = [item for item in items if item["run_id"] == run_filter]
-        if workflow_run_filter:
-            items = [
-                item for item in items if item["workflow_run_id"] == workflow_run_filter
-            ]
+        if run_filter or workflow_run_filter:
+            items = [item for item in items if in_scope(item)]
         if agent_filter:
             items = [item for item in items if item["agent"] == agent_filter]
         if service_filter:
