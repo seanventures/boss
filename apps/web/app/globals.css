@@ -2693,16 +2693,24 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
   max-width: 46ch;
 }
 
-/* A HEADING THAT WANTS THE EYEBROW TYPE. `.section-head h2` (0,1,1) outranks `.eyebrow`
-   (0,1,0), so the class alone loses the cascade and the heading keeps its 1.55rem. This says
-   the combination explicitly rather than leaving it to look like the class did nothing. */
-.section-head h2.eyebrow {
-  font-size: 0.75rem;
+/* THE SECTION LABEL: Setup's green MODEL, shared (app/section-label.tsx). One rule so Setup,
+   the Passport and the Kit cannot drift. `.section-head h2` (0,1,1) outranks `.eyebrow` (0,1,0),
+   so the heading form is named here explicitly rather than looking like the class did nothing. */
+.section-head h2.eyebrow, .section-label {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 0.75rem/1.2 var(--sans);
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--accent-text);
-  font-weight: 700;
-  margin: 0;
+  color: var(--accent-text);            /* #2EC5C5 on --surface #101A30, about 8.6:1 */
+}
+.section-label[data-level="1"] {        /* a section title: ink, larger, not shouting */
+  font-size: 0.9375rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
 }
 
 .stack-grid {

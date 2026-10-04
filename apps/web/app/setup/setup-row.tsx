@@ -9,7 +9,7 @@ import React, { forwardRef, type ReactNode } from "react";
 import { Check } from "@phosphor-icons/react";
 
 import type { RowKey } from "../../lib/setup-types";
-import { Tip } from "./pill";
+import { SectionLabel } from "../section-label";
 
 const CIRCLED = ["①", "②", "③"];
 
@@ -29,7 +29,8 @@ export const SetupRow = forwardRef<HTMLElement, {
              data-focused={focused || undefined} aria-label={label} id={`su-${row}`}>
       <div className="su-row-label">
         {step ? <span className="su-step" aria-hidden="true">{CIRCLED[step - 1]}</span> : null}
-        {tip ? <Tip tip={tip} as="strong">{label}</Tip> : <strong>{label}</strong>}
+        {/* The shared green label (D-3), the same as the agent Passport's and the Kit's. */}
+        <SectionLabel as="span" tip={tip}>{label}</SectionLabel>
         {done ? <Check className="su-done" size={14} weight="bold" aria-label="done" /> : null}
       </div>
       <div className="su-row-body">{children}</div>
