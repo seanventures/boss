@@ -80,7 +80,7 @@ def test_every_state_the_checks_produce_has_a_pill():
         assert state in repository, state
     for state in ("working", "checking", "not_checked", "key_rejected", "login_expired",
                   "no_credit", "rate_limited", "model_not_found", "unreachable",
-                  "paused_budget", "not_on_server"):
+                  "paused_budget", "not_on_server", "key_unreadable"):
         assert state in model, state
 
 

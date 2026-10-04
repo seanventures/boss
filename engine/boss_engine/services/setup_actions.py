@@ -653,6 +653,31 @@ def _new_source_id(connection: Connection, project_id: str, provider: str) -> st
     return f"setup-{provider}-{n}"
 
 
+def _same_connection(connection: Connection, project_id: str, provider: str, *,
+                     base_url: str, model: str) -> Optional[str]:
+    """The `setup-<provider>[-n]` row already pointing at this URL and model, if any."""
+    from .setup_service import api_source_provider
+
+    def norm(url: Any) -> str:
+        return str(url or "").strip().rstrip("/").lower()
+
+    rows = connection.execute(
+        text("SELECT source_id, connection_metadata, supported_models FROM entitlement_sources "
+             "WHERE project_id = :p AND (source_id = :s OR source_id LIKE :like) "
+             "AND (credential_secret_ref_id IS NOT NULL OR connection_status = 'connected') "
+             "ORDER BY source_id"),
+        {"p": project_id, "s": f"setup-{provider}", "like": f"setup-{provider}-%"}).mappings()
+    for row in rows:
+        if api_source_provider(row["source_id"]) != provider:
+            continue
+        meta = setup_view._obj(row["connection_metadata"])
+        models = setup_view._list(row["supported_models"])
+        stored_model = str(meta.get("model") or (models[0] if models else "") or "")
+        if norm(meta.get("base_url")) == norm(base_url) and stored_model == model:
+            return str(row["source_id"])
+    return None
+
+
 def _connect_key(connection: Connection, settings: Any, project_id: str, provider: str, *,
                  api_key: str, base_url: str, model: str, accept: bool, actor: str,
                  http: Optional[Http], replace_source_id: str = "") -> dict[str, Any]:
@@ -683,7 +708,15 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
                        proof.get("host"))
     from .setup_service import api_source_provider, last_check_broken
 
-    if replace_source_id and api_source_provider(replace_source_id) == provider:
+    spec = PROVIDERS.get(provider) or {}
+    if not (replace_source_id and api_source_provider(replace_source_id) == provider):
+        # THE SAME CONNECTION ADDED AGAIN IS THAT ROW, re-tested: provider, URL and model are
+        # the identity, so a second press never makes a second identical row.
+        replace_source_id = _same_connection(
+            connection, project_id, provider,
+            base_url=proof.get("base_url") or base_url or spec.get("base_url") or "",
+            model=str(proof.get("model") or model or "")) or ""
+    if replace_source_id:
         # REPLACE NEVER DOWNGRADES. A key that is only busy or unreachable does not replace one
         # whose last check worked; the working key stays and the refusal says why.
         current = connection.execute(
@@ -699,7 +732,6 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
         source_id = replace_source_id
     else:
         source_id = _new_source_id(connection, project_id, provider)
-    spec = PROVIDERS.get(provider) or {}
     EntitlementBrokerService(settings).upsert_source(
         connection,
         {"project_id": project_id, "provider": provider, "source_id": source_id,
@@ -749,8 +781,8 @@ def check_model(connection: Connection, settings: Any, project_id: str, source_i
         if row["credential_secret_ref_id"]:
             try:
                 key = resolve_secret_ref(connection, row["credential_secret_ref_id"], settings)
-            except Exception:  # noqa: BLE001 — an unreadable key is a rejected key
-                proof = {"ok": False, "state": "key_rejected"}
+            except Exception:  # noqa: BLE001 — BOSS cannot read it; the provider never saw it
+                proof = {"ok": False, "state": "key_unreadable"}
                 _record_model_check(connection, project_id, source_id, proof, actor)
                 return proof
         try:

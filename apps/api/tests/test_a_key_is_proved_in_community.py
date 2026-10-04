@@ -106,3 +106,43 @@ def test_a_second_key_is_a_second_model_and_a_busy_key_never_replaces_a_working_
                               "WHERE project_id = :p AND source_id = 'setup-openrouter'"),
                          {"p": PROJECT}).scalar()
     assert meta["last_check"]["state"] == "working"
+
+
+def test_the_same_connection_added_again_is_the_same_row(client, engine, monkeypatch):
+    """Adding OpenRouter · stub/small twice made two identical rows, and busy adds piled up."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    assert connect_key(client, model="stub/small").status_code == 200
+    again = connect_key(client, model="stub/small")
+    assert again.status_code == 200, again.text
+    assert [m["source_id"] for m in again.json()["models"]] == ["setup-openrouter"]
+    # A busy key for the same connection neither piles up nor replaces the working one.
+    busy = connect_key(client, key="sk-stub-429", model="stub/small")
+    assert busy.status_code == 422
+    with engine.begin() as c:
+        rows = c.execute(text("SELECT source_id FROM entitlement_sources WHERE project_id = :p "
+                              "AND source_id LIKE 'setup-openrouter%'"), {"p": PROJECT}).scalars()
+        assert list(rows) == ["setup-openrouter"]
+
+
+def test_a_key_boss_cannot_decrypt_is_not_blamed_on_the_provider(client, monkeypatch):
+    """A changed master key made the row say "Key rejected — The provider refused this key"."""
+    from boss_engine.services import secret_backends
+
+    as_ceo(monkeypatch)
+    calls: list = []
+    fakes(monkeypatch, model_calls=calls)
+    assert connect_key(client).status_code == 200
+    asked = len(calls)
+
+    def unreadable(*_a, **_k):
+        raise RuntimeError("decrypt failed")
+
+    monkeypatch.setattr(secret_backends, "resolve_secret_ref", unreadable)
+    body = client.post("/v1/setup/checks", headers=AUTH, json={
+        "project_id": PROJECT, "target": "model:setup-openrouter"}).json()
+    [model] = body["models"]
+    assert model["pill"]["label"] == "Can't read key"
+    assert "decrypt" in model["pill"]["tip"] and "provider" not in model["pill"]["tip"]
+    assert model["pill"]["action"] == "replace"
+    assert len(calls) == asked                      # the provider was never asked
