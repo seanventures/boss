@@ -74,7 +74,7 @@ describe("the origin that feeds it", () => {
 // --------------------------------------------------------------------------- //
 describe("the card spine's origin", () => {
   it("takes origin from whichever run in the group recorded one", async () => {
-    const { appOrigin } = await import("../app/code-tasks-ui");
+    const { appOrigin } = await import("../app/factory/legacy-build-parts");
     const members = [
       { finalize_ctx: { is_followup: true } },            // newest: a follow-up, no origin
       { finalize_ctx: { origin: { kind: "meeting", meeting_run_id: "mrun_1" } } },
@@ -83,12 +83,12 @@ describe("the card spine's origin", () => {
   });
 
   it("returns undefined when no run in the group has one", async () => {
-    const { appOrigin } = await import("../app/code-tasks-ui");
+    const { appOrigin } = await import("../app/factory/legacy-build-parts");
     expect(appOrigin([{ finalize_ctx: {} }, { finalize_ctx: null }])).toBeUndefined();
   });
 
   it("prefers the newest origin when several runs carry one", async () => {
-    const { appOrigin } = await import("../app/code-tasks-ui");
+    const { appOrigin } = await import("../app/factory/legacy-build-parts");
     const members = [
       { finalize_ctx: { origin: { kind: "meeting", meeting_run_id: "newest" } } },
       { finalize_ctx: { origin: { kind: "meeting", meeting_run_id: "older" } } },
