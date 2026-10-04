@@ -193,7 +193,10 @@ class MetatronService:
             f"Available: {self._format_usd(snapshot['available_usd_micros'])}, "
             f"reserved: {self._format_usd(snapshot['reserved_usd_micros'])}, "
             f"actual: {self._format_usd(snapshot['actual_usd_micros'])}, "
-            f"committed: {self._format_usd(snapshot['committed_usd_micros'])}."
+            f"committed: {self._format_usd(snapshot['committed_usd_micros'])} "
+            f"of {snapshot.get('whose') or 'the'} "
+            f"{self._format_usd(snapshot['cap_usd_micros'])} cap, which resets at "
+            f"{snapshot.get('resets_at_label') or '00:00 UTC'}."
         )
         if top_driver:
             answer += (

@@ -2470,7 +2470,12 @@ CREATE TABLE IF NOT EXISTS cost_receipts (
   estimated_usd_micros BIGINT NOT NULL,
   actual_usd_micros BIGINT,
   status TEXT NOT NULL DEFAULT 'estimated',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- A call answered by a subscription, licensed seat or local model (included_spend.py):
+  -- money is $0 and every money cap ignores the row; what it would have cost at API list
+  -- price is kept here and reported as "included in your subscription".
+  equivalent_usd_micros BIGINT,
+  included_in_subscription BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS outbox_messages (
@@ -3720,7 +3725,10 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     turns INTEGER NOT NULL DEFAULT 0,
     ok BOOLEAN NOT NULL DEFAULT true,
     error TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The call ran on a subscription or a local model: cost_usd_micros is its API-equivalent
+    -- value, not money, and no budget settlement charges it (included_spend.py).
+    included_in_subscription BOOLEAN NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS idx_llm_calls_run ON llm_calls (code_task_run_id);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_model ON llm_calls (model, stage, created_at DESC);
@@ -6423,3 +6431,23 @@ CREATE TABLE IF NOT EXISTS agent_conversation_turns (
   UNIQUE (conversation_id, seq)
 );
 CREATE INDEX IF NOT EXISTS agent_conversation_turns_act ON agent_conversation_turns(act_id);
+
+-- SUBSCRIPTION CALLS ARE NOT MONEY (services/included_spend.py). Before this rule a call on a
+-- subscription source settled at its API-list-price equivalent, and the money caps counted it:
+-- boss-1 went red on a $10 cap with no API key at all. Receipts settled through the model
+-- gateway name their source, so the ones a subscription, licensed seat or local model answered
+-- are CLASSIFIED here — amounts untouched, history not rewritten — and every money total
+-- (MONEY_SQL) stops counting them; their value is reported as included in the subscription.
+-- Idempotent: only unclassified rows are touched. Receipts settled outside the gateway before
+-- this change name no source and keep counting as money.
+UPDATE cost_receipts cr
+SET included_in_subscription = true,
+    equivalent_usd_micros = COALESCE(cr.equivalent_usd_micros, cr.actual_usd_micros,
+                                     cr.estimated_usd_micros)
+FROM model_gateway_invocations mi
+JOIN model_gateway_leases ml ON ml.id = mi.model_gateway_lease_id
+JOIN entitlement_sources es ON es.id = ml.entitlement_source_id
+WHERE mi.receipt_id = cr.receipt_id
+  AND cr.project_id = mi.project_id
+  AND NOT cr.included_in_subscription
+  AND es.entitlement_kind IN ('subscription', 'licensed_seat', 'local_capacity');

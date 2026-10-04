@@ -20,6 +20,7 @@ from ..config import Settings
 from .budget import BudgetGovernor
 from .core import emit_event, make_id, now_utc
 from .entitlements import EntitlementBrokerService
+from .included_spend import source_is_included, split
 from .jobs import JobLeaseService
 from .receipts import ReceiptService
 from .secret_backends import resolve_secret_ref
@@ -502,7 +503,10 @@ class ModelGatewayService:
             connection, project_id, decision["selected_source_id"]
         )
         self._assert_owner_scope(source, project_id, consumer_owner_id)
-        paid = source["source_kind"] in self.PAID_SOURCE_KINDS
+        # A flat-rate or local source is not paid per call, whatever its kind: its reservation
+        # is $0 of money (included_spend.py), a gate rather than a hold.
+        paid = (source["source_kind"] in self.PAID_SOURCE_KINDS
+                and not source_is_included(source))
         if paid and not source.get("credential_secret_ref_id"):
             raise ModelCapacityDeniedError(
                 "Paid gateway capacity requires a canonical SecretRef credential binding."
@@ -799,10 +803,20 @@ class ModelGatewayService:
         if invocation["status"] != "in_progress":
             return self._serialize_invocation(invocation)
 
+        # A SUBSCRIPTION CALL IS NOT MONEY (included_spend.py). The Claude CLI reports what a
+        # call would cost at API list price whether or not a subscription answered it, and that
+        # figure used to settle here as actual money: boss-1's $10 cap went red with no API key.
+        # The lease names the source; on a subscription, seat or local model the money settled
+        # is $0 and the reported figure is kept as the call's API-equivalent value.
+        included = self._lease_source_included(connection, lease)
+        money_usd_micros, equivalent_usd_micros = split(actual_cost_usd_micros, included)
+
         if succeeded:
             self.receipts.mark_succeeded(
                 connection, invocation["receipt_id"], provider_ref,
-                {"usage_units": usage_units, "model_id": lease.get("model_id")},
+                {"usage_units": usage_units, "model_id": lease.get("model_id"),
+                 **({"included_in_subscription": True,
+                     "equivalent_usd_micros": equivalent_usd_micros} if included else {})},
             )
         else:
             self.receipts.mark_failed(connection, invocation["receipt_id"], error or {"reason": "provider_call_failed"})
@@ -814,6 +828,7 @@ class ModelGatewayService:
                 connection, project_id, reservation_id, invocation["receipt_id"],
                 "model_gateway", lease.get("model_id") or lease["source_id"],
                 int(lease["estimated_cost_usd_micros"]), actual_cost_usd_micros, worker_id,
+                included_in_subscription=included,
             )
         elif reservation_id:
             self.budget.release(connection, project_id, reservation_id, "Model invocation failed before billable use.")
@@ -847,7 +862,7 @@ class ModelGatewayService:
                 """
             ),
             {"status": status, "provider_ref": provider_ref, "usage": json.dumps(usage_units),
-             "actual": actual_cost_usd_micros, "error": json.dumps(error or {}), "id": invocation_id},
+             "actual": money_usd_micros, "error": json.dumps(error or {}), "id": invocation_id},
         ).mappings().one()
         connection.execute(
             text("UPDATE model_gateway_leases SET status=:status, completed_at=now(), result=CAST(:result AS JSONB) WHERE id=:id"),
@@ -868,9 +883,9 @@ class ModelGatewayService:
                 """
                 INSERT INTO llm_calls (
                   id,project_id,stage,engine,model,prompt_tokens,completion_tokens,
-                  total_tokens,cost_usd_micros,ok,error
+                  total_tokens,cost_usd_micros,ok,error,included_in_subscription
                 ) VALUES (:id,:p,'model_gateway',:engine,:model,:prompt,:completion,
-                          :total,:cost,:ok,:error)
+                          :total,:cost,:ok,:error,:included)
                 """
             ),
             {"id": make_id("llm"), "p": project_id, "engine": lease["source_id"],
@@ -878,13 +893,23 @@ class ModelGatewayService:
              "completion": int(usage_units.get("completion_tokens", 0)),
              "total": int(usage_units.get("total_tokens", 0)),
              "cost": int(actual_cost_usd_micros or 0), "ok": succeeded,
-             "error": None if succeeded else json.dumps(error or {})[:2000]},
+             "error": None if succeeded else json.dumps(error or {})[:2000],
+             "included": included},
         )
         emit_event(connection, project_id, f"model_gateway.invocation_{status}", worker_id,
                    "model_gateway_invocation", invocation_id,
                    {"lease_id": lease_id, "receipt_id": invocation["receipt_id"],
                     "provider_ref": provider_ref})
         return self._serialize_invocation(dict(row))
+
+    @staticmethod
+    def _lease_source_included(connection: Connection, lease: dict[str, Any]) -> bool:
+        """Whether the source this lease runs on is flat-rate or local capacity."""
+        row = connection.execute(
+            text("SELECT entitlement_kind, cost_mode FROM entitlement_sources WHERE id = :id"),
+            {"id": lease.get("entitlement_source_id")},
+        ).mappings().first()
+        return source_is_included(dict(row) if row else None)
 
     def release(
         self, connection: Connection, project_id: str, lease_id: str, *,

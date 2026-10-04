@@ -32,6 +32,7 @@ from typing import Optional
 
 from ..config import Settings
 from .claude_cli_adapter import CliChatBrain
+from .included_spend import BILLING_SUBSCRIPTION
 from .scheduling import low_priority
 
 _log = logging.getLogger(__name__)
@@ -185,6 +186,9 @@ class CodexCliAdapter(CliChatBrain):
             "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write,
             "total_tokens": prompt + cache_read + cache_write + completion,
+            # The Codex CLI runs on the ChatGPT subscription login: what the price table makes
+            # of these tokens is its list-price value, not money (included_spend.py).
+            "billing": BILLING_SUBSCRIPTION,
         }
 
 

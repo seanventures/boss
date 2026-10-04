@@ -35,12 +35,30 @@ export type ReadinessNeed = {
   after_a_person: boolean;
 };
 
+/** Something worth knowing before Start that does not stop it — the budget at orange or
+ *  yellow (workflow_readiness._budget_readiness). Red is a need, not a note. */
+export type ReadinessNote = { key: string; level: string; text: string; area?: string | null };
+
 export type Readiness = {
   ready: boolean;
   checked: ReadinessNeed[];
   missing: ReadinessNeed[];
+  notes?: ReadinessNote[];
   summary?: string;
 };
+
+function ReadinessNotes({ notes }: { notes?: ReadinessNote[] }) {
+  if (!notes?.length) return null;
+  return (
+    <>
+      {notes.map((note) => (
+        <p key={note.key} className="dw-ready dw-ready-note" data-testid={`dw-readiness-note-${note.key}`}>
+          {isAreaId(note.area) ? <AreaLink area={note.area}>{note.text}</AreaLink> : note.text}
+        </p>
+      ))}
+    </>
+  );
+}
 
 /** The fields the New project wizard collects on its own steps — the brief, its name, the
  *  repository, the criteria and the links. A catalogue template declares them too (so an agent
@@ -93,15 +111,19 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
   const missing = readiness.missing ?? [];
   if (!missing.length) {
     return (
-      <p className="dw-ready dw-ready-ok" data-testid="dw-readiness-ok">
-        Ready to run here: {readiness.checked.map((c) => c.label.toLowerCase()).join(", ")}.
-      </p>
+      <>
+        <p className="dw-ready dw-ready-ok" data-testid="dw-readiness-ok">
+          Ready to run here: {readiness.checked.map((c) => c.label.toLowerCase()).join(", ")}.
+        </p>
+        <ReadinessNotes notes={readiness.notes} />
+      </>
     );
   }
   const open = unaccepted(readiness, accepted);
   return (
     <section className="dw-ready" data-testid="dw-readiness" aria-label="What this needs first">
       <h4>This cannot run here yet</h4>
+      <ReadinessNotes notes={readiness.notes} />
       <ul className="dw-ready-list">
         {missing.map((need) => (
           <li key={need.key} data-testid={`dw-readiness-missing-${need.key}`}

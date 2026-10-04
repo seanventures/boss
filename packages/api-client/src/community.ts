@@ -1028,7 +1028,7 @@ export type DiscoveriesResponse = { discoveries: DiscoveryRun[] };
 
 /** engine/boss_engine/services/model_failures.py `explain`, plus where the work stands. */
 export type ModelAttention = {
-  kind: string;          // login_rejected | budget_wait | budget_refused | no_model | ...
+  kind: string;          // login_rejected | budget_hold | budget_wait | budget_refused | no_model | ...
   state?: string;        // stopped | waiting | retrying
   headline: string;
   action: string;
@@ -1767,6 +1767,38 @@ export type BudgetStatusResponse = {
     skill_or_model_id: string;
     amount_usd_micros: number;
   }>;
+  /** What subscription / local-model calls would have cost at API list price. Not money and
+   *  in no cap (engine/boss_engine/services/included_spend.py). */
+  included_in_subscription_usd_micros?: number;
+  included_cost_drivers?: Array<{
+    skill_or_model_id: string;
+    amount_usd_micros: number;
+  }>;
+  /** Every cap measures its own period. The numbers above are the binding period's ("day" or
+   *  "month" — the one nearest its cap); `periods` carries each. */
+  period?: string | null;
+  cap_name?: string | null;
+  period_start?: string | null;
+  resets_at?: string | null;
+  /** "00:00 UTC", "00:00 UTC on 1 November". */
+  resets_at_label?: string | null;
+  budget_timezone?: string | null;
+  periods?: Record<string, BudgetPeriodStatus>;
+};
+
+export type BudgetPeriodStatus = {
+  period: string;
+  cap_usd_micros: number;
+  actual_usd_micros: number;
+  reserved_usd_micros: number;
+  committed_usd_micros: number;
+  available_usd_micros: number;
+  utilization_ratio: number;
+  budget_state: string;
+  period_start: string;
+  resets_at: string;
+  resets_at_label: string;
+  cap_name: string;
 };
 
 export type BudgetReserveRequest = {

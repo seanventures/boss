@@ -1155,6 +1155,7 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
             emit_event(connection, project_id, "meeting.prd_auto_approve_failed", "boss",
                        "decision", decision_id, {"error": str(error)[:400]})
     if fctx.get("reservation_id") and fctx.get("receipt_id"):
+        from . import model_routing
         from .budget import BudgetGovernor
         from .receipts import ReceiptService
 
@@ -1175,6 +1176,10 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
             model,
             int(fctx.get("estimated_usd_micros") or actual_cost),
             actual_cost,
+            # The panel ran on the project's model; on a subscription its cost is list-price
+            # value, not money (included_spend.py).
+            included_in_subscription=model_routing.call_is_included(
+                connection, settings, project_id, None),
         )
     elif fctx.get("reservation_id"):
         try:

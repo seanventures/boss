@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -2181,9 +2181,22 @@ class JobLeaseService:
                 task_priority = str(task_row["priority"] or "p2").lower()
                 risk_tier = int(task_row["risk_tier"] or 0)
 
+        # What holds it, in the budget's own period: the hold sentence names the period and
+        # when it resets, and the job is not deferred past that reset.
+        held_by = {
+            "budget_state": budget_state,
+            "utilization_ratio": snapshot.get("utilization_ratio"),
+            "cap_usd_micros": snapshot.get("cap_usd_micros"),
+            "committed_usd_micros": snapshot.get("committed_usd_micros"),
+            "period": snapshot.get("period"),
+            "whose": snapshot.get("whose"),
+            "cap_name": snapshot.get("cap_name"),
+            "resets_at": snapshot.get("resets_at"),
+            "resets_at_label": snapshot.get("resets_at_label"),
+        }
         if budget_state == "orange" and task_priority not in {"p0", "p1"}:
             return {
-                "budget_state": budget_state,
+                **held_by,
                 "task_priority": task_priority,
                 "risk_tier": risk_tier,
                 "defer_seconds": 300,
@@ -2198,7 +2211,7 @@ class JobLeaseService:
         if budget_state == "red":
             if kind == "infra.droplet.create":
                 return {
-                    "budget_state": budget_state,
+                    **held_by,
                     "task_priority": task_priority,
                     "risk_tier": risk_tier,
                     "defer_seconds": 900,
@@ -2206,7 +2219,7 @@ class JobLeaseService:
                 }
             if task_priority != "p0":
                 return {
-                    "budget_state": budget_state,
+                    **held_by,
                     "task_priority": task_priority,
                     "risk_tier": risk_tier,
                     "defer_seconds": 900,
@@ -2214,7 +2227,7 @@ class JobLeaseService:
                 }
             if kind in high_impact_effects and risk_tier >= 2:
                 return {
-                    "budget_state": budget_state,
+                    **held_by,
                     "task_priority": task_priority,
                     "risk_tier": risk_tier,
                     "defer_seconds": 900,
@@ -2232,9 +2245,23 @@ class JobLeaseService:
         policy: dict[str, Any],
     ) -> None:
         deferred_until = now_utc() + timedelta(seconds=int(policy["defer_seconds"]))
+        # Not past the moment the budget's period resets: the cap is measured per period, so
+        # a job held at 23:55 UTC is runnable at 00:00, not at 00:10.
+        if policy.get("resets_at"):
+            resets_at = datetime.fromisoformat(str(policy["resets_at"]))
+            deferred_until = max(min(deferred_until, resets_at), now_utc())
+        # SAID AS WHAT IT IS, WHEREVER IT SHOWS (model_failures.budget_hold_sentence). The job
+        # stays queued with a later run_after and no lease, which every surface used to read as
+        # "no worker has picked it up" — on boss-1 three research runs said that while the
+        # budget held them.
+        from .model_failures import budget_hold_sentence
+
+        held = budget_hold_sentence(policy["budget_state"], policy.get("utilization_ratio"),
+                                    policy.get("cap_usd_micros"), policy)
         message = (
-            f"Budget state {policy['budget_state']} deferred job {kind} "
-            f"(priority {policy['task_priority']}, risk {policy['risk_tier']})."
+            f"{held} "
+            f"(job {kind}, priority {policy['task_priority']}, risk {policy['risk_tier']}; "
+            f"{policy['reason']})"
         )
         connection.execute(
             text(
@@ -2253,6 +2280,7 @@ class JobLeaseService:
                 "last_error": json.dumps(
                     {
                         "message": message,
+                        "kind": "budget_hold",
                         "budget_state": policy["budget_state"],
                         "reason": policy["reason"],
                     }

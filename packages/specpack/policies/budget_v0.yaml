@@ -4,8 +4,11 @@ version: 0.1.0
 scope:
   type: project
   id: boss-dogfood
-daily_cap_usd_micros: 10000000      # $10.00
-monthly_cap_usd_micros: 200000000   # $200.00
+# Each cap measures its own period (engine budget.period_spend): the daily cap the money spent
+# and held since 00:00 UTC today, the monthly cap since 00:00 UTC on the 1st. Neither counts an
+# earlier period's spend, so a budget that reaches its cap clears when the period resets.
+daily_cap_usd_micros: 10000000      # $10.00 per UTC day
+monthly_cap_usd_micros: 200000000   # $200.00 per calendar month (UTC)
 burst_cap_usd_micros_per_min: 100000 # $0.10/min of ACTUAL settled spend (not reservation estimates)
 max_concurrent_jobs: 3
 max_workers_total: 2

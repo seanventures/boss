@@ -38,15 +38,45 @@ export type BudgetStatusCard = {
   utilizationRatio: number;
   activeReservationsCount: number;
   topCostDrivers: BudgetDriver[];
+  /** Subscription and local-model calls at API list price — "included in your subscription",
+   *  never money and never in a cap (engine included_spend.py). */
+  includedInSubscriptionUsdMicros: number;
+  includedCostDrivers: BudgetDriver[];
   // BOSS-281: the enforced thresholds — shown so operators see REAL knobs
   softCapPct?: number | null;
   autoLiteModePct?: number | null;
   freezeProvisioningPct?: number | null;
   freezeTier2Pct?: number | null;
   tier2Frozen?: boolean | null;
+  /** The period the numbers above measure — every cap measures its own (engine
+   *  budget.period_spend): "day" or "month", and when it resets ("00:00 UTC"). */
+  period: "day" | "month";
+  resetsAtLabel: string;
+  /** Each capped period, so the card can show the one that does not bind too. */
+  periods: BudgetPeriodLine[];
   apiReachable: boolean;
   blockedReason?: string;
 };
+
+export type BudgetPeriodLine = {
+  period: "day" | "month";
+  capUsdMicros: number;
+  committedUsdMicros: number;
+  utilizationRatio: number;
+  budgetState: string;
+  resetsAtLabel: string;
+};
+
+/** "today" / "this month" — whose money a number is. */
+export function periodWords(period: string): { whose: string; when: string; cap: string } {
+  return period === "month"
+    ? { whose: "this month's", when: "this month", cap: "monthly cap" }
+    : { whose: "today's", when: "today", cap: "daily cap" };
+}
+
+function asPeriod(value: unknown): "day" | "month" {
+  return value === "month" ? "month" : "day";
+}
 
 function mapBudgetStatus(payload: BudgetStatusResponse): BudgetStatusCard {
   return {
@@ -69,12 +99,29 @@ function mapBudgetStatus(payload: BudgetStatusResponse): BudgetStatusCard {
       skillOrModelId: driver.skill_or_model_id,
       amountUsdMicros: driver.amount_usd_micros,
     })),
+    includedInSubscriptionUsdMicros: payload.included_in_subscription_usd_micros ?? 0,
+    includedCostDrivers: (payload.included_cost_drivers ?? []).map((driver) => ({
+      skillOrModelId: driver.skill_or_model_id,
+      amountUsdMicros: driver.amount_usd_micros,
+    })),
     softCapPct: (payload as Record<string, unknown>).soft_cap_pct as number | null,
     autoLiteModePct: (payload as Record<string, unknown>).auto_lite_mode_pct as number | null,
     freezeProvisioningPct:
       (payload as Record<string, unknown>).freeze_provisioning_pct as number | null,
     freezeTier2Pct: (payload as Record<string, unknown>).freeze_tier2_pct as number | null,
     tier2Frozen: (payload as Record<string, unknown>).tier2_frozen as boolean | null,
+    period: asPeriod(payload.period),
+    resetsAtLabel: payload.resets_at_label || "00:00 UTC",
+    periods: Object.values(payload.periods ?? {})
+      .filter((p) => p.cap_usd_micros > 0)
+      .map((p) => ({
+        period: asPeriod(p.period),
+        capUsdMicros: p.cap_usd_micros,
+        committedUsdMicros: p.committed_usd_micros,
+        utilizationRatio: p.utilization_ratio,
+        budgetState: p.budget_state,
+        resetsAtLabel: p.resets_at_label,
+      })),
     apiReachable: true,
   };
 }
@@ -101,6 +148,11 @@ function unavailableBudgetStatus(
     utilizationRatio: 0,
     activeReservationsCount: 0,
     topCostDrivers: [],
+    includedInSubscriptionUsdMicros: 0,
+    includedCostDrivers: [],
+    period: "day",
+    resetsAtLabel: "00:00 UTC",
+    periods: [],
     apiReachable: false,
     blockedReason: reason,
   };

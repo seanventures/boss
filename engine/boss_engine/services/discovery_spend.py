@@ -179,7 +179,13 @@ class DiscoveryStageSpend:
         # settled spend, not reservations, so an estimate larger than that cap is still
         # granted; the daily and monthly caps govern its size. (It used to be clamped to the
         # burst cap, which made every stage fill the whole minute on its own.)
-        amount = self.estimate
+        #
+        # ON A SUBSCRIPTION THE HONEST ESTIMATE IS $0 OF MONEY (included_spend.py): the stage is
+        # pinned to the source that answers, and a flat-rate source costs nothing per call. The
+        # $0 reservation is still a gate — refused once the cap is spent.
+        from .included_spend import reservation_estimate
+
+        amount = reservation_estimate(connection, self.project_id, source_id, self.estimate)
         reserved = self.budget.reserve(
             connection, self.project_id, "model_gateway", amount,
             f"Discovery {self.run_id} stage {stage}",
