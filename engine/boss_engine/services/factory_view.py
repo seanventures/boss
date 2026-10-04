@@ -137,11 +137,15 @@ def building_rows(connection: Any, project_id: str, attention: list[Mapping[str,
                   viewer: Optional[str] = None, now: Optional[datetime] = None) -> list[BuildRow]:
     """The Floor's BUILDING rows alone — what Agents › Live shows of the builds, so the two
     say the same rows with the same counts (factory spec §10 decision 2)."""
-    from .code_task_service import list_code_task_runs, overlay_stop_requests
+    from .code_task_service import (list_code_task_runs, list_internal_code_task_runs,
+                                    overlay_stop_requests)
 
     now = now or _now()
     runs = overlay_stop_requests(
-        connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True))
+        connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+        # BOSS's own builds are builds (D14): read apart so they never crowd out the window.
+        + list_internal_code_task_runs(connection, project_id, INTERNAL_RUNS))
+    runs.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
     latest: dict[str, Mapping[str, Any]] = {}
     for r in runs:
         latest.setdefault(_lineage_key(r), r)
@@ -181,6 +185,7 @@ class BuildRow(TypedDict, total=False):
     attention_id: Optional[str]
     preview: Optional[PreviewFlag]
     origin: Optional[Origin]
+    internal: bool                 # BOSS's own housekeeping build (D14)
 
 
 class FloorOutcome(TypedDict, total=False):
@@ -398,6 +403,8 @@ STATION_VERB: dict[str, str] = {
 BOSS_TIP = "BOSS machinery. No agent at this station."
 OUTCOME_WINDOW = timedelta(days=7)
 FLOOR_RUNS = 200
+#: BOSS's own builds read beside the window (never inside it: they used to fill it).
+INTERNAL_RUNS = 10
 ACT_RUNS_CAP = 40
 DEPLOY_OK = frozenset({"healthy", "succeeded", "completed", "passed"})
 DEPLOY_BAD = frozenset({"failed", "rejected", "rolled_back", "rollback_pending"})
@@ -473,6 +480,12 @@ def _pr_number(run: Mapping[str, Any]) -> Optional[int]:
 # ── naming an app (the engine's half of app-identity.ts / app-grouping.ts) ──────────────────
 
 
+def _is_internal(run: Mapping[str, Any]) -> bool:
+    from .code_task_service import is_internal_run
+
+    return is_internal_run(dict(run))
+
+
 def app_name(run: Mapping[str, Any]) -> str:
     """What a person calls the app this build makes: the benchmark's name, the name the brief
     gives itself (naming.project_name), else the directive that asked for it."""
@@ -482,6 +495,14 @@ def app_name(run: Mapping[str, Any]) -> str:
     bench = fctx.get("qa_benchmark") if isinstance(fctx.get("qa_benchmark"), dict) else {}
     if bench.get("name"):
         return str(bench["name"])[:46]
+    from .code_task_service import is_internal_run
+
+    if is_internal_run(dict(run)):
+        # BOSS's own build is named for the app it works on, never "Captain" (D14).
+        spec = _j(run.get("spec"), {}) or {}
+        repo = str(spec.get("repo") or fctx.get("repo") or "").strip()
+        if repo and repo != "_fixture":
+            return repo[:46]
     title = re.sub(r"^\[\d+/\d+\]\s*", "", str(run.get("title") or ""))
     name = project_name(title)[0]
     if name == "Untitled app":
@@ -1346,6 +1367,8 @@ def build_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
         "attention_id": attention_id,
         "preview": preview_flag(preview, now),
         "origin": origin,
+        # BOSS's own housekeeping build (the Captain's quality pass): drawn, and marked (D14).
+        "internal": _is_internal(run),
     }
 
 
@@ -1432,11 +1455,15 @@ def _etag(material: Any) -> str:
 
 def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None,
           now: Optional[datetime] = None) -> Floor:
-    from .code_task_service import list_code_task_runs, overlay_stop_requests
+    from .code_task_service import (list_code_task_runs, list_internal_code_task_runs,
+                                    overlay_stop_requests)
 
     now = now or _now()
     runs = overlay_stop_requests(
-        connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True))
+        connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+        # BOSS's own builds are builds (D14): read apart so they never crowd out the window.
+        + list_internal_code_task_runs(connection, project_id, INTERNAL_RUNS))
+    runs.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
     latest: dict[str, Mapping[str, Any]] = {}
     for r in runs:  # newest first: the first of a lineage is its latest attempt
         latest.setdefault(_lineage_key(r), r)
@@ -2177,6 +2204,17 @@ def _attempt_of(run: Mapping[str, Any], *, now: datetime,
             "at": _iso(run.get("created_at"))}
 
 
+APPS_RUNS_CAP = 120
+
+
+def _attempt_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
+                 viewer: Optional[str]) -> dict[str, Any]:
+    """One attempt of an app as the Floor's row (stations, state, k of n …) plus `at`."""
+    row: dict[str, Any] = dict(build_row(run, facts, now=now, viewer=viewer))
+    row["at"] = _iso(run.get("created_at"))
+    return row
+
+
 def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
          now: Optional[datetime] = None) -> Apps:
     """One row per app, grouped by identity (the logic of app-grouping.ts, server-side)."""
@@ -2187,7 +2225,10 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
         connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True))
     groups = group_into_apps(runs)
     newest = [g[0] for g in groups][:ACT_RUNS_CAP]
-    facts = load_facts(connection, project_id, newest)
+    # Every attempt is drawn as a compact BuildRow (D21), so every attempt's facts are read —
+    # still one query per kind of fact, bounded.
+    every = [r for g in groups for r in g][:APPS_RUNS_CAP]
+    facts = load_facts(connection, project_id, every)
     builders_of: dict[str, list[str]] = {}
     ids = [str(r["id"]) for r in runs]
     if ids:
@@ -2228,7 +2269,8 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
         rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
                      "state": state, "word": word, "preview": flag, "deploys": deploys,
                      "builds": len(group), "run_ids": [str(r["id"]) for r in group],
-                     "attempts": [_attempt_of(r, now=now, viewer=viewer) for r in group],
+                     "attempts": [_attempt_row(r, facts, now=now, viewer=viewer)
+                                  for r in group],
                      "at": _iso(head.get("updated_at") or head.get("created_at"))})
     rank = {"needs_plan": 0, "needs_waiver": 0, "budget_refused": 0, "pr_open": 0}
     rows.sort(key=lambda r: (rank.get(r["state"], 1 if section_of(r["state"]) == "building"

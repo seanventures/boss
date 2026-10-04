@@ -172,6 +172,33 @@ def list_code_task_runs(connection, project_id: str, limit: int = 50,
     return [_row_to_run(r) for r in rows]
 
 
+def is_internal_run(run: dict) -> bool:
+    """BOSS's own housekeeping build (the Captain's quality passes): same prefixes as the list."""
+    title = str((run or {}).get("title") or "").lower()
+    return any(title.startswith(p) for p in _internal_run_prefixes())
+
+
+def list_internal_code_task_runs(connection, project_id: str, limit: int = 10) -> list[dict]:
+    """The newest of BOSS's own builds. Kept OUT of the main window (they used to fill it) and
+    read here on their own, so the Factory can still give them a home: they are builds."""
+    if hasattr(connection, "list_runs"):
+        return [r for r in connection.list_runs(project_id, limit * 4) if is_internal_run(r)][:limit]
+    params: dict = {"p": project_id, "lim": int(limit)}
+    clauses = []
+    for i, prefix in enumerate(_internal_run_prefixes()):
+        clauses.append(f"lower(coalesce(title, '')) LIKE :pre{i}")
+        params[f"pre{i}"] = f"{prefix}%"
+    rows = connection.execute(
+        sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
+            "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, "
+            "error, created_at, updated_at "
+            f"FROM code_task_runs WHERE project_id = :p AND ({' OR '.join(clauses)}) "
+            "ORDER BY created_at DESC LIMIT :lim"),
+        params,
+    ).mappings().all()
+    return [_row_to_run(r) for r in rows]
+
+
 def count_code_task_runs(
     connection, project_id: str, *, exclude_internal: bool = False
 ) -> int:

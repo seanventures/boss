@@ -52,7 +52,7 @@ def test_the_floor_never_guesses(client, engine):
         assert b["k"] <= b["n"]
 
 
-def test_one_row_per_lineage_and_no_housekeeping(client, engine):
+def test_one_row_per_lineage_and_housekeeping_marked(client, engine):
     first = fx.new_run(engine, status="failed", phase="implement", minutes_ago=30,
                        title="Team inbox")
     second = fx.new_run(engine, title="Team inbox · retry 1",
@@ -61,7 +61,8 @@ def test_one_row_per_lineage_and_no_housekeeping(client, engine):
     body = _floor(client).json()
     ids = {b["run_id"] for b in body["builds"]} | {s["run_id"] for s in body["stopped"]}
     assert second in ids and first not in ids
-    assert chore not in ids
+    # BOSS's own build is a build (D14): drawn, marked internal, never counted as the app.
+    assert _row(body, chore)["internal"] is True
     assert _row(body, second)["attempt"] == 2
     assert _row(body, second)["root_run_id"] == first
 
@@ -134,6 +135,10 @@ def test_the_apps_tab_groups_by_identity(client, engine):
     assert row["run_ids"][0] == a2 and a1 in row["run_ids"]
     assert row["builds"] >= 2 and row["builders"] == ["software_engineer"]
     assert row["app"] == "Shorty"
+    # D21: each attempt is the Floor's row, so the Apps tab draws compact BuildRows.
+    newest = row["attempts"][0]
+    assert newest["run_id"] == a2 and newest["stations"] and newest["n"] >= newest["k"]
+    assert {"state", "word", "attempt", "at"} <= set(newest)
 
 
 def test_agents_live_shows_the_same_builds(client, engine):
@@ -187,3 +192,14 @@ def test_a_build_the_budget_holds_says_so_and_a_new_cap_lets_it_go(client, engin
         due = c.execute(text("SELECT run_after <= now() FROM jobs WHERE id = :j"),
                         {"j": f"job_{run_id}"}).scalar()
     assert due is True
+
+
+def test_boss_own_builds_have_a_home_and_their_apps_name(client, engine):
+    """D14: the Captain's quality passes are builds. They were missing from the Floor, and their
+    PR cards said "Captain" where the app's name goes."""
+    run_id = fx.new_run(engine, title="Captain: QUALITY IMPROVE PASS. Measured gaps: ui",
+                        spec={"repo": "e2e-app", "owner": "e2e-org"})
+    fx.stage(engine, run_id, "implement")
+    row = _row(_floor(client).json(), run_id)
+    assert row["internal"] is True
+    assert row["app"] == "e2e-app"

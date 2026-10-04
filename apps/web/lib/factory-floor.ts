@@ -80,6 +80,8 @@ export type BuildRow = {
   attentionId: string | null;
   preview: PreviewFlag | null;
   origin: Origin | null;
+  /** BOSS's own housekeeping build (the Captain's quality pass). */
+  internal?: boolean;
 };
 
 export type FloorOutcome = {
@@ -179,6 +181,7 @@ export function parseBuildRow(w: unknown): BuildRow {
     attentionId: opt(o.attention_id) ?? null,
     preview: o.preview ? parsePreviewFlag(o.preview) : null,
     origin: o.origin ? parseOrigin(o.origin) : null,
+    internal: o.internal === true || undefined,
   };
 }
 
