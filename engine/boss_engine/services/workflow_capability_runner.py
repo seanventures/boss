@@ -1474,6 +1474,13 @@ def _execute_step(
 ) -> dict[str, Any]:
     binding = step.get("binding") or {}
 
+    # APPROVING SENDS EXACTLY WHAT WAS PREVIEWED. A step a gate released checks that its
+    # inputs still hash to the content the approver saw; if an upstream step was re-run in
+    # between, it refuses rather than send words nobody approved.
+    stale = _approved_content_refusal(connection, project_id, step, context)
+    if stale:
+        raise StaleApprovalError(stale)
+
     # A STEP THAT SAYS WHAT IT WANTS AND LETS AN AGENT WORK OUT HOW.
     #
     # Checked before everything else because it binds nothing: no capability key, no custom step,
@@ -2944,6 +2951,179 @@ def _successor_attempt(
         return None
     return str(row["id"]) if row else None
 
+class StaleApprovalError(SettledCapabilityError):
+    """The step's inputs no longer match the content a person approved.
+
+    Settled: retrying the same approval would only refuse again. The tick clears the step's
+    decision when it records this, so Retry opens a fresh gate showing the new content.
+    """
+
+
+def _gated_inputs(
+    connection: Connection, project_id: str, spec_step: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[Optional[str], dict[str, Any]]:
+    """The skill a gated step calls and EXACTLY the inputs it will be given.
+
+    ONE resolution for the preview shown when the gate opens, the refresh while it waits, and
+    the check when it finally runs — three copies would drift, and a hash computed two
+    different ways refuses every approval.
+    """
+    binding = spec_step.get("binding") or {}
+    context = dict(context)
+    context.pop(SKIPPED_INPUTS, None)
+    raw = binding.get("inputs") or {}
+    if binding.get("agent_work"):
+        return "agent_work", _resolve_inputs(
+            raw, context, frozenset(k for k in raw if k != "instructions"))
+    custom_key = str(binding.get("custom_step") or "")
+    if custom_key:
+        definition = custom_steps.get(connection, project_id, custom_key) or {}
+        skill_id = definition.get("skill_id") or (
+            f"mcp:{definition.get('mcp_tool_name')}" if definition.get("mcp_tool_name")
+            else None)
+        return skill_id, _resolve_inputs(
+            raw, context, custom_steps.optional_inputs(connection, project_id, custom_key))
+    key = str(binding.get("capability") or "")
+    capability = get_capability(key)
+    inputs = _resolve_inputs(raw, context,
+                             optional=frozenset(capability.optional_inputs or ()))
+    return f"capability:{key}", _fill_optional_from_run_input(capability, inputs, context)
+
+
+def _action_preview_for(
+    connection: Connection, project_id: str, spec_step: dict[str, Any],
+    context: dict[str, Any], label: str,
+) -> dict[str, Any]:
+    """What approving this step will do, from the inputs it will really be given."""
+    from . import action_preview
+
+    try:
+        skill_id, inputs = _gated_inputs(connection, project_id, spec_step, context)
+    except Exception as error:  # noqa: BLE001 — a preview must never stop a gate opening
+        binding = spec_step.get("binding") or {}
+        return action_preview.unresolved(
+            binding.get("custom_step") or binding.get("capability"), str(error),
+            step_label=label)
+    return action_preview.build(skill_id, inputs, step_label=label,
+                                connection=connection, project_id=project_id)
+
+
+def _unique_question(
+    connection: Connection, project_id: str, task_id: Optional[str], question: str,
+    run_id: str,
+) -> str:
+    """The question in words, kept distinct from another run's open gate.
+
+    create_blocking_decision merges a pending decision with the same question — which once
+    attached five runs' deploys to ONE decision. The run id used to keep them apart, at the
+    cost of a raw id in the title; now a second open gate with the same words gets "(2)".
+    """
+    for n in range(1, 50):
+        candidate = question if n == 1 else f"{question} ({n})"
+        row = connection.execute(
+            text("SELECT recommendation->>'workflow_run_id' AS run_id FROM decisions "
+                 "WHERE project_id=:p AND question=:q AND status='pending' "
+                 "AND task_id IS NOT DISTINCT FROM :t LIMIT 1"),
+            {"p": project_id, "q": candidate, "t": task_id},
+        ).mappings().first()
+        if row is None or row["run_id"] == run_id:
+            return candidate
+    return f"{question} · {run_id[-8:]}"
+
+
+def _approved_content_refusal(
+    connection: Connection, project_id: str, step: dict[str, Any], context: dict[str, Any],
+) -> Optional[str]:
+    """Why this released step must not run: its content is not what was approved."""
+    from . import action_preview
+
+    decision_id = context.get("approval_decision_id")
+    if not decision_id:
+        return None
+    row = connection.execute(
+        text("SELECT recommendation FROM decisions WHERE id=:i"), {"i": decision_id},
+    ).mappings().first()
+    rec = (row or {}).get("recommendation") if row else None
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            rec = None
+    if not isinstance(rec, dict):
+        return None
+    preview = rec.get("action_preview") if isinstance(rec.get("action_preview"), dict) else {}
+    expected = str(rec.get("approved_content_hash") or preview.get("content_hash") or "")
+    if not expected:
+        return None
+    try:
+        _skill, inputs = _gated_inputs(connection, project_id, step, context)
+    except Exception:  # noqa: BLE001 — the step itself will fail saying what is missing
+        return None
+    current = action_preview.content_hash(inputs)
+    if current == expected:
+        return None
+    return action_preview.stale_message(
+        str(rec.get("step_label") or preview.get("step_label") or step.get("id") or ""),
+        expected, current)
+
+
+def _refresh_waiting_previews(
+    connection: Connection, project_id: str, run_id: str, spec_steps: dict[str, Any],
+) -> int:
+    """Keep an open gate's preview equal to what the step would send NOW.
+
+    If an upstream step is re-run while the gate waits, the approver must be looking at the new
+    content — and the hash the approval binds to moves with it.
+    """
+    rows = connection.execute(
+        text(
+            """
+            SELECT s.id, s.step_id, d.id AS decision_id, d.recommendation
+            FROM workflow_step_runs s
+            JOIN decisions d ON d.id = s.decision_id
+            WHERE s.workflow_run_id = :r AND s.status = 'waiting'
+              AND s.step_kind = 'capability'
+              AND d.status IN ('pending', 'delegated')
+              AND d.recommendation->'action_preview' IS NOT NULL
+            """
+        ),
+        {"r": run_id},
+    ).mappings().all()
+    if not rows:
+        return 0
+    context = _run_context(connection, run_id)
+    refreshed = 0
+    for row in rows:
+        rec = row["recommendation"] if isinstance(row["recommendation"], dict) else {}
+        old = rec.get("action_preview") or {}
+        spec_step = spec_steps.get(row["step_id"]) or {}
+        if not spec_step:
+            continue
+        preview = _action_preview_for(connection, project_id, spec_step, context,
+                                      str(rec.get("step_label") or old.get("step_label") or ""))
+        if preview.get("content_hash") == old.get("content_hash"):
+            continue
+        patch = {"action_preview": preview, "preview_refreshed_at": now_utc().isoformat()}
+        connection.execute(
+            text("UPDATE decisions SET recommendation = COALESCE(recommendation,'{}'::jsonb) "
+                 "|| CAST(:patch AS JSONB), updated_at = now() WHERE id = :i"),
+            {"i": row["decision_id"], "patch": json.dumps(patch)},
+        )
+        connection.execute(
+            text("UPDATE workflow_step_runs SET binding_snapshot = "
+                 "COALESCE(binding_snapshot,'{}'::jsonb) || CAST(:patch AS JSONB), "
+                 "updated_at = now() WHERE id = :i"),
+            {"i": row["id"], "patch": json.dumps({"action_preview": preview})},
+        )
+        emit_event(connection, project_id, "workflow.gate_preview_refreshed", "workflow",
+                   "workflow_step_run", row["id"],
+                   {"step_id": row["step_id"], "decision_id": row["decision_id"],
+                    "was": old.get("content_hash"), "now": preview.get("content_hash")})
+        refreshed += 1
+    return refreshed
+
+
 def _gate_subject(
     connection: Connection,
     project_id: str,
@@ -3165,13 +3345,38 @@ def _open_gate(
     #
     # The run id makes it unique, and the title makes the Approvals page readable: an approver
     # is being asked about a specific piece of work, not about a workflow in the abstract.
-    subject_name = str((run.get("input") or {}).get("title")
-                       or run.get("workflow_key") or "workflow").strip()[:80]
+    #
+    # IN WORDS, NOT KEYS. "Email the newsletter: weekly_newsletter · run 4715a965" named a
+    # workflow key and a run id; the question now reads "<step label> — <run title>", and a
+    # second open gate with the same words is told apart by `_unique_question`. The ids stay
+    # in the recommendation, which is the evidence.
+    from . import action_preview
+
+    run_context = _run_context(connection, run["id"])
+    # The tick's run row carries no input; the run's context does.
+    run_input = run.get("input") or run_context.get("input") or {}
+    subject_name = action_preview.run_title(run_input, run_context.get("workflow_name") or "")
+    capability_key = str(subject["key"])
+    # WHAT APPROVING WILL DO, from the inputs the step will really be given. Only for a step
+    # the approval RELEASES — on a gate capability the approval is the work itself.
+    preview = (None if subject["completes_step"] or subject.get("decision_id")
+               else _action_preview_for(connection, project_id, spec_step, run_context,
+                                        str(subject["label"])))
+    question = _unique_question(
+        connection, project_id, run.get("task_id"),
+        action_preview.gate_question(str(subject["label"]), subject_name), run["id"])
+    recommendation_extra: dict[str, Any] = {}
+    if preview is not None:
+        recommendation_extra["action_preview"] = preview
+    # AN ENVIRONMENT ONLY WHERE THERE IS ONE. "staging" on an email step was noise that read as
+    # a fact about where the email went.
+    if capability_key in {"deploy", "redeploy", "monitor"}:
+        recommendation_extra["environment"] = str(run_input.get("environment") or "staging")
     decision_id = subject.get("decision_id") or create_blocking_decision(
         connection,
         project_id,
         run.get("task_id"),
-        f"{subject['label']}: {subject_name} · run {run['id'][-8:]}",
+        question,
         {
             "capability": subject["key"],
             "step_id": step_row["step_id"],
@@ -3191,17 +3396,29 @@ def _open_gate(
             # than "approving records your decision".
             "step_label": subject["label"],
             "workflow_key": run.get("workflow_key"),
-            "app_name": str((run.get("input") or {}).get("app_name")
-                            or (run.get("input") or {}).get("title") or "").strip()[:120],
-            "environment": str((run.get("input") or {}).get("environment") or "staging"),
+            "app_name": str(run_input.get("app_name")
+                            or run_input.get("title") or "").strip()[:120],
+            "run_title": subject_name,
             # Whether answering this finishes the step or merely lets it run. The two have
             # different consequences and the page has never been able to tell them apart.
             "gate_completes_step": bool(subject["completes_step"]),
+            **recommendation_extra,
         },
         {"estimated_usd": 0.0},
         subject["summary"],
         risk_tier=max(2, int(subject["risk_tier"])),
     )
+    if not subject.get("decision_id"):
+        # A FIRST APPROVAL IS "Approve" / "Reject". The shared default, "Approve and retry" /
+        # "Keep blocked", is right for an alert about something that failed; nothing has
+        # failed here and approving retries nothing.
+        connection.execute(
+            text("UPDATE decisions SET options = CAST(:o AS JSONB) WHERE id = :i"),
+            {"i": decision_id, "o": json.dumps([
+                {"action": "approve", "label": "Approve"},
+                {"action": "reject", "label": "Reject"},
+            ])},
+        )
     # The deadline goes on the step, not in a scheduler somewhere else. A timeout you cannot
     # see from the row that is waiting is a timeout nobody can explain when it fires.
     sla_hours = approval.get("sla_hours")
@@ -3226,6 +3443,8 @@ def _open_gate(
                 # it?" must not change if the workflow is edited while somebody is deciding.
                 "gate_completes_step": bool(subject["completes_step"]),
                 "requires_person": requires_person,
+                # The same preview the decision carries, so the run's step can show it.
+                **({"action_preview": preview} if preview is not None else {}),
                 "opened_at": now_utc().isoformat(),
                 "due_at": (
                     (now_utc() + timedelta(hours=float(sla_hours))).isoformat()
@@ -3561,6 +3780,10 @@ def tick(
 
             # Answered gates next, so a step approved a moment ago is released in the same
             # tick rather than waiting for the next one.
+            # An open gate's preview follows its content, so nobody approves a stale one.
+            phase = "refresh waiting previews"
+            _refresh_waiting_previews(connection, project_id, run_id, spec_steps)
+
             phase = "resume answered gates"
             performed.extend(_resume_answered_gates(
                 connection, project_id, {**dict(run), "id": run_id}
@@ -3796,6 +4019,14 @@ def tick(
                         # minutes to arrive at the same sentence.
                         retryable=not isinstance(error, SettledCapabilityError),
                     )
+                    if isinstance(error, StaleApprovalError):
+                        # The approval covered other content, so it no longer releases this
+                        # step: Retry opens a fresh gate showing what would be sent now.
+                        connection.execute(
+                            text("UPDATE workflow_step_runs SET decision_id = NULL, "
+                                 "updated_at = now() WHERE id = :i"),
+                            {"i": claimed["id"]},
+                        )
                     performed.append({
                         "run_id": run_id, "step_id": claimed["step_id"],
                         "outcome": "failed", "error": str(error),

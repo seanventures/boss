@@ -1929,6 +1929,8 @@ export type DecisionActionRequest = {
   note?: string;
   delegate_to?: string;
   external_ref?: string;
+  /** The `action_preview.content_hash` the approver saw; a moved-on preview is refused. */
+  content_hash?: string;
 };
 
 export type DecisionDigestRequest = {
