@@ -3976,6 +3976,10 @@ class SkillSummary(BaseModel):
     policy: dict[str, Any]
     publisher: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
+    # Whether BOSS can run it here, and why not (the Library shows "Set up", never "Ready",
+    # for a skill nothing can execute — the provider cost syncs, for one).
+    usable: Optional[bool] = None
+    reason: Optional[str] = None
 
 
 class SkillListResponse(BaseModel):
