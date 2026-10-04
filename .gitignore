@@ -33,3 +33,6 @@ tmp/
 
 # The installed release record (written by the installer; not a local change)
 .boss-release
+
+# Artifacts the API writes under the checkout when run or tested in place (settings.artifact_root)
+/artifacts/
