@@ -19,6 +19,7 @@ import { Section } from "./ability-drawer";
 import { shortError, TIP, agentName } from "./kit-copy";
 import { BLANK, type BuiltIn, deleteConsequence, type Draft, draftFromSkill, type Skill, skillStatus } from "./library-data";
 import { StatusPill } from "./ability-card";
+import { DrawerShell } from "./overlay";
 import { RiskDot } from "./tools-section";
 
 const HOW = [
@@ -96,7 +97,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                                   release_grants: (skill.references?.agents ?? []).length > 0 });
     setBusy(false);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", "Saved");
+    showToast("success", `Deleted ${skill.label || skill.skill_key}`);
     onSaved(null); onClose();
   };
 
@@ -105,7 +106,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
     setMenu(false);
     const r = await skillsWrite({ action: skill.enabled ? "disable" : "enable", project_id: projectId, actor, skill_key: skill.skill_key });
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", skill.enabled ? `${skill.label} off` : "Saved");
+    showToast("success", skill.enabled ? `${skill.label} off` : `${skill.label} on`);
     onSaved(skill.skill_key);
   };
 
@@ -124,7 +125,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
     : skillStatus(true, true, false, held.length);
 
   return (
-    <aside className="kit-drawer" role="dialog" aria-label={title} data-testid="kit-skill-drawer">
+    <DrawerShell label={title} testId="kit-skill-drawer" onClose={onClose}>
       <header className="kit-drawer-head">
         <h3 className="kit-drawer-title" data-tip={skill?.summary || builtIn?.description || undefined} data-user-text>{title}</h3>
         {!creating ? <StatusPill status={status} tip={skill?.catalogue?.reason ?? undefined} /> : null}
@@ -314,6 +315,6 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
           </>
         ) : null}
       </div>
-    </aside>
+    </DrawerShell>
   );
 }

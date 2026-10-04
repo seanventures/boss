@@ -4,7 +4,7 @@ import React, { useMemo, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 
 import type { Palette } from "../../../../lib/workflow-editor-types";
-import { abilityOf, itemsByAbility, notSetUp, setUpHref, useKitAbilities } from "../../../../lib/use-kit-abilities";
+import { abilityOf, itemLabel, itemsByAbility, notSetUp, setUpHref, useKitAbilities } from "../../../../lib/use-kit-abilities";
 import { Popover } from "./popover";
 
 const GROUP_WORD: Record<string, string> = { code: "Code", research: "Research", coordinate: "Coordinate", ship: "Ship", media: "Media" };
@@ -19,7 +19,7 @@ type Kind = "skill" | "mcp";
  * named agent does not hold turns amber rather than disappearing: the save would refuse it, and
  * the operator should see which one before pressing Save.
  */
-export function ScopePicker({ kind, selected, captain, palette, onChange, projectId }: {
+export function ScopePicker({ kind, selected, captain, palette, onChange, projectId, problem }: {
   kind: Kind;
   selected: string[];
   captain: string | null;
@@ -27,6 +27,8 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
   onChange(next: string[]): void;
   /** For the Kit's abilities: offered first, and `Not set up` where they are not. */
   projectId?: string;
+  /** The Check's problem on this field, said in one line (the whole of it in the tooltip). */
+  problem?: string | null;
 }) {
   // ABILITIES FIRST (skills-mcp spec §3.3): what a step can use, in outcomes, each with the
   // skills or servers behind it. One not set up is red and links to where it is set up.
@@ -57,6 +59,11 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
     onChange(selected.includes(item) ? selected.filter((x) => x !== item) : [...selected, item]);
 
   const q = query.trim().toLowerCase();
+  const labelOf = (item: string) => itemLabel(abilities, kind, item);
+  const matches = (item: string) => !q || item.toLowerCase().includes(q) || labelOf(item).toLowerCase().includes(q);
+  // A chip already says `Not set up · Set up ↗`, so the Check's sentence about the same item is
+  // not said again under it (K15); any other problem is one line.
+  const flagged = selected.some((item) => notSetUp(abilityOf(abilities, kind, item)));
   const label = kind === "skill" ? "Skill" : "MCP";
   const whose = named?.name ?? captain ?? "";
 
@@ -72,9 +79,11 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
             <React.Fragment key={item}>
               <span className="wf-chip" data-amber={amber || undefined} data-tone={unset ? "red" : undefined}
                     data-testid={`wf-scope-chip-${kind}-${item}`}
-                    title={unset ? `${ability!.label} · Not set up`
-                      : amber ? (captain ? `Not held by ${whose}` : "Not held by any agent") : item}>
-                {item}
+                    title={[labelOf(item) !== item ? item : null,
+                            unset ? `${ability!.label} · Not set up`
+                              : amber ? (captain ? `Not held by ${whose}` : "Not held by any agent") : null]
+                      .filter(Boolean).join(" · ") || item}>
+                {labelOf(item)}
                 <button type="button" className="wf-chip-x" aria-label={`Remove ${item}`}
                         onClick={() => toggle(item)}><X size={10} weight="bold" /></button>
               </span>
@@ -91,6 +100,10 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
                 aria-expanded={open} data-testid={`wf-scope-add-${kind}`}
                 onClick={() => setOpen((o) => !o)}>+ {label}</button>
       </div>
+      {problem && !flagged ? (
+        <span className="wf-field-error wf-one-line" role="alert" title={problem}
+              data-testid={`wf-scope-problem-${kind}`}>{problem}</span>
+      ) : null}
       <Popover anchor={trigger} open={open} onClose={() => { setOpen(false); setQuery(""); }}
                label={kind === "skill" ? "Limit skills" : "Limit MCP"} testId={`wf-scope-pop-${kind}`}>
         <input className="wf-pop-search" autoFocus value={query} placeholder="Search"
@@ -100,12 +113,12 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
             <fieldset className="wf-pop-group" data-testid={`wf-scope-abilities-${kind}`}>
               <legend>Abilities</legend>
               {byAbility.filter((g) => !q || g.ability.label.toLowerCase().includes(q)
-                                      || g.items.some((i) => i.toLowerCase().includes(q))).map(({ ability, items }) => {
+                                      || g.items.some(matches)).map(({ ability, items }) => {
                 const all = items.every((i) => selected.includes(i));
                 const unset = notSetUp(ability);
                 return (
                   <label key={ability.key} className="wf-check" data-testid={`wf-scope-ability-${kind}-${ability.key}`}
-                         title={`${GROUP_WORD[ability.group] ?? ability.group} · ${items.join(", ")}`}>
+                         title={`${GROUP_WORD[ability.group] ?? ability.group} · ${items.map(labelOf).join(", ")}`}>
                     <input type="checkbox" checked={all}
                            onChange={() => onChange(all ? selected.filter((x) => !items.includes(x))
                                                         : [...new Set([...selected, ...items])])} />
@@ -121,23 +134,23 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
             </fieldset>
           ) : null}
           {groups.map((group) => {
-            const items = group.items.filter((i) => !q || i.toLowerCase().includes(q));
+            const items = group.items.filter(matches);
             if (!items.length) return null;
             return (
               <fieldset key={group.agent} className="wf-pop-group">
                 {groups.length > 1 || !captain ? <legend>{group.agent}</legend> : null}
                 {items.map((item) => (
-                  <label key={`${group.agent}:${item}`} className="wf-check">
+                  <label key={`${group.agent}:${item}`} className="wf-check" title={item}>
                     <input type="checkbox" checked={selected.includes(item)}
                            data-testid={`wf-scope-opt-${kind}-${item}`}
                            onChange={() => toggle(item)} />
-                    <span>{item}</span>
+                    <span>{labelOf(item)}</span>
                   </label>
                 ))}
               </fieldset>
             );
           })}
-          {groups.every((g) => !g.items.some((i) => !q || i.toLowerCase().includes(q))) ? (
+          {groups.every((g) => !g.items.some(matches)) ? (
             <div className="wf-faint wf-pop-empty">{captain ? `${whose} holds none` : "None held"}</div>
           ) : null}
         </div>

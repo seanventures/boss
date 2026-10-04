@@ -5,7 +5,8 @@
  * connection, some skills and some MCP tools. `GET /v1/kit` computes every ability's single
  * status server-side, so no screen re-derives it.
  */
-export type AbilityStatus = "ready" | "unheld" | "setup" | "needs_repo" | "testing" | "failing" | "review" | "off";
+/** `untested`: set up and held, but no passing test yet — not Ready until one passes (K8). */
+export type AbilityStatus = "ready" | "untested" | "unheld" | "setup" | "needs_repo" | "testing" | "failing" | "review" | "off";
 export type ToolPolicy = "allow" | "ask" | "off";
 export type AbilityGroup = "code" | "research" | "coordinate" | "ship" | "media";
 
@@ -26,6 +27,10 @@ export type ProviderField = {
   placeholder?: string;
   copy?: boolean;
   optional?: boolean;
+  /** A choice rather than text (Email's TLS: None · STARTTLS · SSL): a segmented control. */
+  options?: { value: string; label: string }[];
+  /** The option chosen when nothing is stored. */
+  default?: string;
 };
 
 export type Provider = {
@@ -72,7 +77,9 @@ export type Ability = {
   tools: KitTool[];
   holders: string[];
   recommended: string[];
-  used_in: { workflow_key: string; workflow_name: string; step_id: string; step_title: string }[];
+  /** `via` names what the step uses ("skill:<id>", "mcp:<server>", "capability:<x>"), so a
+   *  Library row counts its own steps rather than the whole ability's. */
+  used_in: { workflow_key: string; workflow_name: string; step_id: string; step_title: string; via?: string }[];
   last_test: null | TestResult;
   try: null | { field: ProviderField };
   depends_on: string[];
@@ -80,7 +87,7 @@ export type Ability = {
   connect_href?: string | null;
   /** The token scopes a provider needs, for the `Get a token ↗` tooltip. */
   scopes_tip?: string | null;
-  mcp: { server_id: string; name: string; trusted: boolean; reachable: boolean | null }[];
+  mcp: { server_id: string; name: string; trusted: boolean; reachable: boolean | null; url?: string }[];
   /** The MCP servers the kit file names, registered or not. */
   mcp_names?: string[];
 };

@@ -76,7 +76,7 @@ describe("the Skills & MCP copy budget", () => {
       expect([a.key, r.over, r.paragraphs, r.banned]).toEqual([a.key, [], [], []]);
       cleanup();
     }
-  });
+  }, 20_000); // twelve drawers rendered in turn: allow for a loaded machine
 
   it("Who can", async () => {
     installKitApi();

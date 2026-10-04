@@ -54,6 +54,22 @@ function Field({ field, value, stored, error, replacing, onChange, onReplace }: 
   replacing: boolean; onChange: (v: string) => void; onReplace: () => void;
 }) {
   const id = `kit-field-${field.name}`;
+  if (field.options?.length) {
+    // A CHOICE, NOT TEXT (K7): Email's TLS is None · STARTTLS · SSL, so a plain relay on port 25
+    // or 1025 (Mailpit, postfix) connects, where STARTTLS-or-nothing refused it.
+    return (
+      <div className="kit-field" data-testid={id}>
+        <span className="kit-field-label">{field.label}</span>
+        <span className="kit-seg kit-seg-sm" role="radiogroup" aria-label={field.label} data-testid={`${id}-options`}>
+          {field.options.map((o) => (
+            <button key={o.value} type="button" role="radio" aria-checked={value === o.value}
+                    data-testid={`${id}-${o.value}`} onClick={() => onChange(o.value)}>{o.label}</button>
+          ))}
+        </span>
+        {error ? <span className="kit-field-err" role="alert" data-testid={`${id}-error`} data-tip={error}>{shortError(error)}</span> : null}
+      </div>
+    );
+  }
   if (field.secret && stored && !replacing) {
     return (
       <div className="kit-field" data-testid={id}>
@@ -72,6 +88,20 @@ function Field({ field, value, stored, error, replacing, onChange, onReplace }: 
       {error ? <span className="kit-field-err" role="alert" data-testid={`${id}-error`} data-tip={error}>{shortError(error)}</span> : null}
     </label>
   );
+}
+
+/** An option field's value when nothing is chosen or stored. Security follows the port: SSL on
+ *  465, none on 1025 (Mailpit's), else STARTTLS; any other choice its declared default. */
+export function optionDefault(f: ProviderField, values: Record<string, string>, stored: Record<string, string>): string {
+  if (!f.options?.length) return "";
+  const has = (v: string) => f.options!.some((o) => o.value === v);
+  if (f.name === "security") {
+    const port = (values.port ?? stored.port ?? "").trim();
+    if (port === "465" && has("ssl")) return "ssl";
+    if (port === "1025" && has("none")) return "none";
+    if (!f.default && has("starttls")) return "starttls";
+  }
+  return f.default ?? f.options[0].value;
 }
 
 export function ConnectionSection({ ability, projectId, actor, onChanged }: {
@@ -127,7 +157,7 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
     for (const f of chosen.fields) {
       const v = (values[f.name] ?? "").trim();
       if (f.secret) { if (v) fields[f.name] = v; }
-      else fields[f.name] = v || (stored[f.name] ?? "");
+      else fields[f.name] = v || (stored[f.name] ?? optionDefault(f, values, stored));
     }
     const r = await kitApi.connect(projectId, actor, ability.key, chosen.key, fields);
     setBusy(false);
@@ -146,10 +176,13 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
     const r = await kitApi.disconnect(projectId, actor, ability.key);
     setBusy(false);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", "Saved");
+    showToast("success", `Disconnected ${chosen?.label ?? ability.label}`);
     onChanged(r.data);
   };
 
+  // WHAT IS SHOWN IS THE STORED PROVIDER'S (K10): its Acts as and its last test belong to it, so
+  // picking another provider's tab shows that provider's empty form, not GitHub's result.
+  const onStored = conn.provider === chosen?.key;
   const reused = chosen?.reuses === "github";
   // Something stored to forget. Keyless Exa with nothing stored is the default, not a
   // connection a person made.
@@ -174,7 +207,7 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
         </div>
       ) : null}
       {(chosen?.fields ?? []).map((f) => (
-        <Field key={f.name} field={f} value={values[f.name] ?? (f.secret ? "" : (stored[f.name] ?? ""))}
+        <Field key={f.name} field={f} value={values[f.name] ?? (f.secret ? "" : (stored[f.name] ?? optionDefault(f, values, stored)))}
                stored={f.secret ? stored[f.name] : undefined}
                error={error && (error.field === f.name) ? error.message : null}
                replacing={Boolean(replacing[f.name])}
@@ -190,19 +223,19 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
           Get a token ↗
         </a>
       ) : null}
-      {conn.acts_as ? (
+      {onStored && conn.acts_as ? (
         <div className="kit-row" data-testid="kit-acts-as">
           <span className="kit-field-label" data-tip={TIP.actsAs}>Acts as</span>
           <span className="kit-fact" data-tip={conn.acts_as}>{conn.acts_as}</span>
         </div>
       ) : null}
-      <TestRow test={ability.last_test} />
+      {onStored ? <TestRow test={ability.last_test} /> : null}
       <div className="kit-actions">
         <button type="button" className="kit-btn kit-btn-primary" disabled={busy || (reused && ability.status === "needs_repo")}
                 data-testid="kit-save-test" onClick={() => void save()}>
           {busy ? "Testing…" : "Save & test"}
         </button>
-        {canDisconnect ? (
+        {canDisconnect && onStored ? (
           <span className="kit-confirm-wrap">
             <button type="button" className="kit-btn" disabled={busy} data-testid="kit-disconnect"
                     onClick={() => setConfirm(true)}>Disconnect</button>

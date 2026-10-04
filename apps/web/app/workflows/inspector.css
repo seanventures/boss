@@ -100,6 +100,7 @@
 .wf-label { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
 .wf-req { color: var(--red); }
 .wf-field-error { color: var(--red); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; }
+.wf-one-line { display: block; white-space: nowrap; min-width: 0; max-width: 100%; }
 .wf-hint, .wf-note { display: inline-block; margin-top: 2px; }
 
 .wf-check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink); cursor: pointer; }

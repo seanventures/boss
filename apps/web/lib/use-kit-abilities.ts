@@ -71,13 +71,32 @@ export function abilityOf(abilities: Ability[] | null, kind: "skill" | "mcp", it
       || (a.mcp_names ?? []).includes(item));
 }
 
-/** What a step can pick of one kind, per ability: {ability, items}. */
+/** What a step can pick of one kind, per ability: {ability, items}. A tool the Kit has turned Off
+ *  (Merge a PR, by default) is never offered: it would only be refused at run time (K15). */
 export function itemsByAbility(abilities: Ability[] | null, kind: "skill" | "mcp"): { ability: Ability; items: string[] }[] {
   return (abilities ?? []).map((a) => ({
     ability: a,
     items: kind === "skill"
-      ? a.tools.filter((t) => t.ref.startsWith("skill:")).map((t) => t.ref.slice(6))
+      ? a.tools.filter((t) => t.ref.startsWith("skill:") && t.policy !== "off").map((t) => t.ref.slice(6))
       : [...new Set([...(a.mcp_names ?? []), ...a.mcp.map((m) => m.name),
                      ...a.tools.filter((t) => t.ref.startsWith("mcp:")).map((t) => t.ref.slice(4).split(".")[0])])],
   })).filter((g) => g.items.length > 0);
+}
+
+/**
+ * What a chip says for a skill id or server name (K15): the Kit's words, never the raw id. A
+ * skill is its tool row's label (github.create_pr_real → "Open a PR"); a server backing exactly
+ * one ability is that ability (context7 → "Library docs"); anything else stays as it is named.
+ */
+export function itemLabel(abilities: Ability[] | null, kind: "skill" | "mcp", item: string): string {
+  if (!abilities) return item;
+  if (kind === "skill") {
+    for (const a of abilities) {
+      const row = a.tools.find((t) => t.ref === `skill:${item}`);
+      if (row?.label) return row.label;
+    }
+    return item;
+  }
+  const backs = abilities.filter((a) => a.mcp.some((m) => m.name === item) || (a.mcp_names ?? []).includes(item));
+  return backs.length === 1 ? backs[0].label : item;
 }

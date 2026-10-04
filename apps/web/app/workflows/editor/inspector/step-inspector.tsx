@@ -23,6 +23,14 @@ import { InputSourceRow, type Upstream } from "./input-source";
 import { Popover } from "./popover";
 import { ScopePicker } from "./scope-picker";
 import { StepAbility } from "./step-ability";
+import { itemLabel, useKitAbilities } from "../../../../lib/use-kit-abilities";
+import type { Ability } from "../../../../lib/kit-types";
+
+/** A lacked item's words: a skill's Kit label, else a server's ability (K15). */
+function kitLabel(abilities: Ability[] | null, id: string): string {
+  const asSkill = itemLabel(abilities, "skill", id);
+  return asSkill !== id ? asSkill : itemLabel(abilities, "mcp", id);
+}
 import {
   AGENTED, APPROVABLE, STEP_ID, approvalMode, approvalOf, blockOf, declaredInputs, forcedApproval,
   formFields, instructionsOf, isAgentTask, producesOf, scopedMcp, scopedSkills, sourceOf, usesOf,
@@ -82,6 +90,7 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
   onClose(): void;
 }) {
   const view = stepView(step, palette);
+  const kitAbilities = useKitAbilities(projectId);
   const patch = (p: StepPatch) => dispatch({ type: "PATCH_STEP", id: step.id, patch: p });
   const problems = state.problems.filter((p) => p.step_id === step.id);
   const inputs = declaredInputs(step, palette);
@@ -132,6 +141,7 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
           {captain && named ? (
             <GrantRow projectId={projectId} actor={actor} roleKey={captain}
                       agentName={named.name || captain} lacks={view.badges.lacks}
+                      labelOf={(id) => kitLabel(kitAbilities, id)}
                       onGranted={refreshPalette} />
           ) : null}
         </Section>
@@ -142,17 +152,17 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
       {shows.scope ? (
         <Section label="Skills" tip="Limits what the agent may use here. Never grants." testId="wf-sec-scope">
           <ScopePicker kind="skill" selected={scopedSkills(step)} captain={captain} palette={palette}
-                       projectId={projectId} onChange={(skills) => patch({ skills })} />
-          <FieldError problems={problems} field="skills" />
+                       projectId={projectId} onChange={(skills) => patch({ skills })}
+                       problem={problems.find((p) => p.field === "skills")?.message ?? null} />
           <div className="wf-sub-label">MCP</div>
           <ScopePicker kind="mcp" selected={scopedMcp(step)} captain={captain} palette={palette}
-                       projectId={projectId} onChange={(mcp) => patch({ mcp })} />
-          <FieldError problems={problems} field="mcp" />
+                       projectId={projectId} onChange={(mcp) => patch({ mcp })}
+                       problem={problems.find((p) => p.field === "mcp")?.message ?? null} />
         </Section>
       ) : usesOf(step, palette).length ? (
         <Section label="Uses" tip="Fixed by this step. Use an Agent task to choose." testId="wf-sec-uses">
           <div className="wf-chips">
-            {usesOf(step, palette).map((u) => <span key={u} className="wf-chip wf-chip-ro">{u}</span>)}
+            {usesOf(step, palette).map((u) => <span key={u} className="wf-chip wf-chip-ro" title={u}>{kitLabel(kitAbilities, u)}</span>)}
             <StepAbility step={step} projectId={projectId} />
           </div>
           <FieldError problems={problems} field="ability" />

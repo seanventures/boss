@@ -16,6 +16,7 @@ import { StatusPill } from "./ability-card";
 import { AgentsSection } from "./agents-section";
 import { ConnectionSection } from "./connection-section";
 import { PROVENANCE, shortError, TIP } from "./kit-copy";
+import { DrawerShell } from "./overlay";
 import { ToolsSection } from "./tools-section";
 import { TrySection } from "./try-section";
 import { UsedInSection } from "./used-in-section";
@@ -63,22 +64,16 @@ export function AbilityDrawer({ ability, crew, projectId, actor, focus, testing,
 }) {
   const [menu, setMenu] = useState(false);
   const provenance = PROVENANCE[ability.provenance] ?? PROVENANCE.built_in;
-  useEffect(() => {
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
-  }, [onClose]);
-
   const toggle = async (enabled: boolean) => {
     setMenu(false);
     const r = await kitApi.enabled(projectId, actor, ability.key, enabled);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", enabled ? "Saved" : `${ability.label} off`);
+    showToast("success", enabled ? `${ability.label} on` : `${ability.label} off`);
     onChanged(r.data);
   };
 
   return (
-    <aside className="kit-drawer" role="dialog" aria-label={ability.label} data-testid={`kit-drawer-${ability.key}`}>
+    <DrawerShell label={ability.label} testId={`kit-drawer-${ability.key}`} onClose={onClose}>
       <header className="kit-drawer-head">
         <AbilityIcon name={ability.icon} />
         <h3 className="kit-drawer-title" data-tip={ability.tip}>{ability.label}</h3>
@@ -126,6 +121,6 @@ export function AbilityDrawer({ ability, crew, projectId, actor, focus, testing,
           </Section>
         ) : null}
       </div>
-    </aside>
+    </DrawerShell>
   );
 }

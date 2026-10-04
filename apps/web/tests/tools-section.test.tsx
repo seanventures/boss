@@ -20,7 +20,8 @@ describe("an ability's tools", () => {
     await render(<ToolsSection ability={prs} projectId="p1" actor="ceo" onChanged={() => {}} />);
     const allow = $('[data-testid="kit-policy-skill:github.create_pr_real-allow"]') as HTMLButtonElement;
     expect(allow.disabled).toBe(true);
-    expect(allow.dataset.tip).toBe("Changes the world · always asks a person");
+    // The reason sits on the wrapper: a disabled button gets no hover, so its own tip never showed.
+    expect(allow.parentElement!.dataset.tip).toBe("Changes the world · always asks a person");
     expect($('[data-testid="kit-policy-skill:github.create_pr_real-ask"]')!.getAttribute("aria-checked")).toBe("true");
     expect($('[data-testid="kit-policy-skill:github.merge_pr_real-off"]')!.getAttribute("aria-checked")).toBe("true");
   });

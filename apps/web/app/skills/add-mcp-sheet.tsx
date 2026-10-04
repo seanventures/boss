@@ -10,7 +10,8 @@ import React, { useEffect, useState } from "react";
 import type { McpCatalogueEntry } from "../../lib/kit-types";
 import { mcpApi, type McpAuthInput } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
-import { PROVENANCE, shortError } from "./kit-copy";
+import { PROVENANCE, plural, shortError } from "./kit-copy";
+import { ModalShell } from "./overlay";
 
 const RISKS = [{ tier: 0, label: "Reads" }, { tier: 2, label: "Writes" }, { tier: 3, label: "Public" }];
 
@@ -35,7 +36,8 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
     const r = await mcpApi.addFromCatalogue(projectId, actor, entry.key, entry.auth === "none" ? null : token);
     setBusy(false);
     if (!r.ok) { setError({ field: r.field ?? "token", message: r.error }); showToast("error", `Test failed · ${shortError(r.error)}`); return; }
-    showToast("success", `Connected · ${r.data.test.tools.length} tools`);
+    const count = r.data.test?.tools?.length ?? r.data.server?.tools?.length ?? 0;
+    showToast("success", `Added ${entry.label} · ${plural(count, "tool")}`);
     onAdded(r.data.server.id);
   };
 
@@ -55,14 +57,12 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
                                                         auth, provenance: { source: "custom" } });
     setBusy(false);
     if (!r.ok) { setError({ field: r.field ?? "name", message: r.error }); showToast("error", shortError(r.error)); return; }
-    showToast("success", `Connected · ${t.data.tools.length} tools`);
+    showToast("success", `Added ${form.name.trim()} · ${plural(t.data.tools.length, "tool")}`);
     onAdded(r.data.id);
   };
 
   return (
-    <div className="kit-modal" role="dialog" aria-label="Add MCP" data-testid="kit-add-mcp">
-      <div className="kit-modal-scrim" onClick={onClose} />
-      <div className="kit-modal-card kit-modal-wide">
+    <ModalShell label="Add MCP" testId="kit-add-mcp" onClose={onClose} wide>
         <header className="kit-modal-head">
           <span className="kit-seg" role="radiogroup" aria-label="Add MCP">
             <button type="button" role="radio" aria-checked={tab === "catalogue"} data-testid="kit-add-catalogue" onClick={() => setTab("catalogue")}>Catalogue</button>
@@ -153,7 +153,6 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }

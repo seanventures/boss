@@ -18,7 +18,7 @@ import { ACTION_OF, type CardAction, REPO_HREF } from "./ability-card";
 import { PILL, PILL_TONE, TIP } from "./kit-copy";
 
 const TILE_BUTTON: Partial<Record<AbilityStatus, string>> = {
-  ready: "Done ✓", unheld: "Give to agents", setup: "Set up", needs_repo: "Connect repo ↗",
+  ready: "Done ✓", untested: "Test", unheld: "Give to agents", setup: "Set up", needs_repo: "Connect repo ↗",
   failing: "Fix", review: "Review", off: "Turn on", testing: "Testing…",
 };
 
@@ -60,6 +60,16 @@ export function EssentialsStrip({ essentials, testing, onOpen, onAction, onTestC
       </div>
     );
   }
+  const press = (a: Ability, status: AbilityStatus) => {
+    const action = ACTION_OF[status];
+    if (status === "ready") onOpen(a.key);
+    else if (status === "setup") onAction(a.key, "connect");
+    else if (action) onAction(a.key, action);
+  };
+  const statusOf = (a: Ability): AbilityStatus => (testing.has(a.key) ? "testing" : a.status);
+  const done = essentials.filter((a) => a.status === "ready").length;
+  const next = essentials.find((a) => a.status !== "ready");
+  const nextStatus = next ? statusOf(next) : null;
   return (
     <section className="kit-ess" aria-label="Essentials" data-testid="kit-essentials">
       <header className="kit-ess-head">
@@ -67,9 +77,41 @@ export function EssentialsStrip({ essentials, testing, onOpen, onAction, onTestC
         <button type="button" className="kit-icon-btn" aria-label="Dismiss" data-testid="kit-essentials-dismiss"
                 onClick={onDismiss}><X size={14} /></button>
       </header>
+      {/* ON A PHONE, ONE LINE (K3): the four as dots (the next one ringed), the count, and the
+          next one's button — four 240px tiles stacked pushed the first card a screen down. */}
+      <div className="kit-ess-compact" data-testid="kit-essentials-compact" data-tip={TIP.essentials}>
+        <span className="kit-ess-dots">
+          {essentials.map((a, i) => {
+            const status = statusOf(a);
+            return (
+              <button key={a.key} type="button" className="kit-ess-dot" data-status={status}
+                      data-next={a === next || undefined}
+                      aria-label={`${i + 1} ${a.label} · ${PILL[status]}`} data-tip={`${a.label} · ${PILL[status]}`}
+                      data-testid={`kit-ess-dot-${a.key}`} onClick={() => onOpen(a.key)}>
+                <span className="kit-dot" data-tone={PILL_TONE[status]} />
+              </button>
+            );
+          })}
+        </span>
+        <span className="kit-faint">{done}/{essentials.length}</span>
+        <span className="kit-spacer" />
+        {next && nextStatus ? (
+          ACTION_OF[nextStatus] === "repo" ? (
+            <a className="kit-btn kit-btn-sm" href={REPO_HREF} data-tip={next.label} aria-label={`${next.label} · ${TILE_BUTTON[nextStatus]}`}
+               data-testid="kit-ess-compact-action">{TILE_BUTTON[nextStatus]}</a>
+          ) : (
+            <button type="button" className="kit-btn kit-btn-sm" disabled={nextStatus === "testing"} data-tip={next.label}
+                    aria-label={`${next.label} · ${TILE_BUTTON[nextStatus]}`}
+                    data-testid="kit-ess-compact-action" onClick={() => press(next, nextStatus)}>
+              {TILE_BUTTON[nextStatus]}
+            </button>
+          )
+        ) : null}
+        <button type="button" className="kit-icon-btn" aria-label="Dismiss" onClick={onDismiss}><X size={14} /></button>
+      </div>
       <ol className="kit-ess-lane">
         {essentials.map((a, i) => {
-          const status: AbilityStatus = testing.has(a.key) ? "testing" : a.status;
+          const status = statusOf(a);
           const action = ACTION_OF[status];
           return (
             <li key={a.key} className="kit-ess-tile" data-status={status} data-testid={`kit-ess-${a.key}`}
@@ -84,12 +126,7 @@ export function EssentialsStrip({ essentials, testing, onOpen, onAction, onTestC
               ) : (
                 <button type="button" className={`kit-btn kit-btn-sm${status === "ready" ? " kit-btn-done" : ""}`}
                         disabled={status === "testing"} data-testid={`kit-ess-action-${a.key}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (status === "ready") onOpen(a.key);
-                          else if (status === "setup") onAction(a.key, "connect");
-                          else if (action) onAction(a.key, action);
-                        }}>
+                        onClick={(e) => { e.stopPropagation(); press(a, status); }}>
                   {TILE_BUTTON[status]}
                 </button>
               )}

@@ -20,7 +20,7 @@ describe("the Essentials strip", () => {
     installKitApi();
     window.history.replaceState(null, "", "/?area=skills");
     await render(<KitHome projectId="p1" actor="ceo" />);
-    expect($$('[data-testid^="kit-ess-"][data-status]').map((t) => t.dataset.testid))
+    expect($$('li[data-testid^="kit-ess-"][data-status]').map((t) => t.dataset.testid))
       .toEqual(["kit-ess-open_prs", "kit-ess-web_research", "kit-ess-file_tickets", "kit-ess-email"]);
     expect($('[data-testid="kit-ess-action-open_prs"]')!.textContent).toBe("Connect repo ↗");
     expect($('[data-testid="kit-ess-action-web_research"]')!.textContent).toBe("Done ✓");

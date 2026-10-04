@@ -9,17 +9,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { $, $$, cleanup, click, render } from "./_helpers/kit-render";
 import { ability, clone, installKitApi, KITS } from "./_helpers/kit-api";
+import type { Ability } from "../lib/kit-types";
+import type { KitWithCrew } from "../lib/kit-api";
 
 const { WhoCan } = await import("../app/skills/who-can");
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-async function mount(calls?: ReturnType<typeof installKitApi>) {
-  const kit = clone(KITS.fresh);
+/** Who can as the Kit hosts it: a holder write comes back and the Kit re-renders with it. */
+function Host({ start, changed, reload }: { start: KitWithCrew; changed: (a: Ability) => void; reload: () => void }) {
+  const [kit, setKit] = React.useState(start);
+  return (
+    <WhoCan kit={kit} crew={kit.crew ?? []} projectId="p1" actor="ceo" focusRole="pm"
+            onChanged={(a) => { changed(a); setKit((k) => ({ ...k, abilities: k.abilities.map((x) => (x.key === a.key ? a : x)) })); }}
+            onReload={reload} onOpenAbility={() => {}} />
+  );
+}
+
+async function mount(calls?: ReturnType<typeof installKitApi>, start: KitWithCrew = clone(KITS.fresh)) {
+  const kit = start;
   const used = calls ?? installKitApi(kit);
   const changed = vi.fn(); const reload = vi.fn();
-  await render(<WhoCan kit={kit} crew={kit.crew ?? []} projectId="p1" actor="ceo" focusRole="pm"
-                       onChanged={changed} onReload={reload} onOpenAbility={() => {}} />);
+  await render(<Host start={clone(kit)} changed={changed} reload={reload} />);
   return { kit, calls: used, changed, reload };
 }
 
@@ -31,7 +42,7 @@ describe("Who can", () => {
     expect(puts).toHaveLength(1);
     expect(puts[0].body).toMatchObject({ ability: "web_search" });
     expect(puts[0].body!.roles).toContain("backend_engineer");
-    expect($('[data-testid="kit-who-changes"]')!.textContent).toBe("1 changes");
+    expect($('[data-testid="kit-who-changes"]')!.textContent).toBe("1 change");
     await click('[data-testid="kit-who-undo"]');
     const undo = calls.filter((c) => c.body?.action === "holders")[1];
     expect(new Set(undo.body!.roles as string[])).toEqual(new Set(ability(kit, "web_search").holders));

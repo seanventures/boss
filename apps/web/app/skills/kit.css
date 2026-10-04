@@ -102,14 +102,25 @@
 .kit-ess-tile > .kit-dot { margin-left: 28px; }
 .kit-ess-tile > .kit-btn { margin-left: auto; }
 .kit-ess-final { flex: 0 0 auto; display: flex; align-items: center; }
+.kit-ess-compact { display: none; align-items: center; gap: 6px; min-width: 0; }
+.kit-ess-dots { display: inline-flex; gap: 2px; flex: none; }
+.kit-ess-dot { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid transparent; border-radius: 50%; background: transparent; cursor: pointer; }
+.kit-ess-dot[data-next] { border-color: var(--accent); }
+.kit-ess-compact > .kit-btn { flex: none; }
+
+/* ── Floating overlays: the drawer as a sheet, portalled to <body> (overlay.tsx) ─────────── */
+.kit-sheet-layer { position: fixed; inset: 0; z-index: 70; }
+.kit-drawer[data-floating] { position: fixed; top: 64px; right: 12px; bottom: 12px; z-index: 1; width: min(420px, calc(100vw - 24px)); max-height: none; box-shadow: var(--shadow-lg); }
 
 /* ── Drawer: right column, a bottom sheet on a phone ────────────────────────────────────── */
 .kit-drawer { position: sticky; top: 12px; display: flex; flex-direction: column; max-height: calc(100vh - 40px); min-width: 0; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); overflow: hidden; }
 .kit-lib[data-drawer="open"] { display: grid; grid-template-columns: minmax(0, 1fr) 420px; align-items: start; }
 .kit-lib[data-drawer="open"] > :not(.kit-drawer):not(.kit-modal) { grid-column: 1; }
 .kit-lib[data-drawer="open"] > .kit-drawer { grid-column: 2; grid-row: 1 / span 4; }
-.kit-drawer-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); min-width: 0; }
-.kit-drawer-title { margin: 0; font: 600 1.125rem/1.25 var(--sans); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kit-drawer-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); min-width: 0; }
+/* A title wraps rather than truncating (K22): "Open pull requests" is the whole name. */
+.kit-drawer-title { margin: 0; flex: 1 1 140px; font: 600 1.125rem/1.25 var(--sans); min-width: 0; overflow-wrap: anywhere; }
+.kit-drawer-title:focus { outline: none; }
 .kit-drawer-body { overflow-y: auto; padding: 4px 14px 16px; }
 .kit-drawer > .kit-card-line { padding: 6px 14px 0; }
 .kit-section { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 8px; }
@@ -137,6 +148,8 @@
 .kit-seg-sm button { font-size: 0.75rem; padding: 4px 8px; }
 .kit-seg button[aria-checked="true"] { background: var(--surface-3); color: var(--ink); }
 .kit-seg button:disabled { opacity: 0.4; cursor: not-allowed; }
+.kit-seg-lock { display: inline-flex; cursor: not-allowed; }
+.kit-seg-lock > button:disabled { pointer-events: none; }
 .kit-tool { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-width: 0; }
 .kit-tool-label { font: 600 0.8125rem var(--sans); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kit-review { padding: 6px 8px; border: 1px dashed color-mix(in srgb, var(--amber) 50%, transparent); border-radius: var(--r); }
@@ -182,11 +195,16 @@
 .kit-cat-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg); }
 
 /* ── Who can: the matrix; a list on a phone ─────────────────────────────────────────────── */
+.kit-matrix-frame { position: relative; min-width: 0; }
+.kit-matrix-frame[data-more]::after { content: ""; position: absolute; top: 1px; right: 1px; bottom: 1px; width: 56px; pointer-events: none; border-radius: 0 var(--r-xl) var(--r-xl) 0; background: linear-gradient(90deg, transparent, var(--surface)); }
+.kit-matrix-more { position: absolute; z-index: 3; top: 8px; right: 8px; padding: 4px 9px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--surface-3); color: var(--accent-text); font: 600 0.75rem var(--sans); cursor: pointer; }
 .kit-matrix-wrap { overflow: auto; max-width: 100%; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .kit-matrix { border-collapse: separate; border-spacing: 0; font: 0.8125rem var(--sans); }
 .kit-matrix th, .kit-matrix td { padding: 4px; text-align: center; border-bottom: 1px solid var(--border); }
-.kit-matrix thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); vertical-align: bottom; width: 96px; min-width: 96px; }
-.kit-matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 150px; }
+/* Compact columns so all twelve fit at 1440 (K18): 76px, the label in up to three short lines. */
+.kit-matrix thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); vertical-align: bottom; width: 76px; min-width: 76px; max-width: 76px; }
+.kit-matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 132px; }
+.kit-col-label { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; hyphens: auto; }
 .kit-matrix tr[data-focus] th, .kit-matrix tr[data-focus] td { background: var(--accent-soft); }
 .kit-matrix-group th { color: var(--faint); font: 700 0.6875rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase; text-align: left !important; padding-top: 10px; }
 .kit-col { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; border: 0; background: transparent; color: var(--ink-soft); font: 600 0.6875rem/1.2 var(--sans); cursor: pointer; }
@@ -209,23 +227,26 @@
 .kit-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); overflow: hidden; }
 .kit-list-row { display: grid; grid-template-columns: minmax(140px, 1.6fr) auto minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 10px; min-height: 40px; padding: 6px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .kit-list-row:last-child { border-bottom: 0; }
+.kit-list-row > .kit-chip { justify-self: start; }
+.kit-list-empty { display: flex; gap: 10px; align-items: center; padding: 12px; color: var(--muted); font: 600 0.8125rem var(--sans); }
 .kit-list-row:hover { background: var(--accent-soft); }
 .kit-list-name { font: 600 0.8125rem var(--sans); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Narrow screens ──────────────────────────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .kit-home[data-drawer="open"] .kit-body, .kit-lib[data-drawer="open"] { grid-template-columns: minmax(0, 1fr); }
-  .kit-drawer { position: fixed; top: 64px; right: 12px; bottom: 12px; z-index: 40; width: min(420px, calc(100vw - 24px)); max-height: none; box-shadow: var(--shadow-lg); }
   .kit-lib[data-drawer="open"] > .kit-drawer { grid-column: auto; grid-row: auto; }
 }
 @media (max-width: 719px) {
   .kit-grid { grid-template-columns: minmax(0, 1fr); }
-  .kit-drawer { left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 82vh; border-radius: var(--r-xl) var(--r-xl) 0 0; }
+  /* A real bottom sheet: over the page, at most 85% of it, scrolling inside (K3). */
+  .kit-drawer[data-floating] { left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 85vh; border-radius: var(--r-xl) var(--r-xl) 0 0; }
   .kit-matrix-wrap { display: none; }
   .kit-who-list { display: flex; }
-  .kit-ess-lane { flex-direction: column; gap: 8px; overflow: visible; }
-  .kit-ess-tile { width: auto; }
-  .kit-ess-tile + .kit-ess-tile::before { display: none; }
+  /* Essentials is one line on a phone (K3): the lane and its header give way to the compact row. */
+  .kit-ess { padding: 8px 10px; }
+  .kit-ess-head, .kit-ess-lane { display: none; }
+  .kit-ess-compact { display: flex; }
   .kit-list-row { grid-template-columns: minmax(0, 1fr) auto auto; }
   .kit-list-row > :nth-child(3), .kit-list-row > :nth-child(4), .kit-list-row > :nth-child(6) { display: none; }
   .kit-search { flex: 1 1 100%; }

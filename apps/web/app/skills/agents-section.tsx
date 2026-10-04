@@ -14,7 +14,7 @@ import type { Ability } from "../../lib/kit-types";
 import { kitApi, type CrewMember } from "../../lib/kit-api";
 import { AgentAvatar } from "../agent-avatar";
 import { showToast } from "../client-forms";
-import { shortError, agentName } from "./kit-copy";
+import { plural, shortError, agentName } from "./kit-copy";
 import { ToolsNarrow } from "./tools-narrow";
 
 export function blocked(ability: Ability): boolean {
@@ -54,11 +54,11 @@ export function AgentsSection({ ability, crew, projectId, actor, onChanged }: {
       <div className="kit-agents-bar">
         <button type="button" className="kit-btn kit-btn-sm" disabled={busy || cantGive}
                 data-testid="kit-agents-recommended"
-                onClick={() => void write([...recommended], `Gave ${ability.label} to ${recommended.size} agents`)}>
+                onClick={() => void write([...recommended], `Gave ${ability.label} to ${plural(recommended.size, "agent")}`)}>
           Recommended only
         </button>
         <button type="button" className="kit-btn kit-btn-sm" disabled={busy || cantGive} data-testid="kit-agents-everyone"
-                onClick={() => void write(crew.map((c) => c.role_key), `Gave ${ability.label} to ${crew.length} agents`)}>
+                onClick={() => void write(crew.map((c) => c.role_key), `Gave ${ability.label} to ${plural(crew.length, "agent")}`)}>
           Everyone
         </button>
         <span className="kit-confirm-wrap">
@@ -66,10 +66,10 @@ export function AgentsSection({ ability, crew, projectId, actor, onChanged }: {
                   data-testid="kit-agents-clear" onClick={() => setConfirm(true)}>Clear</button>
           {confirm ? (
             <span className="kit-pop" role="dialog" aria-label="Confirm clear" data-testid="kit-agents-clear-confirm">
-              <strong>Take {ability.label} from {held.size} agents?</strong>
+              <strong>Take {ability.label} from {plural(held.size, "agent")}?</strong>
               <span className="kit-pop-actions">
                 <button type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="kit-agents-clear-yes"
-                        onClick={() => { setConfirm(false); void write([], `Took ${ability.label} from ${held.size} agents`); }}>Clear</button>
+                        onClick={() => { setConfirm(false); void write([], `Took ${ability.label} from ${plural(held.size, "agent")}`); }}>Clear</button>
                 <button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirm(false)}>Cancel</button>
               </span>
             </span>
