@@ -151,7 +151,13 @@
 .fx-form { display: flex; flex-direction: column; gap: 10px; }
 .fx-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
 .fx-field textarea, .fx-field input { font: inherit; font-size: 0.86rem; }
-.fx-field textarea { padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); resize: vertical; }
+/* Dark inputs (walk D13): every field of a Factory sheet on the console's own tokens. */
+.fx-field textarea, .fx-field input, .fx-field select {
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink);
+  min-height: 34px; color-scheme: dark;
+}
+.fx-field textarea { resize: vertical; }
+.fx-field textarea::placeholder, .fx-field input::placeholder { color: var(--faint); }
 
 /* Motion budget and stills. */
 .fx-row[data-still] .ag-av, .fx-row[data-still] .ag-av *, .fx-line[data-still] .ag-av, .fx-line[data-still] .ag-av * { animation: none !important; }
@@ -203,4 +209,22 @@
   .fx-floor .ag-live-sec[data-sec="building"] { order: 2; }
   .fx-floor .ag-live-sec[data-sec="shipped"] { order: 3; }
   .fx-floor .ag-live-sec[data-sec="stopped"] { order: 4; }
+  /* Shipped on a phone: one chip per line, the whole sentence, never `PR #2 open…` (walk D18). */
+  .fx-floor .ag-out-row { grid-template-columns: minmax(0, 1fr); }
+  .fx-floor .ag-out-chip { height: auto; min-height: 44px; white-space: normal; }
+  .fx-floor .ag-out-text { overflow: visible; text-overflow: clip; }
+  .fx-floor .ag-btn, .fx-floor .ag-zone-more, .fx-floor .fx-row-open, .fx .fx-tab, .fx .ag-btn, .fx .fx-find { min-height: 44px; }
 }
+
+/* BOSS's own builds are builds too (walk D14): a small tag beside the app name. */
+.fx-internal {
+  flex: none; font-size: 0.66rem; letter-spacing: 0.06em; padding: 1px 6px; border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong); color: var(--muted);
+}
+.fx-row-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+
+/* From a benchmark (walk D12): one row per example app, Factory words and tokens. */
+.fx-bench { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.fx-bench-row { display: flex; align-items: center; gap: 10px; min-height: 48px; border-bottom: 1px solid var(--hair); min-width: 0; }
+.fx-bench-name { font-weight: 650; color: var(--ink); max-width: 40%; }
+.fx-bench-tag { color: var(--muted); font-size: 0.8rem; min-width: 0; }
