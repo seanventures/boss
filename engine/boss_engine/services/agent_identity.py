@@ -451,12 +451,23 @@ def avatar_of(role_key: str, agent_id: Optional[str], persona: dict[str, Any]) -
 
 
 def identities(connection: Connection, project_id: str) -> list[dict]:
-    """The light list the web resolver loads once: one face and name per agent."""
-    rows = connection.execute(
-        text("SELECT role_key, agent_id, display_name, spec, lifecycle FROM roles "
-             "WHERE project_id = :p AND role_key <> 'human' ORDER BY role_key"),
-        {"p": project_id},
-    ).mappings().all()
+    """The light list the web resolver loads once: one face and name per agent.
+
+    BACKFILLS FIRST, as `passport` does. An agent with no agent_id here is seeded by its
+    role_key, and the first Passport opened would give it an agt_ id and so a second face —
+    the same agent looking different before and after somebody clicked it.
+    """
+    def read() -> list[Any]:
+        return connection.execute(
+            text("SELECT role_key, agent_id, fingerprint, display_name, spec, lifecycle "
+                 "FROM roles WHERE project_id = :p AND role_key <> 'human' ORDER BY role_key"),
+            {"p": project_id},
+        ).mappings().all()
+
+    rows = read()
+    if any(not r["agent_id"] or not r["fingerprint"] for r in rows):
+        if quietly(connection, backfill, project_id):
+            rows = read()
     out = []
     for r in rows:
         persona = _persona(r["spec"])
