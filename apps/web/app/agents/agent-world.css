@@ -1196,6 +1196,7 @@
   .ag-att[data-enter], .ag-att[data-pulse], .ag-att[data-pulse]::after, .ag-spin { animation: none; }
   .ag-att[data-pulse] { outline: 2px solid var(--amber); outline-offset: 2px; }
   .ag-mission .ag-chain-edge[data-new="true"] .ag-chain-line { animation: none; }
+}
 
 /* ── Agents home: Organization, Directory, Activity (S3) ── */
 /* Teams are soft zones tinted from their palette hue (--team-hue); state is always a glyph and a
