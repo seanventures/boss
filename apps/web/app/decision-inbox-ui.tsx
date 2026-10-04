@@ -1,5 +1,6 @@
 "use client";
 
+import { WhyAsked } from "./skills/why-asked";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { createDecisionDigestAction } from "./actions";
@@ -670,7 +671,7 @@ function DecisionInboxRow({
   orgId?: string;
 }) {
   // A notice, not a question: BOSS refused to spend and the step has already failed. Its fix
-  // is elsewhere (Govern, Repo and model), and the engine offers only Dismiss.
+  // is elsewhere (Govern, Repo and models), and the engine offers only Dismiss.
   const refusal = decision.kind === "refusal";
   const guidance = decision.guidance ?? null;
   const estimatedCost =
@@ -851,6 +852,7 @@ function DecisionInboxRow({
                                  projectId={projectId} />
             </>
           ) : null}
+          {isPending ? <WhyAsked recommendation={decision.recommendation} projectId={projectId} /> : null}
         </div>
       </div>
       <div className="dq-foot">

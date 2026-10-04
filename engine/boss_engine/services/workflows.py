@@ -79,6 +79,11 @@ CONTROL_KINDS = {
 }
 #: Whose workflow a definition is. See the column comment in db/schema.sql.
 NAMESPACES = {"system", "product"}
+
+#: Product workflows BOSS runs for the operator but does not offer as templates: Repo and
+#: models' Try it (`setup_first_pr`). Product namespace so the capability runner ticks them and
+#: their runs list with the operator's other work; hidden from the Library and its counts.
+HIDDEN_PRODUCT_KEYS: tuple[str, ...] = ("setup_first_pr",)
 SYSTEM_NAMESPACE = "system"
 PRODUCT_NAMESPACE = "product"
 
@@ -900,7 +905,22 @@ def check_spec(
 
     normalized, shape, binding = spec_problems(connection, project_id, spec,
                                                namespace=namespace)
-    problems = shape + binding
+    # WHAT A STEP NEEDS SET UP IN SKILLS & MCP (skills-mcp spec §3.3): a built-in step whose
+    # ability is not set up — `build` with no repo connected says "Needs Open pull requests set
+    # up". A WARNING here, not a refusal: the workflow is fine to save, it just cannot run yet,
+    # and the problem links to the ability.
+    try:
+        from ..config import get_settings
+        from .kit import ability_problems
+
+        with connection.begin_nested():
+            needs = [{**problem(p["step_id"], "ability", p["message"]), "severity": "warning",
+                      "ability": p["ability"]}
+                     for p in ability_problems(connection, get_settings(), project_id, normalized)]
+    except Exception:  # noqa: BLE001 — the Kit must never be why a check fails
+        logger.debug("ability problems could not be read", exc_info=True)
+        needs = []
+    problems = shape + binding + needs
     steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict)]
     agents: list[str] = []
     for step in steps:
@@ -923,7 +943,7 @@ def check_spec(
     except Exception:  # noqa: BLE001 — nor a needs list on a half-written spec
         logger.debug("needs of an unfinished spec could not be read", exc_info=True)
     return {
-        "ok": not problems,
+        "ok": not (shape + binding),
         "problems": problems,
         "summary": {"steps": len(steps), "agents": agents, "approvals": approvals,
                     "typical_minutes": minutes, "needs": needs},
@@ -1242,6 +1262,10 @@ def list_definitions(
         # COALESCE, because rows written before the column existed carry NULL until the default
         # is applied — and a system workflow invisible to the system list is worse than noise.
         clause += " AND COALESCE(d.namespace, 'system') = :namespace"
+        if namespace == PRODUCT_NAMESPACE:
+            # BOSS-owned customer work that is not a template: run like any product workflow
+            # (the capability runner ticks product runs only), never offered in the Library.
+            clause += " AND NOT (d.workflow_key = ANY(:hidden_keys))"
     rows = connection.execute(
         text(
             f"""
@@ -1300,7 +1324,9 @@ def list_definitions(
             ORDER BY d.updated_at DESC, d.workflow_key
             """
         ),
-        {"project_id": project_id, **({"namespace": namespace} if namespace else {})},
+        {"project_id": project_id, **({"namespace": namespace} if namespace else {}),
+         **({"hidden_keys": list(HIDDEN_PRODUCT_KEYS)}
+            if namespace == PRODUCT_NAMESPACE else {})},
     ).mappings().all()
     # Labels for the customer's own steps, resolved once for the whole list rather than per
     # workflow: a project has a handful of them and every workflow draws from the same set.
@@ -5620,6 +5646,13 @@ _AWAIT_LABELS: dict[str, str] = {
 }
 
 
+#: A code task awaited by a step that is not the build, named after that step.
+_CODE_TASK_BY_CAPABILITY: dict[str, str] = {
+    "plrr": "the readiness fixes to finish",
+    "redeploy": "the rebuild to finish",
+}
+
+
 def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
     """What a waiting step is waiting FOR — or None when that is not recorded.
 
@@ -5644,7 +5677,13 @@ def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
         return "a decision"
     awaited = (step.get("output") or {}).get("await")
     if isinstance(awaited, dict):
-        label = _AWAIT_LABELS.get(str(awaited.get("kind") or "").strip())
+        kind = str(awaited.get("kind") or "").strip()
+        # NOT EVERY CODE TASK IS THE BUILD. Readiness extends the build's task, and its run
+        # said "waiting on the build to finish" beside a build step marked succeeded.
+        capability = str(step.get("capability") or (step.get("output") or {}).get("capability") or "")
+        if kind == "code_task" and capability and capability != "build":
+            return _CODE_TASK_BY_CAPABILITY.get(capability, "the code work to finish")
+        label = _AWAIT_LABELS.get(kind)
         if label:
             return label
     return None

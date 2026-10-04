@@ -79,6 +79,9 @@ def save(
             "choose STARTTLS or SSL, not both. Port 587 is usually STARTTLS; 465 is SSL.")
 
     secret_ref = _existing_secret_ref(connection, project_id)
+    # The secret store's own last four (only for a secret long enough that four characters
+    # say nothing about it), kept so a screen can show `Set · …a1f3` like every other secret.
+    last4 = (_row(connection, project_id) or {}).get("password_last4")
     if password:
         from .secret_backends import default_secret_backend
         from .secrets_service import put_secret
@@ -91,12 +94,13 @@ def save(
             value=password, secret_kind="api_token",
             backend=default_secret_backend(settings), actor=actor)
         secret_ref = stored.get("id") or stored.get("secret_ref_id") or secret_ref
+        last4 = stored.get("last4")
 
     body = {
         "host": host, "port": port, "username": str(username or "").strip(),
         "from_address": from_address, "from_name": str(from_name or "").strip(),
         "use_tls": bool(use_tls), "use_ssl": bool(use_ssl),
-        "secret_ref_id": secret_ref,
+        "secret_ref_id": secret_ref, "password_last4": last4 if secret_ref else None,
     }
     connection.execute(
         text(
@@ -163,6 +167,7 @@ def describe(connection: Connection, project_id: str) -> dict[str, Any]:
         "use_ssl": bool(row.get("use_ssl")),
         # Whether, not what.
         "has_password": bool(row.get("secret_ref_id")),
+        "password_last4": row.get("password_last4") if row.get("secret_ref_id") else None,
     }
 
 

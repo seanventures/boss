@@ -679,6 +679,32 @@ def assign_skill_to_role(
                 "warning": gap["message"]} if gap else {})}
 
 
+_ALIASES: Optional[dict[str, str]] = None
+
+
+def role_skill_aliases() -> dict[str, str]:
+    """{role skill id: the shipped skill it means}, from packages/specpack/kits/aliases.yaml.
+
+    Not under skills/: every file there is a skill bundle some edition installs."""
+    global _ALIASES
+    if _ALIASES is None:
+        import yaml
+
+        from ..config import get_settings
+
+        path = get_settings().specpack_root / "kits" / "aliases.yaml"
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+        except OSError:
+            data = {}
+        _ALIASES = {str(k): str(v) for k, v in (data.get("aliases") or {}).items()}
+    return dict(_ALIASES)
+
+
+def role_skill_alias(skill_id: str) -> str:
+    return role_skill_aliases().get(skill_id, skill_id)
+
+
 def sync_role_skills(
     connection: Connection, *, project_id: str, actor: str = "system",
 ) -> dict[str, Any]:
@@ -726,7 +752,9 @@ def sync_role_skills(
         spec = row["spec"] if isinstance(row["spec"], dict) else {}
         wanted = ((spec.get("permissions") or {}).get("allowed_skills")) or []
         for skill_id in wanted:
-            skill_id = str(skill_id).strip()
+            # A ROLE MAY NAME A SKILL BY ANOTHER NAME (packages/specpack/kits/aliases.yaml):
+            # the grant is the skill it means.
+            skill_id = role_skill_alias(str(skill_id).strip())
             if (str(row["role_key"]), skill_id) in held:
                 continue
             # A wildcard is a description, not a grant. "infra.*" cannot be cashed in, and

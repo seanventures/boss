@@ -102,15 +102,6 @@ export type InfraView = {
   blockedReason?: string;
 };
 
-export type SettingsView = {
-  project_id: string;
-  roles: { key: string; name: string; autonomy_level: number; trust_score: number }[];
-  repos: { name: string; runs: number; prs: number; last_run_at: string | null }[];
-  unavailable: { id: string; label: string; reason: string }[];
-  apiReachable: boolean;
-  blockedReason?: string;
-};
-
 async function get<T>(path: string, projectId: string, empty: T): Promise<T> {
   try {
     const r = await fetch(
@@ -137,11 +128,5 @@ export function fetchInfra(projectId: string): Promise<InfraView> {
   return get("infra", projectId, {
     project_id: projectId, hosts: [], targets: [], models: [], integrations: [],
     load_recorded: false, load_note: "", apiReachable: false,
-  });
-}
-
-export function fetchSettings(projectId: string): Promise<SettingsView> {
-  return get("settings", projectId, {
-    project_id: projectId, roles: [], repos: [], unavailable: [], apiReachable: false,
   });
 }

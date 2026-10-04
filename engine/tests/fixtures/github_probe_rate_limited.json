@@ -1,0 +1,80 @@
+{
+ "_source": "Derived from GitHub's REST docs (2026-10-04), NOT recorded from a live token: git/blobs needs Contents: write; pulls needs Pull requests: write; 403 'Resource not accessible by personal access token' when a fine-grained token lacks a permission; 422 'Validation Failed' for a head that does not exist; the expiry header github-authentication-token-expiration. Re-record against real tokens (spec 7.0).",
+ "profile": "rate_limited",
+ "user": {
+  "status": 200,
+  "headers": {
+   "github-authentication-token-expiration": "2099-01-02 10:00:00 UTC"
+  },
+  "body": {
+   "login": "e2e",
+   "id": 1,
+   "type": "User"
+  }
+ },
+ "repos": {
+  "status": 200,
+  "headers": {
+   "github-authentication-token-expiration": "2099-01-02 10:00:00 UTC"
+  },
+  "body": [
+   {
+    "full_name": "e2e/app",
+    "private": true,
+    "default_branch": "main",
+    "owner": {
+     "login": "e2e",
+     "type": "User"
+    }
+   },
+   {
+    "full_name": "e2e/site",
+    "private": false,
+    "default_branch": "main",
+    "owner": {
+     "login": "e2e",
+     "type": "User"
+    }
+   },
+   {
+    "full_name": "e2e-org/platform",
+    "private": true,
+    "default_branch": "develop",
+    "owner": {
+     "login": "e2e-org",
+     "type": "Organization"
+    }
+   }
+  ]
+ },
+ "repo": {
+  "status": 403,
+  "headers": {
+   "x-ratelimit-remaining": "0",
+   "x-ratelimit-reset": "4102444800"
+  },
+  "body": {
+   "message": "API rate limit exceeded for user ID 1."
+  }
+ },
+ "blobs": {
+  "status": 403,
+  "body": {
+   "message": "Resource not accessible by personal access token",
+   "documentation_url": "https://docs.github.com/rest"
+  },
+  "headers": {
+   "x-accepted-github-permissions": ""
+  }
+ },
+ "pulls": {
+  "status": 403,
+  "body": {
+   "message": "Resource not accessible by personal access token",
+   "documentation_url": "https://docs.github.com/rest"
+  },
+  "headers": {
+   "x-accepted-github-permissions": ""
+  }
+ }
+}

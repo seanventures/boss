@@ -224,8 +224,9 @@ describe("watching the outer workflow, step by step", () => {
     // the PR it opened or the panel it convened.
     expect(DW).toContain("function stepLinks");
     expect(DW).toContain("open the project");
-    expect(DW).toContain("activity log");
-    expect(DW).toContain("Ask BOSS");
+    // The log is the step's own now: the panel's Activity section links to it.
+    expect(DW).toContain("stepLogHref(");
+    expect(DW).toContain("onAsk={ask}");
     expect(DW).toContain("pull request");
   });
 
@@ -417,7 +418,7 @@ describe("the workflow drawn as a path", () => {
     // operator asked for.
     expect(DW).toContain("function StepDetail");
     for (const marker of ['data-testid="dw-step-took"', 'data-testid="dw-step-error"',
-                          'data-testid="dw-step-links"', 'data-testid="dw-step-out"',
+                          'data-testid="dw-step-links"', '<StepOutputFacts',
                           'data-testid="dw-step-decide"']) {
       expect(DW).toContain(marker);
     }

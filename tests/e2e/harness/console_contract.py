@@ -171,8 +171,11 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Journey("skill_create"),
     ),
     "setup": (
-        Press("setup-github-help-toggle", "app/setup-ui.tsx",
-              expect=_tid("setup-github-help-steps")),
+        Press("su-test-all", "app/setup/setup-board.tsx", expect=_tid("su-verdict"),
+              why="Repo and models re-checks every row and answers with one verdict"),
+        Journey("setup_first_run"),
+        Journey("setup_replace_token"),
+        Journey("setup_deep_links"),
     ),
     "budget": (
         Press("budget-intensity-apply", "app/budget-intensity-ui.tsx", write=True,

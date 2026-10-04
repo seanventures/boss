@@ -104,50 +104,9 @@ export async function syncTrackerBindingAction(formData: FormData): Promise<Acti
   });
 }); }
 
-export async function setDefaultWorkTrackerAction(formData: FormData): Promise<ActionResult> { return act(async () => {
-  await post("/v1/work-trackers/set-default", {
-    project_id: text(formData, "project_id"),
-    actor: text(formData, "actor", "ceo"),
-    provider_key: text(formData, "provider_key", "plane"),
-  });
-}); }
-
-export async function connectWorkTrackerAction(formData: FormData): Promise<ActionResult> { return act(async () => {
-  const providerKey = text(formData, "provider_key", "plane");
-  const configuration: Record<string, string> = {};
-  // Common fields from the connect form (provider-specific extras ignored if empty)
-  for (const key of [
-    "api_base_url",
-    "web_base_url",
-    "workspace_slug",
-    "project_id_external",
-    "base_url",
-    "email",
-    "project_key",
-    "issue_type",
-    "team_id",
-    "team_key",
-    "owner",
-    "repo",
-    "organization",
-    "project",
-    "work_item_type",
-  ]) {
-    const value = text(formData, key);
-    if (!value) continue;
-    if (key === "project_id_external") configuration.project_id = value;
-    else configuration[key] = value;
-  }
-  await post("/v1/work-trackers/connect", {
-    project_id: text(formData, "project_id"),
-    actor: text(formData, "actor", "ceo"),
-    provider_key: providerKey,
-    configuration,
-    api_token: text(formData, "api_token") || undefined,
-    set_as_default: formData.get("set_as_default") === "true",
-    test: formData.get("skip_test") !== "true",
-  });
-}); }
+// CONNECTING A TRACKER moved to Skills & MCP › File tickets (skills-mcp spec §5.1): it tests what
+// was typed before storing it and keeps the token in the secret store. The form that lived here
+// stored the token in the tracker's configuration and is gone, with its two actions.
 
 export async function upsertDeliveryBotAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   await post("/v1/work-orchestration/bot-identities", {

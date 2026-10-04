@@ -221,7 +221,7 @@ def test_every_skill_file_is_reachable_from_some_edition():
     #: paper over. Fixing one means deleting it from here.
     # `email` was adopted into community_edition once its executor existed — the exemption
     # list is not meant to outlive the reason for it.
-    KNOWN_ORPHANS = {"agent_toolchain", "infra_do", "slack"}
+    KNOWN_ORPHANS = {"agent_toolchain", "infra_do"}
 
     on_disk = {p.stem for p in (root / "skills").glob("*.yaml")}
     orphans = sorted(on_disk - reachable - KNOWN_ORPHANS - export_sources)

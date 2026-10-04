@@ -297,7 +297,7 @@ def main() -> int:
         raise ConnectError(
             "this install already has an \"Anything OpenAI-compatible\" connection to "
             "another address. Nothing was changed. To use Ollama instead, replace that "
-            "connection in Mission Control (Settings, Repo and model).")
+            "connection in Mission Control (Settings, Repo and models).")
     # The Ollama model connected before this run, so roles BOSS gave it can follow a switch.
     previous = list(current["models"]) if current is not None else []
     if current is not None and model in current["models"]:
@@ -310,7 +310,7 @@ def main() -> int:
         if result.get("ok") is not True or result.get("source_id") != SOURCE_ID:
             raise ConnectError("BOSS did not record the Ollama connection")
         print(f"  Ollama connected: {model} at {base_url} "
-              "(unverified until a governed job uses it; no model was called)")
+              "(it answered one test question, budgeted and receipted)")
     record(f"ollama_model={model}")
     if args.default_if_no_hosted:
         record(f"ollama_default={make_default(api_url, api_key, args.env_file or Path('/nonexistent'), model, previous)}")

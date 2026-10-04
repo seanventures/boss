@@ -676,12 +676,13 @@ class _FakeBoss:
             def do_POST(self):  # noqa: N802
                 body = self._body()
                 outer.requests.append(("POST", self.path, body))
-                if self.path == "/v1/setup/coding-agents/connect":
+                if self.path == "/v1/setup/models" and body.get("kind") == "subscription":
                     outer.sources.append({"source_id": outer.SUBSCRIPTION_SOURCES[body["provider"]],
                                           "connection_status": "connected"})
-                    # BOSS proves a connection with one governed test turn before recording it.
-                    return self._reply(201, {"connected": True, "entitlement_recorded": True,
-                                             "proof": {"ok": True, "replied": "BOSS_OK"}})
+                    # Repo and models' connect proves it with one governed test turn, then
+                    # answers with the whole view.
+                    return self._reply(200, {"models": [
+                        {"provider": body["provider"], "pill": {"state": "working"}}]})
                 if self.path == "/v1/setup/model":
                     outer.sources = [item for item in outer.sources
                                      if item.get("source_id") != "setup-custom"]
@@ -851,7 +852,7 @@ def test_connect_found_at_a_terminal_signs_in_inside_the_container(world, boss_a
     calls = _docker_calls(world)
     assert "exec -u boss api claude auth login" in calls
     assert "exec -u boss api grok login --device-auth" in calls
-    recorded = [body["provider"] for body in boss_api.posts("/v1/setup/coding-agents/connect")]
+    recorded = [body["provider"] for body in boss_api.posts("/v1/setup/models")]
     assert recorded == ["claude_code", "grok"]
     assert "Claude Code  connected" in output
     assert "Grok Build   connected" in output
@@ -874,7 +875,7 @@ def test_boss_connect_asks_once_per_found_login_and_no_changes_nothing(world, bo
     assert "host.docker.internal" not in calls
     assert "skipped   Grok Build. Later: boss connect grok" in output
     assert "skipped   Ollama (nothing was changed)" in output
-    assert [b["provider"] for b in boss_api.posts("/v1/setup/coding-agents/connect")] == ["claude_code"]
+    assert [b["provider"] for b in boss_api.posts("/v1/setup/models")] == ["claude_code"]
     assert boss_api.posts("/v1/setup/model") == []
 
     # Signed in already: nothing to ask, nothing to sign in again.
@@ -900,7 +901,7 @@ def test_boss_connect_claude_and_grok_at_a_terminal(world, boss_api) -> None:
     assert code == 0, output
     assert "already signed in inside BOSS; recording it" in output
     assert _docker_calls(world).count("claude auth login") == 1
-    assert len(boss_api.posts("/v1/setup/coding-agents/connect")) == 3
+    assert len(boss_api.posts("/v1/setup/models")) == 3
 
 
 def test_boss_connect_claude_without_a_terminal_or_with_an_api_key_signs_nothing_in(
@@ -916,7 +917,7 @@ def test_boss_connect_claude_without_a_terminal_or_with_an_api_key_signs_nothing
     assert "holds ANTHROPIC_API_KEY" in blocked
     assert SECRET not in blocked
     assert "auth login" not in _docker_calls(world)
-    assert boss_api.posts("/v1/setup/coding-agents/connect") == []
+    assert boss_api.posts("/v1/setup/models") == []
 
 
 def test_boss_connect_ollama_registers_once_and_reports_an_unreachable_host(world, boss_api) -> None:

@@ -1585,11 +1585,15 @@ def execute_tracker_issues_create(
     if row is None:
         raise ValueError(
             f"this project has no {'connected work tracker' if not wanted else wanted + ' connected'}"
-            f". Connect one first in Work allocation → Connect work tracker — Plane, Jira, "
-            f"Linear, GitHub Issues or Azure DevOps.")
+            f". Connect one first in Skills & MCP → File tickets — GitHub Issues, Linear, Jira, "
+            f"Plane or Azure DevOps.")
+
+    from .work_orchestration import with_credential
 
     adapter = get_adapter(row["provider_key"])
-    config = dict(row["configuration"] or {})
+    # The token for these calls only: a secret-store reference, or the GitHub connection.
+    config = with_credential(context.connection, context.project_id,
+                             dict(row["configuration"] or {}))
 
     created: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -1645,6 +1649,286 @@ def _issue_body(action: dict[str, Any]) -> str:
         parts.append(f"Timing as discussed: {action['due']}")
     parts.append("Created by BOSS from a meeting transcript.")
     return "\n\n".join(p for p in parts if p)
+
+
+# --------------------------------------------------------------------------- #
+# The Kit's skills (skills-mcp spec E11, E12): an ability whose skill cannot run is not one.  #
+# --------------------------------------------------------------------------- #
+
+#: The engine's read tools `repo.read` offers, and nothing else (its spec's policy.tools).
+REPO_READ_TOOLS = ("read_code", "search_code", "list_source", "git_history", "read_pull_request")
+
+
+@register_executor("repo.read")
+def execute_repo_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """Read the project's repository through the engine's own read tools.
+
+    A workflow step's agent gets no native tools (agent_loop: a bounded run is offered exactly
+    what its agent holds), so before this an agent asked to review code could not open a file.
+    Holding `repo.read` offers it these five reads, each a call of this one skill — so the grant,
+    the budget gate and the invocation record are the ordinary skill runtime's. The tools are the
+    project-pinned set chat uses (build_discuss_read_registry): the project id is the run's, not
+    the model's to choose."""
+    from ..context import EngineContext
+    from ..tools.builtin import build_discuss_read_registry
+
+    tool = str(inputs.get("tool") or "read_code").strip()
+    if tool not in REPO_READ_TOOLS:
+        raise ValueError(f"repo.read offers {', '.join(REPO_READ_TOOLS)}; not {tool!r}.")
+    registry = build_discuss_read_registry(
+        edition=getattr(context.settings, "boss_edition", None))
+    if tool not in registry.names():
+        raise SkillExecutorConfigurationError(f"this BOSS has no {tool} tool.")
+    spec = registry.get(tool)
+    args = {k: v for k, v in inputs.items() if k != "tool" and not str(k).startswith("_")}
+    # THE PROJECT'S REPOSITORY, NEVER BOSS'S OWN. The read tools default to BOSS's source
+    # ("boss") for Ask BOSS; an agent holding this reads the repo its project is bound to, and
+    # a repo it names must be one the project is bound to as well.
+    from .kit_connections import github_state
+
+    bound = github_state(context.connection, context.settings, context.project_id)
+    repo = str(args.get("repo") or "").strip()
+    if not args.get("run_id"):
+        if repo.lower() in ("", "boss", "self", "platform"):
+            if not bound["repo"]:
+                raise SkillExecutorConfigurationError(
+                    "this project has no repository connected. Connect it in Setup.")
+            args["repo"] = bound["repo"]
+        elif repo.lower() != str(bound["repo"] or "").lower() and not context.connection.execute(
+                text("SELECT 1 FROM github_repository_bindings WHERE project_id = :p "
+                     "AND lower(full_name) = lower(:r) AND status = 'active'"),
+                {"p": context.project_id, "r": repo}).first():
+            raise SkillExecutorConfigurationError(f"{repo} is not a repository of this project.")
+    ctx = EngineContext(settings=context.settings, engine=context.connection.engine)
+    out = spec.handler(ctx, project_id=context.project_id, actor=context.actor, args=args)
+    return {"tool": tool, "result": out if isinstance(out, dict) else {"value": out}}
+
+
+@register_executor("ci.status")
+def execute_ci_status(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """CI results for a ref of the project's repository: GitHub check runs, read-only."""
+    from .kit_connections import _http_get, github_state, github_token
+
+    state = github_state(context.connection, context.settings, context.project_id)
+    if not state["connected"] or not state["repo"]:
+        raise SkillExecutorConfigurationError(
+            "this project has no GitHub repository connected. Connect it in Setup.")
+    token = github_token(context.connection, context.settings, context.project_id)
+    base, repo = state["api_base"], state["repo"]
+    ref = str(inputs.get("ref") or "").strip()
+    if not ref:
+        ref = str((_http_get(f"{base}/repos/{repo}", token) or {}).get("default_branch")
+                  or "main")
+    data = _http_get(f"{base}/repos/{repo}/commits/{ref}/check-runs?per_page=50", token) or {}
+    checks = [{"name": c.get("name"), "status": c.get("status"),
+               "conclusion": c.get("conclusion"), "url": c.get("html_url")}
+              for c in data.get("check_runs") or []]
+    failing = [c["name"] for c in checks
+               if c["conclusion"] in ("failure", "timed_out", "cancelled", "action_required")]
+    return {"ref": ref, "total": int(data.get("total_count") or len(checks)),
+            "failing": failing, "checks": checks}
+
+
+_DOCS_SYSTEM = (
+    "You write documents. Answer with the document only, in Markdown: a title, short sections "
+    "with headings, plain sentences. No preamble, no closing remarks, no notes about yourself.")
+
+
+@register_executor("docs.draft")
+def execute_docs_draft(context: "SkillExecutorContext", inputs: dict[str, Any]
+                       ) -> dict[str, Any]:
+    """Draft a document with the project's model: model.generate_text in a document's shape."""
+    brief = _required_text(inputs, "brief")
+    extra = []
+    if inputs.get("audience"):
+        extra.append(f"Audience: {inputs['audience']}")
+    if inputs.get("length"):
+        extra.append(f"Length: {inputs['length']}")
+    written = execute_model_generate_text(context, {
+        "prompt": "\n".join([brief, *extra]), "system": _DOCS_SYSTEM,
+        "context": inputs.get("context") or ""})
+    return {"markdown": written["text"], "characters": written["characters"],
+            "model": written.get("model")}
+
+
+@register_executor("work_tracker.issue.ensure")
+def execute_work_tracker_issue_ensure(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Make sure one piece of work has an issue in the project's tracker — once.
+
+    Idempotent by work item: the receipt keyed on (tracker, work item) is the binding, so a
+    retried job or a second ask returns the issue already opened instead of opening another.
+    A work item BOSS tracks (work_items) also gets its work_tracker_bindings row."""
+    from .work_orchestration import connected_tracker, with_credential
+    from .work_tracker_adapters import get_adapter
+
+    work_item_id = _required_text(inputs, "work_item_id")
+    title = _required_text(inputs, "title")
+    description = str(inputs.get("description") or "").strip()
+    wanted = str(inputs.get("provider_key") or "").strip().lower()
+    row = connected_tracker(context.connection, context.project_id, wanted)
+    if row is None:
+        raise ValueError("this project has no connected work tracker. Connect one in Skills & "
+                         "MCP › File tickets.")
+    provider = str(row["provider_key"])
+    org_id, workspace_id = context.tenant_scope()
+    receipt, created = context.receipts.create_or_reuse(
+        context.connection, org_id, workspace_id, context.project_id,
+        f"work_tracker.issue.ensure:{provider}:{work_item_id}", "work_tracker.issue.ensure",
+        {"provider": provider, "work_item_id": work_item_id},
+        {"title": title}, created_by_job_id=context.created_by_job_id)
+    if not created and receipt.get("status") == "succeeded":
+        return {**(receipt.get("result") or {}), "tracker_binding_id": receipt["id"],
+                "sync_status": "synced", "deduplicated": True}
+    config = with_credential(context.connection, context.project_id,
+                             dict(row["configuration"] or {}))
+    made = get_adapter(provider).create_issue(
+        config, title=title[:200], description_html=description.replace("\n", "<br>"),
+        description_text=description or title)
+    if made is None:
+        raise RuntimeError(f"{row['display_name']} did not create the issue — check the "
+                           "connection's test in Skills & MCP › File tickets.")
+    out = {"provider": provider, "external_issue_id": made.external_issue_id,
+           "external_key": made.external_key, "external_url": made.external_url}
+    context.receipts.mark_succeeded(context.connection, receipt["id"],
+                                    f"{provider}:{made.external_issue_id}", out)
+    _bind_work_item(context, provider, work_item_id, made)
+    return {**out, "tracker_binding_id": receipt["id"], "sync_status": "synced"}
+
+
+def _bind_work_item(context: "SkillExecutorContext", provider: str, work_item_id: str,
+                    made: Any) -> None:
+    """Record the issue on a BOSS work item, when the id names one."""
+    from .core import make_id as _make_id
+
+    known = context.connection.execute(
+        text("SELECT 1 FROM work_items WHERE id = :w AND project_id = :p"),
+        {"w": work_item_id, "p": context.project_id}).first()
+    if not known:
+        return
+    context.connection.execute(
+        text("""INSERT INTO work_tracker_bindings
+                  (id, project_id, provider_id, work_item_id, external_issue_id, external_key,
+                   external_url, external_state, sync_status, created_by, last_synced_at)
+                SELECT :id, :p, pr.id, :w, :ext, :key, :url, :state, 'synced', :actor, now()
+                  FROM work_tracker_providers pr
+                 WHERE pr.project_id = :p AND pr.provider_key = :provider
+                ON CONFLICT (project_id, provider_id, work_item_id) DO UPDATE
+                  SET external_issue_id = EXCLUDED.external_issue_id,
+                      external_key = EXCLUDED.external_key,
+                      external_url = EXCLUDED.external_url, sync_status = 'synced',
+                      last_synced_at = now(), updated_at = now()"""),
+        {"id": _make_id("wtb"), "p": context.project_id, "w": work_item_id,
+         "ext": made.external_issue_id, "key": made.external_key, "url": made.external_url,
+         "state": made.external_state, "actor": context.actor, "provider": provider})
+
+
+@register_executor("work_tracker.issue.update")
+def execute_work_tracker_issue_update(
+    context: "SkillExecutorContext", inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Comment on an issue, or change its state, in the project's tracker."""
+    from .work_orchestration import connected_tracker, with_credential
+    from .work_tracker_adapters import WorkTrackerHttpError, strip_html, update_issue
+
+    binding = _required_text(inputs, "tracker_binding_id")
+    comment = strip_html(str(inputs.get("comment_html") or inputs.get("comment") or ""))
+    links = inputs.get("links") or []
+    if isinstance(links, list) and links:
+        comment = "\n".join([comment, *[str(link) for link in links]]).strip()
+    state = str(inputs.get("state") or "").strip()
+    if not comment and not state:
+        raise ValueError("say what to change: a comment, links or a state")
+    row = connected_tracker(context.connection, context.project_id)
+    if row is None:
+        raise ValueError("this project has no connected work tracker. Connect one in Skills & "
+                         "MCP › File tickets.")
+    issue = binding
+    found = context.connection.execute(
+        text("SELECT result FROM receipts WHERE id = :id AND project_id = :p"),
+        {"id": binding, "p": context.project_id}).scalar()
+    if isinstance(found, dict):
+        issue = str(found.get("external_key") or found.get("external_issue_id") or binding)
+    else:
+        bound = context.connection.execute(
+            text("SELECT external_key, external_issue_id FROM work_tracker_bindings "
+                 "WHERE id = :id AND project_id = :p"),
+            {"id": binding, "p": context.project_id}).mappings().first()
+        if bound is not None:
+            issue = str(bound["external_key"] or bound["external_issue_id"] or binding)
+    config = with_credential(context.connection, context.project_id,
+                             dict(row["configuration"] or {}))
+    try:
+        done = update_issue(str(row["provider_key"]), config, issue=issue, comment=comment,
+                            state=state)
+    except WorkTrackerHttpError as error:
+        raise RuntimeError(str(error)) from error
+    return {"tracker_binding_id": binding, "sync_status": "synced", **done}
+
+
+def _chat_connection(context: "SkillExecutorContext", provider: str) -> Optional[dict[str, Any]]:
+    from .kit_connections import chat_settings
+
+    stored = chat_settings(context.connection, context.settings, context.project_id)
+    return stored if stored and stored.get("provider") == provider else None
+
+
+@register_executor("slack.post_real_guarded")
+def execute_slack_post(context: "SkillExecutorContext", inputs: dict[str, Any]
+                       ) -> dict[str, Any]:
+    """Post to Slack: the project's Slack connection (Skills & MCP › Team chat) first, the
+    environment's webhook otherwise. Approval is the spec's policy, enforced before this."""
+    import httpx
+
+    from .slack_adapter import SlackAdapter
+
+    message = str(inputs.get("text") or inputs.get("body") or "").strip()
+    if not message:
+        raise ValueError("text is required — an empty post is not a message")
+    stored = _chat_connection(context, "slack")
+    if stored is None:
+        channel = str(inputs.get("channel") or "").strip()
+        return {"provider_ref": SlackAdapter(context.settings).post_message(
+            channel, None, message), "channel": channel}
+    channel = str(inputs.get("channel") or stored.get("channel") or "").strip()
+    body: dict[str, Any] = {"channel": channel, "text": message}
+    if inputs.get("thread_ts"):
+        body["thread_ts"] = str(inputs["thread_ts"])
+    resp = httpx.post("https://slack.com/api/chat.postMessage",
+                      headers={"Authorization": f"Bearer {stored['token']}"}, json=body,
+                      timeout=30.0)
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("ok"):
+        raise RuntimeError(f"Slack refused the post: {data.get('error') or 'unknown error'}")
+    return {"provider_ref": f"slack:{data.get('channel')}:{data.get('ts')}", "channel": channel}
+
+
+@register_executor("mattermost.post_real")
+def execute_mattermost_post(context: "SkillExecutorContext", inputs: dict[str, Any]
+                            ) -> dict[str, Any]:
+    """Post to Mattermost: the project's Mattermost connection first, the environment's bot
+    otherwise."""
+    import httpx
+
+    from .mattermost_adapter import MattermostAdapter
+
+    message = str(inputs.get("body") or inputs.get("text") or "").strip()
+    if not message:
+        raise ValueError("body is required — an empty post is not a message")
+    subject = str(inputs.get("subject") or "").strip() or None
+    stored = _chat_connection(context, "mattermost")
+    channel = str(inputs.get("channel_id") or (stored or {}).get("channel") or "").strip()
+    if stored is None:
+        return {"post_ref": MattermostAdapter(context.settings).post_message(
+            f"mattermost:{channel}", subject, message)}
+    text_out = f"**{subject}**\n{message}" if subject else message
+    resp = httpx.post(f"{str(stored.get('base_url') or '').rstrip('/')}/api/v4/posts",
+                      headers={"Authorization": f"Bearer {stored['token']}"},
+                      json={"channel_id": channel, "message": text_out}, timeout=30.0)
+    resp.raise_for_status()
+    return {"post_ref": f"mattermost-post:{resp.json().get('id') or 'unknown'}"}
 
 
 @register_executor("media.fetch_link")

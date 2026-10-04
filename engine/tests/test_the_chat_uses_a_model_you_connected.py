@@ -90,22 +90,35 @@ def test_claude_first_when_both_are_connected(connection):
     assert chat_engine_for(connection, _Settings(), "p") == "claude_code"
 
 
-def test_an_api_key_is_left_exactly_as_it_was(connection):
-    """An install that has always run its chat on a key must not have the conversation moved
-    underneath it because a subscription was connected for builds."""
+def test_a_connected_subscription_beats_a_stale_environment_key(connection):
+    """Repo and models' one resolver (model_routing.resolve_job): a key in the install's
+    environment answers only when nothing is connected. An operator who connects a
+    subscription in the console is never overridden by a leftover OPENAI_API_KEY — Claude
+    Code's "stale key overrides subscription" trap, avoided."""
     class _WithKey(_Settings):
         openai_api_key = "sk-x"
 
     _connect(connection, "anthropic_claude_code")
+
+    assert chat_engine_for(connection, _WithKey(), "p") == "claude_code"
+
+
+def test_an_install_with_only_an_environment_key_keeps_it(connection):
+    """Nothing connected: the environment decides, exactly as before this existed."""
+    class _WithKey(_Settings):
+        openai_api_key = "sk-x"
 
     assert chat_engine_for(connection, _WithKey(), "p") == ""
 
 
 def test_the_console_choice_beats_everything(connection):
+    """The project's choice comes first while it is connected — ahead of Auto's preference
+    for Claude and of the install's environment key."""
     class _WithKey(_Settings):
         openai_api_key = "sk-x"
 
     _connect(connection, "anthropic_claude_code")
+    _connect(connection, "openai_codex_chatgpt")
     _choose(connection, "codex")
 
     assert chat_engine_for(connection, _WithKey(), "p") == "codex"
@@ -127,10 +140,11 @@ def test_nothing_connected_changes_nothing(connection):
 
 
 def test_the_console_offers_only_engines_that_can_hold_a_conversation(connection):
-    """Offering the harness list here would be a green tick over nothing: the factory honours
-    exactly these three and sends everything else to the OpenAI adapter, so "openrouter" in
-    this box would silently mean "OpenAI"."""
-    assert CHAT_ENGINES == ("claude_code", "codex", "native")
+    """Every engine the router can build a chat adapter for (model_routing.adapter_for builds
+    each on its own credential and endpoint), and no coding-only harness."""
+    from boss_engine.services.model_routing import CHAT_ROUTABLE
+
+    assert CHAT_ENGINES == CHAT_ROUTABLE
     assert _allowed_choices(KNOBS["chat_llm_engine"]) == list(CHAT_ENGINES)
     assert "aider" not in _allowed_choices(KNOBS["chat_llm_engine"])
 

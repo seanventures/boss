@@ -37,6 +37,10 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import model_probes  # noqa: E402  (Repo and models' key modes: sk-stub-401/402/404/429)
 from typing import Any, Optional
 
 HERE = Path(__file__).resolve().parent
@@ -308,6 +312,8 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------ routes
     def do_GET(self) -> None:  # noqa: N802 — http.server's naming
         path = self.path.split("?", 1)[0]
+        if path.endswith("/models") and self._key_mode("GET", path):
+            return
         if path in ("/health", "/v1/health"):
             self._send(200, {"ok": True})
         elif path == "/v1/models":
@@ -318,8 +324,29 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": {"message": f"no route {path}"}})
 
+    def _key_mode(self, method: str, path: str) -> bool:
+        """Repo and models' key modes (model_probes.py): sk-stub-401/402/404/429 answer as a
+        provider would. True when one answered."""
+        key = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip() \
+            or (self.headers.get("x-api-key") or "")
+        found = model_probes.answer(key, method, path)
+        if found is None or key == "sk-stub-ok" and not path.endswith("/models"):
+            return False
+        status, headers, payload = found
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
+        if path.endswith("/chat/completions") and self._key_mode("POST", path):
+            return
         body = self._body()
         if path.endswith("/chat/completions"):
             self._chat(body)

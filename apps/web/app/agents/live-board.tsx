@@ -274,11 +274,11 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
         {setup.length ? (
           <ul className="ag-live-setup" data-testid="ag-live-setup">
             {setup.map((a) => {
-              const patch = { area: a.fix?.area || "setup", view: null, role: null };
+              const patch = { area: a.fix?.area || "setup", view: null, role: null, focus: a.fix?.focus ?? null };
               return (
                 <li key={a.id}>
                   <a className="ag-link" href={linkTo(patch, orgId)} data-testid={`ag-live-setup-${a.id}`}
-                     title={a.whatToDo || undefined}
+                     title={a.fix?.label || a.whatToDo || undefined}
                      onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(patch); } }}>
                     Setup: <span data-user-text>{a.title}</span> ↗
                   </a>

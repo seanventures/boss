@@ -49,6 +49,8 @@ export type ActivityLogQuery = {
   /** One workflow run (`wfr_…`) — the governed run a work task was one step of. A different
    *  scope from `run_id`, and the console URL can carry both. */
   workflow_run_id?: string;
+  /** One step of that workflow run: its own rows and the work task it started. */
+  step_id?: string;
   /** One AI agent, by role key. */
   agent?: string;
   /** Which BOSS process said it: "api" | "worker". Rows from sources that do not record a
@@ -189,6 +191,7 @@ export function activityLogSearchParams(
   setIfPresent(params, "source", query.source);
   setIfPresent(params, "run_id", query.run_id);
   setIfPresent(params, "workflow_run_id", query.workflow_run_id);
+  setIfPresent(params, "step_id", query.step_id);
   setIfPresent(params, "agent", query.agent);
   setIfPresent(params, "service", query.service);
   setIfPresent(params, "since", query.since);

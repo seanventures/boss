@@ -60,6 +60,12 @@ installs:
   # container boundary.
   # The mobile device skill is on-demand and still requires a leased job plus an explicitly
   # enabled trusted device host. Listing it makes that opt-in capability visible in the catalog.
+  # `kit`, `slack` and `deployment` joined with Skills & MCP's Kit (skills-mcp spec E5, E12): an
+  # ability on the Kit is only real if every skill it names is in this catalogue AND has an
+  # executor — Read the repo (repo.read), Tests & CI (ci.status), Render docs (docs.draft),
+  # Team chat (slack.post_real_guarded) and Deploy / Watch health (deployment.*).
+  # test_every_kit_skill_has_an_executor enforces both halves.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
-           mattermost, youtube, video, meeting_ops, email, agent_code, mobile]
+           mattermost, youtube, video, meeting_ops, email, agent_code, mobile,
+           kit, slack, deployment]
 status: active  # Independent product; Cloud is opt-in via Easy Connect

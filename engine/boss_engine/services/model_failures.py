@@ -13,7 +13,14 @@ import re
 from typing import Any, Mapping, Optional
 
 #: Where an operator fixes a model connection.
-SETUP_HREF = "/?area=setup&step=model"
+SETUP_HREF = "/?area=setup&focus=models"
+
+
+def setup_href(source_id: Optional[str] = None) -> str:
+    """Repo and models' Models row — and that source's menu, when the source is known."""
+    from urllib.parse import quote
+
+    return f"{SETUP_HREF}&source={quote(source_id)}" if source_id else SETUP_HREF
 
 _LOGIN_REJECTED = (
     "invalid bearer token", "failed to authenticate", "authentication_error",
@@ -197,8 +204,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "credential_unreadable",
             "headline": f"BOSS could not read the login it stored for {the_source}.",
-            "action": f"Reconnect {the_source} in Setup → Model to store it again.",
-            "href": SETUP_HREF, "retry": False,
+            "action": f"Reconnect {the_source} in Repo and models to store it again.",
+            "href": setup_href(source_id), "retry": False,
         }
     # EVERY LEASE ON THE SOURCE IS HELD BY OTHER WORK. A queue, not a verdict: it frees when
     # that work's call settles (model_gateway.acquire).
@@ -213,9 +220,9 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "login_rejected",
             "headline": f"The {who} login was rejected, so no model call can run.",
-            "action": (f"Reconnect the {who} in Setup → Model. For Claude Code, run "
+            "action": (f"Reconnect the {who} in Repo and models. For Claude Code, run "
                        "`claude setup-token` and paste the long sk-ant-… value it prints."),
-            "href": SETUP_HREF, "retry": False,
+            "href": setup_href(source_id), "retry": False,
         }
     # HELD BY THE BUDGET STATE (the job gate). Not a failure and not a missing worker: the job
     # is queued with a later run_after, and it runs once the money spent is back under the line.
@@ -279,8 +286,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "kind": "capacity_owner",
             "headline": f"The {who} belongs to someone else on this install and cannot be used "
                         "for this work.",
-            "action": "Connect your own subscription in Setup → Model.",
-            "href": SETUP_HREF, "retry": False,
+            "action": "Connect your own subscription in Repo and models.",
+            "href": setup_href(source_id), "retry": False,
         }
     # A SKILL THAT NEEDS ONE PROVIDER'S API (image generation, speech-to-text) and the project
     # has not connected it. The exception carries its own fix (model_routing.ProviderRequirement).
@@ -295,8 +302,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                          "project has not connected one." if named else
                          "This step needs a provider capability this project has not "
                          "connected."),
-            "action": named.fix if named else "Connect the provider it names in Repo and model.",
-            "href": SETUP_HREF, "retry": False,
+            "action": named.fix if named else "Connect the provider it names in Repo and models.",
+            "href": setup_href(source_id), "retry": False,
         }
     if "no_eligible_source" in lowered or "no eligible model" in lowered \
             or "openai_api_key is not configured" in lowered:
@@ -306,8 +313,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "no_model",
             "headline": "No connected model can run this work.",
-            "action": "Connect a model in Setup → Model.",
-            "href": SETUP_HREF, "retry": False,
+            "action": "Connect a model in Repo and models.",
+            "href": setup_href(source_id), "retry": False,
         }
     if NO_DIRECT_ANSWER in lowered:
         return {

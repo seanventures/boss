@@ -43,6 +43,8 @@ export type NeedsYouItem = {
   detail: string;
   what_to_do?: string | null;
   fix_area?: string | null;
+  /** Where in that area: Repo and models lands on the row (`focus=repository|models`). */
+  fix_focus?: string | null;
   fix_label?: string | null;
   decision_id?: string | null;
   run_id?: string | null;
@@ -156,8 +158,8 @@ export function decisionsHref(filter: "needs_action" | "expired", orgId?: string
   return withOrg(new URLSearchParams({ area: "decisions", decision_filter: filter }), orgId);
 }
 
-export function areaHref(area: string, orgId?: string | null): string {
-  return withOrg(new URLSearchParams({ area }), orgId);
+export function areaHref(area: string, orgId?: string | null, focus?: string | null): string {
+  return withOrg(new URLSearchParams({ area, ...(focus ? { focus } : {}) }), orgId);
 }
 
 /** "12m", "1h 05m", "3d 4h" — how long something has been where it is. */
@@ -227,7 +229,8 @@ export function attentionFromNeedsYou(item: NeedsYouItem): AttentionItem {
     decideInline: false,
     contentHash: item.content_hash ?? undefined,
     riskTier: typeof item.risk_tier === "number" ? item.risk_tier : undefined,
-    fix: item.fix_area ? { area: item.fix_area, label: item.fix_label ?? "Fix" } : undefined,
+    fix: item.fix_area ? { area: item.fix_area, label: item.fix_label ?? "Fix in Repo and models",
+                           ...(item.fix_focus ? { focus: item.fix_focus } : {}) } : undefined,
     at: item.at ?? undefined,
   };
 }

@@ -76,6 +76,9 @@ def test_project_skill_catalog_is_edition_filtered_and_stateful(client, engine):
     assert global_response.status_code == 200
     global_ids = {item["id"] for item in global_response.json()["items"]}
     assert "deployment.health.check" in global_ids
+    # An enterprise-only skill. (deployment.health.check is in Community since the Kit's Watch
+    # health ability — skills-mcp spec E12 — so it no longer proves the edition filter.)
+    assert "providerops.drift.report" in global_ids
 
     with engine.begin() as connection:
         register_skill(
@@ -93,7 +96,7 @@ def test_project_skill_catalog_is_edition_filtered_and_stateful(client, engine):
     items = response.json()["items"]
     project_ids = {item["id"] for item in items}
     assert "github.create_pr_sandbox" in project_ids
-    assert "deployment.health.check" not in project_ids
+    assert "providerops.drift.report" not in project_ids
     sandbox = next(
         item for item in items if item["id"] == "github.create_pr_sandbox"
     )

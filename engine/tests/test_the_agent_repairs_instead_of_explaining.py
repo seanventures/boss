@@ -90,25 +90,28 @@ def test_the_event_records_which_credential_was_replaced():
 
 def test_the_agent_can_rerun_the_check_itself():
     """The exact instruction it used to give: "open BOSS's GitHub view, select the repository,
-    and click Test access"."""
+    and click Test access". It runs Repo and models' own three probes instead."""
     assert _tool("test_github_access").kind == "write"
     assert "test_github_access" in build_discuss_read_registry().names()
     source = inspect.getsource(_tool("test_github_access").handler)
-    assert "svc.test_connection(" in source
+    assert "setup_actions.check_repository(" in source
 
 
 def test_and_the_retest_is_deliberately_repeatable():
-    """Receipts dedupe by key, and the whole point is re-asking a question whose answer has
-    changed — a fixed key would return the first failure forever."""
-    source = inspect.getsource(_tool("test_github_access").handler)
-    assert "_uuid.uuid4()" in source
+    """Every check writes its own receipt — a fixed dedupe key would return the first failure
+    forever."""
+    from boss_engine.services import setup_actions
+
+    source = inspect.getsource(setup_actions._receipt)
+    assert "uuid.uuid4()" in source
 
 
 def test_it_finds_the_connection_and_repository_without_being_told():
-    """An agent that needs three ids before it can act will ask the operator for them."""
+    """An agent that needs three ids before it can act will ask the operator for them: the
+    default repository is found, and an install configured from its settings file too."""
     source = inspect.getsource(_tool("test_github_access").handler)
-    assert "ORDER BY created_at DESC LIMIT 1" in source
     assert "(role = 'primary') DESC" in source
+    assert 'target = "install"' in source
 
 
 def test_the_agent_can_apply_a_setting_it_recommends():

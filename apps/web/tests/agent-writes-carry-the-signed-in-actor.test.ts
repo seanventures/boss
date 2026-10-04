@@ -32,6 +32,9 @@ const AGENT_WRITE_SURFACE = [
   /\/v1\/agents\b/,               // the agent resource: create, edit, delete
   /\/v1\/agent-studio\//,         // Studio profile writes
   /["'`]\/api\/skills["'`]/,      // the skills proxy, which also grants
+  /\/v1\/kit\//,                  // Skills & MCP's Kit: holders, Apply recommended
+  /["'`]\/api\/kit["'`]/,         // its proxy
+  /["'`]\/api\/mcp["'`]/,         // the MCP proxy, which grants a server to an agent
   /from "(\.\.\/)+lib\/agents"|from "\.\/lib\/agents"|from "\.\/agents"/,
   /from "\.\/agent-studio-actions"/,
   /from "\.\.\/lib\/agent-wizard"/,
@@ -54,10 +57,12 @@ const KNOWN_AGENT_WRITERS = [
   // The 'Give <skill> to <captain>' grant on a workflow step row (moved out of
   // delivery-workflows-ui.tsx, which no longer writes agents itself).
   "app/workflows/captain-can-run-it.tsx",
-  // The shared MCP panel (skills-mcp stream): removing a server an agent holds releases that
-  // agent's grant through /api/skills, so it is an agent writer too — reviewed at integration.
-  "app/mcp-servers-ui.tsx",
-  "app/skills-ui.tsx",
+  // Skills & MCP (the Kit): the proxies and the one client that give abilities and servers to
+  // agents (PUT holders, Apply recommended, a server's Agents), and the skill drawer's grants.
+  "app/api/kit/route.ts",
+  "app/api/mcp/route.ts",
+  "lib/kit-api.ts",
+  "app/skills/skill-drawer.tsx",
   "lib/agent-studio.ts",
   "lib/agent-world.ts",
   "lib/agents-live.ts",
