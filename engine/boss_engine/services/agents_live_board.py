@@ -860,6 +860,7 @@ def force(connection: Any, project_id: str, attention: list[AttentionItem]
     asks = {str(r["role_key"]): int(r["n"]) for r in connection.execute(
         text("SELECT role_key, count(*) AS n FROM agent_acts WHERE project_id = :p "
              "AND ended_at IS NULL AND status = 'awaiting_input' AND role_key IS NOT NULL "
+             "AND NOT (kind = 'step' AND decision_id IS NOT NULL) "
              "GROUP BY role_key"),
         {"p": project_id},
     ).mappings().all()}

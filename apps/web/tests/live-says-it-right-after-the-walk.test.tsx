@@ -107,6 +107,7 @@ describe("D1 Skip asks why, and sends it", () => {
     expect($('[data-testid="ag-att-stop"]')?.textContent).toContain("Stop this run?");
     await click($('[data-testid="ag-att-stop-confirm"]'));
     expect(post.mock.calls[0][0]).toBe("stop");
+    expect(String(post.mock.calls[0][1].reason ?? "")).not.toBe("");
     expect(toasts).toEqual(["Run stopped"]);
   });
 

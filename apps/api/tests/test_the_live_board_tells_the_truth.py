@@ -78,7 +78,7 @@ def _gated_run(client, monkeypatch):
     return run_id, herald, view
 
 
-def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, monkeypatch):
+def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, engine, monkeypatch):
     run_id, herald, view = _gated_run(client, monkeypatch)
     decision_id = wf.steps_of(view)["publish"]["decision_id"]
 
@@ -114,6 +114,13 @@ def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, 
     agent = next(a for a in board["agents"] if a["role_key"] == herald)
     assert agent["team"] == "yours" and agent["state"] != "needs_you"
     assert next(t for t in board["teams"] if t["key"] == "yours")["needs_you"] == 0
+    # Even a gate act written before D4, which named the captain, is never the agent's wait.
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_acts SET role_key = :h WHERE decision_id = :d "
+                       "AND kind = 'step'"), {"h": herald, "d": decision_id})
+    legacy = _board(client).json()
+    assert next(a for a in legacy["agents"] if a["role_key"] == herald)["state"] != "needs_you"
+    assert next(t for t in legacy["teams"] if t["key"] == "yours")["needs_you"] == 0
     assert [t["key"] for t in board["teams"]][:8] == [
         "leadership", "architecture", "engineering", "quality", "operations", "cost", "media",
         "thinkers"]
