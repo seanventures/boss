@@ -29,7 +29,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
   onNew?: (roleKey: string) => void;
 }) {
   const live = useConversation(projectId, conversationId, actor);
-  const { conversation, busy, speaking, thinking, problem, setProblem } = live;
+  const { conversation, busy, answering, speaking, thinking, problem, setProblem } = live;
   const roleKey = conversation?.seats[0] ?? "";
   const merged = useMemo(() => {
     const m = new Map(book);
@@ -58,7 +58,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
   return (
     <SeatBook.Provider value={merged}>
       <aside className="ag-talk" role="dialog" aria-modal="false" data-testid="ag-talk"
-             data-kind={conversation?.kind ?? ""} aria-label={conversation?.title ?? "Talk"}>
+             data-kind={conversation?.kind ?? ""} aria-label={roleKey ? seatName(merged.get(roleKey) ?? null).name : "Talk"}>
         <TalkHead roleKey={roleKey} state={state} conversation={conversation} plan={plan}
                   onClose={onClose}
                   onPlan={onPlan && conversation && !plan ? () => onPlan(roleKey, conversation) : undefined}
@@ -77,7 +77,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
           autoFocus
           initial={draft}
           onSend={(message) => void live.send(message)}
-          onStop={busy ? live.stop : undefined}
+          onStop={answering ? live.stop : undefined}
           extra={plan ? (
             <button type="button" className="ag-btn" data-testid="ag-propose"
                     disabled={busy || !spoke}
@@ -103,8 +103,8 @@ function TalkHead({ roleKey, state, conversation, plan, onClose, onPlan, onNew }
       {roleKey ? <ConverseFace roleKey={roleKey} size={48} state={state} badge /> : null}
       <div className="ag-talk-who">
         <span className="ag-talk-name">
-          <strong>{who.name}</strong>
-          {who.role ? <span className="ag-muted">{who.role}</span> : null}
+          <strong data-testid="ag-talk-callsign">{who.name}</strong>
+          {who.role ? <span className="ag-muted" data-testid="ag-talk-role">{who.role}</span> : null}
           <AiBadge />
           {plan ? <span className="ag-chip ag-chip-accent">Plan</span> : null}
         </span>

@@ -15,10 +15,11 @@ door the composer uses (`start_from_proposal`, given the API's start function).
           summary, decisions (with who was for and against) and next actions, any of which can
           carry a start card or open a decision.
 
-STREAMING. The adapters BOSS has return a whole answer per call, so a seat's reply is revealed
-in word groups as soon as it exists (`REVEAL_SECONDS` in total), after a `turn_start` that the
-console draws as the seat thinking. An adapter that grows a `stream_text_response` streams for
-real with no change here.
+STREAMING. Each word goes out as a `token` event the moment the model writes it: the Claude
+CLI (`stream-json` partial messages) and the OpenAI adapter (`stream=True`) implement
+`stream_text_response`, and the wrappers around them (fallback, governed) pass it through. An
+adapter that cannot stream (the Codex CLI) answers whole; that answer is revealed in word groups
+(`REVEAL_SECONDS` in total) after a `turn_start` the console draws as the seat thinking.
 
 WHAT THIS MODULE LEANS ON: agent_persona.compose_agent_prompt builds the system prompt (the
 same compiler as the dock, work and panel prompts); agent_acts.open_act / close_act write the
@@ -198,7 +199,8 @@ def _roles(connection, project_id: str, keys: Optional[list[str]] = None) -> dic
 
 
 def _seat_info(role: dict) -> dict:
-    persona = (role.get("spec") or {}).get("persona") or {}
+    # The one persona the prompt, the room's peer list and the title read too.
+    persona = agent_persona.persona_of(role)
     tone = ((role.get("spec") or {}).get("comms_contract") or {}).get("tone")
     return {
         "role_key": role["role_key"],
@@ -214,7 +216,7 @@ def _seat_info(role: dict) -> dict:
 def _speaker(role: Optional[dict], role_key: Optional[str]) -> str:
     if not role:
         return str(role_key or "An agent")
-    persona = (role.get("spec") or {}).get("persona") or {}
+    persona = agent_persona.persona_of(role)
     title = role.get("display_name") or role["role_key"]
     return f"{persona['callsign']} ({title})" if persona.get("callsign") else title
 
@@ -371,7 +373,9 @@ def create_conversation(connection, *, project_id: str, actor: str, kind: str,
     lead = _resolve(lead_role_key) if lead_role_key else resolved[0]
     if lead not in resolved:
         raise _invalid("the lead must be one of the seats")
-    names = [roles[k].get("display_name") or k for k in resolved]
+    # Named the way the console names them: the callsign when there is one ("Talk with Vera").
+    names = [_seat_info(roles[k]).get("callsign") or roles[k].get("display_name") or k
+             for k in resolved]
     default_title = {"talk": f"Talk with {names[0]}", "plan": f"Plan with {names[0]}",
                      "room": preset_row["label"] if preset_row else " · ".join(names)}[kind]
     conversation_id = make_id("cnv")
