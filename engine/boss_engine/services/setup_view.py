@@ -200,8 +200,23 @@ def _secret_backend(settings: Any, *, wait: bool = False) -> Optional[str]:
         return chosen
     if wait:
         return _cached("secret_backend", lambda: _pick_backend(settings))
-    found, _pending = _cached_or_later("secret_backend", lambda: _pick_backend(settings), None)
+    found, pending = _cached_or_later("secret_backend", lambda: _pick_backend(settings), None)
+    # THE FIRST READ ON A COLD CACHE WAITS A MOMENT. Without an answer the board cannot tell
+    # whether to ask for database consent, so the form went out without the question and the
+    # submit was refused (409) instead. The store's health call normally answers well inside
+    # this bound; a store that hangs still never holds the page for longer.
+    deadline = time.monotonic() + COLD_SECRET_BACKEND_WAIT_SECONDS
+    while found is None and pending and time.monotonic() < deadline:
+        time.sleep(0.05)
+        with _CACHE_LOCK:
+            hit = _CACHE.get("secret_backend")
+        if hit:
+            found = hit[1]
     return found
+
+
+#: How long the first read waits for the secret store's answer (_secret_backend).
+COLD_SECRET_BACKEND_WAIT_SECONDS = 2.0
 
 
 # ── Small readers ─────────────────────────────────────────────────────────────────────────────
