@@ -120,7 +120,7 @@ VERDICT: dict[str, dict[str, Any]] = {
     "ready": {"label": "Ready", "tone": "green",
               "tip": "Repository and model checked. Ready to build."},
     "to_go": {"label": "{n} to go", "tone": "grey",
-              "tip": "Connect a repository and a model to start."},
+              "tip": "Connect {missing} to start."},
     "problem": {"label": "{n} problem", "tone": "red", "tip": "{headline}"},
     "problems": {"label": "{n} problems", "tone": "red", "tip": "{headline}"},
     "budget_spent": {"label": "Budget spent", "tone": "red",

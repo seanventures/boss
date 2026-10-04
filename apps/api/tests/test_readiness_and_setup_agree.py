@@ -38,6 +38,11 @@ def test_they_agree_through_every_state(client, engine, monkeypatch):
         assert _readiness(engine, "repository") == repo_ok, step
         assert _readiness(engine, "model") == model_ok, step
         states.append((repo_ok, model_ok, view["ready"]))
+        if step == "full":
+            # The header names what is still missing, not both halves.
+            assert view["verdict"]["tip"] == "Connect a model to start."
+        if step == "empty":
+            assert view["verdict"]["tip"] == "Connect a repository and a model to start."
     assert states == [(False, False, False), (False, False, False), (True, False, False),
                       (True, True, True)]
 

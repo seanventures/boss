@@ -885,7 +885,11 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
     elif ready:
         verdict = setup_pills.pill("verdict", "ready")
     else:
-        verdict = setup_pills.pill("verdict", "to_go", n=int(not repo_ok) + int(not model_ok))
+        # NAME WHAT IS MISSING: a connected subscription is not told to connect a model.
+        missing = " and ".join(part for part, gone in (("a repository", not repo_ok),
+                                                       ("a model", not model_ok)) if gone)
+        verdict = setup_pills.pill("verdict", "to_go", n=int(not repo_ok) + int(not model_ok),
+                                   missing=missing)
         # SAY WHY, not the generic line: an org approval pending, a busy GitHub, a check still
         # running is the reason it is not ready, and the chip's tip names it.
         waiting = next((row["pill"] for row in [*repository["repos"], *models]

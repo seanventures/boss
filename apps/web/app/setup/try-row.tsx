@@ -27,7 +27,7 @@ export const TryRow = forwardRef<HTMLElement, {
   const reason = [...view.repository.repos, ...view.models]
     .map((row) => row.pill).find((pill) => pill.tone === "red" || pill.tone === "amber");
   const blocked = !view.ready
-    ? (reason?.tip ?? "Connect a repository and a model to start.")
+    ? (reason?.tip ?? view.verdict.tip)
     : `Runs a short build on ${repo?.full_name ?? "your repository"}. Never merges. You review it.`;
   // "Your first PR is open." is said once — when this page watched it open — not for ever.
   const wasRunning = useRef(false);

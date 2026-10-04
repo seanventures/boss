@@ -91,7 +91,7 @@ const CONNECTION = { id: "ghc1", auth: "token" as const, account_login: "param",
 export function repoDone(): SetupView {
   return {
     ...firstRun(), next: "model",
-    verdict: { label: "1 to go", tone: "grey", tip: "Connect a repository and a model to start." },
+    verdict: { label: "1 to go", tone: "grey", tip: "Connect a model to start." },
     repository: { connection: CONNECTION, repos: [REPO] },
   };
 }
