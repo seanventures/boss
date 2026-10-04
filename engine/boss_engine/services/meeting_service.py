@@ -775,10 +775,14 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
 
 
 def _sign_seats(connection, run_id: str) -> None:
-    """Each seat is signed work (agent_acts): seated when the panel opens, closed when it ends."""
+    """Each seat is signed work (agent_acts): seated when the panel opens, closed when it ends.
+
+    Never waits on the panel's lock: a tick holding it would hold it to the end of its own long
+    transaction, and this panel's phase would stall behind it. Skipped, the holder signs it."""
     from . import agent_acts
 
-    agent_acts.quietly(connection, "sign a panel's seats", agent_acts.sync_meeting, run_id)
+    agent_acts.quietly(connection, "sign a panel's seats", agent_acts.sync_meeting, run_id,
+                       wait=False)
 
 
 #: The blocks request_meeting wraps around a directive so every seat reads them — the SAME
@@ -817,11 +821,16 @@ def convene_prd_meeting_core(
     project_id: str, directive: str, url: str = "",
     constraints: Optional[dict] = None, role_keys: Optional[list] = None,
     task_id: Optional[str] = None, title: Optional[str] = None,
+    origin: Optional[dict] = None,
 ) -> dict:
     """Shared core for convening a durable multi-agent PRD meeting: create the
     task (if needed), reserve budget, start the run, enqueue the first step.
     Used by the /v1/meetings/prd endpoint and the Plane ``boss:design`` intake so
-    both routes are governed identically."""
+    both routes are governed identically.
+
+    `origin` is who convened it — {act_id} for a chat turn, {workflow_run_id, step_run_id}
+    for a workflow step, and the accountable {actor} — so its seats are signed under that
+    work (agent_acts.sync_meeting), never under a made-up person."""
     constraints = dict(constraints or {})
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
@@ -899,7 +908,8 @@ def convene_prd_meeting_core(
         connection, project_id=project_id, task_id=task_id,
         directive=directive, url=url, constraints=constraints,
         role_keys=role_keys or [],
-        finalize_ctx={"reservation_id": reservation_id, "meeting_fingerprint": fingerprint},
+        finalize_ctx={"reservation_id": reservation_id, "meeting_fingerprint": fingerprint,
+                      **({"origin": dict(origin)} if origin else {})},
         title=title,
     )
     job = jobs.create_job(

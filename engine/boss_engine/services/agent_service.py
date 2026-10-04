@@ -596,25 +596,30 @@ class AgentService:
         # Build exactly once for the turn. The router receives the resolved
         # object and never reaches back into the feature catalog per tool call.
         manifest = build_manifest(connection, self.settings, project_id)
-        turn = self.router.route_turn(
-            connection,
-            project_id=project_id,
-            actor=actor,
-            messages=messages,
-            manifest=manifest,
-            confirm_plan_id=confirm_plan_id,
-            pending_plan_id=thread.get("pending_plan_id"),
-            # A task-scoped thread carries its task_id -> the router builds ON that task's existing
-            # app branch (extend the PR) instead of a fresh build on main.
-            external_ref=thread.get("external_ref"),
-            role=role,
-            mode=mode,
-            # So the turn can report what it is doing while it does it. See agent_progress:
-            # a chat turn is one HTTP request, and an investigation that now runs six or more
-            # lookups would otherwise be two minutes of a pulsing dot.
-            thread_id=thread["id"],
-            depth=depth,
-        )
+        # A build or a panel this turn starts was started by this turn, for this person
+        # (agent_acts.origin): its stages and seats are signed under the turn.
+        from . import agent_acts
+
+        with agent_acts.origin(act_id=act_id, actor=actor):
+            turn = self.router.route_turn(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                messages=messages,
+                manifest=manifest,
+                confirm_plan_id=confirm_plan_id,
+                pending_plan_id=thread.get("pending_plan_id"),
+                # A task-scoped thread carries its task_id -> the router builds ON that task's
+                # existing app branch (extend the PR) instead of a fresh build on main.
+                external_ref=thread.get("external_ref"),
+                role=role,
+                mode=mode,
+                # So the turn can report what it is doing while it does it. See agent_progress:
+                # a chat turn is one HTTP request, and an investigation that now runs six or more
+                # lookups would otherwise be two minutes of a pulsing dot.
+                thread_id=thread["id"],
+                depth=depth,
+            )
         assistant = self.append_message(
             connection,
             thread_id=thread["id"],

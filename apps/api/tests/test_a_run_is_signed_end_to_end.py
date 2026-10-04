@@ -164,8 +164,9 @@ def test_a_run_is_one_connected_chain_with_truthful_edges_and_cost_on_the_right_
     view = wf.run_view(client, run_id)
     assert view["status"] == "completed", wf.statuses(view)
 
+    # Read by the person who ran it: their own edges say "you".
     chain = client.get(f"/v1/workflow-runs/{run_id}/chain",
-                       params={"project_id": wf.PROJECT}).json()
+                       params={"project_id": wf.PROJECT, "viewer": "ceo"}).json()
     acts = chain["acts"]
     by_id = {a["act_id"]: a for a in acts}
 
@@ -203,6 +204,14 @@ def test_a_run_is_one_connected_chain_with_truthful_edges_and_cost_on_the_right_
     assert (approvals[0]["edge_label"], approvals[0]["handed_by"]) == (
         "Approved by you", {"kind": "person", "id": "ceo"})
     assert not any(a["how"] == "asked_by_agent" for a in acts)
+    # A teammate reading the same chain reads whose they were — never their own "you".
+    theirs = {a["act_id"]: a["edge_label"] for a in client.get(
+        f"/v1/workflow-runs/{run_id}/chain",
+        params={"project_id": wf.PROJECT, "viewer": "teammate"}).json()["acts"]}
+    assert theirs[steps["spend"]["act_id"]] == "Ran as ceo"
+    assert theirs[approvals[0]["act_id"]] == "Approved by ceo"
+    assert theirs[roots[0]["act_id"]] == "Started by ceo"
+    assert theirs[steps["review"]["act_id"]] == "Named in workflow"
 
     # FIVE STAGES under the build, the engineer credited with the one it builds.
     stages = [a for a in acts if a["kind"] == "stage"]

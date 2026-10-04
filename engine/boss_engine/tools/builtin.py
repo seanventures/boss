@@ -671,6 +671,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         # a whole nine-step pipeline inside a step of the pipeline that created it.
         finalize_ctx: dict = ({"workflow_run_id": str(args["workflow_run_id"])}
                               if args.get("workflow_run_id") else {})
+        # WHO STARTED IT: the workflow step or chat turn calling this tool, and the person
+        # accountable (agent_acts.origin). Its stages are signed under that work.
+        started_by = services_module("agent_acts").current_origin(actor)
+        if started_by:
+            finalize_ctx["origin"] = started_by
         risk_tier = args.get("risk_tier")
         extended_from = None
         rr = services_module("repo_registry")
@@ -691,7 +696,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 if branch:
                     base_branch = branch
                     extended_from = root
-                    finalize_ctx = {"root_run_id": root, "web_app_build": True}
+                    finalize_ctx = {"root_run_id": root, "web_app_build": True,
+                                    **({"origin": finalize_ctx["origin"]}
+                                       if finalize_ctx.get("origin") else {})}
                     risk_tier = 0 if risk_tier is None else risk_tier
                     instructions = (
                         "EXTEND the existing app on this branch — do NOT rebuild from scratch. "
@@ -1648,6 +1655,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 url=(args.get("url") or "").strip(),
                 task_id=args.get("task_id"),
                 title=title,
+                # Who convened it (agent_acts.origin): its seats sit under that work.
+                origin=services_module("agent_acts").current_origin(actor),
             )
         return {"status": "running", "meeting": _json_safe(result), "project_id": pid}
 
