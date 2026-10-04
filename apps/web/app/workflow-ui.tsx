@@ -140,6 +140,7 @@ function eventMeta(t: string): { Icon: typeof Ic.dot; label: string; tone: Tone 
     "decision.approved": { Icon: Ic.check, label: "Decision approved", tone: "green" },
     "decision.rejected": { Icon: Ic.x, label: "Decision rejected", tone: "red" },
     "decision.revision_requested": { Icon: Ic.retry, label: "Revision requested", tone: "amber" },
+    "decision.withdrawn": { Icon: Ic.ban, label: "Decision withdrawn", tone: "muted" },
     "decision.follow_on_job_queued": { Icon: Ic.arrow, label: "Follow-on job queued", tone: "blue" },
     "decision.follow_on_blocked": { Icon: Ic.shield, label: "Follow-on blocked", tone: "amber" },
     "budget.reservation_created": { Icon: Ic.wallet, label: "Budget reserved", tone: "amber" },

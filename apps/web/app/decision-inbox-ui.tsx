@@ -312,6 +312,11 @@ function decisionStatusDetail(decision: DecisionFeedItem): string {
       ? `Revision requested: ${decision.resolutionNote}`
       : "Revision was requested on this decision.";
   }
+  if (decision.status === "withdrawn") {
+    // Its run was stopped, removed or finished before anybody answered: there is no step left
+    // for an answer to release, so the card has no buttons and says why.
+    return decision.resolutionNote || "Withdrawn: the run it belonged to is over.";
+  }
   if (decision.status === "executed") {
     return decision.externalRef
       ? `Executed with evidence: ${decision.externalRef}`

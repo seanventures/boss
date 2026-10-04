@@ -319,6 +319,17 @@ class DecisionService:
             except decision_actions.DecisionActionNotAllowed as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
 
+        # A QUESTION WHOSE RUN IS GONE IS NOT ANSWERED. A gate of a stopped or removed run sat
+        # in Approvals with Approve on it (boss-1, 2026-10-04); approving would have released a
+        # step of a run that no longer exists. Withdrawn decisions, and any whose run ended by
+        # a path that did not withdraw them, are refused here — for a policy approval too.
+        if action != "execute":
+            from .run_decisions import refusal_to_answer
+
+            gone = refusal_to_answer(connection, row)
+            if gone:
+                raise InvalidDecisionTransitionError(gone)
+
         if action in {"approve", "reject", "revise", "delegate"}:
             # A DEADLINE NOBODY MET MUST NOT ALSO DESTROY THE WORK.
             #
