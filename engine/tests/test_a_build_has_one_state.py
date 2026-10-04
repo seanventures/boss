@@ -160,3 +160,27 @@ def test_counts_in_words_are_singular_for_one():
     """`Not ready · 1 check failed`, `1 of 1 command passed`: never `1 checks`."""
     assert fv._plural(1, "check failed", "checks failed") == "1 check failed"
     assert fv._plural(2, "check failed", "checks failed") == "2 checks failed"
+
+
+@pytest.mark.parametrize("title,name", [
+    ("Lead Triage Inbox.", "Lead Triage Inbox"),
+    ("“Invoice export”!", "Invoice export"),
+    ("Team inbox", "Team inbox"),
+])
+def test_an_app_name_is_a_name_not_a_sentence(title, name):
+    """boss-1 read "Lead Triage Inbox." — the brief's sentence, period and all."""
+    assert fv._a_name(title) == name
+
+
+def test_one_count_rule_for_every_surface():
+    from boss_engine.services.command_center import attention_counts
+
+    items = [{"kind": "approval"}, {"kind": "failed_step"}, {"kind": "failed_step"},
+             {"kind": "gate_override"}, {"kind": "readiness"}]
+    assert attention_counts(items) == {"needs_you": 1, "stopped": 3, "setup": 1}
+
+
+def test_a_builds_app_name_drops_the_briefs_period():
+    name = fv.app_name({"id": "crun_x", "title": "Build a lead triage inbox. Lead Triage Inbox.",
+                        "finalize_ctx": {}, "spec": {}})
+    assert not name.endswith((".", "!", "?", ",", ";", ":")), name

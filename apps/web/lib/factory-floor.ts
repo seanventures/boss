@@ -103,7 +103,9 @@ export type StoppedRow = {
 
 export type PreBuild = { meetingRunId: string; title: string; seats: string[]; at?: string };
 
-export type FloorCounts = { building: number; needsYou: number; shipped7d: number; stopped: number; apps: number };
+/** `needsYou` and `stopped` count what NEEDS YOU lists (decisions; stopped work), the rule every
+ *  surface shares; `stoppedBuilds` is the STOPPED section's rows. */
+export type FloorCounts = { building: number; needsYou: number; shipped7d: number; stopped: number; stoppedBuilds: number; apps: number };
 
 export type Floor = {
   projectId: string; etag: string; generatedAt: string;
@@ -196,7 +198,7 @@ export function parseFloor(w: unknown): Floor {
   return {
     projectId: str(o.project_id), etag: str(o.etag), generatedAt: str(o.generated_at),
     counts: { building: num(c.building), needsYou: num(c.needs_you), shipped7d: num(c.shipped_7d),
-              stopped: num(c.stopped), apps: num(c.apps) },
+              stopped: num(c.stopped), stoppedBuilds: num(c.stopped_builds), apps: num(c.apps) },
     attention: arr(o.attention).map(parseAttention),
     builds: arr(o.builds).map(parseBuildRow),
     outcomes: arr(o.outcomes).map((x) => {
