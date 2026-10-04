@@ -16,14 +16,19 @@ import { ChatCircleDots, CheckCircle, ShieldCheck } from "@phosphor-icons/react"
 import type { V2Agent } from "../../lib/v2/workforce";
 import type { AvatarState } from "../../lib/agent-world-types";
 import { ZONES, zoneOf, type Zone } from "../../lib/agent-world";
-import { useIdentity } from "../../lib/use-agent-identities";
+import { useIdentity, useIdentityVersion } from "../../lib/use-agent-identities";
 import type { LiveMap, LivePresence } from "../../lib/agents-live";
 import { AgFace, AgFaceStack, AgState } from "./agent-face";
+import { TEAM_ORDER, teamOfAgent } from "../../lib/agents-live-board";
 
 /** The feed's status, as presence, for when the live endpoint has nothing to say. */
 export function presenceFromStatus(a: V2Agent): LivePresence {
   const last = a.last_touched
     || (a.task === "No work in this window." ? "No recent work" : (a.task || "").replace(/^last: /, "Last: "));
+  // A COUNT IS NOT WORK. An older API's idle line was "last: <stage> · N calls in 30d" — a
+  // volume, not what the agent did (agents-home spec §3.3). Never shown: the server's
+  // `Last: <verb> · <label> · 2h` replaces it, and until then the card says it has none.
+  if (a.status === "IDLE" && /\bcalls? in \d+d\b/i.test(last)) return { state: "idle", line: "No work yet" };
   if (a.status === "AT GATE") return { state: "needs_you", line: a.task || "Waiting on you" };
   if (a.status === "STUCK") return { state: "stuck", line: a.task || "Stuck" };
   if (a.status === "WORKING") return { state: "working", line: a.task || "" };
@@ -76,22 +81,83 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
 }
 
 /** The roster shows everyone. Only a very large roster folds its idle tail behind one quiet
- *  `Show n more` — live agents (needs you, working, in a panel) are never folded away. */
+ *  `Show n more` — live agents (needs you, working, in a panel) are never folded away.
+ *  Presence grouping only: Directory groups by team and shows every agent. */
 export const ROSTER_FOLD_AT = 30;
 
 /** The face on a roster card. Big enough to read the character and its motion at a glance. */
 export const ROSTER_FACE_PX = 64;
 
-export function RosterZones({ agents, live, onOpen, onAsk, onRegister }: {
+/** Directory's sections: each agent's team (agent_identity.team_of, via identities), in the
+ *  shipped order, then any team an operator named. An empty team is not drawn. */
+export function groupByTeam(placed: Placed[]): { key: string; label: string; tip?: string; members: Placed[] }[] {
+  const groups = new Map<string, { key: string; label: string; tip?: string; members: Placed[] }>();
+  for (const p of placed) {
+    const team = p.agent.registered === false ? teamOfAgent("") : teamOfAgent(p.agent.id);
+    const key = p.agent.registered === false ? "yours" : team.key;
+    if (!groups.has(key)) groups.set(key, { ...(p.agent.registered === false ? { key: "yours", label: "Yours" } : team), members: [] });
+    groups.get(key)!.members.push(p);
+  }
+  const rank = (k: string) => {
+    const i = TEAM_ORDER.indexOf(k);
+    return i < 0 ? TEAM_ORDER.length - 1 - 0.5 : i; // operator teams sit before Yours
+  };
+  return [...groups.values()].sort((a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label));
+}
+
+export function RosterZones({ agents, live, onOpen, onAsk, onRegister, groupBy = "presence" }: {
   agents: V2Agent[];
   live: LiveMap;
   onOpen: (roleKey: string) => void;
   onAsk: (roleKey: string, name: string) => void;
   onRegister?: (name: string) => void;
+  /** presence: NEEDS YOU / WORKING / IN A PANEL / IDLE. team: Directory's team sections. */
+  groupBy?: "presence" | "team";
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [unfolded, setUnfolded] = useState(false);
   const placed = useMemo(() => placeAgents(agents, live), [agents, live]);
+  if (groupBy === "team") {
+    return <TeamSections placed={placed} onOpen={onOpen} onAsk={onAsk} onRegister={onRegister} />;
+  }
+  return <PresenceZones placed={placed} host={host} unfolded={unfolded} onUnfold={() => setUnfolded(true)}
+                        onOpen={onOpen} onAsk={onAsk} onRegister={onRegister} />;
+}
+
+/** Directory: the same cards, in team sections. The glide still runs when a filter or a search
+ *  changes the layout. */
+function TeamSections({ placed, onOpen, onAsk, onRegister }: {
+  placed: Placed[]; onOpen: (k: string) => void; onAsk: (k: string, n: string) => void;
+  onRegister?: (name: string) => void;
+}) {
+  useIdentityVersion(); // each agent's team comes from the identity store
+  const host = useRef<HTMLDivElement>(null);
+  const groups = groupByTeam(placed);
+  useGlide(host, groups.map((g) => `${g.key}:${g.members.map((p) => p.agent.id).join(",")}`).join("|"));
+  return (
+    <div className="ag-roster ag-dir" ref={host} data-testid="roster-grid" data-group="team">
+      {groups.map((g) => (
+        <section key={g.key} className="ag-zone ag-dir-team" data-team={g.key} data-testid={`ag-dir-team-${g.key}`}
+                 aria-label={`${g.label} ${g.members.length}`}>
+          <header className="ag-zone-head">
+            <span className="ag-zone-label" title={g.tip}>{g.label}</span>
+            <span className="ag-zone-count">{g.members.length}</span>
+          </header>
+          <div className="ag-zone-grid">
+            {g.members.map((p) => (
+              <RosterCard key={p.agent.id} placed={p} onOpen={onOpen} onAsk={onAsk} onRegister={onRegister} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function PresenceZones({ placed, host, unfolded, onUnfold, onOpen, onAsk, onRegister }: {
+  placed: Placed[]; host: React.RefObject<HTMLDivElement | null>; unfolded: boolean; onUnfold: () => void;
+  onOpen: (k: string) => void; onAsk: (k: string, n: string) => void; onRegister?: (name: string) => void;
+}) {
   const byZone = useMemo(() => {
     const m = new Map<Zone, Placed[]>(ZONES.map((z) => [z.key, []]));
     for (const p of placed) m.get(p.zone)!.push(p);
@@ -126,7 +192,7 @@ export function RosterZones({ agents, live, onOpen, onAsk, onRegister }: {
             ) : null}
             {hidden > 0 ? (
               <button type="button" className="ag-zone-more" data-testid="ag-idle-more"
-                      onClick={() => setUnfolded(true)} title="Show every idle agent">
+                      onClick={onUnfold} title="Show every idle agent">
                 Show {hidden} more
               </button>
             ) : null}

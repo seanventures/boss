@@ -32,7 +32,7 @@ const AGENT_WRITE_SURFACE = [
   /\/v1\/agents\b/,               // the agent resource: create, edit, delete
   /\/v1\/agent-studio\//,         // Studio profile writes
   /["'`]\/api\/skills["'`]/,      // the skills proxy, which also grants
-  /from "\.\.\/lib\/agents"|from "\.\/lib\/agents"|from "\.\/agents"/,
+  /from "(\.\.\/)+lib\/agents"|from "\.\/lib\/agents"|from "\.\/agents"/,
   /from "\.\/agent-studio-actions"/,
   /from "\.\.\/lib\/agent-wizard"/,
 ];
@@ -67,6 +67,10 @@ const KNOWN_AGENT_WRITERS = [
   // Agent World's one resolver: it only READS /v1/agents/identities (no actor, no write), but
   // it names the agent resource, so it is listed and held to the same rule.
   "lib/agent-identity.ts",
+  // Agents home: Organization › Zones' `Move to…` sets an agent's team through lib/agents with
+  // the signed-in actor it is handed; the Activity client only READS /v1/agents/activity.
+  "app/agents/team-zones.tsx",
+  "lib/agents-activity.ts",
 ];
 
 /** Builds the bodies the writers above send, so it is held to the same rule. */
