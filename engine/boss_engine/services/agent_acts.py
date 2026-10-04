@@ -231,19 +231,16 @@ def _json(value: Any, default: Any) -> Any:
 
 
 def resolve_role(key_or_title: Optional[str]) -> Optional[str]:
-    """One namespace for seat titles, captain ids and stage roles (S-identity's resolver when it
-    is there, the frozen ALIASES table until then)."""
+    """One namespace for seat titles, captain ids and stage roles (agent_identity.resolve); a
+    custom agent's own key is not in the shipped table and passes through."""
     raw = str(key_or_title or "").strip()
     if not raw:
         return None
-    try:
-        from .agent_identity import resolve  # S-identity
+    from .agent_identity import resolve  # lazy: agent_identity reads this module's table
 
-        found = resolve(raw)
-        if found:
-            return found
-    except (ImportError, NotImplementedError):
-        pass
+    found = resolve(raw)
+    if found:
+        return found
     lowered = raw.lower()
     return ALIASES.get(lowered) or lowered
 

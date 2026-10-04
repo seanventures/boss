@@ -59,6 +59,9 @@ NOT_AN_AGENT_ON_A_STEP = {
     # it (agents.delete_agent → workflow_catalogue.restaff_without) instead of being refused.
     (("default_captain",), "services/step_agents.py"): "marks the captain as a soft default",
     (("default_captain",), "services/workflow_catalogue.py"): "sets and re-staffs that mark",
+    # A conversation's start card reads the Library OUTLINE of a step (workflows._step_outline:
+    # `agent` is the captain the guard already reads), never a workflow step of its own.
+    (("agent",), "services/agent_converse.py"): "the library outline's copy of the captain",
 }
 
 

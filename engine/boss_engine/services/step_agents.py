@@ -152,6 +152,38 @@ def is_default_captain(step: dict[str, Any]) -> bool:
     return bool(default) and default == named_agent(step)
 
 
+#: The run-input key a start card writes: {step_id: role_key}, the agents the operator saw on the
+#: card and pressed Start on (agent_converse.start_from_proposal).
+RUN_STEP_AGENTS = "step_agents"
+#: Marks a step whose agent came from that card, so `resolve` says so on the run.
+NAMED_ON_START_CARD = "named_on_start_card"
+
+
+def with_run_agent(connection: Connection, project_id: str, step: dict[str, Any],
+                   run_input: Any) -> dict[str, Any]:
+    """This step as this RUN runs it: with the agent the start card named, when it named one.
+
+    A card is the operator's choice, pressed, so it fills a step that names nobody and replaces
+    a catalogue's soft default; an agent the workflow itself names (a real choice, made when it
+    was published) and a gate's approver are never replaced. The card's agent must be one of
+    this project's agents and on duty — anything else leaves the step exactly as published.
+    """
+    chosen = (run_input or {}).get(RUN_STEP_AGENTS) if isinstance(run_input, dict) else None
+    if not isinstance(chosen, dict) or not isinstance(step, dict) or is_gate(step):
+        return step
+    key = str(chosen.get(str(step.get("id") or "")) or "").strip().lower()
+    named = named_agent(step)
+    if not key or key == named or key == "human" or (named and not is_default_captain(step)):
+        return step
+    off = _lifecycle_of(connection, project_id, key)
+    if off is None or off[0] != "active":
+        return step
+    out = {k: v for k, v in step.items() if k != "default_captain"}
+    out["captain"] = key
+    out[NAMED_ON_START_CARD] = True
+    return out
+
+
 def is_gate(step: dict[str, Any]) -> bool:
     """A step whose whole purpose is that somebody answers it."""
     if str(step.get("kind") or "") == "decision":
@@ -787,7 +819,9 @@ def resolve(
             from .agent_identity import paused_message
 
             raise StepAgentError(paused_message(off[1], off[0]))
-        return _record(named, "named", "named on the step", [named])
+        return _record(named, "named",
+                       "named on the start card you pressed" if step.get(NAMED_ON_START_CARD)
+                       else "named on the step", [named])
 
     if binding.get("agent_work"):
         agents = project_agents(connection, project_id)

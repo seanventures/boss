@@ -76,8 +76,7 @@ export function DockAgentHead({ roleKey, roleName, state, projectId, actId, onCl
   const about = useActDetail(projectId, actId ?? null);
   return (
     <div className="ag-dock-head" data-testid="ag-dock-head" data-state={state}>
-      <RunFace roleKey={roleKey} variant={roleKey ? "agent" : "boss"} size={32} state={state} standalone
-               label={named.name} />
+      <RunFace roleKey={roleKey} variant={roleKey ? "agent" : "boss"} size={32} state={state} standalone />
       <span className="ag-dock-who">
         <span className="ag-dock-name">
           <strong data-testid="ag-dock-name">{named.name}</strong>

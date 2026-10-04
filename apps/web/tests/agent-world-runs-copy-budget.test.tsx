@@ -99,7 +99,7 @@ describe("the run surfaces stay concise", () => {
 
   it("every face that stands alone is named with its state", async () => {
     const el = await render(<DockAgentHead roleKey="qa" roleName="QA" state="speaking" projectId="p1" />);
-    expect(el.querySelector('.ag-face[role="img"]')?.getAttribute("aria-label")).toBe("QA, Speaking");
+    expect(el.querySelector('.ag-face[role="img"]')?.getAttribute("aria-label")).toBe("QA Lead, AI agent, Speaking");
   });
 });
 

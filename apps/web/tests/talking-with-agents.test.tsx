@@ -174,16 +174,16 @@ describe("talking to one agent", () => {
 
     const sheet = q('[data-testid="ag-talk"]')!;
     expect(sheet.textContent).toContain("QA Lead");
-    expect(q(".ag-ai")!.getAttribute("title")).toBe("An AI agent. Not a real person.");
+    expect(q('[data-testid="ag-ai-badge"]')!.getAttribute("title")).toBe("An AI agent. Not a real person.");
     expect(faceState("qa", sheet.querySelector(".ag-talk-head") as HTMLElement)).toBe("idle");
 
     await push(0, "turn_start", { turn_id: "t1", seq: 1, speaker_kind: "agent", role_key: "qa", act_id: "act_1" });
     expect(faceState("qa", sheet.querySelector(".ag-talk-head") as HTMLElement)).toBe("thinking");
-    expect(sheet.querySelector(".ag-face-badge")!.textContent).toContain("Thinking");
+    expect(sheet.querySelector(".ag-cv-badge")!.textContent).toContain("Thinking");
 
     await push(0, "token", { turn_id: "t1", text: "Hi, I'm the QA Lead " });
     expect(faceState("qa", sheet.querySelector(".ag-talk-head") as HTMLElement)).toBe("speaking");
-    expect(sheet.querySelector(".ag-face-badge")!.textContent).toContain("Speaking");
+    expect(sheet.querySelector(".ag-cv-badge")!.textContent).toContain("Speaking");
     await push(0, "token", { turn_id: "t1", text: "— an AI agent." });
     expect(sheet.querySelector('[data-testid="ag-turn-agent"]')!.textContent)
       .toContain("Hi, I'm the QA Lead — an AI agent.");
@@ -349,8 +349,8 @@ describe("the room", () => {
     expect(seat("qa").getAttribute("data-state")).toBe("thinking");
     expect(seat("security_reviewer").textContent).toContain("Up next");
     // The face says it in words too, never colour alone.
-    expect(seat("pm").querySelector(".ag-face-badge")!.textContent).toContain("Done");
-    expect(seat("qa").querySelector('[role="img"]')!.getAttribute("aria-label")).toBe("QA Lead, Thinking");
+    expect(seat("pm").querySelector(".ag-cv-badge")!.textContent).toContain("Done");
+    expect(seat("qa").querySelector('[role="img"]')!.getAttribute("aria-label")).toBe("QA Lead, AI agent, Thinking");
     await act(async () => { streams[0].end(); });
     await settle();
     expect(overBudget(room)).toEqual([]);

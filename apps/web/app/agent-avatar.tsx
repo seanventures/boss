@@ -16,7 +16,8 @@
 import React, { useRef } from "react";
 
 import { avatarSvg } from "../lib/agent-avatar";
-import { agentIdentity, useIdentityVersion } from "../lib/agent-identity";
+import { agentIdentity } from "../lib/agent-identity";
+import { useIdentityVersion } from "../lib/use-agent-identities";
 import type { AgentIdentity, AvatarSpec, AvatarState, AvatarVariant } from "../lib/agent-world-types";
 import { LIVE_STATES, STATE_WORDS, withLifecycle } from "../lib/avatar-kit/states";
 import { useAvatarMotion } from "./agents/use-avatar-motion";
@@ -69,7 +70,8 @@ export function AgentAvatar({ size = 24, state = "idle", motion, standalone = fa
   return (
     <span ref={ref} className={`ag-avatar${className ? ` ${className}` : ""}`}
           style={{ ["--ag-size" as string]: `${size}px` }}
-          data-state={face.state} data-motion={motion} data-role-key={face.identity?.roleKey}
+          data-state={face.state} data-variant={input.variant ?? "agent"} data-size={size}
+          data-motion={motion} data-role-key={face.identity?.roleKey}
           {...(standalone ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
           {...(tip ? { "data-tip": tip } : {})}
           {...(onClick ? { onClick } : {})}>

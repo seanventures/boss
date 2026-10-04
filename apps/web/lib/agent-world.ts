@@ -9,16 +9,14 @@
  *
  * The face, the cast and the identity resolver are the kit's (lib/agent-avatar.ts,
  * lib/agent-identity.ts, lib/avatar-kit/): nothing here draws or names an agent its own way. The
- * 1:1 talk (openTalk) belongs to S-converse and throws until it lands, so it is called through a
- * wrapper that falls back to the existing side dock.
+ * 1:1 talk is S-converse's (lib/agent-converse.ts): every Ask in the Agents area opens it.
  */
 import { apiWrite } from "./api-write";
-import { openDockAbout } from "./dock-subject";
 import { avatarSvg, seededSpec } from "./agent-avatar";
 import { agentIdentity } from "./agent-identity";
 import { CAST, CAST_BY_KEY } from "./avatar-kit/cast";
+import { openTalk } from "./converse-doors";
 import {
-  openTalk,
   type Act, type ActHow, type ActKind, type ActStatus, type AgentIdentity, type AvatarSpec,
   type AvatarState, type AvatarVariant, type ConversationContext, type LineageGraph,
   type Passport, type Persona, type Presence, type Voice,
@@ -86,14 +84,10 @@ export function resolveAvatar(roleKey: string, agentId: string | null | undefine
   return { ...base, ...picked, kit: "boss-v1" } as AvatarSpec;
 }
 
-/** Talk to an agent. The 1:1 conversation when S-converse is there; the side dock, addressed to
- *  that agent by role key, until then (openTalk is still the contract's stub). */
-export function askAgent(roleKey: string, name: string, context?: ConversationContext): void {
-  try {
-    openTalk(roleKey, context);
-    return;
-  } catch { /* converse has not landed */ }
-  openDockAbout({ subject: null, role: name || roleKey, question: `@${name || roleKey}: ` });
+/** Talk to an agent: the 1:1 conversation, in its own voice, by role key. `name` is kept for
+ *  callers that only hold a display name; the talk sheet resolves the face and voice itself. */
+export function askAgent(roleKey: string, _name: string, context?: ConversationContext): void {
+  openTalk(roleKey, context);
 }
 
 // ── State words (spec §9) ───────────────────────────────────────────────────────────────────

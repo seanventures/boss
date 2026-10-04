@@ -5,8 +5,8 @@
  *
  * `Signed by` is the Act card inline. `Said` is the agent's last three completion turns for this
  * work, trimmed, read from the work's own record (never a summary written in the browser). A
- * failed step shows the face stuck, with the reason one hover away. `Ask <Name>` opens the dock
- * with that agent, about this step, parented to this work.
+ * failed step shows the face stuck, with the reason one hover away. `Ask <Name>` opens the 1:1
+ * talk with that agent, about this step, its replies signed under this work.
  */
 import React from "react";
 
@@ -71,7 +71,7 @@ export function StepSignedBy({ act, approval, projectId, viewer, failure, questi
       ) : null}
       {who.roleKey ? (
         <button type="button" className="cap-btn ag-signed-ask" data-testid="ag-signed-ask"
-                data-tip={`Opens the dock with ${named.name}, about this step`}
+                data-tip={`Talk with ${named.name} about this step`}
                 onClick={() => askAboutAct(act, question)}>
           Ask {named.name}
         </button>

@@ -2,7 +2,9 @@
  * What the Run Credits image shows, from a chain (spec §3.6, §11.1). Pure and server-safe, so
  * the image route and a test read the same card.
  */
-import { agentIdentity, avatarSvg, type Chain } from "../../lib/agent-world-types";
+import { avatarSvg } from "../../lib/agent-avatar";
+import { agentIdentity } from "../../lib/agent-identity";
+import type { Chain } from "../../lib/agent-world-types";
 import { costLabel, creditWho, minutesLabel, personName, roleWords } from "./chain-model";
 
 /** Base colours (globals.css :root), spelled out: an image has no stylesheet. */
