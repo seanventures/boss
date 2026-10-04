@@ -21,6 +21,7 @@ kept. Nothing here returns, logs or emits a secret.
 from __future__ import annotations
 
 import json
+import re
 import time
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
@@ -65,21 +66,42 @@ def result(ok: bool, *, fact: Optional[str] = None, error: Optional[str] = None,
             "field": None if ok else field}
 
 
+_TOKEN = re.compile(r"\b40[13]\b|bad credentials|unauthori[sz]ed|forbidden|invalid api key|"
+                    r"invalid_auth|token rejected|authentication|\b535\b", re.I)
+_REACH = re.compile(r"connecterror|connection refused|unreachable|timed out|timeout|can't reach|"
+                    r"no answer|name or service|nodename|gaierror|urlopen error|\b5\d\d\b|"
+                    r"bad gateway|service unavailable", re.I)
+_TLS = re.compile(r"starttls|smtpnotsupported|ssl|wrong version number|tls", re.I)
+_NOT_FOUND = re.compile(r"\b404\b|not found", re.I)
+_MISSING = re.compile(r"\bneeds\b|\brequired\b|\bfirst\b", re.I)
+_RAW = re.compile(r"[{}\":]|error|exception|http", re.I)
+
+
 def short_error(message: Optional[str]) -> str:
-    """At most six words for a card's red line; the whole message stays in the tooltip."""
+    """At most six plain words for a red line; the whole message stays in the tooltip.
+
+    NEVER THE RAW TEXT. A provider's own words ("SMTPNotSupportedError: STARTTLS extension
+    not supported", `HTTP 502: {"message":`) are classified — a rejected token, a server that
+    cannot be reached, a TLS mismatch, not found — and a message BOSS wrote itself, short and
+    plain, is kept. apps/web/app/skills/kit-copy.ts `shortError` applies the same rules."""
     said = str(message or "").strip()
-    low = said.lower()
-    if any(code in low for code in ("401", "403", "bad credentials", "unauthorized",
-                                    "forbidden", "invalid api key", "authentication")):
+    if _TOKEN.search(said):
         return "Token rejected"
-    if any(k in low for k in ("connecterror", "connection refused", "name or service",
-                              "nodename", "gaierror", "urlopen error", "timed out",
-                              "unreachable", "no answer")):
+    if _REACH.search(said):
         return "Can't reach server"
-    if "404" in low or "not found" in low:
+    if _TLS.search(said):
+        return "TLS setting mismatch"
+    if _NOT_FOUND.search(said):
         return "Not found"
     words = said.split()
-    return " ".join(words[:6]) if words else "Test failed"
+    if words and len(words) <= 6 and not _RAW.search(said):
+        return said
+    if _MISSING.search(said):
+        return "Missing a setting"
+    words = said.split()
+    if words and len(words) <= 6 and not _RAW.search(said):
+        return said
+    return "Test failed"
 
 
 # --------------------------------------------------------------------------- #
@@ -161,11 +183,22 @@ def search_settings(connection: Connection, settings: Any, project_id: str) -> d
 # --------------------------------------------------------------------------- #
 
 def github_state(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
-    """{connected, repo, api_base}: the project's GitHub connection and primary repository,
-    as Setup connected them. The token is resolved separately (`github_token`)."""
+    """{connected, repo, api_base, failing}: the project's GitHub connection and primary
+    repository, as Setup connected them. The token is resolved separately (`github_token`).
+
+    `failing` is the reason Setup's last check of the connection failed (None when it passed or
+    never ran): a connection that exists but fails its check is FAILING, not "needs repo" —
+    the operator has connected one, and what they need is the reason it does not work."""
+    failing: Optional[str] = None
     try:
+        conn_row = connection.execute(
+            text("""SELECT c.id, c.api_base_url, c.last_test_status, c.last_error
+                      FROM github_connections c
+                     WHERE c.project_id = :p AND c.status IN ('configured', 'active')
+                     ORDER BY c.updated_at DESC LIMIT 1"""),
+            {"p": project_id}).mappings().first()
         row = connection.execute(
-            text("""SELECT b.full_name, c.api_base_url
+            text("""SELECT b.full_name, c.api_base_url, c.last_test_status, c.last_error
                       FROM github_repository_bindings b
                       JOIN github_connections c ON c.id = b.connection_id
                      WHERE b.project_id = :p AND b.status = 'active'
@@ -173,15 +206,30 @@ def github_state(connection: Connection, settings: Any, project_id: str) -> dict
                      ORDER BY (b.role = 'primary') DESC, b.updated_at DESC LIMIT 1"""),
             {"p": project_id}).mappings().first()
     except Exception:  # noqa: BLE001 — an older schema has no registry: not connected
-        row = None
+        conn_row = row = None
+    checked = row or conn_row
+    if checked is not None and str(checked["last_test_status"] or "") == "failed":
+        error = checked["last_error"]
+        if isinstance(error, str):
+            try:
+                error = json.loads(error)
+            except ValueError:
+                error = {"message": error}
+        failing = str((error or {}).get("message") or "Setup's GitHub check failed") \
+            if isinstance(error, dict) else str(error or "Setup's GitHub check failed")
     if row is None:
         env_repo = "/".join(x for x in (getattr(settings, "github_owner", "") or "",
                                         getattr(settings, "github_repo", "") or "") if x)
-        if getattr(settings, "github_token", None) and env_repo.count("/") == 1:
-            return {"connected": True, "repo": env_repo, "api_base": "https://api.github.com"}
-        return {"connected": False, "repo": None, "api_base": "https://api.github.com"}
+        if conn_row is None and getattr(settings, "github_token", None) \
+                and env_repo.count("/") == 1:
+            return {"connected": True, "repo": env_repo, "api_base": "https://api.github.com",
+                    "failing": None}
+        base = str((conn_row or {}).get("api_base_url") or "https://api.github.com").rstrip("/")
+        return {"connected": False, "repo": None, "api_base": base, "failing": failing,
+                "has_connection": conn_row is not None}
     base = str(row["api_base_url"] or "https://api.github.com").rstrip("/")
-    return {"connected": True, "repo": str(row["full_name"]), "api_base": base}
+    return {"connected": True, "repo": str(row["full_name"]), "api_base": base,
+            "failing": failing, "has_connection": True}
 
 
 def github_token(connection: Connection, settings: Any, project_id: str) -> str:
@@ -271,7 +319,9 @@ def view(connection: Connection, settings: Any, project_id: str, ability: dict[s
                       "from_address": str(stored.get("from_address") or ""),
                       "username": str(stored.get("username") or "")}
             if stored.get("has_password"):
-                fields["password"] = "…set"
+                fields["password"] = _mask(stored.get("password_last4"))
+            fields["security"] = ("ssl" if stored.get("use_ssl") else "starttls"
+                                  if stored.get("use_tls") else "none")
             acts_as = stored.get("from_address")
         elif getattr(settings, "email_smtp_host", None):
             # Configured the old way (environment). It works; say so, and show where.
@@ -290,9 +340,7 @@ def view(connection: Connection, settings: Any, project_id: str, ability: dict[s
                         fields[field["name"]] = _mask(config.get("last4"))
                 elif config.get(field["name"]) is not None:
                     fields[field["name"]] = str(config.get(field["name"]))
-            acts_as = config.get("acts_as") or (
-                f"{config.get('owner')}/{config.get('repo')}" if provider == "github_issues"
-                else None)
+            acts_as = config.get("acts_as") or None
         elif dep["github"]["connected"]:
             provider = "github_issues"
     elif key in ("team_chat", "web_search"):
@@ -384,19 +432,31 @@ def add_catalogue_server(connection: Connection, settings: Any, project_id: str,
         auth["header_name"] = entry["header_name"]
     if token:
         auth["secret"] = token
+    from . import kit
+    from .mcp_registry import review_mcp_server
+
     existing = find_mcp_server(connection, project_id, entry["name"])
     if existing is not None:
+        server = existing
         if token:
-            return update_mcp_server(connection, project_id, existing["id"], actor=actor,
-                                     settings=settings, auth=auth) or existing
-        return existing
-    return register_mcp_server(
-        connection, project_id, entry["name"], entry["url"],
-        risk_tier=int(entry.get("risk_default") or 0), data_boundary="public",
-        description=entry.get("description"),
-        publisher={"id": key, "name": entry.get("label") or key, "kind": "vendor"},
-        provenance={"source": "catalogue", "catalogue": key, "trusted": False},
-        auth=auth, actor=actor, settings=settings)
+            server = update_mcp_server(connection, project_id, existing["id"], actor=actor,
+                                       settings=settings, auth=auth) or existing
+    else:
+        server = register_mcp_server(
+            connection, project_id, entry["name"], entry["url"],
+            risk_tier=int(entry.get("risk_default") or 0), data_boundary="public",
+            description=entry.get("description"),
+            publisher={"id": key, "name": entry.get("label") or key, "kind": "vendor"},
+            provenance={"source": "catalogue", "catalogue": key, "trusted": False},
+            auth=auth, actor=actor, settings=settings)
+    # A FIRST-PARTY CATALOGUE SERVER IS REVIEWED BY BEING CHOSEN: the person picked a curated,
+    # vendor-published server at its vendor's own URL, so it does not land as "Review" with
+    # every call waiting. (A tier >= 2 tool still asks a person each time — that is the tier.)
+    if entry.get("provenance") == "official" and not server.get("trusted"):
+        server = review_mcp_server(connection, project_id, server["id"], actor=actor) or server
+    # THE AGENTS COME WITH IT: who held it before a disconnect, else the recommended roles.
+    kit.restore_server_holders(connection, settings, project_id, server["name"], actor=actor)
+    return server
 
 
 # --------------------------------------------------------------------------- #
@@ -498,7 +558,7 @@ def _mcp_test(begin: Begin, settings: Any, project_id: str, ability: dict[str, A
     if failed:
         return result(False, error=failed, started=started)
     elapsed = int((time.monotonic() - started) * 1000)
-    return result(True, fact=f"{tools} tools", latency_ms=elapsed)
+    return result(True, fact=f"{tools} tool{'s' if tools != 1 else ''}", latency_ms=elapsed)
 
 
 def _search_call(settings: Any, server: dict[str, Any], headers: dict[str, str], query: str,
@@ -569,7 +629,25 @@ def _tracker_test(settings: Any, provider: str, config: dict[str, Any]) -> dict[
              "plane": "Plane", "azure_devops": "Azure DevOps"}.get(provider, provider)
     where = (outcome.get("repository") or config.get("team_key") or config.get("project_key")
              or config.get("project") or outcome.get("account") or "")
-    return result(True, fact=f"{label} · {where}".strip(" ·"), started=started)
+    passed = result(True, fact=f"{label} · {where}".strip(" ·"), started=started)
+    # ACTS AS is an account the provider named (a login, a user), never the repo or project.
+    passed["account"] = outcome.get("account") or None
+    return passed
+
+
+SMTP_SECURITY = ("none", "starttls", "ssl")
+
+
+def smtp_security(values: dict[str, Any]) -> str:
+    """none | starttls | ssl: what was chosen, else what the port usually means."""
+    chosen = str(values.get("security") or "").strip().lower()
+    if chosen in SMTP_SECURITY:
+        return chosen
+    try:
+        port = int(values.get("port") or 587)
+    except (TypeError, ValueError):
+        port = 587
+    return "ssl" if port == 465 else "starttls"
 
 
 def _smtp_send(settings: Any, values: dict[str, Any], to: str) -> dict[str, Any]:
@@ -580,12 +658,13 @@ def _smtp_send(settings: Any, values: dict[str, Any], to: str) -> dict[str, Any]
         port = int(values.get("port") or 587)
     except (TypeError, ValueError):
         return result(False, error="Port must be a number", field="port", started=started)
+    security = smtp_security(values)
     scoped = settings.model_copy(update={
         "email_smtp_host": values.get("host"), "email_smtp_port": port,
         "email_smtp_username": values.get("username") or None,
         "email_smtp_password": values.get("password") or None,
         "email_from_address": values.get("from_address"),
-        "email_smtp_use_tls": port != 465, "email_smtp_use_ssl": port == 465,
+        "email_smtp_use_tls": security == "starttls", "email_smtp_use_ssl": security == "ssl",
         "email_real_send_allowed": True,
     })
     try:
@@ -596,6 +675,8 @@ def _smtp_send(settings: Any, values: dict[str, Any], to: str) -> dict[str, Any]
         said = _said(error)
         low = said.lower()
         field = ("password" if "auth" in low or "535" in low or "password" in low
+                 else "security" if any(k in low for k in ("starttls", "ssl", "tls",
+                                                          "wrong version number"))
                  else "host" if any(k in low for k in ("connect", "refused", "resolve", "nodename", "gaierror",
                                                         "timed out", "name or service"))
                  else None)
@@ -702,7 +783,9 @@ def run_test(begin: Begin, settings: Any, project_id: str, ability: dict[str, An
             values = {"host": scoped.email_smtp_host, "port": scoped.email_smtp_port,
                       "username": scoped.email_smtp_username,
                       "password": scoped.email_smtp_password,
-                      "from_address": scoped.email_from_address}
+                      "from_address": scoped.email_from_address,
+                      "security": ("ssl" if scoped.email_smtp_use_ssl else "starttls"
+                                   if scoped.email_smtp_use_tls else "none")}
             return _smtp_send(settings, values, actor_email or str(scoped.email_from_address))
         if test == "chat_post":
             with begin() as connection:
@@ -793,8 +876,8 @@ def _connect_email(begin: Begin, settings: Any, project_id: str, fields: dict[st
                               port=int(values.get("port") or 587),
                               username=str(values.get("username") or ""),
                               password=fields.get("password") or None,
-                              use_tls=int(values.get("port") or 587) != 465,
-                              use_ssl=int(values.get("port") or 587) == 465, actor=actor)
+                              use_tls=smtp_security(values) == "starttls",
+                              use_ssl=smtp_security(values) == "ssl", actor=actor)
         except email_config.EmailConfigError as error:
             raise KitFieldError(str(error), None) from error
     return outcome
@@ -838,8 +921,7 @@ def _connect_tracker(begin: Begin, settings: Any, project_id: str, provider: dic
             config["secret_ref_id"] = written["secret_ref_id"]
             config["last4"] = written.get("last4")
         config["kit"] = True
-        if outcome.get("fact"):
-            config["acts_as"] = str(outcome["fact"]).split(" · ", 1)[-1]
+        config["acts_as"] = outcome.get("account") or None
         service = WorkOrchestrationService(settings)
         service.connect_tracker_provider(connection, project_id=project_id, provider_key=key,
                                          configuration=config, actor=actor,
@@ -957,7 +1039,8 @@ def _connect_catalogue(begin: Begin, settings: Any, project_id: str, ability: di
 
         record_reachability(connection, project_id, server["id"], reachable=True,
                             tools=probe["tools"])
-    return result(True, fact=f"{len(probe['tools'])} tools",
+    count = len(probe["tools"])
+    return result(True, fact=f"{count} tool{'s' if count != 1 else ''}",
                   latency_ms=int(probe.get("latency_ms") or 0))
 
 
@@ -989,6 +1072,11 @@ def disconnect(connection: Connection, settings: Any, project_id: str, ability: 
         server = _catalogue_server(connection, project_id, next(
             p["catalogue"] for p in ability["connection"]["providers"] if p.get("catalogue")))
         if server is not None:
+            # Remember who held it, so reconnecting gives it back to them.
+            from . import kit
+
+            kit.remember_server_holders(connection, settings, project_id, server["name"],
+                                        actor=actor)
             delete_mcp_server(connection, project_id, server["id"], actor=actor,
                               release_grants=True)
     else:

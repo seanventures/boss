@@ -153,7 +153,11 @@ abilities:
                     {name: port, label: Port, placeholder: "587"},
                     {name: from_address, label: Send as, placeholder: "you@example.com"},
                     {name: username, label: User, optional: true},
-                    {name: password, label: Password, secret: true, optional: true}]}
+                    {name: password, label: Password, secret: true, optional: true},
+                    # A plain relay (port 25/1025, Mailpit, postfix) speaks no TLS; 465 is SSL.
+                    {name: security, label: Security, optional: true,
+                     options: [{value: none, label: None}, {value: starttls, label: STARTTLS},
+                               {value: ssl, label: SSL}]}]}
     skills: [email.send_real_guarded]
     tools:
       - {ref: "skill:email.send_real_guarded", label: Send an email, policy: ask}

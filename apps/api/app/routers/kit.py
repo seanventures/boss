@@ -272,7 +272,7 @@ def build_kit_router(
         actor = _writer(body)
         with begin(engine) as connection:
             view = kit.kit_view(connection, settings(), body.project_id)
-        keys = [a["key"] for a in view["abilities"] if a["status"] in ("ready", "failing")]
+        keys = [a["key"] for a in view["abilities"] if a["status"] in ("ready", "untested", "failing")]
         defs = {k: _ability(body.project_id, k) for k in keys}
         with ThreadPoolExecutor(max_workers=TEST_CONCURRENCY) as pool:
             list(pool.map(lambda k: _run_test(body.project_id, defs[k], actor), keys))
@@ -403,6 +403,13 @@ def build_kit_router(
                 raise
             record_reachability(connection, body.project_id, server["id"], reachable=True,
                                 tools=probe["tools"])
+            # The probe that let it in IS a passing test of every ability it backs (Library
+            # docs for Context7), so the Kit reads "Ready · n tools", not "Not tested".
+            passed = kit_connections.result(
+                True, fact=f"{len(probe['tools'])} tool{'s' if len(probe['tools']) != 1 else ''}",
+                latency_ms=int(probe.get("latency_ms") or 0))
+            for ability in kit.abilities_on_server(settings(), server["name"]):
+                kit.record_test(connection, body.project_id, ability["key"], passed, actor=actor)
             from boss_engine.services.mcp_registry import get_mcp_server
 
             return {"server": get_mcp_server(connection, body.project_id, server["id"]),

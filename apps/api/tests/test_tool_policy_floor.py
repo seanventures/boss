@@ -91,6 +91,9 @@ def test_turning_an_ability_off_turns_its_tools_off(client, engine):
         server = mcp_registry.find_mcp_server(c, PROJECT, "doc-render")
         if server is not None:
             mcp_registry.review_mcp_server(c, PROJECT, server["id"], actor="ceo")
+            # An unreachable server is Failing too; nothing here runs mcp-tools.
+            mcp_registry.record_reachability(c, PROJECT, server["id"], reachable=True,
+                                             tools=server.get("tools") or [])
     r = client.post("/v1/kit/render_docs/enabled",
                     json={"project_id": PROJECT, "actor": "ceo", "enabled": False})
     assert r.status_code == 200 and r.json()["status"] == "off"
