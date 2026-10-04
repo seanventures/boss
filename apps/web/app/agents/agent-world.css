@@ -740,7 +740,7 @@
 }
 .ag-mention-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 13px var(--sans); cursor: pointer; }
 .ag-mention-menu li[aria-selected="true"] button, .ag-mention-menu button:hover { background: var(--accent-soft); }
-.ag-mention-menu code { margin-left: auto; color: var(--faint); font-size: 11px; }
+.ag-mention-menu .ag-pick-name { flex: 1; }
 
 /* Talk sheet */
 .ag-talk {
@@ -782,17 +782,41 @@
   background: radial-gradient(ellipse 80% 50% at 50% 0%, var(--accent-soft), transparent 70%), var(--bg);
 }
 .ag-room-head { display: flex; align-items: center; gap: 12px; padding: 12px max(16px, calc((100% - 960px) / 2)); border-bottom: 1px solid var(--border); background: var(--surface); }
-.ag-room-title { color: var(--ink); font-size: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-table { display: flex; justify-content: center; align-items: flex-end; gap: 18px; padding: 84px 16px 26px; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.ag-room-title { color: var(--ink); font-size: 16px; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+.ag-room-title[data-empty] { color: var(--faint); font-weight: 600; }
+.ag-room-members { flex: none; cursor: default; }
+.ag-room-members .ag-cv-face + .ag-cv-face { margin-left: -6px; }
+.ag-room-members .ag-face { border-radius: 50%; box-shadow: 0 0 0 2px var(--surface); }
+/* The stage: faces big enough to read, the floor lit under whoever holds it. */
+.ag-table { display: flex; justify-content: center; align-items: flex-end; gap: 22px; padding: 92px 16px 26px; overflow-x: auto; border-bottom: 1px solid var(--border); }
 .ag-seat {
-  position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; width: 132px; flex: none; padding: 10px 6px 8px;
-  border-radius: 14px; border: 1px solid transparent; background: transparent; color: var(--ink); cursor: pointer;
-  transform: translateY(var(--lift, 0px)); transition: transform 0.24s ease, background 0.24s ease;
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; width: 148px; flex: none; padding: 12px 6px 8px;
+  border-radius: 16px; border: 1px solid transparent; background: transparent; color: var(--ink); cursor: pointer;
+  transform: translateY(var(--lift, 0px)); transition: transform 0.28s ease, background 0.24s ease, opacity 0.24s ease;
 }
 .ag-seat:hover { background: var(--surface-2); }
 .ag-seat[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-soft); }
-.ag-seat[data-state="speaking"] { background: var(--surface-2); transform: translateY(calc(var(--lift, 0px) - 6px)); }
-.ag-seat .ag-cv-face { margin-bottom: 8px; }
+.ag-seat .ag-cv-face { margin-bottom: 8px; isolation: isolate; transition: transform 0.28s ease, filter 0.28s ease; }
+.ag-seat .ag-face { border-radius: 50%; }
+/* Whose turn it is: the face lifts and glows, the floor under it lights. */
+.ag-seat-floor {
+  position: absolute; left: 50%; bottom: 46px; width: 112px; height: 22px; transform: translateX(-50%); border-radius: 50%;
+  background: radial-gradient(ellipse at center, var(--accent-soft), transparent 70%); opacity: 0; transition: opacity 0.28s ease; pointer-events: none;
+}
+.ag-seat[data-turn] { transform: translateY(calc(var(--lift, 0px) - 10px)); }
+.ag-seat[data-turn] .ag-seat-floor { opacity: 1; }
+.ag-seat[data-turn] .ag-face { box-shadow: 0 0 0 3px var(--accent-line); }
+.ag-seat[data-state="speaking"] .ag-cv-face { transform: scale(1.1); }
+/* The speaker's halo: a glow behind the face that swells while its words arrive. */
+.ag-seat .ag-cv-face::before {
+  content: ""; position: absolute; inset: -10px; z-index: -1; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle, var(--accent-soft) 40%, transparent 72%); transition: opacity 0.28s ease;
+}
+.ag-seat[data-turn] .ag-cv-face::before { opacity: 0.7; }
+.ag-seat[data-state="speaking"] .ag-cv-face::before { animation: agav-cv-glow 1.4s ease-in-out infinite alternate; }
+.ag-seat[data-state="thinking"] .ag-cv-face { filter: saturate(0.9); }
+.ag-table[data-busy] .ag-seat:not([data-turn]) { opacity: 0.72; }
+.ag-table[data-busy] .ag-seat:not([data-turn]):hover { opacity: 1; }
 .ag-seat-name { font: 700 13px var(--sans); display: inline-flex; gap: 4px; align-items: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-seat-role { font-size: 11px; color: var(--faint); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-seat-role[data-next] { color: var(--accent-text); }
@@ -848,9 +872,10 @@
 .ag-picker-foot textarea { flex: 1 1 220px; min-width: 0; resize: none; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink); font: 13px/1.4 var(--sans); }
 
 @media (max-width: 640px) {
-  .ag-table { justify-content: flex-start; padding-top: 64px; gap: 6px; }
-  .ag-seat { width: 104px; transform: none; }
-  .ag-seat[data-state="speaking"] { transform: translateY(-4px); }
+  .ag-table { justify-content: flex-start; padding-top: 72px; gap: 6px; }
+  .ag-seat { width: 108px; transform: none; }
+  .ag-seat[data-turn] { transform: translateY(-6px); }
+  .ag-seat-floor { width: 88px; }
   .ag-seat-line { max-width: 180px; }
   .ag-room-head .ag-muted { display: none; }
   .ag-proposal-rows { grid-template-columns: 1fr; }
@@ -859,7 +884,12 @@
 @keyframes agav-cv-stamp { from { transform: translateX(-50%) scale(0.6); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
 @keyframes agav-cv-dots { 0%, 100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 @keyframes agav-cv-caret { to { opacity: 0; } }
+@keyframes agav-cv-glow { from { opacity: 0.6; transform: scale(0.96); } to { opacity: 1; transform: scale(1.12); } }
 
+/* Reduced motion: nothing moves; who holds the floor still reads, by its glow and lit floor. */
 @media (prefers-reduced-motion: reduce) {
-  .ag-cv-badge, .ag-typing i, .ag-seat-dots i, .ag-caret, .ag-seat { animation: none !important; transition: none !important; }
+  .ag-cv-badge, .ag-typing i, .ag-seat-dots i, .ag-caret, .ag-seat, .ag-seat .ag-cv-face, .ag-seat .ag-cv-face::before, .ag-seat-floor {
+    animation: none !important; transition: none !important;
+  }
+  .ag-seat[data-state="speaking"] .ag-cv-face { transform: none; }
 }

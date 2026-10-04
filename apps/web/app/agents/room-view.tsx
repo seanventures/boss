@@ -8,7 +8,14 @@
  *
  * It must feel like a live room, and only because it IS one: a seat rings `thinking` from the
  * moment its turn starts until its first word, `speaking` while its words arrive, and `done`
- * once it has spoken this round. Seats still to speak say "Up next". Nothing moves otherwise.
+ * once it has spoken this round. Seats still to speak say "Up next". The seat whose turn it is
+ * holds the floor (`data-turn`): its face lifts and glows on a lit floor, and the face itself
+ * plays the kit's speaking or thinking motion. Nothing moves otherwise; under reduced motion
+ * the floor and glow stay, still.
+ *
+ * THE TITLE IS WHAT THE ROOM IS ABOUT, and it does not change under the operator: the first
+ * question asked (clipped, the whole of it in the tooltip). Who is in the room is shown as
+ * faces beside it, never as a title that a first turn then swaps out.
  *
  * Layout: the table stays put and the transcript scrolls inside its own pane — the page never
  * scrolls (the operator's note on the Run view, applied here from the start).
@@ -19,9 +26,17 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   mentionsIn, useConversation, type ConversationView, type SeatInfo, type SummaryView, type TurnView,
 } from "../../lib/agent-converse";
+
+/** The room's title: its first question, on one line. */
+export function roomTitle(turns: TurnView[], pending?: string): { text: string; full: string } {
+  const first = turns.find((t) => t.speakerKind === "person" && t.content.trim())?.content ?? pending ?? "";
+  const line = first.trim().replace(/\s+/g, " ");
+  if (!line) return { text: "New room", full: "" };
+  return { text: line.length > 72 ? `${line.slice(0, 70)}…` : line, full: line };
+}
 import type { AvatarState } from "../../lib/agent-world-types";
 import {
-  AiBadge, Composer, ConverseFace, ProblemNote, ProposalCard, SeatBook, StopButton, TurnItem, seatName,
+  AiBadge, Composer, ConverseFace, ProblemNote, ProposalCard, SeatBook, StopButton, TurnItem, humanise, seatName,
   useSeat, useStickToBottom,
 } from "./converse-parts";
 
@@ -33,7 +48,7 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
   onClose: () => void;
 }) {
   const live = useConversation(projectId, conversationId, actor);
-  const { conversation, busy, speaking, thinking, queue, problem, setProblem } = live;
+  const { conversation, busy, answering, speaking, thinking, queue, problem, setProblem } = live;
   const [to, setTo] = useState<string[]>([]);
   const [debate, setDebate] = useState(false);
   const asked = useRef(false);
@@ -71,23 +86,37 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
   const byTurn = new Map(turns.map((t) => [t.turnId, t]));
   const nobodySpoke = !turns.some((t) => t.speakerKind === "agent" && t.status === "complete");
 
+  const seats = conversation?.seats ?? [];
+  // Who each seat is, with the callsign seatName shows (the @ menu inserts it; it resolves back).
+  const named = seats.map((k) => {
+    const info = merged.get(k) ?? { roleKey: k, name: humanise(k), lifecycle: "active" };
+    const who = seatName(info);
+    return { ...info, callsign: who.role ? who.name : null };
+  });
+  const title = roomTitle(turns, question);
+  const toggle = (k: string) => setTo((all) => all.includes(k) ? all.filter((x) => x !== k) : [...all, k]);
+
   const send = (message: string) => {
-    const named = Array.from(new Set([...to, ...mentionsIn(message, conversation?.seats ?? [])]));
-    void live.send(message, { to: named, rounds: debate ? 2 : 1 });
+    const addressed = Array.from(new Set([...to, ...mentionsIn(message, seats, named)]));
+    void live.send(message, { to: addressed, rounds: debate ? 2 : 1 });
   };
 
   return (
     <SeatBook.Provider value={merged}>
       <div className="ag-room" role="dialog" aria-modal="true" data-testid="ag-room"
-           aria-label={conversation?.title ?? "Room"}>
+           aria-label={title.full || "Room"}>
         <header className="ag-room-head">
           <span className="ag-eyebrow">Room</span>
-          <strong className="ag-room-title" data-user-text title={conversation?.title}>
-            {conversation?.title ?? "Opening…"}
+          <strong className="ag-room-title" data-testid="ag-room-title" data-user-text
+                  data-empty={title.full ? undefined : "1"} title={title.full || undefined}>
+            {conversation ? title.text : "Opening…"}
           </strong>
-          {conversation ? <span className="ag-muted">{conversation.seats.length} agents</span> : null}
+          <span className="ag-room-members ag-stack" data-testid="ag-room-members"
+                title={named.map((s) => seatName(s).name).join(" · ")}>
+            {seats.map((k) => <ConverseFace key={k} roleKey={k} size={24} state={stateOf(k)} />)}
+          </span>
           <span className="ag-spacer" />
-          {busy ? <StopButton onStop={live.stop} /> : null}
+          {answering ? <StopButton onStop={live.stop} /> : null}
           <button type="button" className="ag-btn" data-testid="ag-summarize"
                   disabled={busy || nobodySpoke}
                   title={nobodySpoke ? "Ask the room something first" : "The lead sums up: decisions and next steps"}
@@ -98,16 +127,19 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
           <button type="button" className="ag-icon-btn" onClick={onClose} aria-label="Close" title="Close">×</button>
         </header>
 
-        <div className="ag-table" data-testid="ag-table" data-busy={busy ? "1" : undefined}
->
-          {(conversation?.seats ?? []).map((k, i) => (
-            <Seat key={k} roleKey={k} index={i} count={conversation?.seats.length ?? 1} state={stateOf(k)}
-                  lead={conversation?.leadRoleKey === k}
-                  next={busy && queue[0] !== k && queue.includes(k) && stateOf(k) === "idle"}
-                  line={speaking === k ? latest(k)?.content ?? "" : ""}
-                  selected={to.includes(k)}
-                  onToggle={() => setTo((all) => all.includes(k) ? all.filter((x) => x !== k) : [...all, k])} />
-          ))}
+        <div className="ag-table" data-testid="ag-table" data-busy={answering ? "1" : undefined}>
+          {seats.map((k, i) => {
+            const state = stateOf(k);
+            return (
+              <Seat key={k} roleKey={k} index={i} count={seats.length} state={state}
+                    lead={conversation?.leadRoleKey === k}
+                    turn={state === "speaking" || state === "thinking"}
+                    next={answering && queue[0] !== k && queue.includes(k) && state === "idle"}
+                    line={speaking === k ? latest(k)?.content ?? "" : ""}
+                    selected={to.includes(k)}
+                    onToggle={() => toggle(k)} />
+            );
+          })}
         </div>
 
         <div className="ag-room-feed" ref={scroller} data-testid="ag-room-feed" aria-live="off">
@@ -128,14 +160,14 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
             <span className="ag-muted">To</span>
             <button type="button" className="ag-chip ag-chip-btn" aria-pressed={!to.length}
                     onClick={() => setTo([])}>Everyone</button>
-            {(conversation?.seats ?? []).map((k) => (
-              <ToToggle key={k} roleKey={k} on={to.includes(k)}
-                        onToggle={() => setTo((all) => all.includes(k) ? all.filter((x) => x !== k) : [...all, k])} />
+            {seats.map((k) => (
+              <ToToggle key={k} roleKey={k} on={to.includes(k)} onToggle={() => toggle(k)} />
             ))}
           </div>
-          <Composer placeholder="Ask the room · @ to mention" seats={conversation?.seatInfo}
+          <Composer placeholder="Ask the room · @ to mention" seats={named}
                     disabled={busy || !conversation || conversation.status === "closed"} autoFocus
                     onSend={send}
+                    onMention={(k) => setTo((all) => all.includes(k) ? all : [...all, k])}
                     extra={(
                       <label className="ag-toggle" title="Each answers another seat once more">
                         <input type="checkbox" checked={debate} onChange={(e) => setDebate(e.target.checked)}
@@ -149,22 +181,30 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
   );
 }
 
-function Seat({ roleKey, index, count, state, lead, next, line, selected, onToggle }: {
-  roleKey: string; index: number; count: number; state: AvatarState; lead: boolean; next: boolean; line: string;
+/** The stage face: big enough to read a face on (≥72px), bigger while it holds the floor. */
+export const SEAT_FACE = 80;
+
+function Seat({ roleKey, index, count, state, lead, turn, next, line, selected, onToggle }: {
+  roleKey: string; index: number; count: number; state: AvatarState; lead: boolean;
+  /** This seat holds the floor: thinking or speaking now. */
+  turn: boolean;
+  next: boolean; line: string;
   selected: boolean; onToggle: () => void;
 }) {
   const seat = useSeat(roleKey);
   const who = seatName(seat);
   return (
     <button type="button" className="ag-seat" data-state={state} data-testid={`ag-seat-${roleKey}`}
-            aria-pressed={selected}
+            data-turn={turn ? "1" : undefined} aria-pressed={selected}
             // The table is an arc: the middle seat sits furthest back, the ends come forward.
             style={{ ["--lift" as string]: `${Math.round(Math.abs(index - (count - 1) / 2) * 14)}px` }}
             title={selected ? "Asking only the selected seats" : `Ask ${who.name} directly`}
             onClick={onToggle}>
       {line ? <span className="ag-seat-line" data-user-text>{tail(line)}</span> : null}
       {state === "thinking" ? <span className="ag-seat-line ag-seat-dots" aria-hidden><i /><i /><i /></span> : null}
-      <ConverseFace roleKey={roleKey} size={48} state={state} badge label={who.name} />
+      <span className="ag-seat-floor" aria-hidden />
+      <ConverseFace roleKey={roleKey} size={SEAT_FACE} state={state} badge
+                    label={who.role ? `${who.name}, ${who.role}` : who.name} />
       <span className="ag-seat-name">{who.name}{lead ? <span className="ag-lead" title="Writes the summary">★</span> : null}</span>
       <span className="ag-seat-role" data-next={next ? "1" : undefined}>{next ? "Up next" : who.role ?? ""}</span>
     </button>

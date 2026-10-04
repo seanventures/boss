@@ -371,7 +371,9 @@ def create_conversation(connection, *, project_id: str, actor: str, kind: str,
     lead = _resolve(lead_role_key) if lead_role_key else resolved[0]
     if lead not in resolved:
         raise _invalid("the lead must be one of the seats")
-    names = [roles[k].get("display_name") or k for k in resolved]
+    # Named the way the console names them: the callsign when there is one ("Talk with Vera").
+    names = [_seat_info(roles[k]).get("callsign") or roles[k].get("display_name") or k
+             for k in resolved]
     default_title = {"talk": f"Talk with {names[0]}", "plan": f"Plan with {names[0]}",
                      "room": preset_row["label"] if preset_row else " · ".join(names)}[kind]
     conversation_id = make_id("cnv")
