@@ -395,7 +395,10 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
     # AI disclosure and voice the agent has in chat and on a panel. The rules below stay the
     # authority on what it may do; the outcome it must declare is asked for in the user turn
     # (OUTCOME_ASK). A persona that cannot compile falls back to the plain name line.
-    lines = [_agent_voice(dict(row) if row else {"role_key": role, "spec": spec})
+    from .agent_instructions import for_prompt
+
+    lines = [_agent_voice(dict(row) if row else {"role_key": role, "spec": spec},
+                          for_prompt(connection, project_id, role, "work"))
              or f"You are {name}, an AI agent in BOSS."]
     if spec.get("mission"):
         lines.append(f"\nYOUR MISSION\n  {spec['mission']}")
@@ -427,11 +430,11 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
     return "\n".join(lines)
 
 
-def _agent_voice(role: dict[str, Any]) -> str:
+def _agent_voice(role: dict[str, Any], instructions: Optional[list[dict]] = None) -> str:
     from .agent_persona import identity_and_voice
 
     try:
-        return identity_and_voice(role, mode="work")
+        return identity_and_voice(role, mode="work", instructions=instructions)
     except Exception:  # noqa: BLE001 — a work prompt must still compile
         return ""
 

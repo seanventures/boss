@@ -1397,8 +1397,12 @@ def _agent_voice(role: str, connection: Any, project_id: Optional[str]) -> str:
             _log.warning("agent voice lookup failed for %s", role, exc_info=True)
     if "spec" not in row:
         row = agent_persona.shipped_role(agent_identity.resolve(role) or "") or row
+    from .agent_instructions import for_prompt
+
+    instructions = (for_prompt(connection, project_id, row.get("role_key"), "chat")
+                    if connection is not None and project_id else [])
     try:
-        voice = agent_persona.identity_and_voice(row, mode="chat")
+        voice = agent_persona.identity_and_voice(row, mode="chat", instructions=instructions)
     except Exception:  # noqa: BLE001
         from .agent_world_types import AI_DISCLOSURE
 
