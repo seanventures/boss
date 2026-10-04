@@ -437,8 +437,12 @@ def _try(connection, settings: Any, project_id: str, ability: dict[str, Any], va
         server = find_mcp_server(connection, project_id, server_name)
         if server is None:
             raise HTTPException(status_code=409, detail=f"{server_name} is not registered.")
+        # `args` in the kit file shapes a call that needs more than the one typed value.
+        template = spec.get("args") if isinstance(spec.get("args"), dict) else None
+        inputs = ({k: (value if v == "{input}" else v) for k, v in template.items()}
+                  if template else {arg: value})
         got = call_tool_with_receipt(
-            connection, settings, project_id, server, tool, {arg: value},
+            connection, settings, project_id, server, tool, inputs,
             dedupe_key=f"kit-try:{ability['key']}:{make_id('try')}",
             tenant_scope=context.tenant_scope(),
             # NO PERSON'S APPROVAL IS CARRIED, by design: Try runs only a tier-0 tool set to
