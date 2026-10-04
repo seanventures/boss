@@ -55,13 +55,20 @@ export type BuildRowProps = {
   onOpen: (runId: string, from: HTMLElement | null) => void;
 };
 
+/** A title short enough for a tooltip: its first eight words, then `…`. */
+export function shortTitle(title: string): string {
+  const words = title.split(/\s+/).filter(Boolean);
+  return words.length > 8 ? `${words.slice(0, 8).join(" ")}…` : title;
+}
+
 export function BuildRow({ build: b, density = "row", band = "wide", now, still, onOpen }: BuildRowProps) {
   useIdentityVersion();
   const frozen = still || STILL_STATES.has(b.state);
   const parts = nowParts(b, now);
   const cost = b.metered && b.costUsd > 0 ? `$${b.costUsd.toFixed(2)}` : "";
   const started = localTime(b.startedAt);
-  const nameTip = [b.title, `attempt ${b.attempt}`, b.actor ? `started by ${b.actor}` : "", started]
+  // A tooltip is ~14 words: a long build title (the Captain writes whole briefs) is cut.
+  const nameTip = [shortTitle(b.title), `attempt ${b.attempt}`, b.actor ? `started by ${b.actor}` : "", started]
     .filter(Boolean).join(" · ");
   const phone = band === "phone";
 
