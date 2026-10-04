@@ -5239,7 +5239,7 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
 def _register_role_experience_tools(reg: ToolRegistry) -> None:
     """What a role has actually argued, on this project, in its own words.
 
-    The Agents page listed a workforce and "Ask" opened the GENERAL agent with "@QA Lead: "
+    Agent Studio listed a workforce and "Ask" opened the GENERAL agent with "@QA Lead: "
     typed into the box — the name was prose in a prompt, not an identity. So an operator asking
     the QA Lead a question got BOSS, answering as itself, with no idea what the QA Lead had
     ever said.
@@ -6705,7 +6705,7 @@ def build_default_registry() -> ToolRegistry:
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
-    # Giving an agent a skill or an MCP server: the act the Agents page exists for, by asking.
+    # Giving an agent a skill or an MCP server: the act Agent Studio exists for, by asking.
     from .agent_tools import register_agent_tools
 
     register_agent_tools(reg)

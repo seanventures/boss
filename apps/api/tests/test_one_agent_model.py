@@ -551,7 +551,7 @@ def test_an_agent_made_here_can_captain_a_step_the_moment_it_exists(client):
             "id": "audit", "kind": "capability", "captain": key + "_typo",
             "binding": {"agent_work": True, "inputs": {"instructions": "check"}}}]}})
     assert typo.status_code in (400, 409, 422), typo.text
-    assert "Agents page" in typo.text, "a refused captain must say what to do"
+    assert "Agent Studio" in typo.text, "a refused captain must say what to do"
 
 
 def test_a_name_with_no_english_letters_still_makes_an_agent(client):
@@ -745,7 +745,7 @@ def test_an_older_version_alone_blocks_until_the_delete_retires_it(client, engin
     # an agent that is gone — and the refusal says what to do.
     again = client.post(f"/v1/workflows/{definition}/versions", json={
         "project_id": PROJECT, "actor": "ceo", "spec": _audit_spec(key)})
-    assert again.status_code in (400, 409, 422) and "Agents page" in again.text, again.text
+    assert again.status_code in (400, 409, 422) and "Agent Studio" in again.text, again.text
 
 
 def test_a_retired_version_whose_agent_is_back_is_published_again_on_resave(client, engine):
@@ -950,7 +950,7 @@ def test_a_deleted_bundled_agent_is_refused_as_a_captain_at_publish(client, engi
     r = client.post(f"/v1/workflows/{definition.json()['id']}/versions", json={
         "project_id": CAPTAIN_PROJECT, "actor": "ceo", "spec": _audit_spec(victim)})
     assert r.status_code in (400, 409, 422), r.text
-    assert "Agents page" in r.text, "the refusal must say what to do"
+    assert "Agent Studio" in r.text, "the refusal must say what to do"
     offered = client.get("/v1/delivery-workflows/capabilities",
                          params={"project_id": CAPTAIN_PROJECT}).json()["roles"]
     assert victim not in offered, "the builder must not offer a captain publish refuses"

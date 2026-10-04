@@ -59,6 +59,7 @@ class AgentRuntimeService:
         role_key = role.get("role_key") or role.get("role_id")
         #: Who the installed agent is (agent id, version), for the identity line of its voice.
         identity: dict[str, Any] = {}
+        instructions: list[dict[str, Any]] = []
         if role_key:
             installed_role = connection.execute(
                 text(
@@ -73,12 +74,15 @@ class AgentRuntimeService:
                             "display_name": installed_role["display_name"],
                             "agent_id": installed_role["agent_id"],
                             "identity_version": installed_role["identity_version"]}
+                from .agent_instructions import for_prompt
+
+                instructions = for_prompt(connection, project_id, role_key, "work")
         runtime = module.get("runtime") or {}
         prompt_bundle = module.get("prompt_bundle") or {}
         job_prompt = self._job_prompt(job_kind, prompt_bundle, runtime)
         compiled_prompt = {
             "system": self._compile_system_prompt(module, role, prompt_bundle,
-                                                  identity=identity),
+                                                  identity=identity, instructions=instructions),
             "job": self._compile_job_prompt(job_kind, job_prompt, task_payload or {}),
             "checklist": self._compile_checklist(role, runtime),
             "runtime_contract": self._compile_runtime_contract(role, runtime),
@@ -208,6 +212,7 @@ class AgentRuntimeService:
         prompt_bundle: dict[str, Any],
         *,
         identity: Optional[dict[str, Any]] = None,
+        instructions: Optional[list[dict[str, Any]]] = None,
     ) -> str:
         sections = [
             str(prompt_bundle.get("system") or "").strip(),
@@ -226,16 +231,18 @@ class AgentRuntimeService:
             # THE AGENT'S OWN VOICE, the same one it has in chat and on a panel
             # (agent_persona L1 + L3): who it is, that it is an AI, and how it speaks. The
             # remit above stays the authority on what it may do.
-            self._agent_voice(role, identity or {}),
+            self._agent_voice(role, identity or {}, instructions),
         ]
         return "\n\n".join(section for section in sections if section)
 
     @staticmethod
-    def _agent_voice(role: dict[str, Any], identity: dict[str, Any]) -> str:
+    def _agent_voice(role: dict[str, Any], identity: dict[str, Any],
+                     instructions: Optional[list[dict[str, Any]]] = None) -> str:
         from .agent_persona import identity_and_voice
 
         try:
-            return identity_and_voice({**identity, "spec": role}, mode="work")
+            return identity_and_voice({**identity, "spec": role}, mode="work",
+                                      instructions=instructions)
         except Exception:  # noqa: BLE001 — a work prompt must still compile
             return ""
 

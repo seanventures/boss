@@ -290,7 +290,7 @@ describe("an agent's page", () => {
     expect(profile?.textContent).toContain("v2");
     expect($('[data-testid="agent-profile-check-qa"]')?.textContent).toContain("Check");
     // Not two Profiles, not two Tests: the Studio rows sit inside the Passport's Profile section.
-    const titles = [...document.querySelectorAll(".ct-block-title")].map((t) => t.firstChild?.textContent?.trim());
+    const titles = [...document.querySelectorAll('.section-label[data-level="1"]')].map((t) => t.firstChild?.textContent?.trim());
     expect(titles.filter((t) => t === "Profile")).toHaveLength(1);
     expect(document.querySelectorAll('[data-testid="ag-test"]')).toHaveLength(1);
     expect($("#ag-sec-profile")?.contains(profile!)).toBe(true);

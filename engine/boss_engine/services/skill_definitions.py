@@ -49,7 +49,13 @@ from .core import emit_event, make_id
 #: obeys — imported rather than restated so the two cannot drift.
 from .workflow_capabilities import MANUAL_APPROVAL_RISK_FLOOR
 
-BEHAVIOURS = ("builtin", "mcp_tool", "sandboxed_command", "agent_program")
+BEHAVIOURS = ("builtin", "mcp_tool", "sandboxed_command", "agent_program", "guide")
+
+#: The fifth behaviour (agent-loadout spec §4.6): a GUIDE. A SKILL.md playbook an operator
+#: uploaded — it runs nothing, reaches no network and changes nothing. The agent always sees its
+#: one-line summary; calling it returns the body. Progressive disclosure: a 10 KB playbook costs
+#: tokens only when the agent decides it needs it. Risk is always 0 (Reads).
+GUIDE_MAX_CHARS = 20_000
 
 #: The fourth behaviour, and the only one no person authored.
 #:
@@ -140,6 +146,12 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
     having a definition at all.
     """
     given = dict(config or {})
+    if behaviour == "guide":
+        # A guide has no settings: anything here would be a way to make it DO something.
+        if given:
+            raise SkillDefinitionError("a guide takes no config — it only explains.")
+        return {}
+
     if behaviour == "builtin":
         return {"executor_id": _clean(given.get("executor_id"), "executor_id", limit=120)}
 
@@ -454,6 +466,22 @@ def save_skill(
         raise SkillDefinitionError("risk_tier must be between 0 and 3.")
     parsed_inputs = _named_list(inputs, "inputs")
     parsed_produces = _named_list(produces, "produces")
+    if behaviour == "guide":
+        # A GUIDE ONLY EXPLAINS: tier 0, nothing in, nothing out, and its body is checked by
+        # the same lint as an agent's instructions — it reaches the model as a tool result.
+        from .agent_instructions import lint_instructions, normalise
+
+        tier, parsed_inputs, parsed_produces = 0, [], []
+        knowledge = normalise(knowledge)
+        if not knowledge.strip():
+            raise SkillDefinitionError("a guide needs its text — the knowledge is the guide.")
+        if len(knowledge) > GUIDE_MAX_CHARS:
+            raise SkillDefinitionError(
+                f"a guide is at most {GUIDE_MAX_CHARS:,} characters.")
+        problems, _ = lint_instructions(knowledge)
+        if problems:
+            raise SkillDefinitionError(
+                f"{problems[0]['message']} (line {problems[0]['line']}).")
     parsed_config = validate_config(behaviour, config or {},
                                     [entry["name"] for entry in parsed_inputs])
     if behaviour == "mcp_tool":
@@ -719,7 +747,7 @@ def sync_role_skills(
     Nothing connected the two. So every install had agents that were TOLD what they could use
     and HELD nothing, and every permission that worked did so because a skill happened to list
     the role in `allowed_callers` — never because an agent had been given anything. An operator
-    looking at the Agents page saw exactly what was there: agents with no skills.
+    looking at Agent Studio saw exactly what was there: agents with no skills.
 
     Idempotent, and additive only. It never removes an assignment: an operator who has granted
     something by hand has made a decision, and a sync that reverts it on the next run is a sync

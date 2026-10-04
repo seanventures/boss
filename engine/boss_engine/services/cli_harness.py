@@ -1525,6 +1525,9 @@ class GenericCliCodeAgent:
             f"TEST/BUILD COMMANDS (make these pass):\n{tests}\n"
             + (f"\nREPO GUIDE (the repository's own instructions — follow them):\n{guide}\n"
                if guide else "")
+            # THE AGENT IT RUNS AS: its operator's working instructions (agent-loadout §4.8).
+            + (f"\n{spec.agent_instructions}\n" if getattr(spec, "agent_instructions", "")
+               else "")
             + "\nEdit files in place. Do NOT create a branch, commit, or push — BOSS handles "
               "git, the pull request and the merge gate.\n"
         )

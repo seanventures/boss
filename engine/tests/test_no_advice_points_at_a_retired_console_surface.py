@@ -1,6 +1,7 @@
 """Every pointer BOSS prints or documents names a console surface that still exists.
 
-Workflow Studio folded Agent Studio, Team structure and Agent work into **Agents**, and the
+Workflow Studio folded the old Agent Studio, Team structure and Agent work into one area — named
+**Agent Studio** again on 2026-10-04 (the operator's call), now the agents' one home — and the
 Workflow area's Yours / Catalogue / Design a workflow / Your steps tabs into **Workflows → Runs |
 Library**. The review of ws/ia (2026-10-03) found the advice had not moved with them:
 
@@ -8,8 +9,8 @@ Library**. The review of ws/ia (2026-10-03) found the advice had not moved with 
     area `studio`, an id the console no longer has — it worked only because of the redirect;
   * the refusal on BOSS's own workflows sent people to "Workflow > Design a workflow" and
     "Workflow > Catalogue";
-  * README, Quickstart, the walkthroughs and the examples named "Agent work", "Team structure",
-    "Agent Studio" and "Delivery → Build your own → Your steps", and the install is followed
+  * README, Quickstart, the walkthroughs and the examples named "Agent work", "Team structure"
+    and "Delivery → Build your own → Your steps", and the install is followed
     literally from the README.
 
 These read the area ids from the console's own list (apps/web/lib/area-ids.ts) and every
@@ -30,7 +31,7 @@ SPECPACK = REPO / "packages" / "specpack" / "workflows"
 
 #: Names of console surfaces that no longer exist, as a person would read them.
 RETIRED = re.compile(
-    r"Agent Studio|Team structure|\*\*Agent work\*\*|Build your own|Your steps|"
+    r"Team structure|\*\*Agent work\*\*|Build your own|Your steps|"
     r"Design a workflow|Workflow\s*[>→]\s*Catalogue|Delivery\s*→\s*(\*\*)?(Workflows|Yours|Build)|"
     r"Create a new workflow|edit inputs"
 )
@@ -61,10 +62,10 @@ def test_every_readiness_fix_names_a_surface_that_exists(need):
     assert not RETIRED.search(need.fix), need.fix
 
 
-def test_an_agent_the_workflow_names_is_fixed_in_agents():
+def test_an_agent_the_workflow_names_is_fixed_in_agent_studio():
     need = ready._role_need("video_editor")
     assert need.area == "workforce"
-    assert "Agents (+ New agent)" in need.fix
+    assert "Agent Studio (+ New agent)" in need.fix
 
 
 def test_the_refusal_on_bosss_own_workflows_names_a_surface_that_exists():

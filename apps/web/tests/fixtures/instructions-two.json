@@ -1,0 +1,64 @@
+{
+ "role_key": "qa",
+ "items": [
+  {
+   "id": "ins_1",
+   "name": "review-checklist.md",
+   "source": "file",
+   "size_chars": 3174,
+   "tokens_est": 794,
+   "sha256": "11111111",
+   "modes": [
+    "work",
+    "chat",
+    "panel"
+   ],
+   "position": 1,
+   "preview": "# Review checklist\n- Always list untested branches first",
+   "updated_at": "2026-10-04T12:00:00Z",
+   "updated_by": "ceo",
+   "created_at": "2026-10-04T12:00:00Z",
+   "created_by": "ceo",
+   "since_version": 7,
+   "usable": true,
+   "unusable_reason": null
+  },
+  {
+   "id": "ins_2",
+   "name": "house-rules.md",
+   "source": "file",
+   "size_chars": 1626,
+   "tokens_est": 407,
+   "sha256": "22222222",
+   "modes": [
+    "work"
+   ],
+   "position": 2,
+   "preview": "# Review checklist\n- Always list untested branches first",
+   "updated_at": "2026-10-04T12:00:00Z",
+   "updated_by": "ceo",
+   "created_at": "2026-10-04T12:00:00Z",
+   "created_by": "ceo",
+   "since_version": 8,
+   "usable": false,
+   "unusable_reason": "Can't change what it may do \u00b7 line 3"
+  }
+ ],
+ "budget": {
+  "work": {
+   "used_chars": 4800,
+   "limit_chars": 16000
+  },
+  "chat": {
+   "used_chars": 3174,
+   "limit_chars": 16000
+  },
+  "panel": {
+   "used_chars": 3174,
+   "limit_chars": 16000
+  }
+ },
+ "version": 8,
+ "fingerprint": "9f3ac21e",
+ "can_edit": true
+}

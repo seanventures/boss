@@ -592,7 +592,7 @@ def approval_mode_for(capability_key: str, requested: Optional[str]) -> str:
 #: The roles BOSS's own capabilities name as their DEFAULT captain — the vocabulary the palette
 #: is written in, checked by test_every_step_has_a_captain.
 #:
-#: NOT WHO A STEP MAY NAME. That used to be this set, so an agent made on the Agents page could
+#: NOT WHO A STEP MAY NAME. That used to be this set, so an agent made in Agent Studio could
 #: never be put on a step ("names captain 'docs_writer', which is not a role this workforce
 #: has") while roles no project has were offered in the picker. Who a step may name is the
 #: PROJECT's agents — the `roles` table — and `step_agents.assignment_problems` checks that at
@@ -668,7 +668,7 @@ def validate_captain(step: Mapping[str, Any],
         f"step '{step.get('id', '?')}' names agent '{named}', which this project does not "
         f"have: it is not a role this workforce has. Its agents include: "
         f"{', '.join(others[:6]) or 'none yet'}{', …' if len(others) > 6 else ''}. Pick one of "
-        f"them, create '{named}' on the Agents page first, or leave the captain empty for BOSS "
+        f"them, create '{named}' in Agent Studio first, or leave the captain empty for BOSS "
         "to pick."
     ]
 
