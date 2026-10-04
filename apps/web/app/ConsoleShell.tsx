@@ -13,6 +13,7 @@ import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
+import { PresencePill } from "./agents/presence-pill";
 
 import React, {
   useCallback,
@@ -1166,6 +1167,7 @@ export default function ConsoleShell({
             <span>Jump to</span>
             <kbd>⌘K</kbd>
           </button>
+          <PresencePill projectId={scope.projectId ?? scope.project} />
           <details className="bx-system-menu">
             <summary aria-label="System details">System</summary>
             <div className="bx-system-panel">

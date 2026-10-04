@@ -9,7 +9,11 @@ import { AgentQuickCreate } from "./agent-quick-create";
 import { FocusedAgents } from "./focused-agents-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
-import { openDockAbout } from "../lib/dock-subject";
+import { askAgent as talkTo, identityOf } from "../lib/agent-world";
+import { useLivePresence } from "../lib/agents-live";
+import { AgFace } from "./agents/agent-face";
+import { RosterSummary, RosterZones, placeAgents } from "./agents/roster-zones";
+import { TeamSwarm } from "./agents/team-swarm";
 
 /**
  * The Agents area: Roster, Team and Panels, in v1's own styling.
@@ -42,11 +46,10 @@ function openAgent(roleKey: string): void {
   } catch { /* non-browser */ }
 }
 
-/** Open the console's side dock, addressed to this member of the workforce: same page, the
- *  panel on the right with the agent's name in its head. `dock_role` is what makes the reply
- *  come from that role's lens and its own past arguments. */
-function askAgent(agentName: string): void {
-  openDockAbout({ subject: null, role: agentName, question: `@${agentName}: ` });
+/** Talk to one agent, by role key: the 1:1 conversation (Agent World), or the side dock
+ *  addressed to it until that lands. The reply comes from that role's lens and voice. */
+function askAgent(roleKey: string, agentName: string): void {
+  talkTo(roleKey, agentName, { from: "roster" });
 }
 
 export type AgentsView = "roster" | "team" | "panels";
@@ -81,9 +84,11 @@ export function WorkforceArea(
   },
 ) {
   const [view, setViewState] = useState<AgentsView>("roster");
-  const [filter, setFilter] = useState<"all" | "working" | "worked" | "duty" | "unregistered">("all");
+  const [filter, setFilter] = useState<"all" | "needs_you" | "worked" | "duty" | "retired" | "unregistered">("all");
   const [search, setSearch] = useState("");
-  const [showAll, setShowAll] = useState(false);
+  const [teamLayout, setTeamLayout] = useState<"list" | "swarm">("list");
+  // WHO IS DOING WHAT, from open work: the same store the top-bar pill reads.
+  const live = useLivePresence(workforce.project_id);
   // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
   const [openRole, setOpenRole] = useState("");
   useEffect(() => {
@@ -124,19 +129,27 @@ export function WorkforceArea(
   const [deleted, setDeleted] = useState<Set<string>>(new Set());
   // THE ROSTER, NOT THE WORK FEED: every agent a step's picker offers, plus unregistered ones
   // doing work. `agents` alone is who worked, which said "All 5" beside a picker of 34.
-  const everyone = useMemo(
+  // RETIRED AGENTS KEEP THEIR WORK and leave the roster: they are under Retired only.
+  const all = useMemo(
     () => (workforce.roster ?? workforce.agents ?? []).filter((a) => !deleted.has(a.id)),
     [workforce.roster, workforce.agents, deleted]);
+  const retired = useMemo(() => all.filter((a) => identityOf(a.id, a.name).lifecycle === "retired"), [all]);
+  const everyone = useMemo(() => all.filter((a) => !retired.includes(a)), [all, retired]);
+  const needsYou = useMemo(() => new Set(placeAgents(everyone, live)
+    .filter((p) => p.zone === "needs_you").map((p) => p.agent.id)), [everyone, live]);
   const agents = useMemo(() => {
-    const scoped = filter === "working"
-      ? everyone.filter((a) => a.status === "WORKING" || a.status === "STUCK")
+    const scoped = filter === "needs_you" ? everyone.filter((a) => needsYou.has(a.id))
       : filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0)
+      : filter === "retired" ? retired
       : filter === "unregistered" ? everyone.filter((a) => !a.registered) : everyone;
     const query = search.trim().toLowerCase();
-    return query ? scoped.filter((a) => `${a.name} ${a.role} ${a.task}`.toLowerCase().includes(query)) : scoped;
-  }, [everyone, filter, search]);
+    const who = (a: typeof scoped[number]) => {
+      const id = identityOf(a.id, a.name);
+      return `${a.name} ${a.role} ${a.task} ${id.callsign ?? ""} ${id.tagline ?? ""}`.toLowerCase();
+    };
+    return query ? scoped.filter((a) => who(a).includes(query)) : scoped;
+  }, [everyone, retired, needsYou, filter, search]);
 
-  const working = everyone.filter((a) => a.status === "WORKING" || a.status === "STUCK").length;
   // COUNTED, NOT ASSUMED: roles idle all window have recorded no work.
   const workedCount = everyone.filter((a) => volumeOf(a) > 0).length;
   const unregisteredCount = everyone.filter((agent) => !agent.registered).length;
@@ -144,7 +157,6 @@ export function WorkforceArea(
   useEffect(() => {
     if (filter === "unregistered" && unregisteredCount === 0) setFilter("all");
   }, [filter, unregisteredCount]);
-  const shownAgents = filter === "all" && !search.trim() && !showAll ? agents.slice(0, 12) : agents;
   const panels = studio?.panels ?? [];
   const orphans = useMemo(() => studio ? orphanProfiles(studio, everyone.map((a) => a.id)) : [],
                           [studio, everyone]);
@@ -175,7 +187,17 @@ export function WorkforceArea(
             </button>
           ) : null}
         </div>
+        {view === "roster" ? <RosterSummary agents={everyone} live={live} /> : null}
         <span className="wf-lib-spacer" />
+        {view === "team" ? (
+          <span className="wf-seg" role="group" aria-label="Layout">
+            <button type="button" aria-pressed={teamLayout === "list"} data-active={teamLayout === "list"}
+                    data-testid="agents-team-list" onClick={() => setTeamLayout("list")}>List</button>
+            <button type="button" aria-pressed={teamLayout === "swarm"} data-active={teamLayout === "swarm"}
+                    data-testid="agents-team-swarm" title="Who handed work to whom, live"
+                    onClick={() => setTeamLayout("swarm")}>Swarm</button>
+          </span>
+        ) : null}
         {view === "roster" ? (
           <label className="wf-lib-search">
             <input type="search" aria-label="Find an agent" placeholder="Find an agent"
@@ -194,20 +216,23 @@ export function WorkforceArea(
       ) : null}
 
       {view === "team" ? (
-        chart ? <OrgChartArea projectId={workforce.project_id} actor={actor} chart={chart} />
-          : <p className="detail">Team unavailable</p>
+        !chart ? <p className="detail">Team unavailable</p>
+          : teamLayout === "swarm" ? <TeamSwarm projectId={workforce.project_id} chart={chart} live={live} />
+          : <OrgChartArea projectId={workforce.project_id} actor={actor} chart={chart} />
       ) : view === "panels" && studio ? (
         <PanelsView feed={studio} actor={actor} />
       ) : (
         <div className="roster">
           <div className="roster-filterbar">
             <span className="roster-filters">
-              {(["all", "working", "worked", "duty"] as const).map((f) => (
+              {(["all", "duty", "needs_you", "worked", ...(retired.length ? ["retired" as const] : [])] as const).map((f) => (
                 <button key={f} type="button" className="cap-btn" data-active={filter === f}
                         onClick={() => setFilter(f)} data-testid={`wf-filter-${f}`}
-                        title={f === "duty" ? "Agents that watch and act on their own" : undefined}>
-                  {f === "all" ? `All ${everyone.length}` : f === "working" ? `Working ${working}`
-                    : f === "worked" ? `Has done work ${workedCount}` : "On duty"}
+                        title={f === "duty" ? "Agents that watch and act on their own"
+                          : f === "retired" ? "Kept for their work. Hidden from pickers." : undefined}>
+                  {f === "all" ? `All ${everyone.length}` : f === "needs_you" ? `Needs you ${needsYou.size}`
+                    : f === "worked" ? `Has done work ${workedCount}`
+                    : f === "retired" ? `Retired ${retired.length}` : "On duty"}
                 </button>
               ))}
             </span>
@@ -233,37 +258,11 @@ export function WorkforceArea(
               </div>
             ) : <p className="detail">No match</p>
           ) : (
-            <div className="roster-grid" data-testid="roster-grid">
-              {shownAgents.map((a) => (
-                <article className="roster-card" key={a.id} data-status={a.status}
-                         data-testid={`wf-agent-${a.id}`}>
-                  <header className="roster-card-head">
-                    <span className="roster-name">{a.name}</span>
-                    <span className="roster-state">{a.status === "IDLE" ? "Idle" : a.status === "WORKING" ? "Working" : a.status === "STUCK" ? "Stuck" : "At gate"}</span>
-                  </header>
-                  <p className="roster-task" title={a.task}>
-                    {a.last_touched || (a.task === "No work in this window." ? "No recent work" : a.task.replace(/^last: /, "Last: "))}
-                  </p>
-                  <div className="roster-actions">
-                    <button type="button" className="roster-open" onClick={() => openAgent(a.id)}
-                            data-testid={`wf-open-${a.id}`}>Details</button>
-                    <button type="button" className="roster-ask" onClick={() => askAgent(a.name)}
-                            data-testid={`wf-ask-${a.id}`}>Ask</button>
-                    {!a.registered ? (
-                      <button type="button" className="roster-open" onClick={() => setCreating(a.name)}
-                              title="Make it an agent: skills, limits and a trust score"
-                              data-testid={`wf-register-${a.id}`}>Register</button>
-                    ) : null}
-                  </div>
-                </article>
-              ))}
-            </div>
+            // GROUPED BY WHAT THEY ARE DOING: Needs you, Working, In a panel, Idle (spec §3.2).
+            <RosterZones agents={agents} live={live} onOpen={openAgent}
+                         onAsk={(roleKey, name) => askAgent(roleKey, name)}
+                         onRegister={(name) => setCreating(name)} />
           )}
-          {filter !== "duty" && !showAll && filter === "all" && !search.trim() && agents.length > shownAgents.length ? (
-            <button type="button" className="roster-show-all" onClick={() => setShowAll(true)}>
-              Show all {agents.length}
-            </button>
-          ) : null}
         </div>
       )}
 
@@ -502,6 +501,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
                        setDragging(null);
                      }}>
                   <div className="org-node-identity">
+                    <AgFace roleKey={n.id} size={24} decorative />
                     <span className="org-node-name">{displayName(n)}</span>
                     {/* Only show the role when it adds information beyond the name. */}
                     {humanise(n.role || n.id) !== n.name ? (

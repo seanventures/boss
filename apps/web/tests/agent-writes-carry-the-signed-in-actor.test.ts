@@ -46,6 +46,9 @@ const KNOWN_AGENT_WRITERS = [
   "app/agent-profile-ui.tsx",
   "app/agent-quick-create.tsx",
   "app/agent-studio-actions.ts",
+  // Agent World: the passport, persona, lifecycle and card client; the live-presence poll (a
+  // read of /v1/agents/live); and the share-card image route (reads only).
+  "app/api/agent-card/[role]/route.tsx",
   "app/api/agent/route.ts",
   "app/api/skills/route.ts",
   // The 'Give <skill> to <captain>' grant on a workflow step row (moved out of
@@ -56,6 +59,8 @@ const KNOWN_AGENT_WRITERS = [
   "app/mcp-servers-ui.tsx",
   "app/skills-ui.tsx",
   "lib/agent-studio.ts",
+  "lib/agent-world.ts",
+  "lib/agents-live.ts",
   "lib/agents.ts",
   // Agent World's one resolver: it only READS /v1/agents/identities (no actor, no write), but
   // it names the agent resource, so it is listed and held to the same rule.

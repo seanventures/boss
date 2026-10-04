@@ -15,6 +15,9 @@
 import { apiWrite } from "./api-write";
 import type { Persona } from "./agent-world-types";
 
+/** Where a new agent came from, recorded on its passport (Agent World spec §5.4). */
+export type BornFrom = { kind: "blank" | "template" | "archetype"; archetype?: string; template_key?: string };
+
 export type GrantableSkill = {
   skill_id: string; label: string; summary: string; source: string;
   behaviour_kind: string; risk_tier: number; enabled: boolean;
@@ -92,11 +95,8 @@ export async function loadGrantable(projectId: string): Promise<AgentResult<Gran
 export function createAgent(projectId: string, actor: string, input: {
   name: string; purpose: string; skills: string[]; mcpServers: McpGrant[];
   reportsTo?: string | null; roleKey?: string;
-  /** Agent World: how it speaks (linted server-side; never widens what it may do). */
-  persona?: Persona;
-  /** What it starts from: a blank agent, a shipped role, or a "thinks like" archetype. */
-  bornFrom?: { kind: "blank" } | { kind: "template"; template_key: string }
-    | { kind: "archetype"; archetype: string };
+  /** Its birth record and voice. Sent only when given, so an older API sees the old body. */
+  bornFrom?: BornFrom; persona?: Persona;
 }) {
   return send("/v1/agents", "POST", {
     project_id: projectId, actor, name: input.name, purpose: input.purpose,
@@ -104,9 +104,9 @@ export function createAgent(projectId: string, actor: string, input: {
     mcp_servers: input.mcpServers.map((g) => ({ server_id: g.server_id, tools: g.tools ?? [] })),
     reports_to: input.reportsTo || null,
     ...(input.roleKey ? { role_key: input.roleKey } : {}),
-    ...(input.persona ? { persona: input.persona } : {}),
     ...(input.bornFrom ? { born_from: input.bornFrom } : {}),
-  }, { scope: "agent-create", label: "Create agent" });
+    ...(input.persona ? { persona: input.persona } : {}),
+  }, { scope: "agent-create", label: "Create agent" }) as Promise<AgentResult<{ role_key?: string; agent_id?: string }>>;
 }
 
 /** Only the fields present are sent, and the API changes only those. */
