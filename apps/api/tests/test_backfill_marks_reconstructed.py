@@ -98,3 +98,47 @@ def test_backfill_rebuilds_runs_seats_and_stages_once_and_marks_them(client, eng
     chain = client.get(f"/v1/workflow-runs/{run_id}/chain",
                        params={"project_id": wf.PROJECT}).json()
     assert all(a["reconstructed"] for a in chain["acts"])
+
+
+def test_the_boot_job_backfills_in_short_steps_and_live_work_wins(client, engine, monkeypatch):
+    """No one has to know about /v1/acts/backfill: the API's boot job does it. One short
+    transaction per run, panel or build, each a try-lock — a run a live tick holds is left for
+    the next pass, never waited on — and a historical step row is read, never rewritten."""
+    from boss_engine.services import agent_acts
+
+    wf.install_model(monkeypatch)
+    skill = wf.skills(client, 1)[0]
+    worker = wf.new_agent(client, wf.key("legacy_boot"), holds=(skill,))
+    made = wf.published(client, {
+        "entry_step": "draft", "input_schema": wf.START_FORM,
+        "steps": [wf.agent_step("draft", captain=worker, skills=[skill])]})
+    held = wf.started(client, made["definition"]["workflow_key"], {"instructions": "One."})
+    free = wf.started(client, made["definition"]["workflow_key"], {"instructions": "Two."})
+    wf.tick(client)
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM agent_acts"))
+        c.execute(text("UPDATE workflow_step_runs SET output = output - 'act_id' "
+                       "WHERE workflow_run_id IN (:a, :b)"), {"a": held, "b": free})
+    _legacy_rows(engine)
+
+    with engine.connect() as tick:
+        holding = tick.begin()
+        tick.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                     {"k": f"agent_acts:run:{held}"})
+        written = agent_acts.backfill_all(engine, pause_seconds=0)
+        holding.rollback()
+    assert written[wf.PROJECT] > 0
+    with engine.begin() as c:
+        signed = set(c.execute(text(
+            "SELECT DISTINCT workflow_run_id FROM agent_acts WHERE workflow_run_id IS NOT NULL"
+        )).scalars())
+        outputs = c.execute(text(
+            "SELECT output FROM workflow_step_runs WHERE workflow_run_id = :r"),
+            {"r": free}).scalars().all()
+    assert free in signed and held not in signed, "the backfill waited on, or wrote, a held run"
+    assert all("act_id" not in (o or {}) for o in outputs), "history was rewritten"
+
+    # The next pass picks up what live work held, and finds nothing else to do.
+    again = agent_acts.backfill_all(engine, pause_seconds=0)
+    assert again[wf.PROJECT] > 0
+    assert agent_acts.backfill_all(engine, pause_seconds=0)[wf.PROJECT] == 0

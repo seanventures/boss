@@ -928,7 +928,8 @@ def org_chart(connection, project_id: str, *, hours: int = 168) -> dict[str, Any
 
 
 def agent_detail(connection, project_id: str, role_key: str, *,
-                 hours: float = SCORE_WINDOW_HOURS) -> dict[str, Any]:
+                 hours: float = SCORE_WINDOW_HOURS,
+                 viewer: Optional[str] = None) -> dict[str, Any]:
     """One agent: what it is, what it has worked on, and what governs it.
 
     THE PAGE THAT DID NOT EXIST. An agent card in the roster was an `<article>` — not a link,
@@ -1044,7 +1045,7 @@ def agent_detail(connection, project_id: str, role_key: str, *,
         "owns_stages": stages,
         # SIGNED WORK (agent_acts): what it actually did, newest first, with who handed each
         # piece over — workflow steps, build stages, panel seats, chats, approvals.
-        **_signed_work(connection, project_id, role_key),
+        **_signed_work(connection, project_id, role_key, viewer=viewer),
         "apps": apps,
         "panels": [{"id": p["id"], "subject": _meeting_title(p.get("title"), p.get("directive"))[:120],
                     "status": p["status"], "phase": p["phase"],
@@ -1068,18 +1069,21 @@ def agent_detail(connection, project_id: str, role_key: str, *,
     }
 
 
-def _signed_work(connection, project_id: str, role_key: str) -> dict[str, Any]:
+def _signed_work(connection, project_id: str, role_key: str, *,
+                 viewer: Optional[str] = None) -> dict[str, Any]:
     from . import agent_acts
 
     def read(c) -> dict[str, Any]:
-        page = agent_acts.acts_for_agent(c, project_id, role_key, days=30, limit=20)
+        page = agent_acts.acts_for_agent(c, project_id, role_key, days=30, limit=20,
+                                         viewer=viewer)
         cost = c.execute(
             sql("SELECT COALESCE(sum(cost_usd), 0) FROM agent_acts WHERE project_id = :p "
                 "AND role_key = :r AND started_at > now() - interval '7 days'"),
             {"p": project_id, "r": role_key},
         ).scalar()
         return {"work": page["items"], "work_next": page["next"],
-                "presence": agent_acts.presence_map(c, project_id).get(
+                # This agent's presence only: one index probe, not the whole project's.
+                "presence": agent_acts.presence_map(c, project_id, role_key=role_key).get(
                     role_key, {"state": "idle", "line": ""}),
                 "cost_7d_usd": round(float(cost or 0), 4)}
 

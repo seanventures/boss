@@ -1324,6 +1324,21 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] delivery catalogue: {result['count']} workflows for {project}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a seed
         print(f"[lifespan] delivery catalogue seed skipped: {exc}")
+    # SIGNED WORK FOR WHAT RAN BEFORE THE LEDGER. Without this, every Passport, Lineage and
+    # Credits screen is empty for existing work until somebody knows to call /v1/acts/backfill.
+    # In a thread, one short transaction per run, panel or build with try-locks, so it never
+    # delays the boot or a live tick; idempotent, so every boot after the first finds nothing.
+    try:
+        def _backfill_acts() -> None:
+            from boss_engine.services.agent_acts import backfill_all
+
+            written = backfill_all(engine)
+            if any(written.values()):
+                print(f"[lifespan] signed work reconstructed: {written}")
+
+        threading.Thread(target=_backfill_acts, name="boss-acts-backfill", daemon=True).start()
+    except Exception as exc:  # noqa: BLE001 — never block boot on a backfill
+        print(f"[lifespan] signed-work backfill not started: {exc}")
     # FLOWS THE OLDER STUDIO FILED UNDER THE SYSTEM NAMESPACE come back where the customer's
     # work lives, once, before anyone reads. This ran inside a GET of the Studio catalog, so a
     # read wrote and the flows reappeared in Workflow only after someone had opened Studio.
@@ -5994,7 +6009,8 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             project_id=payload.project_id, task_id=task_id,
             directive=payload.directive, url=payload.url,
             constraints=payload.constraints, role_keys=payload.roles,
-            finalize_ctx={"reservation_id": reservation_id},
+            # Who convened it: the person its seats are accountable to (agent_acts).
+            finalize_ctx={"reservation_id": reservation_id, "origin": {"actor": payload.actor}},
             title=meeting_title,
         )
         job = jobs.create_job(
@@ -11282,7 +11298,8 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.Discove
         task_id = task["task_id"]
         meeting_run_id = start_meeting_run(
             connection, project_id=project_id, task_id=task_id, directive=directive, url=None,
-            constraints={}, role_keys=None, finalize_ctx={"reservation_id": reservation_id},
+            constraints={}, role_keys=None,
+            finalize_ctx={"reservation_id": reservation_id, "origin": {"actor": actor}},
         )
         jobs.create_job(connection, project_id=project_id, task_id=task_id,
                         kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": meeting_run_id})
@@ -13630,7 +13647,8 @@ def console_v2_workforce_endpoint(project_id: str, hours: int = 24) -> dict:
 
 
 @app.get("/v1/console/v2/agents/{role_key}")
-def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720) -> dict:
+def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720,
+                            viewer: Optional[str] = None) -> dict:
     """One agent: every app it has worked on, its metrics, and the spec that governs it.
 
     The roster's card was an `<article>` — not a link, no detail view behind it — so an agent
@@ -13643,7 +13661,8 @@ def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720) ->
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         return agent_detail(connection, project_id, role_key,
-                            hours=max(1, min(int(hours), 24 * 90)))
+                            hours=max(1, min(int(hours), 24 * 90)),
+                            viewer=_acts_viewer(viewer))
 
 
 @app.get("/v1/projects/{project_id}/agents")
@@ -27457,6 +27476,20 @@ def _acts_reader(project_id: str):
     return project_id.strip()
 
 
+def _acts_viewer(viewer: Optional[str]) -> Optional[str]:
+    """Who is reading, so an edge a person made says "you" only to that person.
+
+    The authenticated principal when there is one — a request cannot claim to be someone else.
+    With API auth off every caller is the same process, so the console names its operator with
+    `?viewer=`; with neither, every person is named, which is never wrong."""
+    principal = current_api_principal.get()
+    if principal:
+        return str(principal)
+    if current_transport_authenticated.get():
+        return None
+    return (viewer or "").strip() or None
+
+
 @app.get("/v1/agents/live")
 def agents_live(project_id: str, request: Request, response: Response):
     """Who is working, in a panel, or waiting on you right now. ETag'd for a cheap 4s poll."""
@@ -27475,7 +27508,8 @@ def agents_live(project_id: str, request: Request, response: Response):
 
 @app.get("/v1/agents/{role_key}/acts")
 def agent_acts_feed(role_key: str, project_id: str, kind: Optional[str] = None, days: int = 30,
-                    cursor: Optional[str] = None, limit: int = 50) -> dict:
+                    cursor: Optional[str] = None, limit: int = 50,
+                    viewer: Optional[str] = None) -> dict:
     """An agent's signed work, newest first: each act with who handed it over and to whom."""
     from boss_engine.services import agent_acts
 
@@ -27486,14 +27520,14 @@ def agent_acts_feed(role_key: str, project_id: str, kind: Optional[str] = None, 
             return agent_acts.acts_for_agent(
                 connection, project_id, agent_acts.resolve_role(role_key) or role_key,
                 kind=kind or None, days=max(1, min(int(days), 365)), cursor=cursor,
-                limit=limit)
+                limit=limit, viewer=_acts_viewer(viewer))
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/agents/{role_key}/lineage")
 def agent_lineage(role_key: str, project_id: str, days: int = 30,
-                  mode: str = "observed") -> dict:
+                  mode: str = "observed", viewer: Optional[str] = None) -> dict:
     """Who hands this agent work and who it hands work to (observed), or its declared line."""
     from boss_engine.services import agent_acts
 
@@ -27503,13 +27537,13 @@ def agent_lineage(role_key: str, project_id: str, days: int = 30,
         try:
             return agent_acts.lineage(
                 connection, project_id, agent_acts.resolve_role(role_key) or role_key,
-                days=max(1, min(int(days), 365)), mode=mode)
+                days=max(1, min(int(days), 365)), mode=mode, viewer=_acts_viewer(viewer))
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/workflow-runs/{run_id}/chain")
-def workflow_run_chain(run_id: str, project_id: str) -> dict:
+def workflow_run_chain(run_id: str, project_id: str, viewer: Optional[str] = None) -> dict:
     """A run's acts as one ordered tree, rooted at the person who started it, with Credits.
 
     Synced from the run's rows first, so the chain is never a tick behind what the run shows."""
@@ -27524,21 +27558,21 @@ def workflow_run_chain(run_id: str, project_id: str) -> dict:
             raise HTTPException(status_code=404, detail="Workflow run not found.")
         agent_acts.quietly(connection, "sign a run's work", agent_acts.sync_run, run_id,
                            wait=False)
-        found = agent_acts.chain(connection, project_id, run_id)
+        found = agent_acts.chain(connection, project_id, run_id, viewer=_acts_viewer(viewer))
     if found is None:
         raise HTTPException(status_code=404, detail="This run has no signed work.")
     return found
 
 
 @app.get("/v1/acts/{act_id}")
-def get_signed_act(act_id: str, project_id: str) -> dict:
+def get_signed_act(act_id: str, project_id: str, viewer: Optional[str] = None) -> dict:
     """One act: who, how, why, scope and cost, its last turns, receipt and children."""
     from boss_engine.services import agent_acts
 
     project_id = _acts_reader(project_id)
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
-        found = agent_acts.get_act(connection, project_id, act_id)
+        found = agent_acts.get_act(connection, project_id, act_id, viewer=_acts_viewer(viewer))
     if found is None:
         raise HTTPException(status_code=404, detail="Act not found.")
     return found
@@ -27547,14 +27581,16 @@ def get_signed_act(act_id: str, project_id: str) -> dict:
 @app.post("/v1/acts/backfill")
 def backfill_signed_acts(payload: ActsBackfillRequest) -> dict:
     """Reconstruct acts from work done before the ledger existed. Idempotent; every act it
-    writes is marked reconstructed."""
+    writes is marked reconstructed. The API boots this on its own (lifespan); this is for
+    running it again by hand. One short transaction per run, panel or build — live work wins."""
     from boss_engine.services import agent_acts
 
     project_id = _acts_reader(payload.project_id)
     with begin(engine) as connection:
         actor = require_project_write_actor(connection, project_id, payload.actor,
                                             "workflow_manage")
-        written = agent_acts.backfill(connection, project_id)
+    written = agent_acts.backfill(engine, project_id)
+    with begin(engine) as connection:
         emit_event(connection, project_id, "agent_acts.backfilled", actor, "project",
                    project_id, {"acts": written})
     return {"project_id": project_id, "reconstructed": written}

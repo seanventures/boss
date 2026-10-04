@@ -71,8 +71,13 @@ def test_a_question_to_an_agent_is_one_act_under_what_it_was_about(client, engin
     assert sorted((m["role"], m["act_id"], m["fingerprint"]) for m in stored) == [
         ("assistant", reply["act_id"], "fp_qa_v4"), ("user", reply["act_id"], "fp_qa_v4")]
 
-    one = client.get(f"/v1/acts/{reply['act_id']}", params={"project_id": PROJECT}).json()
+    one = client.get(f"/v1/acts/{reply['act_id']}",
+                     params={"project_id": PROJECT, "viewer": "executive_console"}).json()
     assert one["edge_label"] == "Asked by you"
+    # Anyone else reads who asked, not their own "you".
+    other = client.get(f"/v1/acts/{reply['act_id']}",
+                       params={"project_id": PROJECT, "viewer": "teammate"}).json()
+    assert other["edge_label"] == "Asked by executive_console"
     assert one["from"] == {"kind": "person", "id": "executive_console"}
     assert one["turns_excerpt"][0]["text"].startswith("I ran this")
 

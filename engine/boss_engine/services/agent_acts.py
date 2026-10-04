@@ -40,8 +40,10 @@ import logging
 import os
 import re
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -116,13 +118,16 @@ def edge_label(how: str, considered_n: int = 0, *, skill: Optional[str] = None,
     """The §9 words for an edge. The single source: the web renders this string, never its own.
 
     `considered_n` is how many agents BOSS weighed; "over n" counts the ones it did NOT pick, so
-    a pick between three reads `Picked by BOSS over 2`. A person is "you" unless a name is given.
+    a pick between three reads `Picked by BOSS over 2`. A person is "you" unless a name is given:
+    `_label_for` gives one whenever the person is not the one reading.
     """
     template = EDGE_LABELS.get(how)
     if template is None:
         raise ValueError(f"unknown how {how!r}")
     if how == "model_pick" and int(considered_n or 0) <= 1:
         return "Picked by BOSS"  # an aggregate over picks of different sizes has no one n
+    if actor and actor != "you" and how in _PERSON_WORDS:
+        return _PERSON_WORDS[how].format(actor=actor)
     return template.format(
         n=max(int(considered_n or 0) - 1, 0),
         skill=skill or "its skill",
@@ -132,7 +137,33 @@ def edge_label(how: str, considered_n: int = 0, *, skill: Optional[str] = None,
     )
 
 
-def _label_for(act: dict[str, Any]) -> str:
+#: The edges a PERSON makes, worded for someone other than the reader. EDGE_LABELS (frozen in
+#: phase 0) words them for the person who did it ("Approved by you"); a teammate reading the
+#: same act must read whose approval it was, never their own name's stand-in.
+_PERSON_WORDS: dict[str, str] = {
+    "run_actor": "Ran as {actor}",
+    "asked_by_person": "Asked by {actor}",
+    "approved": "Approved by {actor}",
+    "started": "Started by {actor}",
+}
+
+#: Who is accountable when no person started the work: BOSS's own machinery (a sweep, a retry,
+#: the shepherd) or a build or panel whose starter was never recorded. Said as what it is —
+#: never a made-up person such as "operator".
+BOSS = "boss"
+
+
+def _person_word(act: dict[str, Any], viewer: Optional[str]) -> str:
+    """Who to name on a person's edge: "you" only when the reader IS that person."""
+    if act.get("handed_by_kind") == "boss":
+        return "BOSS"
+    person = act.get("handed_by_id") or act.get("accountable")
+    if not person or person == BOSS:
+        return "BOSS"
+    return "you" if viewer and str(person) == str(viewer) else str(person)
+
+
+def _label_for(act: dict[str, Any], viewer: Optional[str] = None) -> str:
     how = str(act.get("how") or "")
     scope = act.get("scope") if isinstance(act.get("scope"), dict) else {}
     considered = act.get("considered") if isinstance(act.get("considered"), list) else []
@@ -141,10 +172,41 @@ def _label_for(act: dict[str, Any]) -> str:
         how, len(considered),
         skill=", ".join((scope.get("skills") or []) + (scope.get("mcp") or [])) or None,
         captain=handed if how == "captain" else None,
-        # "Asked by you" from the asker's own seat; the act carries who it was.
-        actor=None,
+        # "you" from the person's own seat; anyone else reads that person's name.
+        actor=_person_word(act, viewer) if how in _PERSON_WORDS else None,
         agent=handed if how == "asked_by_agent" else None,
     )
+
+
+# ── where the work came from ─────────────────────────────────────────────────────────────────
+#
+# A build or a panel is started by a TOOL, in the tool's own transaction, while the step or the
+# chat turn that called it is still uncommitted in another. So the starter cannot be found by
+# looking: it is handed over. Whoever is about to call a tool that starts work says so with
+# `origin(...)`; the tool writes it into the work's finalize_ctx["origin"]; the ledger reads it
+# there. {act_id} for a chat turn, {step_run_id} for a workflow step, and always the
+# accountable person as {actor}.
+
+_ORIGIN: ContextVar[Optional[dict[str, Any]]] = ContextVar("boss_agent_acts_origin",
+                                                           default=None)
+
+
+@contextmanager
+def origin(**fields: Any) -> Iterator[None]:
+    """The work started inside this block was started by this act / step / person."""
+    token = _ORIGIN.set({k: str(v) for k, v in fields.items() if v not in (None, "")})
+    try:
+        yield
+    finally:
+        _ORIGIN.reset(token)
+
+
+def current_origin(actor: Optional[str] = None) -> dict[str, Any]:
+    """The origin a tool should record, falling back to the person calling it."""
+    found = dict(_ORIGIN.get() or {})
+    if actor and not found.get("actor"):
+        found["actor"] = str(actor)
+    return found
 
 
 def _now() -> datetime:
@@ -366,9 +428,10 @@ def _fill_links(connection: Connection, act_id: str, **links: Any) -> None:
 
 def _lock(connection: Connection, key: str, *, wait: bool = True) -> bool:
     """Serialise writers of one subject so two writers never open the same act twice. Held to
-    the end of the caller's transaction. `wait=False` is for callers a person is waiting on (a
-    read of the chain, an approval): if a tick holds the run, they skip the sync — the tick
-    signs the same rows a moment later — rather than wait out a step that may run minutes."""
+    the end of the caller's transaction. `wait=False` is for every caller inside a long
+    transaction (the tick, the backfill) or with a person waiting (a read of the chain, an
+    approval): if another transaction holds the subject, they skip — every sync is idempotent
+    and the holder signs the same rows — rather than wait out a step that may run minutes."""
     if wait:
         connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
                            {"k": f"agent_acts:{key}"})
@@ -411,7 +474,8 @@ def _run_label(run: dict[str, Any]) -> str:
     return f"{run.get('workflow_name') or 'Workflow'} #{str(run['id'])[-4:]}"
 
 
-def root_for_run(connection: Connection, workflow_run_id: str) -> Optional[str]:
+def root_for_run(connection: Connection, workflow_run_id: str, *,
+                 reconstructed: bool = False) -> Optional[str]:
     """The run's kind='run' root act, created on first use.
 
     The person who started the run is at the root: every act under it is accountable to them.
@@ -454,6 +518,7 @@ def root_for_run(connection: Connection, workflow_run_id: str) -> Optional[str]:
         handed_by_kind="person", handed_by_id=run["actor"], parent_act_id=parent_act,
         accountable=run["actor"], subject_kind="workflow_run", subject_id=run["id"],
         label=_run_label(run), started_at=run["created_at"], workflow_run_id=run["id"],
+        reconstructed=reconstructed,
     )
 
 
@@ -675,11 +740,16 @@ def _parent_for(step_id: str, preds: dict[str, list[str]],
 
 
 def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
-             _depth: int = 0) -> list[str]:
-    """Bring a run's acts up to date with its rows. Idempotent; returns the acts it touched."""
+             reconstructed: bool = False, _depth: int = 0) -> list[str]:
+    """Bring a run's acts up to date with its rows. Idempotent; returns the acts it touched.
+
+    `wait=False` is for every caller inside a long transaction (the tick) or with a person
+    waiting (a read, an approval): if another transaction holds this run, skip — the holder signs
+    the same rows, and the next sync catches up. `reconstructed` is the backfill: its acts say
+    so, and the historical step rows are read, never rewritten."""
     if not _lock(connection, f"run:{workflow_run_id}", wait=wait):
         return []
-    root = root_for_run(connection, workflow_run_id)
+    root = root_for_run(connection, workflow_run_id, reconstructed=reconstructed)
     if not root:
         return []
     run = _run_row(connection, workflow_run_id)
@@ -750,6 +820,7 @@ def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
                         code_task_run_id=_awaited(output, "code_task"),
                         meeting_run_id=_awaited(output, "meeting"),
                         decision_id=row.get("decision_id"))
+            _adopt_build(connection, latest, _awaited(output, "code_task"))
             if terminal:
                 ti, to, cost = _agent_run_usage(connection, output)
                 close_act(connection, latest["act_id"], status=state, tokens_in=ti,
@@ -783,12 +854,14 @@ def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
                 label=f"{_step_name(step, str(row['step_id']))} · {_run_label(run)}",
                 status=state if not terminal else "active",
                 started_at=row.get("started_at") or row.get("created_at"),
+                reconstructed=reconstructed,
                 workflow_run_id=workflow_run_id, step_id=row["step_id"],
                 code_task_run_id=_awaited(output, "code_task"),
                 meeting_run_id=_awaited(output, "meeting"),
                 decision_id=row.get("decision_id"),
             )
             act = _act_row(connection, act_id) or {}
+            _adopt_build(connection, act, _awaited(output, "code_task"))
             if terminal:
                 ti, to, cost = _agent_run_usage(connection, output)
                 close_act(connection, act_id, status=state, tokens_in=ti, tokens_out=to,
@@ -798,19 +871,22 @@ def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
             by_subject.setdefault(str(row["id"]), []).append(act)
             by_step.setdefault(str(row["step_id"]), []).append(act)
             touched.append(act_id)
-            _stamp_output(connection, row["id"], act_id)
+            if not reconstructed:
+                _stamp_output(connection, row["id"], act_id)
 
         current = (by_subject.get(str(row["id"])) or [None])[-1]
         if current and row.get("decision_id"):
-            approved = _record_approval(connection, run, current, str(row["decision_id"]))
+            approved = _record_approval(connection, run, current, str(row["decision_id"]),
+                                        reconstructed=reconstructed)
             if approved:
                 touched.append(approved)
         meeting = _awaited(output, "meeting")
         if meeting:
-            touched.extend(sync_meeting(connection, meeting))
+            touched.extend(sync_meeting(connection, meeting, wait=wait,
+                                        reconstructed=reconstructed))
         if row.get("child_workflow_run_id") and _depth < 3:
             touched.extend(sync_run(connection, str(row["child_workflow_run_id"]),
-                                    wait=wait, _depth=_depth + 1))
+                                    wait=wait, reconstructed=reconstructed, _depth=_depth + 1))
 
     _close_root(connection, root, run)
     return touched
@@ -849,7 +925,7 @@ def _stamp_output(connection: Connection, step_run_id: str, act_id: str) -> None
 
 
 def _record_approval(connection: Connection, run: dict[str, Any], step_act: dict[str, Any],
-                     decision_id: str) -> Optional[str]:
+                     decision_id: str, *, reconstructed: bool = False) -> Optional[str]:
     """The person's approval, as a child of the step it released. Only an APPROVAL is signed:
     a rejection ends the step, and the step's act already says so."""
     exists = connection.execute(
@@ -874,7 +950,7 @@ def _record_approval(connection: Connection, run: dict[str, Any], step_act: dict
         parent_act_id=step_act["act_id"], accountable=run["actor"], subject_kind="decision",
         subject_id=decision_id, label=f"Approved · {str(decision['question'] or '')[:80]}",
         started_at=at, workflow_run_id=run["id"], step_id=step_act.get("step_id"),
-        decision_id=decision_id,
+        decision_id=decision_id, reconstructed=reconstructed,
     )
     close_act(connection, act_id, status="complete", ended_at=at)
     return act_id
@@ -902,7 +978,13 @@ def on_decision(connection: Connection, decision_id: str) -> list[str]:
 
 def reconcile(connection: Connection, project_id: str, *, limit: int = 25) -> int:
     """Close what finished elsewhere: runs with open acts are re-synced, and stages and seats
-    whose code task or panel has ended are closed. Cheap and idempotent; the tick calls it."""
+    whose code task or panel has ended are closed. Cheap and idempotent; the tick calls it.
+
+    NEVER WAITS. The tick is one long transaction and every lock taken here is held until it
+    commits — through agent and model steps that run for minutes. A run or panel another
+    transaction holds is skipped (that holder signs it), so a second tick, the console's
+    `advance`, or a panel's own worker is never queued behind this one, and two ticks that meet
+    the same runs in a different order cannot deadlock."""
     touched = 0
     runs = connection.execute(
         text("SELECT DISTINCT workflow_run_id FROM agent_acts WHERE project_id = :p "
@@ -910,7 +992,7 @@ def reconcile(connection: Connection, project_id: str, *, limit: int = 25) -> in
         {"p": project_id, "n": int(limit)},
     ).scalars().all()
     for run_id in runs:
-        touched += len(sync_run(connection, str(run_id)))
+        touched += len(sync_run(connection, str(run_id), wait=False))
     tasks = connection.execute(
         text("SELECT DISTINCT a.code_task_run_id FROM agent_acts a "
              "JOIN code_task_runs t ON t.id = a.code_task_run_id "
@@ -928,7 +1010,7 @@ def reconcile(connection: Connection, project_id: str, *, limit: int = 25) -> in
         {"p": project_id, "n": int(limit)},
     ).scalars().all()
     for meeting in meetings:
-        touched += len(sync_meeting(connection, str(meeting)))
+        touched += len(sync_meeting(connection, str(meeting), wait=False))
     touched += prune_chats(connection, project_id)
     return touched
 
@@ -967,23 +1049,68 @@ def _code_task(connection: Connection, code_task_run_id: str) -> Optional[dict[s
     return dict(row) if row else None
 
 
+def _origin_of(ctx: dict[str, Any]) -> dict[str, Any]:
+    found = ctx.get("origin") if isinstance(ctx.get("origin"), dict) else {}
+    return dict(found)
+
+
+def _in_project(act: Optional[dict[str, Any]], project_id: str) -> Optional[dict[str, Any]]:
+    return act if act and act.get("project_id") == project_id else None
+
+
+def _step_run_act(connection: Connection, project_id: str,
+                  step_run_id: Optional[str]) -> Optional[dict[str, Any]]:
+    if not step_run_id:
+        return None
+    row = connection.execute(
+        text("SELECT * FROM agent_acts WHERE subject_kind = 'workflow_step_run' "
+             "AND subject_id = :s AND project_id = :p ORDER BY started_at DESC LIMIT 1"),
+        {"s": str(step_run_id), "p": project_id},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def _run_actor(connection: Connection, project_id: str,
+               workflow_run_id: Optional[str]) -> Optional[str]:
+    if not workflow_run_id:
+        return None
+    actor = connection.execute(
+        text("SELECT actor FROM workflow_runs WHERE id = :r AND project_id = :p"),
+        {"r": str(workflow_run_id), "p": project_id},
+    ).scalar()
+    return str(actor) if actor else None
+
+
+def _starter(connection: Connection, project_id: str, ctx: dict[str, Any]) -> Optional[str]:
+    """The person who started this work, as recorded where it was started. None = nobody was
+    recorded; the caller then says BOSS, never a made-up person."""
+    found = _origin_of(ctx)
+    for value in (found.get("actor"), ctx.get("actor"), ctx.get("requested_by")):
+        if value and str(value).strip():
+            return str(value).strip()
+    return _run_actor(connection, project_id,
+                      found.get("workflow_run_id") or ctx.get("workflow_run_id"))
+
+
 def _code_task_parent(connection: Connection, task: dict[str, Any],
                       _depth: int = 0) -> Optional[dict[str, Any]]:
-    """The act a build's stages hang off: the step that started it, wherever that is recorded."""
+    """The act a build's stages hang off: the step or chat turn that started it, from what
+    started it recorded (finalize_ctx.origin), else from the step that waits on it."""
+    project_id = task["project_id"]
     found = connection.execute(
         text("SELECT * FROM agent_acts WHERE kind = 'step' AND code_task_run_id = :c "
-             "ORDER BY started_at DESC LIMIT 1"),
-        {"c": task["id"]},
+             "AND project_id = :p ORDER BY started_at DESC LIMIT 1"),
+        {"c": task["id"], "p": project_id},
     ).mappings().first()
     if found:
         return dict(found)
     fctx = _json(task.get("finalize_ctx"), {})
-    origin = fctx.get("origin") if isinstance(fctx.get("origin"), dict) else {}
-    if origin.get("act_id"):
-        act = _act_row(connection, str(origin["act_id"]))
-        if act:
-            return act
-    workflow_run_id = fctx.get("workflow_run_id") or origin.get("workflow_run_id")
+    started_by = _origin_of(fctx)
+    act = (_in_project(_act_row(connection, started_by.get("act_id")), project_id)
+           or _step_run_act(connection, project_id, started_by.get("step_run_id")))
+    if act:
+        return act
+    workflow_run_id = fctx.get("workflow_run_id") or started_by.get("workflow_run_id")
     if workflow_run_id:
         step_run = connection.execute(
             text(
@@ -996,25 +1123,29 @@ def _code_task_parent(connection: Connection, task: dict[str, Any],
             ),
             {"r": str(workflow_run_id), "c": task["id"]},
         ).scalar()
-        if step_run:
-            act = connection.execute(
-                text("SELECT * FROM agent_acts WHERE subject_kind = 'workflow_step_run' "
-                     "AND subject_id = :s ORDER BY started_at DESC LIMIT 1"),
-                {"s": step_run},
-            ).mappings().first()
-            if act:
-                _fill_links(connection, act["act_id"], code_task_run_id=task["id"])
-                return dict(act)
+        act = _step_run_act(connection, project_id, step_run)
+        if act:
+            return act
     parent_run = fctx.get("parent_run_id") or fctx.get("retry_of")
     if parent_run and _depth < 4:
         earlier = _code_task(connection, str(parent_run))
-        if earlier:
+        if earlier and earlier["project_id"] == project_id:
             return _code_task_parent(connection, earlier, _depth + 1)
     return None
 
 
-def _code_task_root(connection: Connection, task: dict[str, Any]) -> str:
-    """A build nobody's workflow started (the dock, the API): its own root, the person on it."""
+def _origin_pending(fctx: dict[str, Any]) -> bool:
+    """The work says it was started by a step or a chat turn whose act is not visible yet: that
+    act is still in its own uncommitted transaction. Never answered with a root of its own."""
+    started_by = _origin_of(fctx)
+    return bool(started_by.get("act_id") or started_by.get("step_run_id")
+                or started_by.get("workflow_run_id") or fctx.get("workflow_run_id"))
+
+
+def _code_task_root(connection: Connection, task: dict[str, Any], *,
+                    reconstructed: bool = False) -> str:
+    """A build nobody's workflow or chat started (the API, BOSS's own sweeps): its own root,
+    the person who started it on it — or BOSS, said as BOSS, when nobody was recorded."""
     existing = connection.execute(
         text("SELECT act_id FROM agent_acts WHERE kind = 'run' AND subject_kind = 'code_task_run' "
              "AND subject_id = :c LIMIT 1"),
@@ -1023,14 +1154,46 @@ def _code_task_root(connection: Connection, task: dict[str, Any]) -> str:
     if existing:
         return str(existing)
     fctx = _json(task.get("finalize_ctx"), {})
-    spec = _json(task.get("spec"), {})
-    who = str(fctx.get("actor") or fctx.get("requested_by") or spec.get("owner") or "operator")
+    who = _starter(connection, task["project_id"], fctx)
+    parent_run = fctx.get("parent_run_id") or fctx.get("retry_of")
+    if who is None and parent_run:
+        # A retry is the same person's build again.
+        who = connection.execute(
+            text("SELECT accountable FROM agent_acts WHERE kind = 'run' "
+                 "AND subject_kind = 'code_task_run' AND subject_id = :c LIMIT 1"),
+            {"c": str(parent_run)},
+        ).scalar()
     return open_act(
         connection, project_id=task["project_id"], kind="run", role_key=None, how="started",
-        handed_by_kind="person", handed_by_id=who, accountable=who,
+        handed_by_kind="person" if who and who != BOSS else "boss",
+        handed_by_id=who if who != BOSS else None, accountable=who or BOSS,
         subject_kind="code_task_run", subject_id=task["id"],
         label=f"Build · {str(task.get('title') or 'untitled')[:80]}",
         started_at=task.get("created_at"), code_task_run_id=task["id"],
+        reconstructed=reconstructed,
+    )
+
+
+def _adopt_build(connection: Connection, parent: Optional[dict[str, Any]],
+                 code_task_run_id: Optional[str]) -> None:
+    """Stages a build signed before the act that started it was visible take that act as their
+    parent once it is: the edge was declared by the build's origin, not guessed."""
+    if not parent or not parent.get("act_id") or not code_task_run_id:
+        return
+    connection.execute(
+        text(
+            """
+            UPDATE agent_acts SET parent_act_id = :parent, root_act_id = :root,
+                   accountable = :accountable,
+                   workflow_run_id = COALESCE(workflow_run_id, :wfr)
+            WHERE code_task_run_id = :c AND kind = 'stage' AND parent_act_id IS NULL
+              AND project_id = :p AND act_id <> :parent
+            """
+        ),
+        {"parent": parent["act_id"], "root": parent.get("root_act_id") or parent["act_id"],
+         "accountable": parent.get("accountable") or BOSS,
+         "wfr": parent.get("workflow_run_id"), "c": str(code_task_run_id),
+         "p": parent.get("project_id")},
     )
 
 
@@ -1046,12 +1209,17 @@ def stage_role(stage: str, parent: Optional[dict[str, Any]]) -> Optional[str]:
 
 
 def stage_act(connection: Connection, *, project_id: Optional[str], code_task_run_id: str,
-              stage: Optional[str]) -> Optional[dict[str, Any]]:
+              stage: Optional[str], reconstructed: bool = False) -> Optional[dict[str, Any]]:
     """The act a model call in this build stage belongs to, opened on first use.
 
     Called where every model call is recorded (llm_telemetry), so a stage cannot spend without
     being signed. A stage outside the pipeline's map (quality, research, the model gateway)
-    belongs to the build itself: its calls are signed by the act that started the build."""
+    belongs to the build itself: its calls are signed by the act that started the build.
+
+    A build started by a step or a chat turn can spend before that act is committed (the tool
+    that started it commits on its own). Its stages are then signed with no parent, the
+    starter's person accountable, and adopted by the starting act as soon as it is visible —
+    never hung off a root of their own."""
     task = _code_task(connection, code_task_run_id)
     if not task:
         return None
@@ -1059,10 +1227,16 @@ def stage_act(connection: Connection, *, project_id: Optional[str], code_task_ru
     stage_key = str(stage or "").strip().lower()
     _lock(connection, f"task:{code_task_run_id}")
     parent = _code_task_parent(connection, task)
+    fctx = _json(task.get("finalize_ctx"), {})
+    pending = parent is None and _origin_pending(fctx)
+    if parent:
+        _adopt_build(connection, parent, code_task_run_id)
     if stage_key not in STAGE_PHASES:
         if parent:
             return {"act_id": parent["act_id"], "role_key": parent.get("role_key")}
-        root = _code_task_root(connection, task)
+        if pending:
+            return None  # its starter's act will sign it; nothing to hang a guess on
+        root = _code_task_root(connection, task, reconstructed=reconstructed)
         return {"act_id": root, "role_key": None}
 
     open_now = [dict(r) for r in connection.execute(
@@ -1078,11 +1252,16 @@ def stage_act(connection: Connection, *, project_id: Optional[str], code_task_ru
         if STAGE_PHASES.get(str(act["step_id"]), -1) != phase:
             close_act(connection, act["act_id"], status="complete")
 
-    parent_id = parent["act_id"] if parent else _code_task_root(connection, task)
-    parent_row = parent or _act_row(connection, parent_id)
+    if parent:
+        parent_id, parent_row = parent["act_id"], parent
+    elif pending:
+        parent_id, parent_row = None, None
+    else:
+        parent_id = _code_task_root(connection, task, reconstructed=reconstructed)
+        parent_row = _act_row(connection, parent_id)
     role = stage_role(stage_key, parent)
-    accountable = (parent_row or {}).get("accountable") or "operator"
-    fctx = _json(task.get("finalize_ctx"), {})
+    accountable = ((parent_row or {}).get("accountable")
+                   or _starter(connection, project_id, fctx) or BOSS)
     act_id = open_act(
         connection, project_id=project_id, kind="stage", role_key=role, how="next_stage",
         handed_by_kind="boss", parent_act_id=parent_id,
@@ -1091,18 +1270,23 @@ def stage_act(connection: Connection, *, project_id: Optional[str], code_task_ru
         accountable=accountable, subject_kind="code_task_run", subject_id=code_task_run_id,
         label=f"{STAGE_TITLES.get(stage_key, stage_key.title())} · "
               f"{str(task.get('title') or 'untitled')[:60]}",
-        code_task_run_id=code_task_run_id, step_id=stage_key,
-        workflow_run_id=(parent_row or {}).get("workflow_run_id") or fctx.get("workflow_run_id"),
+        code_task_run_id=code_task_run_id, step_id=stage_key, reconstructed=reconstructed,
+        workflow_run_id=((parent_row or {}).get("workflow_run_id") or fctx.get("workflow_run_id")
+                         or _origin_of(fctx).get("workflow_run_id")),
     )
     return {"act_id": act_id, "role_key": role}
 
 
+_TASK_ENDED = {"completed": "complete", "succeeded": "complete", "failed": "error",
+               "cancelled": "stale", "simulated": "complete"}
+
+
 def close_code_task(connection: Connection, code_task_run_id: str) -> int:
-    """The build ended (or is waiting on a person): its open stages say so."""
+    """The build ended (or is waiting on a person): its open stages say so, and so does the
+    build's own root when nothing else started it."""
     status = connection.execute(text("SELECT status FROM code_task_runs WHERE id = :i"),
                                 {"i": code_task_run_id}).scalar()
-    mapped = {"completed": "complete", "succeeded": "complete", "failed": "error",
-              "cancelled": "stale", "simulated": "complete"}.get(str(status or ""))
+    mapped = _TASK_ENDED.get(str(status or ""))
     rows = connection.execute(
         text("SELECT act_id FROM agent_acts WHERE code_task_run_id = :c AND kind = 'stage' "
              "AND ended_at IS NULL"),
@@ -1113,6 +1297,13 @@ def close_code_task(connection: Connection, code_task_run_id: str) -> int:
             close_act(connection, act_id, status=mapped)
         elif str(status or "") in ("blocked", "awaiting_approval"):
             _set_status(connection, act_id, "awaiting_input")
+    if mapped:
+        for root in connection.execute(
+            text("SELECT act_id FROM agent_acts WHERE kind = 'run' "
+                 "AND subject_kind = 'code_task_run' AND subject_id = :c AND ended_at IS NULL"),
+            {"c": code_task_run_id},
+        ).scalars().all():
+            close_act(connection, root, status=mapped)
     return len(rows) if mapped else 0
 
 
@@ -1187,8 +1378,9 @@ def pr_trailers(connection: Connection, code_task_run_id: str) -> str:
     if not made or not made.get("agents"):
         return ""
     count = len(made["agents"])
+    accountable = made.get("accountable") or BOSS
     lines = ["", "", f"Made by {count} agent{'s' if count != 1 else ''} · "
-                     f"accountable: {made.get('accountable') or 'you'}", ""]
+                     f"accountable: {'BOSS' if accountable == BOSS else accountable}", ""]
     for agent in made["agents"]:
         lines.append(f"BOSS-Agent: {agent['name']} ({agent['role_key']}"
                      f"{', ' + agent['agent_id'] if agent.get('agent_id') else ''})")
@@ -1208,8 +1400,78 @@ def pr_trailers(connection: Connection, code_task_run_id: str) -> str:
 # ── 5. panel seats ───────────────────────────────────────────────────────────────────────────
 
 
-def sync_meeting(connection: Connection, meeting_run_id: str) -> list[str]:
-    """One seat act per seat on a panel, under the step (or ask) that convened it."""
+_PENDING = object()
+
+
+def _meeting_parent(connection: Connection, meeting: dict[str, Any],
+                    fctx: dict[str, Any]) -> Any:
+    """The act that convened this panel: the workflow step that waits on it, or what its origin
+    names (a step, a chat turn). `_PENDING` when the origin names one that is not visible yet —
+    the tool that convened the panel commits before the step or turn that called it — so the
+    seats wait for it rather than hang off a root of their own. None: a standalone panel."""
+    project_id = meeting["project_id"]
+    found = connection.execute(
+        text("SELECT * FROM agent_acts WHERE kind = 'step' AND meeting_run_id = :m "
+             "AND project_id = :p ORDER BY started_at DESC LIMIT 1"),
+        {"m": meeting["id"], "p": project_id},
+    ).mappings().first()
+    if found:
+        return dict(found)
+    started_by = _origin_of(fctx)
+    named = _in_project(_act_row(connection, started_by.get("act_id") or fctx.get("act_id")),
+                        project_id)
+    if named:
+        return named
+    step_act = _step_run_act(connection, project_id, started_by.get("step_run_id"))
+    if step_act:
+        _fill_links(connection, step_act["act_id"], meeting_run_id=meeting["id"])
+        return step_act
+    if started_by.get("act_id") or fctx.get("act_id"):
+        return _PENDING
+    if started_by.get("step_run_id") and connection.execute(
+            text("SELECT 1 FROM workflow_step_runs s JOIN workflow_runs r "
+                 "ON r.id = s.workflow_run_id WHERE s.id = :s AND r.project_id = :p"),
+            {"s": started_by["step_run_id"], "p": project_id}).scalar():
+        return _PENDING
+    return None
+
+
+def _meeting_root(connection: Connection, meeting: dict[str, Any], fctx: dict[str, Any], *,
+                  reconstructed: bool) -> dict[str, Any]:
+    """A panel nothing else convened (the Meetings screen, the API, Plane): its own root, the
+    person who convened it on it — BOSS, said as BOSS, when nobody was recorded."""
+    from .meeting_service import meeting_title
+
+    existing = _meeting_root_id(connection, meeting["id"])
+    if not existing:
+        who = _starter(connection, meeting["project_id"], fctx)
+        existing = open_act(
+            connection, project_id=meeting["project_id"], kind="run", role_key=None,
+            how="started", handed_by_kind="person" if who and who != BOSS else "boss",
+            handed_by_id=who if who != BOSS else None, accountable=who or BOSS,
+            subject_kind="meeting_run", subject_id=meeting["id"],
+            label=f"Panel · {meeting_title(meeting['title'], meeting['directive'])[:80]}",
+            started_at=meeting["created_at"], meeting_run_id=meeting["id"],
+            reconstructed=reconstructed)
+    return _act_row(connection, existing) or {}
+
+
+def _meeting_root_id(connection: Connection, meeting_run_id: str) -> Optional[str]:
+    found = connection.execute(
+        text("SELECT act_id FROM agent_acts WHERE kind = 'run' "
+             "AND subject_kind = 'meeting_run' AND subject_id = :m LIMIT 1"),
+        {"m": meeting_run_id},
+    ).scalar()
+    return str(found) if found else None
+
+
+def sync_meeting(connection: Connection, meeting_run_id: str, *, wait: bool = True,
+                 reconstructed: bool = False) -> list[str]:
+    """One seat act per seat on a panel, under the step (or chat turn) that convened it.
+
+    A panel a workflow step convened is signed under that step, and only once the step's act
+    exists: until then nothing is written, and the run's own sync signs the seats when the step
+    settles. A seat's parent is decided once, from the panel's real origin, never guessed."""
     meeting = connection.execute(
         text("SELECT id, project_id, status, role_keys, finalize_ctx, title, directive, "
              "minutes_artifact_id, created_at, updated_at FROM meeting_runs WHERE id = :i"),
@@ -1219,53 +1481,47 @@ def sync_meeting(connection: Connection, meeting_run_id: str) -> list[str]:
         return []
     from .meeting_service import meeting_title
 
-    _lock(connection, f"meeting:{meeting_run_id}")
+    if not _lock(connection, f"meeting:{meeting_run_id}", wait=wait):
+        return []
+    meeting = dict(meeting)
     fctx = _json(meeting["finalize_ctx"], {})
-    parent = connection.execute(
-        text("SELECT * FROM agent_acts WHERE kind = 'step' AND meeting_run_id = :m "
-             "ORDER BY started_at DESC LIMIT 1"),
-        {"m": meeting_run_id},
-    ).mappings().first()
-    parent = dict(parent) if parent else _act_row(connection, fctx.get("act_id"))
-    if parent is None:
-        parent_id = connection.execute(
-            text("SELECT act_id FROM agent_acts WHERE kind = 'run' "
-                 "AND subject_kind = 'meeting_run' AND subject_id = :m LIMIT 1"),
-            {"m": meeting_run_id},
-        ).scalar()
-        if not parent_id:
-            who = str(fctx.get("actor") or fctx.get("requested_by") or "operator")
-            parent_id = open_act(
-                connection, project_id=meeting["project_id"], kind="run", role_key=None,
-                how="started", handed_by_kind="person", handed_by_id=who, accountable=who,
-                subject_kind="meeting_run", subject_id=meeting_run_id,
-                label=f"Panel · {meeting_title(meeting['title'], meeting['directive'])[:80]}",
-                started_at=meeting["created_at"], meeting_run_id=meeting_run_id)
-        parent = _act_row(connection, parent_id)
+    fctx = fctx if isinstance(fctx, dict) else {}
     status = {"completed": "complete", "simulated": "complete",
-              "failed": "error"}.get(str(meeting["status"]))
-    seats: list[str] = []
-    for key in _json(meeting["role_keys"], []) or []:
-        role = resolve_role(str(key))
-        if role and role not in seats:
-            seats.append(role)
+              "failed": "error", "cancelled": "stale"}.get(str(meeting["status"]))
+    touched: list[str] = []
     existing = {str(r["role_key"]): dict(r) for r in connection.execute(
         text("SELECT act_id, role_key, ended_at FROM agent_acts WHERE kind = 'seat' "
              "AND meeting_run_id = :m"),
         {"m": meeting_run_id},
     ).mappings().all()}
-    touched: list[str] = []
+    parent = None
+    if not existing:
+        parent = _meeting_parent(connection, meeting, fctx)
+        if parent is _PENDING:
+            return []
+        if parent is None:
+            parent = _meeting_root(connection, meeting, fctx, reconstructed=reconstructed)
+    seats: list[str] = []
+    for key in _json(meeting["role_keys"], []) or []:
+        role = resolve_role(str(key))
+        if role and role not in seats:
+            seats.append(role)
     title = meeting_title(meeting["title"], meeting["directive"])[:80]
     for role in seats:
         act = existing.get(role)
         if act is None:
+            if parent is None:
+                # A seat added after the others: it sits where they sit.
+                first = next(iter(existing.values()))
+                row = _act_row(connection, first["act_id"]) or {}
+                parent = _act_row(connection, row.get("parent_act_id")) or {}
             act_id = open_act(
                 connection, project_id=meeting["project_id"], kind="seat", role_key=role,
-                how="seated", handed_by_kind="boss", parent_act_id=parent["act_id"],
-                accountable=parent["accountable"], subject_kind="meeting_run",
+                how="seated", handed_by_kind="boss", parent_act_id=parent.get("act_id"),
+                accountable=parent.get("accountable") or BOSS, subject_kind="meeting_run",
                 subject_id=meeting_run_id, label=f"Panel · {title}",
                 started_at=meeting["created_at"], meeting_run_id=meeting_run_id,
-                workflow_run_id=parent.get("workflow_run_id"))
+                workflow_run_id=parent.get("workflow_run_id"), reconstructed=reconstructed)
             touched.append(act_id)
             act = {"act_id": act_id, "ended_at": None}
         if status and act["ended_at"] is None:
@@ -1273,9 +1529,9 @@ def sync_meeting(connection: Connection, meeting_run_id: str) -> list[str]:
                       artifacts=([{"kind": "minutes", "ref": meeting["minutes_artifact_id"]}]
                                  if meeting["minutes_artifact_id"] else []))
             touched.append(act["act_id"])
-    if parent and parent.get("kind") == "run" and parent.get("subject_kind") == "meeting_run" \
-            and status and parent.get("ended_at") is None:
-        close_act(connection, parent["act_id"], status=status, ended_at=meeting["updated_at"])
+    root = _meeting_root_id(connection, meeting_run_id)
+    if root and status:
+        close_act(connection, root, status=status, ended_at=meeting["updated_at"])
     return touched
 
 
@@ -1340,15 +1596,21 @@ def record_handoff(connection: Connection, *, project_id: str, envelope_id: str,
     sender = resolve_role(sender_id)
     if not target or not sender:
         return None
-    lineage = lineage or {}
-    parent = _act_row(connection, lineage.get("act_id")) if lineage.get("act_id") else None
-    if parent is None:
-        found = connection.execute(
-            text("SELECT * FROM agent_acts WHERE project_id = :p AND role_key = :r "
-                 "AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1"),
-            {"p": project_id, "r": sender},
+    # THE PARENT IS WHAT THE ENVELOPE SAYS, OR NOTHING. An agent with two runs and a panel
+    # seat open is in three pieces of work; "its newest open act" is a guess that hangs this
+    # ask — its cost, its accountable person — on whichever run happened to start last. The
+    # envelope's own lineage names the act it was sent from, or the run it belongs to; it is
+    # only believed for this project.
+    lineage = lineage if isinstance(lineage, dict) else {}
+    parent = _in_project(_act_row(connection, str(lineage["act_id"])), project_id) \
+        if lineage.get("act_id") else None
+    if parent is None and lineage.get("workflow_run_id"):
+        root = connection.execute(
+            text("SELECT * FROM agent_acts WHERE kind = 'run' AND workflow_run_id = :r "
+                 "AND project_id = :p ORDER BY started_at LIMIT 1"),
+            {"r": str(lineage["workflow_run_id"]), "p": project_id},
         ).mappings().first()
-        parent = dict(found) if found else None
+        parent = dict(root) if root else None
     act_id = open_act(
         connection, project_id=project_id, kind="handoff", role_key=target,
         how="asked_by_agent", handed_by_kind="agent", handed_by_id=sender,
@@ -1377,8 +1639,11 @@ def _live_cost(connection: Connection, act_ids: list[str]) -> dict[str, tuple[in
             for r in rows}
 
 
-def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None) -> dict[str, Any]:
-    """The wire shape (snake_case; lib/agent-world.ts maps it to the web's Act)."""
+def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None, *,
+              viewer: Optional[str] = None) -> dict[str, Any]:
+    """The wire shape (snake_case; lib/agent-world.ts maps it to the web's Act).
+
+    `viewer` is the person reading: an edge a person made reads "you" only for that person."""
     scope = _json(act.get("scope"), {})
     tokens_in, tokens_out = int(act.get("tokens_in") or 0), int(act.get("tokens_out") or 0)
     cost = float(act.get("cost_usd") or 0)
@@ -1395,7 +1660,7 @@ def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None
         "handed_by": {"kind": act["handed_by_kind"],
                       **({"id": act["handed_by_id"]} if act.get("handed_by_id") else {})},
         "how": act["how"],
-        "edge_label": _label_for(act),
+        "edge_label": _label_for(act, viewer),
         "why": act.get("why"),
         "considered": _json(act.get("considered"), []),
         "scope": {"skills": scope.get("skills") or [], "mcp": scope.get("mcp") or []},
@@ -1416,12 +1681,14 @@ def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None
     }
 
 
-def _serialized(connection: Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _serialized(connection: Connection, rows: list[dict[str, Any]], *,
+                viewer: Optional[str] = None) -> list[dict[str, Any]]:
     live = _live_cost(connection, [r["act_id"] for r in rows if r.get("ended_at") is None])
-    return [serialize(r, live.get(r["act_id"])) for r in rows]
+    return [serialize(r, live.get(r["act_id"]), viewer=viewer) for r in rows]
 
 
-def get_act(connection: Connection, project_id: str, act_id: str) -> Optional[dict[str, Any]]:
+def get_act(connection: Connection, project_id: str, act_id: str, *,
+            viewer: Optional[str] = None) -> Optional[dict[str, Any]]:
     """One act, with what an Act card shows beside it: its last turns, receipt, and children."""
     row = connection.execute(
         text("SELECT * FROM agent_acts WHERE act_id = :a AND project_id = :p"),
@@ -1429,7 +1696,7 @@ def get_act(connection: Connection, project_id: str, act_id: str) -> Optional[di
     ).mappings().first()
     if not row:
         return None
-    act = _serialized(connection, [dict(row)])[0]
+    act = _serialized(connection, [dict(row)], viewer=viewer)[0]
     turns = connection.execute(
         text("SELECT direction, content, created_at FROM agent_turns WHERE act_id = :a "
              "AND direction = 'completion' ORDER BY created_at DESC LIMIT 3"),
@@ -1490,7 +1757,7 @@ def _from_node(act: dict[str, Any], parent: Optional[dict[str, Any]]) -> dict[st
 
 def acts_for_agent(connection: Connection, project_id: str, role_key: str, *,
                    kind: Optional[str] = None, days: int = 30, cursor: Optional[str] = None,
-                   limit: int = 50) -> dict[str, Any]:
+                   limit: int = 50, viewer: Optional[str] = None) -> dict[str, Any]:
     """An agent's signed work, newest first, each with who handed it over and who it handed to."""
     limit = max(1, min(int(limit), 200))
     params: dict[str, Any] = {"p": project_id, "r": role_key, "d": int(days), "n": limit + 1}
@@ -1524,7 +1791,7 @@ def acts_for_agent(connection: Connection, project_id: str, role_key: str, *,
     ).mappings().all() if rows else []:
         children.setdefault(child["parent_act_id"], []).append(dict(child))
     items = []
-    for act, wire in zip(rows, _serialized(connection, rows)):
+    for act, wire in zip(rows, _serialized(connection, rows, viewer=viewer)):
         wire["from"] = _from_node(act, parents.get(act.get("parent_act_id")))
         wire["to"] = [{k: v for k, v in _node(c).items() if k != "person" or v}
                       for c in children.get(act["act_id"], [])]
@@ -1533,10 +1800,19 @@ def acts_for_agent(connection: Connection, project_id: str, role_key: str, *,
     return {"role_key": role_key, "items": items, "next": nxt}
 
 
+#: The most acts the observed lineage reads. It is a picture of who hands this agent work, so
+#: the newest few thousand acts say it; reading a busy project's whole year does not.
+LINEAGE_ROW_CAP = 2000
+
+
 def lineage(connection: Connection, project_id: str, role_key: str, *, days: int = 30,
-            mode: str = "observed", max_nodes: int = 60) -> dict[str, Any]:
+            mode: str = "observed", max_nodes: int = 60,
+            viewer: Optional[str] = None) -> dict[str, Any]:
     """Who hands this agent work and who it hands work to, from the acts (observed), or the
-    reporting line and birth it declares (declared)."""
+    reporting line and birth it declares (declared).
+
+    Read as the agent's OWN acts (each with its parent) plus the CHILDREN of its own acts —
+    two index reads that cost what this agent did, not what the whole project did."""
     centre = {"id": f"agent:{role_key}", "kind": "agent", "role_key": role_key}
     if mode == "declared":
         return _declared_lineage(connection, project_id, role_key, centre)
@@ -1545,18 +1821,29 @@ def lineage(connection: Connection, project_id: str, role_key: str, *, days: int
     rows = connection.execute(
         text(
             """
+            WITH mine AS (
+                SELECT * FROM agent_acts
+                WHERE project_id = :p AND role_key = :r
+                  AND started_at > now() - make_interval(days => :d)
+                ORDER BY started_at DESC LIMIT :n
+            ), handed AS (
+                SELECT c.* FROM agent_acts c
+                WHERE c.parent_act_id IN (SELECT act_id FROM mine)
+                  AND c.project_id = :p AND c.role_key IS DISTINCT FROM :r
+                  AND c.started_at > now() - make_interval(days => :d)
+                ORDER BY c.started_at DESC LIMIT :n
+            ), edges AS (
+                SELECT * FROM mine UNION ALL SELECT * FROM handed
+            )
             SELECT c.act_id, c.role_key, c.how, c.handed_by_kind, c.handed_by_id, c.accountable,
                    c.considered, c.scope, c.started_at, c.reconstructed, c.kind,
                    p.act_id AS p_act_id, p.role_key AS p_role_key,
                    p.handed_by_kind AS p_hbk, p.handed_by_id AS p_hbi,
                    p.accountable AS p_accountable
-            FROM agent_acts c LEFT JOIN agent_acts p ON p.act_id = c.parent_act_id
-            WHERE c.project_id = :p
-              AND c.started_at > now() - make_interval(days => :d)
-              AND (c.role_key = :r OR p.role_key = :r)
+            FROM edges c LEFT JOIN agent_acts p ON p.act_id = c.parent_act_id
             """
         ),
-        {"p": project_id, "d": int(days), "r": role_key},
+        {"p": project_id, "d": int(days), "r": role_key, "n": LINEAGE_ROW_CAP},
     ).mappings().all()
     nodes: dict[str, dict[str, Any]] = {centre["id"]: centre}
     edges: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1599,7 +1886,9 @@ def lineage(connection: Connection, project_id: str, role_key: str, *, days: int
         sample = edge["sample"]
         label = _label_for({"how": how_top, "scope": _json(sample.get("scope"), {}),
                             "considered": _json(sample.get("considered"), []),
-                            "handed_by_id": sample.get("handed_by_id")})
+                            "handed_by_kind": sample.get("handed_by_kind"),
+                            "handed_by_id": sample.get("handed_by_id"),
+                            "accountable": sample.get("accountable")}, viewer)
         if edge["acts"] > 1:
             label = f"{label} ×{edge['acts']}"
         out_edges.append({"from": edge["from"], "to": edge["to"], "acts": edge["acts"],
@@ -1654,8 +1943,8 @@ def _credit_line(kinds: list[str], labels: list[str]) -> str:
     return f"{head} · {repeats} rounds" if repeats > 1 and len(titles) == 1 else head
 
 
-def chain(connection: Connection, project_id: str,
-          workflow_run_id: str) -> Optional[dict[str, Any]]:
+def chain(connection: Connection, project_id: str, workflow_run_id: str, *,
+          viewer: Optional[str] = None) -> Optional[dict[str, Any]]:
     """A run's acts as one ordered tree, with who is accountable, totals and Credits."""
     root = connection.execute(
         text("SELECT * FROM agent_acts WHERE kind = 'run' AND workflow_run_id = :r "
@@ -1680,7 +1969,7 @@ def chain(connection: Connection, project_id: str,
 
     # This run's subtree: a child run's chain is its own, and its parent's chain contains it.
     walk(dict(root), 0)
-    wire = _serialized(connection, [a for a, _ in ordered])
+    wire = _serialized(connection, [a for a, _ in ordered], viewer=viewer)
     for item, (_, depth) in zip(wire, ordered):
         item["depth"] = depth
     started = min((a["started_at"] for a, _ in ordered), default=None)
@@ -1733,31 +2022,43 @@ def _age(since: Any) -> str:
     return f"{seconds // 86400}d"
 
 
-def presence_map(connection: Connection, project_id: str) -> dict[str, dict[str, Any]]:
+def presence_map(connection: Connection, project_id: str, *, include_idle: bool = True,
+                 role_key: Optional[str] = None) -> dict[str, dict[str, Any]]:
     """Every agent's state, in the §4.5 priority: needs you > in a panel > working > idle.
 
     "Needs you" is this agent's own act waiting on a person, or a gate waiting on a person
     that holds this agent's finished work. The line is built from the act's label — data, never
-    a model's words."""
+    a model's words.
+
+    WHAT IT READS IS BOUNDED BY WHAT IS OPEN, NOT BY HISTORY. The open acts come off the
+    partial `agent_acts_live` index. The idle line ("Last: …") is one index probe per agent
+    (`agent_acts_role_ended`): the agents are found by skipping through that index, never by
+    sorting every act the project has ever ended. `include_idle=False` (the 4s live poll) skips
+    it altogether; `role_key` reads one agent (its Passport)."""
+    params: dict[str, Any] = {"p": project_id, "h": LIVE_HORIZON_HOURS}
+    only = ""
+    if role_key:
+        only = " AND (a.role_key = :r OR p.role_key = :r)"
+        params["r"] = role_key
     open_rows = [dict(r) for r in connection.execute(
         text(
-            """
+            f"""
             SELECT a.act_id, a.role_key, a.kind, a.status, a.label, a.started_at,
                    p.role_key AS parent_role
             FROM agent_acts a LEFT JOIN agent_acts p ON p.act_id = a.parent_act_id
             WHERE a.project_id = :p AND a.ended_at IS NULL
               AND (a.status = 'awaiting_input'
-                   OR a.started_at > now() - make_interval(hours => :h))
+                   OR a.started_at > now() - make_interval(hours => :h)){only}
             ORDER BY a.started_at DESC
             """
         ),
-        {"p": project_id, "h": LIVE_HORIZON_HOURS},
+        params,
     ).mappings().all()]
     rank = {"needs_you": 0, "in_panel": 1, "working": 2}
     out: dict[str, dict[str, Any]] = {}
 
     def offer(role: Optional[str], state: str, row: dict[str, Any], line: str) -> None:
-        if not role:
+        if not role or (role_key and role != role_key):
             return
         held = out.get(role)
         if held is None or rank[state] < rank[held["_rank"]]:
@@ -1775,31 +2076,58 @@ def presence_map(connection: Connection, project_id: str) -> dict[str, dict[str,
         else:
             offer(row["role_key"], "working", row, f"Now: {row['label']}")
 
-    last = connection.execute(
-        text(
-            """
-            SELECT DISTINCT ON (role_key) role_key, act_id, label, ended_at, status
-            FROM agent_acts
-            WHERE project_id = :p AND role_key IS NOT NULL AND ended_at IS NOT NULL
-            ORDER BY role_key, ended_at DESC
-            """
-        ),
-        {"p": project_id},
-    ).mappings().all()
-    for row in last:
-        if row["role_key"] in out:
-            continue
-        out[row["role_key"]] = {"state": "idle", "act_id": row["act_id"],
-                                "line": f"Last: {row['label']} · {_age(row['ended_at'])}",
-                                "since": _iso(row["ended_at"]), "_rank": "idle"}
+    if include_idle:
+        for row in _last_ended(connection, project_id, role_key):
+            if row["role_key"] in out:
+                continue
+            out[row["role_key"]] = {"state": "idle", "act_id": row["act_id"],
+                                    "line": f"Last: {row['label']} · {_age(row['ended_at'])}",
+                                    "since": _iso(row["ended_at"]), "_rank": "idle"}
     for value in out.values():
         value.pop("_rank", None)
     return out
 
 
+def _last_ended(connection: Connection, project_id: str,
+                role_key: Optional[str]) -> list[dict[str, Any]]:
+    """Each agent's most recent ended act: a skip-scan for the agents, one probe each."""
+    roles_sql = (
+        "SELECT CAST(:r AS text) AS role_key" if role_key else
+        """
+        WITH RECURSIVE agents AS (
+            (SELECT role_key FROM agent_acts
+             WHERE project_id = :p AND role_key IS NOT NULL AND ended_at IS NOT NULL
+             ORDER BY role_key LIMIT 1)
+            UNION ALL
+            SELECT (SELECT n.role_key FROM agent_acts n
+                    WHERE n.project_id = :p AND n.role_key > agents.role_key
+                      AND n.ended_at IS NOT NULL
+                    ORDER BY n.role_key LIMIT 1)
+            FROM agents WHERE agents.role_key IS NOT NULL
+        )
+        SELECT role_key FROM agents WHERE role_key IS NOT NULL
+        """
+    )
+    return [dict(r) for r in connection.execute(
+        text(
+            f"""
+            SELECT a.role_key, l.act_id, l.label, l.ended_at, l.status
+            FROM ({roles_sql}) a
+            CROSS JOIN LATERAL (
+                SELECT act_id, label, ended_at, status FROM agent_acts
+                WHERE project_id = :p AND role_key = a.role_key AND ended_at IS NOT NULL
+                ORDER BY ended_at DESC LIMIT 1
+            ) l
+            """
+        ),
+        {"p": project_id, **({"r": role_key} if role_key else {})},
+    ).mappings().all()]
+
+
 def live(connection: Connection, project_id: str) -> dict[str, Any]:
-    """The agents that are not idle, and an ETag over exactly that, for a cheap 4s poll."""
-    present = sorted(presence_map(connection, project_id).items())
+    """The agents that are not idle, and an ETag over exactly that, for a cheap 4s poll. Reads
+    only what is open: the cost of the hottest poll does not grow with the ledger."""
+    present = sorted(presence_map(connection, project_id, include_idle=False).items())
     items = [{"role_key": role, **p} for role, p in present if p["state"] != "idle"]
     etag = hashlib.sha256(json.dumps(
         [(i["role_key"], i["state"], i["act_id"]) for i in items]).encode()).hexdigest()[:20]
@@ -1841,87 +2169,127 @@ def my_recent_work(connection: Connection, project_id: str, role_key: str, *, li
 # ── backfill (§5.1): reconstructed acts from legacy rows ─────────────────────────────────────
 
 
-def backfill(connection: Connection, project_id: str) -> int:
-    """Acts for work done before the ledger existed. Idempotent per source row; every act it
-    writes is `reconstructed`, and the parent order is inferred, which the UI says (dashed,
-    `Reconstructed`). Sources: workflow step rows with ran_as, panel seats, and build stages
-    from the llm_calls stage order of each code task."""
-    def count() -> int:
-        return int(connection.execute(
-            text("SELECT count(*) FROM agent_acts WHERE project_id = :p"),
-            {"p": project_id}).scalar() or 0)
+def backfill(engine: Any, project_id: str, *, pause_seconds: float = 0.0) -> int:
+    """Acts for work done before the ledger existed. Returns how many acts it wrote.
 
-    before = count()
-    runs = connection.execute(
-        text(
-            """
-            SELECT DISTINCT r.id FROM workflow_runs r
-            JOIN workflow_definitions d ON d.id = r.workflow_definition_id
-            WHERE r.project_id = :p AND COALESCE(d.namespace, 'system') = 'product'
-              AND NOT EXISTS (SELECT 1 FROM agent_acts a WHERE a.workflow_run_id = r.id)
-            """
-        ),
-        {"p": project_id},
-    ).scalars().all()
-    for run_id in runs:
-        sync_run(connection, str(run_id))
-        connection.execute(
-            text("UPDATE agent_acts SET reconstructed = true WHERE workflow_run_id = :r"),
-            {"r": str(run_id)},
-        )
+    Idempotent per source row; every act it writes is `reconstructed`, and the parent order is
+    inferred, which the UI says (dashed, `Reconstructed`). Sources: workflow step rows with
+    ran_as, panel seats, and build stages from the llm_calls stage order of each code task.
 
-    meetings = connection.execute(
-        text("SELECT id FROM meeting_runs m WHERE m.project_id = :p AND NOT EXISTS "
-             "(SELECT 1 FROM agent_acts a WHERE a.meeting_run_id = m.id AND a.kind = 'seat')"),
-        {"p": project_id},
-    ).scalars().all()
-    for meeting_id in meetings:
-        sync_meeting(connection, str(meeting_id))
-        connection.execute(
-            text("UPDATE agent_acts SET reconstructed = true WHERE meeting_run_id = :m "
-                 "OR (subject_kind = 'meeting_run' AND subject_id = :m)"),
-            {"m": str(meeting_id)},
-        )
+    ONE SHORT TRANSACTION PER RUN, PANEL OR BUILD, never the project's whole history in one:
+    each takes its subject's lock with a try, so a live tick or build always wins and the unit
+    is picked up next time. Historical step rows are read, never rewritten. `pause_seconds`
+    is the breath between units the boot job takes, so history is a trickle beside live work."""
+    from ..db import begin
 
-    tasks = connection.execute(
-        text(
-            """
-            SELECT c.code_task_run_id, array_agg(c.stage ORDER BY c.created_at) AS stages,
-                   array_agg(c.id ORDER BY c.created_at) AS ids
-            FROM llm_calls c
-            WHERE c.project_id = :p AND c.code_task_run_id IS NOT NULL AND c.act_id IS NULL
-              AND NOT EXISTS (SELECT 1 FROM agent_acts a
-                              WHERE a.code_task_run_id = c.code_task_run_id
-                                AND a.kind = 'stage')
-            GROUP BY c.code_task_run_id
-            """
-        ),
-        {"p": project_id},
-    ).mappings().all()
-    for task in tasks:
-        for call_id, stage in zip(task["ids"], task["stages"]):
-            got = stage_act(connection, project_id=project_id,
-                            code_task_run_id=str(task["code_task_run_id"]), stage=stage)
-            if got:
-                connection.execute(text("UPDATE llm_calls SET act_id = :a WHERE id = :i"),
-                                   {"a": got["act_id"], "i": call_id})
-        close_code_task(connection, str(task["code_task_run_id"]))
-        connection.execute(
-            text("UPDATE agent_acts SET reconstructed = true WHERE code_task_run_id = :c "
-                 "AND kind IN ('stage', 'run')"),
-            {"c": str(task["code_task_run_id"])},
-        )
-    # Ended acts of a backfilled build that is no longer running: their times are the calls'.
+    written = 0
+
+    def breathe() -> None:
+        if pause_seconds:
+            time.sleep(pause_seconds)
+
+    def candidates(sql: str) -> list[Any]:
+        with begin(engine) as c:
+            return list(c.execute(text(sql), {"p": project_id}).all())
+
+    for (run_id,) in candidates(
+        """
+        SELECT r.id FROM workflow_runs r
+        JOIN workflow_definitions d ON d.id = r.workflow_definition_id
+        WHERE r.project_id = :p AND COALESCE(d.namespace, 'system') = 'product'
+          AND NOT EXISTS (SELECT 1 FROM agent_acts a WHERE a.workflow_run_id = r.id)
+        ORDER BY r.created_at
+        """
+    ):
+        with begin(engine) as c:
+            if not _lock(c, f"run:{run_id}", wait=False) or _count(
+                    c, "workflow_run_id = :s", run_id):
+                continue
+            sync_run(c, str(run_id), wait=False, reconstructed=True)
+            written += _count(c, "workflow_run_id = :s", run_id)
+        breathe()
+
+    for (meeting_id,) in candidates(
+        """
+        SELECT m.id FROM meeting_runs m WHERE m.project_id = :p AND NOT EXISTS
+            (SELECT 1 FROM agent_acts a WHERE a.meeting_run_id = m.id AND a.kind = 'seat')
+        ORDER BY m.created_at
+        """
+    ):
+        with begin(engine) as c:
+            before = _count(c, "meeting_run_id = :s", meeting_id)
+            sync_meeting(c, str(meeting_id), wait=False, reconstructed=True)
+            written += _count(c, "meeting_run_id = :s", meeting_id) - before
+        breathe()
+
+    for (task_id,) in candidates(
+        """
+        SELECT DISTINCT c.code_task_run_id FROM llm_calls c
+        WHERE c.project_id = :p AND c.code_task_run_id IS NOT NULL AND c.act_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM agent_acts a
+                          WHERE a.code_task_run_id = c.code_task_run_id AND a.kind = 'stage')
+        """
+    ):
+        with begin(engine) as c:
+            if not _lock(c, f"task:{task_id}", wait=False):
+                continue
+            before = _count(c, "code_task_run_id = :s", task_id)
+            _backfill_build(c, project_id, str(task_id))
+            written += _count(c, "code_task_run_id = :s", task_id) - before
+        breathe()
+    return written
+
+
+def _count(connection: Connection, where: str, subject: Any) -> int:
+    return int(connection.execute(
+        text(f"SELECT count(*) FROM agent_acts WHERE {where}"), {"s": str(subject)}
+    ).scalar() or 0)
+
+
+def _backfill_build(connection: Connection, project_id: str, code_task_run_id: str) -> None:
+    calls = connection.execute(
+        text("SELECT id, stage FROM llm_calls WHERE code_task_run_id = :c AND project_id = :p "
+             "AND act_id IS NULL ORDER BY created_at, id"),
+        {"c": code_task_run_id, "p": project_id},
+    ).all()
+    for call_id, stage in calls:
+        got = stage_act(connection, project_id=project_id, code_task_run_id=code_task_run_id,
+                        stage=stage, reconstructed=True)
+        if got:
+            connection.execute(text("UPDATE llm_calls SET act_id = :a WHERE id = :i"),
+                               {"a": got["act_id"], "i": call_id})
+    close_code_task(connection, code_task_run_id)
+    # Its stages' times are its calls' times, not the moment they were rebuilt.
     connection.execute(
         text(
             """
             UPDATE agent_acts a SET started_at = t.first_at,
                    ended_at = CASE WHEN a.ended_at IS NULL THEN NULL ELSE t.last_at END
             FROM (SELECT act_id, min(created_at) AS first_at, max(created_at) AS last_at
-                  FROM llm_calls WHERE project_id = :p AND act_id IS NOT NULL GROUP BY act_id) t
+                  FROM llm_calls WHERE code_task_run_id = :c AND act_id IS NOT NULL
+                  GROUP BY act_id) t
             WHERE a.act_id = t.act_id AND a.reconstructed AND a.kind = 'stage'
             """
         ),
-        {"p": project_id},
+        {"c": code_task_run_id},
     )
-    return count() - before
+
+
+def backfill_all(engine: Any, *, pause_seconds: float = 0.05) -> dict[str, int]:
+    """The boot job: every project's history, one short transaction per unit. Never raises."""
+    written: dict[str, int] = {}
+    try:
+        from ..db import begin
+
+        with begin(engine) as c:
+            projects = [str(p) for p in c.execute(text("SELECT id FROM projects")).scalars()]
+    except Exception as error:  # noqa: BLE001 — a boot job never stops the boot
+        log.warning("agent acts: backfill could not list projects: %s", error)
+        return written
+    for project_id in projects:
+        try:
+            written[project_id] = backfill(engine, project_id, pause_seconds=pause_seconds)
+        except Exception as error:  # noqa: BLE001
+            log.warning("agent acts: backfill of %s stopped: %s: %s", project_id,
+                        type(error).__name__, error)
+    return written
