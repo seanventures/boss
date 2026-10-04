@@ -219,6 +219,11 @@ export async function askBossAction(
     // "Engineering Captain" and BOSS-in-general answered, which is the exact failure the role
     // work existed to remove.
     role: String(formData.get("role") ?? "").trim() || undefined,
+    // THE AGENT BY KEY, AND THE WORK IT IS ABOUT (Agent World). The display name above drifts
+    // between screens; the key does not. `context.act_id` parents the reply to that work.
+    role_key: String(formData.get("role_key") ?? "").trim() || undefined,
+    context: String(formData.get("context_act_id") ?? "").trim()
+      ? { act_id: String(formData.get("context_act_id")).trim() } : undefined,
     // WHAT THEY BROUGHT WITH THEM — a screenshot of the error, a log too long to paste.
     // Parsed rather than forwarded blind: a malformed blob would otherwise reach the API as a
     // 422 the operator sees as "request failed".

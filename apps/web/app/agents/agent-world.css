@@ -485,4 +485,192 @@
 
 /* ── [runs] ag-chain / ag-act / ag-dock ────────────────────────────────────────── */
 
+/* The run surfaces' face: a ring that says the real state, with a word beside it elsewhere.
+   (When the kit's AgentAvatar replaces the fallback disc, its own ring takes over: .ag-face-kit
+   hides this one.) Keyframes are agav-run-* so they cannot collide with the kit's agav-*. */
+.ag-face { position: relative; display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: var(--ag-size, 24px); height: var(--ag-size, 24px); border-radius: 50%; }
+.ag-face .ag-face-disc { width: 100%; height: 100%; margin: 0; font-size: calc(var(--ag-size, 24px) * 0.38); }
+.ag-face-glyph { display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+  border-radius: 50%; background: var(--surface-3); color: var(--muted); border: 1px solid var(--border-strong); }
+.ag-face[data-variant="you"] .ag-face-glyph { color: var(--ink); }
+.ag-face[data-variant="boss"] .ag-face-glyph { color: var(--accent-text); }
+.ag-face-kit, .ag-face-kit svg { display: block; width: 100%; height: 100%; }
+.ag-face-ring { position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
+.ag-face:has(.ag-face-kit) .ag-face-ring { display: none; }
+.ag-face[data-state="working"] .ag-face-ring { border-color: var(--border-strong); border-top-color: var(--accent-text);
+  animation: agav-run-spin 2.4s linear infinite; }
+.ag-face[data-state="thinking"] .ag-face-ring { border-style: dotted; border-color: var(--accent-text);
+  animation: agav-run-spin 1.6s linear infinite; }
+.ag-face[data-state="speaking"] .ag-face-ring { border-color: var(--accent-text); animation: agav-run-talk .3s ease-out; }
+.ag-face[data-state="needs_you"] .ag-face-ring { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft);
+  animation: agav-run-halo 1s ease-in-out infinite alternate; }
+.ag-face[data-state="done"] .ag-face-ring { border-color: var(--green); }
+.ag-face[data-state="stuck"] .ag-face-ring { border-color: var(--red); }
+.ag-face[data-state="stuck"] > :not(.ag-face-ring) { transform: rotate(4deg); }
+.ag-face[data-state="paused"] .ag-face-ring, .ag-face[data-state="retired"] .ag-face-ring { border-style: dashed; border-color: var(--faint); }
+.ag-face[data-size="48"][data-state="paused"], .ag-face[data-size="96"][data-state="paused"],
+.ag-face[data-size="48"][data-state="retired"], .ag-face[data-size="96"][data-state="retired"] { filter: grayscale(1); }
+.ag-ai { position: absolute; right: -4px; bottom: -3px; font: 700 8px/1 var(--sans); letter-spacing: .04em; padding: 2px 3px;
+  border-radius: 4px; background: var(--surface); color: var(--accent-text); border: 1px solid var(--border-strong); }
+.ag-ai-badge { display: inline-flex; align-items: center; font: 700 9px/1 var(--sans); letter-spacing: .06em; padding: 2px 4px;
+  border-radius: 4px; color: var(--accent-text); border: 1px solid var(--border-strong); background: var(--surface-2); }
+.ag-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ag-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.ag-state[data-state="working"] i, .ag-state[data-state="thinking"] i, .ag-state[data-state="speaking"] i { background: var(--accent-text); }
+.ag-state[data-state="needs_you"] i { background: var(--amber); }
+.ag-state[data-state="done"] i { background: var(--green); }
+.ag-state[data-state="stuck"] i { background: var(--red); }
+
+/* How the work reached the agent: a glyph on the node's status row; the words are a tooltip. */
+.ag-how { display: inline-flex; align-items: center; margin-right: 4px; color: var(--faint); vertical-align: -1px; }
+.ag-how[data-how="captain"] { color: var(--amber); }
+.ag-how[data-how="model_pick"], .ag-how[data-how="only_holder"], .ag-how[data-how="only_candidate"] { color: var(--accent-text); }
+
+/* Auto → the picked agent: the sparkle fades out as the face fades in, once. */
+.ag-morph { position: relative; display: inline-flex; }
+.ag-morph-from { position: absolute; inset: 0; display: inline-flex; opacity: 0; animation: agav-run-fade-out .2s ease-out; }
+[data-morph="true"] .ag-morph > .ag-face { animation: agav-run-fade-in .2s ease-out; }
+
+/* ── The Act card ── */
+.ag-face-btn { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit;
+  font: inherit; cursor: pointer; border-radius: 999px; }
+.ag-face-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.ag-act-pop { position: fixed; z-index: 80; width: min(340px, calc(100vw - 32px)); animation: agav-run-rise .16s ease-out; }
+.ag-act { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-xl);
+  background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); color: var(--ink); }
+.ag-act[data-inline="true"] { box-shadow: none; background: var(--surface-2); border-color: var(--border); }
+.ag-act-head { display: flex; align-items: center; gap: 12px; }
+.ag-act-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ag-act-name { display: flex; align-items: center; gap: 6px; font-size: 15px; }
+.ag-act-role, .ag-act-tagline { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-act-tagline { color: var(--faint); font-style: italic; }
+.ag-act-close { border: 0; background: none; color: var(--faint); font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 4px; }
+.ag-act-label { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-act-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; }
+.ag-act-row { display: contents; }
+.ag-act-row dt { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; padding-top: 2px; }
+.ag-act-row dd { margin: 0; font-size: 13px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ag-act-inline { display: inline-flex; align-items: center; gap: 6px; }
+.ag-act-why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.ag-act-recon { font-size: 11px; color: var(--faint); border: 1px dashed var(--border-strong); border-radius: 4px; padding: 1px 5px; }
+.ag-act-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ag-chip { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--surface-3); color: var(--muted); border: 1px solid var(--border); }
+.ag-chip[data-kind="mcp"] { color: var(--accent-text); }
+.ag-chip[data-kind="wide"] { color: var(--amber); background: var(--amber-soft); border-color: var(--amber); }
+.ag-act-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 10px; }
+.ag-act-btn { border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--ink); border-radius: var(--r);
+  padding: 5px 10px; font: 600 12px var(--sans); cursor: pointer; }
+.ag-act-link, .ag-link-btn { font-size: 12px; color: var(--accent-text); text-decoration: none; background: none; border: 0;
+  padding: 0; cursor: pointer; font-family: inherit; }
+.ag-act-link:hover, .ag-link-btn:hover { text-decoration: underline; }
+
+/* ── The Chain: a strip above the lane, scrolling inside itself, never the page ── */
+.ag-chain { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; min-width: 0; }
+.ag-chain-toggle { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; border: 0; background: none;
+  color: var(--muted); font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; padding: 2px 0; }
+.ag-chain-count { color: var(--faint); font-weight: 500; text-transform: none; letter-spacing: 0; }
+.ag-chain-strip { display: flex; align-items: flex-start; gap: 0; overflow-x: auto; overscroll-behavior-x: contain;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface-2); max-width: 100%; }
+.ag-chain-hop { display: inline-flex; flex-direction: column; gap: 4px; flex: none; }
+.ag-chain-col { display: inline-flex; flex-direction: column; gap: 6px; }
+.ag-chain-hop[data-stack="true"] .ag-chain-col { padding: 4px 6px; border-left: 2px solid var(--border-strong); }
+.ag-chain-who { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.ag-chain-name { font-size: 12px; color: var(--ink); }
+.ag-chain-edge { position: relative; display: inline-flex; align-items: center; flex: none; width: 34px; height: 24px; margin: 0 4px; }
+.ag-chain-line { position: absolute; left: 2px; right: 10px; top: 50%; border-top: 1px solid var(--border-strong); transform-origin: left; }
+.ag-chain-edge[data-reconstructed="true"] .ag-chain-line { border-top-style: dashed; }
+.ag-chain-edge[data-new="true"] .ag-chain-line { animation: agav-run-draw .4s ease-out; }
+.ag-chain-arrow { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--faint); }
+.ag-chain-loop { flex-direction: row; align-items: center; gap: 6px; }
+.ag-chain-swap { color: var(--faint); }
+.ag-chain-rounds { font-size: 11px; color: var(--amber); font-weight: 700; }
+.ag-chain-inside { display: inline-flex; flex-direction: column; gap: 6px; }
+.ag-chain-fold { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: 0; background: none;
+  color: var(--faint); font: 500 11px var(--sans); cursor: pointer; padding: 0; }
+.ag-chain-sub { display: inline-flex; align-items: center; padding: 4px 6px; border-radius: var(--r); background: var(--surface);
+  border: 1px solid var(--border); }
+
+/* ── The step drawer, signed ── */
+.ag-signed { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+.ag-signed-title { margin: 0; }
+.ag-stuck { display: flex; align-items: center; gap: 10px; color: var(--red); font-size: 13px; min-width: 0; }
+.ag-stuck-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-said { display: flex; flex-direction: column; gap: 6px; }
+.ag-said-turn { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 8px 10px; border-left: 2px solid var(--border-strong);
+  background: var(--surface-2); border-radius: 0 var(--r) var(--r) 0; font-size: 13px; color: var(--muted); }
+.ag-signed-ask { align-self: flex-start; }
+
+/* ── Credits ── */
+.ag-credits-btn { margin-left: 6px; }
+.ag-credits-backdrop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(5, 8, 15, .72); }
+.ag-credits { width: min(620px, 100%); max-height: calc(100vh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 18px;
+  padding: 22px; border-radius: var(--r-xl); background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg);
+  color: var(--ink); animation: agav-run-rise .2s ease-out; }
+.ag-credits-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ag-credits-title { display: flex; flex-direction: column; gap: 4px; font-size: 20px; min-width: 0; }
+.ag-credits-title strong { overflow-wrap: anywhere; }
+.ag-credits-close { border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: var(--r);
+  width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.ag-credits-cast { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.ag-credits-row { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: var(--r); background: var(--surface-2);
+  border: 1px solid var(--border); min-width: 0; animation: agav-run-rise .32s ease-out both; animation-delay: calc(var(--ag-i, 0) * 70ms); }
+.ag-credits-who { display: flex; flex-direction: column; min-width: 0; }
+.ag-credits-name, .ag-act-name, .ag-dock-name { min-width: 0; }
+.ag-credits-name { display: flex; align-items: center; gap: 6px; }
+.ag-credits-name strong, .ag-act-name strong, .ag-dock-name strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-credits-role, .ag-credits-line { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-credits-line { color: var(--faint); }
+.ag-credits-totals { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 0; padding-top: 12px; border-top: 1px solid var(--border); }
+.ag-credits-totals div { display: flex; flex-direction: column; gap: 2px; }
+.ag-credits-totals dt { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+.ag-credits-totals dd { margin: 0; font-size: 15px; font-weight: 600; }
+.ag-credits-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ag-credits-actions .cap-btn { display: inline-flex; align-items: center; gap: 6px; }
+.ag-credits-said { font-size: 12px; color: var(--green); }
+
+/* ── A build: one face per stage, and who made the PR ── */
+.ag-stage-face { display: inline-flex; margin: 0 4px 0 2px; vertical-align: middle; }
+.ag-made-by { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+
+/* ── The dock, with the agent in it ── */
+.ag-dock-head { display: flex; align-items: center; gap: 10px; padding: 8px 2px 10px; border-bottom: 1px solid var(--border); margin-bottom: 10px; min-width: 0; }
+.ag-dock-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ag-dock-name { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.ag-dock-state { font-size: 11px; color: var(--accent-text); }
+.ag-dock-role, .ag-dock-tagline { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-dock-tagline { color: var(--faint); font-style: italic; }
+.ag-dock-about { display: inline-flex; align-items: center; gap: 4px; max-width: 46%; padding: 3px 4px 3px 8px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+.ag-dock-about-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-dock-about-x { display: inline-flex; border: 0; background: none; color: var(--faint); cursor: pointer; padding: 2px; border-radius: 50%; }
+.ag-dock-gutter { display: inline-flex; align-items: center; gap: 6px; }
+.ag-cites { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ag-cite { display: inline-flex; align-items: center; font-size: 11px; color: var(--muted); padding: 2px 8px 2px 2px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--border); }
+.ag-cite[data-loading="true"] { padding-left: 8px; color: var(--faint); }
+.ag-cite-text { white-space: nowrap; }
+
+@keyframes agav-run-spin { to { transform: rotate(360deg); } }
+@keyframes agav-run-talk { from { transform: scale(1.12); } to { transform: scale(1); } }
+@keyframes agav-run-halo { from { opacity: .35; } to { opacity: .8; } }
+@keyframes agav-run-fade-in { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: scale(1); } }
+@keyframes agav-run-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes agav-run-draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes agav-run-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-face-ring, .ag-morph-from, .ag-morph > .ag-face, .ag-act-pop, .ag-chain-line, .ag-credits, .ag-credits-row {
+    animation: none !important;
+  }
+  .ag-morph-from { opacity: 0; }
+}
+
+@media (max-width: 640px) {
+  .ag-dock-about { max-width: 100%; }
+  .ag-dock-head { flex-wrap: wrap; }
+  .ag-credits { padding: 16px; }
+}
+
 /* ── [converse] ag-talk / ag-room / ag-proposal ────────────────────────────────── */
