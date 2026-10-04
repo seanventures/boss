@@ -108,3 +108,11 @@ def test_the_view_renders_only_through_the_catalogue():
     """The console never computes a tone: every pill the view hands out comes from `pill()`."""
     source = inspect.getsource(setup_view)
     assert '"tone": "' not in source.replace('"tone": entry["tone"]', "")
+
+
+def test_a_time_in_a_pill_travels_as_an_instant_for_the_viewers_clock():
+    shown = setup_pills.pill("repository", "rate_limited", time="14:20",
+                             at="2026-10-04T14:20:00+00:00")
+    assert shown["at"] == "2026-10-04T14:20:00+00:00"
+    assert setup_pills.pill("repository", "rate_limited")["label"] == "GitHub busy"
+    assert "at" not in setup_pills.pill("repository", "working", at="2026-10-04T14:20:00+00:00")

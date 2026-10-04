@@ -41,8 +41,10 @@ function CopyChip({ text, tip }: { text: string; tip: string }) {
   );
 }
 
-export function AddModelPanel({ initialTile, initialProvider, onDone }: {
+export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSourceId }: {
   initialTile: Tile; initialProvider: string; onDone?: () => void;
+  /** Replace: the one connection this replaces (a new key never overwrites another). */
+  replaceSourceId?: string;
 }) {
   const { projectId, view, apply } = useBoard();
   const [tile, setTile] = useState<Tile>(initialTile);
@@ -62,6 +64,8 @@ export function AddModelPanel({ initialTile, initialProvider, onDone }: {
   const detected: Detected | undefined = view.detected.find((d) => d.provider === provider);
   const chips = view.catalogue.filter((c) => c.kind === tile);
   const signedIn = detected?.found === "signed_in";
+  // A CLI that is not on the server cannot use a pasted token: say so instead of a field.
+  const notOnServer = detected?.found === "not_on_server";
   const onServerOnly = provider === "grok" || provider === "cursor";
 
   useEffect(() => {
@@ -94,7 +98,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone }: {
   const fields = entry?.fields ?? [];
   let ready = !busy && (!needsConsent || consent);
   if (tile === "subscription") {
-    if (onServerOnly) ready = ready && signedIn;
+    if (onServerOnly || notOnServer) ready = ready && signedIn;
     else if (!signedIn) ready = ready && (provider === "codex" ? !!file : !!secret.trim());
   } else if (tile === "api_key") {
     ready = ready && (provider === "custom" ? !!baseUrl.trim() && !!model.trim()
@@ -116,9 +120,16 @@ export function AddModelPanel({ initialTile, initialProvider, onDone }: {
         credential_file: tile === "subscription" && sent.file ? sent.file : undefined,
         base_url: baseUrl || undefined, model: model || undefined,
         accept_database_fallback: needsConsent ? consent : undefined,
+        source_id: replaceSourceId,
       }, { label: "Connect" });
       apply(next);
-      toast("Connected · Working");
+      // SAY WHAT THE CHECK SAID: a busy provider's key is kept, but it is not "Working".
+      const before = new Set(view.models.map((m) => m.source_id));
+      const row = next.models.find((m) => m.source_id === replaceSourceId)
+        ?? next.models.find((m) => !before.has(m.source_id) && m.provider === provider)
+        ?? next.models.find((m) => m.provider === provider);
+      const label = row?.pill.label ?? "Working";
+      toast(`Connected · ${label}`, row && row.pill.tone !== "green" ? "error" : "success");
       onDone?.();
     } catch (error) {
       setRefusal(refusalOf(error));
@@ -168,7 +179,11 @@ export function AddModelPanel({ initialTile, initialProvider, onDone }: {
         {tile === "subscription" && signedIn ? (
           <Tip tip="Already signed in on the BOSS server." className="su-faint">Found</Tip>
         ) : null}
-        {tile === "subscription" && !signedIn && provider === "claude_code" ? (
+        {tile === "subscription" && notOnServer && !onServerOnly ? (
+          <Tip tip="Install and sign in on the BOSS server first." className="su-faint"
+               testid="su-not-on-server">Not on server</Tip>
+        ) : null}
+        {tile === "subscription" && !signedIn && !notOnServer && provider === "claude_code" ? (
           <>
             <CopyChip text="claude setup-token" tip="Run on your computer. Paste the token it prints." />
             <label className="su-field">
@@ -180,7 +195,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone }: {
             </label>
           </>
         ) : null}
-        {tile === "subscription" && !signedIn && provider === "codex" ? (
+        {tile === "subscription" && !signedIn && !notOnServer && provider === "codex" ? (
           <>
             <CopyChip text="~/.codex/auth.json" tip="After codex login on your computer, drop this file." />
             <label className="su-drop" data-testid="su-model-file">

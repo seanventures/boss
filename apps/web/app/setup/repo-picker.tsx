@@ -28,14 +28,32 @@ export function RepoPicker({ repos, busy, onConnect, exclude = [] }: {
                aria-label="Search your repositories" data-testid="su-repo-search"
                onChange={(e) => setQuery(e.target.value)} />
       </label>
-      <ul className="su-picker-list" role="listbox" aria-label="Repositories">
+      {/* KEYBOARD FIRST: each option is a focusable button; Up/Down move between them, Enter
+          or Space picks, and Enter on the picked one connects. */}
+      <ul className="su-picker-list" role="listbox" aria-label="Repositories"
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+            const options = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button[role=option]")];
+            const at = options.indexOf(document.activeElement as HTMLButtonElement);
+            const next = options[Math.max(0, Math.min(options.length - 1,
+                                                      at + (e.key === "ArrowDown" ? 1 : -1)))];
+            if (next) { e.preventDefault(); next.focus(); }
+          }}>
         {shown.map((r) => (
-          <li key={r.full_name} role="option" aria-selected={picked === r.full_name}
-              data-testid={`su-repo-option-${r.full_name}`}
-              onClick={() => setPicked(r.full_name)}>
-            <span className="su-mono" data-user-text>{r.full_name}</span>
-            <span className="su-faint">{r.private ? "private" : "public"}</span>
-            <span className="su-faint" data-user-text>{r.default_branch ?? ""}</span>
+          <li key={r.full_name} role="presentation">
+            <button type="button" role="option" aria-selected={picked === r.full_name}
+                    className="su-option" data-testid={`su-repo-option-${r.full_name}`}
+                    onClick={() => setPicked(r.full_name)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && picked === r.full_name && !busy) {
+                        e.preventDefault();
+                        onConnect(r.full_name);
+                      }
+                    }}>
+              <span className="su-mono" data-user-text>{r.full_name}</span>
+              <span className="su-faint">{r.private ? "private" : "public"}</span>
+              <span className="su-faint" data-user-text>{r.default_branch ?? ""}</span>
+            </button>
           </li>
         ))}
         {shown.length === 0 ? <li className="su-faint" aria-disabled="true">No match</li> : null}

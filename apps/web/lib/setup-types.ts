@@ -15,6 +15,8 @@ export type Pill = {
   tip: string;
   action?: PillAction | null;
   fix_url?: string | null;
+  /** The instant a time in the label stands for; the console shows it in local time. */
+  at?: string | null;
 };
 
 export type CheckResult = { ok: boolean | null; state: string; at: string | null };

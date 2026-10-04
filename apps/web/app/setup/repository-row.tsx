@@ -22,6 +22,8 @@ const CHECK_TIPS = {
   pull_requests: "Can open a pull request for you to review.",
 } as const;
 const CHECK_LABELS = { read: "Read", write: "Write", pull_requests: "Pull requests" } as const;
+/** An expiry worth saying: within a year (a 26,000-day token says nothing useful). */
+const EXPIRY_SHOWN_DAYS = 365;
 
 /** GitHub's new-token page with the two permissions BOSS needs filled in (spec §6.4). */
 export function createTokenUrl(host: string): string {
@@ -56,7 +58,13 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
   const host = typeof window !== "undefined" ? window.location.hostname : "this server";
 
   const submit = async (value: string) => {
-    if (!value.trim() || (needsConsent && !consent)) return;
+    if (!value.trim()) return;
+    if (needsConsent && !consent) {
+      // NEVER SILENT: the press says what it is waiting for.
+      setRefusal({ state: "needs_consent", headline: "Store in BOSS database",
+                   fix: "No secret store on this server. Encrypted in Postgres." });
+      return;
+    }
     if (timer.current) clearTimeout(timer.current);
     setPhase("checking");
     setRefusal(null);
@@ -85,7 +93,9 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
   const onChange = (value: string) => {
     setToken(value);
     if (timer.current) clearTimeout(timer.current);
-    if (value.trim().length >= 20) timer.current = setTimeout(() => void submit(value), 400);
+    if (value.trim().length >= 20 && !(needsConsent && !consent)) {
+      timer.current = setTimeout(() => void submit(value), 400);
+    }
   };
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
@@ -113,7 +123,7 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
         <div className="su-line">
           <span className="su-dot su-tone-green" aria-hidden="true" />
           <span>Signed in as <span className="su-mono" data-user-text>@{found?.account_login}</span></span>
-          {days !== null ? (
+          {days !== null && days <= EXPIRY_SHOWN_DAYS ? (
             <Tip tip="Builds stop when it expires. Make a new token before then." className="su-faint">
               Expires in {days}d
             </Tip>
@@ -124,7 +134,8 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
         </div>
         {phase === "connecting" ? <ChecksRunning /> : (
           <RepoPicker repos={found?.repos ?? []} busy={false} onConnect={connect}
-                      exclude={view.repository.repos.map((r) => r.full_name)} />
+                      exclude={view.repository.repos.filter((r) => r.binding_id)
+                        .map((r) => r.full_name)} />
         )}
         {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
       </div>
@@ -148,7 +159,7 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
       <div className="su-line">
         <Out href={createTokenUrl(host)} tip="Opens GitHub with the two permissions BOSS needs filled in."
              testid="su-create-token">Create token</Out>
-        <Tip tip="Org repo: pick the org as owner. Blocked? A classic token with repo scope works."
+        <Tip tip="Org repo: pick the org as owner. Blocked? A classic repo-scope token works."
              className="su-faint su-tipped" testid="su-other-ways">Other ways</Tip>
       </div>
       {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
@@ -201,6 +212,7 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
     try { await run("checks", { target: key }, "Test"); } finally { setChecking(key, false); }
   };
   const red = pill.tone === "red";
+  const [confirming, setConfirming] = useState(false);
   return (
     <div className="su-repo" data-testid={`su-repo-${repo.full_name}`}>
       <div className="su-line">
@@ -216,7 +228,10 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
       </div>
       <div className="su-line">
         <Checks checks={repo.checks} />
-        {days !== null && repo.pill.state !== "expired" ? (
+        {/* Once, and only when it means something: the pill already says "Expires in 2d"
+            when it is close, and a token valid for decades needs no countdown. */}
+        {days !== null && days <= EXPIRY_SHOWN_DAYS
+          && !["expired", "expiring"].includes(repo.pill.state) ? (
           <Tip tip="Builds stop when it expires. Make a new token before then." className="su-faint">
             Expires in {days}d
           </Tip>
@@ -249,8 +264,20 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
           onSelect: () => run("repo_default", { binding_id: repo.binding_id }, "Make default") }] : []),
         ...(repo.binding_id ? [{
           label: "Remove", danger: true, testid: "su-menu-remove",
-          onSelect: () => run("repo_remove", { binding_id: repo.binding_id }, "Remove") }] : []),
+          onSelect: () => setConfirming(true) }] : []),
       ]} />
+      {confirming ? (
+        <div className="su-confirm" role="alertdialog" data-testid="su-repo-remove-confirm">
+          <strong>Remove {repo.full_name}?</strong>
+          <button type="button" className="su-btn su-btn-sm su-btn-danger"
+                  data-testid="su-repo-remove-yes"
+                  onClick={() => { setConfirming(false);
+                                   void run("repo_remove", { binding_id: repo.binding_id }, "Remove"); }}>
+            Remove
+          </button>
+          <button type="button" className="su-link" onClick={() => setConfirming(false)}>Keep</button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -270,7 +297,8 @@ function AddRepo({ connectionId, onDone }: { connectionId: string; onDone: () =>
   if (!found) return <span className="su-faint su-line"><CircleNotch className="su-spin" size={12} />Checking token…</span>;
   return (
     <RepoPicker repos={found.repos} busy={busy}
-                exclude={view.repository.repos.map((r) => r.full_name)}
+                exclude={view.repository.repos.filter((r) => r.binding_id)
+                  .map((r) => r.full_name)}
                 onConnect={async (fullName) => {
                   setBusy(true);
                   try {
@@ -306,6 +334,10 @@ export const RepositoryRow = forwardRef<HTMLElement, {
       <div className="su-line">
         <span className="su-mono" data-user-text>{first.full_name}</span>
         <Pill pill={first.pill} testid="su-repo-pill" />
+        {connection?.source === "install" ? (
+          <Tip tip="Set in the server's settings file. Replace here to manage it in BOSS."
+               className="su-chip">From install</Tip>
+        ) : null}
         <RowMenu label={`${first.full_name} actions`} testid="su-repo-menu" items={[
           { label: "Replace token", onSelect: () => setDrawer("replace"), testid: "su-menu-replace" },
         ]} />

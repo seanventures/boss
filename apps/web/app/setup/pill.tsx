@@ -26,7 +26,19 @@ export function Dot({ tone }: { tone: Tone }) {
   return <span className={`su-dot su-tone-${tone}`} aria-hidden="true" />;
 }
 
-export function Pill({ pill, testid }: { pill: PillT; testid?: string }) {
+/** A pill's HH:MM in the viewer's own zone: the server writes its clock (UTC in a container)
+ *  and sends the instant as `at`; the label and tip are rewritten here. */
+export function localPill<T extends PillT>(pill: T): T {
+  if (!pill.at) return pill;
+  const when = new Date(pill.at);
+  if (Number.isNaN(when.getTime())) return pill;
+  const hhmm = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const swap = (text: string) => text.replace(/\b\d{2}:\d{2}\b/g, hhmm);
+  return { ...pill, label: swap(pill.label), tip: swap(pill.tip) };
+}
+
+export function Pill({ pill: raw, testid }: { pill: PillT; testid?: string }) {
+  const pill = localPill(raw);
   return (
     <span className={`su-pill su-tone-${pill.tone}`} data-tip={pill.tip} title={pill.tip}
           data-state={pill.state} data-testid={testid} role="status">

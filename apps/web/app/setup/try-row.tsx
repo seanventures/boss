@@ -4,7 +4,7 @@
  * ③ Try it: one sentence becomes a pull request on the default repository. The finish line of
  * setup, and on the board a one-line Quick PR for small work.
  */
-import React, { forwardRef, useState } from "react";
+import React, { forwardRef, useEffect, useRef, useState } from "react";
 
 import { SetupFailure, setupWrite } from "../../lib/setup-client";
 import type { SetupView } from "../../lib/setup-types";
@@ -22,9 +22,20 @@ export const TryRow = forwardRef<HTMLElement, {
   const last = view.try.last_run;
   const running = last && last.pill.tone === "busy";
   const enabled = view.ready && !busy && !running;
+  // SAY WHY IT CANNOT RUN: the failing row's own fix ("Token needs Pull requests: Read and
+  // write."), not a generic sentence.
+  const reason = [...view.repository.repos, ...view.models]
+    .map((row) => row.pill).find((pill) => pill.tone === "red" || pill.tone === "amber");
   const blocked = !view.ready
-    ? "Connect a repository and a model to start."
+    ? (reason?.tip ?? "Connect a repository and a model to start.")
     : `Runs a short build on ${repo?.full_name ?? "your repository"}. Never merges. You review it.`;
+  // "Your first PR is open." is said once — when this page watched it open — not for ever.
+  const wasRunning = useRef(false);
+  const [justOpened, setJustOpened] = useState(false);
+  useEffect(() => {
+    if (last?.pill.tone === "busy") wasRunning.current = true;
+    else if (last?.pr_url && wasRunning.current) { wasRunning.current = false; setJustOpened(true); }
+  }, [last?.pill.tone, last?.pr_url]);
   const runHref = last ? `?area=delivery_workflows&wfr=${encodeURIComponent(last.run_id)}` : "";
 
   const start = async () => {
@@ -44,7 +55,8 @@ export const TryRow = forwardRef<HTMLElement, {
     <SetupRow ref={ref} row="try" label={label} step={step} mode={mode} focused={focused}
               tip="One sentence becomes a pull request you review.">
       {mode === "waiting" ? (
-        <span className="su-faint" title={blocked} data-tip={blocked}>Open a PR</span>
+        <span className="su-faint" title={blocked} data-tip={blocked}
+              data-testid="su-try-blocked">Open a PR</span>
       ) : (
         <div className="su-stack">
           <div className="su-line su-try">
@@ -67,7 +79,7 @@ export const TryRow = forwardRef<HTMLElement, {
                   <a className="su-pill su-tone-green" href={last.pr_url} target="_blank"
                      rel="noreferrer noopener" title={last.pill.tip} data-tip={last.pill.tip}
                      data-testid="su-try-pr">{last.pill.label}</a>
-                  <span>Your first PR is open.</span>
+                  {justOpened ? <span>Your first PR is open.</span> : null}
                 </>
               ) : (
                 <a href={runHref} className="su-plain"><Pill pill={last.pill} testid="su-try-pill" /></a>

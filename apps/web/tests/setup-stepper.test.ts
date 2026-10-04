@@ -35,6 +35,18 @@ describe("the stepper follows the server's next step", () => {
   });
 });
 
+describe("after the first PR it stays a board", () => {
+  it("a failing row is a red row on the board, not a return to the stepper", () => {
+    // The server says so (`next` is null once a first PR exists); the board must not re-derive
+    // a stepper from a failing row.
+    const view = everyRed();
+    expect(view.next).toBeNull();
+    for (const row of ["repository", "models", "jobs", "budget", "try"] as const) {
+      expect(rowMode(view, row)).toBe("open");
+    }
+  });
+});
+
 describe("deep links", () => {
   it("reads focus, add and source", () => {
     expect(readParams("?area=setup&focus=budget")).toEqual({ focus: "budget", add: null, source: null });

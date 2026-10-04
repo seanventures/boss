@@ -161,4 +161,10 @@ def pill(kind: str, state: str, **values: Any) -> dict[str, Any]:
     fix_url: Optional[str] = values.get("fix_url") or entry.get("fix_url")
     if fix_url:
         out["fix_url"] = fix_url
+    # A TIME IN A PILL IS THE VIEWER'S CLOCK. The label carries the server's HH:MM (UTC in a
+    # container); `at` is the instant, so the console rewrites it in the browser's own zone.
+    if values.get("at") and "{time}" in entry["label"] + entry["tip"]:
+        out["at"] = str(values["at"])
+    if "{time}" in entry["label"] and not values.get("time"):
+        out["label"] = out["label"].replace(" · ", "").strip(" ·")
     return out

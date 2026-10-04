@@ -297,16 +297,24 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
   border-radius: var(--r);
   background: var(--bg);
 }
-.su-picker-list li {
+.su-picker-list li { list-style: none; }
+.su-option {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
+  width: 100%;
   padding: 8px 10px;
+  border: 0;
   border-radius: calc(var(--r) - 2px);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
-.su-picker-list li[aria-selected="true"] { background: var(--accent-soft); }
-.su-picker-list li:hover { background: var(--surface-2); }
+.su-option[aria-selected="true"] { background: var(--accent-soft); }
+.su-option:hover { background: var(--surface-2); }
+.su-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .su-picker .su-btn { align-self: flex-start; }
 
 /* ── Add a model ────────────────────────────────────────────────────────────────── */
@@ -408,9 +416,25 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
     border-top: 1px solid var(--border-strong);
     border-radius: var(--r-xl) var(--r-xl) 0 0;
   }
-  .su-tiles { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Chips and menus keep their own size inside grids and wrapped lines. */
 .su-job > .su-chip { justify-self: start; }
 .su-model .su-menu { margin-left: auto; }
+
+/* The verdict is the page's one answer: a dot and a solid tone, never a faint tint. */
+.su-verdict.su-tone-red { background: var(--red); color: #fff; }
+.su-verdict.su-tone-red .su-dot { background: #fff; }
+.su-verdict.su-tone-green .su-dot { background: var(--green); }
+
+/* A model row: menu and age stay on the line's end, wrapping as one. */
+.su-model > .su-line { flex-wrap: wrap; }
+.su-age { white-space: nowrap; }
+
+@media (max-width: 640px) {
+  /* Tiles stay side by side; the toast never covers the form it reports on. */
+  .su-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .su-tile { height: 40px; font-size: 0.8125rem; }
+  .su-drawer-body { padding-bottom: 96px; }
+  .su-try input { font-size: 0.8125rem; }
+}

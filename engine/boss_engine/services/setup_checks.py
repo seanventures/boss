@@ -283,6 +283,12 @@ def repository_state(checks: dict[str, Any], *, expires_at: Optional[datetime],
             recorded = "working"
     if recorded == "token_rejected" and expires_at is not None and expires_at <= now:
         return "expired"
+    if recorded == "rate_limited":
+        # A rate limit is over when its reset time is: the row is re-checked, not left saying
+        # "GitHub busy" under a header that already says Ready.
+        reset = parse_time(checks.get("retry_at"))
+        if reset is None or reset <= now:
+            return "checking"
     if recorded == "working" and expires_at is not None \
             and expires_at - now <= timedelta(days=EXPIRING_DAYS):
         return "expiring"
@@ -299,7 +305,9 @@ _NOT_FOUND = ("model_not_found", "does not exist", "no such model", "unknown mod
 def classify_model_failure(status: int, detail: str, *, subscription: bool = False) -> str:
     """The model pill state for a failed check."""
     lowered = (detail or "").lower()
-    if status == 0:
+    # Nothing answered — no route, a refused connection, or a gateway in the way (502/503/504):
+    # the key may be right, so it is kept as "Can't reach", never "Check failed".
+    if status == 0 or status in (502, 503, 504):
         return "unreachable"
     if status == 429 or "rate limit" in lowered or "usage limit" in lowered:
         return "rate_limited"

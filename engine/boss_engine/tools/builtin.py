@@ -2118,9 +2118,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 {"p": pid, "w": wanted}).mappings().first()
             target = binding["id"] if binding else None
             if target is None:
-                env_repo = "/".join(str(getattr(ctx.settings, a, "") or "").strip()
-                                    for a in ("target_github_owner", "target_github_repo"))
-                if env_repo.strip("/") and getattr(ctx.settings, "github_token", None):
+                from ..services.setup_view import install_repository
+
+                if all(install_repository(ctx.settings)):
                     target = "install"
             if target is None:
                 return {"ok": False,

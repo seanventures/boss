@@ -25,6 +25,7 @@ import { BudgetRow } from "./budget-row";
 import { JobsRow } from "./jobs-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
+import { Dot } from "./pill";
 import { RepositoryRow } from "./repository-row";
 import { TryRow } from "./try-row";
 
@@ -173,11 +174,14 @@ export function SetupBoard({ projectId, initialView = null }: {
           <h1>Repo and models</h1>
           <span className={`su-pill su-verdict su-tone-${view.verdict.tone}`} data-testid="su-verdict"
                 title={view.verdict.tip} data-tip={view.verdict.tip}>
-            {view.verdict.label}
+            <Dot tone={view.verdict.tone} />{view.verdict.label}
           </span>
           <span className="su-spacer" />
+          {/* Nothing connected, nothing to test: the button waits for something to check. */}
           <button type="button" className="su-btn" data-testid="su-test-all"
-                  disabled={checking.has("all")} onClick={testAll}
+                  disabled={checking.has("all")
+                    || (!view.repository.repos.length && !view.models.length)}
+                  onClick={testAll}
                   title="Re-checks GitHub access and asks each model one tiny question."
                   data-tip="Re-checks GitHub access and asks each model one tiny question.">
             <ArrowClockwise size={14} aria-hidden="true" className={checking.has("all") ? "su-spin" : undefined} />

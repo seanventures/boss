@@ -20,6 +20,11 @@ afterEach(() => { mounted?.unmount(); mounted = null; });
 
 function audit(root: HTMLElement) {
   expect(overBudget(root)).toEqual([]);
+  // Tooltips have a budget too: fourteen words (the "Other ways" tip was fifteen).
+  const long = [...root.querySelectorAll("[data-tip]")]
+    .map((el) => el.getAttribute("data-tip") ?? "")
+    .filter((tip) => tip.split(/\s+/).filter(Boolean).length > 14);
+  expect(long).toEqual([]);
   expect(root.querySelectorAll(".su-board p, .su-drawer p").length).toBe(0);
   const visible = ` ${root.textContent ?? ""} `;
   for (const word of BANNED) expect(visible.toLowerCase()).not.toContain(word.toLowerCase());

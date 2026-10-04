@@ -372,9 +372,7 @@ def _check_install_repository(connection: Connection, settings: Any, project_id:
                               actor: str, http: Optional[Http]) -> dict[str, Any]:
     from .core import emit_event
 
-    owner = str(getattr(settings, "target_github_owner", "") or "").strip()
-    name = str(getattr(settings, "target_github_repo", "") or "").strip()
-    token = str(getattr(settings, "github_token", "") or "").strip()
+    owner, name, token = setup_view.install_repository(settings)
     if not (owner and name and token):
         raise SetupActionError(404, "not_connected", "Not connected", "No repository.")
     full = f"{owner}/{name}"
@@ -416,6 +414,10 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
     """Write a model check onto its source (or, for an install key, as an event)."""
     from .core import emit_event
 
+    if result.get("state") == "paused_budget":
+        # Not a check: the budget refused to spend on it. Nothing is recorded, so the row keeps
+        # what it last knew and reads "Paused · budget" exactly while the budget says so.
+        return
     last = {"ok": bool(result.get("ok")), "state": result.get("state") or "failed",
             "at": iso(now_utc()), "latency_ms": result.get("latency_ms"),
             "retry_at": result.get("retry_at"), "host": result.get("host"),
@@ -569,11 +571,10 @@ def _connect_subscription(connection: Connection, settings: Any, project_id: str
                 stored = store_coding_agent_credential(
                     own, settings, project_id, provider, credential, actor=actor,
                     accept_database_fallback=True)
-        except SetupError as exc:
-            # The message never carries the value; it says what kind of wrong.
-            raise SetupActionError(422, "key_rejected" if provider != "claude_code"
-                                   else "login_expired", "Token rejected",
-                                   _first_sentence(str(exc))) from None
+        except SetupError:
+            # Said as the catalogue's pill (Login expired: "Make a new token with claude
+            # setup-token."), never a sentence of its own; nothing about the value is repeated.
+            raise _failure(provider, "login_expired") from None
         stored_ref = stored.get("ref_key")
     setup_view.forget_cached("cli")
     proofs: list[dict[str, Any]] = []

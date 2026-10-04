@@ -51,8 +51,9 @@ def test_an_install_configured_from_its_settings_file(client, monkeypatch, offli
     as_ceo(monkeypatch)
     fakes(monkeypatch)
     monkeypatch.setattr(api_main.settings, "github_token", "ghp_e2e_full")
-    monkeypatch.setattr(api_main.settings, "target_github_owner", "e2e")
-    monkeypatch.setattr(api_main.settings, "target_github_repo", "app")
+    # The pair README installs set (BOSS_GITHUB_OWNER / BOSS_GITHUB_REPO), not only TARGET_*.
+    monkeypatch.setattr(api_main.settings, "github_owner", "e2e", raising=False)
+    monkeypatch.setattr(api_main.settings, "github_repo", "app", raising=False)
     monkeypatch.setattr(api_main.settings, "openai_api_key", "sk-stub-ok")
     offline()
     body = view(client)
@@ -61,7 +62,8 @@ def test_an_install_configured_from_its_settings_file(client, monkeypatch, offli
     [model] = body["models"]
     assert (model["label"], model["source"], model["pill"]["label"]) == (
         "OpenAI", "install", "Not checked")
-    assert body["ready"] is True                    # never told it is unconfigured
+    # Never told it is unconfigured — and never told Ready over a check that has not run.
+    assert repo["pill"]["label"] == "Checking…" and body["ready"] is False
 
 
 def test_connected_then_expired_then_budget_red(client, engine, monkeypatch, offline):
@@ -90,18 +92,21 @@ def test_connected_then_expired_then_budget_red(client, engine, monkeypatch, off
     body = view(client)
     assert body["repository"]["repos"][0]["pill"]["label"] == "Expires in 2d"
     assert body["ready"] is True
+    # J8: ONE answer for the budget row, the header and the metered model — the gate's own.
+    # A $0.01 cap cannot fit one metered check, so it is Spent everywhere at once ...
     response = client.put("/v1/setup/budget", headers=AUTH,
                           json={"project_id": PROJECT, "monthly_cap_usd": 0.01})
     assert response.status_code == 200
-    with engine.begin() as c:
-        c.execute(text(
-            "INSERT INTO budget_reservations (id, project_id, category, amount_usd_micros, "
-            "reason, status, expires_at) VALUES ('br-test', :p, 'model', 20000, 'test', 'active', "
-            "now() + interval '1 hour')"),
-            {"p": PROJECT})
-    body = view(client)
-    assert body["budget"]["state"] == "spent" and body["verdict"]["label"] == "Budget spent"
+    body = response.json()
+    assert body["budget"]["state"] == "spent" and body["budget"]["pill"]["label"] == "Spent"
+    assert body["verdict"]["label"] == "Budget spent"
     assert body["models"][0]["pill"]["label"] == "Paused · budget"
+    # ... and Save on a real cap clears all three, with no re-test.
+    body = client.put("/v1/setup/budget", headers=AUTH,
+                      json={"project_id": PROJECT, "monthly_cap_usd": 200}).json()
+    assert body["budget"]["pill"]["label"] == "OK"
+    assert body["models"][0]["pill"]["label"] == "Working"
+    assert body["verdict"]["label"] != "Budget spent"
 
 
 def test_a_read_never_waits_for_a_cli_or_the_secret_store(client, monkeypatch):
@@ -123,3 +128,42 @@ def test_a_read_never_waits_for_a_cli_or_the_secret_store(client, monkeypatch):
     body = view(client)
     assert _time.monotonic() - started < 3
     assert body["detecting"] is True
+
+
+def test_after_the_first_pr_a_failure_is_a_red_row_not_the_stepper(client, engine, monkeypatch):
+    """Any failure after the first PR dropped the board back into the stepper."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    connect_repository(client)
+    assert connect_key(client).status_code == 200
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, "
+                       "pull_request_url, pull_request_number) VALUES ('ctr-first', :p, 'x', "
+                       "'completed', 'https://github.com/e2e/app/pull/1', 1)"), {"p": PROJECT})
+        c.execute(text("UPDATE github_connections SET expires_at = now() - interval '1 hour' "
+                       "WHERE project_id = :p"), {"p": PROJECT})
+    body = view(client)
+    assert body["repository"]["repos"][0]["pill"]["label"] == "Expired"
+    assert body["next"] is None and body["try"]["done"] is True
+
+
+def test_an_install_repository_is_checked_then_taken_over(client, monkeypatch):
+    """M6: Test proves the settings-file repository, and Replace token moves it into BOSS —
+    the picker offers the repository it is replacing."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    monkeypatch.setattr(api_main.settings, "github_token", "ghp_e2e_full")
+    monkeypatch.setattr(api_main.settings, "github_owner", "e2e", raising=False)
+    monkeypatch.setattr(api_main.settings, "github_repo", "app", raising=False)
+    body = client.post("/v1/setup/checks", headers=AUTH,
+                       json={"project_id": PROJECT, "target": "repository"}).json()
+    assert body["repository"]["repos"][0]["pill"]["label"] == "Working"
+    found = client.post("/v1/setup/repository/token", headers=AUTH,
+                        json={"project_id": PROJECT, "token": "ghp_e2e_full"}).json()
+    assert "e2e/app" in {r["full_name"] for r in found["repos"]}
+    taken = client.post("/v1/setup/repository/select", headers=AUTH, json={
+        "project_id": PROJECT, "connection_id": found["connection_id"],
+        "full_name": "e2e/app"}).json()
+    [repo] = taken["repository"]["repos"]
+    assert repo["binding_id"] and taken["repository"]["connection"]["source"] == "connected"
+    assert repo["pill"]["label"] == "Working"

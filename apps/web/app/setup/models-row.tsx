@@ -56,7 +56,7 @@ function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void
 }
 
 function ModelLine({ entry, menuOpen, onReplace }: {
-  entry: ModelEntry; menuOpen: boolean; onReplace: (provider: string) => void;
+  entry: ModelEntry; menuOpen: boolean; onReplace: (provider: string, sourceId: string) => void;
 }) {
   const { projectId, apply, checking, setChecking } = useBoard();
   const key = `model:${entry.source_id}`;
@@ -107,7 +107,8 @@ function ModelLine({ entry, menuOpen, onReplace }: {
         ) : null}
         <RowMenu label={`${entry.label} actions`} testid="su-model-menu" open={menuOpen} items={[
           { label: "Test", onSelect: test, testid: "su-menu-test" },
-          { label: "Replace", onSelect: () => onReplace(entry.provider), testid: "su-menu-replace" },
+          { label: "Replace", onSelect: () => onReplace(entry.provider, entry.source_id),
+            testid: "su-menu-replace" },
           ...(canPick ? [{ label: "Default model…", onSelect: () => setPicking(true),
                            testid: "su-menu-default-model" }] : []),
           ...(entry.source === "connected" ? [{ label: "Remove", danger: true,
@@ -118,7 +119,8 @@ function ModelLine({ entry, menuOpen, onReplace }: {
       {red || pill.tone === "amber" ? (
         <div className="su-line su-fix">
           {entry.pill.action === "replace" ? (
-            <button type="button" className="su-btn su-btn-sm" onClick={() => onReplace(entry.provider)}>
+            <button type="button" className="su-btn su-btn-sm"
+                    onClick={() => onReplace(entry.provider, entry.source_id)}>
               Replace
             </button>
           ) : null}
@@ -158,7 +160,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
   onAddHandled: () => void;
 }>(function ModelsRow({ mode, step, focused, add, source, onAddHandled }, ref) {
   const { view } = useBoard();
-  const [drawer, setDrawer] = useState<{ provider: string } | null>(null);
+  const [drawer, setDrawer] = useState<{ provider: string; sourceId?: string } | null>(null);
   const opening = drawer ?? (add ? { provider: add } : null);
   const close = () => { setDrawer(null); onAddHandled(); };
   const start = defaultAdd(view);
@@ -168,7 +170,23 @@ export const ModelsRow = forwardRef<HTMLElement, {
   // A finished step, or a later one that already has a model (connected before the
   // repository broke): one line with the model and its pill, never "Not connected".
   if ((mode === "done" || mode === "waiting") && working) {
-    body = <span className="su-line"><span>{working.label}</span><Pill pill={working.pill} testid="su-model-pill" /></span>;
+    body = (
+      <span className="su-line">
+        <span>{working.label}</span>
+        <Pill pill={working.pill} testid="su-model-pill" />
+        {working.source === "install" ? (
+          <Tip tip="Set in the server's settings file. Replace here to manage it in BOSS."
+               className="su-chip">From install</Tip>
+        ) : null}
+        <RowMenu label={`${working.label} actions`} testid="su-model-menu" items={[
+          { label: "Replace", onSelect: () => setDrawer({ provider: working.provider,
+                                                          sourceId: working.source_id }),
+            testid: "su-menu-replace" },
+          { label: "Add model", onSelect: () => setDrawer({ provider: start.provider }),
+            testid: "su-menu-add" },
+        ]} />
+      </span>
+    );
   } else if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
   } else if (mode === "current" && view.models.length === 0) {
@@ -185,7 +203,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
       <div className="su-stack">
         {view.models.map((entry) => (
           <ModelLine key={entry.source_id} entry={entry} menuOpen={source === entry.source_id}
-                     onReplace={(provider) => setDrawer({ provider })} />
+                     onReplace={(provider, sourceId) => setDrawer({ provider, sourceId })} />
         ))}
         <button type="button" className="su-link su-add" data-testid="su-add-model-open"
                 onClick={() => setDrawer({ provider: start.provider })}>
@@ -202,8 +220,10 @@ export const ModelsRow = forwardRef<HTMLElement, {
       {body}
       {showDrawer ? (
         <Drawer title="Add a model" onClose={close} testid="su-model-drawer">
-          <AddModelPanel key={opening!.provider} initialTile={tileOf(view, opening!.provider)}
-                         initialProvider={opening!.provider} onDone={close} />
+          <AddModelPanel key={`${opening!.provider}:${drawer?.sourceId ?? ""}`}
+                         initialTile={tileOf(view, opening!.provider)}
+                         initialProvider={opening!.provider} onDone={close}
+                         replaceSourceId={drawer?.sourceId} />
         </Drawer>
       ) : null}
     </SetupRow>
