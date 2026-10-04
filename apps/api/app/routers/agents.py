@@ -234,9 +234,15 @@ def build_agents_router(
     # Writes are a PERSON's (agent_instructions.ONLY_A_PERSON) with role_review, the permission
     # a voice edit needs; the actor is the signed-in principal, as for PATCH /v1/agents.
 
-    def _ins_fail(error: Exception):
+    def _ins_fail(error: Exception, *, dry_run: bool = False):
+        """A refusal. A DRY RUN's refusal is its answer, not an error: 200 {ok: false, …} — the
+        sheet asks on every keystroke and a 422 each time is a console full of red."""
+        from fastapi.responses import JSONResponse
+
         from boss_engine.services.agent_instructions import InstructionError
 
+        if dry_run and isinstance(error, InstructionError) and error.status == 422:
+            return JSONResponse({"ok": False, **error.detail()}, status_code=200)
         if isinstance(error, InstructionError):
             raise HTTPException(status_code=error.status, detail=error.detail()) from error
         raise error
@@ -279,7 +285,7 @@ def build_agents_router(
                     connection, body.project_id, role_key, actor=actor, name=body.name,
                     body=body.body, source=body.source, modes=body.modes, dry_run=body.dry_run)
             except Exception as error:  # noqa: BLE001
-                _ins_fail(error)
+                return _ins_fail(error, dry_run=body.dry_run)
         return JSONResponse(out, status_code=200 if body.dry_run else 201)
 
     @router.patch("/v1/agents/{role_key}/instructions/{ins_id}")
@@ -294,7 +300,7 @@ def build_agents_router(
                     name=body.name, modes=body.modes, position=body.position,
                     dry_run=body.dry_run)
             except Exception as error:  # noqa: BLE001
-                _ins_fail(error)
+                return _ins_fail(error, dry_run=body.dry_run)
 
     @router.delete("/v1/agents/{role_key}/instructions/{ins_id}")
     def remove_instruction(role_key: str, ins_id: str, project_id: str,
