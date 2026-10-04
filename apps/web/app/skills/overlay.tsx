@@ -63,11 +63,15 @@ function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () =
   }, []);
 }
 
-/** A drawer: a column beside the content when wide, a bottom/side sheet over it when not. */
-export function DrawerShell({ label, testId, onClose, children }: {
+/** A drawer: a column beside the content when wide, a bottom/side sheet over it when not.
+ *  `float`: always a sheet (the agent Passport has no column to sit in). `over`: above a
+ *  full-screen page (`.tpl-page`, z 200), which the Kit's own layers sit under. */
+export function DrawerShell({ label, testId, onClose, children, float, over }: {
   label: string; testId: string; onClose: () => void; children: React.ReactNode;
+  float?: boolean; over?: boolean;
 }) {
-  const floating = useMedia(FLOAT_QUERY);
+  const narrow = useMedia(FLOAT_QUERY);
+  const floating = narrow || !!float;
   const ref = useRef<HTMLElement>(null);
   useOverlayFocus(ref, onClose, floating);
   const aside = (
@@ -78,7 +82,7 @@ export function DrawerShell({ label, testId, onClose, children }: {
   );
   if (!floating || typeof document === "undefined") return aside;
   return createPortal(
-    <div className="kit-sheet-layer" data-testid={`${testId}-layer`}>
+    <div className="kit-sheet-layer" data-testid={`${testId}-layer`} data-over={over ? "page" : undefined}>
       <div className="kit-modal-scrim" onClick={onClose} />
       {aside}
     </div>,
@@ -87,13 +91,16 @@ export function DrawerShell({ label, testId, onClose, children }: {
 }
 
 /** A modal: always over the page (portalled), Esc closes it, focus returns to its opener. */
-export function ModalShell({ label, testId, onClose, wide, children }: {
+export function ModalShell({ label, testId, onClose, wide, children, over }: {
   label: string; testId: string; onClose: () => void; wide?: boolean; children: React.ReactNode;
+  /** Above a full-screen page (the agent Passport), as DrawerShell's `over`. */
+  over?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useOverlayFocus(ref, onClose);
   const modal = (
-    <div className="kit-modal" role="dialog" aria-modal="true" aria-label={label} data-testid={testId}>
+    <div className="kit-modal" role="dialog" aria-modal="true" aria-label={label} data-testid={testId}
+         data-over={over ? "page" : undefined}>
       <div className="kit-modal-scrim" onClick={onClose} />
       <div ref={ref} className={`kit-modal-card${wide ? " kit-modal-wide" : ""}`}>{children}</div>
     </div>

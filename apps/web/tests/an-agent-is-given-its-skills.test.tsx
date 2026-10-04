@@ -20,7 +20,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
 
-const { AgentSkills } = await import("../app/agent-detail-ui");
+const { LoadoutGrants, offerSkills } = await import("../app/skills/agent-abilities");
 const { CaptainCanRunIt } = await import("../app/delivery-workflows-ui");
 
 const skill = (id: string, over: Record<string, unknown> = {}) => ({
@@ -28,69 +28,52 @@ const skill = (id: string, over: Record<string, unknown> = {}) => ({
   behaviour_kind: "builtin", risk_tier: 0, enabled: true, ...over,
 });
 
-function panel(holds: unknown[], available: unknown[]) {
-  return { role_key: "video_editor", holds, available } as never;
-}
-
 const render = (node: React.ReactElement) => renderToStaticMarkup(node);
 
-describe("what an agent can do is on the agent", () => {
+/** The Passport's Loadout › Skills row (agent-loadout spec §3.2), holding `holds`. */
+function loadout(holds: unknown[], available: unknown[] = [], canEdit = true) {
+  return render(
+    <LoadoutGrants projectId="p" actor="ceo" roleKey="video_editor" canEdit={canEdit}
+                   skills={holds as never} available={available as never} servers={[]} availableServers={[]}
+                   allowed={[]} forbidden={[]} onChanged={() => {}} onFromFile={() => {}} initialAbilities={[]} />);
+}
+
+describe("what an agent can do is on the agent, first", () => {
   it("lists the skills it actually holds, with what holding them costs", () => {
-    const html = render(
-      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}}
-                   spec={{}}
-                   panel={panel([skill("video.apply_plan"),
-                                 skill("publish_youtube", { risk_tier: 3 })], [])} />);
-    expect(html).toContain("video.apply_plan");
-    expect(html).toContain("2 skills held");
-    // A tier at or above the approval floor stops a run and waits for a person. That is a
-    // property of GIVING the skill out, so it belongs where the giving happens.
-    expect(html).toContain("needs approval each time (tier 3)");
+    const html = loadout([skill("video.apply_plan"), skill("publish_youtube", { risk_tier: 3 })]);
+    expect(html).toContain('data-testid="agent-skill-video.apply_plan"');
+    expect(html).toContain('data-testid="agent-skill-publish_youtube"');
+    // A tier at or above the approval floor stops a run and waits for a person: said on the chip.
+    const chip = html.split('data-testid="agent-skill-publish_youtube"')[1].split("</span></span>")[0];
+    expect(chip).toContain('aria-label="Asks a person"');
   });
 
   it("an agent holding nothing is told what that means, not shown an empty box", () => {
-    // The state every installed example was in. "No skills" is not a cosmetic gap: every step
-    // naming this agent is refused at the gate.
-    const html = render(
-      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}}
-                   spec={{ allowed_skills: ["video.cut", "video.reframe"] }}
-                   panel={panel([], [skill("video.cut")])} />);
-    expect(html).toContain("holds no skills");
-    expect(html).toContain("refused at the gate");
-    // And it names the ones its own spec says it may have, because that is the next click.
-    expect(html).toContain("video.cut");
+    // The state every installed example was in: every step naming it is refused at the gate.
+    const html = loadout([]);
+    expect(html).toContain("No skills");
+    expect(html).toContain("Steps naming it are refused until it holds one");
   });
 
-  it("a grant left behind by a deleted skill is shown as broken, not hidden", () => {
-    const html = render(
-      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}} spec={{}}
-                   panel={panel([skill("gone", { missing: true })], [])} />);
-    expect(html).toContain("this grant does");
+  it("a grant left behind by a deleted skill is shown as off, not hidden", () => {
+    const html = loadout([skill("gone", { missing: true })]);
+    expect(html).toMatch(/data-off="true"[^>]*data-tip="Off · not in this project"[^>]*data-testid="agent-skill-gone"/);
   });
 
-  it("offers a skill to give, and says so when there is nothing left to give", () => {
-    const withMore = render(
-      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}} spec={{}}
-                   panel={panel([], [skill("video.cut")])} />);
-    expect(withMore).toContain("Give this agent a skill");
-
-    const exhausted = render(
-      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}} spec={{}}
-                   panel={panel([skill("video.cut")], [])} />);
-    expect(exhausted).toContain("already holds every skill");
-    expect(exhausted).not.toContain("Give this agent a skill");
+  it("offers + Add to an editor and nothing to a reader", () => {
+    expect(loadout([], [skill("video.cut")])).toContain('data-testid="loadout-skills-add"');
+    const reader = loadout([skill("video.cut")], [], false);
+    expect(reader).not.toContain('data-testid="loadout-skills-add"');
+    expect(reader).not.toContain('data-testid="agent-skill-video.cut-more"');
   });
 
-  it("a skill the spec forbids is not offered, and the reason is stated", () => {
+  it("offers the role's own skills first and never a skill its spec forbids", () => {
     // Offering a forbidden skill and refusing it later is a control that lies about itself.
-    const html = render(
-      <AgentSkills projectId="p" actor="ceo" roleKey="video_editor" onChanged={() => {}}
-                   spec={{ forbidden_skills: ["deploy_production"] }}
-                   panel={panel([], [skill("deploy_production"), skill("video.cut")])} />);
-    expect(html).toContain("Its spec forbids deploy_production");
-    // The picker itself must not carry it as an option.
-    const options = html.split("<select")[1] ?? "";
-    expect(options.split("</select>")[0]).not.toContain("deploy_production");
+    const { itsRole, others } = offerSkills(
+      [skill("video.cut"), skill("deploy_production"), skill("web.search")] as never,
+      ["video.cut"], ["deploy_production"], [], "video_editor");
+    expect(itsRole.map((s) => s.skill_id)).toEqual(["video.cut"]);
+    expect(others.map((s) => s.skill_id)).toEqual(["web.search"]);
   });
 });
 

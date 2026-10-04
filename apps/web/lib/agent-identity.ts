@@ -210,6 +210,8 @@ export function identityVersion(): number { return snapshot(); }
 
 /** Every identity loaded for the project, by role key (the shipped cast is added by callers). */
 export function loadedIdentities(): ReadonlyMap<string, AgentIdentity> { return loaded; }
+/** The project the identities were loaded for: what a card opened anywhere reads its facts by. */
+export function identitiesProject(): string | null { return loadedFor; }
 
 /**
  * Fetch the install's identities for a project. A load that succeeded is kept until
