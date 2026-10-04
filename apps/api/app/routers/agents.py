@@ -38,6 +38,8 @@ class AgentCreateBody(BaseModel):
     persona: Optional[dict[str, Any]] = None
     #: {kind: blank|template|archetype, template_key?|archetype?} — what it starts from.
     born_from: Optional[dict[str, Any]] = None
+    #: Which team it sits in (a shipped key or the operator's own name); empty = Yours.
+    team: Optional[str] = None
 
 
 class AgentUpdateBody(BaseModel):
@@ -53,6 +55,8 @@ class AgentUpdateBody(BaseModel):
     grant_skills: list[str] = Field(default_factory=list)
     grant_mcp_servers: list[Any] = Field(default_factory=list)
     persona: Optional[dict[str, Any]] = None
+    #: Organization's `Move to…`: a shipped team key, the operator's own team, or null (Yours).
+    team: Optional[str] = None
     # IDENTITY FIELDS ARE FACTS, NOT SETTINGS. Accepted here only so a body carrying one is
     # refused by name (422 "Identity fields are fixed") instead of being silently ignored.
     agent_id: Optional[Any] = None
@@ -147,7 +151,7 @@ def build_agents_router(
                     purpose=body.purpose, role_key=body.role_key, skills=body.skills,
                     mcp_servers=body.mcp_servers, reports_to=body.reports_to,
                     boundaries=body.boundaries, persona=body.persona,
-                    born_from=body.born_from)
+                    born_from=body.born_from, team=body.team)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 
@@ -163,7 +167,7 @@ def build_agents_router(
         changes: dict[str, Any] = {
             name: getattr(body, name)
             for name in ("display_name", "mission", "boundaries", "reports_to", "skills",
-                         "mcp_servers", "persona")
+                         "mcp_servers", "persona", "team")
             if name in given
         }
         grants = bool(body.grant_skills or body.grant_mcp_servers

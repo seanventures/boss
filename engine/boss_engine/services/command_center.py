@@ -148,6 +148,18 @@ def _latest_per_step(steps: Iterable[Mapping[str, Any]]) -> list[Mapping[str, An
     return [latest[sid] for sid in order]
 
 
+def step_index(steps_done: int, step_count: int, status: Any = None) -> int:
+    """Which step a run is on, 1-based: the one after those done (succeeded or skipped).
+
+    A finished run is on its last step. Never past `step_count`, never an estimate."""
+    count = max(int(step_count or 0), 0)
+    if count == 0:
+        return 0
+    if str(status or "") == "completed":
+        return count
+    return max(1, min(int(steps_done or 0) + 1, count))
+
+
 def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
              steps: list[Mapping[str, Any]], decisions: list[Mapping[str, Any]],
              readiness: list[Mapping[str, Any]], names: Mapping[str, str],
@@ -180,6 +192,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         run_steps = sorted(_latest_per_step(by_run.get(run_id, [])),
                            key=lambda s: order.get(str(s.get("step_id")), len(order)))
         done = sum(1 for s in run_steps if s.get("status") in ("succeeded", "skipped"))
+        step_count = max(len(spec), len(run_steps))
         base = {
             "run_id": run_id,
             "workflow_key": run.get("workflow_key"),
@@ -187,13 +200,16 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "subject": run_subject(run),
             "status": status,
             "steps_done": done,
-            "step_count": max(len(spec), len(run_steps)),
+            "step_count": step_count,
             "started_at": _iso(run.get("created_at")),
         }
+        # `step k of n` everywhere a run is named: the step after the ones done. Counted, not
+        # estimated — the same number on the attention card and on the run's Live row.
+        here = step_index(done, step_count, status)
         for step in run_steps:
             if step.get("decision_id"):
                 run_of_decision[str(step.get("decision_id"))] = {
-                    **base, "step_id": step.get("step_id"),
+                    **base, "step_id": step.get("step_id"), "step_index": here,
                     "step_label": step_label(spec.get(str(step.get("step_id")), {}),
                                              str(step.get("step_id"))),
                 }
@@ -230,6 +246,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
                 spec_step = spec.get(str(step.get("step_id")), {})
                 label = step_label(spec_step, str(step.get("step_id")))
                 needs_you.append({
+                    "id": f"run:{run_id}:{step.get('step_id')}",
                     "kind": "failed_step",
                     "title": f"“{label}” failed" + (f" on {base['subject']}"
                                                     if base["subject"] else ""),
@@ -245,6 +262,9 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
                     # The run's own answers, as the Workflow screen gets them: what each is
                     # called, whether it can be taken now, and why not.
                     "answers": list(answers),
+                    "run": {"id": run_id, "subject": base["subject"],
+                            "step_id": step.get("step_id"), "step_label": label,
+                            "step_index": here, "step_count": step_count},
                     "at": _iso(step.get("completed_at") or updated),
                 })
 
@@ -277,6 +297,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         else:
             title = _first_line(decision.get("question"), 160)
         needs_you.append({
+            "id": str(decision.get("id")),
             "kind": "approval",
             "decision_kind": described["kind"],
             "title": title,
@@ -291,6 +312,13 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "step_id": run["step_id"] if run else None,
             "workflow_name": run["workflow_name"] if run else None,
             "actions": [a["action"] for a in described["allowed_actions"]],
+            # The whole offer — label, tone, effect, what it needs — so a card elsewhere draws
+            # exactly the inbox's buttons. `actions` stays the list of names older readers use.
+            "allowed_actions": [dict(a) for a in described["allowed_actions"]],
+            "run": ({"id": run["run_id"], "subject": run.get("subject") or "",
+                     "step_id": run["step_id"], "step_label": run["step_label"],
+                     "step_index": run.get("step_index"), "step_count": run.get("step_count")}
+                    if run else None),
             "risk_tier": decision.get("risk_tier"),
             "at": _iso(decision.get("created_at")),
         })
@@ -299,6 +327,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         if gap.get("done"):
             continue
         needs_you.append({
+            "id": f"ready:{gap.get('id') or gap.get('key') or _first_line(gap.get('title'), 40)}",
             "kind": "readiness",
             "title": str(gap.get("title") or "Finish setting up"),
             "detail": str(gap.get("detail") or ""),
@@ -345,9 +374,13 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
     }
 
 
-def build(connection, settings, project_id: str,
-          now: Optional[datetime] = None) -> dict[str, Any]:
-    """Read what `assemble` needs. Two run queries and one decision query, whatever the size."""
+def read(connection, settings, project_id: str,
+         now: Optional[datetime] = None) -> dict[str, Any]:
+    """Read what `assemble` needs. Two run queries and one decision query, whatever the size.
+
+    Returned as `assemble`'s keyword arguments, so another view of the same factory (Agents ›
+    Live: agents_live_board) reads these rows ONCE and passes them through `assemble` rather
+    than writing its own query that could disagree."""
     now = now or datetime.now(timezone.utc)
     # Apply the deadlines first, as GET /v1/status and the Approvals inbox do. Without it an
     # overdue decision whose default is reject or approve dropped off this page (attention
@@ -359,9 +392,9 @@ def build(connection, settings, project_id: str,
     runs = [dict(r) for r in connection.execute(
         text(
             """
-            SELECT r.id, r.status, r.input, r.blocked_reason, r.error,
+            SELECT r.id, r.status, r.actor, r.input, r.blocked_reason, r.error,
                    r.created_at, r.updated_at, r.completed_at,
-                   d.workflow_key, d.name AS workflow_name, v.spec
+                   d.workflow_key, d.name AS workflow_name, v.version, v.spec
             FROM workflow_runs r
             JOIN workflow_definitions d ON d.id = r.workflow_definition_id
             JOIN workflow_versions v ON v.id = r.workflow_version_id
@@ -381,11 +414,14 @@ def build(connection, settings, project_id: str,
         steps = [dict(s) for s in connection.execute(
             text(
                 """
-                SELECT workflow_run_id, step_id, step_kind, status, output, last_error,
-                       decision_id, started_at, completed_at
-                FROM workflow_step_runs
-                WHERE workflow_run_id = ANY(:ids)
-                ORDER BY created_at, iteration
+                SELECT s.workflow_run_id, s.step_id, s.step_kind, s.status, s.output,
+                       s.last_error, s.decision_id, s.started_at, s.completed_at,
+                       s.updated_at, s.binding_snapshot->'approval' AS approval,
+                       dd.status AS decision_status
+                FROM workflow_step_runs s
+                LEFT JOIN decisions dd ON dd.id = s.decision_id
+                WHERE s.workflow_run_id = ANY(:ids)
+                ORDER BY s.created_at, s.iteration
                 """
             ),
             {"ids": [r["id"] for r in runs]},
@@ -394,7 +430,7 @@ def build(connection, settings, project_id: str,
         text(
             """
             SELECT id, task_id, question, status, risk_tier, default_action,
-                   recommendation, deadline_at, created_at
+                   recommendation, deadline_at, created_at, delegated_to
             FROM decisions
             WHERE project_id = :project_id AND status = ANY(:candidates)
             ORDER BY risk_tier DESC, created_at DESC
@@ -425,5 +461,26 @@ def build(connection, settings, project_id: str,
     loaded = load_runs(connection, project_id, [r["id"] for r in runs])
     stopped = {run_id: stopped_for_operator(run, run_steps)
                for run_id, (run, run_steps) in loaded.items()}
-    return assemble(project_id=project_id, runs=runs, steps=steps, decisions=decisions,
-                    readiness=readiness, names=names, now=now, stopped=stopped)
+    return {"project_id": project_id, "runs": runs, "steps": steps, "decisions": decisions,
+            "readiness": readiness, "names": names, "now": now, "stopped": stopped}
+
+
+def build(connection, settings, project_id: str,
+          now: Optional[datetime] = None) -> dict[str, Any]:
+    """The Command Center: `assemble` over `read`, each card attributed and each running row
+    given its verb — by the same functions Agents › Live uses (agents_live_board.enrich), so a
+    card here and its twin on Live show the same face and the same buttons."""
+    rows = read(connection, settings, project_id, now)
+    out = assemble(**rows)
+    from .agents_live_board import enrich
+
+    enrich(connection, project_id, out, rows)
+    return out
+
+
+def needs_you_count(connection, settings, project_id: str,
+                    now: Optional[datetime] = None) -> int:
+    """HOW MANY THINGS NEED THE OPERATOR: gates (decision_actions.attention), failed steps and
+    setup gaps — the Command Center's `counts.needs_you`. The top-bar pill, Agents › Live and
+    the Command Center all say this number; none of them counts its own (spec §6.3)."""
+    return int(build(connection, settings, project_id, now)["counts"]["needs_you"])

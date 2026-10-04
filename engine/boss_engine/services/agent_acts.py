@@ -1302,6 +1302,27 @@ def close_code_task(connection: Connection, code_task_run_id: str) -> int:
             close_act(connection, act_id, status=mapped)
         elif str(status or "") in ("blocked", "awaiting_approval"):
             _set_status(connection, act_id, "awaiting_input")
+    pr = _pull_request_of(connection, code_task_run_id) if mapped else None
+    if pr:
+        # THE PULL REQUEST IS WHAT THE BUILD MADE, so "PR #842 opened" is credited to the
+        # agent who built it: the build's newest engineering stage (implement, repair, solo),
+        # else its newest stage. Once per build — a second settle adds nothing (spec §6.5).
+        already = connection.execute(
+            text("SELECT 1 FROM agent_acts WHERE code_task_run_id = :c AND kind = 'stage' "
+                 "AND artifacts @> CAST(:pr AS JSONB) LIMIT 1"),
+            {"c": code_task_run_id, "pr": json.dumps([{"kind": "pr"}])},
+        ).scalar()
+        target = None if already else connection.execute(
+            text("SELECT act_id FROM agent_acts WHERE code_task_run_id = :c AND kind = 'stage' "
+                 "ORDER BY (step_id = ANY(:eng)) DESC, started_at DESC LIMIT 1"),
+            {"c": code_task_run_id, "eng": sorted(ENGINEERING_STAGES)},
+        ).scalar()
+        if target:
+            connection.execute(
+                text("UPDATE agent_acts SET artifacts = artifacts || CAST(:a AS JSONB) "
+                     "WHERE act_id = :i"),
+                {"a": json.dumps([pr]), "i": target},
+            )
     if mapped:
         for root in connection.execute(
             text("SELECT act_id FROM agent_acts WHERE kind = 'run' "
@@ -1310,6 +1331,27 @@ def close_code_task(connection: Connection, code_task_run_id: str) -> int:
         ).scalars().all():
             close_act(connection, root, status=mapped)
     return len(rows) if mapped else 0
+
+
+def _pull_request_of(connection: Connection,
+                     code_task_run_id: str) -> Optional[dict[str, Any]]:
+    """The build's pull request as an artifact, from code_task_runs — or None when it opened
+    none. `ref` is `#n` (the number the run recorded, else the one in the URL)."""
+    row = connection.execute(
+        text("SELECT pull_request_url, pull_request_number FROM code_task_runs WHERE id = :i"),
+        {"i": code_task_run_id},
+    ).mappings().first()
+    if not row or not (row["pull_request_url"] or row["pull_request_number"]):
+        return None
+    number = row["pull_request_number"]
+    if not number and row["pull_request_url"]:
+        found = re.search(r"/pull/(\d+)", str(row["pull_request_url"]))
+        number = int(found.group(1)) if found else None
+    item: dict[str, Any] = {"kind": "pr", "ref": f"#{number}" if number else
+                            str(row["pull_request_url"])}
+    if row["pull_request_url"]:
+        item["url"] = str(row["pull_request_url"])
+    return item
 
 
 def settle_code_task(engine: Any, code_task_run_id: str) -> None:
@@ -1628,6 +1670,116 @@ def record_handoff(connection: Connection, *, project_id: str, envelope_id: str,
     return act_id
 
 
+# ── the work verb (agents-home spec §4.5): one word for what an act is doing ─────────────────
+
+#: Build stages → the verb. Data the pipeline already has (STAGE_PHASES), never a label.
+STAGE_VERBS: dict[str, str] = {
+    "spec": "Planning", "plan": "Planning", "review_plan": "Planning", "standards": "Planning",
+    "design": "Designing",
+    "implement": "Coding", "repair": "Coding", "solo": "Coding", "guest": "Coding",
+    "review_code": "Reviewing", "consistency_check": "Reviewing", "security_check": "Reviewing",
+    "write_tests": "Testing", "check_tests": "Testing", "run_all_tests": "Testing",
+}
+#: A capability's `family` (workflow_capabilities.Capability.family) → the verb.
+FAMILY_VERBS: dict[str, str] = {
+    "deploy": "Deploying", "publish": "Publishing", "monitor": "Monitoring",
+    "research": "Researching",
+}
+#: Every verb work_verb can say. The web renders these words and maps none of its own.
+VERBS = frozenset({"Needs you", "Stuck", "Approved", "Rejected", "In a panel", "Talking",
+                   "Waiting", "Blocked", "Working", *STAGE_VERBS.values(),
+                   *FAMILY_VERBS.values()})
+
+
+def capability_family(capability: Optional[str]) -> str:
+    """The registry's own `family` for a capability key; "" when it has none or is unknown."""
+    if not capability:
+        return ""
+    try:
+        from .workflow_capabilities import CAPABILITIES
+
+        found = CAPABILITIES.get(str(capability))
+    except Exception:  # noqa: BLE001 — a verb is never worth failing a read for
+        return ""
+    return str(getattr(found, "family", "") or "") if found is not None else ""
+
+
+def work_verb(act: dict[str, Any], *, capability: Optional[str] = None,
+              waiting: bool = False, run_status: Optional[str] = None) -> str:
+    """THE ONE MAP from an act to the word every agent surface says (spec §4.5).
+
+    Live's lanes, Activity's river, presence lines and the workforce card all read this, so
+    no screen words work its own way. It reads the act's status, kind, stage and its step's
+    capability family — never its label: a label is a name somebody typed, and "deploy" in a
+    build's title does not make the build a deploy.
+
+    `capability` is the step's capability key (callers that hold the run spec pass it; the
+    readers below look it up in one query). `waiting` is a step waiting on something that is
+    not a person (a timer, a sub-run, a build). `run_status` lets a run's own act say Blocked.
+    """
+    status = str(act.get("status") or "")
+    kind = str(act.get("kind") or "")
+    if status == "awaiting_input":
+        return "Needs you"
+    if status in ("error", "stale"):
+        return "Stuck"
+    if kind == "approval":
+        return "Rejected" if status == "rejected" else "Approved"
+    if kind == "seat":
+        return "In a panel"
+    if kind == "chat":
+        return "Talking"
+    if kind == "run" and str(run_status or "") == "blocked":
+        return "Blocked"
+    if kind == "stage":
+        return STAGE_VERBS.get(str(act.get("step_id") or "").strip().lower(), "Working")
+    if kind == "step":
+        if waiting and status in OPEN_STATUSES:
+            return "Waiting"
+        return FAMILY_VERBS.get(capability_family(capability), "Working")
+    return "Working"
+
+
+def _step_capabilities(connection: Connection,
+                       rows: Iterable[dict[str, Any]]) -> dict[str, str]:
+    """{act_id: capability key} for the step acts among `rows`, from their run's spec — one
+    query for all of them, reading only the steps' ids and capabilities."""
+    wanted: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if row.get("kind") == "step" and row.get("workflow_run_id") and row.get("step_id"):
+            wanted.setdefault(str(row["workflow_run_id"]), []).append(row)
+    if not wanted:
+        return {}
+    found: dict[tuple[str, str], str] = {}
+    for r in connection.execute(
+        text(
+            """
+            SELECT r.id AS run_id, s->>'id' AS step_id,
+                   COALESCE(s->'binding'->>'capability', s->>'capability') AS capability
+            FROM workflow_runs r
+            JOIN workflow_versions v ON v.id = r.workflow_version_id
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(v.spec->'steps') = 'array' THEN v.spec->'steps'
+                     ELSE '[]'::jsonb END) s
+            WHERE r.id = ANY(:ids)
+            """
+        ),
+        {"ids": list(wanted)},
+    ).mappings().all():
+        if r["capability"]:
+            found[(str(r["run_id"]), str(r["step_id"]))] = str(r["capability"])
+    return {str(a["act_id"]): found[(run_id, str(a["step_id"]))]
+            for run_id, acts in wanted.items() for a in acts
+            if (run_id, str(a["step_id"])) in found}
+
+
+def verbs_for(connection: Connection, rows: list[dict[str, Any]]) -> dict[str, str]:
+    """{act_id: work_verb} for a batch of act rows."""
+    caps = _step_capabilities(connection, rows)
+    return {str(r["act_id"]): work_verb(r, capability=caps.get(str(r["act_id"])))
+            for r in rows}
+
+
 # ── reading the ledger ───────────────────────────────────────────────────────────────────────
 
 
@@ -1672,6 +1824,9 @@ def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None
         "scope_ok": act.get("scope_ok"),
         "accountable": act["accountable"],
         "label": act["label"],
+        # What it is doing, in the one word every surface says (work_verb). The readers that
+        # hold a connection refine it with the step's capability (verbs_for).
+        "verb": work_verb(act),
         "subject": {"kind": act.get("subject_kind"), "id": act.get("subject_id")},
         "links": {k: act[k] for k in LINKS if act.get(k)},
         "artifacts": _json(act.get("artifacts"), []),
@@ -1689,7 +1844,13 @@ def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None
 def _serialized(connection: Connection, rows: list[dict[str, Any]], *,
                 viewer: Optional[str] = None) -> list[dict[str, Any]]:
     live = _live_cost(connection, [r["act_id"] for r in rows if r.get("ended_at") is None])
-    return [serialize(r, live.get(r["act_id"]), viewer=viewer) for r in rows]
+    verbs = verbs_for(connection, rows)
+    out = []
+    for r in rows:
+        wire = serialize(r, live.get(r["act_id"]), viewer=viewer)
+        wire["verb"] = verbs.get(str(r["act_id"]), wire["verb"])
+        out.append(wire)
+    return out
 
 
 def get_act(connection: Connection, project_id: str, act_id: str, *,
@@ -1905,18 +2066,29 @@ def lineage(connection: Connection, project_id: str, role_key: str, *, days: int
 
 def _declared_lineage(connection: Connection, project_id: str, role_key: str,
                       centre: dict[str, Any]) -> dict[str, Any]:
+    # ONE HOME FOR A REPORTING LINE: org_assignments, the table Organization › Lines edits.
+    # This read roles.reports_to, a second store nothing kept in step with the editor, so the
+    # Passport's declared line and the chart could name two different bosses (spec §4.6).
     row = connection.execute(
-        text("SELECT reports_to, born_by, created_at FROM roles "
-             "WHERE project_id = :p AND role_key = :r"),
+        text("SELECT r.born_by, r.created_at, o.reports_to, o.updated_at FROM roles r "
+             "LEFT JOIN org_assignments o ON o.project_id = r.project_id "
+             "AND o.agent_id = r.role_key WHERE r.project_id = :p AND r.role_key = :r"),
         {"p": project_id, "r": role_key},
     ).mappings().first()
+    if row is None:
+        row = connection.execute(
+            text("SELECT NULL AS born_by, NULL AS created_at, reports_to, updated_at "
+                 "FROM org_assignments WHERE project_id = :p AND agent_id = :r"),
+            {"p": project_id, "r": role_key},
+        ).mappings().first()
     nodes = [centre]
     edges = []
     if row and row["reports_to"]:
-        boss = resolve_role(str(row["reports_to"]))
+        boss = resolve_role(str(row["reports_to"])) or str(row["reports_to"])
         nodes.append({"id": f"agent:{boss}", "kind": "agent", "role_key": boss})
         edges.append({"from": f"agent:{boss}", "to": centre["id"], "acts": 0, "how_top": "named",
-                      "label": "Reports to", "last_at": _iso(row["created_at"]),
+                      "label": "Reports to",
+                      "last_at": _iso(row["updated_at"] or row["created_at"]),
                       "reconstructed": False})
     born_by = str((row or {}).get("born_by") or "")
     if born_by and born_by != "spec-pack":
@@ -2049,7 +2221,7 @@ def presence_map(connection: Connection, project_id: str, *, include_idle: bool 
         text(
             f"""
             SELECT a.act_id, a.role_key, a.kind, a.status, a.label, a.started_at,
-                   p.role_key AS parent_role
+                   a.workflow_run_id, a.step_id, p.role_key AS parent_role
             FROM agent_acts a LEFT JOIN agent_acts p ON p.act_id = a.parent_act_id
             WHERE a.project_id = :p AND a.ended_at IS NULL
               AND (a.status = 'awaiting_input'
@@ -2061,6 +2233,7 @@ def presence_map(connection: Connection, project_id: str, *, include_idle: bool 
     ).mappings().all()]
     rank = {"needs_you": 0, "in_panel": 1, "working": 2}
     out: dict[str, dict[str, Any]] = {}
+    verbs = verbs_for(connection, open_rows)
 
     def offer(role: Optional[str], state: str, row: dict[str, Any], line: str) -> None:
         if not role or (role_key and role != role_key):
@@ -2079,14 +2252,19 @@ def presence_map(connection: Connection, project_id: str, *, include_idle: bool 
         elif row["kind"] == "seat":
             offer(row["role_key"], "in_panel", row, f"In a panel: {row['label']}")
         else:
-            offer(row["role_key"], "working", row, f"Now: {row['label']}")
+            offer(row["role_key"], "working", row,
+                  f"Now: {verbs.get(str(row['act_id']), 'Working')} · {row['label']}")
 
     if include_idle:
-        for row in _last_ended(connection, project_id, role_key):
+        ended = _last_ended(connection, project_id, role_key)
+        last_verbs = verbs_for(connection, ended)
+        for row in ended:
             if row["role_key"] in out:
                 continue
+            verb = last_verbs.get(str(row["act_id"]), "Working")
             out[row["role_key"]] = {"state": "idle", "act_id": row["act_id"],
-                                    "line": f"Last: {row['label']} · {_age(row['ended_at'])}",
+                                    "line": f"Last: {verb} · {row['label']} · "
+                                            f"{_age(row['ended_at'])}",
                                     "since": _iso(row["ended_at"]), "_rank": "idle"}
     for value in out.values():
         value.pop("_rank", None)
@@ -2116,10 +2294,12 @@ def _last_ended(connection: Connection, project_id: str,
     return [dict(r) for r in connection.execute(
         text(
             f"""
-            SELECT a.role_key, l.act_id, l.label, l.ended_at, l.status
+            SELECT a.role_key, l.act_id, l.label, l.ended_at, l.status, l.kind, l.step_id,
+                   l.workflow_run_id
             FROM ({roles_sql}) a
             CROSS JOIN LATERAL (
-                SELECT act_id, label, ended_at, status FROM agent_acts
+                SELECT act_id, label, ended_at, status, kind, step_id, workflow_run_id
+                FROM agent_acts
                 WHERE project_id = :p AND role_key = a.role_key AND ended_at IS NOT NULL
                 ORDER BY ended_at DESC LIMIT 1
             ) l
@@ -2137,6 +2317,255 @@ def live(connection: Connection, project_id: str) -> dict[str, Any]:
     etag = hashlib.sha256(json.dumps(
         [(i["role_key"], i["state"], i["act_id"]) for i in items]).encode()).hexdigest()[:20]
     return {"items": items, "etag": f'"{etag}"'}
+
+
+# ── who a decision belongs to (agents-home spec §6.2) ────────────────────────────────────────
+
+
+def owners_of_decisions(connection: Connection, project_id: str,
+                        decision_ids: Iterable[str]) -> dict[str, Optional[str]]:
+    """{decision_id: role_key or None} — the agent a waiting decision is ABOUT.
+
+    In order: the role of the act the decision is linked to (agent_acts.decision_id); else
+    that act's parent's role (a gate's step act is nobody's — it holds the work of the step
+    before it); else the gated step's `captain` when it names an agent. Else None: a card with
+    no attributed agent shows BOSS or You, never a guessed face."""
+    ids = [str(d) for d in dict.fromkeys(decision_ids) if d]
+    if not ids:
+        return {}
+    out: dict[str, Optional[str]] = {d: None for d in ids}
+    rows = connection.execute(
+        text(
+            """
+            SELECT DISTINCT ON (a.decision_id) a.decision_id, a.role_key,
+                   p.role_key AS parent_role
+            FROM agent_acts a LEFT JOIN agent_acts p ON p.act_id = a.parent_act_id
+            WHERE a.project_id = :p AND a.decision_id = ANY(:ids) AND a.kind <> 'approval'
+            ORDER BY a.decision_id, a.started_at DESC
+            """
+        ),
+        {"p": project_id, "ids": ids},
+    ).mappings().all()
+    for r in rows:
+        out[str(r["decision_id"])] = r["role_key"] or r["parent_role"] or None
+    missing = [d for d, role in out.items() if role is None]
+    if missing:
+        from .step_agents import named_agent
+
+        for r in connection.execute(
+            text(
+                """
+                SELECT s.decision_id, s.step_id, v.spec
+                FROM workflow_step_runs s
+                JOIN workflow_runs r ON r.id = s.workflow_run_id
+                JOIN workflow_versions v ON v.id = r.workflow_version_id
+                WHERE s.decision_id = ANY(:ids) AND r.project_id = :p
+                """
+            ),
+            {"ids": missing, "p": project_id},
+        ).mappings().all():
+            spec = r["spec"] if isinstance(r["spec"], dict) else {}
+            step = next((st for st in spec.get("steps") or []
+                         if isinstance(st, dict) and str(st.get("id")) == str(r["step_id"])), {})
+            named = str(step.get("captain") or "").strip().lower()
+            if not named:
+                try:
+                    named = str(named_agent(step) or "").strip().lower()
+                except Exception:  # noqa: BLE001
+                    named = ""
+            if named and named != "human":
+                out[str(r["decision_id"])] = resolve_role(named) or named
+    return out
+
+
+def owner_of_decision(connection: Connection, project_id: str,
+                      decision_id: str) -> Optional[str]:
+    """The agent one waiting decision is about, or None. See owners_of_decisions."""
+    return owners_of_decisions(connection, project_id, [decision_id]).get(str(decision_id))
+
+
+def step_owners(connection: Connection, project_id: str,
+                pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Optional[str]]:
+    """{(run_id, step_id): role_key} — who ran a step, from its newest step act."""
+    pairs = list(dict.fromkeys((str(r), str(s)) for r, s in pairs if r and s))
+    if not pairs:
+        return {}
+    rows = connection.execute(
+        text(
+            """
+            SELECT DISTINCT ON (workflow_run_id, step_id) workflow_run_id, step_id, role_key
+            FROM agent_acts
+            WHERE project_id = :p AND kind = 'step' AND workflow_run_id = ANY(:runs)
+            ORDER BY workflow_run_id, step_id, started_at DESC
+            """
+        ),
+        {"p": project_id, "runs": sorted({r for r, _ in pairs})},
+    ).mappings().all()
+    found = {(str(r["workflow_run_id"]), str(r["step_id"])): r["role_key"] for r in rows}
+    return {pair: found.get(pair) for pair in pairs}
+
+
+# ── the project's river of work (agents-home spec §4.9, §6.4) ───────────────────────────────
+
+#: Activity filters → what they select. A handoff is an edge an agent, a captain or BOSS made.
+ACTIVITY_KINDS = ("needs_you", "handoffs", "builds", "panels", "talks")
+_HANDOFF_HOWS = ("captain", "asked_by_agent", "model_pick")
+#: Kinds that are a step's OWN inner work when they hang off one (chain-model.ts NESTED).
+_NESTED_KINDS = ("stage", "seat", "run", "chat")
+#: The SQL form of chain-model.ts nestedUnderWork: an act folded under the work it belongs to.
+_NESTED_SQL = ("(p.act_id IS NOT NULL AND p.kind <> 'run' AND "
+               "(p.kind IN ('stage', 'seat') OR a.kind IN ('stage', 'seat', 'run', 'chat')))")
+
+
+def activity(connection: Connection, project_id: str, *, cursor: Optional[str] = None,
+             limit: int = 50, kinds: Optional[Iterable[str]] = None,
+             role_key: Optional[str] = None, run_id: Optional[str] = None,
+             parent_act_id: Optional[str] = None, days: int = 1,
+             viewer: Optional[str] = None) -> dict[str, Any]:
+    """Every agent's work on the project, newest first: acts_for_agent without the role.
+
+    Each item is the act's wire shape plus `verb`, `from`, `children{count}` (its own inner
+    work, folded) and `turns{tool_calls}` (how many tool calls fold under it; 0 = no fold
+    control, never a promise). Unfiltered, it reads the work that stands on its own — a step,
+    a standalone build stage, a chat — and folds the rest under it; `parent` reads one act's
+    folded work, `run` a whole run, and `role` / `kinds` everything that matches. A run's root
+    (the person starting it) is not agent work and is left out unless `run` asks."""
+    limit = max(1, min(int(limit), 200))
+    days = 7 if int(days or 1) >= 7 else 1
+    wanted = [k for k in (kinds or []) if k]
+    unknown = sorted(set(wanted) - set(ACTIVITY_KINDS))
+    if unknown:
+        raise ValueError(f"unknown activity filter {unknown[0]!r}; use one of "
+                         f"{', '.join(ACTIVITY_KINDS)}")
+    params: dict[str, Any] = {"p": project_id, "d": days, "n": limit + 1}
+    where = ["a.project_id = :p", "a.started_at > now() - make_interval(days => :d)"]
+    if parent_act_id:
+        where.append("a.parent_act_id = :parent")
+        where.append(_NESTED_SQL)
+        params["parent"] = parent_act_id
+    elif run_id:
+        where.append("a.workflow_run_id = :run")
+        params["run"] = run_id
+    else:
+        where.append("a.kind <> 'run'")
+        if not wanted and not role_key:
+            where.append(f"NOT {_NESTED_SQL}")
+    if role_key:
+        where.append("a.role_key = :r")
+        params["r"] = role_key
+    ors = []
+    if "needs_you" in wanted:
+        ors.append("a.status = 'awaiting_input'")
+    if "handoffs" in wanted:
+        ors.append("(a.how = ANY(:hows) OR a.kind = 'handoff')")
+        params["hows"] = list(_HANDOFF_HOWS)
+    if "builds" in wanted:
+        ors.append("a.kind = 'stage'")
+    if "panels" in wanted:
+        ors.append("a.kind = 'seat'")
+    if "talks" in wanted:
+        ors.append("a.kind = 'chat'")
+    if ors:
+        where.append("(" + " OR ".join(ors) + ")")
+    if cursor:
+        at, _, after = cursor.partition("|")
+        where.append("(a.started_at, a.act_id) < (CAST(:ca AS timestamptz), :cid)")
+        params.update(ca=at, cid=after)
+    rows = [dict(r) for r in connection.execute(
+        text(f"SELECT a.* FROM agent_acts a LEFT JOIN agent_acts p "
+             f"ON p.act_id = a.parent_act_id WHERE {' AND '.join(where)} "
+             "ORDER BY a.started_at DESC, a.act_id DESC LIMIT :n"),
+        params,
+    ).mappings().all()]
+    more = len(rows) > limit
+    rows = rows[:limit]
+    ids = [r["act_id"] for r in rows]
+    parents = {r["act_id"]: dict(r) for r in connection.execute(
+        text("SELECT * FROM agent_acts WHERE act_id = ANY(:a)"),
+        {"a": [r["parent_act_id"] for r in rows if r.get("parent_act_id")]},
+    ).mappings().all()} if rows else {}
+    nested: dict[str, int] = {}
+    tools: dict[str, int] = {}
+    if ids:
+        for r in connection.execute(
+            text(f"SELECT a.parent_act_id AS id, count(*) AS n FROM agent_acts a "
+                 f"JOIN agent_acts p ON p.act_id = a.parent_act_id "
+                 f"WHERE a.parent_act_id = ANY(:ids) AND {_NESTED_SQL} GROUP BY 1"),
+            {"ids": ids},
+        ).mappings().all():
+            nested[str(r["id"])] = int(r["n"])
+        for r in connection.execute(
+            text("SELECT act_id AS id, count(*) AS n FROM agent_turns "
+                 "WHERE act_id = ANY(:ids) AND direction = 'tool_call' GROUP BY 1"),
+            {"ids": ids},
+        ).mappings().all():
+            tools[str(r["id"])] = int(r["n"])
+    items = []
+    for act, wire in zip(rows, _serialized(connection, rows, viewer=viewer)):
+        wire["from"] = _from_node(act, parents.get(act.get("parent_act_id")))
+        wire["children"] = {"count": nested.get(str(act["act_id"]), 0)}
+        wire["turns"] = {"tool_calls": tools.get(str(act["act_id"]), 0)}
+        items.append(wire)
+    nxt = f"{_iso(rows[-1]['started_at'])}|{rows[-1]['act_id']}" if more and rows else None
+    return {"project_id": project_id, "items": items, "next": nxt}
+
+
+#: The most tool calls one act shows; past it the Activity log has them all.
+TOOL_CALLS_CAP = 50
+
+
+def tool_calls(connection: Connection, project_id: str, act_id: str, *,
+               limit: int = TOOL_CALLS_CAP) -> Optional[dict[str, Any]]:
+    """The tool calls folded under one act: name, whether it worked, how long it took.
+
+    NEVER CONTENT. A tool call's arguments and its result are the customer's code and data;
+    this reads only the columns that say what was called and how it went. A call is paired
+    with the next result of the same tool (the CLI writes them in order); a call with no
+    result yet has `ok: None`. None when the act is not on this project."""
+    owner = connection.execute(
+        text("SELECT project_id FROM agent_acts WHERE act_id = :a"), {"a": act_id}).scalar()
+    if owner != project_id:
+        return None
+    limit = max(1, min(int(limit), TOOL_CALLS_CAP))
+    rows = connection.execute(
+        text("SELECT direction, tool_name, ok, latency_ms, created_at FROM agent_turns "
+             "WHERE act_id = :a AND direction IN ('tool_call', 'tool_result') "
+             "ORDER BY created_at, turn_index, id"),
+        {"a": act_id},
+    ).mappings().all()
+    calls: list[dict[str, Any]] = []
+    waiting: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        name = str(r["tool_name"] or "")
+        if r["direction"] == "tool_call":
+            item = {"tool_name": name or "tool", "ok": None,
+                    "latency_ms": int(r["latency_ms"]) if r["latency_ms"] else None,
+                    "at": _iso(r["created_at"])}
+            calls.append(item)
+            waiting.setdefault(name, []).append(item)
+        else:
+            queue = waiting.get(name) or (waiting.get("") if not name else None) or []
+            if not queue and not name:
+                queue = next((q for q in waiting.values() if q), [])
+            if queue:
+                item = queue.pop(0)
+                item["ok"] = bool(r["ok"])
+                if r["latency_ms"]:
+                    item["latency_ms"] = int(r["latency_ms"])
+    return {"act_id": act_id, "items": calls[:limit], "more": len(calls) > limit,
+            "total": len(calls)}
+
+
+def copy_declared_lines(connection: Connection, project_id: Optional[str] = None) -> int:
+    """One-time, idempotent: roles.reports_to takes the plan's line (org_assignments) for
+    history. Nothing reads roles.reports_to for a declared line any more; returns rows changed."""
+    return int(connection.execute(
+        text("UPDATE roles r SET reports_to = o.reports_to FROM org_assignments o "
+             "WHERE o.project_id = r.project_id AND o.agent_id = r.role_key "
+             "AND r.reports_to IS DISTINCT FROM o.reports_to"
+             + (" AND r.project_id = :p" if project_id else "")),
+        {"p": project_id} if project_id else {},
+    ).rowcount or 0)
 
 
 def observed_edges(connection: Connection, project_id: str, *,

@@ -81,6 +81,13 @@ def fill_missing(current: dict[str, Any], shipped: dict[str, Any], *,
                 if field not in merged and field in shipped_persona:
                     merged[field] = shipped_persona[field]
             out["persona"] = merged
+    # WHICH TEAM, when the role has none — even an operator-edited one: a team is where the
+    # agent sits on the org map, not a remit or a voice, and an edited Forge with no team would
+    # otherwise sit in "Yours" for ever. A team somebody chose is never changed.
+    shipped_team = shipped.get("team")
+    if isinstance(shipped_team, str) and shipped_team.strip() and not str(
+            out.get("team") or "").strip():
+        out["team"] = shipped_team.strip()
     shipped_mcp = (shipped.get("permissions") or {}).get("mcp_servers")
     if shipped_mcp:
         permissions = out.get("permissions")
@@ -227,6 +234,11 @@ def sync_project(connection: Connection, settings: Any, project_id: str, *,
                 install_or_fill(role_key, shipped, {"kind": "pack"})
         _grant(connection, project_id, actor)
         identities = agent_identity.quietly(connection, agent_identity.backfill, project_id) or 0
+        # ONE HOME FOR A REPORTING LINE: the plan (org_assignments) is copied onto
+        # roles.reports_to for history; nothing reads the latter for a declared line any more.
+        from .agent_acts import copy_declared_lines
+
+        agent_identity.quietly(connection, copy_declared_lines, project_id)
     if installed or filled:
         _log.info("shipped cast for %s: installed %s, filled %s", project_id, installed, filled)
     return {"project_id": project_id, "installed": installed, "filled": filled,
