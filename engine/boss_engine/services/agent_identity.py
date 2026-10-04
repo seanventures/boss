@@ -627,9 +627,12 @@ def set_lifecycle(connection: Connection, project_id: str, role_key: str, state:
                   actor: str, reason: str, *, is_owner: bool = False) -> dict:
     """Pause, resume or retire an agent. Only its sponsor or an owner may (403 otherwise).
 
-    An agent nobody sponsors (a shipped one) is the owners' — anyone the endpoint already let
-    through with role_review. Paused agents are skipped by Auto and a step naming one fails
-    fast; retired ones also leave the pickers. Their work history stays.
+    `is_owner` is decided by the caller the way every owner-only act is (a HUMAN member with
+    the ceo role — main.require_autonomy_operator), never by role_review alone. An agent
+    nobody sponsors (every shipped one) is the owners' and only theirs: role_review let any
+    reviewer through, including the `coo` system member — an agent able to retire agents.
+    Paused agents are skipped by Auto and a step naming one fails fast; retired ones also
+    leave the pickers. Their work history stays.
     """
     wanted = str(state or "").strip().lower()
     if wanted not in LIFECYCLES:
@@ -638,6 +641,8 @@ def set_lifecycle(connection: Connection, project_id: str, role_key: str, state:
     sponsor = str(row.get("sponsor") or "").strip()
     if sponsor and actor != sponsor and not is_owner:
         raise IdentityError(f"Only the sponsor can {_VERB[wanted]} this agent", status=403)
+    if not sponsor and not is_owner:
+        raise IdentityError(f"Only an owner can {_VERB[wanted]} this agent", status=403)
     current = row.get("lifecycle") or "active"
     if current == wanted:
         return passport(connection, project_id, row["role_key"])

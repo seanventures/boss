@@ -107,14 +107,36 @@ def test_only_the_sponsor_or_an_owner_may_change_an_agents_lifecycle(client):
     assert listed[key]["lifecycle"] == "retired"
 
 
-def test_a_shipped_agent_nobody_sponsors_is_its_owners(client, engine):
-    """No sponsor: anyone the endpoint lets through (role_review) answers for it."""
+def test_a_shipped_agent_nobody_sponsors_is_its_owners_and_only_theirs(client, engine):
+    """No sponsor: only an owner — a HUMAN member with the ceo role — may pause, resume or
+    retire it. role_review alone is not ownership: vp_agents may review roles, and
+    `executive_console`, a system member, holds role_review too — a principal that is not a
+    person could otherwise retire agents."""
+    for reviewer in ("vp_agents", "executive_console"):
+        refused = _lifecycle(client, "docs_writer", "retired", actor=reviewer)
+        assert refused.status_code == 403, (reviewer, refused.text)
+        assert refused.json()["detail"] == "Only an owner can retire this agent"
     try:
-        paused = _lifecycle(client, "docs_writer", "paused", actor="vp_agents")
+        paused = _lifecycle(client, "docs_writer", "paused")
         assert paused.status_code == 200, paused.text
         assert paused.json()["sponsor"] is None
     finally:
         assert _lifecycle(client, "docs_writer", "active").status_code == 200
+
+
+def test_a_ceo_role_on_something_other_than_a_person_is_not_an_owner(client, engine):
+    """The owner check asks for a human, as require_autonomy_operator does."""
+    from sqlalchemy import text
+
+    with engine.begin() as c:
+        c.execute(text("UPDATE project_members SET role_keys = role_keys || '[\"ceo\"]'::jsonb "
+                       "WHERE project_id = :p AND member_id = 'executive_console'"),
+                  {"p": PROJECT})
+        kind = c.execute(text("SELECT member_type FROM project_members WHERE project_id = :p "
+                              "AND member_id = 'executive_console'"), {"p": PROJECT}).scalar()
+    assert kind != "human"
+    refused = _lifecycle(client, "docs_writer", "paused", actor="executive_console")
+    assert refused.status_code == 403, refused.text
 
 
 def test_a_lifecycle_change_is_a_version(client):
