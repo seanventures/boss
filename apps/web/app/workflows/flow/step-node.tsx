@@ -7,17 +7,21 @@
  * what it is set up with (design) or where it has got to (run). Every explanation is a
  * `data-tip`, so the node stays a glance and the reason is one hover away.
  *
- * WHO RUNS IT IS ON EVERY NODE, AT EVERY DENSITY AND IN EVERY MODE: the agent's face (initials
- * and colour, or the Auto / You / A person glyph) and its name when it fits. Where the name is
+ * WHO RUNS IT IS ON EVERY NODE, AT EVERY DENSITY AND IN EVERY MODE: the agent's face (its
+ * boss-kit character, or the Auto / You / A person glyph) and its name when it fits. In run
+ * mode the face carries the step's real phase as its state ring. Where the name is
  * cut, the row's tooltip leads with it.
  *
  * The title is never the raw step id when a label exists: `stepView` resolves the step's own
  * title, then its custom-step or built-in label.
  */
-import { Check, HandPalm, HardDrives, Lock, LockSimple, Minus, Plug, Sparkle, User, Warning, X } from "@phosphor-icons/react";
+import { Check, HandPalm, HardDrives, Lock, LockSimple, Minus, Plug, Sparkle, Warning, X } from "@phosphor-icons/react";
 import React from "react";
 
 import type { StepView } from "../../../lib/workflow-editor-types";
+import type { AvatarState } from "../../../lib/agent-world-types";
+import { stateFromRunPhase } from "../../../lib/avatar-kit/states";
+import { AgentAvatar as Face } from "../../agent-avatar";
 import { agentMeta } from "../../agent-chip";
 import { NodeIcon } from "./type-icons";
 
@@ -26,18 +30,16 @@ export type RunPhase = "done" | "moving" | "needs_you" | "failed" | "future" | "
 /** The names behind the badge counts, when the caller knows them. Only feeds tooltips. */
 export type NodeDetail = { risk?: number; skills?: string[]; mcp?: string[]; duration?: string };
 
-/** An agent's face: initials for a named agent, a glyph for Auto, You and A person. Sized by
- *  CSS where it sits (a node, a summary chip), or by `size` when a caller needs another. */
-export function AgentAvatar({ agent, size }: { agent: StepView["agent"]; size?: number }) {
-  const style = size ? { width: size, height: size } : undefined;
+/** An agent's face: its kit character for a named agent, the system glyph for Auto, You and A
+ *  person. Sized by CSS where it sits (a node, a summary chip), or by `size` when a caller needs
+ *  another. `state` comes from a real status only (lib/avatar-kit/states.ts). */
+export function AgentAvatar({ agent, size, state }: { agent: StepView["agent"]; size?: number; state?: AvatarState }) {
   if (agent.kind === "named") {
     const meta = agentMeta(agent.role_key ?? agent.label, agent.label);
-    return <span className={`mr-avatar tone-${meta.tone} wf-avatar`} style={style} aria-hidden>{meta.initials}</span>;
+    return <Face agent={agent.role_key ?? agent.label} size={size ?? 20} state={state} aiBadge={false}
+                 className={`mr-avatar tone-${meta.tone} wf-avatar ag-face`} />;
   }
-  const Icon = agent.kind === "auto" ? Sparkle : agent.kind === "person" ? HandPalm : User;
-  return <span className="wf-avatar wf-avatar-glyph" data-kind={agent.kind} style={style} aria-hidden>
-    <Icon size={11} weight="bold" />
-  </span>;
+  return <Face variant={agent.kind} size={size ?? 20} state={state} className="wf-avatar" />;
 }
 
 /** How a run phase is said to a screen reader, and marked on the icon so it is never colour alone. */
@@ -107,7 +109,7 @@ export function StepNode(p: {
       ) : (
         <span className="wf-node-agent" data-kind={view.agent.kind} data-tip={agentTip(view.agent)}
               data-testid="wf-node-agent">
-          <AgentAvatar agent={view.agent} />
+          <AgentAvatar agent={view.agent} state={mode === "run" ? stateFromRunPhase(phase) : undefined} />
           <span className="wf-node-agent-name">{view.agent.label}</span>
         </span>
       )}

@@ -57,6 +57,9 @@ const KNOWN_AGENT_WRITERS = [
   "app/skills-ui.tsx",
   "lib/agent-studio.ts",
   "lib/agents.ts",
+  // Agent World's one resolver: it only READS /v1/agents/identities (no actor, no write), but
+  // it names the agent resource, so it is listed and held to the same rule.
+  "lib/agent-identity.ts",
 ];
 
 /** Builds the bodies the writers above send, so it is held to the same rule. */

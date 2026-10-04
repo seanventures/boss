@@ -21,25 +21,11 @@ import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 
 import { callAction } from "../lib/call-action";
-const ROLE_META: Record<string, { initials: string; tone: string }> = {
-  "Product Manager": { initials: "PM", tone: "accent" },
-  "Engineer / Architect": { initials: "EN", tone: "blue" },
-  "UX Designer": { initials: "UX", tone: "pink" },
-  "Privacy & Safety": { initials: "PS", tone: "amber" },
-  "Finance / FinOps": { initials: "FI", tone: "green" },
-  "Growth / Marketing": { initials: "GR", tone: "pink" },
-  "QA / Test": { initials: "QA", tone: "blue" },
-  "Customer Advocate": { initials: "CA", tone: "accent" },
-  Security: { initials: "SE", tone: "amber" },
-  "Data / Analytics": { initials: "DA", tone: "green" },
-  "Facilitator / Chief of Staff": { initials: "CS", tone: "green" },
-};
+import type { AvatarState } from "../lib/agent-world-types";
+import { seatAvatar, useIdentityVersion } from "../lib/agent-identity";
+import { AgentAvatar } from "./agent-avatar";
 
-function roleMeta(role: string) {
-  return ROLE_META[role] ?? { initials: role.slice(0, 2).toUpperCase(), tone: "muted" };
-}
-
-const ROLE_ORDER = [
+export const ROLE_ORDER = [
   "Product Manager", "Engineer / Architect", "UX Designer", "Privacy & Safety",
   "Finance / FinOps", "Growth / Marketing", "QA / Test", "Customer Advocate", "Security", "Data / Analytics",
 ];
@@ -90,16 +76,23 @@ function fmtDuration(start?: string | null, end?: string | null): string {
   return `${h}h ${m % 60}m`;
 }
 
-function Avatar({ role }: { role: string }) {
-  const m = roleMeta(role);
-  return <span className={`mr-avatar tone-${m.tone}`}>{m.initials}</span>;
+/** A seat's face. The seat title resolves to its agent through the one resolver, so a panel's
+ *  "QA / Test" is the same face as `qa` on a workflow step. Seats that share an agent (Growth and
+ *  Data are both the PM) get their own emblem and visor, so no two seats look alike. The
+ *  facilitator is BOSS itself. */
+export function SeatAvatar({ role, size = 26, state }: { role: string; size?: number; state?: AvatarState }) {
+  useIdentityVersion(); // the seat face is worked out here, so repaint when identities load
+  if (/facilitator/i.test(role)) {
+    return <AgentAvatar variant="boss" size={size} state={state} className="mr-avatar ag-face" />;
+  }
+  return <AgentAvatar agent={role} spec={seatAvatar(role)} size={size} state={state} aiBadge={false} className="mr-avatar ag-face" />;
 }
 
 function ContributionCard({ role, text }: { role: string; text: string }) {
   return (
     <div className="mr-card">
       <div className="mr-card-head">
-        <Avatar role={role} />
+        <SeatAvatar role={role} />
         <span className="mr-card-role">{role}</span>
       </div>
       <div className="mr-card-body"><Markdown text={text} /></div>
@@ -172,7 +165,7 @@ function NewMeetingForm({
             {roles.filter((r) => r.enabled !== false).map((r) => (
               <label key={r.key} className="mr-role-pick" title={r.lens}>
                 <input type="checkbox" name="roles" value={r.key} defaultChecked={r.default} />
-                <Avatar role={r.title} />
+                <SeatAvatar role={r.title} />
                 <span className="mr-role-pick-title">{r.title}</span>
               </label>
             ))}
@@ -377,7 +370,7 @@ function MeetingDetail({
       {/* Participants */}
       <div className="mr-participants">
         {(meeting.participants ?? []).map((p) => (
-          <span key={p} className="mr-participant"><Avatar role={p} />{p}</span>
+          <span key={p} className="mr-participant"><SeatAvatar role={p} />{p}</span>
         ))}
       </div>
 
@@ -426,7 +419,7 @@ function MeetingDetail({
           <div className="mr-section-title">Synthesis — the facilitator reconciles</div>
           <div className="mr-synth">
             <div className="mr-card-head">
-              <Avatar role="Facilitator / Chief of Staff" />
+              <SeatAvatar role="Facilitator / Chief of Staff" />
               <span className="mr-card-role">Facilitator / Chief of Staff</span>
             </div>
             <div className="mr-card-body tall"><Markdown text={meeting.synthesis} /></div>
@@ -470,7 +463,7 @@ function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRo
       <div className="mr-role-list">
         {roles.map((r) => (
           <div key={r.key} className={`mr-role-row${r.enabled === false ? " off" : ""}`}>
-            <Avatar role={r.title} />
+            <SeatAvatar role={r.title} />
             <div className="mr-role-row-body">
               <span className="mr-role-row-title">{r.title} {r.is_default ? <span className="cap-badge tone-green">default</span> : null}</span>
               <span className="mr-role-row-lens">{r.lens}</span>
@@ -630,7 +623,7 @@ export function MeetingsHome({
               </div>
               <span className="mr-meeting-title">{meetingCardTitle(m.title)}</span>
               <div className="mr-meeting-avatars">
-                {(m.participants ?? []).map((p) => <Avatar key={p} role={p} />)}
+                {(m.participants ?? []).map((p) => <SeatAvatar key={p} role={p} size={24} />)}
               </div>
               <div className="mr-meeting-foot">
                 {isRunning(m) ? (
