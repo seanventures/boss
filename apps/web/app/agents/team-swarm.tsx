@@ -20,6 +20,7 @@ import {
 } from "../../lib/agent-world";
 import type { LiveMap } from "../../lib/agents-live";
 import { AgFace } from "./agent-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 // Hive's reference geometry (HiveScreen.tsx), kept in step by hand.
 const W = 900;
@@ -100,6 +101,7 @@ export async function lastRunReplay(projectId: string):
 }
 
 export function TeamSwarm({ projectId, chart, live }: { projectId: string; chart: OrgChart; live: LiveMap }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const nodes = chart.nodes ?? [];
   const edges: SwarmEdge[] = useMemo(() => (chart.edges ?? []).map((e) => ({ from: e.source, to: e.target, times: e.times })),
                                      [chart.edges]);

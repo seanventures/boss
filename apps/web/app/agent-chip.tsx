@@ -16,10 +16,10 @@
 
 import React, { type ReactNode } from "react";
 
-import { agentIdentity } from "../lib/agent-identity";
 import type { AvatarSize, AvatarState } from "../lib/agent-world-types";
 import { withLifecycle } from "../lib/avatar-kit/states";
 import { own } from "../lib/avatar-kit/dict";
+import { useIdentity } from "../lib/use-agent-identities";
 import { AgentAvatar, AgentStateWord } from "./agent-avatar";
 
 /** Initials and a tone per agent. Deliberately the same palette the meeting room uses. */
@@ -96,7 +96,7 @@ export function AgentChip({ roleKey, label, note, children, href, size = 24, sta
   state?: AvatarState;
 }) {
   const meta = agentMeta(roleKey, label);
-  const identity = agentIdentity(roleKey || label || "");
+  const identity = useIdentity(roleKey || label || ""); // repaints when identities load
   const name = label || identity.name;
   const callsign = identity.callsign && identity.callsign !== name ? ` · ${identity.callsign}` : "";
   // One state for the face, its word and the chip: a paused or retired agent is paused or

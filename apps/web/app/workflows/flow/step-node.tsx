@@ -26,6 +26,7 @@ import { agentMeta } from "../../agent-chip";
 import type { LaneAgent } from "../../agents/chain-model";
 import { HowGlyph, nameOf, RunFace } from "../../agents/run-face";
 import { NodeIcon } from "./type-icons";
+import { useIdentityVersion } from "../../../lib/use-agent-identities";
 
 export type RunPhase = "done" | "moving" | "needs_you" | "failed" | "future" | "skipped";
 
@@ -51,6 +52,7 @@ export function AgentAvatar({ agent, size, state }: { agent: StepView["agent"]; 
  * by a person shows `You` (or `A person`): a built-in with no captain says so honestly.
  */
 function RanBy({ view, ran }: { view: StepView["agent"]; ran: LaneAgent }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const named = nameOf(ran.roleKey, ran.variant);
   const morph = view.kind === "auto" && ran.variant === "agent";
   // A callsign is shown beside its role, never instead of it: the tooltip says both.

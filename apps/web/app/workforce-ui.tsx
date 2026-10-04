@@ -11,6 +11,7 @@ import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce"
 import { apiWrite } from "../lib/api-write";
 import { askAgent as talkTo, identityOf, openAgent } from "../lib/agent-world";
 import { useLivePresence } from "../lib/agents-live";
+import { useIdentityVersion } from "../lib/use-agent-identities";
 import { AgFace } from "./agents/agent-face";
 import { RosterSummary, RosterZones, placeAgents } from "./agents/roster-zones";
 import { TeamSwarm } from "./agents/team-swarm";
@@ -77,6 +78,8 @@ export function WorkforceArea(
   },
 ) {
   const [view, setViewState] = useState<AgentsView>("roster");
+  // Retired and the search read identities: a load (lifecycle, callsign) re-runs them.
+  const identities = useIdentityVersion();
   const [filter, setFilter] = useState<"all" | "needs_you" | "worked" | "duty" | "retired" | "unregistered">("all");
   const [search, setSearch] = useState("");
   const [teamLayout, setTeamLayout] = useState<"list" | "swarm">("list");
@@ -126,7 +129,7 @@ export function WorkforceArea(
   const all = useMemo(
     () => (workforce.roster ?? workforce.agents ?? []).filter((a) => !deleted.has(a.id)),
     [workforce.roster, workforce.agents, deleted]);
-  const retired = useMemo(() => all.filter((a) => identityOf(a.id, a.name).lifecycle === "retired"), [all]);
+  const retired = useMemo(() => all.filter((a) => identityOf(a.id, a.name).lifecycle === "retired"), [all, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
   const everyone = useMemo(() => all.filter((a) => !retired.includes(a)), [all, retired]);
   const needsYou = useMemo(() => new Set(placeAgents(everyone, live)
     .filter((p) => p.zone === "needs_you").map((p) => p.agent.id)), [everyone, live]);
@@ -141,7 +144,7 @@ export function WorkforceArea(
       return `${a.name} ${a.role} ${a.task} ${id.callsign ?? ""} ${id.tagline ?? ""}`.toLowerCase();
     };
     return query ? scoped.filter((a) => who(a).includes(query)) : scoped;
-  }, [everyone, retired, needsYou, filter, search]);
+  }, [everyone, retired, needsYou, filter, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
 
   // COUNTED, NOT ASSUMED: roles idle all window have recorded no work.
   const workedCount = everyone.filter((a) => volumeOf(a) > 0).length;
