@@ -172,6 +172,25 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
             "repos": found["repos"], "connection_id": current["id"]}
 
 
+def connection_repos(connection: Connection, settings: Any, project_id: str,
+                     connection_id: str, *, http: Optional[Http] = None) -> dict[str, Any]:
+    """`+ Add repo`: the repositories the STORED token can see (no paste needed)."""
+    service = _service(settings)
+    try:
+        ref = service.secret_refs.require_usable(
+            connection, project_id=project_id,
+            credential_ref=service._credential_ref(connection, project_id, connection_id))
+        token = service._resolve_secret(ref, connection)
+    except Exception:  # noqa: BLE001 — an unreadable token is one to replace
+        raise SetupActionError(422, "token_rejected", "Token rejected",
+                               "Paste a new token.") from None
+    found = setup_checks.inspect_token(token, api_base=_api_base(settings), http=http)
+    if not found["ok"]:
+        raise SetupActionError(422, found["state"], "Token rejected", "Paste a new token.")
+    return {"account_login": found["account_login"], "expires_at": found["expires_at"],
+            "repos": found["repos"], "connection_id": connection_id}
+
+
 def _promote(connection: Connection, project_id: str, binding_id: str, actor: str) -> None:
     """Make one binding the project's default (`primary`); the old default becomes `source`."""
     from .core import emit_event

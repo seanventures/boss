@@ -164,8 +164,7 @@ import { AssuranceCenter } from "./assurance-ui";
 import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
-import { SetupHome } from "./setup-ui";
-import { EmailSetup } from "./email-setup-ui";
+import { SetupBoard } from "./setup/setup-board";
 import { SkillsHome } from "./skills-ui";
 import { ChannelsHome } from "./channels-ui";
 import { DeploymentManagerPanel } from "./deployment-manager-ui";
@@ -1461,13 +1460,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {/* THE FIRST TEN MINUTES. Before any of the areas below mean anything, an install
-            needs somewhere to write code and something to think with. */}
+        {/* REPO AND MODELS: where BOSS writes code and what it thinks with — one board over
+            one server view (app/setup/setup-board.tsx). Outgoing email lives in Skills and MCP. */}
         {shows("setup") ? (
-        <section className="panel-stack" data-area="setup" aria-label="Repo and model">
-          <SetupHome projectId={activeProjectId} actor={activeActorId} />
-          {/* Where the readiness checklist sends an operator whose workflow ends in an email. */}
-          <EmailSetup projectId={activeProjectId} />
+        <section className="panel-stack" data-area="setup" aria-label="Repo and models">
+          <SetupBoard projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
 
