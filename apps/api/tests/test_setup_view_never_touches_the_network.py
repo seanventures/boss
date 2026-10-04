@@ -102,3 +102,24 @@ def test_connected_then_expired_then_budget_red(client, engine, monkeypatch, off
     body = view(client)
     assert body["budget"]["state"] == "spent" and body["verdict"]["label"] == "Budget spent"
     assert body["models"][0]["pill"]["label"] == "Paused · budget"
+
+
+def test_a_read_never_waits_for_a_cli_or_the_secret_store(client, monkeypatch):
+    """Connecting Claude Code hung the console: each GET asked the CLI for its catalog on the
+    request thread. Now every probe is answered from a cache refreshed in the background."""
+    import time as _time
+
+    from boss_engine.services import cli_harness, setup_view
+
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    monkeypatch.setattr(setup_view, "_detect_clis", lambda _s: _time.sleep(6) or {})
+    monkeypatch.setattr(setup_view, "_pick_backend", lambda _s: _time.sleep(6) or "database")
+    monkeypatch.setattr(cli_harness, "_read_model_catalog", lambda _spec: _time.sleep(6) or ())
+    monkeypatch.setattr(cli_harness, "_catalog_cache", {})
+    monkeypatch.delenv("BOSS_COMMUNITY_SECRET_STORE", raising=False)
+    setup_view.forget_cached()
+    started = _time.monotonic()
+    body = view(client)
+    assert _time.monotonic() - started < 3
+    assert body["detecting"] is True

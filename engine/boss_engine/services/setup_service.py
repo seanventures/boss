@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path as pathlib_Path
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 from sqlalchemy import text
@@ -240,6 +240,9 @@ def connected_engines(
         if engine in known and engine not in found:
             found[engine] = {"engine": engine, "why": why, **extra}
 
+    from .provider_limits import is_available
+
+    deferred: dict[str, tuple] = {}
     rows = connection.execute(
         text("SELECT source_id, provider, connection_status, updated_at, "
              "       credential_secret_ref_id, observed_capacity, limit_shape, cost_mode, "
@@ -254,9 +257,8 @@ def connected_engines(
         has_key = bool(row["credential_secret_ref_id"])
         if not connected and not has_key:
             continue          # a seeded catalogue row: nobody has connected this
-        engine = by_entitlement.get(source_id) or (
-            by_api_provider.get(source_id[len("setup-"):])
-            if source_id.startswith("setup-") else None)
+        engine = by_entitlement.get(source_id) or by_api_provider.get(
+            api_source_provider(source_id) or "")
         if not engine:
             continue
         # CAPACITY TRAVELS WITH THE CONNECTION. An engine that is connected and out of
@@ -264,21 +266,22 @@ def connected_engines(
         # the job pickers, the console's model rows, an operator deciding whether to wait
         # — needs to be able to tell them apart. Recorded by provider_limits from the one
         # place every engine reports through.
-        from .provider_limits import is_available
         capacity = _json_object(row["observed_capacity"])
         metadata = _json_object(row["connection_metadata"])
         # WHAT KIND OF MONEY, AND WHETHER IT LAST WORKED — what `resolve_job`'s Auto ranks by
         # (a working subscription, then local, then a metered key). A source whose last check
         # or last call was refused stays listed, so a job chosen on it keeps its choice, but
         # Auto never picks it over one that works.
-        local = source_id in ("setup-ollama", "setup-vllm")
+        local = api_source_provider(source_id) in ("ollama", "vllm")
         kind = ("subscription" if (connected and not has_key)
                 or (row["cost_mode"] or "") == "subscription"
                 else "local" if local else "metered")
-        last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
-        broken = (capacity.get("credential_state") == "rejected"
-                  or (last.get("ok") is False
-                      and last.get("state") not in ("rate_limited", "unreachable")))
+        broken = last_check_broken(metadata, capacity)
+        if broken and engine not in found:
+            # A WORKING connection of the same engine wins over a refused one, wherever it sits
+            # in the list; this one is offered only if nothing better turns up.
+            deferred.setdefault(engine, (source_id, connected, row, capacity, kind))
+            continue
         offer(engine, "subscription" if connected else "api key",
               source_id=source_id, kind=kind, working=not broken,
               plan={"cost_mode": row["cost_mode"] or "",
@@ -291,6 +294,17 @@ def connected_engines(
                         if hasattr(row["updated_at"], "isoformat")
                         else str(row["updated_at"] or "")) or None)
 
+    for engine, (source_id, connected, row, capacity, kind) in deferred.items():
+        if engine in found:
+            continue
+        offer(engine, "subscription" if connected else "api key", source_id=source_id,
+              kind=kind, working=False,
+              plan={"cost_mode": row["cost_mode"] or "", "limits": {}},
+              capacity={"available": is_available(capacity),
+                        "exhausted": bool(capacity.get("exhausted")),
+                        "retry_at": capacity.get("retry_at"),
+                        "detail": capacity.get("detail") or ""},
+              saved_at=None)
     # And the environment, for an install that was set up before any of this existed.
     for engine, entry in environment_engines(settings).items():
         if engine in known and engine not in found:
@@ -319,6 +333,27 @@ ENV_LANES: tuple[tuple[str, str], ...] = (
     ("xai", "xai_api_key"), ("vllm", "vllm_base_url"),
     ("ollama", "ollama_base_url"),
 )
+
+
+#: `setup-<provider>` for a provider's first connection, `setup-<provider>-<n>` for the next:
+#: ONE SOURCE PER CONNECTION, so a second OpenRouter key never overwrites the first.
+_API_SOURCE = re.compile(r"^setup-([a-z_]+?)(?:-(\d+))?$")
+
+
+def api_source_provider(source_id: str) -> Optional[str]:
+    """The provider of a key or local connection made in Repo and models, else None."""
+    found = _API_SOURCE.match(str(source_id or ""))
+    return found.group(1) if found else None
+
+
+def last_check_broken(metadata: Any, capacity: Any = None) -> bool:
+    """Whether a source's last check (or call) was refused — not merely busy or unreachable."""
+    metadata = _json_object(metadata)
+    capacity = _json_object(capacity)
+    last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
+    return (capacity.get("credential_state") == "rejected"
+            or (last.get("ok") is False
+                and last.get("state") not in ("rate_limited", "unreachable")))
 
 
 def _json_object(value: Any) -> dict[str, Any]:

@@ -106,6 +106,16 @@ export function SetupBoard({ projectId, initialView = null }: {
     } catch { /* no window */ }
   }, [view]);
 
+  // WHAT THE SERVER IS STILL LOOKING FOR (signed-in CLIs, the secret store) arrives on a
+  // background probe; the page asks again shortly rather than waiting on it.
+  const detecting = Boolean(view?.detecting);
+  const asks = useRef(0);
+  useEffect(() => {
+    if (!detecting || asks.current >= 6) return;
+    const timer = window.setTimeout(() => { asks.current += 1; void load(); }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [detecting, view, load]);
+
   // A RUN IN FLIGHT IS WATCHED: every 5s while the page is visible.
   const running = view?.try.last_run?.pill.tone === "busy";
   useEffect(() => {
@@ -132,8 +142,15 @@ export function SetupBoard({ projectId, initialView = null }: {
     return (
       <div className="su-board" data-testid="su-board">
         <header className="su-head"><h1>Repo and models</h1></header>
-        {error ? <span className="su-pill su-tone-red" role="alert">{error}</span>
-               : <span className="su-faint">Loading…</span>}
+        {error ? (
+          <div className="su-line" role="alert" data-testid="su-load-error">
+            <span className="su-pill su-tone-red" title={error} data-tip={error}>
+              <span className="su-dot su-tone-red" aria-hidden="true" />Not loaded
+            </span>
+            <button type="button" className="su-btn su-btn-sm" data-testid="su-load-retry"
+                    onClick={() => { setError(null); void load(); }}>Retry</button>
+          </div>
+        ) : <span className="su-faint">Loading…</span>}
       </div>
     );
   }

@@ -69,6 +69,9 @@ export async function GET(req: Request) {
     const r = await fetch(`${API_URL}${path}`, {
       headers: authHeaders({ "Content-Type": "application/json" }),
       cache: "no-store",
+      // A read is answered from what the API recorded; it never needs long. A model list
+      // (catalogue=) asks the provider, so it gets more room.
+      signal: AbortSignal.timeout(catalogue || repos ? 30_000 : 10_000),
     });
     return await forward(r);
   } catch (e) {

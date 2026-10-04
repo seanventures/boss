@@ -81,3 +81,28 @@ def test_one_press_is_one_check(client, monkeypatch):
     for _ in range(2):
         assert connect_key(client, idempotency_key="press-1").status_code == 200
     assert len(calls) == 1
+
+
+def test_a_second_key_is_a_second_model_and_a_busy_key_never_replaces_a_working_one(
+        client, engine, monkeypatch):
+    """One source per connection: a second OpenRouter key was written over the first, and a
+    rate-limited key replaced a working one."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    assert connect_key(client, model="stub/small").status_code == 200
+    second = connect_key(client, model="stub/large")
+    assert second.status_code == 200, second.text
+    rows = {m["source_id"]: m for m in second.json()["models"]}
+    assert set(rows) == {"setup-openrouter", "setup-openrouter-2"}
+    assert {m["model"] for m in rows.values()} == {"stub/small", "stub/large"}
+    # Replace the first with a key the provider says is busy: refused, the working one stays.
+    replaced = client.post("/v1/setup/models", headers=AUTH, json={
+        "project_id": PROJECT, "provider": "openrouter", "kind": "api_key",
+        "api_key": "sk-stub-429", "model": "stub/small", "source_id": "setup-openrouter"})
+    assert replaced.status_code == 422
+    assert replaced.json()["detail"]["state"] == "rate_limited"
+    with engine.begin() as c:
+        meta = c.execute(text("SELECT connection_metadata FROM entitlement_sources "
+                              "WHERE project_id = :p AND source_id = 'setup-openrouter'"),
+                         {"p": PROJECT}).scalar()
+    assert meta["last_check"]["state"] == "working"

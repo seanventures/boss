@@ -103,6 +103,7 @@ _TTL = 300.0
 
 
 def _cached(key: str, compute: Callable[[], Any], ttl: float = _TTL) -> Any:
+    """Compute now (a write path may wait), and keep it for `ttl`."""
     now = time.monotonic()
     with _CACHE_LOCK:
         hit = _CACHE.get(key)
@@ -112,6 +113,37 @@ def _cached(key: str, compute: Callable[[], Any], ttl: float = _TTL) -> Any:
     with _CACHE_LOCK:
         _CACHE[key] = (now + ttl, value)
     return value
+
+
+_PENDING: set[str] = set()
+
+
+def _cached_or_later(key: str, compute: Callable[[], Any], default: Any,
+                     ttl: float = _TTL) -> tuple[Any, bool]:
+    """(value, pending) for a READ: the cached value (even a stale one) or `default`, never a
+    wait. A missing or stale value is computed on a background thread, one at a time per key;
+    `pending` says one is on its way so the page can ask again."""
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        fresh = bool(hit and now < hit[0])
+        running = key in _PENDING
+        if not fresh and not running:
+            _PENDING.add(key)
+    if not fresh and not running:
+        def run() -> None:
+            try:
+                value = compute()
+                with _CACHE_LOCK:
+                    _CACHE[key] = (time.monotonic() + ttl, value)
+            except Exception:  # noqa: BLE001 — a probe that fails is retried next read
+                pass
+            finally:
+                with _CACHE_LOCK:
+                    _PENDING.discard(key)
+
+        threading.Thread(target=run, name=f"boss-setup-{key}", daemon=True).start()
+    return (hit[1] if hit else default), (not fresh)
 
 
 def forget_cached(prefix: str = "") -> None:
@@ -134,28 +166,42 @@ def local_found(provider: str) -> Optional[dict[str, Any]]:
         return hit[1] if hit and time.monotonic() < hit[0] else None
 
 
+def _detect_clis(settings: Any) -> dict[str, dict[str, Any]]:
+    from .cli_harness import detect_all
+
+    return {d["name"]: d for d in detect_all(settings)}
+
+
 def _cli_detection(settings: Any) -> dict[str, dict[str, Any]]:
-    def compute() -> dict[str, dict[str, Any]]:
-        try:
-            from .cli_harness import detect_all
-
-            return {d["name"]: d for d in detect_all(settings)}
-        except Exception:  # noqa: BLE001 — detection is a convenience, never a failure
-            return {}
-
-    return _cached("cli", compute)
+    """Which coding CLIs are signed in on this server. Each probe spawns the CLI, so a read
+    never waits for it: the last answer, refreshed in the background."""
+    found, _pending = _cached_or_later("cli", lambda: _detect_clis(settings), {})
+    return found
 
 
-def _secret_backend(settings: Any) -> str:
-    def compute() -> str:
-        try:
-            from .secret_backends import default_secret_backend
+def detection_pending() -> bool:
+    with _CACHE_LOCK:
+        return "cli" in _PENDING or "secret_backend" in _PENDING
 
-            return default_secret_backend(settings)
-        except Exception:  # noqa: BLE001
-            return "database"
 
-    return _cached("secret_backend", compute)
+def _pick_backend(settings: Any) -> str:
+    from .secret_backends import default_secret_backend
+
+    return default_secret_backend(settings)
+
+
+def _secret_backend(settings: Any, *, wait: bool = False) -> Optional[str]:
+    """Where a pasted credential would be kept. A write may wait for the answer (a health call
+    to the store); a read takes the last answer, or None while the first is on its way."""
+    from .secret_backends import operator_chosen_backend
+
+    chosen = operator_chosen_backend()
+    if chosen:
+        return chosen
+    if wait:
+        return _cached("secret_backend", lambda: _pick_backend(settings))
+    found, _pending = _cached_or_later("secret_backend", lambda: _pick_backend(settings), None)
+    return found
 
 
 # ── Small readers ─────────────────────────────────────────────────────────────────────────────
@@ -220,14 +266,15 @@ def secret_consent(connection: Connection, project_id: str) -> bool:
     return row is True or str(row).lower() in ("true", "1")
 
 
-def secrets_state(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
+def secrets_state(connection: Connection, settings: Any, project_id: str, *,
+                  wait: bool = False) -> dict[str, Any]:
     """Where a credential pasted here would be kept, and whether the operator must say yes."""
     from .secret_backends import operator_chosen_backend
 
-    backend = _secret_backend(settings)
+    backend = _secret_backend(settings, wait=wait)
     needs = (backend == "database" and operator_chosen_backend() != "database"
              and not secret_consent(connection, project_id))
-    return {"backend": backend, "needs_consent": needs}
+    return {"backend": backend or "checking", "needs_consent": needs}
 
 
 # ── Repository ────────────────────────────────────────────────────────────────────────────────
@@ -347,9 +394,9 @@ def repository_working(view_repo: dict[str, Any]) -> bool:
 # ── Models ────────────────────────────────────────────────────────────────────────────────────
 
 def _provider_of(source_id: str, by_entitlement: dict[str, str]) -> str:
-    if source_id.startswith("setup-"):
-        return source_id[len("setup-"):]
-    return by_entitlement.get(source_id, source_id)
+    from .setup_service import api_source_provider
+
+    return api_source_provider(source_id) or by_entitlement.get(source_id, source_id)
 
 
 def _by_entitlement(settings: Any) -> dict[str, str]:
@@ -447,7 +494,8 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
         out.append(_model_entry(
             source_id=source_id, provider=provider, kind=kind, model=model, state=state,
             checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
-            host=last.get("host") or "", latency_ms=last.get("latency_ms")))
+            host=last.get("host") or "", latency_ms=last.get("latency_ms"),
+            base_url=str(metadata.get("base_url") or "")))
     # THE INSTALL'S OWN SETTINGS FILE. A key there is a model like any other, with the chip
     # `From install` — never a mystery "Unverified" model nobody remembers choosing.
     for engine, attr in ENV_LANES:
@@ -477,7 +525,7 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
 
 def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[str], state: str,
                  checked_at: Optional[str], retry_at: Optional[str], source: str,
-                 now: datetime, host: str, latency_ms: Any) -> dict[str, Any]:
+                 now: datetime, host: str, latency_ms: Any, base_url: str = "") -> dict[str, Any]:
     entry = CATALOGUE_BY_PROVIDER.get(provider) or {}
     pill = setup_pills.pill(
         "model", state, age=_age(checked_at, now) or "a moment", time=_hhmm(retry_at),
@@ -486,12 +534,26 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
         fix_url=entry.get("billing_url") if state == "no_credit" else None)
     checked = parse_time(checked_at)
     return {
-        "source_id": source_id, "provider": provider, "label": provider_label(provider),
+        "source_id": source_id, "provider": provider,
+        "label": _label_with_host(provider, base_url),
         "kind": kind, "model": model, "used_for": [], "pill": pill,
         "checked_at": checked.isoformat() if checked else None,
         "source": source, "retry_at": retry_at, "latency_ms": latency_ms,
         "stale": checked is None or now - checked > STALE_AFTER,
     }
+
+
+def _label_with_host(provider: str, base_url: str) -> str:
+    """"Other" alone says nothing: an endpoint the operator typed is named by its host."""
+    label = provider_label(provider)
+    if provider in ("custom", "vllm", "ollama") and base_url:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(base_url)
+        host = parsed.hostname or ""
+        if host:
+            return f"{label} · {host}{f':{parsed.port}' if parsed.port else ''}"
+    return label
 
 
 def model_working(entry: dict[str, Any]) -> bool:
@@ -741,7 +803,19 @@ def build_basics(connection: Connection, settings: Any, project_id: str, *,
 
 def build(connection: Connection, settings: Any, project_id: str, *,
           now: Optional[datetime] = None) -> dict[str, Any]:
-    """The whole of Repo and models. No network, no decryption."""
+    """The whole of Repo and models. No network, no decryption, NO SUBPROCESS: every CLI
+    catalog and detection comes from a cache refreshed in the background (`detecting` says a
+    refresh is on its way, so the page asks again)."""
+    from .cli_harness import catalogs_from_cache_only
+
+    with catalogs_from_cache_only():
+        view = _build(connection, settings, project_id, now=now)
+    view["detecting"] = detection_pending()
+    return view
+
+
+def _build(connection: Connection, settings: Any, project_id: str, *,
+           now: Optional[datetime] = None) -> dict[str, Any]:
     now = now or now_utc()
     budget = _budget(connection, settings, project_id)
     repository = _repository(connection, settings, project_id, now)

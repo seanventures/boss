@@ -45,3 +45,20 @@ describe("the rail badge", () => {
     expect(SHELL).toContain('sub: "Where BOSS writes code and what it thinks with"');
   });
 });
+
+describe("a render never waits on Repo and models", () => {
+  it("gives up on a hung summary within its time box", async () => {
+    const { fetchSetupSummary, SUMMARY_TIMEOUT_MS } = await import("../lib/setup-server");
+    const original = globalThis.fetch;
+    globalThis.fetch = ((_url: unknown, init?: RequestInit) => new Promise((_, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+    })) as typeof fetch;
+    try {
+      const started = Date.now();
+      expect(await fetchSetupSummary("p")).toBeNull();
+      expect(Date.now() - started).toBeLessThan(SUMMARY_TIMEOUT_MS + 1000);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});

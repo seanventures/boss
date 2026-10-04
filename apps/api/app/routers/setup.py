@@ -148,7 +148,8 @@ def build_setup_router(
                         credential=body.credential or "",
                         credential_file=body.credential_file or "",
                         base_url=body.base_url or "", model=body.model or "",
-                        accept_database_fallback=body.accept_database_fallback, actor=actor)
+                        accept_database_fallback=body.accept_database_fallback, actor=actor,
+                        replace_source_id=body.source_id or "")
                 except setup_actions.SetupActionError as error:
                     fail(error)
         return fresh_view(body.project_id)

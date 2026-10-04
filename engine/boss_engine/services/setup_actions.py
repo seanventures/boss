@@ -69,7 +69,7 @@ def first_press(project_id: str, key: Optional[str], window: float = 120.0) -> b
 def require_store(connection: Connection, settings: Any, project_id: str, accept: bool,
                   actor: str) -> None:
     """Refuse before anything is stored when the only store is a database nobody agreed to."""
-    state = setup_view.secrets_state(connection, settings, project_id)
+    state = setup_view.secrets_state(connection, settings, project_id, wait=True)
     if not state["needs_consent"]:
         return
     if not accept:
@@ -129,6 +129,8 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
     token = (token or "").strip()
     if not token:
         raise SetupActionError(422, "token_rejected", "Paste token", "Paste a GitHub token.")
+    # THE DECISION FIRST: nothing is sent anywhere until the operator has agreed where it lives.
+    require_store(connection, settings, project_id, accept_database_fallback, actor)
     found = setup_checks.inspect_token(token, api_base=_api_base(settings), http=http)
     if not found["ok"]:
         from .setup_pills import REPOSITORY, pill
@@ -137,7 +139,6 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
                      repo="that repository") if found["state"] in REPOSITORY else {
             "label": "Token rejected", "tip": "GitHub refused this token."}
         raise SetupActionError(422, found["state"], shown["label"], shown["tip"])
-    require_store(connection, settings, project_id, accept_database_fallback, actor)
     service = _service(settings)
     credential_ref = service.store_token_credential(
         connection, project_id=project_id, token=token, auth_method="personal_access_token",
@@ -524,8 +525,8 @@ def _failure(provider: str, state: str, model: Optional[str] = None,
 def connect_model(connection: Connection, settings: Any, project_id: str, *, provider: str,
                   kind: str, api_key: str = "", credential: str = "", credential_file: str = "",
                   base_url: str = "", model: str = "", accept_database_fallback: bool = False,
-                  actor: str = "ceo", http: Optional[Http] = None, prove_with=None
-                  ) -> dict[str, Any]:
+                  actor: str = "ceo", http: Optional[Http] = None, prove_with=None,
+                  replace_source_id: str = "") -> dict[str, Any]:
     """Store a model credential and prove it with one governed question.
 
     A failed check keeps nothing, except a key whose provider was busy or unreachable — that
@@ -546,7 +547,7 @@ def connect_model(connection: Connection, settings: Any, project_id: str, *, pro
                                      prove_with=prove_with)
     return _connect_key(connection, settings, project_id, provider, api_key=api_key,
                         base_url=base_url, model=model, accept=accept_database_fallback,
-                        actor=actor, http=http)
+                        actor=actor, http=http, replace_source_id=replace_source_id)
 
 
 def _connect_subscription(connection: Connection, settings: Any, project_id: str, provider: str,
@@ -631,9 +632,25 @@ def _forget_credential(connection: Connection, project_id: str, ref_key: Optiona
             {"a": actor, "p": project_id, "k": ref_key})
 
 
+def _new_source_id(connection: Connection, project_id: str, provider: str) -> str:
+    """ONE SOURCE PER CONNECTION: `setup-<provider>` while it is free, else the next
+    `setup-<provider>-<n>`. A second key for a provider is a second model, not a replacement."""
+    taken = set(connection.execute(
+        text("SELECT source_id FROM entitlement_sources WHERE project_id = :p "
+             "AND (source_id = :s OR source_id LIKE :like) "
+             "AND (credential_secret_ref_id IS NOT NULL OR connection_status = 'connected')"),
+        {"p": project_id, "s": f"setup-{provider}", "like": f"setup-{provider}-%"}).scalars())
+    if f"setup-{provider}" not in taken:
+        return f"setup-{provider}"
+    n = 2
+    while f"setup-{provider}-{n}" in taken:
+        n += 1
+    return f"setup-{provider}-{n}"
+
+
 def _connect_key(connection: Connection, settings: Any, project_id: str, provider: str, *,
                  api_key: str, base_url: str, model: str, accept: bool, actor: str,
-                 http: Optional[Http]) -> dict[str, Any]:
+                 http: Optional[Http], replace_source_id: str = "") -> dict[str, Any]:
     from .entitlements import EntitlementBrokerService
     from .model_gateway import ModelGatewayService
     from .secret_backends import default_secret_backend
@@ -646,6 +663,9 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     if provider == "ollama" and not base_url:
         found = setup_view.local_found("ollama")
         base_url = (found or {}).get("base_url") or ""
+    if api_key:
+        # Asked before the provider is called: a refusal sends nothing anywhere.
+        require_store(connection, settings, project_id, accept, actor)
     try:
         proof = _key_proof(connection, settings, project_id, provider, api_key=api_key,
                            base_url=base_url, model=model, actor=actor, http=http)
@@ -656,9 +676,24 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     if not keep:
         raise _failure(provider, str(proof.get("state") or "failed"), proof.get("model"),
                        proof.get("host"))
-    if api_key:
-        require_store(connection, settings, project_id, accept, actor)
-    source_id = f"setup-{provider}"
+    from .setup_service import api_source_provider, last_check_broken
+
+    if replace_source_id and api_source_provider(replace_source_id) == provider:
+        # REPLACE NEVER DOWNGRADES. A key that is only busy or unreachable does not replace one
+        # whose last check worked; the working key stays and the refusal says why.
+        current = connection.execute(
+            text("SELECT connection_metadata, observed_capacity, credential_secret_ref_id "
+                 "FROM entitlement_sources WHERE project_id = :p AND source_id = :s"),
+            {"p": project_id, "s": replace_source_id}).mappings().first()
+        working = bool(current and current["credential_secret_ref_id"]
+                       and not last_check_broken(current["connection_metadata"],
+                                                 current["observed_capacity"]))
+        if not proof.get("ok") and working:
+            raise _failure(provider, str(proof.get("state") or "failed"), proof.get("model"),
+                           proof.get("host"))
+        source_id = replace_source_id
+    else:
+        source_id = _new_source_id(connection, project_id, provider)
     spec = PROVIDERS.get(provider) or {}
     EntitlementBrokerService(settings).upsert_source(
         connection,

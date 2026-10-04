@@ -212,6 +212,8 @@ class ModelConnectBody(_Body):
     model: Optional[str] = None
     accept_database_fallback: bool = False
     idempotency_key: Optional[str] = None
+    #: Replace: the one connection this credential replaces (never a working one with a worse).
+    source_id: Optional[str] = None
 
 
 class SourceModelBody(_Body):
