@@ -3096,7 +3096,8 @@ CREATE TABLE IF NOT EXISTS skill_definitions (
   label TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '',
   behaviour_kind TEXT NOT NULL
-    CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program')),
+    CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program',
+                              'guide')),
   -- WHAT THIS SKILL KNOWS. The markdown body an operator writes: the house style, the format
   -- their team uses, the clauses that matter. Carried into every execution as context, so the
   -- skill behaves the same on its hundredth run as on the one somebody watched.
@@ -3138,6 +3139,22 @@ DO $$ BEGIN
     ALTER TABLE skill_definitions
       ADD CONSTRAINT skill_definitions_behaviour_kind_check
       CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program'));
+  END IF;
+END $$;
+
+-- A FIFTH BEHAVIOUR: a GUIDE (agent-loadout spec §4.6). A SKILL.md playbook an operator
+-- uploads: it runs nothing, reaches nothing and is read by the agent only when it calls it.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'skill_definitions_behaviour_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%guide%'
+  ) THEN
+    ALTER TABLE skill_definitions DROP CONSTRAINT skill_definitions_behaviour_kind_check;
+    ALTER TABLE skill_definitions
+      ADD CONSTRAINT skill_definitions_behaviour_kind_check
+      CHECK (behaviour_kind IN ('builtin', 'mcp_tool', 'sandboxed_command', 'agent_program',
+                                'guide'));
   END IF;
 END $$;
 
