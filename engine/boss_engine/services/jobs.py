@@ -2184,6 +2184,8 @@ class JobLeaseService:
         if budget_state == "orange" and task_priority not in {"p0", "p1"}:
             return {
                 "budget_state": budget_state,
+                "utilization_ratio": snapshot.get("utilization_ratio"),
+                "cap_usd_micros": snapshot.get("cap_usd_micros"),
                 "task_priority": task_priority,
                 "risk_tier": risk_tier,
                 "defer_seconds": 300,
@@ -2199,6 +2201,8 @@ class JobLeaseService:
             if kind == "infra.droplet.create":
                 return {
                     "budget_state": budget_state,
+                    "utilization_ratio": snapshot.get("utilization_ratio"),
+                    "cap_usd_micros": snapshot.get("cap_usd_micros"),
                     "task_priority": task_priority,
                     "risk_tier": risk_tier,
                     "defer_seconds": 900,
@@ -2207,6 +2211,8 @@ class JobLeaseService:
             if task_priority != "p0":
                 return {
                     "budget_state": budget_state,
+                    "utilization_ratio": snapshot.get("utilization_ratio"),
+                    "cap_usd_micros": snapshot.get("cap_usd_micros"),
                     "task_priority": task_priority,
                     "risk_tier": risk_tier,
                     "defer_seconds": 900,
@@ -2215,6 +2221,8 @@ class JobLeaseService:
             if kind in high_impact_effects and risk_tier >= 2:
                 return {
                     "budget_state": budget_state,
+                    "utilization_ratio": snapshot.get("utilization_ratio"),
+                    "cap_usd_micros": snapshot.get("cap_usd_micros"),
                     "task_priority": task_priority,
                     "risk_tier": risk_tier,
                     "defer_seconds": 900,
@@ -2232,9 +2240,18 @@ class JobLeaseService:
         policy: dict[str, Any],
     ) -> None:
         deferred_until = now_utc() + timedelta(seconds=int(policy["defer_seconds"]))
+        # SAID AS WHAT IT IS, WHEREVER IT SHOWS (model_failures.budget_hold_sentence). The job
+        # stays queued with a later run_after and no lease, which every surface used to read as
+        # "no worker has picked it up" — on boss-1 three research runs said that while the
+        # budget held them.
+        from .model_failures import budget_hold_sentence
+
+        held = budget_hold_sentence(policy["budget_state"], policy.get("utilization_ratio"),
+                                    policy.get("cap_usd_micros"))
         message = (
-            f"Budget state {policy['budget_state']} deferred job {kind} "
-            f"(priority {policy['task_priority']}, risk {policy['risk_tier']})."
+            f"{held} "
+            f"(job {kind}, priority {policy['task_priority']}, risk {policy['risk_tier']}; "
+            f"{policy['reason']})"
         )
         connection.execute(
             text(
@@ -2253,6 +2270,7 @@ class JobLeaseService:
                 "last_error": json.dumps(
                     {
                         "message": message,
+                        "kind": "budget_hold",
                         "budget_state": policy["budget_state"],
                         "reason": policy["reason"],
                     }

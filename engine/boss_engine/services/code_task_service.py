@@ -1363,8 +1363,10 @@ def _release(
         actual = 0
         if run_id and hasattr(connection, "execute"):
             gross = int(connection.execute(
+                # Money only: a call a subscription or local model answered is worth its
+                # cost_usd_micros at list price but costs nothing (included_spend.py).
                 sql("SELECT COALESCE(SUM(cost_usd_micros), 0) FROM llm_calls "
-                    "WHERE code_task_run_id = :r"),
+                    "WHERE code_task_run_id = :r AND NOT included_in_subscription"),
                 {"r": run_id}).scalar() or 0)
             already = int(connection.execute(
                 sql("SELECT COALESCE(SUM(actual_usd_micros), 0) FROM cost_receipts "

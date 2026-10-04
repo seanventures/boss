@@ -7,6 +7,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .core import now_utc
+from .included_spend import INCLUDED_SQL, MONEY_SQL
 
 FAILED_STATES = "('failed_terminal','failed_retryable','deadlettered')"
 
@@ -45,8 +46,11 @@ class ReportService:
                   (SELECT count(*) FROM jobs WHERE project_id=:p AND created_at >= {since} AND status IN {FAILED_STATES}) AS jobs_failed,
                   (SELECT count(*) FROM decisions WHERE project_id=:p AND created_at >= {since}) AS decisions,
                   (SELECT count(*) FROM decisions WHERE project_id=:p AND created_at >= {since} AND status='approved') AS decisions_approved,
-                  (SELECT COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)),0)
-                     FROM cost_receipts WHERE project_id=:p AND created_at >= {since}) AS spend_usd_micros
+                  (SELECT COALESCE(SUM({MONEY_SQL}),0)
+                     FROM cost_receipts WHERE project_id=:p AND created_at >= {since}) AS spend_usd_micros,
+                  (SELECT COALESCE(SUM({INCLUDED_SQL}),0)
+                     FROM cost_receipts WHERE project_id=:p AND created_at >= {since})
+                     AS included_in_subscription_usd_micros
                 """
             ),
             {"p": project_id},
@@ -113,10 +117,11 @@ class ReportService:
     def _by_model(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
-                """
+                f"""
                 SELECT skill_or_model_id AS model,
                   count(*) AS count,
-                  COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)),0) AS spend_usd_micros
+                  COALESCE(SUM({MONEY_SQL}),0) AS spend_usd_micros,
+                  COALESCE(SUM({INCLUDED_SQL}),0) AS included_in_subscription_usd_micros
                 FROM cost_receipts WHERE project_id=:p
                 GROUP BY skill_or_model_id ORDER BY spend_usd_micros DESC
                 """
@@ -128,6 +133,8 @@ class ReportService:
                 "model": r["model"],
                 "count": int(r["count"]),
                 "spend_usd_micros": int(r["spend_usd_micros"]),
+                "included_in_subscription_usd_micros": int(
+                    r["included_in_subscription_usd_micros"]),
             }
             for r in rows
         ]

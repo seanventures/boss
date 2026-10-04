@@ -1028,7 +1028,7 @@ export type DiscoveriesResponse = { discoveries: DiscoveryRun[] };
 
 /** engine/boss_engine/services/model_failures.py `explain`, plus where the work stands. */
 export type ModelAttention = {
-  kind: string;          // login_rejected | budget_wait | budget_refused | no_model | ...
+  kind: string;          // login_rejected | budget_hold | budget_wait | budget_refused | no_model | ...
   state?: string;        // stopped | waiting | retrying
   headline: string;
   action: string;
@@ -1764,6 +1764,13 @@ export type BudgetStatusResponse = {
   utilization_ratio: number;
   active_reservations_count: number;
   top_cost_drivers: Array<{
+    skill_or_model_id: string;
+    amount_usd_micros: number;
+  }>;
+  /** What subscription / local-model calls would have cost at API list price. Not money and
+   *  in no cap (engine/boss_engine/services/included_spend.py). */
+  included_in_subscription_usd_micros?: number;
+  included_cost_drivers?: Array<{
     skill_or_model_id: string;
     amount_usd_micros: number;
   }>;

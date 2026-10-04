@@ -1171,6 +1171,9 @@ class BudgetStatusResponse(BaseModel):
     utilization_ratio: float
     active_reservations_count: int
     top_cost_drivers: list[dict[str, Any]]
+    # Subscription / local-model calls at API list price: not money, in no cap (included_spend).
+    included_in_subscription_usd_micros: int = 0
+    included_cost_drivers: list[dict[str, Any]] = []
     operational_intensity: Optional[int] = None
     # BOSS-280: the enforced thresholds, surfaced so the console shows REAL knobs
     soft_cap_pct: Optional[float] = None

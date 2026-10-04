@@ -38,6 +38,10 @@ export type BudgetStatusCard = {
   utilizationRatio: number;
   activeReservationsCount: number;
   topCostDrivers: BudgetDriver[];
+  /** Subscription and local-model calls at API list price — "included in your subscription",
+   *  never money and never in a cap (engine included_spend.py). */
+  includedInSubscriptionUsdMicros: number;
+  includedCostDrivers: BudgetDriver[];
   // BOSS-281: the enforced thresholds — shown so operators see REAL knobs
   softCapPct?: number | null;
   autoLiteModePct?: number | null;
@@ -66,6 +70,11 @@ function mapBudgetStatus(payload: BudgetStatusResponse): BudgetStatusCard {
     utilizationRatio: payload.utilization_ratio,
     activeReservationsCount: payload.active_reservations_count,
     topCostDrivers: payload.top_cost_drivers.map((driver) => ({
+      skillOrModelId: driver.skill_or_model_id,
+      amountUsdMicros: driver.amount_usd_micros,
+    })),
+    includedInSubscriptionUsdMicros: payload.included_in_subscription_usd_micros ?? 0,
+    includedCostDrivers: (payload.included_cost_drivers ?? []).map((driver) => ({
       skillOrModelId: driver.skill_or_model_id,
       amountUsdMicros: driver.amount_usd_micros,
     })),
@@ -101,6 +110,8 @@ function unavailableBudgetStatus(
     utilizationRatio: 0,
     activeReservationsCount: 0,
     topCostDrivers: [],
+    includedInSubscriptionUsdMicros: 0,
+    includedCostDrivers: [],
     apiReachable: false,
     blockedReason: reason,
   };

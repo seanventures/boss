@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ..config import Settings
+from .included_spend import BILLING_METERED, BILLING_SUBSCRIPTION
 from .scheduling import low_priority
 
 _log = logging.getLogger(__name__)
@@ -497,6 +498,11 @@ class ClaudeCliAdapter(CliChatBrain):
         env = agent_environment(os.environ, extra)
         if token:
             env.pop("ANTHROPIC_API_KEY", None)
+        # WHO PAYS FOR THE CALL (included_spend.py): the subscription when the CLI runs on its
+        # login, money only when it runs on an ANTHROPIC_API_KEY with no login token.
+        self._billing = (BILLING_METERED
+                         if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and env.get("ANTHROPIC_API_KEY")
+                         else BILLING_SUBSCRIPTION)
         return env
 
     def _usage(self, data: dict) -> dict:
@@ -527,9 +533,23 @@ class ClaudeCliAdapter(CliChatBrain):
             "total_tokens": prompt_tokens + cache_read + cache_write + completion,
         }
         if cost is not None:
+            # `total_cost_usd` is the call's API LIST-PRICE value, reported on a subscription
+            # too; `billing` says whether it is money (included_spend.py).
             usage["cost_usd_micros"] = int(round(float(cost) * 1_000_000))
+        usage["billing"] = getattr(self, "_billing", None) or BILLING_SUBSCRIPTION
         return usage
 
+
+
+def claude_cli_billing(settings: Settings) -> str:
+    """Whether the Claude CLI on this install runs on a subscription login or an API key —
+    the same resolution its child environment makes (included_spend.py). Never raises."""
+    try:
+        adapter = ClaudeCliAdapter(settings)
+        adapter._child_env()
+        return adapter._billing
+    except Exception:  # noqa: BLE001 — the CLI path BOSS ships is the subscription login
+        return BILLING_SUBSCRIPTION
 
 
 class FallingBackAdapter:
