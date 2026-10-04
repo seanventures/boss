@@ -1024,7 +1024,17 @@ export type DiscoveryRun = {
   /** Why the run is not moving, in words an operator can act on; null when it is fine. */
   attention?: ModelAttention | null;
 };
-export type DiscoveriesResponse = { discoveries: DiscoveryRun[] };
+/** What a LIST row of discoveries carries: GET /v1/discoveries. The dossier (`state`) is the
+ *  DETAIL — GET /v1/discoveries/{id} — fetched when one is opened. */
+export type DiscoverySummary = {
+  verdict?: string | null;
+  confidence?: number | null;
+  findings: number;
+  outcomes: number;
+  deep?: boolean;
+};
+export type DiscoveryListItem = Omit<DiscoveryRun, "state" | "context"> & { summary: DiscoverySummary };
+export type DiscoveriesResponse = { discoveries: DiscoveryListItem[] };
 
 /** engine/boss_engine/services/model_failures.py `explain`, plus where the work stands. */
 export type ModelAttention = {

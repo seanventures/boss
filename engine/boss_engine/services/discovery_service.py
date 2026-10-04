@@ -460,17 +460,83 @@ def resume_interrupted(settings: Settings) -> dict:
     return {"resumed": len(resumed), "run_ids": resumed[:20]}
 
 
+#: What one row of a LIST may weigh, serialised. A list row is what fits on one line of a
+#: screen — a title, a status, a verdict, two counts and why it is stuck — and 2 KB holds that
+#: several times over. The dossier is the DETAIL: `load_discovery_run`, fetched when one is opened.
+#:
+#: The list returned every run's full research state (sweep findings, critique, market analysis,
+#: per-stage agent replies): 447 KB for 22 runs on boss-1, 425 KB of it `state`, all of it
+#: serialised into every console refresh that rendered Discovery, for a list that reads four
+#: numbers out of it.
+LIST_ITEM_BUDGET_BYTES = 2048
+#: Free text a list row shows is clipped to what a row can show.
+_LIST_TEXT_CHARS = 280
+
+
+def _clip(value: Optional[str], limit: int = _LIST_TEXT_CHARS) -> Optional[str]:
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[: limit - 1] + "…"
+
+
+def _json_count(expr: str) -> str:
+    """The length of a JSON array in `state`, 0 for anything that is not one (never an error)."""
+    return (f"CASE jsonb_typeof({expr}) WHEN 'array' THEN jsonb_array_length({expr}) "
+            "ELSE 0 END")
+
+
 def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
+    """The runs of a project as LIST ROWS: a bounded summary each, never the dossier.
+
+    Postgres reads the summary out of `state` so the dossier never leaves the database for a
+    list. `_attention` needs a handful of state keys (the job it belongs to and how that job
+    ended); those come along, and nothing else does.
+    """
     rows = connection.execute(
-        text("""SELECT d.id, d.project_id, d.status, d.phase, d.title, d.seed, d.context, d.state,
-                       d.usage, d.error, d.created_at, d.updated_at, j.status AS job_status,
+        text(f"""SELECT d.id, d.project_id, d.status, d.phase, d.title, d.seed, d.error,
+                       d.usage, d.created_at, d.updated_at,
+                       jsonb_build_object(
+                         'job_id', d.state->'job_id',
+                         'failed_by_job', d.state->'failed_by_job',
+                         'job_error', d.state->'job_error') AS state,
+                       d.state->'gate'->>'verdict' AS verdict,
+                       CASE jsonb_typeof(d.state->'gate'->'confidence') WHEN 'number'
+                         THEN (d.state->'gate'->>'confidence')::float END AS confidence,
+                       {_json_count("d.state->'signal_findings'")} AS findings,
+                       {_json_count("d.state->'candidate_outcomes'")} AS outcomes,
+                       COALESCE(d.state->>'deep', '') = 'true' AS deep,
+                       j.status AS job_status,
                        j.last_error AS job_error, j.lease_owner AS job_lease_owner,
                        j.run_after AS job_run_after, (now() - j.created_at) AS job_age
                 FROM discovery_runs d LEFT JOIN jobs j ON j.id = d.state->>'job_id'
                 WHERE d.project_id=:p ORDER BY d.created_at DESC LIMIT :n"""),
         {"p": project_id, "n": limit},
     ).mappings().all()
-    return [_row_to_dict(r) for r in rows]
+    return [_row_to_summary(r) for r in rows]
+
+
+def _row_to_summary(r) -> dict:
+    state = r["state"]
+    state = json.loads(state) if isinstance(state, str) else (state or {})
+    usage = r["usage"]
+    usage = json.loads(usage) if isinstance(usage, str) else (usage or None)
+    attention = _attention(r, state)
+    if attention and isinstance(attention.get("detail"), str):
+        attention = {**attention, "detail": _clip(attention["detail"])}
+    return {
+        "id": r["id"], "project_id": r["project_id"], "status": r["status"], "phase": r["phase"],
+        "title": _clip(r["title"]), "seed": _clip(r["seed"]), "error": _clip(r["error"]),
+        "usage": ({"cost_usd_micros": usage.get("cost_usd_micros"), "model": usage.get("model")}
+                  if isinstance(usage, dict) else None),
+        "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        "summary": {
+            "verdict": r["verdict"], "confidence": r["confidence"],
+            "findings": int(r["findings"] or 0), "outcomes": int(r["outcomes"] or 0),
+            "deep": bool(r["deep"]),
+        },
+        "attention": attention,
+    }
 
 
 def load_discovery_run(connection, run_id: str) -> Optional[dict]:

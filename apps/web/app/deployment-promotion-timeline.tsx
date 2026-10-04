@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useConsoleRefresh } from "./use-console-refresh";
 
 import type { DeploymentPromotionFeedItem } from "../lib/providerops";
 
@@ -27,14 +27,14 @@ export function DeploymentPromotionTimeline({
 }: {
   promotions: DeploymentPromotionFeedItem[];
 }) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   const hasActive = promotions.some((promotion) => !TERMINAL.has(promotion.status));
 
   useEffect(() => {
     if (!hasActive) return;
-    const timer = window.setInterval(() => router.refresh(), 5000);
+    const timer = window.setInterval(() => refresh("poll"), 5000);
     return () => window.clearInterval(timer);
-  }, [hasActive, router]);
+  }, [hasActive, refresh]);
 
   if (promotions.length === 0) {
     return (
