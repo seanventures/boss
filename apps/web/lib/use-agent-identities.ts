@@ -33,6 +33,17 @@ export function useIdentity(keyOrTitle: string, name?: string): AgentIdentity {
   }, [keyOrTitle, name, v]);
 }
 
+/**
+ * LOAD THE INSTALL'S AGENTS ONCE FOR THE PAGE. The console shell calls this for the active
+ * project. Without it nothing ever filled the store: every name came from the bundled cast,
+ * which has no callsign for most roles, so the roster said "Program Manager" where the install
+ * says Rally. It does not subscribe — the components that name agents do (useIdentity /
+ * useIdentityVersion), so the shell itself does not repaint when they arrive.
+ */
+export function useLoadIdentities(projectId: string): void {
+  useEffect(() => { void loadIdentities(projectId); }, [projectId]);
+}
+
 /** The identities for a project, loading them on first use. */
 export function useAgentIdentities(projectId: string): Map<string, AgentIdentity> {
   const v = useIdentityVersion();
