@@ -27,7 +27,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 
-from . import decision_actions, workflow_capabilities
+from . import decision_actions, factory_view, workflow_capabilities
 
 #: A run in one of these is in flight.
 LIVE_RUN = frozenset({"queued", "validating", "running", "waiting", "paused", "blocked"})
@@ -164,7 +164,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
              steps: list[Mapping[str, Any]], decisions: list[Mapping[str, Any]],
              readiness: list[Mapping[str, Any]], names: Mapping[str, str],
              now: datetime,
-             stopped: Optional[Mapping[str, list]] = None) -> dict[str, Any]:
+             stopped: Optional[Mapping[str, list]] = None,
+             builds: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """Shape the read rows into the three answers. Pure: no I/O, `now` is passed in.
 
     `stopped` is `{run_id: workflow_run_actions.stopped_for_operator(run, steps)}` from
@@ -291,7 +292,15 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         described = decision_actions.describe(decision, now)
         run = run_of_decision.get(str(decision.get("id")))
         hint = described["guidance"] or {}
-        if run:
+        build = (builds or {}).get("by_decision", {}).get(str(decision.get("id")))
+        if build and build.get("kind") == "plan":
+            # A BUILD'S DECISIONS SAY WHAT THEY ARE (factory spec §4.2.1), the same words on
+            # the Floor, Agents › Live, the pill and here.
+            title = "Approve the plan?"
+        elif build and build.get("kind") == "pr":
+            title = f"Merge PR #{build['pr_number']}?" if build.get("pr_number") \
+                else "Merge the PR?"
+        elif run:
             title = f"“{run['step_label']}” is waiting for you" + (
                 f" on {run['subject']}" if run.get("subject") else "")
         else:
@@ -321,6 +330,30 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
                     if run else None),
             "risk_tier": decision.get("risk_tier"),
             "at": _iso(decision.get("created_at")),
+            **({"build": factory_view.attention_build(build)} if build else {}),
+        })
+
+    # A BUILD STOPPED FOR YOU (factory spec §6.5): checks that failed and wait for a waiver,
+    # or a budget only a person can raise. Neither is a decision, and before this neither
+    # reached the pill, the Command Center or Live — the build just looked stuck.
+    for b in (builds or {}).get("blocked", []):
+        info = factory_view.attention_build(b)
+        if b["kind"] == "gate_override":
+            n = len(b.get("failing") or [])
+            title = f"{n} check failed" if n == 1 else f"{n} checks failed"
+            answers = [{"key": "retry", "label": "Retry", "state": "enabled"},
+                       {"key": "waive", "label": "Waive…", "state": "enabled"}]
+            detail = " · ".join(f["label"] for f in info["failing"])
+        else:
+            title = "Budget refused"
+            answers = [{"key": "retry", "label": "Retry", "state": "enabled"}]
+            detail = _first_line(b.get("error")) or "Over the build budget."
+        needs_you.append({
+            "id": f"build:{b['run_id']}:{'gates' if b['kind'] == 'gate_override' else 'budget'}",
+            "kind": b["kind"], "title": title, "detail": detail,
+            "what_to_do": None, "run_id": None, "build_run_id": b["run_id"],
+            "role_key": b.get("role_key"), "actions": [a["key"] for a in answers],
+            "answers": answers, "build": info, "at": b.get("at"),
         })
 
     for gap in readiness:
@@ -343,7 +376,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
     def rank(item: Mapping[str, Any]) -> tuple[int, str]:
         if item["kind"] == "approval" and item.get("decision_kind") != "refusal":
             first = 0
-        elif item["kind"] == "failed_step":
+        elif item["kind"] in ("failed_step", "gate_override", "budget_refused"):
             first = 1
         elif item["kind"] == "readiness":
             first = 2
@@ -368,6 +401,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "expired_answerable": expired_answerable,
             "failed_steps": sum(1 for n in needs_you if n["kind"] == "failed_step"),
             "readiness": sum(1 for n in needs_you if n["kind"] == "readiness"),
+            "builds": sum(1 for n in needs_you
+                          if n["kind"] in ("gate_override", "budget_refused")),
             "succeeded_7d": sum(1 for r in recent if r["outcome"] == "succeeded"),
             "failed_7d": sum(1 for r in recent if r["outcome"] in ("failed", "deadlettered")),
         },
@@ -458,11 +493,21 @@ def read(connection, settings, project_id: str,
         readiness = []
     from .workflow_run_actions import load_runs, stopped_for_operator
 
+    builds: dict[str, Any] = {"blocked": [], "by_decision": {}}
+    try:
+        with connection.begin_nested():
+            builds = factory_view.build_attention_rows(connection, project_id, decisions)
+    except Exception:  # noqa: BLE001 - a build probe must never blank the landing page
+        import logging
+
+        logging.getLogger("boss.command_center").warning(
+            "could not read the builds that need the operator", exc_info=True)
     loaded = load_runs(connection, project_id, [r["id"] for r in runs])
     stopped = {run_id: stopped_for_operator(run, run_steps)
                for run_id, (run, run_steps) in loaded.items()}
     return {"project_id": project_id, "runs": runs, "steps": steps, "decisions": decisions,
-            "readiness": readiness, "names": names, "now": now, "stopped": stopped}
+            "readiness": readiness, "names": names, "now": now, "stopped": stopped,
+            "builds": builds}
 
 
 def build(connection, settings, project_id: str,

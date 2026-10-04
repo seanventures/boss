@@ -7669,7 +7669,8 @@ def code_task_activity_endpoint(run_id: str):
             text(
                 """
                 SELECT stage, engine, model, role, total_tokens, cost_usd_micros,
-                       latency_ms, retries, turns, ok, error, created_at
+                       latency_ms, retries, turns, ok, error, created_at,
+                       included_in_subscription
                 FROM llm_calls
                 WHERE code_task_run_id = :rid
                 ORDER BY created_at, id
@@ -7694,6 +7695,9 @@ def code_task_activity_endpoint(run_id: str):
             "ok": bool(r["ok"]),
             "error": r["error"],
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            # A subscription or local call: its cost is a list price, not money spent
+            # (factory spec §6.3). Without this every such call looked like spend.
+            "included_in_subscription": bool(r["included_in_subscription"]),
         }
         for r in rows
     ]
@@ -9986,6 +9990,9 @@ def override_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         require_project_actor(
             connection, run_row["project_id"], actor, "task_create"
         )
+    if not str(p.get("reason") or "").strip():
+        # A waiver says why (factory spec §4.2.1): it is read by whoever merges.
+        raise HTTPException(status_code=422, detail="A reason is required to waive checks.")
     from .services.code_task_service import override_code_task
     try:
         return override_code_task(engine, settings, jobs, run_id,
@@ -27896,6 +27903,177 @@ def agents_live_board_endpoint(project_id: str, request: Request, response: Resp
     response.headers["ETag"] = board["etag"]
     response.headers["Cache-Control"] = "no-cache"
     return board
+
+
+# --- the Factory (factory spec §6.2-§6.5) ---------------------------------------------------
+# The Floor, a build's cockpit, the Apps tab, and the build actions that were MCP-only. Every
+# word a build shows comes from factory_view, the one derivation the MCP tools read too.
+
+
+def _etagged(request: Request, response: Response, body: dict):
+    etag = str(body.get("etag") or "")
+    if etag and request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    if etag:
+        response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "no-cache"
+    return body
+
+
+@app.get("/v1/factory/floor")
+def factory_floor_endpoint(project_id: str, request: Request, response: Response,
+                           viewer: Optional[str] = None):
+    """What needs you, what is building, what shipped, what stopped (§6.2). ETag'd: the Floor
+    polls it every 8s while visible, and an unchanged Floor is a 304."""
+    from boss_engine.services import factory_view
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        body = factory_view.floor(connection, settings, project_id, viewer=_acts_viewer(viewer))
+    return _etagged(request, response, jsonable_encoder(body))
+
+
+@app.get("/v1/factory/apps")
+def factory_apps_endpoint(project_id: str, request: Request, response: Response,
+                          viewer: Optional[str] = None):
+    """Every app, where it runs, how it got there: one row per app, grouped by identity."""
+    from boss_engine.services import factory_view
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        body = factory_view.apps(connection, project_id, viewer=_acts_viewer(viewer))
+    return _etagged(request, response, jsonable_encoder(body))
+
+
+@app.get("/v1/code-tasks/{run_id}/cockpit")
+def code_task_cockpit_endpoint(run_id: str, request: Request, response: Response,
+                               project_id: Optional[str] = None, viewer: Optional[str] = None):
+    """One build, whole: its state, its line of stations, its story and its outputs (§6.3).
+    Polled every 4s while the build is live; an unchanged cockpit is a 304."""
+    from boss_engine.services import factory_view
+
+    _acts_reader(project_id or "")
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        if project_id and project_id.strip() != owner:
+            raise HTTPException(status_code=404, detail="code task not found")
+        body = factory_view.cockpit(connection, settings, owner, run_id,
+                                    viewer=_acts_viewer(viewer))
+    if body is None:
+        raise HTTPException(status_code=404, detail="code task not found")
+    return _etagged(request, response, jsonable_encoder(body))
+
+
+@app.get("/v1/code-tasks/{run_id}/acts")
+def code_task_acts_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
+    """A build's signed work, oldest first — for any build, inline ones included (§6.4)."""
+    from boss_engine.services import agent_acts
+
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        items = agent_acts.acts_for_code_task(connection, owner, run_id,
+                                              viewer=_acts_viewer(viewer))
+    return {"run_id": run_id, "items": items}
+
+
+@app.get("/v1/code-tasks/{run_id}/gates")
+def code_task_gates_endpoint(run_id: str) -> dict:
+    """The build's latest quality gate: each gate with its one label and owner station."""
+    from boss_engine.services import factory_view
+
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        row = connection.execute(
+            text("SELECT id, status, gates_passed, gates_failed, created_at FROM quality_gates "
+                 "WHERE code_task_run_id = :r AND project_id = :p "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"r": run_id, "p": owner},
+        ).mappings().first()
+    if row is None:
+        return {"run_id": run_id, "gate_id": None, "status": None, "gates": []}
+
+    def _names(value):
+        return [str(g) for g in (json.loads(value) if isinstance(value, str) else value or [])]
+
+    gates = [{"name": g, "label": factory_view.gate_label(g), "ok": ok,
+              "station": factory_view.gate_station(g),
+              "waivable": g not in factory_view.UNWAIVABLE_GATES}
+             for g, ok in [(g, True) for g in _names(row["gates_passed"])]
+             + [(g, False) for g in _names(row["gates_failed"])]]
+    return {"run_id": run_id, "gate_id": row["id"], "status": row["status"], "gates": gates}
+
+
+@app.get("/v1/code-tasks/{run_id}/review-comments")
+def code_task_review_comments_endpoint(run_id: str, status: str = "all") -> dict:
+    """Every review comment on a build — the panel's and people's — each once."""
+    from boss_engine.services.code_task_service import load_code_task_run, review_comments_of
+
+    with begin(engine) as connection:
+        require_code_task_reader(connection, run_id)
+        run = load_code_task_run(connection, run_id) or {}
+    comments = review_comments_of(run)
+    want = (status or "all").lower()
+    if want != "all":
+        comments = [c for c in comments if (c.get("status") or "open") == want]
+    return {"run_id": run_id, "count": len(comments), "comments": comments}
+
+
+class ReviewCommentResolveBody(BaseModel):
+    actor: str
+    status: Literal["addressed", "dismissed"]
+    note: str = ""
+
+
+@app.post("/v1/code-tasks/{run_id}/review-comments/{comment_id}/resolve")
+def code_task_review_comment_resolve_endpoint(run_id: str, comment_id: str,
+                                              payload: ReviewCommentResolveBody) -> dict:
+    """Mark one comment addressed or dismissed. A dismissal is recorded, never erased."""
+    from boss_engine.services.code_task_service import resolve_review_comment
+
+    actor = payload.actor.strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        require_project_actor(connection, owner, actor, "task_create")
+        try:
+            return resolve_review_comment(connection, run_id, owner, comment_id,
+                                          status=payload.status, actor=actor,
+                                          note=payload.note)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'\"")) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class CodeTaskCancelBody(BaseModel):
+    actor: str
+    reason: str = ""
+
+
+@app.post("/v1/code-tasks/{run_id}/cancel")
+def code_task_cancel_endpoint(run_id: str, payload: CodeTaskCancelBody) -> dict:
+    """Stop a build: the run, its queued job and its open acts together (§6.5). 409 when it
+    already ended. Keeps the work so far; Retry resumes it."""
+    from boss_engine.services.code_task_service import CancelRefused, cancel_run
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = payload.actor.strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        # Stopping work is a governed write: the same bar as starting it.
+        require_project_actor(connection, owner, actor, "task_create")
+        try:
+            return cancel_run(connection, run_id, owner, actor=actor, reason=payload.reason)
+        except CancelRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="code task not found") from exc
 
 
 @app.get("/v1/agents/activity")

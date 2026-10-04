@@ -307,8 +307,9 @@ def open_act(connection: Connection, *, project_id: str, kind: str, role_key: Op
              subject_id: Optional[str] = None, label: str, status: str = "active",
              started_at: Any = None, reconstructed: bool = False,
              artifacts: Iterable[dict] = (), envelope_id: Optional[str] = None,
-             act_id: Optional[str] = None, **links: Any) -> str:
-    """Write one act; returns its act_id.
+             act_id: Optional[str] = None, seat: Optional[int] = None,
+             **links: Any) -> str:
+    """Write one act; returns its act_id. `seat` is a review panel seat (1-based).
 
     `asked_by_agent` needs `envelope_id`: an agent is only ever said to have asked when an A2A
     envelope with sender_kind=agent proves it did. Everything else that moves work between
@@ -349,14 +350,14 @@ def open_act(connection: Connection, *, project_id: str, kind: str, role_key: Op
                 status, parent_act_id, root_act_id, handed_by_kind, handed_by_id, how, why,
                 considered, scope, scope_ok, accountable, subject_kind, subject_id,
                 workflow_run_id, step_id, code_task_run_id, meeting_run_id, thread_id,
-                decision_id, receipt_id, label, artifacts, reconstructed, started_at
+                decision_id, receipt_id, label, artifacts, reconstructed, started_at, seat
             ) VALUES (
                 :act_id, :project_id, :role_key, :agent_id, :fingerprint, :version, :kind,
                 :status, :parent, :root, :hbk, :hbi, :how, :why,
                 CAST(:considered AS JSONB), CAST(:scope AS JSONB), :scope_ok, :accountable,
                 :subject_kind, :subject_id, :workflow_run_id, :step_id, :code_task_run_id,
                 :meeting_run_id, :thread_id, :decision_id, :receipt_id, :label,
-                CAST(:artifacts AS JSONB), :reconstructed, COALESCE(:started_at, now())
+                CAST(:artifacts AS JSONB), :reconstructed, COALESCE(:started_at, now()), :seat
             )
             """
         ),
@@ -370,7 +371,7 @@ def open_act(connection: Connection, *, project_id: str, kind: str, role_key: Op
             "accountable": str(accountable).strip(), "subject_kind": subject_kind,
             "subject_id": subject_id, "label": (label or kind)[:200],
             "artifacts": json.dumps(shipped), "reconstructed": bool(reconstructed),
-            "started_at": started_at,
+            "started_at": started_at, "seat": int(seat) if seat else None,
             **{k: (str(links[k]) if links.get(k) not in (None, "") else None) for k in LINKS},
         },
     )
@@ -1229,7 +1230,8 @@ def stage_role(stage: str, parent: Optional[dict[str, Any]]) -> Optional[str]:
 
 
 def stage_act(connection: Connection, *, project_id: Optional[str], code_task_run_id: str,
-              stage: Optional[str], reconstructed: bool = False) -> Optional[dict[str, Any]]:
+              stage: Optional[str], reconstructed: bool = False,
+              seat: Optional[int] = None) -> Optional[dict[str, Any]]:
     """The act a model call in this build stage belongs to, opened on first use.
 
     Called where every model call is recorded (llm_telemetry), so a stage cannot spend without
@@ -1239,8 +1241,12 @@ def stage_act(connection: Connection, *, project_id: Optional[str], code_task_ru
     A build started by a step or a chat turn can spend before that act is committed (the tool
     that started it commits on its own). Its stages are then signed with no parent, the
     starter's person accountable, and adopted by the starting act as soon as it is visible —
-    never hung off a root of their own."""
+    never hung off a root of their own.
+
+    A review panel's seats each sign their own work (`seat`, 1-based): the act keys on
+    (stage, seat), so every seat has its own face, tool calls and findings (factory §6.4)."""
     task = _code_task(connection, code_task_run_id)
+    seat = int(seat) if seat else None
     if not task:
         return None
     project_id = project_id or task["project_id"]
@@ -1259,13 +1265,19 @@ def stage_act(connection: Connection, *, project_id: Optional[str], code_task_ru
         root = _code_task_root(connection, task, reconstructed=reconstructed)
         return {"act_id": root, "role_key": None}
 
+    # A stage working again ends a budget wait (factory spec §6.4). One conditional write.
+    connection.execute(
+        text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx - 'budget_wait_since' "
+             "WHERE id = :c AND finalize_ctx ? 'budget_wait_since'"),
+        {"c": code_task_run_id},
+    )
     open_now = [dict(r) for r in connection.execute(
-        text("SELECT act_id, step_id, role_key FROM agent_acts WHERE kind = 'stage' "
+        text("SELECT act_id, step_id, role_key, seat FROM agent_acts WHERE kind = 'stage' "
              "AND code_task_run_id = :c AND ended_at IS NULL"),
         {"c": code_task_run_id},
     ).mappings().all()]
     for act in open_now:
-        if act["step_id"] == stage_key:
+        if act["step_id"] == stage_key and (act.get("seat") or None) == seat:
             return {"act_id": act["act_id"], "role_key": act["role_key"]}
     phase = STAGE_PHASES[stage_key]
     for act in open_now:
@@ -1288,9 +1300,11 @@ def stage_act(connection: Connection, *, project_id: Optional[str], code_task_ru
         why=(f"{STAGE_TITLES.get(stage_key, stage_key)} is {role}'s stage of the build"
              if role else None),
         accountable=accountable, subject_kind="code_task_run", subject_id=code_task_run_id,
-        label=f"{STAGE_TITLES.get(stage_key, stage_key.title())} · "
+        label=f"{STAGE_TITLES.get(stage_key, stage_key.title())}"
+              f"{f' · seat {seat}' if seat else ''} · "
               f"{str(task.get('title') or 'untitled')[:60]}",
         code_task_run_id=code_task_run_id, step_id=stage_key, reconstructed=reconstructed,
+        seat=seat,
         workflow_run_id=((parent_row or {}).get("workflow_run_id") or fctx.get("workflow_run_id")
                          or _origin_of(fctx).get("workflow_run_id")),
     )
@@ -1298,7 +1312,9 @@ def stage_act(connection: Connection, *, project_id: Optional[str], code_task_ru
 
 
 _TASK_ENDED = {"completed": "complete", "succeeded": "complete", "failed": "error",
-               "cancelled": "stale", "simulated": "complete"}
+               # A stopped build's open stages did not fail and are not stale: they were
+               # skipped (factory spec §6.5).
+               "cancelled": "skipped", "simulated": "complete"}
 
 
 def close_code_task(connection: Connection, code_task_run_id: str) -> int:
@@ -1849,6 +1865,7 @@ def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None
         "tokens_out": tokens_out,
         "cost_usd": round(cost, 6),
         "reconstructed": bool(act.get("reconstructed")),
+        "seat": act.get("seat"),
         "started_at": _iso(act.get("started_at")),
         "ended_at": _iso(act.get("ended_at")),
         "version": act.get("identity_version"),
@@ -1934,6 +1951,19 @@ def _from_node(act: dict[str, Any], parent: Optional[dict[str, Any]]) -> dict[st
         return {"kind": node["kind"], "id": node.get("role_key") or node.get("person") or "boss",
                 **({"role_key": node["role_key"]} if node.get("role_key") else {})}
     return {"kind": "boss", "id": "boss"}
+
+
+def acts_for_code_task(connection: Connection, project_id: str, code_task_run_id: str, *,
+                       viewer: Optional[str] = None) -> list[dict[str, Any]]:
+    """A build's signed work, oldest first: its root (when nothing else started it), every
+    stage and every review seat — for ANY build, inline ones included (factory spec §6.4).
+    Faces used to exist only for builds a workflow started."""
+    rows = [dict(r) for r in connection.execute(
+        text("SELECT * FROM agent_acts WHERE project_id = :p AND code_task_run_id = :c "
+             "AND kind IN ('run', 'stage') ORDER BY started_at, act_id"),
+        {"p": project_id, "c": code_task_run_id},
+    ).mappings().all()]
+    return _serialized(connection, rows, viewer=viewer)
 
 
 def acts_for_agent(connection: Connection, project_id: str, role_key: str, *,
