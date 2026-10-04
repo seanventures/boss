@@ -27556,9 +27556,12 @@ def agent_lifecycle_endpoint(role_key: str, body: AgentLifecycleBody):
     with begin(engine) as connection:
         who = require_project_write_actor(connection, body.project_id, body.actor,
                                           "role_review")
+        # AN OWNER IS A PERSON: the ceo role on a HUMAN member, as require_autonomy_operator
+        # decides it. A ceo role key alone let an agent or system principal count as an owner.
         try:
-            members.require_member(connection, body.project_id, who, role_keys_any=["ceo"])
-            owner = True
+            member = members.require_member(connection, body.project_id, who,
+                                             role_keys_any=["ceo"])
+            owner = member.get("member_type") == "human"
         except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
             owner = False
         try:
