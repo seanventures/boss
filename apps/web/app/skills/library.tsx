@@ -6,7 +6,7 @@
  * behind `Show internal` — the old page explained them in a sentence per row.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DotsThree, MagnifyingGlass, Plus, Sparkle } from "@phosphor-icons/react";
+import { DotsThree, FileText, MagnifyingGlass, Plus, Sparkle } from "@phosphor-icons/react";
 
 import type { Ability, AbilityStatus } from "../../lib/kit-types";
 import { mcpApi, type CrewMember, type KitWithCrew, type McpServer } from "../../lib/kit-api";
@@ -150,6 +150,8 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
   const holdersOf = (id: string) => assignments.filter((a) => a.skill_id === id).map((a) => a.role_key);
 
   type Row = { id: string; label: string; origin: "yours" | "built_in" | "agent"; tier: number; status: ReturnType<typeof skillStatus>;
+               /** A guide (a SKILL.md playbook): marked with a page icon. */
+               guide?: boolean;
                holders: string[]; ability: Ability | undefined; used: number; internal: boolean; tip: string };
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
@@ -158,6 +160,7 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
       const holders = holdersOf(s.skill_key);
       out.push({ id: s.skill_key, label: s.label || s.skill_key,
                  origin: s.behaviour_kind === "agent_program" ? "agent" : "yours", tier,
+                 guide: s.behaviour_kind === "guide",
                  status: skillStatus(s.enabled, s.catalogue?.usable !== false, tier >= 1 && !s.trusted, holders.length),
                  holders, ability: undefined,
                  used: (s.references?.custom_steps?.length ?? 0) + (s.references?.workflows?.length ?? 0),
@@ -251,7 +254,9 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
               {visibleSkills.map((r) => (
                 <li key={`${r.origin}:${r.id}`} className="kit-list-row" data-testid={`kit-skill-${r.id}`}
                     onClick={() => showSkill(r.id)}>
-                  <span className="kit-list-name" data-tip={r.tip} data-user-text={r.origin !== "built_in" || undefined}>{r.label}</span>
+                  <span className="kit-list-name" data-tip={r.tip} data-user-text={r.origin !== "built_in" || undefined}>
+                    {r.guide ? <FileText size={13} aria-label="Guide" data-testid={`kit-guide-${r.id}`} /> : null} {r.label}
+                  </span>
                   <span className="kit-chip" data-tip={r.origin === "built_in" ? TIP.builtIn : r.origin === "agent" ? "Written by an agent on an earlier run" : TIP.custom}>
                     {r.origin === "built_in" ? "Built in" : r.origin === "agent" ? "Agent-written" : "Yours"}
                   </span>
