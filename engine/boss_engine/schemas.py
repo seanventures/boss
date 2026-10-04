@@ -2706,6 +2706,9 @@ class DecisionActionRequest(BaseModel):
     # action stays inside the governed path with a receipt instead of the human reaching for
     # `gh pr merge` outside the system. `note` becomes mandatory and records why.
     force: bool = False
+    # The `action_preview.content_hash` the approver was looking at. When it no longer matches
+    # the decision's preview (the content changed while they read it), the approval is refused.
+    content_hash: Optional[str] = None
 
 
 class DecisionDigestRequest(BaseModel):

@@ -662,6 +662,7 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
   const note = formData.get("note");
   const delegateTo = formData.get("delegate_to");
   const externalRef = formData.get("external_ref");
+  const contentHash = formData.get("content_hash");
 
   if (typeof decisionId != "string" || !decisionId) return missingInput("decisionId");
   if (!isDecisionAction(action)) {
@@ -687,6 +688,9 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
       typeof externalRef === "string" && externalRef.trim()
         ? externalRef.trim()
         : undefined,
+    // The preview's hash the approver was shown; refused by the engine if it has moved on.
+    content_hash: action === "approve" && typeof contentHash === "string" && contentHash
+      ? contentHash : undefined,
   };
   // NO CATCH HERE. This used to swallow every API error into console.error and then report
   // "Decision recorded" — a refused Approve read as success. act() turns the refusal into
