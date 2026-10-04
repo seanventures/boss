@@ -20,6 +20,7 @@ import { ActFace } from "./act-card";
 import { shortLabel } from "./chain-model";
 import { useActDetail } from "./run-acts";
 import { AiBadge, nameOf, RunFace, STATE_WORD } from "./run-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /**
  * The role key a dock is talking to, as the turn sends it: the key it was opened with, else its
@@ -72,6 +73,7 @@ export function DockAgentHead({ roleKey, roleName, state, projectId, actId, onCl
   roleKey: string | null; roleName?: string; state: AvatarState; projectId: string;
   actId?: string | null; onClearAct?(): void;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const named = roleKey ? nameOf(roleKey) : { name: roleName || "BOSS", role: roleName || "BOSS", tagline: undefined, callsign: undefined };
   const about = useActDetail(projectId, actId ?? null);
   return (
@@ -118,6 +120,7 @@ function hhmm(iso: string): string {
 function CitedAct({ actId, projectId, viewer, speaker }: {
   actId: string; projectId: string; viewer: string; speaker: string | null;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const act = useActDetail(projectId, actId);
   if (!act) {
     return <span className="ag-cite" data-testid="ag-cite" data-loading="true">Cited work ↗</span>;

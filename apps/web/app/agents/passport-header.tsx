@@ -16,6 +16,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Copy, DotsThree, ShareNetwork } from "@phosphor-icons/react";
 
 import type { AvatarState, Passport } from "../../lib/agent-world-types";
+import { useIdentity } from "../../lib/use-agent-identities";
 import {
   bornDate, bornFromLabel, getAgentCard, humanise, identityOf, money, resolveAvatar, setLifecycle, toast,
   versionLine,
@@ -131,7 +132,7 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
   presenceState?: AvatarState;
   facts?: DetailFacts;
 }) {
-  const who = identityOf(roleKey, name);
+  const who = useIdentity(roleKey, name); // and repaints when identities load
   const persona = passport?.persona;
   const callsign = persona?.callsign || who.callsign;
   const display = passport?.displayName || name;

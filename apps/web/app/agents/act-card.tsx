@@ -18,6 +18,7 @@ import { openDockAbout, type DockSubject } from "../../lib/dock-subject";
 import { openTalk } from "../../lib/agent-converse";
 import { shortLabel, whoDid, actState } from "./chain-model";
 import { AiBadge, nameOf, RunFace, StateWord } from "./run-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** A URL in this console with `patch` applied, keeping the org and project the page is on. */
 export function consoleHref(patch: Record<string, string>): string {
@@ -89,6 +90,7 @@ function Row({ label, tip, children, testId }: { label: string; tip?: string; ch
 export function ActCard({ act, viewer, inline, onClose }: {
   act: Act; viewer: string; inline?: boolean; onClose?(): void;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const who = whoDid(act, viewer);
   const named = nameOf(who.roleKey, who.variant, who.personId);
   const state = actState(act);
@@ -213,6 +215,7 @@ function place(trigger: HTMLElement, card: HTMLElement): { left: number; top: nu
 export function ActFace({ act, viewer, size = 24, label, children }: {
   act: Act; viewer: string; size?: 20 | 24 | 32 | 48; label?: string; children?: React.ReactNode;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);

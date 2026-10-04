@@ -17,6 +17,7 @@ import { callAction } from "../lib/call-action";
 // Agent World (S-runs): the agent's face, its live state, and the work it cites.
 import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
 import { nameOf } from "./agents/run-face";
+import { useIdentityVersion } from "../lib/use-agent-identities";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
@@ -258,6 +259,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   /** The work this conversation is about (`?dock_act=`): sent as `context.act_id`. */
   actId?: string;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   /**
    * ONE DURABLE CONVERSATION PER ROLE.
    *

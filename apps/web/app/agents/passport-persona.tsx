@@ -20,6 +20,7 @@ import {
 } from "../../lib/agent-world";
 import { AgFace } from "./agent-face";
 import { FacePicker } from "./face-picker";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** Archetype tiles are pickers: each face big enough to tell the characters apart. */
 export const ARCH_FACE_PX = 56;
@@ -75,6 +76,7 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
   /** The unsaved voice, so Test can be heard before Save. */
   onDraft?: (p: Persona | null) => void;
 }) {
+  useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const saved = useMemo(() => fullPersona(passport?.persona), [passport]);
   const [p, setP] = useState<Persona>(saved);
   const [busy, setBusy] = useState("");
