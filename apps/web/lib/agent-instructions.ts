@@ -107,7 +107,15 @@ async function send<T>(path: string, method: "POST" | "PATCH" | "DELETE", body: 
   }
 }
 
-const toDryRun = (w: unknown): DryRun => {
+/** A dry run's refusal arrives as 200 {ok: false, field, message, line, tip}: an answer. */
+async function dry(p: Promise<Answer<DryRun & { refused?: Wire }>>): Promise<Answer<DryRun>> {
+  const r = await p;
+  if (r.ok && r.data.refused) return refusal({ detail: r.data.refused }, 422);
+  return r;
+}
+
+const toDryRun = (w: unknown): DryRun & { refused?: Wire } => {
+  if (obj(w).ok === false) return { refused: obj(w) } as DryRun & { refused?: Wire };
   const o = obj(w);
   return { tokensEst: num(o.tokens_est), sizeChars: num(o.size_chars), budgetAfter: toBudget(o.budget_after),
            warnings: (Array.isArray(o.warnings) ? o.warnings : []).map(String), looksLikeSkill: o.looks_like_skill === true };
@@ -129,8 +137,8 @@ export const instructionsApi = {
   body: (projectId: string, roleKey: string, id: string) =>
     get(`/v1/agents/${enc(roleKey)}/instructions/${enc(id)}?project_id=${enc(projectId)}`, (w) => str(obj(w).body)),
   dryRun: (projectId: string, actor: string, roleKey: string, input: { name: string; body: string; modes: InstructionMode[]; source: string }) =>
-    send(`/v1/agents/${enc(roleKey)}/instructions`, "POST",
-      { project_id: projectId, actor, ...input, dry_run: true }, toDryRun, ""),  // automatic, not a press: it never blocks Add
+    dry(send(`/v1/agents/${enc(roleKey)}/instructions`, "POST",
+      { project_id: projectId, actor, ...input, dry_run: true }, toDryRun, "")),  // automatic, not a press: it never blocks Add
   add: (projectId: string, actor: string, roleKey: string, input: { name: string; body: string; modes: InstructionMode[]; source: string }) =>
     send(`/v1/agents/${enc(roleKey)}/instructions`, "POST", { project_id: projectId, actor, ...input }, saved, "Add"),
   update: (projectId: string, actor: string, roleKey: string, id: string,
@@ -138,8 +146,8 @@ export const instructionsApi = {
     send(`/v1/agents/${enc(roleKey)}/instructions/${enc(id)}`, "PATCH", { project_id: projectId, actor, ...changes }, saved, "Save"),
   /** A replace, checked and not stored (the sheet's estimate for `Replace file`). */
   dryRunUpdate: (projectId: string, actor: string, roleKey: string, id: string, changes: { body?: string; modes?: InstructionMode[] }) =>
-    send(`/v1/agents/${enc(roleKey)}/instructions/${enc(id)}`, "PATCH", { project_id: projectId, actor, ...changes, dry_run: true },
-      toDryRun, ""),
+    dry(send(`/v1/agents/${enc(roleKey)}/instructions/${enc(id)}`, "PATCH", { project_id: projectId, actor, ...changes, dry_run: true },
+      toDryRun, "")),
   remove: (projectId: string, actor: string, roleKey: string, id: string) =>
     send(`/v1/agents/${enc(roleKey)}/instructions/${enc(id)}?project_id=${enc(projectId)}&actor=${enc(actor)}`,
       "DELETE", null, (w) => ({ version: num(obj(w).version, 1) }), "Remove"),
