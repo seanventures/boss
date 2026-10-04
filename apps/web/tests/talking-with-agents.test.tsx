@@ -30,9 +30,17 @@ let startReply: (body: Record<string, unknown>) => Response;
 
 const SEATS = {
   pm: { role_key: "pm", name: "Product Manager", callsign: "Juno", tagline: "What problem, for whom?", lifecycle: "active" },
-  qa: { role_key: "qa", name: "QA Lead", callsign: null, tagline: "Show me the test.", lifecycle: "active" },
-  security_reviewer: { role_key: "security_reviewer", name: "Security Reviewer", callsign: null, tagline: null, lifecycle: "active" },
+  // The server names every seat (agent_persona.persona_of): a shipped role with no stored
+  // persona still arrives as Vera / Sentry, so the console fills nothing in.
+  qa: { role_key: "qa", name: "QA Lead", callsign: "Vera", tagline: "Show me the test.", lifecycle: "active" },
+  security_reviewer: { role_key: "security_reviewer", name: "Security Reviewer", callsign: "Sentry", tagline: null, lifecycle: "active" },
 };
+
+const PRESETS = [
+  { key: "product_eng_security", label: "Product + Eng + Security",
+    seats: ["pm", "engineering_captain", "security_reviewer"], missing: ["engineering_captain"] },
+  { key: "incident", label: "Incident", seats: ["qa", "pm"], missing: [] },
+];
 
 function conversation(id: string, kind: string, seats: string[], over: Record<string, unknown> = {}) {
   return { conversation_id: id, project_id: "p1", kind, title: kind === "room" ? "Login launch" : `Talk with ${seats[0]}`,
@@ -73,17 +81,16 @@ beforeEach(() => {
     const path = url.pathname.replace("/api/conversations", "");
     calls.push({ method, path, body });
     if (method === "GET" && path === "/presets") {
-      return Response.json({
-        items: [{ key: "product_eng_security", label: "Product + Eng + Security",
-                  seats: ["pm", "engineering_captain", "security_reviewer"], missing: ["engineering_captain"] },
-                { key: "incident", label: "Incident", seats: ["qa", "pm"], missing: [] }],
-        agents: Object.values(SEATS) });
+      return Response.json({ items: PRESETS, agents: Object.values(SEATS) });
     }
     if (method === "GET" && path === "") return Response.json({ items: [] });
     if (method === "GET") return Response.json(conversations[path.slice(1)] ?? {}, { status: conversations[path.slice(1)] ? 200 : 404 });
     if (path === "") {
       const id = `cnv_${Object.keys(conversations).length + 1}`;
-      conversations[id] = conversation(id, String(body.kind), body.seats as string[]);
+      // Like the engine: a preset seats its agents and names the room with its label.
+      const preset = PRESETS.find((p) => p.key === body.preset);
+      conversations[id] = conversation(id, String(body.kind), preset ? preset.seats : body.seats as string[],
+                                       preset ? { title: preset.label, preset: preset.key } : {});
       return Response.json(conversations[id], { status: 201 });
     }
     if (/\/(turns|summary|propose)$/.test(path)) return sseResponse(init?.signal);
@@ -470,8 +477,7 @@ describe("the doors", () => {
 
 describe("one name per agent", () => {
   it("the 1:1 header and each author line say the callsign, with the role beside it", async () => {
-    // The fixture's QA seat carries no callsign (a role installed before personas travelled):
-    // it is still Vera, from the shipped cast.
+    // The header says what the server's seat says (seat_info), the same name the prompt uses.
     await mountHost();
     await act(async () => { converse.openTalk("qa"); });
     await settle();
@@ -495,6 +501,10 @@ describe("one name per agent", () => {
       .toEqual({ name: "QA Lead" });
     expect(seatName({ roleKey: "made_up", name: "Made Up", callsign: null, lifecycle: "active" }))
       .toEqual({ name: "Made Up" });
+    // Nothing is filled in on this side: a seat the server sent with no callsign has none, even
+    // a shipped role the console's cast knows (the prompt would not say Vera either).
+    expect(seatName({ roleKey: "qa", name: "QA Lead", callsign: null, lifecycle: "active" }))
+      .toEqual({ name: "QA Lead" });
     // The wire keeps the difference between cleared and never set.
     expect(converse.mapConversationSummary({ seat_info: [{ role_key: "qa", name: "QA Lead", callsign: "" }] })
       .seatInfo[0].callsign).toBe("");
@@ -608,6 +618,32 @@ describe("the stage is alive", () => {
     expect(title().getAttribute("title")).toBe(long);
     expect(room.querySelectorAll('[data-testid="ag-room-members"] .ag-cv-face')).toHaveLength(3);
     expect(overBudget(room.querySelector(".ag-room-head")!)).toEqual([]);
+  });
+});
+
+describe("a room opened from a preset", () => {
+  it("is called by the preset's label until the first question is asked", async () => {
+    await mountHost();
+    await act(async () => { converse.openRoom({ preset: "incident" }); });
+    await settle();
+    const created = calls.find((c) => c.method === "POST" && c.path === "")!;
+    expect(created.body).toMatchObject({ kind: "room", preset: "incident" });
+    const room = q('[data-testid="ag-room"]')!;
+    const title = room.querySelector('[data-testid="ag-room-title"]')!;
+    expect(title.textContent).toBe("Incident");
+    expect(room.getAttribute("aria-label")).toBe("Incident");
+    // The members are named beside it: faces, with their callsigns in the tooltip.
+    expect(room.querySelector('[data-testid="ag-room-members"]')!.getAttribute("title")).toBe("Vera · Juno");
+  });
+
+  it("the first question replaces the opening name once it is asked", async () => {
+    const { roomTitle } = await import("../app/agents/room-view");
+    expect(roomTitle([], undefined, "Incident").text).toBe("Incident");
+    expect(roomTitle([], "Is login down?", "Incident").text).toBe("Is login down?");
+    const asked = converse.mapTurn({ turn_id: "p", seq: 1, speaker_kind: "person", kind: "question",
+                                     content: "Is login down?", status: "complete" });
+    expect(roomTitle([asked], undefined, "Incident").text).toBe("Is login down?");
+    expect(roomTitle([], undefined, "").text).toBe("New room");
   });
 });
 

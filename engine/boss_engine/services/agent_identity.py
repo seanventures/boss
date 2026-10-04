@@ -468,13 +468,17 @@ def identities(connection: Connection, project_id: str) -> list[dict]:
     if any(not r["agent_id"] or not r["fingerprint"] for r in rows):
         if quietly(connection, backfill, project_id):
             rows = read()
+    from .agent_persona import persona_of
+
     out = []
     for r in rows:
         persona = _persona(r["spec"])
+        # Named by the one persona the prompt and every conversation read (persona_of).
+        named = persona_of({"role_key": r["role_key"], "spec": r["spec"]})
         out.append({
             "role_key": r["role_key"], "agent_id": r["agent_id"],
             "display_name": r["display_name"],
-            "callsign": persona.get("callsign"), "tagline": persona.get("tagline"),
+            "callsign": named.get("callsign"), "tagline": named.get("tagline"),
             "archetype": persona.get("archetype"),
             "avatar": avatar_of(r["role_key"], r["agent_id"], persona),
             "lifecycle": r["lifecycle"] or "active",

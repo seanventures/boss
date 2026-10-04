@@ -135,8 +135,7 @@ function mapContext(w: unknown): ConversationContext {
 }
 
 function mapSeat(w: Wire): SeatInfo {
-  // A callsign the operator cleared ("") stays cleared; one never set (null) may fall back to
-  // the shipped cast's (seatName in app/agents/converse-parts.tsx).
+  // The server's callsign (agent_persona.persona_of), never filled in on this side.
   return { roleKey: str(w.role_key), name: str(w.name || w.role_key),
            callsign: w.callsign === "" ? "" : opt(w.callsign) ?? null,
            tagline: opt(w.tagline) ?? null, agentId: opt(w.agent_id) ?? null,
