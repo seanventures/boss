@@ -1389,6 +1389,7 @@
   .ag-team-face, .ag-zones-agent { transition: none !important; }
   .ag-zones-edge[data-new] { animation: none !important; }
   .ag-team-zone .ag-av *, .ag-zones .ag-av *, .ag-river .ag-av * { animation: none !important; }
+}
 
 /* ── Loadout: the Passport's first section (agent-loadout spec §3) ──────────────────────── */
 .ld { gap: 12px; }
