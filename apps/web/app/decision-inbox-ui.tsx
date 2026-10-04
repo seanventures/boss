@@ -6,6 +6,7 @@ import { createDecisionDigestAction } from "./actions";
 import { identityKey } from "./app-identity";
 import { ClientRelativeTime } from "./client-relative-time";
 import { ActionForm, DecisionResolveForm } from "./client-forms";
+import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
 import { AreaLink } from "./area-link";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
@@ -710,6 +711,9 @@ function DecisionInboxRow({
         : "";
   const subjectTitle =
     typeof recArgs.title === "string" ? recArgs.title : "Document to publish";
+  // WHAT APPROVING WILL DO, as the thing itself (action-preview.tsx). When it is there it
+  // replaces the sentence about the step: the email is the explanation.
+  const preview = actionPreviewOf(rec.action_preview);
 
   return (
     <article
@@ -751,9 +755,10 @@ function DecisionInboxRow({
           ) : null}
           {refusal ? null : (
             <p className="dq-rationale">
-              {why || formatRecommendation(decision)}
+              {why || (preview ? previewLead(preview) : formatRecommendation(decision))}
             </p>
           )}
+          {preview && !refusal ? <ActionPreview preview={preview} /> : null}
           {subject ? (
             <details className="decision-plan-details">
               <summary>
@@ -834,7 +839,7 @@ function DecisionInboxRow({
               ) : null}
             </div>
           ) : null}
-          {isPending && !refusal ? (
+          {isPending && !refusal && !preview ? (
             <>
               <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
               <DeployDestination recommendation={decision.recommendation}
@@ -929,6 +934,9 @@ function DecisionActions({ decision, projectId, actorId }: {
   const startsWork = decision.recommendation.start_code_task === true
     || decision.recommendation.tool === "publish_document";
   const dismiss = direct.find((a) => a.action === "reject")?.label === "Dismiss";
+  // THE CONTENT THIS APPROVAL IS OF. The engine refuses the approval if the preview has moved
+  // on since this card was drawn, so nobody approves an email they did not read.
+  const contentHash = actionPreviewOf(decision.recommendation.action_preview)?.content_hash ?? "";
   return (
     <DecisionResolveForm className="dq-actions">
       <input type="hidden" name="decision_id" value={decision.id} />
@@ -937,6 +945,7 @@ function DecisionActions({ decision, projectId, actorId }: {
       {runId ? <input type="hidden" name="workflow_run_id" value={runId} /> : null}
       {startsWork ? <input type="hidden" name="starts_work" value="1" /> : null}
       {dismiss ? <input type="hidden" name="reject_label" value="Dismiss" /> : null}
+      {contentHash ? <input type="hidden" name="content_hash" value={contentHash} /> : null}
       {direct.map((offer) => (
         <SubmitButton
           key={offer.action}

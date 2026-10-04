@@ -21562,6 +21562,7 @@ def approve_decision(
                 note=payload.note,
                 delegate_to=payload.delegate_to,
                 external_ref=payload.external_ref,
+                content_hash=payload.content_hash,
             )
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
@@ -23477,6 +23478,11 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "decision_status": step["decision_status"],
             "decision_approved_at": (step["decision_approved_at"].isoformat()
                                      if step["decision_approved_at"] else None),
+            # WHAT APPROVING WILL DO — the email, the tickets, the video — resolved from the
+            # step's real inputs when its gate opened (services/action_preview.py). Only while
+            # it waits: afterwards the step's output says what really happened.
+            "action_preview": (snapshot.get("action_preview")
+                               if step["status"] == "waiting" else None),
             # What an operator asks about a waiting step: who, and by when.
             "approval": snapshot.get("approval") or {},
             "due_at": snapshot.get("due_at"),

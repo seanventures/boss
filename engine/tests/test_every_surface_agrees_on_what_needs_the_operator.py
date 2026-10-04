@@ -158,6 +158,13 @@ NOT_READERS = {
     ("engine/boss_engine/services/meeting_service.py", "<module>"):
         "DECISION_TO_PRD_STATE (console-b): a label table for where a meeting's PRD stands, "
         "mapping EVERY status decisions.py writes; it decides no one's attention",
+    ("engine/boss_engine/services/workflow_capability_runner.py", "_unique_question"):
+        "deduplication: keeps a new gate's question distinct from another run's pending one, "
+        "which create_blocking_decision would otherwise merge it into",
+    ("engine/boss_engine/services/workflow_capability_runner.py",
+     "_refresh_waiting_previews"):
+        "a writer: refreshes the action preview on gates still open, so nobody approves "
+        "content that has since changed",
     ("apps/api/app/main.py", "decision_inbox"):
         "the inbox itself: it orders every row and each card carries attention, which the "
         "console filters on",

@@ -273,6 +273,7 @@ class DecisionService:
         external_ref: Optional[str] = None,
         force: bool = False,
         system_policy: bool = False,
+        content_hash: Optional[str] = None,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute"}:
             raise ValueError(f"Unsupported action: {action}")
@@ -380,6 +381,26 @@ class DecisionService:
                 )
 
         if action == "approve":
+            # AN APPROVAL OF WHAT THE APPROVER SAW. A gated step's decision carries a preview of
+            # what it will send and a hash of that content; the console sends back the hash it
+            # showed. If the preview has moved on since (an upstream step was re-run), this
+            # approval was of other content and is refused. The hash that WAS approved is
+            # recorded, and the runner refuses to run the step on anything else.
+            recommendation = row.get("recommendation")
+            if isinstance(recommendation, str):
+                try:
+                    recommendation = json.loads(recommendation)
+                except ValueError:
+                    recommendation = None
+            preview = (recommendation or {}).get("action_preview") \
+                if isinstance(recommendation, dict) else None
+            current_hash = (preview or {}).get("content_hash") if isinstance(preview, dict) \
+                else None
+            if content_hash and current_hash and content_hash != current_hash:
+                raise InvalidDecisionTransitionError(
+                    "What this step would send changed while you were reviewing it, so this "
+                    "approval was not recorded. Reload, read the updated preview, and approve "
+                    "again if it is still right.")
             connection.execute(
                 text(
                     """
@@ -388,6 +409,11 @@ class DecisionService:
                         approved_by = :actor,
                         approved_at = :timestamp,
                         resolution_note = :note,
+                        recommendation = CASE WHEN CAST(:approved_hash AS TEXT) IS NULL
+                            THEN recommendation
+                            ELSE COALESCE(recommendation, '{}'::jsonb)
+                                 || jsonb_build_object('approved_content_hash',
+                                                       CAST(:approved_hash AS TEXT)) END,
                         updated_at = :timestamp
                     WHERE id = :decision_id
                     """
@@ -397,6 +423,7 @@ class DecisionService:
                     "actor": actor,
                     "timestamp": timestamp,
                     "note": note,
+                    "approved_hash": current_hash,
                 },
             )
             emit_event(

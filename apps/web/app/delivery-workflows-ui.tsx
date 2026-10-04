@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ActionPreview, actionPreviewOf } from "./action-preview";
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
@@ -179,6 +180,9 @@ export type RunStep = {
    *  worker picks the answer up, so an approved gate looked identical to an unanswered one. */
   decision_status?: string | null;
   decision_approved_at?: string | null;
+  /** What approving this step's gate will do — the email, tickets or video — resolved from
+   *  its real inputs (action-preview.tsx). Present only while the step waits. */
+  action_preview?: Record<string, unknown> | null;
   /** Whether this step's RECORDED blocker still holds, re-tested when the run was read. */
   blocker?: { cleared?: boolean; checkable?: boolean; reason?: string; missing?: string } | null;
   /** Set only on a deploy step that ships to a STACK target: that deployment (and where it
@@ -2315,7 +2319,12 @@ export function stepQuestion(step: Pick<RunStep, "step_id" | "status">, label?: 
  */
 function ReviewAndDecide({ step }: { step: RunStep }) {
   const role = (step.approval as { approver_role?: string })?.approver_role;
+  // WHAT IT WILL DO, ON THE STEP TOO. The decision card has the buttons; the step at least
+  // shows what is waiting on them, so "Email the newsletter — needs you" says which email.
+  const preview = actionPreviewOf(step.action_preview);
   return (
+    <>
+    {preview ? <ActionPreview preview={preview} /> : null}
     <div className="dw-step-decide" data-testid="dw-step-decide">
       {/* PRIMARY AGAIN, because it is now only rendered when it can actually be pressed — the
           blocked case does not draw a button at all rather than a quieter one. */}
@@ -2335,6 +2344,7 @@ function ReviewAndDecide({ step }: { step: RunStep }) {
         </span>
       )}
     </div>
+    </>
   );
 }
 
