@@ -36,6 +36,8 @@ function served(segments: string[], truncated: boolean): boolean {
     dir = join(dir, dynamic);
   }
   if (existsSync(join(dir, "route.ts"))) return true;
+  // An optional catch-all ([[...x]]) also serves the bare path.
+  if (readdirSync(dir).some((d) => /^\[\[\.\.\..+\]\]$/.test(d) && existsSync(join(dir, d, "route.ts")))) return true;
   // A path cut short by `${...}` continues into a dynamic segment.
   return truncated && readdirSync(dir).some((d) => /^\[.+\]$/.test(d)
     || (statSync(join(dir, d)).isDirectory()));

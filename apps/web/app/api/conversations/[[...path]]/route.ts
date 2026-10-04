@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../../lib/client";
 import { apiWrite } from "../../../../lib/api-write";
-import { refusalFrom } from "../../../../lib/start-refusal";
+import { refusalCode, refusalFrom } from "../../../../lib/start-refusal";
 
 /**
  * Talking with agents: the console's door to `/v1/conversations/*` (lib/agent-converse.ts).
@@ -36,12 +36,10 @@ async function answer(r: Response): Promise<Response> {
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
   if (r.ok) return NextResponse.json(parsed, { status: r.status });
-  const body = (parsed ?? {}) as { detail?: unknown };
-  const detail = (body.detail && typeof body.detail === "object" && !Array.isArray(body.detail))
-    ? body.detail as Record<string, unknown> : {};
   const refused = refusalFrom(r.status, parsed);
+  const code = refusalCode(parsed);
   return NextResponse.json(
-    { error: refused.error, ...(typeof detail.code === "string" ? { code: detail.code } : {}),
+    { error: refused.error, ...(code ? { code } : {}),
       ...(refused.readiness ? { readiness: refused.readiness } : {}) },
     { status: r.status });
 }
