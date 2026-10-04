@@ -278,6 +278,11 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             task = here.get("line") or task
         if key not in working:
             status, task = IDLE, NO_WORK_YET
+        # AN IDLE AGENT'S LINE IS ITS LAST WORK, in the words every agent surface uses
+        # (agent_acts.work_verb via presence): `Last: Coding · Build · Ship it · 2h`. It said
+        # "last: implement · 412 calls in 30d", a volume no other screen showed (spec §6.5).
+        if status == IDLE and here and here.get("state") == "idle" and here.get("line"):
+            task = str(here["line"])
         (agents if key in working else roster).append({
             "id": key,
             "presence": here or {"state": "idle", "line": ""},
@@ -664,10 +669,11 @@ def _status_from_work(work: dict) -> tuple[str, str]:
             age = None
         if age is not None and age < 300:
             return WORKING, stage
-    n = work.get("calls") or 0
-    # "in this window" was misleading once the scoring window widened to 30 days -- the reader
-    # takes "window" to mean the 24h the rest of the screen talks about.
-    return IDLE, f"last: {stage} · {n} call{'' if n == 1 else 's'} in 30d"
+    # The stage, not a call count: an idle card says what the agent last did (its signed
+    # work, where there is any, replaces this line — see `workforce`).
+    from .agent_acts import STAGE_VERBS
+
+    return IDLE, f"Last: {STAGE_VERBS.get(str(stage).strip().lower(), 'Working')} · {stage}"
 
 
 #: How far back an agent's SCORE looks. Deliberately much longer than the live-status window.

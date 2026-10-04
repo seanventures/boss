@@ -59,7 +59,8 @@ _SYSTEM_ACTORS = {"spec-pack", "system", "bootstrap", "boss", "onboarding", "see
 IDENTITY_FIELDS = ("agent_id", "born_by", "born_from", "sponsor", "lifecycle",
                    "identity_version", "fingerprint")
 #: Keys in a role spec that are computed rather than authored, so they never move a version.
-_VOLATILE_SPEC_KEYS = ("skill_reference_diagnostics",)
+#: `team` is where the agent sits on the org map, not who it is: moving it changes no version.
+_VOLATILE_SPEC_KEYS = ("skill_reference_diagnostics", "team")
 
 IDENTITY_FIXED = "Identity fields are fixed"
 

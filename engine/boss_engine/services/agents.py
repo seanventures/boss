@@ -870,6 +870,8 @@ def get_agent(connection: Connection, project_id: str, role_key: str) -> dict[st
         "mission": str(spec.get("mission") or ""),
         "boundaries": _boundaries(spec.get("boundaries") or {}),
         "reports_to": role["reports_to"],
+        # Which team it sits in (agent_identity.team_of, the one resolver): {key, label, tip?}.
+        "team": agent_identity.team_of(spec),
         "autonomy_level": int(role["autonomy_level"] or 0),
         # Made in the console, or installed from a spec pack. Both can be edited; a bundled one
         # stays edited (see seed_exclusions) rather than reverting on the next upgrade.
@@ -900,6 +902,7 @@ def create_agent(
     boundaries: Optional[dict[str, Any]] = None,
     persona: Optional[dict[str, Any]] = None,
     born_from: Optional[dict[str, Any]] = None,
+    team: Optional[str] = None,
 ) -> dict[str, Any]:
     """Make an agent and give it what it holds, in one transaction.
 
@@ -992,6 +995,9 @@ def create_agent(
     }
     if voice:
         spec["persona"] = voice
+    stored_team = _team_value(team)
+    if stored_team:
+        spec["team"] = stored_team
     connection.execute(
         text(
             "INSERT INTO roles (id, project_id, role_key, display_name, autonomy_level, "
@@ -1007,6 +1013,8 @@ def create_agent(
     seed_exclusions.lift(connection, project_id, "role", key)
     seed_exclusions.exclude(connection, project_id, "role_spec", key, actor=actor,
                             reason="created in the console")
+    if parent:
+        _plan_line(connection, project_id, key, parent, actor)
     with agent_identity.sealing_once():
         agent_identity.birth(connection, project_id, key, born_by=actor, born_from=origin,
                              sponsor=actor if agent_identity.is_person(actor) else None,
@@ -1019,6 +1027,31 @@ def create_agent(
                {"skills": skill_ids, "mcp_servers": [s["id"] for s in servers],
                 "reports_to": parent, "born_from": origin})
     return {**get_agent(connection, project_id, key), "warnings": warnings}
+
+
+def _team_value(team: Any) -> Optional[str]:
+    """What `spec.team` stores: a shipped team's key, else the operator's own words (<=40);
+    None for no team (Yours). Read back only through agent_identity.team_of."""
+    raw = str(team or "").strip()[:40]
+    if not raw:
+        return None
+    resolved = agent_identity.team_of({"team": raw})
+    if resolved["key"] == "yours":
+        return None
+    return resolved["key"] if resolved["key"] in agent_identity.TEAM_KEYS else raw
+
+
+def _plan_line(connection: Connection, project_id: str, key: str, parent: Optional[str],
+               actor: str) -> None:
+    """A reporting line set on the agent is the plan's line too (org_assignments, the one home
+    Organization › Lines edits and the Passport's declared lineage reads). A line cleared here
+    clears it there only when the plan had one; an agent never in the plan stays out of it."""
+    from . import org_assignments
+
+    if parent is None:
+        if key not in org_assignments.get_all(connection, project_id):
+            return
+    org_assignments.set_one(connection, project_id, key, reports_to=parent, actor=actor)
 
 
 def _shipped_role(key: str) -> Optional[dict[str, Any]]:
@@ -1153,6 +1186,7 @@ def update_agent(
     grant_skills: Iterable[str] = (),
     grant_mcp_servers: Iterable[Any] = (),
     persona: Any = _UNSET,
+    team: Any = _UNSET,
 ) -> dict[str, Any]:
     """Change what is given, and nothing else.
 
@@ -1196,6 +1230,16 @@ def update_agent(
         if boundaries is not _UNSET:
             spec["boundaries"] = _boundaries(boundaries)
             changed["boundaries"] = spec["boundaries"]
+        if team is not _UNSET:
+            # Organization's `Move to…`. Stored as written (a shipped key, or the operator's
+            # own team name); agent_identity.team_of is the only reader. Empty = Yours.
+            stored_team = _team_value(team)
+            if stored_team != spec.get("team"):
+                if stored_team:
+                    spec["team"] = stored_team
+                else:
+                    spec.pop("team", None)
+                changed["team"] = stored_team or "yours"
         parent = role["reports_to"]
         if reports_to is not _UNSET:
             parent = _check_reports_to(connection, project_id, key, reports_to)
@@ -1209,7 +1253,7 @@ def update_agent(
                        else _mcp_entries(mcp_servers or []))
         added_mcp = _mcp_entries(grant_mcp_servers)
 
-        if {"display_name", "mission", "boundaries", "persona"} & changed.keys():
+        if {"display_name", "mission", "boundaries", "persona", "team"} & changed.keys():
             connection.execute(
                 text("UPDATE roles SET display_name = :name, spec = CAST(:spec AS JSONB) "
                      "WHERE project_id = :p AND role_key = :k"),
@@ -1226,6 +1270,7 @@ def update_agent(
                 text("UPDATE roles SET reports_to = :r WHERE project_id = :p AND role_key = :k"),
                 {"p": project_id, "k": key, "r": parent},
             )
+            _plan_line(connection, project_id, key, parent, actor)
 
         from .skill_definitions import unassign_skill_from_role
 
