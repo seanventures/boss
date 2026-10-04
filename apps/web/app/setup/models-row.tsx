@@ -165,8 +165,10 @@ export const ModelsRow = forwardRef<HTMLElement, {
   const working = view.models.find((m) => m.pill.tone === "green") ?? view.models[0];
 
   let body: React.ReactNode;
-  if (mode === "done" && working) {
-    body = <span className="su-line"><span>{working.label}</span><Pill pill={working.pill} /></span>;
+  // A finished step, or a later one that already has a model (connected before the
+  // repository broke): one line with the model and its pill, never "Not connected".
+  if ((mode === "done" || mode === "waiting") && working) {
+    body = <span className="su-line"><span>{working.label}</span><Pill pill={working.pill} testid="su-model-pill" /></span>;
   } else if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
   } else if (mode === "current" && view.models.length === 0) {

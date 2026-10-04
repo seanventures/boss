@@ -410,3 +410,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
   }
   .su-tiles { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Chips and menus keep their own size inside grids and wrapped lines. */
+.su-job > .su-chip { justify-self: start; }
+.su-model .su-menu { margin-left: auto; }

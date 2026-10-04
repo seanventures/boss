@@ -142,6 +142,8 @@ export type SetupRefusal = {
 
 /** POST /v1/setup/repository/token. */
 export type TokenFound = {
+  /** Replace token: the bindings re-checked with the new token. */
+  rechecked?: string[];
   account_login: string | null;
   expires_at: string | null;
   connection_id: string;

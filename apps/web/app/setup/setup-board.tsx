@@ -17,7 +17,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
-import { readParams, rowMode, stepNumber, type SetupParams } from "../../lib/setup-stepper";
+import {
+  readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
+} from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
 import { JobsRow } from "./jobs-row";
@@ -94,6 +96,15 @@ export function SetupBoard({ projectId, initialView = null }: {
       .catch(() => undefined)
       .finally(() => stale.forEach((key) => setChecking(key, false)));
   }, [view, projectId, setChecking]);
+
+  // THE RAIL BADGE FOLLOWS THE BOARD: every new view tells the shell, so connecting the last
+  // thing clears the badge without a reload.
+  useEffect(() => {
+    if (!view) return;
+    try {
+      window.dispatchEvent(new CustomEvent(SETUP_BADGE_EVENT, { detail: summarize(view).badge }));
+    } catch { /* no window */ }
+  }, [view]);
 
   // A RUN IN FLIGHT IS WATCHED: every 5s while the page is visible.
   const running = view?.try.last_run?.pill.tone === "busy";

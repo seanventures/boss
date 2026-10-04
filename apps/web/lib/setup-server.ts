@@ -5,19 +5,10 @@
  * "nothing to say" — the console never blocks its own render on the setup summary.
  */
 import { API_URL, authHeaders } from "./client";
+import { summarize, type SetupSummary } from "./setup-stepper";
 import type { SetupView } from "./setup-types";
 
-export type SetupSummary = { ready: boolean; badge: { count: number; tone: "amber" | "red" } | null };
-
-export function summarize(view: Pick<SetupView, "ready" | "next" | "problems" | "repository" | "models">):
-  SetupSummary {
-  const unfinished = (view.repository.repos.length ? 0 : 1) + (view.models.length ? 0 : 1);
-  const count = unfinished + view.problems;
-  return {
-    ready: view.ready,
-    badge: count > 0 ? { count, tone: view.problems > 0 ? "red" : "amber" } : null,
-  };
-}
+export { summarize, type SetupSummary };
 
 export async function fetchSetupSummary(projectId: string): Promise<SetupSummary | null> {
   try {

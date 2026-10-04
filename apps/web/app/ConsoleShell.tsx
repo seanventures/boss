@@ -3,6 +3,7 @@
 import { IDENTITY_PARAMS, searchForNewProject } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
 import { resolveLegacyArea } from "./legacy-areas";
+import { SETUP_BADGE_EVENT } from "../lib/setup-stepper";
 import { onChanged } from "./changed";
 import { createRefreshCoordinator, registerConsoleRefresh } from "../lib/console-refresh";
 import {
@@ -928,10 +929,18 @@ export default function ConsoleShell({
     );
   }, [query, areasForEdition]);
 
+  // Repo and models' badge: the server's on first paint, then whatever the board last saw.
+  const [setupBadge, setSetupBadge] = useState(status.setup ?? null);
+  useEffect(() => { setSetupBadge(status.setup ?? null); }, [status.setup]);
+  useEffect(() => {
+    const onBadge = (event: Event) => setSetupBadge((event as CustomEvent).detail ?? null);
+    window.addEventListener(SETUP_BADGE_EVENT, onBadge);
+    return () => window.removeEventListener(SETUP_BADGE_EVENT, onBadge);
+  }, []);
   const badgeFor = (id: AreaId): number | undefined => {
     if (id === "decisions" && status.pendingDecisions > 0) return status.pendingDecisions;
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
-    if (id === "setup" && status.setup && status.setup.count > 0) return status.setup.count;
+    if (id === "setup" && setupBadge && setupBadge.count > 0) return setupBadge.count;
     return undefined;
   };
 
@@ -1097,7 +1106,7 @@ export default function ConsoleShell({
                     ) : null}
                     {badge ? (
                       <span className="bx-nav-badge" data-testid={`nav-badge-${a.id}`}
-                            data-tone={a.id === "setup" ? status.setup?.tone : undefined}>
+                            data-tone={a.id === "setup" ? setupBadge?.tone : undefined}>
                         {badge}
                       </span>
                     ) : null}
