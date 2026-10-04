@@ -301,7 +301,16 @@ export const RepositoryRow = forwardRef<HTMLElement, {
 
   let body: React.ReactNode;
   if (mode === "done" && first) {
-    body = <span className="su-line"><span className="su-mono" data-user-text>{first.full_name}</span></span>;
+    // One line, but still reachable: a token can need replacing before the first PR.
+    body = (
+      <div className="su-line">
+        <span className="su-mono" data-user-text>{first.full_name}</span>
+        <Pill pill={first.pill} testid="su-repo-pill" />
+        <RowMenu label={`${first.full_name} actions`} testid="su-repo-menu" items={[
+          { label: "Replace token", onSelect: () => setDrawer("replace"), testid: "su-menu-replace" },
+        ]} />
+      </div>
+    );
   } else if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
   } else if (repos.length === 0) {
