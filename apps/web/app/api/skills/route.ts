@@ -51,20 +51,12 @@ export async function GET(req: Request) {
   // the default is what this project authored. All three render one page, so they share a
   // route rather than growing three that each need the same auth and error handling.
   const view = url.searchParams.get("view");
-  // `mcp` is the fourth: a server is where a connector's tools live, and a skill with
-  // behaviour "mcp_tool" names one of them. Same page because they answer the same question —
-  // what can an agent actually do here — and splitting them made an operator check two.
-  // `check` is passed through from a fixed set: none (read what was recorded), stale (ask the
-  // servers not checked in the last minute), now (ask every one).
-  const check = ["none", "stale", "now"].includes(url.searchParams.get("check") ?? "")
-    ? String(url.searchParams.get("check")) : "none";
+  // MCP servers are read through /api/mcp (Skills & MCP › Library).
   const path = view === "builtin"
     ? `/v1/skills?project_id=${q(projectId)}`
     : view === "assignments"
       ? `/v1/role-skills?project_id=${q(projectId)}`
-      : view === "mcp"
-        ? `/v1/mcp/servers?project_id=${q(projectId)}&check=${check}`
-        : `/v1/skill-definitions?project_id=${q(projectId)}`;
+      : `/v1/skill-definitions?project_id=${q(projectId)}`;
   return forward(path, { method: "GET" });
 }
 
@@ -126,28 +118,10 @@ export async function POST(req: Request) {
       method: "PATCH", body: { project_id: projectId, actor, enabled: action === "enable" } });
   }
 
-  // MCP SERVERS: register, edit (any field, or just on/off), remove. The server id goes into
-  // the path, so it is checked against the id shape BOSS issues rather than trusted.
+  // MCP SERVERS moved to /api/mcp (Skills & MCP › Library, skills-mcp spec §6.6): one door
+  // for every write to a server. Nothing in the console sends an mcp_* action here any more.
   if (action.startsWith("mcp_")) {
-    const serverId = String(body.server_id ?? "").trim();
-    if (action !== "mcp_register" && !/^[A-Za-z0-9_-]{1,80}$/.test(serverId)) {
-      return NextResponse.json({ error: "server_id is required" }, { status: 400 });
-    }
-    const where = `/v1/mcp/servers/${q(serverId)}?project_id=${q(projectId)}`;
-    if (action === "mcp_register") {
-      return forward("/v1/mcp/servers", {
-        method: "POST", body: { ...(body.server as object ?? {}), project_id: projectId, actor } });
-    }
-    if (action === "mcp_update") {
-      return forward(where, { method: "PATCH", body: body.changes ?? {} });
-    }
-    if (action === "mcp_delete") {
-      // Same rule as a skill: `release_grants` is only sent after the panel has named the
-      // agents that hold the server, and the API refuses without it while any do.
-      const release = body.release_grants === true ? "&release_grants=true" : "";
-      return forward(`${where}${release}`, { method: "DELETE" });
-    }
-    return NextResponse.json({ error: `unknown action ${action}` }, { status: 400 });
+    return NextResponse.json({ error: "MCP servers are managed through /api/mcp" }, { status: 410 });
   }
 
   if (remove) {

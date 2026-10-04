@@ -208,7 +208,9 @@ const AREAS: AreaDef[] = [
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
-  { id: "skills", label: "Skills and MCP", sub: "What agents and steps can do — skills you author, and the MCP servers they reach", group: "Settings", icon: ICONS.capabilities },
+  // WHAT YOUR CREW CAN DO, first in Settings (skills-mcp spec §5.1): the Kit of abilities, who
+  // holds them, and every skill and MCP server. The id is unchanged so every link keeps working.
+  { id: "skills", label: "Skills & MCP", sub: "What your crew can do", group: "Settings", icon: ICONS.capabilities },
   // NAMED FOR WHAT IS IN IT. "Setup" is a stage of the product's life — it reads as something
   // you do once and never open again, so the page an operator needs when a model runs out of
   // credit or a repo token expires was filed under a name that says "already done".

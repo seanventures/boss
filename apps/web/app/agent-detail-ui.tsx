@@ -49,6 +49,7 @@ import { PassportPersona } from "./agents/passport-persona";
 import { PassportTest } from "./agents/passport-test";
 import { PassportWork } from "./agents/passport-work";
 import { ShareCardDialog } from "./agents/share-card-dialog";
+import { AgentAbilities } from "./skills/agent-abilities";
 
 type App = {
   app: string; raw_title?: string; calls: number; tokens: number; spend_usd: number;
@@ -418,6 +419,11 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                 nothing. Above the history deliberately: the first question about an agent is
                 what it is able to do, not what it has already done. */}
             <div id="ag-sec-skills" />
+            {/* ITS ABILITIES, as the Kit shows them (Skills & MCP), with the same grant. */}
+            {detail.registered ? (
+              <AgentAbilities projectId={projectId} roleKey={detail.role_key} actor={actor}
+                              onChanged={() => { void load(); void loadPassport(); }} />
+            ) : null}
             <AgentSkills projectId={projectId} roleKey={detail.role_key} actor={actor}
                          panel={detail.skills} spec={spec} onChanged={() => { void load(); void loadPassport(); }} />
 

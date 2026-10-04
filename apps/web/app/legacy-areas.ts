@@ -65,6 +65,16 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
     return next;
   }
 
+  if (area === "capabilities") {
+    // Skills & MCP folded Capabilities in (skills-mcp spec §5.1): its MCP servers are managed in
+    // the Library's MCP list, the one place servers are managed.
+    const next = copyWithout(params, []);
+    next.set("area", "skills");
+    next.set("tab", "library");
+    next.set("lib", "mcp");
+    return next;
+  }
+
   if (area === "delivery_workflows") {
     const tab = params.get("tab") ?? "";
     const becomes = OLD_WORKFLOW_TABS[tab];
