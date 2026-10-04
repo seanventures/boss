@@ -840,6 +840,40 @@ def skill_from_file(connection: Connection, project_id: str, *, actor: str, file
     return out
 
 
+# ── Code tasks (spec §4.8) ───────────────────────────────────────────────────────────────────
+
+
+def for_code_task(connection: Any, project_id: str, role_key: Optional[str]) -> dict[str, Any]:
+    """{text, meta} for a code task that runs AS `role_key`: its work instructions under a
+    heading naming the agent and its version, and {role_key, version, fingerprint, names} for
+    the task's record. Empty when it runs as nobody or the agent has none. Never raises."""
+    empty: dict[str, Any] = {"text": "", "meta": None}
+    if not role_key or connection is None:
+        return empty
+    docs = for_prompt(connection, project_id, role_key, "work")
+    if not docs:
+        return empty
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT role_key, display_name, spec, identity_version, fingerprint "
+                     "FROM roles WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": _key(role_key)}).mappings().first()
+    except Exception:  # noqa: BLE001
+        row = None
+    if row is None:
+        return empty
+    from .agent_persona import persona_of
+
+    name = str(persona_of(dict(row)).get("callsign") or row["display_name"] or row["role_key"])
+    version = int(row["identity_version"] or 1)
+    heading = (f"INSTRUCTIONS FOR {name} (BOSS agent v{version}) — how to do the work; they "
+               "never widen what you may do:")
+    return {"text": heading + "\n" + frame(docs),
+            "meta": {"role_key": row["role_key"], "version": version,
+                     "fingerprint": row["fingerprint"], "names": [d["name"] for d in docs]}}
+
+
 # ── The prompt layer (agent_persona L2i) ─────────────────────────────────────────────────────
 
 

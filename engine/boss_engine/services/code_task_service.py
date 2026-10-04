@@ -1859,13 +1859,25 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
 
             with _transaction(engine) as c:
                 harness_mcp = _prepare_mcp(c, settings, project_id, spec.get("role_key"))
+                # AND ITS INSTRUCTIONS (agent-loadout §4.8): only when it runs as a role.
+                from .agent_instructions import for_code_task
+
+                ran_as = for_code_task(c, project_id, spec.get("role_key"))
             agent = make_code_agent(settings, mcp=harness_mcp)
             code_spec = CodeTaskSpec(
                 task_id=run_id, title=run["title"],
                 instructions=spec.get("instructions", ""),
                 acceptance_criteria=spec.get("acceptance_criteria", []),
                 test_commands=spec.get("test_commands", []),
+                agent_instructions=ran_as["text"],
             )
+            if ran_as["meta"]:
+                # Which definition (and which instructions) the code was written under.
+                with _transaction(engine) as c:
+                    c.execute(sql("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) "
+                                  "|| jsonb_build_object('ran_as_instructions', "
+                                  "CAST(:m AS JSONB)) WHERE id = :id"),
+                              {"m": json.dumps(ran_as["meta"]), "id": run_id})
             try:
                 result = agent.run(code_spec, RepoContext(owner=owner, repo=repo,
                                                           base_branch=base_branch), sandbox)
@@ -1877,7 +1889,9 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
         with _transaction(engine) as c:
             _set_phase(c, run_id, "validating")
             c.execute(
-                sql("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
+                # The outcome replaces the state, keeping which instructions it ran under.
+                sql("UPDATE code_task_runs SET state=CAST(:s AS JSONB) || jsonb_strip_nulls("
+                     "jsonb_build_object('ran_as_instructions', state->'ran_as_instructions')), "
                      "usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint), 'model', CAST(:m AS text)), "
                      "updated_at=now() WHERE id=:id"),
                 {"s": json.dumps(result.to_metadata()), "cost": int(result.cost_usd_micros or 0),
