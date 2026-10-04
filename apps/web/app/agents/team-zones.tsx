@@ -101,9 +101,14 @@ export function zoneTeams(board: LiveBoard, moved: Record<string, string> = {}):
     }).sort((x, y) => (LIVE_ORDER[x.state] ?? 9) - (LIVE_ORDER[y.state] ?? 9));
     if (Object.keys(moved).length) {
       t.working = t.people.filter((p) => ["working", "thinking", "speaking"].includes(p.state)).length;
-      t.needsYou = t.people.filter((p) => p.state === "needs_you").length;
     }
+    // NEEDS YOU IS ITEMS, NOT AGENTS: the same items the pill and Live's cards count, attributed
+    // to this team's agents. One agent holding three gates is `3 need you`.
+    const members = new Set(t.members);
+    t.needsYou = board.attention.filter((a) => a.roleKey && members.has(a.roleKey)).length;
   }
+  // An empty team is not a place: `Yours 0` is never drawn.
+  for (const [key, t] of teams) if (key === "yours" && t.members.length === 0) teams.delete(key);
   const rank = (k: string) => {
     const i = TEAM_ORDER.indexOf(k);
     return i < 0 ? TEAM_ORDER.length - 1.5 : i;
@@ -137,12 +142,49 @@ export function useNarrow(): boolean {
   return narrow;
 }
 
+/** `1 needs you` / `2 need you`: the grammar every count of items waiting on you uses. */
+export function needYouWords(n: number): string {
+  return `${n} ${n === 1 ? "needs" : "need"} you`;
+}
+
+/** The face an arrow key moves to: Left/Right along the row the face sits in, Up/Down to the
+ *  nearest face in the row above or below (across zones), Home/End to the first and last.
+ *  Pure, from the faces' rectangles, so the grid is 2D whatever the zones' layout. */
+export function nextInGrid(rects: { left: number; top: number; width: number; height: number }[],
+                           at: number, key: string): number {
+  const cur = rects[at];
+  if (!cur) return at;
+  if (key === "Home") return 0;
+  if (key === "End") return rects.length - 1;
+  // No layout (a server render, a test DOM): every face sits at one point. Fall back to order.
+  if (rects.every((r) => r.left === cur.left && r.top === cur.top)) {
+    if (key === "ArrowRight" || key === "ArrowDown") return Math.min(rects.length - 1, at + 1);
+    if (key === "ArrowLeft" || key === "ArrowUp") return Math.max(0, at - 1);
+    return at;
+  }
+  const cx = (r: typeof cur) => r.left + r.width / 2;
+  const cy = (r: typeof cur) => r.top + r.height / 2;
+  const sameRow = (r: typeof cur) => Math.abs(cy(r) - cy(cur)) < cur.height / 2;
+  let best = -1;
+  let score = Infinity;
+  rects.forEach((r, i) => {
+    if (i === at) return;
+    let d = Infinity;
+    if (key === "ArrowRight" && sameRow(r) && cx(r) > cx(cur)) d = cx(r) - cx(cur);
+    else if (key === "ArrowLeft" && sameRow(r) && cx(r) < cx(cur)) d = cx(cur) - cx(r);
+    else if (key === "ArrowDown" && cy(r) - cy(cur) >= cur.height / 2) d = (cy(r) - cy(cur)) * 1000 + Math.abs(cx(r) - cx(cur));
+    else if (key === "ArrowUp" && cy(cur) - cy(r) >= cur.height / 2) d = (cy(cur) - cy(r)) * 1000 + Math.abs(cx(r) - cx(cur));
+    if (d < score) { score = d; best = i; }
+  });
+  return best < 0 ? at : best;
+}
+
 /** `2 working` · `1 needs you`: words, never colour alone. */
 function Badges({ team }: { team: Pick<TeamSummary, "working" | "needsYou"> }) {
   return (
     <>
       {team.needsYou ? (
-        <span className="ag-team-badge" data-kind="needs_you"><Bell size={11} weight="bold" aria-hidden />{team.needsYou} needs you</span>
+        <span className="ag-team-badge" data-kind="needs_you"><Bell size={11} weight="bold" aria-hidden />{needYouWords(team.needsYou)}</span>
       ) : null}
       {team.working ? (
         <span className="ag-team-badge" data-kind="working"><Gear size={11} weight="bold" aria-hidden />{team.working} working</span>
@@ -299,7 +341,14 @@ type Edge = { from: string; to: string; acts: number; label: string; order?: num
 
 /** Where each zone sits: Leadership a band on top; Architecture, Engineering, Quality; then
  *  Operations, Cost, Media, Thinkers; Yours (and operator teams) last. Never force-directed. */
-const ROW_START = new Set(["architecture", "operations", "yours"]);
+/** The fixed map (spec §4.6): Leadership a band, then three, then four, then everyone else. */
+const MAP_ROW: Record<string, "band" | "mid" | "low"> = {
+  leadership: "band", architecture: "mid", engineering: "mid", quality: "mid",
+  operations: "low", cost: "low", media: "low", thinkers: "low",
+};
+export function mapRowOf(key: string): "band" | "mid" | "low" | "rest" {
+  return MAP_ROW[key] ?? "rest";
+}
 
 /** A run's agents in the order they took the work, from the board's lane or the run's chain. */
 async function runPath(board: LiveBoard, runId: string, projectId: string): Promise<{ roles: string[]; subject: string }> {
@@ -444,11 +493,14 @@ function FullZones({ projectId, board, teams, search = "", focusRunId, onClearFo
     const at = order.indexOf((e.target as HTMLElement).dataset?.role ?? "");
     if (at < 0) return;
     let next = at;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = Math.min(order.length - 1, at + 1);
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = Math.max(0, at - 1);
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = order.length - 1;
-    else if (e.key === "Enter") {
+    if (["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+      const rects = order.map((k) => {
+        const r = faces.current.get(k)?.getBoundingClientRect();
+        return r ? { left: r.left, top: r.top, width: r.width || 1, height: r.height || 1 }
+          : { left: 0, top: 0, width: 1, height: 1 };
+      });
+      next = nextInGrid(rects, at, e.key);
+    } else if (e.key === "Enter") {
       e.preventDefault();
       if (e.shiftKey) openAgent(order[at]);
       else setSelected((s) => (s === order[at] ? null : order[at]));
@@ -538,8 +590,7 @@ function FullZones({ projectId, board, teams, search = "", focusRunId, onClearFo
           const label = TEAM_LABELS[t.key]?.label ?? t.label;
           return (
             <section key={t.key} className="ag-zones-zone" data-team={t.key}
-                     data-row-start={ROW_START.has(t.key) || !TEAM_ORDER.includes(t.key) || undefined}
-                     data-band={t.key === "leadership" || undefined} data-focus={focusTeam === t.key || undefined}
+                     data-row={mapRowOf(t.key)} data-focus={focusTeam === t.key || undefined}
                      aria-label={`${label} ${t.people.length}`} style={{ ["--team-hue" as string]: teamHue(t.key) }}>
               <header className="ag-zones-head">
                 <span className="ag-team-label" title={t.tip}>{label}</span>

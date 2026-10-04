@@ -59,11 +59,32 @@ const FILTERS: { key: ActivityFilter; label: string; tip: string }[] = [
 ];
 
 /** The face's FINAL state: what the work came to, never a motion. */
-export function riverState(status: string): AvatarState {
+export function riverState(status: string, item?: Pick<ActivityItem, "kind" | "verb">): AvatarState {
+  // A person's answer is done whichever way it went; a run that ended badly STOPPED (its
+  // starter never got stuck — the step that failed did, and that row says so).
+  if (item && (item.verb === "Approved" || item.verb === "Rejected")) return "done";
   if (status === "awaiting_input") return "needs_you";
-  if (status === "error" || status === "stale") return "stuck";
+  if (status === "error" || status === "stale") return item?.kind === "run" ? "paused" : "stuck";
   if (status === "complete" || status === "skipped") return "done";
   return "working";
+}
+
+/** The word beside a row: the state's word, except a run that ended badly, which `Stopped`. */
+export function riverStatusWord(state: AvatarState, item: Pick<ActivityItem, "kind">): string | null {
+  return item.kind === "run" && state === "paused" ? "Stopped" : null;
+}
+
+/** WHO DID IT, AND WHAT. A gate is the operator's: approving or rejecting is something YOU did,
+ *  and a wait on a gate is a wait on you — never the gated step's captain "working" it. */
+export function sentenceOf(item: ActivityItem): { who: { roleKey: string | null; variant: AvatarVariant; name: string };
+                                                  verb: string } {
+  if (item.verb === "Approved" || item.verb === "Rejected") {
+    return { who: { roleKey: null, variant: "you", name: "You" }, verb: item.verb.toLowerCase() };
+  }
+  if (!item.roleKey && (item.verb === "Needs you" || item.status === "awaiting_input")) {
+    return { who: { roleKey: null, variant: "you", name: "" }, verb: "Waiting on you:" };
+  }
+  return { who: whoOf(item), verb: item.verb.toLowerCase() };
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -260,15 +281,15 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
   item: ActivityItem; projectId: string; viewer: string; filter: ActivityFilter; days: 1 | 7; nested?: boolean;
 }) {
   useIdentityVersion(); // the name is resolved at render
-  const who = whoOf(item);
-  const state = riverState(item.status);
+  const { who, verb: sentence } = sentenceOf(item);
+  const state = riverState(item.status, item);
+  const statusWord = riverStatusWord(state, item);
   const [card, setCard] = useState<Act | null>(null);
   const [kids, setKids] = useState<ActivityItem[] | null>(null);
   const [kidsOpen, setKidsOpen] = useState(false);
   const [tools, setTools] = useState<{ rows: ToolCallRow[]; more: boolean } | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const took = duration(item);
-  const sentence = item.verb.toLowerCase();
 
   const openCard = useCallback(async () => {
     if (card) { setCard(null); return; }
@@ -309,12 +330,13 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
               <ArrowBendDownRight size={11} weight="bold" aria-hidden />
             </span>
           ) : null}
-          <span className="ag-river-who" data-user-text>{who.name}</span>{" "}
+          {who.name ? <><span className="ag-river-who" data-user-text>{who.name}</span>{" "}</> : null}
           <span className="ag-river-verb">{sentence}</span>{" "}
           <span className="ag-river-label" data-user-text title={item.label}>{withoutVerb(item.label, item.verb)}</span>
         </span>
         <span className="ag-river-status" data-state={state}>
-          <AgState state={state} compact />
+          {statusWord ? <span className="ag-state" data-state={state} data-compact>{statusWord}</span>
+            : <AgState state={state} compact />}
         </span>
         <span className="ag-river-took" title={took ? `Took ${took}` : undefined}>{took}</span>
         <span className="ag-river-cost" title={item.costUsd > 0 ? "Metered model spend" : undefined}>
