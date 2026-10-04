@@ -27981,10 +27981,25 @@ def backfill_signed_acts(payload: ActsBackfillRequest) -> dict:
 # THE ONE AGENT MODEL: create/read/edit/delete an agent and its MCP grants (routers/agents.py).
 from .routers.agents import build_agents_router
 
+def project_actor_can(connection, project_id: str, claimed_actor: Optional[str],
+                      permission: str) -> bool:
+    """Whether the signed-in principal holds `permission` here — a question, not a gate: no
+    denial is recorded, so a page can ask it to decide which controls to show."""
+    actor = str(current_api_principal.get() or claimed_actor or "").strip()
+    if not actor:
+        return False
+    try:
+        members.require_member(connection, project_id, actor, permission=permission)
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+        return False
+    return True
+
+
 app.include_router(build_agents_router(
     engine=engine,
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
+    actor_can=project_actor_can,
 ))
 # THE KIT: Skills & MCP's abilities, connections, tests, holders and tool policy (routers/kit.py).
 from .routers.kit import build_kit_router

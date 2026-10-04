@@ -726,7 +726,7 @@ def drop_for_agent(connection: Connection, project_id: str, role_key: str) -> in
         return 0
 
 
-# ── SKILL.md frontmatter (spec §4.6) ─────────────────────────────────────────────────────────────────────
+# ── SKILL.md (spec §4.6) ─────────────────────────────────────────────────────────────────────
 
 _FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
 
@@ -747,6 +747,97 @@ def parse_frontmatter(body: str) -> tuple[dict[str, str], str]:
         k, v = line.split(":", 1)
         head[k.strip().lower()] = v.strip().strip("\"'")
     return head, value[found.end():].lstrip("\n")
+
+
+def _snake(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")[:49]
+
+
+def parse_skill_md(filename: str, text_: str, *, label: Optional[str] = None,
+                   summary: Optional[str] = None) -> dict[str, str]:
+    """{skill_key, label, summary, knowledge} from one SKILL.md-style file, or InstructionError.
+
+    The frontmatter's `name` gives the label (and the key, snake_cased); `description` the
+    summary the agent always sees. Without frontmatter the name comes from the file name and
+    the description must be given. Explicit `label`/`summary` win over the file's.
+    """
+    name = str(filename or "").strip()
+    if name.lower().endswith((".zip", ".tar", ".gz", ".tgz")) or name.endswith("/"):
+        raise InstructionError("file", ONE_FILE)
+    if name and not name.lower().endswith((".md", ".markdown", ".txt")):
+        raise InstructionError("file", NOT_TEXT)
+    raw = check_raw(text_)
+    head, rest = parse_frontmatter(normalise(raw))
+    stem = re.sub(r"\.(md|markdown|txt)$", "", name.rsplit("/", 1)[-1], flags=re.I)
+    if stem.lower() == "skill":
+        stem = ""
+    chosen = str(label or head.get("name") or stem or "").strip()
+    if not chosen:
+        raise InstructionError("label", NEEDS_NAME)
+    pretty = chosen.replace("-", " ").replace("_", " ").strip()
+    pretty = pretty[:1].upper() + pretty[1:]
+    described = str(summary if summary is not None else head.get("description") or "").strip()
+    if not described:
+        raise InstructionError("summary", NEEDS_DESCRIPTION)
+    if len(described) > SUMMARY_MAX:
+        raise InstructionError("summary", DESCRIPTION_TOO_LONG)
+    body = rest.strip()
+    if not body:
+        raise InstructionError("body", NEEDS_TEXT)
+    if len(body) > GUIDE_MAX_CHARS:
+        raise InstructionError("body", "Too long · 20k max")
+    errors, _ = lint_instructions(body)
+    if errors:
+        first = errors[0]
+        raise InstructionError("body", first["message"], line=first.get("line"),
+                               tip=first.get("tip"))
+    errors, _ = lint_instructions(described)
+    if errors:
+        raise InstructionError("summary", errors[0]["message"], tip=errors[0].get("tip"))
+    key = _snake(chosen)
+    if len(key) < 3:
+        key = f"guide_{key}".strip("_")
+    return {"skill_key": key, "label": pretty[:120], "summary": described, "knowledge": body}
+
+
+def skill_from_file(connection: Connection, project_id: str, *, actor: str, filename: str,
+                    text_: str, label: Optional[str] = None, summary: Optional[str] = None,
+                    grant_to: Optional[str] = None) -> dict[str, Any]:
+    """Create a `guide` skill from one file and, with `grant_to`, give it to that agent —
+    one transaction, one version bump. Returns {skill, granted, version?}."""
+    from .agent_identity import sealing_once
+    from .skill_definitions import (SkillDefinitionError, SkillExistsError, assign_skill_to_role,
+                                    save_skill)
+
+    _require_person(actor)
+    parsed = parse_skill_md(filename, text_, label=label, summary=summary)
+    if grant_to:
+        _require_agent(connection, project_id, grant_to)
+    try:
+        with sealing_once():
+            skill = save_skill(connection, project_id=project_id, actor=actor,
+                               skill_key=parsed["skill_key"], label=parsed["label"],
+                               behaviour_kind="guide", summary=parsed["summary"],
+                               knowledge=parsed["knowledge"], risk_tier=0, mode="create")
+            granted = None
+            if grant_to:
+                granted = assign_skill_to_role(connection, project_id=project_id, actor=actor,
+                                               role_key=grant_to, skill_id=skill["skill_key"])
+    except SkillExistsError as error:
+        raise InstructionError("label", NAME_TAKEN, status=409, tip=str(error)) from error
+    except SkillDefinitionError as error:
+        said = str(error)
+        if "already ships" in said:
+            raise InstructionError("label", "Name taken by a built-in", status=409,
+                                   tip=said) from error
+        raise InstructionError("body", said[:80], tip=said) from error
+    out: dict[str, Any] = {"skill": skill, "granted": bool(granted)}
+    if grant_to:
+        row = connection.execute(
+            text("SELECT identity_version FROM roles WHERE project_id = :p AND role_key = :r"),
+            {"p": project_id, "r": _key(grant_to)}).scalar()
+        out["version"] = int(row or 1)
+    return out
 
 
 # ── The prompt layer (agent_persona L2i) ─────────────────────────────────────────────────────

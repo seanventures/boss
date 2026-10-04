@@ -75,3 +75,18 @@ def test_essentials_are_abilities():
     keys = {a["key"] for a in main["abilities"]}
     assert set(main["essentials"]) <= keys
     assert main["essentials"] == ["open_prs", "web_research", "file_tickets", "email"]
+
+
+def test_a_guide_skill_has_an_executor_and_takes_no_config():
+    """agent-loadout §4.6: a `guide` (a SKILL.md playbook) runs through `skill.guide`, and a
+    config — anything that could make it DO something — is refused."""
+    import pytest
+
+    from boss_engine.services.skill_definitions import (BEHAVIOURS, SkillDefinitionError,
+                                                        validate_config)
+
+    assert "guide" in BEHAVIOURS
+    assert "skill.guide" in set(registered_executor_ids())
+    assert validate_config("guide", {}, []) == {}
+    with pytest.raises(SkillDefinitionError):
+        validate_config("guide", {"x": 1}, [])
