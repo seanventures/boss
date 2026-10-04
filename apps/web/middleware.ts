@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  consoleAuthConfig, localHttp, sameOriginMutation, secureConsoleTransport,
+  consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation, secureConsoleTransport,
   sessionCookieName, validSession,
 } from "./lib/console-session";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
@@ -45,6 +45,7 @@ export async function middleware(request: NextRequest) {
   const previewPage = request.method === "GET" && /^\/v1\/previews\/[^/]+\/web(\/|$)/.test(path)
     && (request.headers.get("accept") ?? "").includes("text/html");
   const api = (path.startsWith("/api/") || path.startsWith("/v1/")) && !previewPage;
+  if (networkTrustedConsole()) return passThrough(request);
   if (!secureConsoleTransport(request)) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },
       { status: 426, headers: { "Cache-Control": "no-store" } });
@@ -70,6 +71,11 @@ export async function middleware(request: NextRequest) {
     response.headers.set("Cache-Control", "no-store");
     return response;
   }
+  return passThrough(request);
+}
+
+/** A request that may reach the console: still never a cross-site write. */
+async function passThrough(request: NextRequest) {
   if (!sameOriginMutation(request)) {
     return NextResponse.json({ error: "Cross-origin console mutation denied." },
       { status: 403, headers: { "Cache-Control": "no-store" } });
