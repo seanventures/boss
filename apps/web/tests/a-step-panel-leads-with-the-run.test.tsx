@@ -22,8 +22,12 @@ import { shipItChain } from "./_helpers/run-acts-fixtures";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as Record<string, unknown>).React = React;
 
-const { StepDoneBy, StepActivity, summariseStepActivity, stepLogHref, useStepActivity } =
-  await import("../app/workflows/step-run");
+const { StepDoneBy, StepActivity, StepOutputFacts, summariseStepActivity, stepLogHref, useStepActivity,
+        stepOutput, factText, stepLogSentence, actorVerb, stepActor } = await import("../app/workflows/step-run");
+const { viewOf } = await import("../app/workflows/flow/node-facts");
+const { laneAgentOf } = await import("../app/agents/chain-model");
+const { usd } = await import("../lib/money");
+const { stepQuestion } = await import("../app/delivery-workflows-ui");
 const { FlowLane } = await import("../app/workflows/flow/flow-lane");
 const { ActivityLog } = await import("../app/activity-log-ui");
 const { toChain } = await import("../app/agents/act-wire");
@@ -43,8 +47,16 @@ const LOG_ROWS = [
     data: { model: "claude-opus", cost_usd: 0.0125 } },
   { id: "l2", source: "llm_call", kind: "llm.plan", level: "info", title: "Model call", created_at: "2026-10-04T10:01:30Z",
     data: { model: "claude-opus", cost_usd: 0.0075 } },
-  { id: "s1", source: "workflow_step", kind: "workflow.step", level: "info", title: "step plan succeeded",
-    created_at: "2026-10-04T10:01:00Z" },
+  { id: "s1", source: "workflow_step", kind: "step.capability", level: "info", title: "Step Plan Succeeded",
+    created_at: "2026-10-04T10:01:00Z", data: { status: "succeeded", attempt: 1, duration_seconds: 20 } },
+  { id: "n1", source: "event", kind: "workflow.step_leased", level: "info", title: "Workflow Step Leased",
+    created_at: "2026-10-04T10:00:40Z" },
+  { id: "a1", source: "app_log", kind: "log.sandbox", level: "info", title: "Log Sandbox",
+    created_at: "2026-10-04T10:00:30Z" },
+  { id: "p1", source: "event", kind: "code_task.pr_opened", level: "info", title: "Code Task Pr Opened",
+    created_at: "2026-10-04T10:00:20Z", data: { number: 2 } },
+  { id: "e1", source: "event", kind: "code_task.review_comments_failed", level: "error",
+    title: "Code Task Review Comments Failed", created_at: "2026-10-04T10:00:10Z" },
 ];
 
 beforeEach(() => {
@@ -81,11 +93,18 @@ async function render(el: React.ReactElement) {
   return host!;
 }
 const q = (sel: string) => host!.querySelector<HTMLElement>(sel);
+const mapped = () => LOG_ROWS.map((r) => ({
+  id: r.id, source: r.source, kind: r.kind, status: "ok", level: r.level, title: r.title, actor: "",
+  entityType: "", entityId: "", stage: "", runId: "", workflowRunId: "", agent: "", service: "", body: "",
+  createdAt: r.created_at, data: (r as { data?: Record<string, unknown> }).data ?? {},
+})) as never;
+const BASE = { output: {}, projectId: "p1", viewer: "ceo", question: "Why?", cost: 0, calls: 0, model: "",
+               onAsk: () => {}, stepId: "plan", facts: [] as string[] };
 
 describe("(A) who did it is one line, with the agent's card one press away", () => {
   it("says who, what it cost and on which model, and hides the card until asked", async () => {
-    await render(<StepDoneBy act={planAct} output={{}} phase="done" projectId="p1" viewer="ceo"
-                             question="Why?" cost={0} model="claude-opus" onAsk={() => {}} stepId="plan" />);
+    await render(<StepDoneBy {...BASE} act={planAct} phase="done" status="succeeded" model="claude-opus"
+                             facts={["Started 10:01Z"]} />);
     const line = q('[data-testid="dw-step-doneby"]')!;
     expect(line.textContent).toContain("Done by");
     expect(q('[data-testid="dw-step-doneby-name"]')!.textContent).toBe("Atlas");
@@ -94,34 +113,76 @@ describe("(A) who did it is one line, with the agent's card one press away", () 
     await act(async () => q('[data-testid="dw-step-agent-toggle"]')!.click());
     expect(q('[data-testid="ag-signed-by"]')).not.toBeNull();
     expect(q('[data-testid="dw-step-agent-toggle"]')!.getAttribute("aria-expanded")).toBe("true");
+    // ONE Ask (the line's), and the card opens BELOW the step's facts, not between them.
+    expect(q('[data-testid="ag-signed-ask"]')).toBeNull();
+    expect(q('[data-testid="ag-act-ask"]')).toBeNull();
+    expect(host!.querySelectorAll('[data-testid="dw-step-ask"]')).toHaveLength(1);
+    const facts = q('[data-testid="dw-step-facts"]')!;
+    expect(facts.compareDocumentPosition(q('[data-testid="dw-step-agent-card"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("falls back to the cost of the step's own model calls when the work record has none", async () => {
-    await render(<StepDoneBy act={{ ...planAct, costUsd: 0 }} output={{}} phase="done" projectId="p1" viewer="ceo"
-                             question="Why?" cost={0.02} model="" onAsk={() => {}} stepId="plan" />);
+    await render(<StepDoneBy {...BASE} act={{ ...planAct, costUsd: 0 }} phase="done" status="succeeded"
+                             cost={0.02} calls={2} />);
     expect(q('[data-testid="dw-step-cost"]')!.textContent).toBe("$0.02");
+    // A step whose model calls cost nothing still says so, in the one format.
+    await render(<StepDoneBy {...BASE} act={null} output={{ ran_as: { agent: "qa", how: "named" } }}
+                             phase="done" status="succeeded" cost={0} calls={3} />);
+    expect(q('[data-testid="dw-step-cost"]')!.textContent).toBe("$0.00");
   });
 
-  it("before the step runs it names who it is assigned to, and a skipped step with nobody says nothing", async () => {
-    await render(<StepDoneBy act={null} output={{}} phase="ahead" projectId="p1" viewer="ceo" question="?"
-                             cost={0} model="" assigned="qa" onAsk={() => {}} stepId="qa" />);
+  it("before the step runs it names who the lane names; a skipped step says Skipped and why, with no agent", async () => {
+    await render(<StepDoneBy {...BASE} act={null} phase="ahead" status="pending"
+                             planned={{ kind: "you", label: "You", tip: "" }} />);
     expect(q('[data-testid="dw-step-doneby"]')!.textContent).toContain("Assigned to");
-    await render(<StepDoneBy act={null} output={{}} phase="skipped" projectId="p1" viewer="ceo" question="?"
-                             cost={0} model="" assigned="qa" onAsk={() => {}} stepId="qa" />);
-    expect(q('[data-testid="dw-step-doneby"]')).toBeNull();
+    expect(q('[data-testid="dw-step-doneby-name"]')!.textContent).toBe("You");
+    await render(<StepDoneBy {...BASE} act={planAct} phase="skipped" status="succeeded"
+                             planned={{ kind: "named", role_key: "qa", label: "QA Lead", tip: "" }}
+                             skipped="Skipped: research cannot run here. The panel works from your request instead." />);
+    expect(q('[data-testid="dw-step-skipped"]')!.textContent).toBe("Skipped");
+    expect(q('[data-testid="dw-step-doneby"]')!.textContent).toContain("research cannot run here");
+    expect(q('[data-testid="dw-step-doneby-name"]')).toBeNull();
+    expect(q('[data-testid="dw-step-agent-toggle"]')).toBeNull();
+  });
+
+  it("a ready step nobody has picked up is queued, not being done", () => {
+    expect(actorVerb("now", "ready")).toBe("Queued for");
+    expect(actorVerb("now", "running")).toBe("Doing");
+    expect(actorVerb("done", "succeeded")).toBe("Done by");
+  });
+
+  it("names the same actor as the lane node: who ran it, else the step's planned view", async () => {
+    const spec = { id: "deploy", kind: "capability", binding: { capability: "notify" } } as never;
+    const planned = viewOf(spec, PALETTE).agent;
+    expect(planned.kind).toBe("you");
+    await render(<StepDoneBy {...BASE} act={null} phase="ahead" status="pending" planned={planned} />);
+    expect(q('[data-testid="dw-step-doneby-name"]')!.textContent).toBe("You");
+    // A gate BOSS approved by itself is BOSS's on the lane and in the panel alike.
+    const auto = { outcome: "approved", approved_by: "auto_approval" };
+    expect(laneAgentOf(auto, null, "ceo")?.variant).toBe("boss");
+    expect(stepActor(laneAgentOf(auto, null, "ceo"), { kind: "person", label: "A person", tip: "" })?.variant).toBe("boss");
+  });
+
+  it("asks about a step in English", () => {
+    expect(stepQuestion({ step_id: "build", status: "succeeded" }, "Build")).toBe("What did the Build step do?");
+    expect(stepQuestion({ step_id: "build", status: "skipped" }, "Build")).toBe("Why was the Build step skipped?");
+  });
+
+  it("writes money one way", () => {
+    expect([usd(0), usd(0.002), usd(0.0125), usd(3.456), usd(12.4)]).toEqual(["$0.00", "<$0.01", "$0.01", "$3.46", "$12"]);
   });
 });
 
 describe("(A) the step's activity, and the way straight into its log", () => {
-  it("reads the log scoped to this step and summarises it: no verbose turns, model, summed cost", () => {
-    const s = summariseStepActivity(LOG_ROWS.map((r) => ({
-      id: r.id, source: r.source, kind: r.kind, status: "ok", level: r.level, title: r.title, actor: "",
-      entityType: "", entityId: "", stage: "", runId: "", workflowRunId: "", agent: "", service: "", body: "",
-      createdAt: r.created_at, data: (r as { data?: Record<string, unknown> }).data ?? {},
-    })) as never);
-    expect(s.rows.map((r) => r.id)).toEqual(["l1", "l2", "s1"]);
+  it("reads the log as sentences, errors first, bookkeeping out, repeats folded", () => {
+    const s = summariseStepActivity(mapped());
+    expect(s.rows.map((r) => r.text)).toEqual([
+      "Review comments failed", "Plan: model call", "Step succeeded in 20s", "Opened pull request #2"]);
+    expect(s.errors).toBe(1);
     expect(s.model).toBe("claude-opus");
     expect(s.cost).toBeCloseTo(0.02, 6);
+    expect(s.calls).toBe(2);
+    expect(stepLogSentence({ source: "event", kind: "workflow.step_ready", level: "info", title: "x", data: {} })).toBeNull();
   });
 
   it("asks the API for this step of this run, and links to the step's own log", async () => {
@@ -129,23 +190,27 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     function Probe() {
       const state = useStepActivity("p1", "wfr_1", "plan", false, "succeeded:1");
       return <StepActivity state={state} live={false}
-                           href={stepLogHref(window.location.search, "wfr_1", "plan")} />;
+                           href={stepLogHref(window.location.search, "wfr_1", "plan", { step: "Plan it", run: "Ship it" })} />;
     }
     await render(<Probe />);
     const call = asked.find((u) => u.startsWith("/api/activity?"))!;
     expect(new URLSearchParams(call.split("?")[1]).get("step_id")).toBe("plan");
     expect(new URLSearchParams(call.split("?")[1]).get("workflow_run_id")).toBe("wfr_1");
     const rows = host!.querySelectorAll('[data-testid="dw-step-log-row"]');
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
+    // An error the step log holds is never below the fold of the panel: pinned first, counted.
+    expect(rows[0].getAttribute("data-level")).toBe("error");
+    expect(q('[data-testid="dw-step-log-loud"]')!.textContent).toBe("1 error");
     const href = new URL(q('[data-testid="dw-step-log"]')!.getAttribute("href")!, "http://console.test");
     expect(href.searchParams.get("area")).toBe("activity");
     expect(href.searchParams.get("wfr")).toBe("wfr_1");
     expect(href.searchParams.get("step")).toBe("plan");
     expect(href.searchParams.get("org")).toBe("org_boss");
+    expect(href.searchParams.get("step_name")).toBe("Plan it");
   });
 
   it("the activity log opened on that link is scoped to the step, and says so", async () => {
-    window.history.replaceState({}, "", "/?area=activity&wfr=wfr_1&step=plan");
+    window.history.replaceState({}, "", "/?area=activity&wfr=wfr_1&step=plan&step_name=Plan+it&run_name=Lead+Triage+Inbox");
     await render(<ActivityLog projectId="p1" actor="ceo" />);
     const lists = asked.filter((u) => u.startsWith("/api/activity?"));
     expect(lists.length).toBeGreaterThan(0);
@@ -153,7 +218,9 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     expect(lists.at(-1)).toContain("step_id=plan");
     expect(lists.at(-1)).toContain("workflow_run_id=wfr_1");
     expect(asked.filter((u) => u.startsWith("/api/activity/facets?")).at(-1)).toContain("step_id=plan");
-    expect(q('[data-testid="activity-scope-step"]')!.textContent).toBe("plan");
+    // Names, not ids: the ids are its tooltip.
+    expect(q('[data-testid="activity-scope-step"]')!.textContent).toBe("Plan it · Lead Triage Inbox");
+    expect(q('[data-testid="activity-scope-workflow"]')!.textContent).not.toContain("wfr_1");
     await act(async () => q('[data-testid="activity-scope-step-clear"]')!.click());
     for (let i = 0; i < 4; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(new URLSearchParams(window.location.search).get("step")).toBeNull();
@@ -164,13 +231,49 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     function Panel() {
       const state = useStepActivity("p1", "wfr_1", "plan", false, "x");
       return (<div>
-        <StepDoneBy act={planAct} output={{}} phase="done" projectId="p1" viewer="ceo" question="Why?"
-                    cost={0} model="claude-opus" onAsk={() => {}} stepId="plan" />
+        <StepDoneBy {...BASE} act={planAct} phase="done" status="succeeded" model="claude-opus" />
+        <StepOutputFacts {...stepOutput(BUILD_OUTPUT, { noteShownAbove: false })} />
         <StepActivity state={state} live={false} href="/x" />
       </div>);
     }
     const el = await render(<Panel />);
     expect(overBudget(el)).toEqual([]);
+  });
+});
+
+const BUILD_OUTPUT = {
+  tool: "create_code_task", await: { id: "crun_768a", kind: "code_task" }, act_id: "act_01", run_id: "crun_768a",
+  status: "succeeded", verdict: "awaiting", binding_id: null, capability: "build", project_id: "boss-dogfood",
+  repository: "e2e-org/e2e-app", base_branch: "main", awaited_status: "completed", code_task_run_id: "crun_768a",
+  meeting: { job_id: null, run_id: "mrun_1", task_id: "tsk_1" },
+};
+
+describe("(A) Output is what the step made, for a person", () => {
+  it("shows human outputs and files every machine field under Details, each once, never null", async () => {
+    const { facts, details } = stepOutput(BUILD_OUTPUT, { noteShownAbove: false });
+    expect(facts).toEqual([{ label: "Repository", value: "e2e-org/e2e-app" }, { label: "Base branch", value: "main" }]);
+    const texts = details.map((d) => d.value);
+    expect(texts.filter((t) => t === "crun_768a")).toHaveLength(1);
+    expect(texts).toContain("awaiting");
+    expect(texts).toContain("mrun_1");
+    expect(texts.join(" ")).not.toMatch(/null|act_01|boss-dogfood/);
+    await render(<StepOutputFacts facts={facts} details={details} />);
+    expect(q('[data-testid="dw-step-out"]')!.textContent).not.toContain("awaiting");
+    expect((q('[data-testid="dw-step-details"]') as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it("a succeeded step's note is an output; a step that did not succeed shows it above instead", () => {
+    const out = { note: "Skipped: research cannot run here. The panel works from your request.", verdict: "succeeded",
+                  reason: "research_source_unavailable", status: "not_applicable" };
+    expect(stepOutput(out, { noteShownAbove: false }).facts[0]).toMatchObject(
+      { label: "Note", value: "Skipped: research cannot run here." });
+    expect(stepOutput(out, { noteShownAbove: true }).facts).toEqual([]);
+  });
+
+  it("an object's text is its first id that has a value", () => {
+    expect(factText({ job_id: null, run_id: "mrun_1" })).toBe("mrun_1");
+    expect(factText({ job_id: null })).toBe("");
+    expect(factText(null)).toBe("");
   });
 });
 
@@ -192,20 +295,34 @@ describe("(B) a run's lane has room, and scrolls only inside itself", () => {
     const el = await render(<FlowLane spec={linear(11)} palette={PALETTE} mode="run" runState={{}} />);
     const left = el.querySelector<HTMLButtonElement>('[data-testid="wf-lane-left"]')!;
     const right = el.querySelector<HTMLButtonElement>('[data-testid="wf-lane-right"]')!;
-    expect(left.hidden).toBe(true);
-    expect(right.hidden).toBe(false);
+    expect(left.disabled).toBe(true);
+    expect(right.disabled).toBe(false);
+    // In gutters beside the steps, never over them, and not a tab stop.
+    const viewport0 = el.querySelector<HTMLElement>(".wf-lane-viewport")!;
+    expect(viewport0.contains(right)).toBe(false);
+    expect(right.parentElement).toBe(viewport0.parentElement);
+    expect(right.tabIndex).toBe(-1);
     expect(el.querySelector('.wf-lane-fade[data-side="right"]')!.hasAttribute("data-on")).toBe(true);
     const viewport = el.querySelector<HTMLElement>(".wf-lane-viewport")!;
     (viewport as unknown as { scrollBy: unknown }).scrollBy = undefined;
     await act(async () => right.click());
     await act(async () => { viewport.dispatchEvent(new Event("scroll")); });
     expect(viewport.scrollLeft).toBeGreaterThan(0);
-    expect(left.hidden).toBe(false);
+    expect(left.disabled).toBe(false);
   });
 
-  it("fits the editor's lane by default, and draws no arrows when nothing is hidden", async () => {
+  it("draws no arrows when nothing is hidden, and closes the gaps rather than scroll for a few pixels", async () => {
     laneWidth = 4000;
-    const el = await render(<FlowLane spec={linear(5)} palette={PALETTE} mode="run" runState={{}} />);
+    let el = await render(<FlowLane spec={linear(5)} palette={PALETTE} mode="run" runState={{}} />);
+    expect(el.querySelector('[data-testid="wf-lane-right"]')).toBeNull();
+    // Four steps, 33px wider than the lane at full spacing: they fit, with tighter connectors.
+    const geometry = await import("../app/workflows/flow/geometry");
+    const { layoutFlow } = await import("../lib/workflow-graph");
+    const four = linear(4);
+    const types = new Map(four.steps.map((x) => [x.id, "builtin" as const]));
+    laneWidth = geometry.laneGeometry(layoutFlow(four), types, "comfortable").width - 33;
+    el = await render(<FlowLane spec={four} palette={PALETTE} mode="run" runState={{}} />);
+    expect(el.querySelector<HTMLElement>('[data-testid="wf-lane"]')!.dataset.scrolls).toBeUndefined();
     expect(el.querySelector('[data-testid="wf-lane-right"]')).toBeNull();
   });
 

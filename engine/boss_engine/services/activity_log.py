@@ -910,9 +910,12 @@ def _load_workflow_steps(
         # A RETRY IS NOT A CLEAN RUN. A step that succeeded on its third attempt is not the
         # same event as one that succeeded first time, and reading them identically is how a
         # flaky step stays invisible until it finally fails for good.
+        # `attempt` is 1 on a step's first run, so only a SECOND attempt is a retry. Every
+        # succeeded step used to read WARN (boss-1 walk, 2026-10-04: "Step Meeting Succeeded"
+        # in amber on a clean run). An error left on a step that then succeeded is history.
         if status in ("failed", "deadlettered"):
             level = "error"
-        elif attempt > 0 or last_error:
+        elif attempt > 1 or (last_error and status != "succeeded"):
             level = "warn"
         elif status in ("succeeded", "skipped", "cancelled"):
             level = "info"
@@ -926,7 +929,10 @@ def _load_workflow_steps(
                 actor="workflow",
                 entity_type="workflow_step_run",
                 entity_id=_text(row.get("id")),
-                created_at=row.get("created_at"),
+                # WHEN IT HAPPENED, not when the row was made. A step row is created when the
+                # run is planned, so every step of a run read "18:01" — the run's start —
+                # however late it actually ran or finished.
+                created_at=row.get("completed_at") or row.get("started_at") or row.get("created_at"),
                 data={
                     "step_id": step_id,
                     "step_kind": step_kind,

@@ -418,7 +418,7 @@ describe("the workflow drawn as a path", () => {
     // operator asked for.
     expect(DW).toContain("function StepDetail");
     for (const marker of ['data-testid="dw-step-took"', 'data-testid="dw-step-error"',
-                          'data-testid="dw-step-links"', 'data-testid="dw-step-out"',
+                          'data-testid="dw-step-links"', '<StepOutputFacts',
                           'data-testid="dw-step-decide"']) {
       expect(DW).toContain(marker);
     }

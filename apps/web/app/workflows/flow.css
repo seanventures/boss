@@ -65,32 +65,29 @@
 .wf-flag[data-kind="start"] .wf-flag-label { right: -6px; }
 .wf-flag[data-kind="end"] .wf-flag-label { left: -2px; }
 
-/* A lane wider than its box scrolls inside itself; each edge it can still scroll towards fades
-   and carries an arrow, so "there is more this way" is visible without a scrollbar. */
+/* A lane wider than its box scrolls inside itself. While it does, a gutter on each side holds
+   an arrow — beside the steps, never over them — and each edge with more to see fades. */
+.wf-lane-row { position: relative; display: flex; align-items: stretch; min-width: 0; }
+.wf-lane-row > .wf-lane-viewport { flex: 1 1 auto; min-width: 0; }
+.wf-lane[data-mode="design"] .wf-lane-row { flex: 0 1 auto; min-height: 0; }
 .wf-lane-fade {
-  position: absolute; top: 1px; bottom: 34px; width: 48px; z-index: 2;
+  position: absolute; top: 0; bottom: 0; width: 40px; z-index: 2;
   pointer-events: none; opacity: 0; transition: opacity 150ms ease;
 }
-.wf-lane-fade[data-side="left"] { left: 1px; border-radius: var(--r-xl) 0 0 0;
-  background: linear-gradient(90deg, var(--surface), transparent); }
-.wf-lane-fade[data-side="right"] { right: 1px; border-radius: 0 var(--r-xl) 0 0;
-  background: linear-gradient(270deg, var(--surface), transparent); }
+.wf-lane-fade[data-side="left"] { left: 40px; background: linear-gradient(90deg, var(--surface), transparent); }
+.wf-lane-fade[data-side="right"] { right: 40px; background: linear-gradient(270deg, var(--surface), transparent); }
 .wf-lane-fade[data-on] { opacity: 1; }
 .wf-lane-arrow {
-  position: absolute; top: calc((100% - 34px) / 2 - 16px); z-index: 3;
+  flex: none; align-self: center; margin: 0 4px;
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; padding: 0;
   border: 1px solid var(--border); border-radius: 50%;
   background: var(--bg); color: var(--ink);
   font: 600 1.125rem/1 var(--sans);
-  box-shadow: var(--shadow, 0 2px 8px rgba(0,0,0,.25));
   cursor: pointer;
 }
-.wf-lane-arrow[data-side="left"] { left: 8px; }
-.wf-lane-arrow[data-side="right"] { right: 8px; }
-.wf-lane-arrow[hidden] { display: none; }
-.wf-lane-arrow:hover { border-color: var(--accent); color: var(--accent); }
-.wf-lane-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-lane-arrow[data-off] { opacity: 0.3; cursor: default; }
+.wf-lane-arrow:not([data-off]):hover { border-color: var(--accent); color: var(--accent); }
 
 /* Connectors: in a linear flow each slot carries the line into it, so it moves with its node. */
 .wf-conn {
@@ -393,7 +390,12 @@
 .wf-doneby-verb { color: var(--faint); }
 .wf-doneby-name { color: var(--ink); font-weight: 600; }
 .wf-doneby-fact { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
-.wf-doneby-fact::before { content: "·"; margin-right: 10px; color: var(--faint); }
+/* Who, what it cost and the model: three groups that wrap as wholes, so a narrow panel never
+   starts a line with "· model". */
+.wf-doneby-who { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.wf-doneby-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.wf-doneby-fact + .wf-doneby-fact::before { content: "·"; margin-right: 10px; color: var(--faint); }
+.wf-doneby-why { color: var(--muted); }
 .wf-doneby-acts { display: inline-flex; gap: 12px; margin-left: auto; }
 .wf-doneby-card { border-top: 1px dashed var(--border); padding-top: 8px; }
 .wf-step-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 10px; font-size: 0.75rem; color: var(--faint); }
@@ -413,3 +415,16 @@
 .wf-step-log li[data-level="warn"] .wf-step-log-title { color: var(--amber); }
 .wf-step-sec .dw-step-out dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-step-sec .dw-step-out > div { min-width: 0; }
+.wf-out {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 16px; margin: 8px 0 0;
+}
+.wf-out > div { min-width: 0; }
+.wf-out dt { font-size: 0.75rem; color: var(--faint); }
+.wf-out dd { margin: 2px 0 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+             font-size: 0.8125rem; color: var(--ink); }
+.wf-out-mono dd { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
+.wf-out-details { margin-top: 10px; }
+.wf-out-details > summary { cursor: pointer; font-size: 0.75rem; color: var(--faint); }
+.wf-step-sec-loud { font-size: 0.75rem; font-weight: 600; color: var(--amber); }
+.wf-step-sec-loud[data-level="error"] { color: var(--red); }

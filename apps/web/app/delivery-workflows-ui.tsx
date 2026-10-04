@@ -25,7 +25,10 @@ import { useRunChain } from "./agents/run-acts";
 import { RunChain } from "./agents/run-chain";
 import { CreditsButton } from "./agents/run-credits";
 import { askAboutAct } from "./agents/act-card";
-import { StepActivity, StepDoneBy, StepSection, stepFacts, stepLogHref, useStepActivity } from "./workflows/step-run";
+import { StepActivity, StepDoneBy, StepOutputFacts, StepSection, stepFacts, stepLogHref, stepOutput,
+         useStepActivity } from "./workflows/step-run";
+import type { StepView } from "../lib/workflow-editor-types";
+import { viewOf } from "./workflows/flow/node-facts";
 import type { Act } from "../lib/agent-world-types";
 import { browserHref } from "../lib/browser-links";
 import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
@@ -1452,6 +1455,11 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
 
   return (
     <div className="dw-runs">
+      {/* WHY RUNS ARE SLOW, ONCE. The host's advice (a nearly full disk) is about the machine,
+          not about one run, and it was repeated on every live card. One banner above the list,
+          while anything is running. Renders nothing on a healthy host. */}
+      {runs.some((r) => r.status === "running" || r.status === "waiting")
+        ? <HostAdviceBanner advice={hostAdvice} compact /> : null}
       <div className="dw-runs-head">
         <div className="dw-filters" role="tablist" aria-label="Run state">
           {(["all", ...BUCKETS] as const).map((b) => (
@@ -1494,8 +1502,6 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
             {/* WHY THIS RUN IS SLOW, NEXT TO THE NUMBER THAT MISLEADS. The elapsed time is
                 what gets read as "BOSS is regressing"; if the machine took that time, it has
                 to say so in the same place. Renders nothing on a healthy host. */}
-            {run.status === "running" || run.status === "waiting"
-              ? <HostAdviceBanner advice={hostAdvice} compact /> : null}
             <button type="button" className="dw-run-head" aria-expanded={open}
                     onClick={() => setOpenRun(open ? null : run.id)}>
               <span className="dw-badge" data-tone={tone(run.status)}>{run.status}</span>
@@ -1914,6 +1920,10 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           buildRunId={buildRunId}
           workflowRunId={run.id}
           act={stepActOf(chain, current.step_id)}
+          planned={(() => {
+            const spec = laneSpec.steps.find((x) => x.id === current.step_id);
+            return spec ? viewOf(spec, lanePalette).agent : undefined;
+          })()}
           approval={approvalOf(chain, stepActOf(chain, current.step_id))}
           onRunPreview={onRunPreview}
           onBound={onBound}
@@ -2323,8 +2333,19 @@ export function stepQuestion(step: Pick<RunStep, "step_id" | "status">, label?: 
     case "running":
     case "leased":
       return `Is the ${name} step making progress, or is it stuck?`;
+    case "succeeded":
+    case "completed":
+      return `What did the ${name} step do?`;
+    case "skipped":
+      return `Why was the ${name} step skipped?`;
+    case "pending":
+    case "ready":
+    case "queued":
+      return `When will the ${name} step start?`;
     default:
-      return `Why is the ${name} step ${step.status}?`;
+      // A status read as an adjective ("Why is the build step succeeded?") is not English;
+      // the status is quoted as what it is.
+      return `What does "${step.status}" mean for the ${name} step?`;
   }
 }
 
@@ -2640,7 +2661,7 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
 }
 
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
-                     actions, actor = "", act = null, approval: gateAnswer = null,
+                     actions, actor = "", act = null, approval: gateAnswer = null, planned,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      workflowRunId, previewStarting, busy }: {
   projectId: string;
@@ -2650,6 +2671,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   workflowRunId?: string;
   /** The signed work for this step, once recorded: who did it and how it reached them. */
   act?: Act | null;
+  /** Who the workflow assigns this step to — the lane node's own view, so they agree. */
+  planned?: StepView["agent"];
   /** The person's answer to this step's gate, when there was one. */
   approval?: Act | null;
   /** This step's Try again / Skip, from the run's server-decided `actions`. */
@@ -2803,35 +2826,20 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // A manual gate that has not been answered. The one condition under which "waiting" and
   // "gate · <role>" are the same sentence twice.
   const gateWaiting = approval?.mode === "manual" && step.status === "waiting";
-  // WHAT THE STEP RECORDED — de-duplicated, and not on the page by default.
-  //
-  // Rendered flat, this was the heaviest thing on a succeeded step: six labelled fields of
-  // which AWAIT and RUN ID held the SAME id, BINDING ID was "—", and PROJECT ID and REPOSITORY
-  // are facts about the whole run rather than this step. None of it is an action and none of it
-  // is read twice. It is evidence, so it is kept and filed.
-  const produced = Object.entries(step.output || {})
-    // Who ran it is the Done-by line's (ran_as, act_id), and the project is the whole run's.
-    .filter(([k]) => !["capability", "tool", "inputs", "note", "status", "ran_as", "act_id",
-                       "project_id"].includes(k))
-    // An empty field is a row that says nothing at all.
-    .filter(([, v]) => !(v === null || v === undefined || v === ""))
-    // A LOOPBACK URL IS NOT AN ADDRESS ANYBODY CAN USE. `preview_url` is where the app listens
-    // ON THE HOST — 127.0.0.1:42543 — and printing it under a heading reading PREVIEW URL
-    // invites somebody to copy it, paste it, and get nothing. The link above is the openable
-    // one; this grid is for facts, and that is not one.
-    .filter(([, v]) => !(typeof v === "string" && isLoopbackPreviewUrl(v)))
-    .slice(0, 6)
-    // THE SAME ID UNDER TWO HEADINGS IS ONE FACT AND TWO ROWS. `await` and `run_id` are
-    // routinely identical on a build step; the first one wins.
-    .filter(([, v], i, all) =>
-      typeof v !== "string" || all.findIndex(([, w]) => w === v) === i);
+  // WHAT THE STEP MADE, FOR A PERSON: an allow-list of human outputs (the PR, the branch, the
+  // decision, the note), with every machine field — awaits, run ids, verdicts — under one
+  // Details disclosure, each text once and never "null" (stepOutput, app/workflows/step-run).
+  const output = stepOutput(step.output as Record<string, unknown>,
+                            { noteShownAbove: step.status !== "succeeded" || phase === "skipped" });
 
   // THE STEP'S OWN LOG: its rows and the work it started, read once and shared by the Done-by
   // line (model, cost) and the Activity section, so they cannot disagree.
   const activity = useStepActivity(projectId, workflowRunId, step.step_id, phase === "now",
                                    `${step.status}:${step.attempt}`);
   const logHref = workflowRunId
-    ? stepLogHref(typeof window !== "undefined" ? window.location.search : "", workflowRunId, step.step_id)
+    ? stepLogHref(typeof window !== "undefined" ? window.location.search : "", workflowRunId, step.step_id,
+                  { step: capability?.label ?? step.capability ?? step.step_id,
+                    run: appIdentity(runInput as AppRun).name || runAppTitle })
     : "";
   const facts = stepFacts(step);
   const finished = !["now", "ahead"].includes(phase);
@@ -2844,7 +2852,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       question, stepCaptain(step, capability));
   };
   const hasOutput = isPreviewStep(step) || visibleLinks.length > 0
-    || typeof (step.output || {}).document_id === "string" || produced.length > 0;
+    || typeof (step.output || {}).document_id === "string" || output.facts.length > 0
+    || output.details.length > 0;
 
   return (
     <section className="dw-detail" data-phase={phase} data-testid="dw-detail">
@@ -2896,7 +2905,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             {capability.summary}
           </Explain>
         ) : null}
-        {stepDuration(step) ? (
+        {stepDuration(step) && phase !== "skipped" ? (
           <span className="dw-step-took" data-testid="dw-step-took">{stepDuration(step)}</span>
         ) : null}
         {approval?.mode === "manual" ? (
@@ -2928,15 +2937,11 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           a name, what it cost and the model, with its whole card one press away (operator,
           2026-10-04: "too much info about the agent"). */}
       <StepDoneBy act={act} approval={gateAnswer} output={step.output} phase={phase}
-                  projectId={projectId} viewer={actor}
+                  status={step.status} planned={planned} projectId={projectId} viewer={actor}
                   failure={phase === "failed" ? step.error : null} question={question}
-                  cost={activity.cost} model={activity.model}
-                  assigned={stepCaptain(step, capability) || null} onAsk={ask} stepId={step.step_id} />
-      {facts.length ? (
-        <div className="wf-step-facts" data-testid="dw-step-facts">
-          {facts.map((f) => <span key={f}>{f}</span>)}
-        </div>
-      ) : null}
+                  cost={activity.cost} calls={activity.calls} model={activity.model}
+                  onAsk={ask} stepId={step.step_id} facts={facts}
+                  skipped={phase === "skipped" ? (skippedBy(step) || skipReason(step) || "Did not apply to this run") : undefined} />
 
       {/* A STEP THAT SUCCEEDED IS NOT SHOWING YOU A FAILURE.
           `note` is written by whichever attempt last wrote one, and a step that was refused
@@ -2969,11 +2974,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           step that did NOT succeed the same field is the reason it is sitting there, so it
           stays where it cannot be missed. */}
       {step.output?.note ? (
-        step.status === "succeeded" ? (
-          <Explain label="Why this step recorded no work">
-            {String(step.output.note)}
-          </Explain>
-        ) : (
+        // On a succeeded step the note is what it has to say: it is the Output's Note (or the
+        // Skipped line's reason), not a dot here.
+        step.status === "succeeded" ? null : (
           <p className="dw-step-note"
              data-tone={phase === "failed_on" ? "bad" : undefined}
              data-testid="dw-step-note">
@@ -3315,18 +3318,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           <ChangeRecord documentId={String((step.output as Record<string, unknown>).document_id)} />
         ) : null}
 
-        {produced.length ? (
-          // WHAT IT MADE, ON THE PAGE. This was filed under a closed "What this step recorded";
-          // the operator opens a step to see what it produced, so it is shown, de-duplicated.
-          <dl className="dw-step-out" data-testid="dw-step-out">
-            {produced.map(([k, v]) => (
-              <div key={k}>
-                <dt>{k.replace(/_/g, " ")}</dt>
-                <dd data-tip={summarise(v)}>{summarise(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : null}
+        <StepOutputFacts facts={output.facts} details={output.details} />
         </>) : undefined}
       </StepSection>
       {workflowRunId ? <StepActivity state={activity} href={logHref} live={phase === "now"} /> : null}

@@ -30,7 +30,7 @@ import type {
 import { canMove as modelCanMove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from "./drag-plan";
-import { chooseDensity, fitScale, laneGeometry, overflows, type LaneGeometry } from "./geometry";
+import { chooseDensity, fitScale, overflows, roomyGeometry, type LaneGeometry } from "./geometry";
 import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
 import type { LaneAgent } from "../../agents/chain-model";
@@ -186,7 +186,7 @@ export function FlowLane(p: {
   // Shrinking eleven steps into one screen made them unreadable. The editor keeps Fit as its
   // default, for seeing and dragging the whole flow, and 100% is the same roomy lane.
   const roomy = p.density !== "compact" && (mode === "run" || zoom === "full");
-  const geometry = useMemo(() => (roomy ? laneGeometry(layout, types, "comfortable")
+  const geometry = useMemo(() => (roomy ? roomyGeometry(layout, types, available)
     : chooseDensity(layout, types, available, p.density === "compact" ? "compact" : undefined)),
   [roomy, layout, types, available, p.density]);
   const scale = roomy ? 1 : fitScale(geometry.width, available, geometry.density);
@@ -376,6 +376,15 @@ export function FlowLane(p: {
     <div className="wf-lane" ref={rootRef} data-mode={mode} data-density={geometry.density}
          data-linear={linear ? "true" : "false"} data-scrolls={scrolls ? "true" : undefined}
          data-empty={steps.length ? undefined : "true"} data-testid="wf-lane">
+      {/* THE ARROWS SIT IN GUTTERS BESIDE THE STEPS, never over them, and only while the lane
+          scrolls. Not tab stops: keyboard focus moving along the steps already scrolls them. */}
+      <div className="wf-lane-row" data-gutters={scrolls ? "true" : undefined}>
+      {scrolls ? (
+        <button type="button" className="wf-lane-arrow" data-side="left" data-testid="wf-lane-left"
+                aria-controls={viewportId} aria-label="Scroll the steps left" tabIndex={-1}
+                data-off={!ends.left || undefined} disabled={!ends.left}
+                onClick={() => nudge(-1)}>‹</button>
+      ) : null}
       <div className="wf-lane-viewport" ref={viewportRef} id={viewportId}>
         <div className="wf-lane-sizer" style={{ width: sizerW, height: geometry.height * scale }}>
           <div className="wf-lane-canvas" ref={canvasRef} role="group" aria-label={p.label ?? "Workflow steps"}
@@ -465,17 +474,18 @@ export function FlowLane(p: {
       </div>
 
       {scrolls ? (
+        <button type="button" className="wf-lane-arrow" data-side="right" data-testid="wf-lane-right"
+                aria-controls={viewportId} aria-label="Scroll the steps right" tabIndex={-1}
+                data-off={!ends.right || undefined} disabled={!ends.right}
+                onClick={() => nudge(1)}>›</button>
+      ) : null}
+      {scrolls ? (
         <>
           <span className="wf-lane-fade" data-side="left" data-on={ends.left || undefined} aria-hidden />
           <span className="wf-lane-fade" data-side="right" data-on={ends.right || undefined} aria-hidden />
-          <button type="button" className="wf-lane-arrow" data-side="left" data-testid="wf-lane-left"
-                  aria-controls={viewportId} aria-label="Scroll the steps left" hidden={!ends.left}
-                  onClick={() => nudge(-1)}>‹</button>
-          <button type="button" className="wf-lane-arrow" data-side="right" data-testid="wf-lane-right"
-                  aria-controls={viewportId} aria-label="Scroll the steps right" hidden={!ends.right}
-                  onClick={() => nudge(1)}>›</button>
         </>
       ) : null}
+      </div>
 
       {scrolls ? (
         <Minimap viewport={viewportRef} controls={viewportId} width={geometry.width} scale={scale}

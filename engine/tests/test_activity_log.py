@@ -1014,3 +1014,24 @@ def test_the_step_scope_counts_what_it_lists():
                                        step_id="build")
     assert facets["sources"]["workflow_step"] == 1
     assert facets["sources"]["event"] == 2
+
+
+def test_a_first_attempt_is_not_a_retry(service):
+    """attempt is 1 on a step's first run: a clean first-time success is INFO, not WARN."""
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_first", attempt=1))
+    conn.add("workflow_step_runs", _workflow_step(step_run_id="wsr_second", attempt=2))
+    items = {i["id"]: i for i in _items(_call_list(service, conn, PROJECT_A, source="workflow_step"))}
+    assert items["wsr_first"]["level"] == "info"
+    assert items["wsr_second"]["level"] == "warn"
+
+
+def test_a_step_row_is_dated_when_it_ran_not_when_it_was_planned(service):
+    conn = FakeActivityConn()
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_late", created_at=T_OLD, started_at=T_MID, completed_at=T_NEW))
+    conn.add("workflow_step_runs", _workflow_step(
+        step_run_id="wsr_running", created_at=T_OLD, started_at=T_MID, completed_at=None))
+    items = {i["id"]: i for i in _items(_call_list(service, conn, PROJECT_A, source="workflow_step"))}
+    assert items["wsr_late"]["created_at"] == T_NEW.isoformat()
+    assert items["wsr_running"]["created_at"] == T_MID.isoformat()

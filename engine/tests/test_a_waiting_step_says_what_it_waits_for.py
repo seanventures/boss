@@ -79,3 +79,14 @@ def test_the_endpoint_uses_the_helper_rather_than_its_own_fallback():
     source = main.read_text(encoding="utf-8")
     assert "waiting_on_label(current)" in source
     assert 'approver_role") or "a decision"' not in source
+
+
+def test_a_code_task_that_is_not_the_build_is_not_called_the_build():
+    """Readiness extends the build's code task; its run said "waiting on the build to finish"
+    while the build step beside it read succeeded."""
+    plrr = {"capability": "plrr", "output": {"await": {"kind": "code_task", "id": "crun_2"}}}
+    assert waiting_on_label(plrr) == "the readiness fixes to finish"
+    other = {"output": {"capability": "document", "await": {"kind": "code_task", "id": "crun_3"}}}
+    assert waiting_on_label(other) == "the code work to finish"
+    build = {"capability": "build", "output": {"await": {"kind": "code_task", "id": "crun_1"}}}
+    assert waiting_on_label(build) == "the build to finish"
