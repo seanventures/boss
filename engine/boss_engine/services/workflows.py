@@ -5069,12 +5069,17 @@ def wait_step(
         # What keeps it full decides what to do: a per-minute cap spent continuously, or other
         # work holding the budget's headroom for a long time (model_failures.explain).
         held = "other work" in reason.lower()
+        if kind == "budget_wait":
+            then = ("See what is holding the budget in Budget, or raise the daily or monthly "
+                    "cap, then try it again." if held else
+                    "Raise the per-minute cap in Budget, then try it again.")
+        else:
+            # Not the budget: a busy model source or a secret store that kept not answering.
+            then = "Look at what is using it (Running work), then try it again."
         return fail_step(
             connection, project_id=project_id, step_run_id=step_run_id, worker_id=worker_id,
             error=(f"{reason.rstrip('.')} — still not started after {MAX_STEP_WAITS} tries. "
-                   + ("See what is holding the budget in Budget, or raise the daily or monthly "
-                      "cap, then try it again." if held else
-                      "Raise the per-minute cap in Budget, then try it again.")),
+                   + then),
             retryable=False)
     delay = max(1, int(wait_seconds))
     wake_at = now_utc() + timedelta(seconds=delay)

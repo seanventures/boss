@@ -26,7 +26,7 @@ from typing import Any, Callable, Optional
 
 from ..config import Settings
 from .core import create_blocking_decision, emit_event
-from .model_failures import is_login_rejected, mark_login
+from .model_failures import is_login_rejected, mark_login, waiting_for
 from .typed_decision_spend import (
     _result_of,
     _uncertain,
@@ -50,8 +50,8 @@ class DiscoverySpendRefused(RuntimeError):
     """Budget or model capacity refused the stage before anything was called.
 
     `transient` marks a refusal that clears by itself — the per-minute burst cap on actual
-    spend, or headroom held by other work's reservations — so the job retries later instead of
-    ending the run."""
+    spend, headroom held by other work's reservations, or every lease on the model source held
+    by other work — so the run waits and continues instead of ending."""
 
     def __init__(self, message: str, *, transient: bool = False) -> None:
         super().__init__(message)
@@ -222,8 +222,12 @@ class DiscoveryStageSpend:
             )
         except ModelCapacityDeniedError as denied:
             self.budget.release(connection, self.project_id, reservation_id, str(denied))
-            self._emit(connection, "discovery.spend_refused", {"stage": stage, "message": str(denied)})
-            return {"refused": str(denied)}
+            # Every lease on the source held by other work is a QUEUE, not a verdict: the run
+            # waits its turn (model_failures.waiting_for) instead of failing.
+            transient = waiting_for(denied) is not None
+            self._emit(connection, "discovery.spend_refused",
+                       {"stage": stage, "message": str(denied), "transient": transient})
+            return {"refused": str(denied), "transient": transient}
         if acquired.get("duplicate") or not acquired.get("lease_token"):
             self.budget.release(connection, self.project_id, reservation_id,
                                 "Model lease already existed for this stage.")

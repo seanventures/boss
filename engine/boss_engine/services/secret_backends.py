@@ -36,6 +36,38 @@ from ..ports import sql
 class SecretUnavailable(RuntimeError):
     """A reference exists but the value cannot be obtained. Carries no secret material."""
 
+    #: Whether asking again shortly could answer differently: the store was unreachable, timed
+    #: out, rate-limited the call (429) or failed on its side (5xx).
+    transient = False
+
+
+class SecretNotFound(SecretUnavailable):
+    """The store ANSWERED, and it does not hold this key.
+
+    Told apart from every other `SecretUnavailable` because the two mean opposite things to a
+    reader. "Absent" is an answer; "the store did not answer" is not one. They used to be the
+    same exception, so a credential lookup swallowed a store that blipped under load as "there
+    is no credential" — and the Claude CLI was started with no login and said "Not logged in"
+    about a subscription that was connected (boss-1, 2026-10-04: one call of many concurrent
+    ones, between successes on either side).
+    """
+
+
+class SecretStoreUnreachable(SecretUnavailable):
+    """The store did not answer this time: network, timeout, 429 or 5xx. Asking again may."""
+
+    transient = True
+
+
+def _http_failure(store: str, method: str, path: str, code: int) -> SecretUnavailable:
+    """The one reading of a store's HTTP status: 404 is an answer, 429/5xx a blip, else broken."""
+    message = f"{store} returned {code} for {method} {path}"
+    if code == 404:
+        return SecretNotFound(message)
+    if code == 429 or code >= 500:
+        return SecretStoreUnreachable(message)
+    return SecretUnavailable(message)
+
 
 class SecretBackend(Protocol):
     kind: str
@@ -55,7 +87,7 @@ class EnvBackend:
     def get(self, key: str) -> str:
         value = os.environ.get(key)
         if not value:
-            raise SecretUnavailable(f"environment variable {key} is not set")
+            raise SecretNotFound(f"environment variable {key} is not set")
         return value
 
     def put(self, key: str, value: str) -> None:
@@ -107,7 +139,7 @@ class FileBackend:
     def get(self, key: str) -> str:
         path = self._resolve(key)
         if not os.path.isfile(path):
-            raise SecretUnavailable(f"{key} does not exist")
+            raise SecretNotFound(f"{key} does not exist")
         if os.stat(path).st_mode & 0o077:
             raise SecretUnavailable(f"{key} is group/world readable; refusing to use it")
         with open(path, "r", encoding="utf-8") as handle:
@@ -161,10 +193,9 @@ class PlatformSecretStoreBackend:
                 body = resp.read().decode() or "{}"
         except urllib.error.HTTPError as exc:
             # The status is safe to surface; the body may echo the request, so it is not.
-            raise SecretUnavailable(
-                f"platform secret store returned {exc.code} for {method} {path}") from None
+            raise _http_failure("platform secret store", method, path, exc.code) from None
         except Exception as exc:  # noqa: BLE001
-            raise SecretUnavailable(
+            raise SecretStoreUnreachable(
                 f"platform secret store unreachable: {type(exc).__name__}") from None
         try:
             return json.loads(body)
@@ -175,7 +206,7 @@ class PlatformSecretStoreBackend:
         data = self._call("GET", f"/secret?key={urllib.parse.quote(key)}")
         value = data.get("value") if isinstance(data, dict) else None
         if not value:
-            raise SecretUnavailable(f"{key} is not present in the platform secret store")
+            raise SecretNotFound(f"{key} is not present in the platform secret store")
         return value
 
     def put(self, key: str, value: str) -> None:
@@ -199,7 +230,8 @@ class PlatformSecretStoreBackend:
             # and the credential lands in Postgres instead.
             return {"ok": True, "kind": self.kind, "writable": True, "durable": True}
         except SecretUnavailable as exc:
-            return {"ok": False, "kind": self.kind, "error": str(exc)}
+            return {"ok": False, "kind": self.kind, "error": str(exc),
+                    "transient": exc.transient}
 
 
 
@@ -263,11 +295,10 @@ class InfisicalBackend:
         except urllib.error.HTTPError as exc:
             # The status is safe to surface; the body can echo the request, and the request
             # carried either the client secret or the secret value itself.
-            raise SecretUnavailable(
-                f"infisical returned {exc.code} for {method} {urllib.parse.urlsplit(url).path}"
-            ) from None
+            raise _http_failure("infisical", method, urllib.parse.urlsplit(url).path,
+                                exc.code) from None
         except Exception as exc:  # noqa: BLE001
-            raise SecretUnavailable(
+            raise SecretStoreUnreachable(
                 f"infisical unreachable: {type(exc).__name__}") from None
         try:
             return json.loads(body)
@@ -313,7 +344,7 @@ class InfisicalBackend:
         secret = (data or {}).get("secret") or data or {}
         value = secret.get("secretValue") if isinstance(secret, dict) else None
         if not value:
-            raise SecretUnavailable(f"{key} is not present in infisical")
+            raise SecretNotFound(f"{key} is not present in infisical")
         return value
 
     def put(self, key: str, value: str) -> None:
@@ -357,7 +388,8 @@ class InfisicalBackend:
             return {"ok": True, "kind": self.kind, "writable": True, "durable": True,
                     "keys": len(keys), "environment": self._environment, "path": self._path}
         except SecretUnavailable as exc:
-            return {"ok": False, "kind": self.kind, "error": str(exc)}
+            return {"ok": False, "kind": self.kind, "error": str(exc),
+                    "transient": exc.transient}
 
 
 def _infisical_token(settings: Settings) -> str:
@@ -432,7 +464,7 @@ class LocalVaultBackend:
     def get(self, key: str) -> str:
         path = self._path(key)
         if not os.path.isfile(path):
-            raise SecretUnavailable(f"{key} is not present in local_vault")
+            raise SecretNotFound(f"{key} is not present in local_vault")
         if os.stat(path).st_mode & 0o077:
             raise SecretUnavailable(f"{key} vault file is group/world readable")
         with open(path, "rb") as handle:
@@ -519,11 +551,9 @@ class VaultKvBackend:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 body = resp.read().decode() or "{}"
         except urllib.error.HTTPError as exc:
-            raise SecretUnavailable(
-                f"vault returned {exc.code} for {method} {path}"
-            ) from None
+            raise _http_failure("vault", method, path, exc.code) from None
         except Exception as exc:  # noqa: BLE001
-            raise SecretUnavailable(
+            raise SecretStoreUnreachable(
                 f"vault unreachable: {type(exc).__name__}"
             ) from None
         try:
@@ -537,7 +567,7 @@ class VaultKvBackend:
         payload = (data.get("data") or {}).get("data") or {}
         value = payload.get("value") or payload.get("data")
         if not value:
-            raise SecretUnavailable(f"{key} is not present in vault")
+            raise SecretNotFound(f"{key} is not present in vault")
         return str(value)
 
     def put(self, key: str, value: str) -> None:
@@ -568,7 +598,8 @@ class VaultKvBackend:
             return {"ok": True, "kind": self.kind, "writable": True, "durable": True,
                     "addr": self._addr}
         except SecretUnavailable as exc:
-            return {"ok": False, "kind": self.kind, "error": str(exc)}
+            return {"ok": False, "kind": self.kind, "error": str(exc),
+                    "transient": exc.transient}
 
 
 _EPHEMERAL_MASTER: Optional[bytes] = None
@@ -695,7 +726,7 @@ class DatabaseBackend:
             row = c.execute(sql("SELECT ciphertext FROM secret_material WHERE ref_key = :k"),
                             {"k": key}).mappings().first()
         if not row:
-            raise SecretUnavailable(f"{key} does not exist")
+            raise SecretNotFound(f"{key} does not exist")
         blob = bytes(row["ciphertext"])
         try:
             return _aes_gcm_decrypt(self._key, blob).decode("utf-8")
@@ -936,8 +967,21 @@ def default_secret_backend(settings: Settings) -> str:
     wizard that refuses to complete is worse than one that completes and can be improved, and
     because the alternative an operator falls back to is a plaintext env var anyway.
     """
+    return pick_default_backend(settings)[0]
+
+
+def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
+    """`default_secret_backend`, and the CONFIGURED stores it passed over because they did not
+    answer this time (unreachable, timed out, 429, 5xx).
+
+    The choice is made per call, by asking each store in turn whether it is healthy. So one
+    blip of a configured Infisical sends that call to Postgres — which does not hold what was
+    written to Infisical. For a write that is the documented fallback; for a READ it means
+    "absent" is not an answer, and the reader needs to know that (cli_harness.stored_credential).
+    """
     if operator_chosen_backend() == "database":
-        return "database"
+        return "database", []
+    passed_over: list[str] = []
     for kind in _BACKEND_PREFERENCE:
         try:
             impl = backend_for(kind, settings)
@@ -945,12 +989,15 @@ def default_secret_backend(settings: Settings) -> str:
             continue
         try:
             health = impl.health()
-        except Exception:  # noqa: BLE001 — an unhealthy backend is simply not this one
+        except Exception as exc:  # noqa: BLE001 — an unhealthy backend is simply not this one
+            passed_over.append(f"{kind}: {type(exc).__name__}")
             continue
         if health.get("ok") is False:
+            if health.get("transient"):
+                passed_over.append(f"{kind}: {health.get('error') or 'did not answer'}")
             continue
-        return kind
-    return "database"
+        return kind, passed_over
+    return "database", passed_over
 
 
 def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings) -> str:

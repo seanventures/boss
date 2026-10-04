@@ -115,9 +115,13 @@ def _build_cmd() -> list[str]:
         return _Proc()
 
     subprocess.run = fake
+    adapter = _adapter()
+    # The argv is the point here, not the login: no secret store is asked (a unit test has
+    # none, and one that does not answer now stops the call — cli_harness.claude_login_token).
+    adapter._child_env = lambda: {}
     try:
         try:
-            _adapter()._invoke("hello")
+            adapter._invoke("hello")
         except Exception:
             pass                                   # parsing the stub result is not the point
     finally:
