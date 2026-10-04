@@ -763,9 +763,11 @@ def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
     return out
 
 
-#: What a roster card says for an agent with no work on record. Not "No work yet": the record
-#: read is the last SCORE_WINDOW_HOURS, and an agent busy before that has worked.
-NO_WORK_YET = f"No work in {SCORE_WINDOW_HOURS // 24} days"
+#: What a roster card says for an agent with no work on record (agents-home spec §3.3). It said
+#: "No work in 30 days" because only the score window was read, and an agent busy before it
+#: had worked. An idle agent with ANY signed work now says its last act instead (`Last: …`,
+#: from presence, which reads the whole ledger), so this is left for agents that have none.
+NO_WORK_YET = "No work yet"
 
 
 def _status_of(step: Optional[dict]) -> tuple[str, str]:
