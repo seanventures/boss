@@ -3,8 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { InfraScreen } from "../components/v2/InfraScreen";
-import { SettingsScreen } from "../components/v2/SettingsScreen";
-import type { InfraView, V2Target, SettingsView } from "../lib/v2/platform";
+import type { InfraView, V2Target } from "../lib/v2/platform";
 
 /**
  * Infra & Models, Settings. (The v2 Workflows screen is retired: /v2/boss opens the console
@@ -24,18 +23,6 @@ const infra = (over: Partial<InfraView> = {}): InfraView => ({
   integrations: [],
   load_recorded: false,
   load_note: "BOSS records host verification, not utilisation. There is no load to show.",
-  apiReachable: true,
-  ...over,
-});
-
-const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
-  project_id: "boss-dogfood",
-  roles: [{ key: "cto", name: "CTO", autonomy_level: 2, trust_score: 60 }],
-  repos: [{ name: "example-user/boss-sandbox", runs: 40, prs: 12, last_run_at: "2026-08-20T00:00:00Z" }],
-  unavailable: [
-    { id: "sso", label: "SSO & identity", reason: "This deployment authenticates with an API key." },
-    { id: "members", label: "Members & seats", reason: "BOSS models AGENT roles, not human seats." },
-  ],
   apiReachable: true,
   ...over,
 });
@@ -91,44 +78,6 @@ describe("Infra & Models", () => {
     expect(out).toMatch(/external/);
   });
 });
-
-describe("Settings", () => {
-  const html = (v: SettingsView) => renderToStaticMarkup(<SettingsScreen view={v} />);
-
-  it("names what this deployment does not have, with reasons", () => {
-    // An empty SSO form implies SSO is configurable here and merely unconfigured.
-    const out = html(settings());
-    expect(out).toContain('data-testid="v2-unavailable-sso"');
-    expect(out).toContain('data-testid="v2-unavailable-members"');
-    expect(out).toMatch(/authenticates with an API key/);
-  });
-
-  it("renders no form for anything it cannot configure", () => {
-    // A settings page full of controls that cannot act teaches the operator the console is
-    // decorative — which then applies to the controls that do work.
-    const out = html(settings());
-    expect(out).not.toMatch(/<input/);
-    expect(out).not.toMatch(/<form/);
-  });
-
-  it("calls them agent roles, not members", () => {
-    const out = html(settings());
-    expect(out).toMatch(/Agent roles/);
-    expect(out).toContain('data-testid="v2-role-cto"');
-  });
-
-  it("repos come from what work actually targeted", () => {
-    const out = html(settings());
-    expect(out).toContain("example-user/boss-sandbox");
-    expect(out).toMatch(/12<\/b> PRs opened/);
-  });
-
-  it("an unreachable API does not imply an unconfigured company", () => {
-    expect(html(settings({ apiReachable: false, roles: [], repos: [], unavailable: [] })))
-      .toContain('data-testid="v2-settings-unreachable"');
-  });
-});
-
 
 // ---------------------------------------------------------------------------
 // Apps and where they deploy

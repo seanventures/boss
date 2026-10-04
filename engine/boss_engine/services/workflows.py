@@ -79,6 +79,11 @@ CONTROL_KINDS = {
 }
 #: Whose workflow a definition is. See the column comment in db/schema.sql.
 NAMESPACES = {"system", "product"}
+
+#: Product workflows BOSS runs for the operator but does not offer as templates: Repo and
+#: models' Try it (`setup_first_pr`). Product namespace so the capability runner ticks them and
+#: their runs list with the operator's other work; hidden from the Library and its counts.
+HIDDEN_PRODUCT_KEYS: tuple[str, ...] = ("setup_first_pr",)
 SYSTEM_NAMESPACE = "system"
 PRODUCT_NAMESPACE = "product"
 
@@ -1242,6 +1247,10 @@ def list_definitions(
         # COALESCE, because rows written before the column existed carry NULL until the default
         # is applied — and a system workflow invisible to the system list is worse than noise.
         clause += " AND COALESCE(d.namespace, 'system') = :namespace"
+        if namespace == PRODUCT_NAMESPACE:
+            # BOSS-owned customer work that is not a template: run like any product workflow
+            # (the capability runner ticks product runs only), never offered in the Library.
+            clause += " AND NOT (d.workflow_key = ANY(:hidden_keys))"
     rows = connection.execute(
         text(
             f"""
@@ -1300,7 +1309,9 @@ def list_definitions(
             ORDER BY d.updated_at DESC, d.workflow_key
             """
         ),
-        {"project_id": project_id, **({"namespace": namespace} if namespace else {})},
+        {"project_id": project_id, **({"namespace": namespace} if namespace else {}),
+         **({"hidden_keys": list(HIDDEN_PRODUCT_KEYS)}
+            if namespace == PRODUCT_NAMESPACE else {})},
     ).mappings().all()
     # Labels for the customer's own steps, resolved once for the whole list rather than per
     # workflow: a project has a handful of them and every workflow draws from the same set.

@@ -44,10 +44,10 @@ const DATA: CommandCenterData = commandCenterFrom({
       at: null },
     { kind: "approval", decision_kind: "refusal", title: "Model capacity refused",
       detail: "No model had credit.", what_to_do: "Add credit, then Retry the step.",
-      fix_area: "setup", fix_label: "Open Repo and model", decision_id: "dec_9",
+      fix_area: "setup", fix_label: "Fix in Repo and models", decision_id: "dec_9",
       actions: ["reject"], at: null },
     { kind: "readiness", title: "Connect a repository", detail: "", fix_area: "setup",
-      fix_label: "Open Repo and model", actions: [], at: null },
+      fix_focus: "repository", fix_label: "Fix in Repo and models", actions: [], at: null },
   ],
   recent: [{ run_id: "wfr_done", workflow_name: "Standard Product Delivery", subject: "Bug box",
              outcome: "succeeded", finished_at: "2026-10-01T09:00:00+00:00", error: null }],
@@ -99,12 +99,13 @@ describe("what needs you", () => {
 
   it("a refusal says what to fix and links there, not to an Approve button", () => {
     expect(html).toContain("Add credit, then Retry the step.");
-    expect(html).toContain("Open Repo and model");
+    expect(html).toContain("Fix in Repo and models");
     expect(html).toContain("area=setup");
   });
 
-  it("a setup gap is listed", () => {
+  it("a setup gap is listed, and lands on its row in Repo and models", () => {
     expect(html).toContain("Connect a repository");
+    expect(html).toContain("area=setup&amp;focus=repository");
   });
 });
 

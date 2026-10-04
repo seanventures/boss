@@ -132,6 +132,28 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-head-meta"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-advance"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-notice"),
+    # Repo and models (setup spec §7.7): the board, its rows and its connect forms.
+    ("setup_first_run", "app/setup/setup-board.tsx", "su-board"),
+    ("setup_first_run", "app/setup/setup-board.tsx", "su-verdict"),
+    ("setup_first_run", "app/setup/repository-row.tsx", "su-token-input"),
+    ("setup_first_run", "app/setup/repo-picker.tsx", "su-repo-option-${r.full_name}"),
+    ("setup_first_run", "app/setup/repo-picker.tsx", "su-repo-connect"),
+    ("setup_first_run", "app/setup/repository-row.tsx", "su-repo-pill"),
+    ("setup_first_run", "app/setup/add-model-drawer.tsx", "su-tile-${t.tile}"),
+    ("setup_first_run", "app/setup/add-model-drawer.tsx", "su-provider-${c.provider}"),
+    ("setup_first_run", "app/setup/add-model-drawer.tsx", "su-model-base-url"),
+    ("setup_first_run", "app/setup/add-model-drawer.tsx", "su-model-key"),
+    ("setup_first_run", "app/setup/add-model-drawer.tsx", "su-model-name"),
+    ("setup_first_run", "app/setup/add-model-drawer.tsx", "su-model-connect"),
+    ("setup_first_run", "app/setup/models-row.tsx", "su-model-pill"),
+    ("setup_first_run", "app/setup/try-row.tsx", "su-try-input"),
+    ("setup_first_run", "app/setup/try-row.tsx", "su-try-open"),
+    ("setup_first_run", "app/setup/try-row.tsx", "su-try-progress"),
+    ("setup_replace_token", "app/setup/repository-row.tsx", "su-repo-menu"),
+    ("setup_replace_token", "app/setup/repository-row.tsx", "su-menu-replace"),
+    ("setup_replace_token", "app/setup/repository-row.tsx", "su-repo-pill"),
+    ("setup_deep_links", "app/setup/models-row.tsx", "su-model-drawer"),
+    ("setup_deep_links", "app/setup/setup-row.tsx", "su-row-${row}"),
 )
 
 # (journey, file under apps/web, testid, what the console is missing). R2 says an agent is given
@@ -916,6 +938,84 @@ def advance_now(page, ctx: Context, goto: Callable[[str], None]) -> str:
     return f"'Advance now' said: {said[:160]}"
 
 
+# ----------------------------------------------------------------------------- Repo and models
+SETUP_FULL_TOKEN = "ghp_e2e_full"                     # stubs/github_probes.py profiles
+SETUP_READ_ONLY_TOKEN = "ghp_e2e_contents_read_only"
+
+
+def _setup_pill(page, testid: str, pattern: str, *, timeout_s: float = 90) -> str:
+    return _wait_for_text(page, testid, pattern, timeout_s=timeout_s)
+
+
+def setup_first_run(page, ctx: Context, goto: Callable[[str], None]) -> str:
+    """J1: a fresh install → token → pick a repository → three checks → a model → Try it.
+
+    Pass: every check is ✓, the model row says Working after one governed question, the header
+    says Ready, and Open a PR ends at `PR #n ↗` linking to a pull request the fake opened.
+    """
+    goto("setup")
+    _visible(page, "su-board")
+    token = _visible(page, "su-token-input")
+    token.fill(SETUP_FULL_TOKEN)
+    token.press("Enter")
+    _visible(page, "su-repo-option-e2e/app").click()
+    _visible(page, "su-repo-connect").click()
+    said = _setup_pill(page, "su-repo-pill", r"working")
+    if token.is_visible() and token.input_value():
+        raise JourneyFailed("the token field still held the token after Connect")
+    # ② a model: the scripted model stub as an OpenAI-compatible endpoint ("Other").
+    if not ctx.target or not getattr(ctx.target, "model_stub_url", None):
+        raise JourneyFailed("this walk has no scripted model to connect")
+    _visible(page, "su-tile-api_key").click()
+    _visible(page, "su-provider-custom").click()
+    _visible(page, "su-model-base-url").fill(str(ctx.target.model_stub_url).rstrip("/") + "/v1")
+    _visible(page, "su-model-key").fill("sk-stub-ok")
+    _visible(page, "su-model-name").fill("e2e-stub")
+    _visible(page, "su-model-connect").click()
+    model = _setup_pill(page, "su-model-pill", r"working")
+    _setup_pill(page, "su-verdict", r"ready")
+    _visible(page, "su-try-input").fill(f"Fix the typo in README ({ctx.stamp})")
+    _visible(page, "su-try-open").click()
+    _setup_pill(page, "su-try-progress", r"planning|building|testing|PR #")
+    # THE FINISH LINE IS THE PULL REQUEST, not "Planning…": a Try it that never left Planning
+    # (its run was never ticked) passed this journey once.
+    progress = _setup_pill(page, "su-try-progress", r"PR #\d+", timeout_s=RUN_TIMEOUT_SECONDS)
+    pr = page.locator('[data-testid="su-try-pr"]').first.get_attribute("href") or ""
+    if not re.search(r"/pull/\d+$", pr):
+        raise JourneyFailed(f"Try it said {progress!r} but its link is {pr!r}")
+    _setup_pill(page, "su-verdict", r"ready")
+    return f"repository {said}; model {model}; Try it: {progress} ({pr})"
+
+
+def setup_replace_token(page, ctx: Context, goto: Callable[[str], None]) -> str:
+    """J4: a token without Contents: write → Can't write → Replace token with a full one → the
+    SAME row says Working (no duplicate connection, no "already has" error)."""
+    goto("setup")
+    _visible(page, "su-repo-menu").click()
+    _visible(page, "su-menu-replace").click()
+    token = _visible(page, "su-token-input")
+    token.fill(SETUP_READ_ONLY_TOKEN)
+    token.press("Enter")
+    _visible(page, "su-repo-option-e2e/site").click()
+    _visible(page, "su-repo-connect").click()
+    page.wait_for_timeout(1500)
+    rows = page.locator('[data-testid="su-repo-pill"]').all_inner_texts()
+    if not any(re.search(r"can't write", r, re.I) for r in rows):
+        raise JourneyFailed(f"a read-only token's repository said {rows}, not Can't write")
+    return f"read-only token: {rows}"
+
+
+def setup_deep_links(page, ctx: Context, goto: Callable[[str], None]) -> str:
+    """J11: ?area=setup&add=openai opens Add a model on OpenAI; focus=jobs lands on the row."""
+    goto("setup&add=openai")
+    _visible(page, "su-model-drawer")
+    goto("setup&focus=jobs")
+    focused = page.locator('[data-testid="su-row-jobs"][data-focused="true"]').count()
+    if not focused:
+        raise JourneyFailed("focus=jobs did not land on Who does what")
+    return "add=openai opened the drawer; focus=jobs landed on its row"
+
+
 # In order: each later journey uses what the earlier ones made (the skill, the server, the agent).
 JOURNEYS: tuple[tuple[str, str, Callable[..., str]], ...] = (
     ("R1", "skill_create", skill_create),
@@ -926,6 +1026,9 @@ JOURNEYS: tuple[tuple[str, str, Callable[..., str]], ...] = (
     ("R4", "step_agents", step_agents),
     ("R6", "workflow_build", workflow_build),
     ("R6", "advance_now", advance_now),
+    ("SU", "setup_first_run", setup_first_run),
+    ("SU", "setup_replace_token", setup_replace_token),
+    ("SU", "setup_deep_links", setup_deep_links),
 )
 
 

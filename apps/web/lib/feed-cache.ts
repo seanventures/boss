@@ -31,7 +31,27 @@
  * without a rebuild.
  */
 
-type Entry = { at: number; response: Response };
+/** A response read once and kept as bytes: every caller gets its OWN fresh Response.
+ *  Cloning one shared Response raced — a joiner cloning while another reader drained it got
+ *  "Response.clone: Body has already been consumed", which reached the console as a red 502. */
+type Stored = { status: number; statusText: string; headers: [string, string][]; body: ArrayBuffer };
+type Entry = { at: number; stored: Stored };
+
+function fresh(stored: Stored): Response {
+  // 204/304 cannot carry a body.
+  const body = stored.status === 204 || stored.status === 304 ? null : stored.body.slice(0);
+  return new Response(body, { status: stored.status, statusText: stored.statusText,
+                              headers: stored.headers });
+}
+
+async function store(response: Response): Promise<Stored> {
+  return { status: response.status, statusText: response.statusText,
+           headers: [...response.headers.entries()], body: await response.arrayBuffer() };
+}
+
+/** Control-plane reads that are never reused: state a write changes and the operator watches
+ *  for (Repo and models re-reads after Replace token, a check or a Try it run). */
+const NEVER_REUSED = ["/v1/setup"];
 
 /**
  * Per-URL durations, so a slow feed can be NAMED.
@@ -80,7 +100,7 @@ export function installFeedCache(apiUrl: string): void {
   g.__bossFeedCache = true;
 
   const original = g.fetch.bind(globalThis);
-  const inFlight = new Map<string, Promise<Response>>();
+  const inFlight = new Map<string, Promise<Stored>>();
   const completed = new Map<string, Entry>();
 
   const evict = () => {
@@ -100,7 +120,8 @@ export function installFeedCache(apiUrl: string): void {
 
     // Only idempotent reads of the control plane. A POST that deploys something must never be
     // collapsed into another caller's POST, and a cached DELETE would be a genuine hazard.
-    if (ttl === 0 || method !== "GET" || !url.startsWith(apiUrl)) {
+    if (ttl === 0 || method !== "GET" || !url.startsWith(apiUrl)
+        || NEVER_REUSED.some((path) => url.slice(apiUrl.length).startsWith(path))) {
       return original(input as RequestInfo, init);
     }
 
@@ -111,14 +132,14 @@ export function installFeedCache(apiUrl: string): void {
     const key = url;
 
     const hit = completed.get(key);
-    if (hit && Date.now() - hit.at < ttl) return hit.response.clone();
+    if (hit && Date.now() - hit.at < ttl) return fresh(hit.stored);
 
     const flight = inFlight.get(key);
-    if (flight) return (await flight).clone();
+    if (flight) return fresh(await flight);
 
     const started = Date.now();
-    const promise = original(input as RequestInfo, init)
-      .then((response) => {
+    const promise: Promise<Stored> = original(input as RequestInfo, init)
+      .then(async (response) => {
         const path = key.replace(apiUrl, "");
         const table = timings();
         const prev = table.get(path);
@@ -133,17 +154,18 @@ export function installFeedCache(apiUrl: string): void {
         if (table.size > 300) table.clear();
         // Only successful responses are reusable. Caching a 500 for five seconds would turn a
         // blip into an outage that outlives it.
+        const stored = await store(response);
         if (response.ok) {
-          completed.set(key, { at: Date.now(), response: response.clone() });
+          completed.set(key, { at: Date.now(), stored });
           if (completed.size > 500) evict();
         }
-        return response;
+        return stored;
       })
       .finally(() => {
         inFlight.delete(key);
       });
 
     inFlight.set(key, promise);
-    return (await promise).clone();
+    return fresh(await promise);
   }) as typeof fetch;
 }

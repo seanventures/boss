@@ -1,24 +1,17 @@
-"""First-run setup: connect a repository, connect a model, and say what is still missing.
+"""Connecting models and coding agents: the credential stores, the proofs, the provider list.
 
-WHY THIS EXISTS AS ITS OWN THING. Every piece below already had an endpoint — GitHub
-connections, entitlement sources, credential upload, connection tests. What did not exist was an
-answer to "I just installed this, what do I do?", and the honest answer was: set two environment
-variables on the API container, restart it, then call four endpoints in the right order with the
-right ids. That is not onboarding. For open source it is where the evaluation ends.
-
-So this module owns the ORDER and the VERDICT: it knows which steps configure an install and
-names precisely what is missing. Community stores model keys as unverified until a governed
-model run can prove them. Nothing here is a new capability; it is the sequence somebody would
-otherwise have to learn from the source.
+Repo and models' state lives in `setup_view` (one server-assembled view, no network) and its
+actions in `setup_actions` (one connect per object, one checks endpoint). This module keeps
+what both build on: the provider catalogue, which engines a project has connected
+(`connected_engines`), storing a subscription's credential, and `governed_proof` — one real
+model turn, reserved against the budget and receipted, in every edition.
 """
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path as pathlib_Path
-import urllib.error
-import urllib.request
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 from sqlalchemy import text
@@ -74,6 +67,24 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "example_model": "grok-4.7",
         "key_url": "https://console.x.ai/team/default/api-keys",
         "kind": "api_key",
+    },
+    # LOCAL MODELS. OpenAI-compatible servers on the operator's own hardware: no key, no
+    # per-call money. `setup-ollama` / `setup-vllm` are the lanes' own sources.
+    "ollama": {
+        "label": "Ollama",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api": "openai",
+        "example_model": "",
+        "key_url": "",
+        "kind": "local",
+    },
+    "vllm": {
+        "label": "Local model",
+        "base_url": "",
+        "api": "openai",
+        "example_model": "",
+        "key_url": "",
+        "kind": "local",
     },
     "custom": {
         "label": "Anything OpenAI-compatible",
@@ -138,43 +149,11 @@ class SetupError(RuntimeError):
     """Something the operator can fix, phrased for them."""
 
 
-_PAID_EDITIONS = frozenset({
-    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
-})
-_LIVE_MODEL_PROBE_DENIAL = (
-    "Live model key verification is paused in Community until it has a budget reservation, "
-    "leased job, and cost receipt. The key can be saved without a live test."
-)
-
-
 def coding_agent_live_proof_available(settings: Settings) -> bool:
-    """Every edition proves a coding agent with one live turn before calling it connected.
-
-    Community used to skip the proof because the turn was not reserved or receipted — so a
-    wrong Claude credential (on boss-1, something other than the setup token had been pasted)
-    was "connected" and surfaced hours later as "401 Invalid bearer token" inside a workflow.
-    Community now runs the proof through `governed_proof`: budget reserved and receipt opened,
-    both committed, before the turn; settled at its actual cost after.
-    """
+    """Every edition proves a coding agent with one governed live turn before calling it
+    connected (`governed_proof`: reserved and receipted before, settled after)."""
     return True
 
-
-def _edition_is_paid(settings: Settings) -> bool:
-    edition = str(getattr(settings, "boss_edition", "community") or "community")
-    return edition.strip().lower() in _PAID_EDITIONS
-
-
-def live_model_probe_allowed(settings: Settings) -> bool:
-    """Unknown editions fail closed for the spendy provider request."""
-    edition = str(getattr(settings, "boss_edition", "community") or "community")
-    return edition.strip().lower() in _PAID_EDITIONS
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Keep a provider probe at the URL the authorized operator supplied."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        return None
 
 
 def _provider_endpoint(url_base: str, suffix: str) -> str:
@@ -205,60 +184,6 @@ def model_key_details(*, provider: str, base_url: str = "", model: str = "") -> 
     suffix = "/messages" if spec.get("api") == "anthropic" else "/chat/completions"
     return {"model": name, "endpoint": _provider_endpoint(url_base, suffix),
             "base_url": url_base}
-
-
-def verify_model_key(
-    *, settings: Settings, provider: str, api_key: str, base_url: str = "", model: str = "",
-    timeout: int = 20,
-) -> dict[str, Any]:
-    """Spend one token proving the key works in editions allowed to use this probe.
-
-    A wizard that stores a key and reports success has verified that the operator can type. The
-    first real evidence otherwise arrives when a build fails an hour later, by which point the
-    key is the last thing anyone suspects. One tiny completion costs a fraction of a cent and
-    turns "saved" into "working".
-    """
-    if not live_model_probe_allowed(settings):
-        raise SetupError(_LIVE_MODEL_PROBE_DENIAL)
-    spec = PROVIDERS.get(provider) or PROVIDERS["custom"]
-    details = model_key_details(provider=provider, base_url=base_url, model=model)
-    name = details["model"]
-    endpoint = details["endpoint"]
-    url_base = details["base_url"]
-
-    if spec.get("api") == "anthropic":
-        body = {"model": name, "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}]}
-        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
-                   "content-type": "application/json"}
-    else:
-        body = {"model": name, "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}]}
-        headers = {"Authorization": f"Bearer {api_key}",
-                   "content-type": "application/json"}
-
-    request = urllib.request.Request(
-        endpoint, data=json.dumps(body).encode(), headers=headers, method="POST")
-    opener = urllib.request.build_opener(_NoRedirect)
-    try:
-        with opener.open(request, timeout=timeout) as response:
-            return {"ok": True, "status": response.status, "model": name,
-                    "endpoint": endpoint}
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode(errors="ignore")[:400]
-        # SAY WHICH KIND OF WRONG. "Setup failed" sends somebody to re-read their key when the
-        # real problem was a model name their account cannot reach.
-        hint = {
-            401: "that key was rejected — check it was copied whole.",
-            403: "the key is valid but not allowed to use that model.",
-            404: f"no model called {name!r} at {url_base} — check the model name.",
-            429: "the key works; the provider is rate-limiting right now.",
-        }.get(error.code, "")
-        return {"ok": False, "status": error.code, "model": name, "endpoint": endpoint,
-                "error": hint or detail, "detail": detail}
-    except urllib.error.URLError as error:
-        return {"ok": False, "status": 0, "model": name, "endpoint": endpoint,
-                "error": f"could not reach {url_base}: {error.reason}"}
 
 
 def list_coding_agents(settings: Settings) -> list[dict[str, Any]]:
@@ -302,10 +227,12 @@ def connected_engines(
                       if spec.entitlement_source_id}
     by_entitlement.setdefault("anthropic_claude_code", "claude_code")
     # What the API-key route records, `setup-<provider>`, mapped to the lane that spends it.
-    # openai and "anything OpenAI-compatible" are both the engine-owned native agent.
+    # openai and "anything OpenAI-compatible" are both the engine-owned native agent; a local
+    # model connected in Repo and models is `setup-ollama` or `setup-vllm`.
     by_api_provider = {"openai": "native", "custom": "native", "anthropic": "claude_code",
                        "openrouter": "openrouter", "groq": "groq", "deepseek": "deepseek",
-                       "gemini": "gemini", "xai": "xai", "azure": "azure"}
+                       "gemini": "gemini", "xai": "xai", "azure": "azure",
+                       "ollama": "ollama", "vllm": "vllm"}
 
     found: dict[str, dict[str, Any]] = {}
 
@@ -313,9 +240,13 @@ def connected_engines(
         if engine in known and engine not in found:
             found[engine] = {"engine": engine, "why": why, **extra}
 
+    from .provider_limits import is_available
+
+    deferred: dict[str, tuple] = {}
     rows = connection.execute(
         text("SELECT source_id, provider, connection_status, updated_at, "
-             "       credential_secret_ref_id, observed_capacity, limit_shape, cost_mode "
+             "       credential_secret_ref_id, observed_capacity, limit_shape, cost_mode, "
+             "       connection_metadata "
              "FROM entitlement_sources WHERE project_id = :p "
              "ORDER BY updated_at DESC"),
         {"p": project_id},
@@ -326,26 +257,33 @@ def connected_engines(
         has_key = bool(row["credential_secret_ref_id"])
         if not connected and not has_key:
             continue          # a seeded catalogue row: nobody has connected this
-        engine = by_entitlement.get(source_id) or (
-            by_api_provider.get(source_id[len("setup-"):])
-            if source_id.startswith("setup-") else None)
+        engine = by_entitlement.get(source_id) or by_api_provider.get(
+            api_source_provider(source_id) or "")
         if not engine:
             continue
         # CAPACITY TRAVELS WITH THE CONNECTION. An engine that is connected and out of
         # quota is not the same as one that is ready, and every caller that picks a lane —
-        # the role pickers, the console's model panel, an operator deciding whether to wait
+        # the job pickers, the console's model rows, an operator deciding whether to wait
         # — needs to be able to tell them apart. Recorded by provider_limits from the one
         # place every engine reports through.
-        from .provider_limits import is_available
-        capacity = row["observed_capacity"]
-        if isinstance(capacity, str):
-            try:
-                capacity = json.loads(capacity)
-            except ValueError:
-                capacity = {}
-        capacity = capacity if isinstance(capacity, dict) else {}
+        capacity = _json_object(row["observed_capacity"])
+        metadata = _json_object(row["connection_metadata"])
+        # WHAT KIND OF MONEY, AND WHETHER IT LAST WORKED — what `resolve_job`'s Auto ranks by
+        # (a working subscription, then local, then a metered key). A source whose last check
+        # or last call was refused stays listed, so a job chosen on it keeps its choice, but
+        # Auto never picks it over one that works.
+        local = api_source_provider(source_id) in ("ollama", "vllm")
+        kind = ("subscription" if (connected and not has_key)
+                or (row["cost_mode"] or "") == "subscription"
+                else "local" if local else "metered")
+        broken = last_check_broken(metadata, capacity)
+        if broken and engine not in found:
+            # A WORKING connection of the same engine wins over a refused one, wherever it sits
+            # in the list; this one is offered only if nothing better turns up.
+            deferred.setdefault(engine, (source_id, connected, row, capacity, kind))
+            continue
         offer(engine, "subscription" if connected else "api key",
-              source_id=source_id,
+              source_id=source_id, kind=kind, working=not broken,
               plan={"cost_mode": row["cost_mode"] or "",
                     "limits": row["limit_shape"] if isinstance(row["limit_shape"], dict) else {}},
               capacity={"available": is_available(capacity),
@@ -356,17 +294,75 @@ def connected_engines(
                         if hasattr(row["updated_at"], "isoformat")
                         else str(row["updated_at"] or "")) or None)
 
+    for engine, (source_id, connected, row, capacity, kind) in deferred.items():
+        if engine in found:
+            continue
+        offer(engine, "subscription" if connected else "api key", source_id=source_id,
+              kind=kind, working=False,
+              plan={"cost_mode": row["cost_mode"] or "", "limits": {}},
+              capacity={"available": is_available(capacity),
+                        "exhausted": bool(capacity.get("exhausted")),
+                        "retry_at": capacity.get("retry_at"),
+                        "detail": capacity.get("detail") or ""},
+              saved_at=None)
     # And the environment, for an install that was set up before any of this existed.
-    env_lanes = [("native", "openai_api_key"), ("claude_code", "claude_code_oauth_token"),
-                 ("claude_code", "anthropic_api_key"), ("azure", "azure_openai_key"),
-                 ("openrouter", "openrouter_api_key"), ("groq", "groq_api_key"),
-                 ("deepseek", "deepseek_api_key"), ("gemini", "google_api_key"),
-                 ("xai", "xai_api_key"), ("vllm", "vllm_base_url"),
-                 ("ollama", "ollama_base_url")]
-    for engine, attr in env_lanes:
-        if _set_deliberately(settings, attr):
-            offer(engine, "this install's environment", source_id=None, saved_at=None)
+    for engine, entry in environment_engines(settings).items():
+        if engine in known and engine not in found:
+            found[engine] = entry
     return found
+
+
+def environment_engines(settings: Settings) -> dict[str, dict[str, Any]]:
+    """Engines this install's own settings file holds a credential for. Reads settings only, so
+    it still answers when the database cannot."""
+    found: dict[str, dict[str, Any]] = {}
+    for engine, attr in ENV_LANES:
+        if engine not in found and _set_deliberately(settings, attr):
+            found[engine] = {"engine": engine, "why": "this install's environment",
+                             "source_id": None, "saved_at": None, "kind": "env",
+                             "working": True, "env_attr": attr}
+    return found
+
+
+#: Model credentials an install can carry in its environment, and the engine each one runs.
+ENV_LANES: tuple[tuple[str, str], ...] = (
+    ("native", "openai_api_key"), ("claude_code", "claude_code_oauth_token"),
+    ("claude_code", "anthropic_api_key"), ("azure", "azure_openai_key"),
+    ("openrouter", "openrouter_api_key"), ("groq", "groq_api_key"),
+    ("deepseek", "deepseek_api_key"), ("gemini", "google_api_key"),
+    ("xai", "xai_api_key"), ("vllm", "vllm_base_url"),
+    ("ollama", "ollama_base_url"),
+)
+
+
+#: `setup-<provider>` for a provider's first connection, `setup-<provider>-<n>` for the next:
+#: ONE SOURCE PER CONNECTION, so a second OpenRouter key never overwrites the first.
+_API_SOURCE = re.compile(r"^setup-([a-z_]+?)(?:-(\d+))?$")
+
+
+def api_source_provider(source_id: str) -> Optional[str]:
+    """The provider of a key or local connection made in Repo and models, else None."""
+    found = _API_SOURCE.match(str(source_id or ""))
+    return found.group(1) if found else None
+
+
+def last_check_broken(metadata: Any, capacity: Any = None) -> bool:
+    """Whether a source's last check (or call) was refused — not merely busy or unreachable."""
+    metadata = _json_object(metadata)
+    capacity = _json_object(capacity)
+    last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
+    return (capacity.get("credential_state") == "rejected"
+            or (last.get("ok") is False
+                and last.get("state") not in ("rate_limited", "unreachable")))
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _set_deliberately(settings: Settings, attr: str) -> bool:
@@ -389,60 +385,27 @@ def _set_deliberately(settings: Settings, attr: str) -> bool:
 def build_engine_for(
     connection: Connection, settings: Settings, project_id: str,
 ) -> str:
-    """Which harness should WRITE THE CODE when nobody has said.
+    """Which harness WRITES THE CODE: `model_routing.resolve_job(..., "build")`.
 
-    "The main objective of BOSS is not to depend on a single model but must be able to
-    connect and work with any model provider."
-
-    The seam has been provider-agnostic for a while: one `run_role` interface, a registry of
-    eleven harnesses, a native tool-calling agent for any OpenAI-compatible key. What was left
-    of the old dependency was the DEFAULT. `code_agent_engine` ships as "claude_code" and
-    every fallback chain ends there, so a customer who connects only an OpenRouter key gets a
-    build that shells out to a `claude` binary their install does not have — and the failure
-    reads as a broken pipeline rather than as a default nobody chose.
-
-    Deliberately conservative: this only speaks when the configured engine CANNOT run here.
-    An install whose Claude Code is connected behaves exactly as it did, and an operator who
-    set the variable themselves is never second-guessed. What it removes is the case where the
-    default points at a harness this installation has no credential for.
+    A thin wrapper since Repo and models gained one resolver for every job. The project's
+    choice still comes first; an install with nothing connected keeps the engine it is
+    configured with, so the build fails where it always did, naming that engine.
     """
-    # THE OPERATOR'S CHOICE LIVES IN THE PROJECT, NOT IN THE ENVIRONMENT.
-    #
-    # This read `settings.code_agent_engine` — the env default — so the console's
-    # "Implementer" picker had no effect on a build at all. Setting it to openrouter and
-    # pressing save wrote `project_settings.code_agent_engine = "openrouter"`, the screen
-    # showed openrouter, and every build still ran on the env's claude_code. A control that
-    # cannot change what happens is worse than no control: it spends the operator's trust and
-    # returns nothing. `chat_engine_for` two functions below has always read the knob; this is
-    # the same `effective()`, not a second way of asking.
+    from .model_routing import resolve_job
+
+    try:
+        picked = resolve_job(connection, settings, project_id, "build")
+    except Exception:  # noqa: BLE001 — a lookup must not decide the pipeline cannot run
+        picked = None
+    if picked is not None and picked.engine:
+        return picked.engine
     from .project_settings import effective
 
     try:
-        configured = (effective(connection, project_id, settings, "code_agent_engine")
-                      or "").strip().lower()
-    except Exception:  # noqa: BLE001 — an unreachable settings table falls back to the env
-        configured = (getattr(settings, "code_agent_engine", "") or "").strip().lower()
-    try:
-        connected = connected_engines(connection, settings, project_id)
-    except Exception:  # noqa: BLE001 — a lookup must not decide the pipeline cannot run
-        return configured
-    if not connected:
-        return configured          # nothing to choose from; leave the error where it was
-    if configured and configured in connected:
-        return configured
-    # Prefer a harness a governed task has actually completed on. `verified` is BOSS's own
-    # honesty flag and it is the right tie-breaker here: an unproven adapter is a hypothesis,
-    # and picking one BY DEFAULT would be presenting a hypothesis as a decision.
-    try:
-        from .harness_registry import available_harnesses
-
-        order = sorted(
-            (h for h in available_harnesses() if h["name"] in connected),
-            key=lambda h: (not h["verified"], h["kind"] != "cli", h["name"]),
-        )
+        return (effective(connection, project_id, settings, "code_agent_engine")
+                or "").strip().lower()
     except Exception:  # noqa: BLE001
-        return configured
-    return order[0]["name"] if order else configured
+        return (getattr(settings, "code_agent_engine", "") or "").strip().lower()
 
 
 def chat_engine_for(
@@ -707,13 +670,17 @@ PROOF_ESTIMATE_USD_MICROS = 50_000
 
 
 def governed_proof(engine, settings: Settings, project_id: str, provider: str, actor: str,
-                   prove=None) -> dict[str, Any]:
+                   prove=None, *, amount: int = None) -> dict[str, Any]:  # type: ignore[assignment]
     """`prove_coding_agent`, spent only after its reservation and receipt commit.
 
     A proof is one real model turn. On its own committed connection, before the turn: a budget
     reservation of the proof's estimate and an in-progress
     receipt. After the turn: the receipt succeeds or fails and the reservation settles at the
     actual cost or is released. A refused budget makes no call. `prove` is injectable for tests.
+
+    `amount` is what the proof reserves: the full estimate for a metered key, 0 for a
+    subscription or a local model — a gate rather than a hold, so a flat-rate proof still passes
+    while the budget is red and is refused only once spend is already over the cap.
     """
     import uuid
 
@@ -727,7 +694,7 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
     # turn, in this function, so the same function visibly closes the receipt it opened.
     with engine.begin() as connection:
         # The full estimate: the per-minute cap measures actual spend, not reservations.
-        amount = PROOF_ESTIMATE_USD_MICROS
+        amount = PROOF_ESTIMATE_USD_MICROS if amount is None else max(0, int(amount))
         reserved = budget.reserve(connection, project_id, "model", amount,
                                   f"Connection proof for {provider}", 15, risk_tier=1)
         refused = None
@@ -769,7 +736,7 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
 
 def connect_coding_agent(
     connection: Connection, settings: Settings, project_id: str, provider: str, *,
-    actor: str = "ceo", prove: bool = True,
+    actor: str = "ceo", prove: bool = True, prove_with=None,
 ) -> dict[str, Any]:
     """Import a coding-agent subscription the customer already has, into BOSS.
 
@@ -815,13 +782,14 @@ def connect_coding_agent(
 
     if not prove:
         proof = {"ok": True, "skipped": True}
-    elif _edition_is_paid(settings):
-        proof = prove_coding_agent(settings, provider)
     else:
+        # EVERY EDITION, GOVERNED. One read-only turn, reserved (as a $0 gate: a subscription
+        # turn costs no money) and receipted before it is sent.
         engine = getattr(connection, "engine", None)
         if engine is None:
             raise SetupError("the connection proof needs its own database connection.")
-        proof = governed_proof(engine, settings, project_id, provider, actor)
+        proof = governed_proof(engine, settings, project_id, provider, actor,
+                               prove=prove_with, amount=0)
     if not proof.get("ok"):
         from .model_failures import explain, is_login_rejected, mark_login
 
@@ -885,435 +853,44 @@ def connect_coding_agent(
         "detected": found,
         "proof": proof,
         "harness": provider,
-        "use_it_with": (f"BOSS_CODE_AGENT_ENGINE={provider}"
-                        if spec.require_local_session_file else
-                        f"BOSS_PROVIDER_LOCK={provider}"),
         **record,
     }
 
 
-def _last4(value: str) -> str:
-    """Enough to tell two credentials apart, never enough to use one."""
-    text_value = str(value or "").strip()
-    return text_value[-4:] if len(text_value) >= 4 else ""
-
-
-def _probe(url: str, headers: dict[str, str], timeout: int = 10) -> dict[str, Any]:
-    """A GET that never raises. Returns the parsed body on success, the reason on failure."""
-    request = urllib.request.Request(url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read(200_000)
-        try:
-            return {"ok": True, "status": 200, "body": json.loads(raw.decode(errors="ignore"))}
-        except ValueError:
-            return {"ok": True, "status": 200, "body": {}}
-    except urllib.error.HTTPError as error:
-        return {"ok": False, "status": error.code,
-                "error": error.read().decode(errors="ignore")[:200]}
-    except urllib.error.URLError as error:
-        return {"ok": False, "status": 0, "error": str(error.reason)}
-
-
-#: Where a repository is connected in Mission Control. Named once so the status card, the
-#: setup steps and the build's own error all send an operator to the same place.
-REPOSITORY_CONNECT_PATH = "Mission Control, Settings, Repo and model, Repository"
-
-
-def _community(settings: Settings) -> bool:
-    return str(getattr(settings, "boss_edition", "") or "").strip().lower() in {
-        "community", "oss", "local"}
-
-
-def repository_guidance(settings: Settings) -> str:
-    """How to give this install a repository, said as the path that works on it.
-
-    Community's compose file does not pass BOSS_TARGET_GITHUB_OWNER / _REPO to its containers,
-    so telling a Community operator to set them sends them to edit a file that changes
-    nothing. The connection screen stores the token in the secret store and binds the
-    repository to the project, which is what a build resolves.
-    """
-    connect = (f"Connect a GitHub repository in {REPOSITORY_CONNECT_PATH}: a fine-grained "
-               "token with Contents and Pull requests set to read and write, and the "
-               "repository as owner/name.")
-    if _community(settings):
-        return (f"No repository is connected. {connect} Community does not read "
-                "BOSS_TARGET_GITHUB_OWNER or BOSS_TARGET_GITHUB_REPO from .env.")
-    return (f"No repository is connected. {connect} A server you run yourself can instead "
-            "set BOSS_GITHUB_TOKEN, BOSS_TARGET_GITHUB_OWNER and BOSS_TARGET_GITHUB_REPO in "
-            "the API's environment.")
-
-
-def check_github(settings: Settings) -> dict[str, Any]:
-    """What this install is pointed at, and whether the token can actually push to it.
-
-    A READ, and free. "Connected" that means "an environment variable is not empty" is the kind
-    of status that reads green while the first build dies at push time — which is precisely the
-    failure this screen exists to make impossible. GET /repos returns the caller's own
-    permissions, so BOSS can say `push: true` rather than `token: present`.
-    """
-    token = str(getattr(settings, "github_token", "") or "").strip()
-    owner = str(getattr(settings, "target_github_owner", "") or "").strip()
-    repo = str(getattr(settings, "target_github_repo", "") or "").strip()
-    out: dict[str, Any] = {
-        "configured": bool(token and owner and repo),
-        "repository": f"{owner}/{repo}" if owner and repo else "",
-        "token_last4": _last4(token),
-        "source": "environment",
-    }
-    if not out["configured"]:
-        out["ok"] = False
-        out["error"] = repository_guidance(settings)
-        out["connect_in"] = REPOSITORY_CONNECT_PATH
-        return out
-    probe = _probe(
-        f"https://api.github.com/repos/{owner}/{repo}",
-        {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
-         "User-Agent": "boss-setup-check"},
-    )
-    if not probe["ok"]:
-        out["ok"] = False
-        out["error"] = {
-            401: "the token was rejected by GitHub.",
-            403: "the token is valid but not allowed to see that repository.",
-            404: f"GitHub has no {owner}/{repo} visible to this token.",
-        }.get(probe.get("status"), probe.get("error") or "GitHub did not answer")
-        return out
-    body = probe.get("body") or {}
-    permissions = body.get("permissions") or {}
-    out["ok"] = bool(permissions.get("push"))
-    out["can_push"] = bool(permissions.get("push"))
-    out["default_branch"] = body.get("default_branch")
-    out["private"] = body.get("private")
-    if not out["ok"]:
-        # NAMING THE MISSING HALF. A token that can read but not push looks connected and
-        # produces a pull request that never opens.
-        out["error"] = ("the token can read that repository but cannot push to it — "
-                        "Contents needs read and write.")
-    return out
-
-
-def check_model(settings: Settings) -> dict[str, Any]:
-    """Which model endpoint this install uses, with live checks only where allowed.
-
-    Paid editions use `GET /models` to check reachability and authentication. Community and
-    unknown editions report an environment key as configured but unverified, with no provider
-    request. Even a successful `/models` response cannot prove a completion will work.
-    """
-    key = str(getattr(settings, "openai_api_key", "") or "").strip()
-    base = (str(getattr(settings, "openai_base_url", "") or "").strip()
-            or "https://api.openai.com/v1")
-    model = (str(getattr(settings, "chat_model", "") or "").strip()
-             or str(getattr(settings, "openai_model", "") or "").strip())
-    out: dict[str, Any] = {
-        "configured": bool(key),
-        "base_url": base,
-        "model": model,
-        "key_last4": _last4(key),
-        "source": "environment",
-    }
-    if not key:
-        out["ok"] = False
-        out["error"] = "OPENAI_API_KEY is not set."
-        return out
-    if not live_model_probe_allowed(settings):
-        out["ok"] = False
-        out["verification_state"] = "unverified"
-        out["note"] = "The key is configured; Community has not contacted the model provider."
-        return out
-    probe = _probe(f"{base.rstrip('/')}/models", {"Authorization": f"Bearer {key}"})
-    if not probe["ok"]:
-        out["ok"] = False
-        out["error"] = {
-            401: "the key was rejected by the endpoint.",
-            404: "that endpoint has no /models — it may still work for completions.",
-        }.get(probe.get("status"), probe.get("error") or "the endpoint did not answer")
-        return out
-    listed = (probe.get("body") or {}).get("data") or []
-    names = [str(item.get("id")) for item in listed if isinstance(item, dict)][:60]
-    out["ok"] = True
-    out["models_available"] = len(names)
-    # WHETHER THE MODEL THIS INSTALL ASKS FOR IS ACTUALLY THERE. A gateway that answers and does
-    # not carry the configured alias is the failure that looks like the model being "slow".
-    if model and names:
-        out["model_listed"] = model in names
-        if not out["model_listed"]:
-            out["note"] = (f"the endpoint answered but does not list {model!r}; "
-                           f"it may still route it.")
-    return out
-
-
-def check_github_for_project(
-    connection: Connection, settings: Settings, project_id: str,
-) -> dict[str, Any]:
-    """The repository this project builds in, checked with the credential it is connected with.
-
-    The registry wins over the environment — that is already true of where a code task writes,
-    and a status card that reports the other one describes an install nobody is running.
-    """
-    try:
-        rows = connection.execute(
-            text("SELECT b.full_name, b.connection_id, b.role, b.status, "
-                 "       c.last_test_status "
-                 "  FROM github_repository_bindings b "
-                 "  JOIN github_connections c ON c.id = b.connection_id "
-                 " WHERE b.project_id = :p AND b.status = 'active' "
-                 " ORDER BY (b.role = 'primary') DESC, b.updated_at DESC LIMIT 1"),
-            {"p": project_id},
-        ).mappings().first()
-    except Exception:  # noqa: BLE001 — a status card must not fail with the database
-        rows = None
-    if rows is None:
-        return check_github(settings)          # nothing connected: the environment is the answer
-
-    from .github_connections import GitHubConnectionService
-
-    out: dict[str, Any] = {
-        "configured": True,
-        "repository": rows["full_name"],
-        "source": "connected",
-        "connection_id": rows["connection_id"],
-        "last_test_status": rows["last_test_status"],
-    }
-    service = GitHubConnectionService(settings)
-    try:
-        credential_ref = service._credential_ref(connection, project_id, rows["connection_id"])
-        secret = service.secret_refs.require_usable(
-            connection, project_id=project_id, credential_ref=credential_ref)
-        token = service._resolve_secret(secret, connection) or ""
-    except Exception as exc:  # noqa: BLE001
-        out["ok"] = False
-        out["error"] = f"the stored credential could not be read ({type(exc).__name__})"
-        return out
-    out["token_last4"] = _last4(token)
-    owner, _, name = rows["full_name"].partition("/")
-    probe = _probe(
-        f"https://api.github.com/repos/{owner}/{name}",
-        {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
-         "User-Agent": "boss-setup-check"},
-    )
-    if not probe["ok"]:
-        out["ok"] = False
-        out["error"] = {
-            401: "the token was rejected by GitHub.",
-            403: "the token is valid but not allowed to see that repository.",
-            404: (f"GitHub will not confirm {rows['full_name']} to this token — for a private "
-                  f"repository that is what no access looks like."),
-        }.get(probe.get("status"), probe.get("error") or "GitHub did not answer")
-        return out
-    body = probe.get("body") or {}
-    permissions = body.get("permissions") or {}
-    out["ok"] = bool(permissions.get("push"))
-    out["can_push"] = bool(permissions.get("push"))
-    out["default_branch"] = body.get("default_branch")
-    out["private"] = bool(body.get("private"))
-    if not out["ok"]:
-        out["error"] = (f"the token can see {rows['full_name']} but cannot push to it — "
-                        f"Contents needs read and write.")
-    return out
-
-
 def connected_basics(connection: Connection, settings: Settings, project_id: str
                      ) -> dict[str, Any]:
-    """Whether this project has a repository and a model — counted, never probed.
+    """Whether this project has a usable repository and model — read, never probed.
 
-    The same two answers `setup_status` gives its wizard, without its live probes, because the
-    workflow start preflight asks on every Start and must not make a network call to do it.
-    One function, so the wizard's tick and the preflight cannot disagree about "connected".
+    Every workflow Start asks this, so it reads the same rows Repo and models renders
+    (`setup_view.build_basics`) and the page's pills and Start's refusal cannot disagree.
     """
-    status = _connection_counts(connection, settings, project_id)
-    return {"github": status["github_done"], "model": status["model_done"],
-            "repository": status["repository"]}
-
-
-def _connection_counts(connection: Connection, settings: Settings, project_id: str
-                       ) -> dict[str, Any]:
-    repos = connection.execute(
-        text("SELECT count(*) FROM github_repository_bindings "
-             "WHERE project_id = :p AND status = 'active'"),
-        {"p": project_id},
-    ).scalar() or 0
-    connections = connection.execute(
-        text("SELECT count(*) FROM github_connections "
-             "WHERE project_id = :p AND status IN ('configured', 'active')"),
-        {"p": project_id},
-    ).scalar() or 0
-    # A MODEL IS CONNECTED WHEN THE ROUTER CAN BUILD ONE. This counted every entitlement row
-    # holding a key, while the adapter could reach three engines — so a stored Gemini key was
-    # "connected" here and every step died with "OPENAI_API_KEY is not configured".
+    from . import setup_view
     from .model_routing import choose
 
-    model_ready = choose(connection, settings, project_id).runnable
-    env_repo = str(getattr(settings, "target_github_repo", "") or "").strip()
-    env_owner = str(getattr(settings, "target_github_owner", "") or "").strip()
-    env_github = bool(str(getattr(settings, "github_token", "") or "").strip()
-                      and env_repo and env_owner)
-    primary = None
-    if repos:
-        primary = connection.execute(
-            text("SELECT full_name FROM github_repository_bindings "
-                 "WHERE project_id = :p AND status = 'active' "
-                 "ORDER BY (role = 'primary') DESC, created_at LIMIT 1"),
-            {"p": project_id},
-        ).scalar()
-    return {
-        "github_done": bool((connections and repos) or env_github),
-        "model_done": bool(model_ready),
-        "repository": primary or (f"{env_owner}/{env_repo}" if env_github else None),
-    }
+    return setup_view.basics(setup_view.build_basics(connection, settings, project_id),
+                             router_runnable=choose(connection, settings, project_id).runnable)
 
 
 def setup_status(connection: Connection, settings: Settings, project_id: str) -> dict[str, Any]:
-    """What is connected, what is not, and what to do about it."""
-    repos = connection.execute(
-        text("SELECT count(*) FROM github_repository_bindings "
-             "WHERE project_id = :p AND status = 'active'"),
-        {"p": project_id},
-    ).scalar() or 0
-    connections = connection.execute(
-        text("SELECT count(*) FROM github_connections "
-             # 'configured' and 'active' ARE the healthy states; 'enabled' is not a value this
-             # column's CHECK constraint permits, so this counted zero forever. With the env
-             # defaults emptied it stopped being masked: a project with a connected,
-             # push-tested repository was told "Connect a repository — not done", directly
-             # under a card saying CAN PUSH about that same repository.
-             "WHERE project_id = :p AND status IN ('configured', 'active')"),
-        {"p": project_id},
-    ).scalar() or 0
-    # A CONNECTED SUBSCRIPTION IS A CONNECTED MODEL. Counting stored credentials alone meant
-    # an operator could sign the Codex CLI in, press Connect, watch BOSS prove a live turn and
-    # record the entitlement — and still be told "Connect a model" on the next page load,
-    # because a subscription has no credential to store a reference to. The step looked unsaved
-    # when the only thing missing was this clause.
-    models = connection.execute(
-        text("SELECT count(*) FROM entitlement_sources "
-             "WHERE project_id = :p AND (credential_secret_ref_id IS NOT NULL "
-             "                           OR connection_status = 'connected')"),
-        {"p": project_id},
-    ).scalar() or 0
-    # WHICH ONE, AND WHEN — not just how many. "Connect a model" with a tick beside it and
-    # nothing else on screen is the shape of a wizard that has forgotten what you told it: the
-    # operator cannot tell whether the thing they connected an hour ago is the thing that is
-    # saved. Newest first, so the head of this list is the last thing anybody connected.
-    saved_rows = connection.execute(
-        text("SELECT source_id, provider, auth_method, connection_status, status, "
-             "connection_metadata, updated_at "
-             "FROM entitlement_sources "
-             "WHERE project_id = :p AND (credential_secret_ref_id IS NOT NULL "
-             "                           OR connection_status = 'connected') "
-             "ORDER BY updated_at DESC"),
-        {"p": project_id},
-    ).mappings().all()
-    # WHICH DROPDOWN ENTRY THIS IS. The console needs to reselect the thing that was saved,
-    # and a source_id is not a wizard provider key: the API-key route writes "setup-<key>",
-    # the CLI route writes the harness's entitlement id. Resolved here, from the harness
-    # registry, so the console never has to guess the mapping and cannot drift from it.
-    from .cli_harness import load_specs
+    """DEPRECATED shape for `GET /v1/setup/status` (one release): the view, plus `steps`.
 
-    by_entitlement = {spec.entitlement_source_id: spec.name
-                      for spec in load_specs(settings).values()
-                      if spec.entitlement_source_id}
-    # claude_code is native rather than a CLI harness, so it has no spec to read this from.
-    by_entitlement.setdefault("anthropic_claude_code", "claude_code")
+    Kept for the installer's checkup and older MCP clients; it reads `setup_view.build`, so it
+    no longer calls GitHub on every load.
+    """
+    from . import setup_view
 
-    def _wizard_provider(source_id: str) -> str:
-        if source_id.startswith("setup-"):
-            return source_id[len("setup-"):]
-        return by_entitlement.get(source_id, "")
-
-    def _verification_state(row: Any) -> bool:
-        metadata = row["connection_metadata"] or {}
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except ValueError:
-                metadata = {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-        state = metadata.get("verification_state")
-        if state in {"verified", "unverified"}:
-            return state == "verified"
-        return row["status"] == "verified" or bool(metadata.get("verified_endpoint"))
-
-    saved = [
-        {
-            "source_id": r["source_id"],
-            "provider": r["provider"],
-            "wizard_provider": _wizard_provider(r["source_id"]),
-            "auth_method": r["auth_method"],
-            "kind": ("subscription" if str(r["auth_method"] or "").endswith("oauth")
-                     else "api_key"),
-            "connected": r["connection_status"] == "connected",
-            "verified": _verification_state(r),
-            # Postgres hands back a datetime; a driver that hands back a string is equally
-            # displayable, and neither is worth an exception on a status screen.
-            "saved_at": (r["updated_at"].isoformat()
-                         if hasattr(r["updated_at"], "isoformat")
-                         else (str(r["updated_at"]) or None)) if r["updated_at"] else None,
-        }
-        for r in saved_rows
-    ]
-
-    # THE ENVIRONMENT COUNTS TOO, FOR BOTH STEPS. An install configured the old way — a token
-    # and a key in the API's env — IS set up, and a wizard that says "not connected" to somebody
-    # whose BOSS is already opening pull requests has told them a falsehood about their own
-    # system. Measured on this very deployment, which has no github_connections row and has been
-    # building against example-user/boss-sandbox for weeks.
-    env_model = bool(str(getattr(settings, "openai_api_key", "") or "").strip())
-    env_repo = str(getattr(settings, "target_github_repo", "") or "").strip()
-    env_owner = str(getattr(settings, "target_github_owner", "") or "").strip()
-    env_github = bool(str(getattr(settings, "github_token", "") or "").strip()
-                      and env_repo and env_owner)
-    basics = _connection_counts(connection, settings, project_id)
-    steps = [
-        {
-            "id": "github",
-            "title": "Connect a repository",
-            # The preflight's answer, so the wizard's tick and Start's refusal cannot disagree.
-            "done": basics["github_done"],
-            "detail": ("BOSS writes code on a branch and opens a pull request. It needs a "
-                       "repository it is allowed to push to."),
-            # WHERE, said only while it is still to do: the path that works on this install.
-            **({} if ((connections and repos) or env_github)
-               else {"how": repository_guidance(settings),
-                     "connect_in": REPOSITORY_CONNECT_PATH}),
-            "from_environment": env_github and not (connections and repos),
-            "repository": f"{env_owner}/{env_repo}" if env_github else None,
-        },
-        {
-            "id": "model",
-            "title": "Connect a model",
-            "done": basics["model_done"],
-            "from_environment": env_model and not models,
-            "detail": ("An API key, anything that speaks the OpenAI API, or a subscription "
-                       "you already pay for."),
-        },
-    ]
+    view = setup_view.build(connection, settings, project_id)
+    found = setup_view.basics(view)
     return {
-        "project_id": project_id,
-        "ready": all(step["done"] for step in steps),
-        # WHAT THIS INSTALL IS ACTUALLY RUNNING ON. The steps above answer "is it set up"; these
-        # answer "set up as WHAT, and does it work" — which is the question an operator has when
-        # they already believe it is configured, and the one a screen of empty forms refuses to
-        # answer.
-        # WHAT THIS PROJECT IS ACTUALLY POINTED AT, which is not always the environment.
-        #
-        # This card reported the env pair and nothing else, so an install whose operator had
-        # connected a repository — tested, passing, and the thing every build will use — was
-        # shown a developer sandbox as failed from a shipped default, with the
-        # working connection mentioned nowhere. A screen called "What BOSS is running on" has
-        # to name the repository BOSS will run on.
-        "environment": {"github": check_github_for_project(connection, settings, project_id),
-                        "model": check_model(settings)},
-        "steps": steps,
-        "github_connections": int(connections),
-        "repositories": int(repos),
-        "model_sources": int(models),
-        "model_probe_available": live_model_probe_allowed(settings),
-        "model_saved": saved,
-        "model_from_environment": env_model,
-        "github_from_environment": env_github,
+        **view,
+        "steps": [
+            {"id": "github", "title": "Connect a repository", "done": found["github"],
+             "repository": found["repository"], "href": "/?area=setup&focus=repository"},
+            {"id": "model", "title": "Connect a model", "done": found["model"],
+             "href": "/?area=setup&focus=models"},
+        ],
     }
+
 
 
 # --- The decision model --------------------------------------------------------------------- #

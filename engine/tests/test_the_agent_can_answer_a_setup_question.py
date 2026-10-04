@@ -85,33 +85,39 @@ def test_the_build_says_which_source_it_is():
 
 
 def test_one_call_answers_the_whole_setup_question():
-    """What the agent had to assemble from events, source and three broken tools."""
+    """What the agent had to assemble from events, source and three broken tools: now the very
+    view Repo and models renders, plus the fixes in order with a console link each."""
     spec = _tool("diagnose_setup")
     assert spec.kind == "read"
     # And the agent that answers questions actually has it.
     assert _admitted("diagnose_setup")
     source = inspect.getsource(spec.handler)
-    for expected in ("last_error",              # the REASON a check failed
-                     "coding_agents",           # what is installed and connected
-                     "connected_engines",
-                     "chat_model", "build_model", "role_models",
-                     "secret_store",
-                     "next_steps"):
+    for expected in ("setup_view.build(", "who_does_what", "verdict", "next_steps", "href"):
         assert expected in source, expected
 
 
-def test_and_it_reports_what_will_actually_run():
-    """A diagnosis that contradicts the console is worse than none: `build_engine_for` reads
-    settings.code_agent_engine, which the pipeline layers with the project's choices first."""
-    source = inspect.getsource(_tool("diagnose_setup").handler)
-    assert "_applied(c, pid, ctx.settings)" in source
-    assert "_choose_model(c, effective, pid).describe()" in source
+def test_and_it_reports_what_will_actually_run(monkeypatch):
+    """A diagnosis that contradicts the console is worse than none: the chat and the page read
+    one view, so whatever the page says about who does each job, the tool says too."""
+    from contextlib import nullcontext
+    from types import SimpleNamespace
 
+    from boss_engine.services import setup_view
 
-def test_and_does_not_hand_back_a_to_do_list_of_vendors():
-    """"cursor: curl … | bash" is not a next step for somebody who has never wanted Cursor."""
-    source = inspect.getsource(_tool("diagnose_setup").handler)
-    assert 'if agent.get("installed") or not any_connected:' in source
+    view = {"verdict": {"label": "Ready", "tone": "green", "tip": "t"},
+            "repository": {"connection": None, "repos": [{
+                "full_name": "o/r", "pill": {"tone": "green", "label": "Working", "tip": ""}}]},
+            "models": [{"label": "Claude Code", "source_id": "anthropic_claude_code",
+                        "pill": {"tone": "red", "label": "Login expired", "tip": "Fix it."}}],
+            "jobs": [{"job": "build", "resolved": {"label": "Auto · Claude Code"}}]}
+    monkeypatch.setattr(setup_view, "build", lambda *_a, **_k: view)
+    ctx = SimpleNamespace(begin=lambda: nullcontext(None), settings=None)
+    out = _tool("diagnose_setup").handler(ctx, project_id="p", actor="ceo", args={})
+    assert out["view"] is view
+    assert out["who_does_what"] == {"build": "Auto · Claude Code"}
+    assert out["next_steps"] == [{
+        "row": "models", "what": "Claude Code", "state": "Login expired", "fix": "Fix it.",
+        "href": "/?area=setup&focus=models&source=anthropic_claude_code"}]
 
 
 def test_it_never_returns_a_credential():

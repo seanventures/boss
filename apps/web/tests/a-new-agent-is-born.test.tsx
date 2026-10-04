@@ -213,7 +213,7 @@ describe("From archetype: the kit's cast, none of them a person", () => {
     const draft = calls.filter((c) => c.url.includes("/v1/agents/relentless_operator/persona/draft"));
     expect(draft).toHaveLength(1);
     expect(draft[0].body).toMatchObject({ field: "about_me", actor: "ceo" });
-    expect(document.body.textContent).toContain("Needs a model. Set one in Settings.");
+    expect(document.body.textContent).toContain("Needs a model. Connect one in Repo and models.");
   });
 });
 

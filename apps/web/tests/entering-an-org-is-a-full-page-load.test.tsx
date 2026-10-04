@@ -25,7 +25,9 @@ vi.mock("../app/submit-button", () => ({ SubmitButton: (p: { children: React.Rea
 import { OrgGate } from "../app/org-gate";
 
 const ORGS = [{ org_id: "org_boss", org_name: "BOSS", task_count: 0, meeting_count: 0,
-                project_slug: "boss-dogfood" }] as never;
+                project_slug: "boss-dogfood" },
+              { org_id: "org_two", org_name: "Two", task_count: 0, meeting_count: 0,
+                project_slug: "two" }] as never;
 
 let root: Root;
 let host: HTMLDivElement;
@@ -59,5 +61,22 @@ describe("entering an organization", () => {
     await act(async () => { root.render(<OrgGate orgs={ORGS} />); });
     expect(replace).toHaveBeenCalledWith("/?org=org_boss");
     expect(routerPush).not.toHaveBeenCalled();
+  });
+});
+
+describe("one organization is not a choice", () => {
+  it("a first sign-in on a fresh install goes straight in", async () => {
+    await act(async () => { root.render(<OrgGate orgs={[(ORGS as unknown as unknown[])[0]] as never} />); });
+    expect(replace).toHaveBeenCalledWith("/?org=org_boss");
+  });
+});
+
+describe("a deep link survives the org picker", () => {
+  it("keeps every parameter but the org", async () => {
+    const { orgHref } = await import("../app/org-gate");
+    expect(orgHref("org_boss", "?area=setup&focus=models&source=setup-openrouter"))
+      .toBe("/?org=org_boss&area=setup&focus=models&source=setup-openrouter");
+    expect(orgHref("org_boss", "?pick=1&org_id=old&area=setup")).toBe("/?org=org_boss&area=setup");
+    expect(orgHref("org_boss", "")).toBe("/?org=org_boss");
   });
 });

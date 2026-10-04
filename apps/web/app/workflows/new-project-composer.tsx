@@ -686,7 +686,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                  title="A fine-grained token with Contents and Pull requests: read and write"
                  href={consoleHref(
                    typeof window !== "undefined" ? window.location.search : "",
-                   { area: "setup" })}>
+                   { area: "setup", focus: "repository" })}>
                 Connect one
               </a>
             </span>
