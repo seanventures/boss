@@ -48,6 +48,8 @@ import { PassportTest } from "./agents/passport-test";
 import { PassportWork } from "./agents/passport-work";
 import { ShareCardDialog } from "./agents/share-card-dialog";
 import { PassportLoadout } from "./agents/passport-loadout";
+import { popOpen } from "./agents/loadout-pop";
+import { overlayJustClosed } from "./skills/overlay";
 import { SectionLabel } from "./section-label";
 
 type App = {
@@ -206,7 +208,10 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
   // Escape closes it, and the page behind does not scroll. Same rules as the template page —
   // a full-screen view you cannot get out of is the bug that one shipped with.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); };
+    // Not while a sheet, drawer or menu is open, nor in the moment after one closed (D4).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented && !overlayJustClosed() && !popOpen()) onClose();
+    };
     window.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -515,8 +520,8 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
 
   return (
     <section className="ct-block" data-testid="agent-edit">
-      <div className="ct-block-title">
-        Edit this agent
+      <div className="ld-head">
+        <SectionLabel testid="agent-edit-label">Edit this agent</SectionLabel>
         {!open ? (
           <button type="button" className="linklike" data-testid="agent-edit-open"
                   onClick={() => setOpen(true)}> change name, mission, boundaries or manager</button>
@@ -633,7 +638,7 @@ export function AgentDelete({ projectId, actor, detail, onDeleted, onChanged }: 
 
   return (
     <section className="ct-block ad-danger" data-testid="agent-delete">
-      <div className="ct-block-title">Delete this agent</div>
+      <SectionLabel testid="agent-delete-label">Delete this agent</SectionLabel>
       {blocking.length ? (
         <>
           <p className="detail" data-testid="agent-delete-blocked">

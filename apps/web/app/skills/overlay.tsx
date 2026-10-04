@@ -36,13 +36,48 @@ export function useMedia(query: string): boolean {
 
 /** Focus the overlay's heading on open, Esc to close, focus back to the opener on close.
  *  `where` changes when the overlay moves (in place → portalled): focus follows it there. */
-function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () => void, where: unknown = null) {
+/** The open overlays, newest last: Esc and the focus trap belong to the top one only. */
+const STACK: object[] = [];
+let closedAt = 0;
+
+/** True for a moment after an overlay closed: a page that closes itself on Esc (the agent
+ *  Passport) must not take a second, quick Esc — or the closing one's echo — as its own. */
+export function overlayJustClosed(within = 400): boolean {
+  return STACK.length > 0 || Date.now() - closedAt < within;
+}
+/** Say an overlay (a popover menu, say) just closed: overlayJustClosed() is true for a moment. */
+export function markOverlayClosed(): void { closedAt = Date.now(); }
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+  + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Tab and Shift+Tab stay inside `root` (a modal is modal for the keyboard too). */
+export function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
+  if (e.key !== "Tab" || !root) return;
+  const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)]
+    .filter((el) => !el.closest("[hidden], [aria-hidden='true']"));
+  if (!items.length) { e.preventDefault(); return; }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement as HTMLElement | null;
+  if (!active || !root.contains(active)) { e.preventDefault(); first.focus(); return; }
+  if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+}
+
+function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () => void, where: unknown = null,
+                         trap = true) {
   const opener = useRef<Element | null>(null);
   const close = useRef(onClose);
   close.current = onClose;
+  const me = useRef<object>({});
   useIsoLayoutEffect(() => {
     opener.current = typeof document !== "undefined" ? document.activeElement : null;
+    STACK.push(me.current);
     return () => {
+      const at = STACK.indexOf(me.current);
+      if (at >= 0) STACK.splice(at, 1);
+      closedAt = Date.now();
       const back = opener.current as HTMLElement | null;
       if (back && typeof back.focus === "function" && back.isConnected) back.focus({ preventScroll: true });
     };
@@ -57,16 +92,20 @@ function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () =
     target.focus?.({ preventScroll: true });
   }, [where]); // eslint-disable-line react-hooks/exhaustive-deps -- on open and on a move
   useEffect(() => {
-    // Esc closes THIS overlay and nothing under it: the agent Passport closes itself on an Esc
-    // nobody handled, so an unmarked one took the whole page down with the sheet.
-    const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      close.current();
+    // Esc closes THIS overlay (the top one) and nothing under it: the agent Passport closes
+    // itself on an Esc nobody handled, so an unmarked one took the whole page down with it.
+    const key = (e: KeyboardEvent) => {
+      if (STACK[STACK.length - 1] !== me.current) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close.current();
+        return;
+      }
+      if (trap) trapTab(e, ref.current);
     };
-    document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
-  }, []);
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [trap]); // eslint-disable-line react-hooks/exhaustive-deps -- ref is stable
 }
 
 /** A drawer: a column beside the content when wide, a bottom/side sheet over it when not.
@@ -79,7 +118,8 @@ export function DrawerShell({ label, testId, onClose, children, float, over }: {
   const narrow = useMedia(FLOAT_QUERY);
   const floating = narrow || !!float;
   const ref = useRef<HTMLElement>(null);
-  useOverlayFocus(ref, onClose, floating);
+  // A floating sheet is modal (trap Tab); a drawer beside the cards is not.
+  useOverlayFocus(ref, onClose, floating, floating);
   const aside = (
     <aside ref={ref} className="kit-drawer" role="dialog" aria-label={label} aria-modal={floating || undefined}
            data-floating={floating || undefined} data-testid={testId}>
