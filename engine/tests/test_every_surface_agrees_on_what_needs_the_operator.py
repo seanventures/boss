@@ -405,3 +405,71 @@ def test_the_live_readers_are_in_the_scan():
              (str(p.relative_to(ROOT)) for p in (ROOT / base).rglob("*.py"))}
     assert "engine/boss_engine/services/agents_live_board.py" in found
     assert "engine/boss_engine/services/agent_acts.py" in found
+
+
+# ---------------------------------------------------------------------------------------------
+# A BUILD STOPPED FOR YOU IS COUNTED ONCE, EVERYWHERE (factory spec §6.5, §8.1).
+#
+# Failed checks waiting for a waiver and a budget only a person can raise are not decisions, so
+# they never reached the pill, the Command Center or Live: the build just looked stuck. They
+# are items of the one list now, so every surface that counts it counts them the same.
+# ---------------------------------------------------------------------------------------------
+
+def _builds():
+    return {
+        "blocked": [
+            {"kind": "gate_override", "run_id": "crun_g", "app": "Team inbox",
+             "role_key": "adversarial_reviewer",
+             "failing": ["code_review_passed", "app_serves"], "where": "Review · round 2",
+             "at": NOW.isoformat()},
+            {"kind": "budget_refused", "run_id": "crun_b", "app": "Billing fix",
+             "role_key": None, "failing": [], "where": "before Build", "at": NOW.isoformat(),
+             "error": "The budget refused this code task: daily cap"},
+        ],
+        "by_decision": {"pr": {"kind": "pr", "run_id": "crun_p", "app": "Invoices",
+                               "where": "PR open", "pr_number": 842,
+                               "pr_url": "https://x/pull/842"}},
+    }
+
+
+def test_a_stopped_build_is_one_item_on_every_surface(monkeypatch):
+    from boss_engine.services import factory_view
+
+    monkeypatch.setattr(factory_view, "build_decision_owners",
+                        lambda c, p, wanted: {d: "software_engineer" for d in wanted})
+    builds = _builds()
+    rows = [decision("pr", "pending", action="review_pull_request")]
+    out = cc.assemble(project_id="p", runs=[], steps=[], decisions=rows, readiness=[],
+                      names={}, now=NOW, builds=builds)
+    kinds = [n["kind"] for n in out["needs_you"]]
+    assert kinds.count("gate_override") == 1 and kinds.count("budget_refused") == 1
+    assert out["counts"]["needs_you"] == 3 and out["counts"]["builds"] == 2
+    attention = _board_attention(monkeypatch, out["needs_you"], rows)
+    assert len(attention) == out["counts"]["needs_you"]
+    gates = next(a for a in attention if a["kind"] == "gate_override")
+    assert gates["id"] == "build:crun_g:gates"
+    assert gates["title"] == "2 checks failed"
+    assert gates["role_key"] == "adversarial_reviewer"
+    assert [a["label"] for a in gates["answers"]] == ["Retry", "Waive…"]
+    failing = {f["name"]: f for f in gates["build"]["failing"]}
+    assert failing["app_serves"]["waivable"] is False
+    assert failing["app_serves"]["reason"] == "Can't be waived: the app must start"
+    assert gates["build"]["where"] == "Review · round 2"
+    budget = next(a for a in attention if a["kind"] == "budget_refused")
+    assert budget["role_key"] is None and budget["title"] == "Budget refused"
+    assert budget["build"]["where"] == "before Build"
+    pr = next(a for a in attention if a["kind"] == "approval")
+    assert pr["title"] == "Merge PR #842?"
+    assert pr["build"]["run_id"] == "crun_p" and pr["build"]["pr_url"].endswith("/842")
+    # The PR's face is its builder's, from the build's acts — not a guess.
+    assert pr["role_key"] == "software_engineer"
+
+
+def test_a_build_waiting_on_you_ranks_with_failed_steps():
+    builds = _builds()
+    rows = [decision("gate", "pending", recommendation={"action": "workflow_step_gate"})]
+    out = cc.assemble(project_id="p", runs=[], steps=[], decisions=rows,
+                      readiness=[{"id": "model", "title": "Connect a model", "done": False}],
+                      names={}, now=NOW, builds=builds)
+    assert [n["kind"] for n in out["needs_you"]] == [
+        "approval", "gate_override", "budget_refused", "readiness"]

@@ -222,7 +222,16 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             ).mappings().first()
         if not row:
             return {"ok": False, "error": f"no code task run {run_id}"}
-        return {"run": _json_safe(dict(row))}
+        out = {"run": _json_safe(dict(row))}
+        # The one state every surface says (factory spec §4.4): the Floor, the cockpit and
+        # this tool read the same derivation.
+        try:
+            fv = services_module("factory_view")
+            with ctx.begin() as c:
+                out["build_state"] = _json_safe(fv.state_of(c, project_id, run_id))
+        except Exception:  # noqa: BLE001 — the run is the answer; its state word is extra
+            pass
+        return out
 
     @reg.tool(
         "list_running_work",
@@ -2608,33 +2617,16 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
     def cancel_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         reason = args.get("reason") or "cancelled via MCP"
-        from ..services.core import emit_event
-        with ctx.begin() as c:
-            run = _code_task_in_project(c, run_id, project_id)
-            if run is None:
-                return {"ok": False, "error": f"no code task run {run_id}"}
-            if run["status"] in ("completed", "failed", "cancelled"):
-                return {"ok": False, "error": f"run is already terminal: {run['status']}"}
-            c.execute(
-                _text("UPDATE code_task_runs SET status='cancelled', error=:e, updated_at=now() "
-                      "WHERE id=:id AND project_id=:p"),
-                {"id": run_id, "e": reason, "p": project_id},
-            )
-            jobs = c.execute(
-                _text("SELECT id FROM jobs WHERE project_id=:p AND payload::text LIKE :pat "
-                      "AND status NOT IN ('succeeded','cancelled','deadlettered','failed')"),
-                {"p": project_id, "pat": f"%{run_id}%"},
-            ).mappings().all()
-            for j in jobs:
-                c.execute(
-                    _text("UPDATE jobs SET status='cancelled', updated_at=now() "
-                          "WHERE id=:id AND project_id=:p"),
-                    {"id": j["id"], "p": project_id},
-                )
-            emit_event(c, project_id, "code_task.cancelled", actor, "code_task_run",
-                       run_id, {"reason": reason, "jobs_cancelled": [j["id"] for j in jobs]})
-        return {"ok": True, "run_id": run_id, "jobs_cancelled": [j["id"] for j in jobs],
-                "reason": reason}
+        cts = services_module("code_task_service")
+        # One path with the console's Stop (code_task_service.cancel_run): the run, its job,
+        # its open acts and who stopped it, together.
+        try:
+            with ctx.begin() as c:
+                return cts.cancel_run(c, run_id, project_id, actor=actor, reason=reason)
+        except LookupError:
+            return {"ok": False, "error": f"no code task run {run_id}"}
+        except cts.CancelRefused as exc:
+            return {"ok": False, "error": str(exc)}
 
     @reg.tool(
         "waive_gates",
@@ -2918,24 +2910,16 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
              ["run_id"]),
     )
     def list_review_comments(ctx, *, project_id, actor, args):
-        from ..services.review_comments import parse_findings
-
+        cts = services_module("code_task_service")
         want = (args.get("status") or "all").lower()
         with ctx.begin() as c:
             row = _code_task_in_project(c, run_id := args["run_id"], project_id)
             if not row:
                 return {"ok": False, "error": f"no code task run {run_id}"}
-        fctx = row.get("finalize_ctx") or {}
-        stored = list(fctx.get("review_comments") or [])
-        # The panel's findings live in the run's evidence rather than as stored comments, so
-        # they are parsed here. A reviewer's finding and an operator's comment are the same
-        # kind of thing and an operator should not have to look in two places for them.
-        evidence = (fctx.get("evidence") or {})
-        for stage, key in (("review_code", "review_summary"),
-                           ("security_check", "security_summary"),
-                           ("consistency_check", "consistency_summary")):
-            for c_ in parse_findings(evidence.get(key) or "", stage=stage):
-                stored.append({"id": None, **c_.to_dict()})
+            # The whole run: the fence row carries no finalize_ctx or state, so this list was
+            # always empty. A reviewer's finding and an operator's comment are one list.
+            run = cts.load_code_task_run(c, run_id) or {}
+        stored = cts.review_comments_of(run)
         if want != "all":
             stored = [c_ for c_ in stored if (c_.get("status") or "open") == want]
         return {"ok": True, "run_id": run_id, "count": len(stored), "comments": stored}
@@ -2954,34 +2938,15 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         reversibility="safe",
     )
     def resolve_review_comment(ctx, *, project_id, actor, args):
-        import json as _json
-
-        status = (args.get("status") or "").lower()
-        if status not in ("addressed", "dismissed"):
-            return {"ok": False, "error": "status must be addressed or dismissed"}
-        with ctx.begin() as c:
-            row = _code_task_in_project(c, run_id := args["run_id"], project_id)
-            if not row:
-                return {"ok": False, "error": f"no code task run {run_id}"}
-            fctx = row.get("finalize_ctx") or {}
-            comments = list(fctx.get("review_comments") or [])
-            target = args["comment_id"]
-            hit = False
-            for entry in comments:
-                if entry.get("id") == target:
-                    entry["status"] = status
-                    entry["resolved_by"] = actor
-                    if args.get("note"):
-                        entry["resolution_note"] = str(args["note"])[:500]
-                    hit = True
-            if not hit:
-                return {"ok": False, "error": f"no review comment {target} on {run_id}"}
-            c.execute(_text(
-                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
-                "|| jsonb_build_object('review_comments', CAST(:e AS JSONB)), "
-                "updated_at=now() WHERE id=:id AND project_id=:p"),
-                {"e": _json.dumps(comments), "id": run_id, "p": project_id})
-        return {"ok": True, "run_id": run_id, "comment_id": target, "status": status}
+        cts = services_module("code_task_service")
+        run_id = args["run_id"]
+        try:
+            with ctx.begin() as c:
+                return cts.resolve_review_comment(
+                    c, run_id, project_id, args["comment_id"],
+                    status=args.get("status") or "", actor=actor, note=args.get("note") or "")
+        except (LookupError, ValueError) as exc:
+            return {"ok": False, "error": str(exc).strip("'\"")}
 
     @reg.tool(
         "watch_code_task",

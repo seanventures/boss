@@ -6364,6 +6364,8 @@ ALTER TABLE llm_calls   ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+-- A review panel's seats each sign their own work (factory spec §6.4): 1-based, NULL = no panel.
+ALTER TABLE agent_acts ADD COLUMN IF NOT EXISTS seat INT;
 -- THE LEDGER'S HOT PATHS, each served by an index rather than a scan of a table kept forever.
 -- close_act rolls up an act's calls on every close (each step settle, each build stage change
 -- inside a model call's commit, each chat turn); _live_cost and the Act card read the same way.

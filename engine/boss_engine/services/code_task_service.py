@@ -77,7 +77,23 @@ def _row_to_run(r) -> dict:
         "finalize_ctx": _j(r["finalize_ctx"]), "reservation_id": r["reservation_id"],
         "pull_request_url": r["pull_request_url"], "pull_request_number": r["pull_request_number"],
         "decision_id": r["decision_id"], "error": r["error"],
+        # When it started and last moved (factory spec §6.4): additive, for every reader.
+        "created_at": _iso_or_none(_get(r, "created_at")),
+        "updated_at": _iso_or_none(_get(r, "updated_at")),
     }
+
+
+def _get(r, key):
+    try:
+        return r.get(key) if hasattr(r, "get") else r[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def _iso_or_none(value):
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
 def load_code_task_run(connection, run_id: str) -> Optional[dict]:
@@ -85,7 +101,8 @@ def load_code_task_run(connection, run_id: str) -> Optional[dict]:
         return connection.get_run(run_id)
     r = connection.execute(
         sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
-             "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
+             "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error, "
+             "created_at, updated_at "
              "FROM code_task_runs WHERE id = :id"),
         {"id": run_id},
     ).mappings().first()
@@ -147,7 +164,8 @@ def list_code_task_runs(connection, project_id: str, limit: int = 50,
         where += " AND " + " AND ".join(clauses)
     rows = connection.execute(
         sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
-            "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
+            "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error, "
+             "created_at, updated_at "
             f"FROM code_task_runs WHERE {where} ORDER BY created_at DESC LIMIT :lim"),
         params,
     ).mappings().all()
@@ -982,6 +1000,128 @@ def _carry_open_comments(fctx_prev: dict) -> list:
             if isinstance(c, dict) and (c.get("status") or "open") == "open"]
 
 
+class CancelRefused(ValueError):
+    """The run already ended: there is nothing left to stop."""
+
+
+TERMINAL_RUN_STATUSES = ("completed", "failed", "cancelled", "simulated")
+
+
+def cancel_run(connection, run_id: str, project_id: str, *, actor: str,
+               reason: str = "") -> dict:
+    """STOP A BUILD: the run AND its queued job together (cancelling one leaves a zombie that
+    shows as running forever), its open stage acts closed as skipped, and who stopped it at
+    which phase recorded on the run so every surface says `Stopped by <actor>`.
+
+    The one path for the console (POST /v1/code-tasks/{id}/cancel) and MCP cancel_code_task.
+    Raises LookupError when there is no such run in the project, CancelRefused when it ended."""
+    row = connection.execute(
+        sql("SELECT id, status, phase FROM code_task_runs WHERE id=:id AND project_id=:p"),
+        {"id": run_id, "p": project_id},
+    ).mappings().first()
+    if row is None:
+        raise LookupError(f"no code task run {run_id}")
+    if row["status"] in TERMINAL_RUN_STATUSES:
+        raise CancelRefused(f"run is already terminal: {row['status']}")
+    reason = (reason or "").strip() or f"Stopped by {actor}"
+    stamp = datetime.now(timezone.utc).isoformat()
+    connection.execute(
+        sql("UPDATE code_task_runs SET status='cancelled', error=:e, updated_at=now(), "
+            "finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+            "'cancelled_by', CAST(:a AS text), 'cancelled_at', CAST(:t AS text), "
+            "'cancelled_phase', CAST(:ph AS text)) "
+            "WHERE id=:id AND project_id=:p"),
+        {"id": run_id, "e": reason[:2000], "p": project_id, "a": actor, "t": stamp,
+         "ph": row.get("phase") or ""},
+    )
+    jobs = connection.execute(
+        sql("SELECT id FROM jobs WHERE project_id=:p AND payload::text LIKE :pat "
+            "AND status NOT IN ('succeeded','cancelled','deadlettered','failed')"),
+        {"p": project_id, "pat": f"%{run_id}%"},
+    ).mappings().all()
+    for j in jobs:
+        connection.execute(
+            sql("UPDATE jobs SET status='cancelled', updated_at=now() "
+                "WHERE id=:id AND project_id=:p"),
+            {"id": j["id"], "p": project_id},
+        )
+    try:
+        from . import agent_acts
+
+        with connection.begin_nested():
+            agent_acts.close_code_task(connection, run_id)
+    except Exception:  # noqa: BLE001 — the stop stands even if the ledger can't say so
+        logger.warning("could not close the acts of cancelled run %s", run_id, exc_info=True)
+    emit_event(connection, project_id, "code_task.cancelled", actor, "code_task_run",
+               run_id, {"reason": reason, "phase": row.get("phase"),
+                        "jobs_cancelled": [j["id"] for j in jobs]})
+    return {"ok": True, "run_id": run_id, "status": "cancelled",
+            "jobs_cancelled": [j["id"] for j in jobs], "reason": reason}
+
+
+def _comment_key(c: dict) -> tuple:
+    return (c.get("stage"), c.get("path"), c.get("line"), c.get("severity"),
+            (c.get("body") or "")[:120])
+
+
+def review_comments_of(run: dict) -> list[dict]:
+    """Every review comment on a build, from the panel and from people, each once.
+
+    Stored comments (recorded as the review happens) first; findings still only in the run's
+    evidence (`state`, where the pipeline writes it — never `finalize_ctx.evidence`, which
+    nothing writes) are parsed and added when no stored comment already says the same."""
+    from .review_comments import parse_findings
+
+    fctx = run.get("finalize_ctx") or {}
+    stored = [dict(c) for c in (fctx.get("review_comments") or []) if isinstance(c, dict)]
+    seen = {_comment_key(c) for c in stored}
+    evidence = run.get("state") or {}
+    for stage, key in (("review_code", "review_summary"),
+                       ("security_check", "security_summary"),
+                       ("consistency_check", "consistency_summary")):
+        for parsed in parse_findings(evidence.get(key) or "", stage=stage):
+            entry = {"id": None, **parsed.to_dict()}
+            if _comment_key(entry) in seen:
+                continue
+            seen.add(_comment_key(entry))
+            stored.append(entry)
+    return stored
+
+
+def resolve_review_comment(connection, run_id: str, project_id: str, comment_id: str, *,
+                           status: str, actor: str, note: str = "") -> dict:
+    """Mark one stored comment addressed or dismissed. A dismissal is recorded, not erased."""
+    status = (status or "").lower()
+    if status not in ("addressed", "dismissed"):
+        raise ValueError("status must be addressed or dismissed")
+    row = connection.execute(
+        sql("SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+        {"id": run_id, "p": project_id},
+    ).mappings().first()
+    if row is None:
+        raise LookupError(f"no code task run {run_id}")
+    fctx = row["finalize_ctx"] or {}
+    if isinstance(fctx, str):
+        fctx = json.loads(fctx)
+    comments = list(fctx.get("review_comments") or [])
+    hit = None
+    for entry in comments:
+        if entry.get("id") == comment_id:
+            entry["status"] = status
+            entry["resolved_by"] = actor
+            if note:
+                entry["resolution_note"] = str(note)[:500]
+            hit = entry
+    if hit is None:
+        raise LookupError(f"no review comment {comment_id} on {run_id}")
+    connection.execute(
+        sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+            "|| jsonb_build_object('review_comments', CAST(:e AS JSONB)), "
+            "updated_at=now() WHERE id=:id AND project_id=:p"),
+        {"e": json.dumps(comments), "id": run_id, "p": project_id})
+    return {"ok": True, "run_id": run_id, "comment_id": comment_id, "status": status}
+
+
 class RetryRefused(ValueError):
     """A retry that would spend a governed attempt for nothing. The message says what to do."""
 
@@ -1269,6 +1409,13 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
     waive = list(waive_gates or [])
     if "*" in waive or "all" in waive:
         waive = list(failing)
+    from .factory_view import UNWAIVABLE_GATES
+    unwaivable = [g for g in waive if g in UNWAIVABLE_GATES] + [
+        g for g in failing if g in UNWAIVABLE_GATES and g not in waive]
+    if unwaivable:
+        # A PR for an app that does not start is not a PR anyone can review (factory §4.2.1).
+        raise ValueError("refused: can't be waived: the app must start "
+                         f"({', '.join(sorted(set(unwaivable)))})")
     not_waived = [g for g in failing if g not in waive]
     if not_waived:
         raise ValueError(f"refused: failing gates not waived: {not_waived}. "
@@ -1327,6 +1474,14 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
                     "id": run_id,
                 },
             )
+        if not hasattr(c, "save_run"):
+            # Who waived what, so Checks says `Waived by <actor>` (factory spec §4.5.5).
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('waived', CAST(:w AS JSONB)) WHERE id=:id"),
+                {"w": json.dumps({"gates": list(waive_gates), "by": actor, "reason": reason,
+                                  "at": datetime.now(timezone.utc).isoformat()}),
+                 "id": run_id})
         emit_event(c, project_id, "code_task.gate_overridden", actor, "code_task_run", run_id,
                    {"waived_gates": waive_gates, "reason": reason, "quality_gate_id": qg,
                     "pull_request_url": proposal.get("pull_request_url")})
@@ -1650,6 +1805,12 @@ def refused_reservation(engine, jobs, *, run_id: str, project_id: str, reservati
                     emit_event(c, project_id, "code_task.budget_wait", "boss", "code_task_run",
                                run_id, {"message": message, "refusal": reservation.get("refusal"),
                                         "retry_after_seconds": wait, "job_id": job["id"]})
+                    # THE WAIT IS VISIBLE (factory spec §6.4): the build says `Waiting · budget`
+                    # from this stamp, cleared when its next stage opens — no event scan per row.
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
+                        " || jsonb_build_object('budget_wait_since', COALESCE("
+                        "finalize_ctx->'budget_wait_since', to_jsonb(now()))) WHERE id = :id"), {"id": run_id})
                     return {"status": "running", "done": False, "job_deferred": True,
                             "retry_after_seconds": wait, "error": message}
         except Exception:  # noqa: BLE001 — fall through to a retryable attempt
