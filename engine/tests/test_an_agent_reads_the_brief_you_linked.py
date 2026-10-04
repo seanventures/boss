@@ -70,7 +70,9 @@ def test_a_declared_value_beats_a_skill_field_of_the_same_name():
 
     from boss_engine.services import agent_steps
 
-    source = inspect.getsource(agent_steps.run)
+    # Both a step that ran to the end and one that finished after an approval go through here.
+    assert "products_of(" in inspect.getsource(agent_steps.run)
+    source = inspect.getsource(agent_steps.products_of)
     merge = source.index("_what_the_skills_returned")
     declared = source.index("produced.update(declared)")
     assert merge < declared, "the declared values must be applied last, or the skill field wins"

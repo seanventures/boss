@@ -62,6 +62,129 @@ class AgentStepError(RuntimeError):
 DEFAULT_MAX_STEPS = 24
 
 
+# ── HOW AN AGENT STEP ENDED ───────────────────────────────────────────────────────────────────
+#
+# THE INCIDENT (the bundled "Video edit and publish" example, run live). The editing agent's
+# `media.fetch_link` failed — the link was a YouTube watch page, not a video file — so it made no
+# edit and rendered nothing, and its final reply began "I could not complete this task ...
+# nothing was published." The agent LOOP had finished, so the step's status was the loop's
+# `completed`; the step went green and the run opened the publish gate, asking a person to
+# approve uploading a video that did not exist.
+#
+# The loop finishing is not the WORK finishing. So an agent step now ends with a STRUCTURED
+# outcome the agent declares — completed, blocked (it needs something from a person or the
+# setup) or failed — and the runner checks the products a later step depends on are really
+# there (`verdict`). Prose is read for one line of explanation, never for the decision.
+
+COMPLETED, BLOCKED, FAILED = "completed", "blocked", "failed"
+OUTCOMES = (COMPLETED, BLOCKED, FAILED)
+#: The keys of the outcome the agent declares, in its final JSON object.
+OUTCOME_KEYS = ["outcome", "reason", "needs"]
+
+#: Words a model reaches for instead of the three it was given. Anything else is not a
+#: declaration at all, and is treated as one that was never made.
+_OUTCOME_WORDS = {
+    "completed": COMPLETED, "complete": COMPLETED, "done": COMPLETED, "succeeded": COMPLETED,
+    "success": COMPLETED,
+    "blocked": BLOCKED, "needs_input": BLOCKED, "needs_setup": BLOCKED,
+    "failed": FAILED, "failure": FAILED, "error": FAILED, "incomplete": FAILED,
+}
+
+OUTCOME_ASK = (
+    "\n\nWHEN YOU HAVE FINISHED, end your reply with a JSON object on its own line, containing:"
+    "\n  outcome   \"completed\" only if you did ALL of what was asked and verified it; "
+    "\"blocked\" if you cannot go on without something from a person or the setup (a "
+    "different link, a permission, a skill you were not given); \"failed\" if you tried and "
+    "it did not work."
+    "\n  reason    one line saying why — for blocked or failed, what went wrong."
+    "\n  needs     for blocked only: what a person has to provide or set up, in one line."
+    "\nThe step is judged on this object, not on your prose: work you did not finish is never "
+    "\"completed\"."
+)
+
+
+def _one_line(value: Any, limit: int = 240) -> str:
+    line = " ".join(str(value or "").split())
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
+
+
+def _first_line(summary: str) -> str:
+    """The agent's own first sentence, for a step that has to explain itself without having
+    declared why. Markdown decoration is dropped; the JSON tail is never a sentence."""
+    for raw in str(summary or "").splitlines():
+        line = raw.strip().lstrip("#*->` ").rstrip("*` ").strip()
+        if line and not line.startswith("{"):
+            return _one_line(line)
+    return ""
+
+
+def declared_outcome(final_text: str) -> dict[str, Any]:
+    """The outcome the agent declared in its final JSON object.
+
+    `declared` is False when it did not declare one (or declared a word that is not an outcome):
+    `verdict` then decides from the products alone, which is conservative — a step whose work a
+    later step depends on cannot pass on the strength of an agent saying nothing.
+    """
+    found = _declared_values(str(final_text or ""), OUTCOME_KEYS)
+    word = _OUTCOME_WORDS.get(str(found.get("outcome") or "").strip().lower().replace(" ", "_"))
+    return {
+        "outcome": word or "",
+        "declared": bool(word),
+        "reason": _one_line(found.get("reason")) if word else "",
+        "needs": _one_line(found.get("needs")) if word else "",
+    }
+
+
+def _missing(output: dict[str, Any], field: str) -> bool:
+    value = output.get(field)
+    return value is None or (isinstance(value, (str, list, dict)) and not value) \
+        or (isinstance(value, str) and not value.strip())
+
+
+def _as_noun(field: str) -> str:
+    """`media_artifact_id` → "media artifact (media_artifact_id)": a person reads the noun, the
+    engineer reads the field."""
+    noun = field[:-3] if field.endswith("_id") else field
+    noun = noun.replace("_", " ").strip()
+    return f"{noun} ({field})" if noun != field else field
+
+
+def verdict(output: dict[str, Any], *, required: list[str] | tuple[str, ...] = (),
+            step_name: str = "this step") -> dict[str, Any]:
+    """Whether an agent step's work HAPPENED. Every agent step is judged here.
+
+    Returns {"outcome": completed|blocked|failed, "reason", "needs", "declared", "missing",
+    "error"}. `error` is the one line the run card shows when the outcome is not completed.
+
+    Three rules, in order:
+      1. The agent said failed or blocked → that is the outcome, with its reason (and need).
+      2. Anything a later step depends on (`required`) is absent → failed, whatever the agent
+         said, because the next step cannot run on it and a gate must not open over it.
+      3. Otherwise completed.
+    """
+    stated = output.get("agent_outcome")
+    if not isinstance(stated, dict) or not stated.get("declared"):
+        stated = declared_outcome(str(output.get("summary") or ""))
+    outcome = str(stated.get("outcome") or "")
+    reason = str(stated.get("reason") or "") or _first_line(str(output.get("summary") or ""))
+    needs = str(stated.get("needs") or "")
+    missing = [f for f in required if _missing(output, f)]
+    why = reason or "the agent did not say why"
+    error = ""
+    if outcome == FAILED:
+        error = f"{step_name} could not be completed: {why}"
+    elif outcome == BLOCKED:
+        error = f"{step_name} is blocked: {why}" + (f" — needs: {needs}" if needs else "")
+    elif missing:
+        outcome = FAILED
+        error = (f"{step_name} produced no {', '.join(_as_noun(f) for f in missing)}: {why}")
+    else:
+        outcome = COMPLETED
+    return {"outcome": outcome, "reason": reason, "needs": needs,
+            "declared": bool(stated.get("declared")), "missing": missing,
+            "error": _one_line(error, 480)}
+
+
 def _runnable_catalogue(connection: Connection, settings: Optional[Settings],
                         project_id: str) -> dict[str, dict[str, Any]]:
     """The skills an agent loop can actually offer as tools on this project, by id.
@@ -562,11 +685,11 @@ def run(
     # is not the output of any skill — it is a judgement the editing agent makes after reading
     # the brief. Asked for by name, it becomes a field the next step can wire to.
     wanted = [str(name).strip() for name in (produces or []) if str(name).strip()]
-    asked_for = ""
+    # HOW IT ENDED IS ALWAYS ASKED FOR, whatever else is. See `OUTCOME_ASK` and `verdict`.
+    asked_for = OUTCOME_ASK
     if wanted:
-        asked_for = (
-            "\n\nWHEN YOU HAVE FINISHED, end your reply with a JSON object on its own line "
-            "containing exactly these keys:\n"
+        asked_for += (
+            "\n\nIn the same JSON object, also include these keys:\n"
             + "\n".join(f"  {name}" for name in wanted)
             + "\nIf the instruction points at a document for any of them, read it and take the "
               "value from there rather than inventing one. Where a value genuinely is not "
@@ -623,26 +746,8 @@ def run(
         },
     )
     run_of_the_agent = str(result.get("run_id") or "")
-    produced = _what_the_skills_returned(connection, run_of_the_agent)
-    # DECLARED VALUES WIN OVER SKILL OUTPUT FOR THEIR OWN KEYS. A skill returning a field called
-    # `title` means the name of a Drive file; a declared `title` is the answer to the question
-    # the step was asked. Conflating them would publish a video called "short.mp4".
-    declared, copied_keys = _declared(str(result.get("output_text") or ""), wanted)
-    if copied_keys:
-        # THE ORIGINAL BYTES, NOT THE AGENT'S COPY OF THEM. See `_copied_exactly`.
-        documents = _documents_the_agent_read(connection, run_of_the_agent)
-        for key, (line_range, ends_with) in copied_keys.items():
-            original = _lines_of(documents, line_range)
-            if original is None:
-                original = _copied_exactly(str(declared.get(key) or ""), documents,
-                                           ends_with=ends_with)
-            if original:
-                declared[key] = _without_its_label(original, key)
-            elif not str(declared.get(key) or "").strip():
-                # It pointed at nothing findable and quoted nothing. An empty value must not
-                # travel on as an answer.
-                declared.pop(key, None)
-    produced.update(declared)
+    produced = products_of(connection, run_of_the_agent,
+                           str(result.get("output_text") or ""), wanted)
     offered = [str(s["id"]) for s in skills_offered]
     used = produced.pop("_used", []) if "_used" in produced else _used_skills(
         connection, str(result.get("run_id") or ""))
@@ -667,6 +772,8 @@ def run(
                    "mcp_offered": mcp_offered},
         "status": result.get("status"),
         "summary": result.get("output_text") or "",
+        # HOW THE AGENT SAYS IT ENDED — completed, blocked or failed — as a field, not prose.
+        "agent_outcome": declared_outcome(str(result.get("output_text") or "")),
         "tool_calls": result.get("tool_calls") or len(result.get("transcript") or []),
         "agent_run_id": result.get("run_id"),
         # Set when the agent reached a skill that needs a person. The step waits on this, the
@@ -674,6 +781,39 @@ def run(
         "decision_id": result.get("decision_id"),
         "transcript": result.get("transcript") or [],
     }
+
+
+def products_of(connection: Connection, run_of_the_agent: str, final_text: str,
+                wanted: list[str]) -> dict[str, Any]:
+    """What an agent run produced: every field its skills returned, with the values it was asked
+    to DECIDE (`produces`) read out of its final reply.
+
+    ONE FUNCTION, TWO CALLERS: the step that ran to the end (`run`), and the step that stopped
+    for a person's approval and finished later (the runner's `_terminal_evidence`). The second
+    used to read the skills only, so a title the agent decided after the approval never reached
+    the step that publishes it.
+    """
+    produced = _what_the_skills_returned(connection, run_of_the_agent)
+    # DECLARED VALUES WIN OVER SKILL OUTPUT FOR THEIR OWN KEYS. A skill returning a field called
+    # `title` means the name of a Drive file; a declared `title` is the answer to the question
+    # the step was asked. Conflating them would publish a video called "short.mp4".
+    declared, copied_keys = _declared(final_text, wanted)
+    if copied_keys:
+        # THE ORIGINAL BYTES, NOT THE AGENT'S COPY OF THEM. See `_copied_exactly`.
+        documents = _documents_the_agent_read(connection, run_of_the_agent)
+        for key, (line_range, ends_with) in copied_keys.items():
+            original = _lines_of(documents, line_range)
+            if original is None:
+                original = _copied_exactly(str(declared.get(key) or ""), documents,
+                                           ends_with=ends_with)
+            if original:
+                declared[key] = _without_its_label(original, key)
+            elif not str(declared.get(key) or "").strip():
+                # It pointed at nothing findable and quoted nothing. An empty value must not
+                # travel on as an answer.
+                declared.pop(key, None)
+    produced.update(declared)
+    return produced
 
 
 def _tool_messages(connection: Connection, run_id: str) -> list[dict[str, Any]]:
