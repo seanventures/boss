@@ -177,6 +177,15 @@ export function SetupBoard({ projectId, initialView = null }: {
                 title={view.verdict.tip} data-tip={view.verdict.tip}>
             <Dot tone={view.verdict.tone} />{view.verdict.label}
           </span>
+          {/* THE SEAM TO SKILLS AND MCP: once the repository and a model work, the next job is
+              what the crew can do (the Kit opens on its Essentials). Board and stepper alike. */}
+          {view.ready ? (
+            <a className="su-link" href="?area=skills&setup=1" data-testid="su-next-skills"
+               title="Choose what your agents can do: research, tickets, email."
+               data-tip="Choose what your agents can do: research, tickets, email.">
+              Next: give your crew skills
+            </a>
+          ) : null}
           <span className="su-spacer" />
           {/* Nothing connected, nothing to test: the button waits for something to check. */}
           <button type="button" className="su-btn" data-testid="su-test-all"
