@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import text
+
 from apps.api.tests import _factory_support as fx
 
 
@@ -162,3 +164,26 @@ def test_a_gate_on_the_builds_own_run_is_the_builds(engine):
         _attach_builds_to_their_runs(c, fx.PROJECT, items)
     assert items[0]["build"]["run_id"] == run_id and items[0]["build"]["where"] == "Release"
     assert "build" not in items[1] and "build" not in items[2]
+
+
+def test_a_build_the_budget_holds_says_so_and_a_new_cap_lets_it_go(client, engine):
+    """D3: a held code.task job read "Queued · Waiting for a worker" for 12+ minutes, and a
+    raised cap left it waiting up to 15 more. It reads `Waiting · budget`, and a cap change
+    releases it at once."""
+    from boss_engine.services.budget import release_budget_holds
+
+    run_id = fx.new_run(engine, phase="queued", title="Held app")
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO jobs (id, project_id, kind, status, payload, run_after, last_error) "
+            "VALUES (:j, :p, 'code.task', 'queued', CAST(:pl AS JSONB), now() + interval '15 minutes', "
+            "CAST(:e AS JSONB))"),
+            {"j": f"job_{run_id}", "p": fx.PROJECT, "pl": f'{{"run_id": "{run_id}"}}',
+             "e": '{"kind": "budget_hold", "reason": "red_halts_non_p0_work"}'})
+    body = _floor(client).json()
+    assert _row(body, run_id)["word"] == "Waiting · budget"
+    with engine.begin() as c:
+        assert release_budget_holds(c, fx.PROJECT) >= 1
+        due = c.execute(text("SELECT run_after <= now() FROM jobs WHERE id = :j"),
+                        {"j": f"job_{run_id}"}).scalar()
+    assert due is True

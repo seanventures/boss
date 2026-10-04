@@ -131,3 +131,17 @@ def test_every_state_word_is_short():
                state(run("failed", "implement")), state(run("completed", "done"))]
     for s in samples:
         assert len(s["word"].replace("·", " ").split()) <= 3, s["word"]
+
+
+def test_a_job_the_budget_holds_is_waiting_on_budget_not_a_worker():
+    """Factory test D3: the budget governor holds a job by queueing it with a later run_after
+    and `last_error.kind = budget_hold`. That read "Queued · Waiting for a worker" for 12 min."""
+    held = {"status": "queued", "run_after": NOW + timedelta(minutes=14),
+            "last_error": {"kind": "budget_hold", "reason": "red_halts_non_p0_work"}}
+    s = state(run(phase="queued"), job=held)
+    assert (s["state"], s["word"]) == ("budget_wait", "Waiting · budget")
+    # Released (run_after passed) or never held: the ordinary words.
+    assert state(run(phase="queued"), job={**held, "run_after": NOW - timedelta(seconds=1)})[
+        "word"] == "Queued"
+    assert state(run(phase="queued"), job={"status": "queued", "last_error": {}})[
+        "word"] == "Queued"

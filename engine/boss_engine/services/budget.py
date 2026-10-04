@@ -97,6 +97,19 @@ def state_for_utilization(cap: int, utilization: float, soft: float, orange: flo
     return "green"
 
 
+def release_budget_holds(connection: Connection, project_id: str) -> int:
+    """A CAP CHANGED: every job the budget was holding runs at its next poll, not up to 15
+    minutes later (factory test D3). A job still over the new cap is simply held again by the
+    same policy check; one that fits now goes. Returns how many were released."""
+    released = connection.execute(
+        text("UPDATE jobs SET run_after = now(), updated_at = now() "
+             "WHERE project_id = :p AND status = 'queued' "
+             "AND last_error->>'kind' = 'budget_hold' AND run_after > now()"),
+        {"p": project_id},
+    )
+    return int(getattr(released, "rowcount", 0) or 0)
+
+
 def burst_retry_after_seconds(frees_in: object) -> int:
     """Seconds until the per-minute window has room again: when enough of the last minute's
     actual spend ages out. Never below 5 (a tight loop of refusals helps nobody) nor above 60
@@ -463,6 +476,8 @@ class BudgetGovernor:
                 ),
                 {**params, "id": make_id("bp")},
             )
+        if scope_type == "project":
+            release_budget_holds(connection, scope_id)
         emit_event(connection, scope_id, "budget.intensity_set", actor, "budget_policy", scope_id,
                    {"intensity": intensity, "daily_cap_usd_micros": daily,
                     "max_concurrent_jobs": max_concurrent, "max_workers_total": max_workers,

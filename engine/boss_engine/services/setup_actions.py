@@ -1036,6 +1036,9 @@ def set_budget(connection: Connection, settings: Any, project_id: str, monthly_c
             {"id": make_id("bp"), "p": project_id,
              "d": int(getattr(settings, "daily_cap_usd_micros", 10_000_000) or 10_000_000),
              "m": micros})
+    from .budget import release_budget_holds
+
+    release_budget_holds(connection, project_id)
     emit_event(connection, project_id, "budget.monthly_cap_set", actor, "budget_policy",
                project_id, {"monthly_cap_usd_micros": micros, "via": "repo_and_models"})
 
