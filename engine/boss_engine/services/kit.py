@@ -963,29 +963,42 @@ def used_in(connection: Connection, settings: Any, project_id: str,
             if not isinstance(step, dict):
                 continue
             binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
-            keys: set[str] = set()
+            # (ability, via): via says WHICH part of the ability the step uses —
+            # "skill:<id>", "mcp:<server>" or "capability:<x>" — so the Library row of one skill
+            # or server counts its own steps, not every step of the ability.
+            uses: set[tuple[str, str]] = set()
+
+            def _skill(skill_id: Any) -> None:
+                for key in by_skill.get(str(skill_id), []):
+                    uses.add((key, f"skill:{skill_id}"))
+
+            def _server(name: Any) -> None:
+                for key in by_server.get(str(name).lower(), []):
+                    uses.add((key, f"mcp:{str(name).lower()}"))
+
             for skill in binding.get("skills") or []:
-                keys.update(by_skill.get(str(skill), []))
+                _skill(skill)
             for server in (binding.get("mcp") or []) + (binding.get("mcp_servers") or []):
-                keys.update(by_server.get(str(server).lower(), []))
+                _server(server)
             if binding.get("skill_id"):
-                keys.update(by_skill.get(str(binding["skill_id"]), []))
+                _skill(binding["skill_id"])
             if binding.get("custom_step") and str(binding["custom_step"]) in custom:
                 bound = custom[str(binding["custom_step"])]
                 if bound.get("skill_id"):
-                    keys.update(by_skill.get(str(bound["skill_id"]), []))
+                    _skill(bound["skill_id"])
                 if bound.get("server_name"):
-                    keys.update(by_server.get(str(bound["server_name"]).lower(), []))
+                    _server(bound["server_name"])
             capability = str(binding.get("capability") or "")
             if capability in CAPABILITY_ABILITY:
-                keys.add(CAPABILITY_ABILITY[capability])
-            for key in keys:
+                uses.add((CAPABILITY_ABILITY[capability], f"capability:{capability}"))
+            for key, via in sorted(uses):
                 if key in out:
                     out[key].append({"workflow_key": str(row["workflow_key"]),
                                      "workflow_name": str(row["name"]),
                                      "step_id": str(step.get("id") or ""),
                                      "step_title": str(step.get("title") or step.get("id")
-                                                       or "")})
+                                                       or ""),
+                                     "via": via})
     return out
 
 
@@ -1027,7 +1040,8 @@ def _view(connection: Connection, settings: Any, project_id: str, ability: dict[
         "depends_on": list(ability["depends_on"]),
         "connect_href": ability.get("connect_href"),
         "scopes_tip": ability.get("scopes_tip"),
-        "mcp": [{"server_id": s["id"], "name": s["name"], "trusted": bool(s.get("trusted")),
+        "mcp": [{"server_id": s["id"], "name": s["name"], "url": s.get("url"),
+                 "trusted": bool(s.get("trusted")),
                  "reachable": s.get("reachable")} for s in facts["servers"]],
         # The servers the kit file names, registered or not — what a Studio picker offers.
         "mcp_names": [e["server"] for e in ability["mcp"]],

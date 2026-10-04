@@ -3027,7 +3027,24 @@ def skill_summary_from_service(payload) -> SkillSummary:
         policy=payload.get("policy") or {},
         publisher=payload.get("publisher") or {},
         provenance=payload.get("provenance") or {},
+        usable=payload.get("usable"),
+        reason=payload.get("reason"),
     )
+
+
+def skill_usability(skill: dict) -> tuple[bool, Optional[str]]:
+    """Can BOSS run this catalogue skill here? A skill with no executor (and not one BOSS runs
+    itself, nor an MCP or authored one) cannot, whatever its row says."""
+    from boss_engine.services.skill_executors import registered_executor_ids
+
+    if skill.get("system") or str(skill.get("source") or "module") not in (
+            "module", "catalog", "builtin"):
+        return True, None
+    if skill.get("mock_mode"):
+        return True, None
+    if str(skill.get("id")) in set(registered_executor_ids()):
+        return True, None
+    return False, "Agents can't run this skill on this install"
 
 
 def entitlement_source_summary_from_service(
@@ -15240,9 +15257,11 @@ def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
                 project_id,
                 connection=connection,
             )
-    return SkillListResponse(
-        items=[skill_summary_from_service(skill) for skill in skills]
-    )
+    items = []
+    for skill in skills:
+        usable, reason = skill_usability(skill)
+        items.append(skill_summary_from_service({**skill, "usable": usable, "reason": reason}))
+    return SkillListResponse(items=items)
 
 
 @app.get("/v1/skills/invocations")

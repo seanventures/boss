@@ -19,6 +19,7 @@ import { Section } from "./ability-drawer";
 import { shortError, TIP, agentName } from "./kit-copy";
 import { BLANK, type BuiltIn, deleteConsequence, type Draft, draftFromSkill, type Skill, skillStatus } from "./library-data";
 import { StatusPill } from "./ability-card";
+import { stepsOf } from "./used-in-section";
 import { DrawerShell } from "./overlay";
 import { RiskDot } from "./tools-section";
 
@@ -302,7 +303,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                 </ul>
               ) : ability && ability.used_in.length ? (
                 <ul className="kit-used">
-                  {ability.used_in.map((u) => (
+                  {stepsOf(ability.used_in.filter((u) => !u.via || u.via === `skill:${builtIn?.id ?? skill?.skill_key ?? ""}`)).map((u) => (
                     <li key={`${u.workflow_key}:${u.step_id}`}>
                       <a href={`?area=delivery_workflows&wf=${encodeURIComponent(u.workflow_key)}&step=${encodeURIComponent(u.step_id)}`}>
                         <span data-user-text>{u.workflow_name}</span> › <span data-user-text>{u.step_title}</span>
