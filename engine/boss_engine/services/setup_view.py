@@ -908,9 +908,16 @@ def basics(view: dict[str, Any], *, router_runnable: Optional[bool] = None) -> d
     repos = view["repository"]["repos"]
     default = next((r for r in repos if r["default"]), repos[0] if repos else None)
     usable = any(model_working(m) for m in view["models"])
-    return {"github": any(repository_working(r) for r in repos),
+    github = any(repository_working(r) for r in repos)
+    # SAY THE ROW'S OWN REASON. An expired token is not "no repository is connected": a
+    # workflow Start names what the page's pill says ("Token expired on …. Paste a new one.").
+    why_repo = None if github or not repos else f"{default['full_name']}: {default['pill']['tip']}"
+    broken = [m for m in view["models"] if not model_working(m)]
+    why_model = None if usable or not broken else f"{broken[0]['label']}: {broken[0]['pill']['tip']}"
+    return {"github": github,
             "model": usable if router_runnable is None else (usable and router_runnable),
-            "repository": default["full_name"] if default else None}
+            "repository": default["full_name"] if default else None,
+            "repository_problem": why_repo, "model_problem": why_model}
 
 
 def stale_targets(view: dict[str, Any]) -> list[str]:

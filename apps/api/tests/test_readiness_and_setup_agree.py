@@ -22,6 +22,12 @@ def test_they_agree_through_every_state(client, engine, monkeypatch):
     for step in ("empty", "read_only", "full", "key"):
         if step == "read_only":
             connect_repository(client, token="ghp_e2e_contents_read_only")
+            # The Start names the row's own reason, not "no repository is connected".
+            with engine.begin() as c:
+                _, detail = workflow_readiness.check(c, api_main.settings, PROJECT, "repository")
+            [repo] = _view(engine)["repository"]["repos"]
+            assert detail == f"e2e/app: {repo['pill']['tip']}"
+            assert "Contents: Read and write" in detail
         elif step == "full":
             connect_repository(client, token="ghp_e2e_full")
         elif step == "key":

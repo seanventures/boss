@@ -499,14 +499,15 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
             if basics["github"]:
                 return True, (f"pushes to {basics['repository']}" if basics.get("repository")
                               else "a repository is connected")
-            return False, "no GitHub repository is connected to this project"
+            return False, (basics.get("repository_problem")
+                           or "no GitHub repository is connected to this project")
         # THE ROUTER'S ANSWER, not a count of rows: the same `model_routing.choose` that picks
         # the adapter a step will run on (connected_basics → model_done).
         if basics["model"]:
             from .model_routing import choose
 
             return True, f"a model is connected: {choose(connection, settings, project_id).describe()}"
-        return False, "no model is connected to this project"
+        return False, basics.get("model_problem") or "no model is connected to this project"
     if key == "deployment_target":
         hosts = _scalar(connection, "SELECT count(*) FROM deployment_hosts WHERE project_id=:p "
                                     "AND status IN ('verified','ready','active')", p) or 0
