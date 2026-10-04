@@ -72,3 +72,15 @@ describe("Live never guesses", () => {
     expect(next.map((n) => n.title)).toEqual(["Next: Vera · Test"]);
   });
 });
+
+describe("a gate is drawn once", () => {
+  it("drops the server's gate hop; the lane's own You hop stands for it", async () => {
+    const { parseMission } = await import("../lib/agents-live-board");
+    const m = parseMission({ run_id: "r", state: "waiting_you", hops: [
+      { act_id: "a1", role_key: "pm", state: "done", label: "PRD" },
+      { act_id: "a2", role_key: null, person: "ceo", state: "needs_you", label: "Gate", gate: true },
+    ] });
+    expect(m.hops.map((h) => (h.kind === "hop" ? h.actId : h.kind))).toEqual(["a1"]);
+  });
+});
+

@@ -38,7 +38,7 @@ export function presenceFromStatus(a: V2Agent): LivePresence {
 /** The one line under a card. Built from data, prefixed by what it means. */
 export function presenceLine(p: LivePresence): string {
   const line = (p.line || "").trim();
-  if (/^(Now|Waiting on you|Last|In panel|Stuck)\b/i.test(line)) return line;
+  if (/^(Now|Waiting on you|Last|In panel|In a panel|Stuck|No work yet)\b/i.test(line)) return line;
   if (p.state === "needs_you") return line ? `Waiting on you: ${line}` : "Waiting on you";
   if (p.state === "stuck") return line ? `Stuck: ${line}` : "Stuck";
   if (p.inPanel) return line ? `In panel: ${line}` : "In a panel";
