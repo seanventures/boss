@@ -25,7 +25,7 @@ import pytest
 from boss_engine.services import workflow_run_actions as actions_mod
 from boss_engine.services import workflows
 from boss_engine.services import workflow_recheck
-from boss_engine.services.workflow_run_actions import is_gate, decide, run_actions
+from boss_engine.services.workflow_run_actions import decide, run_actions
 
 DOSSIER_OK = {"drun_ok": {"project_id": "p", "status": "completed", "has_findings": True}}
 
@@ -162,16 +162,14 @@ CASES = [
      None,
      {"stop": False, "remove": False,
       "retry_step:deploy": False, "skip_step:deploy": False}),
-    # A REFUSED APPROVAL: Retry asks again, Skip carries on without it (agents-home D3, the
-    # operator's decision — the skip is recorded with who chose it and why).
-    ("a refused approval: Retry asks again, Skip carries on without it", "failed",
+    ("a refused approval: Try again reopens it, Skip never offered", "failed",
      [step("approve", "failed", "spec_review")],
      None, {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": True,
-            "retry_step:approve": True, "skip_step:approve": True}),
+            "retry_step:approve": True}),
     ("a failed decision step is a gate too", "failed",
      [step("gate", "failed", kind="decision", capability="")],
      None, {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": True,
-            "retry_step:gate": True, "skip_step:gate": True}),
+            "retry_step:gate": True}),
 ]
 
 
@@ -339,7 +337,5 @@ def test_an_approval_is_an_approval_by_the_same_test_everywhere():
         template = {"kind": "capability", "binding": {"capability": key}}
         loaded = step("s", "failed", key)
         offered = {a["key"] for a in run_actions({"status": "failed", "input": {}}, [loaded], {})}
-        # Every failed step, a refused gate included, offers Retry and Skip (agents-home D3).
-        assert {"retry_step", "skip_step"} <= offered, key
-        assert workflows._is_gate_step(template) == is_gate("capability", key), key
+        assert workflows._is_gate_step(template) == ("skip_step" not in offered), key
     assert workflows._is_gate_step({"kind": "decision"})

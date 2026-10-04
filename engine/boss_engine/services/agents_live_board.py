@@ -857,6 +857,12 @@ def force(connection: Any, project_id: str, attention: list[AttentionItem]
             continue
         agents.append(_agent(key, key.replace("_", " ").capitalize(), None, "yours", here,
                              stuck.get(key), "active"))
+    asks = {str(r["role_key"]): int(r["n"]) for r in connection.execute(
+        text("SELECT role_key, count(*) AS n FROM agent_acts WHERE project_id = :p "
+             "AND ended_at IS NULL AND status = 'awaiting_input' AND role_key IS NOT NULL "
+             "GROUP BY role_key"),
+        {"p": project_id},
+    ).mappings().all()}
     order = [k for k, _, _ in TEAMS]
     labels = {k: (label, tip) for k, label, tip in TEAMS}
     custom = sorted({a["team"] for a in agents} - set(order))
@@ -876,11 +882,9 @@ def force(connection: Any, project_id: str, attention: list[AttentionItem]
                     break
         team: Team = {"key": key, "label": label, "members": [a["role_key"] for a in members],
                       "working": sum(1 for a in members if a["state"] in ("working", "in_panel")),
-                      # DECISIONS, counted as every needs-you number is (agents-home D8): the
-                      # cards attributed to this team's agents, not how many agents wait.
-                      "needs_you": sum(1 for a in attention
-                                       if a.get("kind") == "approval"
-                                       and a.get("role_key") in {m["role_key"] for m in members}),
+                      # ITEMS, not agents (D8): this team's agents' OWN open asks. A gate is
+                      # the operator's wait, never a team's (D4 + the lead's follow-up).
+                      "needs_you": sum(asks.get(m["role_key"], 0) for m in members),
                       "in_panel": sum(1 for a in members if a["state"] == "in_panel")}
         if tip:
             team["tip"] = tip

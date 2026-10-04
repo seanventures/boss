@@ -109,9 +109,11 @@ def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, 
     assert hops[0]["label"] == "Started" and hops[0]["role_key"] is None
     assert any(h["role_key"] == herald and h["state"] == "done" for h in hops)
     assert hops[-1]["state"] == "needs_you" and hops[-1]["role_key"] is None, row["hops"]
-    # The herald is on the floor, in Yours (a custom agent with no team), needing you.
+    # The herald is on the floor, in Yours (a custom agent with no team). The gate holding its
+    # draft is YOUR wait, so neither the herald nor its team reads "needs you" for it (D4).
     agent = next(a for a in board["agents"] if a["role_key"] == herald)
-    assert agent["team"] == "yours" and agent["state"] == "needs_you"
+    assert agent["team"] == "yours" and agent["state"] != "needs_you"
+    assert next(t for t in board["teams"] if t["key"] == "yours")["needs_you"] == 0
     assert [t["key"] for t in board["teams"]][:8] == [
         "leadership", "architecture", "engineering", "quality", "operations", "cost", "media",
         "thinkers"]

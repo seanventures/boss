@@ -102,10 +102,8 @@ export function zoneTeams(board: LiveBoard, moved: Record<string, string> = {}):
     if (Object.keys(moved).length) {
       t.working = t.people.filter((p) => ["working", "thinking", "speaking"].includes(p.state)).length;
     }
-    // NEEDS YOU IS ITEMS, NOT AGENTS: the same items the pill and Live's cards count, attributed
-    // to this team's agents. One agent holding three gates is `3 need you`.
-    const members = new Set(t.members);
-    t.needsYou = board.attention.filter((a) => a.roleKey && members.has(a.roleKey)).length;
+    // NEEDS YOU IS THE SERVER'S: this team's agents' own open asks, counted as items. A gate
+    // waiting on you is yours, never a team's, so it is not counted here (agents-home D4).
   }
   // An empty team is not a place: `Yours 0` is never drawn.
   for (const [key, t] of teams) if (key === "yours" && t.members.length === 0) teams.delete(key);

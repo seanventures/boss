@@ -102,26 +102,16 @@ def test_skip_refuses_a_step_that_did_not_fail(client, engine, failed_run):
     assert response.status_code == 409, response.text
 
 
-def test_a_refused_gate_can_be_skipped_and_the_skip_is_not_an_approval(
-        client, engine, failed_run):
-    """Agents home D3 (the operator's decision): a gate somebody said no to can be skipped —
-    the run carries on WITHOUT it — and the record says skipped, by whom and why, never
-    approved."""
+def test_skip_refuses_an_approval_gate(client, engine, failed_run):
+    """A gate that "failed" is a person who said no; a skip would turn that into a yes."""
     with engine.begin() as c:
         c.execute(text("UPDATE workflow_step_runs SET status='failed', "
-                       "last_error='you rejected it', output = COALESCE(output, '{}'::jsonb) "
-                       "|| '{\"rejected_by_approver\": true}'::jsonb "
+                       "last_error='a person rejected this step' "
                        "WHERE workflow_run_id=:r AND step_id='approve'"), {"r": failed_run})
     response = client.post(f"/v1/delivery-workflows/runs/{failed_run}/skip-step", json={
         "project_id": PROJECT, "actor": "ceo", "step_id": "approve", "reason": "ship it"})
-    assert response.status_code == 200, response.text
-    assert response.json()["status"] == "skipped"
-    assert response.json()["message"].startswith("Skipped ")
-    with engine.begin() as c:
-        status = c.execute(text("SELECT status FROM workflow_step_runs WHERE "
-                                "workflow_run_id=:r AND step_id='approve' "
-                                "ORDER BY iteration DESC LIMIT 1"), {"r": failed_run}).scalar()
-    assert status == "skipped"
+    assert response.status_code == 409, response.text
+    assert "approval" in response.json()["detail"]
 
 
 def test_an_unknown_step_is_not_found(client, failed_run):

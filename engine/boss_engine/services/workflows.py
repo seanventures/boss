@@ -4050,11 +4050,13 @@ def _stop_run_at(connection: Connection, run_id: str, row: Any) -> None:
     run = _run_row(connection, run_id)
     template = _step_map(_run_spec(connection, run_id)).get(str(row["step_id"])) or {}
     why = str(row["last_error"] or "its work failed").strip().rstrip(".")
-    # A refused approval cannot be skipped (see `skip_failed_step`), so the sentence does not
-    # offer what the button would refuse.
-    refused = _is_gate_step(template) or bool(
+    # The sentence offers what the buttons offer (`workflow_run_actions.skip_refusal`): a
+    # standalone gate is never skipped past; a refused action can be.
+    gate = _is_gate_step(template)
+    refused = gate or bool(
         (_json(dict(row).get("output"), {}) or {}).get("rejected_by_approver"))
-    choices = ("Retry asks again; Skip carries on without it." if refused
+    choices = ("Retry asks again; Stop ends the run." if gate
+               else "Retry asks again; Skip carries on without it." if refused
                else "Try it again, or skip it and carry on.")
     named = _named_step(connection, run["project_id"], template, str(row["step_id"]))
     sentence = f"Stopped at {named}: {why}. {choices}"

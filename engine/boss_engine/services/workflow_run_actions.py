@@ -178,6 +178,28 @@ def is_refused_approval(step: dict[str, Any]) -> bool:
     return bool(_output(step).get("rejected_by_approver"))
 
 
+#: What a refused standalone approval offers instead of Skip (agents-home D3, lead's rule).
+SKIP_PAST_A_NO = ("Skipping this approval would run what you just refused. "
+                  "Retry asks again; Stop ends the run.")
+
+
+def skip_refusal(step: dict[str, Any]) -> Optional[str]:
+    """THE ONE RULE for whether a failed step may be skipped past a person's no.
+
+    A STANDALONE GATE — a decision step, or a capability declared `is_gate` (resume_workflow
+    and its kind) — exists to release the steps AFTER it. Skipping it carries the run into
+    exactly the work the operator refused: a no becomes a yes. So it is never skipped; it
+    offers Retry (ask again) and Stop. Returns the sentence the refusal says.
+
+    A step whose OWN action was held at its approval (a capability with `approval: manual`, a
+    stack deploy whose deployment decision was rejected) may be skipped: skipping means that
+    action never runs, which is what the no asked for, and the run carries on without it.
+    Returns None for those, and for every step that is not an approval at all."""
+    if is_gate(_step_kind(step), step_capability(step)):
+        return SKIP_PAST_A_NO
+    return None
+
+
 def _verdict(key: str, label: str, state: str, reason: Optional[str] = None,
              step_id: Optional[str] = None, **extra: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"key": key, "label": label, "state": state,
@@ -481,11 +503,13 @@ def _verdicts(
             skip = (ABSENT, f"this run is {status}, so there is nothing to proceed to.")
         elif compensating:
             skip = (DISABLED, undoing)
+        elif skip_refusal(step):
+            skip = (ABSENT, skip_refusal(step))
         else:
             skip = (ENABLED, None)
-        # A REFUSED GATE CAN BE SKIPPED (agents-home D3, the operator's decision): the run goes
-        # on WITHOUT what the gate held, and the record keeps who chose that and why — Skip
-        # always asks for a reason. It never records the gate as approved.
+        # A STEP WHOSE OWN ACTION WAS REFUSED CAN BE SKIPPED (agents-home D3): the action never
+        # runs and the run goes on without it; the record keeps who chose that and why — Skip
+        # always asks for a reason. A standalone gate never can (`skip_refusal`).
         out.append(_verdict("skip_step", "Skip", skip[0], skip[1], step_id=step_id,
                             title=f"Carry on without {_step_label(step)}"))
     return out
@@ -534,6 +558,11 @@ def stopped_for_operator(
         step_id = str(step.get("step_id") or "")
         answers = [_public(v) for v in verdicts
                    if v.get("step_id") == step_id and v["state"] == ENABLED]
+        # A refused standalone gate cannot be skipped, so its other answer is Stop: the run
+        # does not go on into what the person refused (`skip_refusal`).
+        if answers and skip_refusal(step):
+            answers += [{**_public(v), "step_id": step_id} for v in verdicts
+                        if v["key"] == "stop" and v["state"] == ENABLED]
         if answers:
             out.append((step, answers))
     return out

@@ -51,13 +51,17 @@ const $$ = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
 const gate = (id: string, role: string | null) => ({ id, kind: "approval", role_key: role, title: `Publish ${id}` });
 
 describe("D8 a team's needs-you is items, in the right grammar", () => {
-  it("one agent with three gates is `3 need you`; an agent in needs_you state with no item is not counted", async () => {
-    const b = board({ release_manager: ["needs_you", "Waiting on you: Gate"], qa: ["needs_you", "Waiting on you: x"] },
-                    { attention: [gate("d1", "release_manager"), gate("d2", "release_manager"), gate("d3", "release_manager"),
-                                  gate("d4", null)] });
+  it("draws the server's count of the team's own asks; gates waiting on you never count for a team", async () => {
+    // Three gates hold the release manager's work: those are YOUR waits (D4), not Operations'.
+    const b = board({ release_manager: ["idle", "Last: Working · Notify"] },
+                    { attention: [gate("d1", "release_manager"), gate("d2", "release_manager"), gate("d3", "release_manager")] });
+    const ops = b.teams.find((t) => t.key === "operations")!;
+    ops.needsYou = 0;
+    const quality = b.teams.find((t) => t.key === "quality")!;
+    quality.needsYou = 2; // two of Quality's agents' own open asks, as the server counted them
     await render(<TeamZones projectId="p1" board={b} density="compact" />);
-    expect($('[data-testid="ag-team-operations"]')!.textContent).toContain("3 need you");
-    expect($('[data-testid="ag-team-quality"]')!.textContent).not.toMatch(/need/);
+    expect($('[data-testid="ag-team-operations"]')!.textContent).not.toMatch(/need/);
+    expect($('[data-testid="ag-team-quality"]')!.textContent).toContain("2 need you");
   });
   it("says `1 needs you` for one and `2 need you` for more", () => {
     expect(needYouWords(1)).toBe("1 needs you");

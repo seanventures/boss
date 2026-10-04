@@ -2268,9 +2268,10 @@ def presence_map(connection: Connection, project_id: str, *, include_idle: bool 
                  role_key: Optional[str] = None) -> dict[str, dict[str, Any]]:
     """Every agent's state, in the §4.5 priority: needs you > in a panel > working > idle.
 
-    "Needs you" is this agent's own act waiting on a person, or a gate waiting on a person
-    that holds this agent's finished work. The line is built from the act's label — data, never
-    a model's words.
+    "Needs you" is this agent's OWN act waiting on a person. A gate waiting on a person is the
+    operator's, not the agent whose finished work it holds (agents-home D4): that agent shows
+    its last real state, and the gate reads as yours on Live, the pill and Activity. The line
+    is built from the act's label — data, never a model's words.
 
     WHAT IT READS IS BOUNDED BY WHAT IS OPEN, NOT BY HISTORY. The open acts come off the
     partial `agent_acts_live` index. The idle line ("Last: …") is one index probe per agent
@@ -2310,10 +2311,8 @@ def presence_map(connection: Connection, project_id: str, *, include_idle: bool 
 
     for row in open_rows:
         if row["status"] == "awaiting_input":
-            if row["role_key"]:
-                offer(row["role_key"], "needs_you", row, f"Waiting on you: {row['label']}")
-            else:
-                offer(row["parent_role"], "needs_you", row, f"Waiting on you: {row['label']}")
+            # Only the agent's own ask. A role-less wait (a gate) belongs to nobody here.
+            offer(row["role_key"], "needs_you", row, f"Waiting on you: {row['label']}")
         elif row["kind"] == "seat":
             offer(row["role_key"], "in_panel", row, f"In a panel: {row['label']}")
         else:
