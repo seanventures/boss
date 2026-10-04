@@ -463,9 +463,11 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
         ),
         {"p": project_id},
     ).mappings().first()
+    from .included_spend import INCLUDED_SQL, MONEY_SQL
+
     spent = connection.execute(
         text(
-            "SELECT COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)),0) AS s "
+            f"SELECT COALESCE(SUM({MONEY_SQL}),0) AS s "
             "FROM cost_receipts WHERE project_id=:p"
         ),
         {"p": project_id},
@@ -473,7 +475,8 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
     by_model = connection.execute(
         text(
             "SELECT skill_or_model_id AS model, count(*) AS calls, "
-            "COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)),0) AS micros "
+            f"COALESCE(SUM({MONEY_SQL}),0) AS micros, "
+            f"COALESCE(SUM({INCLUDED_SQL}),0) AS included "
             "FROM cost_receipts WHERE project_id=:p GROUP BY skill_or_model_id ORDER BY micros DESC"
         ),
         {"p": project_id},
@@ -483,11 +486,21 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
         {"p": project_id},
     ).mappings().all()
     cap = int(policy["daily_cap_usd_micros"]) if policy else 0
+    # The daily cap is measured against TODAY's money (budget.period_spend), not the total.
+    from .budget import period_spend
+
+    today = period_spend(connection, project_id, "day")
     return {
         "daily_budget_cap_usd": round(cap / 1e6, 2),
+        "spent_today_usd": round(today["actual_usd_micros"] / 1e6, 4),
+        "reserved_today_usd": round(today["reserved_usd_micros"] / 1e6, 4),
+        "daily_cap_resets_at": today["resets_at_label"],
         "total_spend_usd": round(int(spent) / 1e6, 4),
         "spend_by_model": [
-            {"model": r["model"], "calls": int(r["calls"]), "usd": round(int(r["micros"]) / 1e6, 4)}
+            {"model": r["model"], "calls": int(r["calls"]), "usd": round(int(r["micros"]) / 1e6, 4),
+             # What a subscription answered, at list price: included, not money spent.
+             **({"included_in_subscription_usd": round(int(r["included"]) / 1e6, 4)}
+                if int(r["included"] or 0) else {})}
             for r in by_model
         ],
         "provisioned_infrastructure": [

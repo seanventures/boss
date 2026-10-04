@@ -30,6 +30,7 @@ class Model:
         self.fail_for: set[str] = set()
         self.summary: dict | None = None
         self.proposal: dict | None = None
+        self.billing: str | None = None  # the adapter's own stamp: 'subscription', 'api', ...
 
     @staticmethod
     def who(system_prompt: str) -> str:
@@ -42,7 +43,8 @@ class Model:
         if who in self.fail_for:
             raise RuntimeError("upstream exploded: 500 internal error")
         usage = {"model": "stub-1", "prompt_tokens": 120, "completion_tokens": 40,
-                 "total_tokens": 160, "cost_usd_micros": 1500}
+                 "total_tokens": 160, "cost_usd_micros": 1500,
+                 **({"billing": self.billing} if self.billing else {})}
         if "Turn this conversation into ONE concrete start" in prompt:
             return "r", json.dumps(self.proposal), usage
         if "close the discussion" in prompt:
@@ -192,6 +194,35 @@ def test_a_talk_greets_in_character_streams_and_signs_every_reply(client, engine
         consumed = c.execute(text("SELECT count(*) FROM cost_receipts WHERE category = "
                                   "'agent_conversation'")).scalar()
     assert receipts >= 2 and consumed >= 2
+
+
+@pytest.mark.parametrize("billing, money", [("subscription", 0), ("api", 1500)])
+def test_a_talk_on_a_subscription_costs_no_money(client, engine, model, seated, billing, money):
+    """A reply answered on a subscription is worth its list price but costs nothing: the turn,
+    its act and the budget all say $0, and the receipt keeps the value as included. The same
+    reply on a metered key is money everywhere."""
+    model.billing = billing
+    conv = _open(client, "talk", ["qa"], context={"from": "passport"})
+    reply = _say(client, conv["conversation_id"], "")
+    end = next(e for e in reply if e["type"] == "turn_end")
+    assert end["status"] == "complete"
+    assert end["cost_usd"] == money / 1_000_000
+
+    full = client.get(f"/v1/conversations/{conv['conversation_id']}",
+                      params={"project_id": PROJECT, "actor": ACTOR}).json()
+    assert full["turns"][0]["cost_usd"] == money / 1_000_000
+    (act,) = _acts(engine, conv["conversation_id"])
+    assert float(act["cost_usd"]) == money / 1_000_000
+    with engine.begin() as c:
+        settled = c.execute(text(
+            "SELECT actual_usd_micros, equivalent_usd_micros, included_in_subscription "
+            "FROM cost_receipts WHERE receipt_id = :r"), {"r": end["receipt_id"]}).one()
+        call = c.execute(text("SELECT cost_usd_micros, included_in_subscription FROM llm_calls "
+                              "WHERE act_id = :a"), {"a": act["act_id"]}).one()
+    included = billing == "subscription"
+    assert tuple(settled) == ((0, 1500, True) if included else (1500, None, False))
+    # The call's row keeps what it is worth, and says whether that was money.
+    assert tuple(call) == (1500, included)
 
 
 def test_a_conversation_is_named_by_the_agents_callsign(client, engine, seated):

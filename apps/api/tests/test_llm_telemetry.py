@@ -105,7 +105,8 @@ CREATE TABLE llm_calls (
     retries INTEGER NOT NULL DEFAULT 0,
     turns INTEGER NOT NULL DEFAULT 0,
     ok BOOLEAN NOT NULL DEFAULT 1,
-    error TEXT
+    error TEXT,
+    included_in_subscription BOOLEAN NOT NULL DEFAULT 0
 )
 """
 

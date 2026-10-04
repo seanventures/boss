@@ -1024,6 +1024,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
     from .budget import BudgetGovernor
     from .llm_telemetry import record_llm_call, set_llm_context
     from .model_failures import explain
+    from .llm_telemetry import engine_call_is_included
     from .openai_adapter import estimate_cost_usd_micros
 
     budget = BudgetGovernor(settings)
@@ -1175,8 +1176,12 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
             record(usage={}, ok=False, error=str(error))
             yield from fail(error)
             return
-        cost = estimate_cost_usd_micros(usage) if usage else 0
-        record(usage=usage, cost_usd_micros=cost)
+        # What the turn is worth at list price; on a subscription or a local model that is
+        # not money (included_spend.py), so the budget settles $0 and the turn costs nothing.
+        worth = estimate_cost_usd_micros(usage) if usage else 0
+        included = engine_call_is_included(engine_name, usage)
+        cost = 0 if included else worth
+        record(usage=usage, cost_usd_micros=worth)
         if not structured and not getattr(adapter, "stream_text_response", None):
             for piece in _reveal(full):
                 yield {"type": "token", "turn_id": turn_id, "text": piece}
@@ -1227,12 +1232,14 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                                   {"conversation_id": plan.conversation_id, "turn_id": turn_id,
                                    "role_key": speaker.role_key, "act_id": act_id},
                                   {"tokens_in": tokens_in, "tokens_out": tokens_out,
-                                   "cost_usd_micros": cost, "model": usage.get("model")})
+                                   "cost_usd_micros": cost, "model": usage.get("model"),
+                                   **({"included_in_subscription": True,
+                                       "equivalent_usd_micros": worth} if included else {})})
             budget.consume(c, plan.project_id, held, receipt_id=receipt_id,
                            category=BUDGET_CATEGORY,
                            skill_or_model_id=f"converse:{usage.get('model') or 'model'}",
-                           estimated_usd_micros=plan.reserve_micros, actual_usd_micros=cost,
-                           actor=plan.actor)
+                           estimated_usd_micros=plan.reserve_micros, actual_usd_micros=worth,
+                           actor=plan.actor, included_in_subscription=included)
             c.execute(text("""
                 UPDATE agent_conversation_turns SET content = :content,
                        payload = CAST(:payload AS JSONB), cited_acts = CAST(:cited AS JSONB),

@@ -10,7 +10,7 @@ the next step, and every surface that shows model work uses it.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 #: Where an operator fixes a model connection.
 SETUP_HREF = "/?area=setup&step=model"
@@ -29,6 +29,89 @@ _PROVIDER_NAMES = {
     "typesafe_jev": "TypeSafe Jev",
     "typesafe": "TypeSafe Jev",
 }
+
+
+#: Where an operator raises the cap.
+BUDGET_HREF = "/?area=budget"
+
+#: The job gate's reasons for holding work by budget state (jobs._budget_state_policy_for_job).
+BUDGET_HOLD_REASONS = (
+    "red_halts_non_p0_work", "orange_defers_non_critical_work",
+    "red_freezes_infra_provisioning", "red_freezes_tier2_effects",
+)
+_HELD_PREFIX = "held — the budget is"
+_HELD_DETAIL = re.compile(r"held — the budget is (\w+) \(([^)]*)\)", re.I)
+#: "It resets at 00:00 UTC, or raise the daily cap in Budget." — the way out of a period cap.
+_RESETS = re.compile(r"It resets at [^.]*? in Budget\.")
+_REFUSED_BY_CAP = re.compile(r"budget cap exceeded: (.+?)\. It resets at", re.I)
+
+
+def _usd(micros: int) -> str:
+    dollars = int(micros or 0) / 1_000_000
+    if dollars == int(dollars):
+        return f"${dollars:,.0f}"
+    if dollars < 0.01:  # a test-sized cap of a few micros is not "$0.00"
+        return f"${dollars:.6f}".rstrip("0")
+    return f"${dollars:,.2f}"
+
+
+def cap_used_sentence(period: Mapping[str, Any]) -> str:
+    """How much of a period's cap is used, for a period from BudgetGovernor.status_for_project
+    (the snapshot itself, or one of its `periods`):
+    "today's budget is used ($10.20 of $10)", "this month's budget is 95% used ($190 of $200)"."""
+    whose = period.get("whose") or "the"
+    cap = int(period.get("cap_usd_micros") or 0)
+    committed = int(period.get("committed_usd_micros") or 0)
+    ratio = float(period.get("utilization_ratio") or 0)
+    used = "used" if ratio >= 1 else f"{round(ratio * 100):.0f}% used"
+    return f"{whose} budget is {used} ({_usd(committed)} of {_usd(cap)})"
+
+
+def resets_sentence(period: Mapping[str, Any]) -> str:
+    """"It resets at 00:00 UTC, or raise the daily cap in Budget." — every cap measures its own
+    period, so the first way out is waiting for it to turn over."""
+    return (f"It resets at {period.get('resets_at_label') or '00:00 UTC'}, "
+            f"or raise the {period.get('cap_name') or 'cap'} in Budget.")
+
+
+def budget_hold_sentence(budget_state: str, utilization_ratio: Optional[float],
+                         cap_usd_micros: Optional[int],
+                         period: Optional[Mapping[str, Any]] = None) -> str:
+    """THE ONE WORDING for work the budget state holds — the job's last_error, the run's and the
+    discovery's attention, and readiness all say this, never "no worker has picked it up".
+
+    With the budget's `period` (the status snapshot, BudgetGovernor.status_for_project):
+    "Held — the budget is red (95% of today's $10 used), so only P0 work runs. It resets at
+    00:00 UTC, or raise the daily cap in Budget."
+
+    The money it counts is money: a subscription's calls are not in it (included_spend.py), and
+    only the money of the cap's own period (budget.period_spend)."""
+    state = str(budget_state or "unknown")
+    whose = (period or {}).get("whose")
+    used = ""
+    if cap_usd_micros:
+        percent = round(float(utilization_ratio or 0) * 100)
+        cap = f"{whose} {_usd(cap_usd_micros)}" if whose else _usd(cap_usd_micros)
+        used = f" ({percent:.0f}% of {cap} used)"
+    only = {"orange": ", so only P0 and P1 work runs",
+            "red": ", so only P0 work runs"}.get(state, "")
+    way_out = (resets_sentence(period) if period and period.get("resets_at_label")
+               else "Raise the cap in Budget to let it run.")
+    return f"Held — the budget is {state}{used}{only}. {way_out}"
+
+
+def held_headline(sentence: object) -> str:
+    """A hold sentence without its way out: "Held — the budget is red (…), so only P0 work
+    runs" — for a readiness detail or a headline that shows the way out beside it."""
+    return re.split(r"\. (?:It resets at|Raise the cap)", str(sentence or "").strip(),
+                    maxsplit=1)[0].rstrip(".")
+
+
+def is_budget_hold(error: object) -> bool:
+    lowered = str(error or "").lower()
+    return (_HELD_PREFIX in lowered
+            or any(reason in lowered for reason in BUDGET_HOLD_REASONS)
+            or bool(re.search(r"budget state \w+ deferred job", lowered)))
 
 
 def provider_name(source_or_engine: Optional[str]) -> str:
@@ -53,6 +136,23 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                        "`claude setup-token` and paste the long sk-ant-… value it prints."),
             "href": SETUP_HREF, "retry": False,
         }
+    # HELD BY THE BUDGET STATE (the job gate). Not a failure and not a missing worker: the job
+    # is queued with a later run_after, and it runs once the money spent is back under the line.
+    if is_budget_hold(text):
+        found = _HELD_DETAIL.search(text)
+        state = (found.group(1).lower() if found else
+                 "red" if "red" in lowered else "orange" if "orange" in lowered else "over")
+        headline = (held_headline(text) + "." if found
+                    else f"Held — the budget is {state}.")
+        resets = _RESETS.search(text)
+        return {
+            "kind": "budget_hold",
+            "headline": headline,
+            "action": ((resets.group(0) + " " if resets else "Raise the cap in Budget to let it "
+                        "run. ") + "Work on a subscription costs no money and does not count "
+                       "against it."),
+            "href": BUDGET_HREF, "retry": False,
+        }
     # Before the cap below: the governor's headroom refusal mentions the budget too, and it
     # clears by itself when the work holding the reservations finishes (BudgetGovernor.reserve).
     if ("held by other work" in lowered
@@ -75,6 +175,17 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
     if any(term in lowered for term in ("budget cap", "daily cap", "monthly cap",
                                         "budget reservation denied", "insufficient",
                                         "budget allocation", "frozen at this budget")):
+        refused = _REFUSED_BY_CAP.search(text)
+        resets = _RESETS.search(text)
+        if refused and resets:
+            # A period cap: "today's budget is used ($10.20 of $10)" — and when it resets.
+            return {
+                "kind": "budget_refused",
+                "headline": ("The budget refused this work. "
+                             f"{refused.group(1)[0].upper()}{refused.group(1)[1:]}."),
+                "action": f"{resets.group(0)} Then retry.",
+                "href": "/?area=budget", "retry": False,
+            }
         return {
             "kind": "budget_refused",
             "headline": "The budget refused this work.",

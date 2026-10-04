@@ -495,7 +495,7 @@ def _attention(r, state: dict) -> Optional[dict]:
     worker refused, the job deadlettered) never reach this row at all.
     """
     from .discovery_spend import RESEARCH_SOURCE_ID
-    from .model_failures import explain
+    from .model_failures import explain, is_budget_hold
 
     keys = r.keys() if hasattr(r, "keys") else ()
     status, error = r["status"], r["error"] or ""
@@ -529,6 +529,13 @@ def _attention(r, state: dict) -> Optional[dict]:
         return {**said, "state": "stopped",
                 "headline": f"Not running — its worker job stopped ({job_status}). "
                             + said["headline"]}
+    # HELD BY THE BUDGET, NOT WAITING FOR A WORKER. The job gate re-queues a job the budget
+    # state holds with a later run_after and no lease — exactly what "no worker has picked it
+    # up" looked for. On boss-1 three research runs said that while a red budget held them.
+    job_reason = job_error.get("reason") if isinstance(job_error, dict) else None
+    if job_status == "queued" and is_budget_hold(f"{job_text} {job_reason or ''}"):
+        return {**explain(job_text or job_reason, source_id=RESEARCH_SOURCE_ID),
+                "state": "waiting"}
     if error.startswith("waiting for the per-minute budget"):
         return {**explain("burst cap"), "state": "waiting"}
     if error.startswith("retrying:"):
@@ -536,7 +543,16 @@ def _attention(r, state: dict) -> Optional[dict]:
         return {**said, "state": "retrying",
                 "headline": "Retrying after a failed attempt. " + said["headline"]}
     age = r["job_age"] if "job_age" in keys else None
+    # A job deliberately scheduled for later is not unclaimed: nobody is meant to take it yet.
+    from .core import now_utc
+
+    run_after = r["job_run_after"] if "job_run_after" in keys else None
+    try:
+        scheduled_later = run_after is not None and run_after > now_utc()
+    except TypeError:  # a naive timestamp from a caller that built the row itself
+        scheduled_later = False
     if (job_status == "queued" and not (r["job_lease_owner"] if "job_lease_owner" in keys else None)
+            and not scheduled_later
             and age is not None and age.total_seconds() > _UNCLAIMED_AFTER_SECONDS):
         return {"kind": "no_worker", "state": "waiting",
                 "headline": "Queued, but no worker has picked it up for a few minutes.",
@@ -693,6 +709,8 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                         "outcomes": len(dossier.get("candidate_outcomes", []))})
             if governance:
                 from .budget import BudgetGovernor
+                from . import model_routing
+                from .claude_cli_adapter import claude_cli_billing
                 from .receipts import ReceiptService
 
                 ReceiptService().mark_succeeded(
@@ -710,6 +728,11 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                     model or "discovery",
                     int(governance["estimated_usd_micros"]),
                     int(cost),
+                    # The legacy research path is the Claude Code CLI: its reported cost is
+                    # list-price value on a subscription, not money (included_spend.py).
+                    included_in_subscription=model_routing.call_is_included(
+                        c, settings, project_id,
+                        {"billing": claude_cli_billing(settings)}),
                 )
     except Exception as exc:  # noqa: BLE001 — record the failure durably, never crash the thread
         if raise_errors:

@@ -395,7 +395,10 @@ def close_act(connection: Connection, act_id: str, *, status: str,
                 tokens_out = a.tokens_out + :to + COALESCE(c.ct, 0),
                 cost_usd = a.cost_usd + :cost + COALESCE(c.micros, 0) / 1000000.0
             FROM (SELECT sum(prompt_tokens) AS pt, sum(completion_tokens) AS ct,
-                         sum(cost_usd_micros) AS micros
+                         -- money only: a subscription or local call is worth its list price
+                         -- but costs nothing (included_spend.py)
+                         sum(cost_usd_micros) FILTER (WHERE NOT included_in_subscription)
+                             AS micros
                   FROM llm_calls WHERE act_id = :act_id) c
             WHERE a.act_id = :act_id AND a.ended_at IS NULL
             """
