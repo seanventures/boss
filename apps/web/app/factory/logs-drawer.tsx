@@ -72,9 +72,9 @@ export function LogsDrawer({ projectId, runId, previewId, deployId, tab, onTab, 
     <section ref={box} className="fx-logs" role="region" aria-labelledby={headId} data-testid="fx-logs" tabIndex={-1}>
       <header className="fx-logs-head">
         <h2 id={headId} className="fx-sec-title">Logs</h2>
-        <span role="tablist" aria-label="Which log" className="fx-tabs">
+        <span role="tablist" aria-label="Which log" className="fx-ck-tabs">
           {(["build", "preview", "deploy"] as const).map((t) => (
-            <button key={t} type="button" role="tab" aria-selected={tab === t} className="fx-tab" data-testid={`fx-logs-tab-${t}`}
+            <button key={t} type="button" role="tab" aria-selected={tab === t} className="fx-ck-tab" data-testid={`fx-logs-tab-${t}`}
                     onClick={() => onTab(t)}>
               {t === "build" ? "Build" : t === "preview" ? "Preview" : "Deploy"}
             </button>

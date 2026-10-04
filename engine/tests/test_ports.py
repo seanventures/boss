@@ -226,6 +226,79 @@ def test_in_memory_persistence_supports_gate_override(restore_ports, monkeypatch
     assert run["pull_request_number"] == 1
 
 
+def test_a_waiver_whose_pr_fails_still_waits_for_the_operator(restore_ports, monkeypatch):
+    """A waiver that could not open its PR leaves the build at the gate (factory spec §4.2.1):
+    parked at `opening_pr` it read Blocked with nothing left to press."""
+    ports = EnginePorts.oss_defaults(_settings())
+    configure_engine_ports(ports)
+    ports.persistence.save_run(
+        "run-blocked",
+        {
+            "project_id": "project", "task_id": "task", "status": "blocked",
+            "phase": "awaiting_gate_override", "title": "Fix a bug", "spec": {}, "state": {},
+            "usage": {},
+            "finalize_ctx": {"failing_gates": ["review"],
+                             "pending_diff": [{"path": "fix.py", "content": "fixed = True\n"}],
+                             "quality_gate_id": "qg-one"},
+            "reservation_id": None, "pull_request_url": None, "pull_request_number": None,
+            "decision_id": None, "error": None,
+        },
+    )
+
+    class RefusingFactory:
+        def __init__(self, _settings, **_kwargs):
+            self.budget = NoopBudgetPort()
+
+        def propose_pull_request(self, *_args, **_kwargs):
+            return {"status": "failed", "error": "branch already has a PR"}
+
+    monkeypatch.setattr(code_task_service, "SoftwareFactoryService", RefusingFactory)
+    result = code_task_service.override_code_task(
+        None, _settings(), _Jobs(), "run-blocked", waive_gates=["review"],
+        reason="verified manually")
+    run = ports.persistence.get_run("run-blocked")
+
+    assert result["status"] == "error"
+    assert run["status"] == "blocked"
+    assert run["phase"] == "awaiting_gate_override"
+
+
+def test_a_waiver_whose_pr_is_already_open_completes(restore_ports, monkeypatch):
+    """A repeated waiver finds the PR already opened (a prior receipt): that is the PR."""
+    ports = EnginePorts.oss_defaults(_settings())
+    configure_engine_ports(ports)
+    ports.persistence.save_run(
+        "run-blocked",
+        {
+            "project_id": "project", "task_id": "task", "status": "blocked",
+            "phase": "awaiting_gate_override", "title": "Fix a bug", "spec": {}, "state": {},
+            "usage": {},
+            "finalize_ctx": {"failing_gates": ["review"],
+                             "pending_diff": [{"path": "fix.py", "content": "fixed = True\n"}],
+                             "quality_gate_id": "qg-one"},
+            "reservation_id": None, "pull_request_url": None, "pull_request_number": None,
+            "decision_id": None, "error": None,
+        },
+    )
+
+    class ReusingFactory:
+        def __init__(self, _settings, **_kwargs):
+            self.budget = NoopBudgetPort()
+
+        def propose_pull_request(self, *_args, **_kwargs):
+            return {"status": "reused", "pull_request_url": "https://example.test/pull/7",
+                    "pull_request_number": 7, "decision_id": "decision-seven"}
+
+    monkeypatch.setattr(code_task_service, "SoftwareFactoryService", ReusingFactory)
+    result = code_task_service.override_code_task(
+        None, _settings(), _Jobs(), "run-blocked", waive_gates=["review"],
+        reason="verified manually")
+    run = ports.persistence.get_run("run-blocked")
+
+    assert result["status"] == "completed"
+    assert run["pull_request_number"] == 7
+
+
 def test_engine_port_import_does_not_import_sqlalchemy():
     result = subprocess.run(
         [

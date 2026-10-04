@@ -270,11 +270,12 @@ export function parseCockpit(w: unknown): Cockpit {
 export const COCKPIT_LIVE_MS = 4000;
 export const COCKPIT_IDLE_MS = 30_000;
 
-export function cockpitUrl(projectId: string, runId: string): string {
-  return `/v1/code-tasks/${encodeURIComponent(runId)}/cockpit?project_id=${encodeURIComponent(projectId)}`;
+export function cockpitUrl(projectId: string, runId: string, viewer?: string): string {
+  return `/v1/code-tasks/${encodeURIComponent(runId)}/cockpit?project_id=${encodeURIComponent(projectId)}`
+    + (viewer ? `&viewer=${encodeURIComponent(viewer)}` : "");
 }
 
-export function useCockpit(projectId: string, runId: string | null): Polled<Cockpit> {
-  return usePolled(projectId && runId ? cockpitUrl(projectId, runId) : null, parseCockpit,
+export function useCockpit(projectId: string, runId: string | null, viewer?: string): Polled<Cockpit> {
+  return usePolled(projectId && runId ? cockpitUrl(projectId, runId, viewer) : null, parseCockpit,
     (c) => (c && !c.live ? COCKPIT_IDLE_MS : COCKPIT_LIVE_MS));
 }

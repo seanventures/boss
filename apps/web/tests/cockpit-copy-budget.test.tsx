@@ -24,7 +24,7 @@ const { Cockpit } = await import("../app/factory/cockpit");
 const BANNED = /(\b(persona|fingerprint|ledger|act|acts|sentient|alive|conscious|impersonate|signed|tokens?|eta|estimated|almost|projects?|code task|pipeline|fail-closed|governed|ratchet|machinery)\b|%)/i;
 
 function audit() {
-  const roots = $$(".fx-cockpit, .fx-logs, .fx-sheet");
+  const roots = $$(".fx-cockpit, .fx-logs, .fx-ck-sheet");
   return {
     surfaces: roots.length,
     over: [...new Set(roots.flatMap((r) => overBudget(r)))],

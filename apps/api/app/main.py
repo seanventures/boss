@@ -28069,7 +28069,11 @@ def code_task_cancel_endpoint(run_id: str, payload: CodeTaskCancelBody) -> dict:
         # Stopping work is a governed write: the same bar as starting it.
         require_project_actor(connection, owner, actor, "task_create")
         try:
-            return cancel_run(connection, run_id, owner, actor=actor, reason=payload.reason)
+            # Who stopped it is who is authenticated, when anyone is: the console names itself
+            # in `actor`, but the person reading (the viewer, the same principal) must see
+            # `Stopped by you` — a request cannot sign as someone else (_acts_viewer's rule).
+            who = str(current_api_principal.get() or "").strip() or actor
+            return cancel_run(connection, run_id, owner, actor=who, reason=payload.reason)
         except CancelRefused as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except LookupError as exc:

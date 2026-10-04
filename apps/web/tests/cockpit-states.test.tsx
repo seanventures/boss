@@ -222,7 +222,7 @@ describe("the header's actions", () => {
     stubFetch(cockpit());
     await mount(view());
     await click($('[data-testid="fx-bay-tests"]'));
-    const rows = $$('[data-testid="fx-story"] .fx-row');
+    const rows = $$('[data-testid="fx-story"] .fx-ck-row');
     expect(rows.map((r) => r.dataset.testid)).toEqual(["fx-story-act_TESTS0000000001"]);
   });
 

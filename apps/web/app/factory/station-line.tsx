@@ -19,7 +19,7 @@ import type { Act, ActStatus, AvatarState } from "../../lib/agent-world-types";
 import type { Station, StationStatus } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ActFace } from "../agents/act-card";
-import { AgFaceStack } from "../agents/agent-face";
+import { AgFace } from "../agents/agent-face";
 import { RunFace, nameOf } from "../agents/run-face";
 import { span, type Band } from "../agents/live-util";
 
@@ -77,12 +77,20 @@ function seconds(s: Station, now: number | null): number | null {
 function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; still: boolean; viewer: string }) {
   const state = still && (s.status === "working" || s.status === "needs_you") ? "idle" : AVATAR[s.status];
   if (s.key === "review" && s.seats.length > 1) {
-    const states = new Map(s.seats.filter((x) => x.roleKey).map((x) => [x.roleKey!,
-      still && (x.status === "working" || x.status === "needs_you") ? "idle" as AvatarState : AVATAR[x.status]] as const));
+    // One face per seat, each in its own state — two seats of one role are two faces.
+    const seats = s.seats.filter((x) => x.roleKey);
+    const shown = seats.slice(0, 3);
+    const seatState = (x: Station["seats"][number]): AvatarState =>
+      still && (x.status === "working" || x.status === "needs_you") ? "idle" : AVATAR[x.status];
     return (
-      <span className="fx-seats" data-seats={s.seats.length}>
-        <AgFaceStack roleKeys={s.seats.map((x) => x.roleKey).filter((k): k is string => !!k)} size={size === 16 ? 16 : 24}
-                     max={3} states={states} />
+      <span className="fx-seats ag-stack" data-seats={s.seats.length} data-size={size === 16 ? 16 : 24} role="img"
+            aria-label={seats.map((x) => `${nameOf(x.roleKey).name}${x.seat > 1 ? ` #${x.seat}` : ""}`).join(", ")}>
+        {shown.map((x) => (
+          <span key={x.actId || `seat-${x.seat}`} data-seat={x.seat} data-state={seatState(x)}>
+            <AgFace roleKey={x.roleKey!} size={size === 16 ? 16 : 24} state={seatState(x)} decorative />
+          </span>
+        ))}
+        {seats.length > shown.length ? <span className="ag-stack-more" aria-hidden>+{seats.length - shown.length}</span> : null}
       </span>
     );
   }
