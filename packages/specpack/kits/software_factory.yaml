@@ -61,7 +61,8 @@ abilities:
         - {key: context7, label: Context7, catalogue: context7}
     mcp: [{server: context7}]
     test: mcp_list_tools
-    try: {tool: "mcp:context7.resolve-library-id", arg: libraryName,
+    # The tool wants both: the library's name, and what the docs are for.
+    try: {tool: "mcp:context7.resolve-library-id", args: {libraryName: "{input}", query: "{input}"},
           field: {name: libraryName, label: Library, placeholder: react}}
 
   - key: web_research
