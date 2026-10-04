@@ -29,9 +29,9 @@ describe("Agent work", () => {
       agents: [agent({ id: "a", calls: 4 }), agent({ id: "b" }), agent({ id: "c" })],
       handoffs: [],
     } as unknown as Workforce;
-    const out = renderToStaticMarkup(<WorkforceArea workforce={workforce} actor="ceo" />);
-    // The roster counts every role; "Has done work" counts the ones with recorded work.
-    expect(out).toContain("Roster <em data-testid=\"wf-roster-count\">(3)</em>");
+    const out = renderToStaticMarkup(<WorkforceArea workforce={workforce} actor="ceo" initialView="directory" />);
+    // The Directory (the roster) counts every role; "Has done work" counts the ones with work.
+    expect(out).toContain("Directory <em data-testid=\"wf-roster-count\">(3)</em>");
     expect(out).toContain("Has done work 1");
   });
 

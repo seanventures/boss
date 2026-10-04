@@ -23,7 +23,8 @@ const wf = (over: Partial<Workforce> = {}): Workforce => ({
   agents: [agent()], handoffs: [], ...over,
 } as Workforce);
 
-const html = (w: Workforce) => renderToStaticMarkup(<WorkforceArea workforce={w} actor="ceo" />);
+// The grid is Agents › Directory (agents-home spec §3.3); Live is the default view.
+const html = (w: Workforce) => renderToStaticMarkup(<WorkforceArea workforce={w} actor="ceo" initialView="directory" />);
 
 describe("v1 Workforce", () => {
   it("says a genuinely empty roster is empty, and offers the one way to add an agent", () => {
@@ -85,8 +86,10 @@ describe("v1 Workforce", () => {
     expect(src).toContain('aria-label="Find an agent"');
     // Team structure and Agent Studio are views of this area, not areas of their own.
     const out = html(wf());
-    expect(out).toContain('data-testid="agents-view-roster"');
-    expect(out).toContain('data-testid="agents-view-team"');
+    expect(out).toContain('data-testid="agents-view-live"');
+    expect(out).toContain('data-testid="agents-view-directory"');
+    expect(out).toContain('data-testid="agents-view-org"');
+    expect(out).toContain('data-testid="agents-view-activity"');
     expect(src).not.toContain("openArea(");
   });
 
@@ -116,7 +119,9 @@ describe("v1 Workforce", () => {
     // holds clear of every other wf- rule.
     const studio = new Set([...readdirSync("app/workflows").filter((f) => f.endsWith(".css"))
       .flatMap((f) => [...cssOnly(`app/workflows/${f}`).matchAll(/\.(wf-[\w-]+)/g)].map((m) => m[1]))]);
-    const stray = [...mine].filter((c) => !/^(roster|org)-/.test(c) && c !== "roster" && c !== "org"
+    // ag-* is Agent World's own namespace (app/agents/agent-world.css): the area's header and
+    // Live are Agent World surfaces now (agents-home spec §3).
+    const stray = [...mine].filter((c) => !/^(roster|org|ag)-/.test(c) && c !== "roster" && c !== "org"
                                          && !studio.has(c));
     expect(stray, "classes outside this screen's namespace").toEqual([]);
   });

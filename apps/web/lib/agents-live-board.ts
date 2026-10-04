@@ -9,7 +9,11 @@
  */
 
 import type { AvatarState } from "./agent-world-types";
+import { useCallback, useEffect, useRef, useState } from "react";
+
 import { agentIdentity } from "./agent-identity";
+import { isConsoleLive, subscribeConsoleLive } from "./console-live";
+import { onChanged } from "../app/changed";
 
 // ── Shared ──────────────────────────────────────────────────────────────────────────────────
 
@@ -313,4 +317,95 @@ export function parseToolCalls(w: unknown): ToolCalls {
     }),
     more: o.more === true,
   };
+}
+
+// ── The poll (S2): one per mounted Agents area ──────────────────────────────────────────────
+
+export const BOARD_POLL_MS = 8000;
+const BOARD_MISSING_MS = 60_000;
+
+export type LiveBoardState = {
+  board: LiveBoard | null;
+  /** The last failure's reason, while the board could not be read. Cleared by an answer. */
+  error: string | null;
+  /** True until the first answer (or failure). */
+  loading: boolean;
+  refresh: () => void;
+};
+
+/**
+ * `/v1/agents/live-board`, every 8s while the page is visible, the console is Live and
+ * `enabled` (the Live or Organization tab is open). If-None-Match makes an unchanged answer a
+ * 304 and no re-render; elapsed times tick locally from `step_since`, so they are not in the
+ * ETag. A change made anywhere in the console (`onChanged`) and pressing Live again ask now.
+ */
+export function useLiveBoard(projectId: string, enabled = true): LiveBoardState {
+  const [board, setBoard] = useState<LiveBoard | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const etag = useRef<string | null>(null);
+  const kick = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!projectId || !enabled) return undefined;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let inflight = false;
+    let gen = 0;
+    const hidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+
+    const tick = async (mine: number) => {
+      if (stopped || mine !== gen) return;
+      let wait = BOARD_POLL_MS;
+      if (!hidden() && isConsoleLive() && !inflight) {
+        inflight = true;
+        try {
+          const r = await fetch(`/v1/agents/live-board?project_id=${encodeURIComponent(projectId)}`, {
+            cache: "no-store", headers: etag.current ? { "If-None-Match": etag.current } : {},
+          });
+          if (stopped) return;
+          if (r.status === 304) {
+            setError(null);
+          } else if (r.ok) {
+            etag.current = r.headers.get("etag");
+            setBoard(parseLiveBoard(await r.json()));
+            setError(null);
+          } else {
+            if (r.status === 404 || r.status === 405) wait = BOARD_MISSING_MS;
+            let said = "";
+            try { said = String(((await r.json()) as { detail?: unknown }).detail ?? ""); } catch { /* none */ }
+            setError(said || `The API answered ${r.status}.`);
+          }
+        } catch (e) {
+          if (!stopped) setError(e instanceof Error ? e.message : "The API did not answer.");
+        } finally {
+          inflight = false;
+          if (!stopped) setLoading(false);
+        }
+      }
+      if (!stopped && mine === gen) timer = setTimeout(() => void tick(mine), wait);
+    };
+    const restart = () => {
+      if (stopped || hidden() || !isConsoleLive()) return;
+      if (timer) clearTimeout(timer);
+      gen += 1;
+      void tick(gen);
+    };
+    kick.current = restart;
+    const onVis = () => restart();
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVis);
+    const offChanged = onChanged(() => restart());
+    const offPause = subscribeConsoleLive((on) => { if (on) restart(); });
+    void tick(gen);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVis);
+      offChanged();
+      offPause();
+    };
+  }, [projectId, enabled]);
+
+  const refresh = useCallback(() => kick.current(), []);
+  return { board, error, loading: loading && !board && !error, refresh };
 }

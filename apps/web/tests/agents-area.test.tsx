@@ -60,7 +60,8 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/?area=workforce&org=o1");
+  // The card grid is Agents › Directory; Live is the default view (agents-home spec §3.1).
+  window.history.replaceState(null, "", "/?area=workforce&view=directory&org=o1");
   vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
     const url = String(input);
     if (url.startsWith("/api/agents/role_1")) {
@@ -217,20 +218,25 @@ describe("Register on a shipped agent registers the shipped agent", () => {
   });
 });
 
-describe("Roster | Team | Panels", () => {
+describe("Live | Organization | Directory | Activity | Panels", () => {
   it("reads the view from the URL, and only its own views", () => {
-    expect(readAgentsView("?view=team")).toBe("team");
+    expect(readAgentsView("?view=org")).toBe("org");
+    expect(readAgentsView("?view=directory")).toBe("directory");
+    expect(readAgentsView("?view=activity")).toBe("activity");
     expect(readAgentsView("?view=panels")).toBe("panels");
+    // Old links: the Roster is the Directory, the Team is Organization.
+    expect(readAgentsView("?view=roster")).toBe("directory");
+    expect(readAgentsView("?view=team")).toBe("org");
     // `view` is shared with the workflow editor (visual|json).
-    expect(readAgentsView("?view=json")).toBe("roster");
-    expect(readAgentsView("")).toBe("roster");
+    expect(readAgentsView("?view=json")).toBe("live");
+    expect(readAgentsView("")).toBe("live");
   });
 
-  it("Team is a view of this area, synced to the URL", async () => {
+  it("Organization is a view of this area, synced to the URL", async () => {
     await mount();
-    await click($('[data-testid="agents-view-team"]'));
-    expect(new URLSearchParams(window.location.search).get("view")).toBe("team");
-    expect(document.body.innerHTML).toContain("Planned roles");
+    await click($('[data-testid="agents-view-org"]'));
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("org");
+    expect($('[data-testid="agents-area"]')?.dataset.view).toBe("org");
   });
 
   it("Panels is hidden until there is a panel", async () => {
