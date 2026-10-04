@@ -27,6 +27,10 @@ requirement, and the self-test fails when no journey labelled with it uses all o
                         with its reason
   R6  workflow_build    (console smoke) two palette steps → saved → "2 steps" after a reload
   R6  advance_now       (console smoke) Running → Advance now → a sentence that is not an error
+  R7  live_gate         A run waiting at a gate → Agents › Live shows its row `Waiting on you` →
+                        the amber You hop focuses its card → Approve on the card → the decision is
+                        approved, the run moves on, and the pill fell by one and still equals what
+                        the other surfaces count (agents-home spec §8.3)
 
 Every selector a journey uses is listed in JOURNEY_SELECTORS, which the self-test checks against
 the console source — a renamed testid fails a fast test, not a forty-minute walk. Controls the
@@ -72,7 +76,10 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-complete"),
     ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-pattern-${pattern.id}"),
     ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-skill-${skill.id}"),
-    ("agent_update", "app/workforce-ui.tsx", "wf-open-${a.id}"),
+    # Agents opens on Live (agents-home spec §3.1): the cards are on Directory, a tab away.
+    ("agent_with_skill", "app/workforce-ui.tsx", "agents-view-directory"),
+    ("agent_update", "app/workforce-ui.tsx", "agents-view-directory"),
+    ("agent_update", "app/agents/roster-zones.tsx", "wf-open-${a.id}"),
     ("agent_update", "app/agent-detail-ui.tsx", "agent-detail"),
     ("agent_update", "app/agent-detail-ui.tsx", "agent-skills"),
     ("agent_update", "app/agent-detail-ui.tsx", "agent-skill-open"),
@@ -132,6 +139,12 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-head-meta"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-advance"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-notice"),
+    # R7: Agents › Live (live-board stream) — a gate on a run, decided from its card.
+    ("live_gate", "app/workforce-ui.tsx", "agents-view-live"),
+    ("live_gate", "app/agents/live-board.tsx", "ag-live"),
+    ("live_gate", "app/agents/mission-row.tsx", "ag-mission-${mission.runId}"),
+    ("live_gate", "app/agents/mission-row.tsx", "ag-you-hop-${mission.runId}"),
+    ("live_gate", "app/agents/attention-card.tsx", "ag-att-${item.id}"),
 )
 
 # (journey, file under apps/web, testid, what the console is missing). R2 says an agent is given
@@ -467,6 +480,7 @@ def agent_with_skill(page, ctx: Context, goto: Callable[[str], None]) -> str:
     name = f"E2E Agent {ctx.stamp}"
     problems: list[str] = []
     goto("workforce")
+    _visible(page, "agents-view-directory").click()
     _visible(page, "wf-new-agent").click()
     _visible(page, "aw-dialog")
     # A preset fills the prompts and rules the wizard requires; the journey is about
@@ -557,6 +571,8 @@ def agent_with_skill(page, ctx: Context, goto: Callable[[str], None]) -> str:
 
 def _open_agent(page, goto: Callable[[str], None], role: str) -> None:
     goto("workforce")
+    # Agents opens on Live; the agent cards are under Directory.
+    _visible(page, "agents-view-directory").click()
     _visible(page, f"wf-open-{role}").click()
     _visible(page, "agent-detail")
     _visible(page, "agent-skills")
@@ -916,6 +932,126 @@ def advance_now(page, ctx: Context, goto: Callable[[str], None]) -> str:
     return f"'Advance now' said: {said[:160]}"
 
 
+# ----------------------------------------------------------------------------- R7
+GATED_EXAMPLE = "weekly-newsletter"   # its send step waits for a person's approval
+
+
+def _open_gate(ctx: Context) -> tuple[str, str]:
+    """(run_id, decision_id) of a run held at a gate waiting on the operator: one already
+    waiting, else the gated example started and followed to its gate, which is left open."""
+    api = _api(ctx)
+    runs = (api.get("/v1/delivery-workflows/runs", project_id=ctx.target.project_id,
+                    limit=50) or {}).get("runs") or []
+    for run in runs:
+        for step in run.get("steps") or []:
+            if step.get("decision_id") and step.get("decision_status") == "pending" \
+                    and str(step.get("status")) == "waiting":
+                return str(run.get("id")), str(step.get("decision_id"))
+    from .discover import examples
+    from .drive import Driver, _run_detail
+
+    example = next((e for e in examples() if e.directory == GATED_EXAMPLE), None)
+    if example is None:
+        raise JourneyFailed(f"no run is waiting at a gate, and examples/{GATED_EXAMPLE} is gone, "
+                            f"so there is no gate to decide from a card")
+    driver = Driver(ctx.target, approve_gates=False, install_catalogue=False)
+    outcome = driver.run_example(example)
+    if not outcome.run_id:
+        raise JourneyFailed(f"starting {example.workflow_key} for a gate failed: "
+                            f"{'; '.join(outcome.problems) or outcome.status}")
+    _, steps = _run_detail(driver.api, outcome.run_id)
+    held = next((s for s in steps if s.get("status") == "waiting" and s.get("decision_id")), None)
+    if not held:
+        raise JourneyFailed(f"{example.workflow_key} ran without stopping at its approval: "
+                            f"{', '.join(_step_line(s) for s in steps)[:400]}")
+    return outcome.run_id, str(held["decision_id"])
+
+
+def _pill_count(ctx: Context) -> int:
+    body = _api(ctx).get("/v1/agents/live", project_id=ctx.target.project_id) or {}
+    return int(((body.get("attention") or {}).get("count")) or 0)
+
+
+def _steps_done(ctx: Context, run_id: str) -> int:
+    runs = (_api(ctx).get("/v1/delivery-workflows/runs", project_id=ctx.target.project_id,
+                          limit=50) or {}).get("runs") or []
+    run = next((r for r in runs if str(r.get("id")) == run_id), {})
+    return int(run.get("steps_done") or 0)
+
+
+def live_gate(page, ctx: Context, goto: Callable[[str], None]) -> str:
+    """Decide a gate from Agents › Live (R7): the run's row says it waits on you, its amber You
+    hop focuses the card, Approve on the card approves THAT decision, the run moves on, and the
+    pill falls by one and still counts what every other surface counts."""
+    if ctx.target is None:
+        raise JourneyFailed("this journey reads the decision and the run back through the API, "
+                            "and the walk was given no target")
+    run_id, decision_id = _open_gate(ctx)
+    api = _api(ctx)
+    board = api.get("/v1/agents/live-board", project_id=ctx.target.project_id) or {}
+    card = next((a for a in board.get("attention") or [] if str(a.get("id")) == decision_id), None)
+    if card is None:
+        raise JourneyFailed(f"decision {decision_id} holds run {run_id} but Live's attention "
+                            f"list does not have it")
+    approve = next((a for a in card.get("actions") or [] if a.get("action") == "approve"), None)
+    if not card.get("decide_inline") or not approve:
+        raise JourneyFailed(f"the gate on {run_id} cannot be decided from its card "
+                            f"(decide_inline={card.get('decide_inline')}, risk "
+                            f"{card.get('risk_tier')}); Live offers Review ↗ only")
+    pill_before, done_before = _pill_count(ctx), _steps_done(ctx, run_id)
+
+    goto("workforce")
+    _visible(page, "agents-view-live").click()
+    _visible(page, "ag-live")
+    _wait_for_text(page, f"ag-mission-{run_id}", r"Waiting on you", timeout_s=30)
+    _visible(page, f"ag-you-hop-{run_id}").click()
+    page.wait_for_timeout(300)
+    focused = page.evaluate(
+        "(id) => { const c = document.querySelector(`[data-testid=\"ag-att-${id}\"]`);"
+        " return !!c && (c === document.activeElement || c.contains(document.activeElement)); }",
+        decision_id)
+    if not focused:
+        raise JourneyFailed(f"pressing the You hop on {run_id} did not focus the card for "
+                            f"decision {decision_id}")
+    _visible(page, f"ag-att-{decision_id}").get_by_role(
+        "button", name=str(approve.get("label")), exact=True).first.click()
+
+    deadline = time.time() + 30
+    status = ""
+    while time.time() < deadline:
+        status = str((api.get(f"/v1/decisions/{decision_id}") or {}).get("status") or "")
+        if status == "approved":
+            break
+        page.wait_for_timeout(500)
+    problems: list[str] = []
+    if status != "approved":
+        problems.append(f"pressed {approve.get('label')!r} on the card; decision {decision_id} "
+                        f"is {status or 'unreadable'}, not approved")
+    deadline = time.time() + 120
+    done_after = done_before
+    while time.time() < deadline and done_after <= done_before:
+        page.wait_for_timeout(1000)
+        done_after = _steps_done(ctx, run_id)
+    if done_after <= done_before:
+        problems.append(f"approved the gate, but run {run_id} did not move on "
+                        f"({done_before} steps done before, {done_after} after two minutes)")
+    pill_after = _pill_count(ctx)
+    if pill_after != pill_before - 1:
+        problems.append(f"the pill counted {pill_before} before and {pill_after} after one "
+                        f"approval")
+    items = (api.get("/v1/decisions/inbox", project_id=ctx.target.project_id) or {}).get("items") or []
+    inbox = sum(1 for i in items if i.get("attention") == "needs_action")
+    board = api.get("/v1/agents/live-board", project_id=ctx.target.project_id) or {}
+    others = sum(1 for a in board.get("attention") or [] if a.get("kind") != "approval")
+    if pill_after != inbox + others:
+        problems.append(f"the pill says {pill_after} need you; Approvals has {inbox} and Live "
+                        f"{others} more that are not decisions")
+    if problems:
+        raise JourneyFailed("; ".join(problems))
+    return (f"run {run_id}: Waiting on you → You hop focused its card → {approve.get('label')} → "
+            f"approved; {done_before}→{done_after} steps done; pill {pill_before}→{pill_after}")
+
+
 # In order: each later journey uses what the earlier ones made (the skill, the server, the agent).
 JOURNEYS: tuple[tuple[str, str, Callable[..., str]], ...] = (
     ("R1", "skill_create", skill_create),
@@ -926,6 +1062,7 @@ JOURNEYS: tuple[tuple[str, str, Callable[..., str]], ...] = (
     ("R4", "step_agents", step_agents),
     ("R6", "workflow_build", workflow_build),
     ("R6", "advance_now", advance_now),
+    ("R7", "live_gate", live_gate),
 )
 
 

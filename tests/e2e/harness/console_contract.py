@@ -88,8 +88,18 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
     "workforce": (
         Press("wf-new-agent", "app/workforce-ui.tsx", expect=_tid("aw-dialog"),
               expect_source="app/agent-creation-wizard.tsx"),
+        # Agents home (agents-home spec §3.1): four tabs, each with the surface it must show.
+        Press("agents-view-live", "app/workforce-ui.tsx", expect=_tid("ag-live"),
+              expect_source="app/agents/live-board.tsx"),
+        Press("agents-view-directory", "app/workforce-ui.tsx", expect=_tid("roster-grid"),
+              expect_source="app/agents/roster-zones.tsx"),
+        Press("agents-view-org", "app/workforce-ui.tsx", expect=_tid("ag-zones"),
+              expect_source="app/agents/team-zones.tsx"),
+        Press("agents-view-activity", "app/workforce-ui.tsx", expect=_tid("ag-river"),
+              expect_source="app/agents/activity-river.tsx"),
         Journey("agent_with_skill"),
         Journey("agent_update"),
+        Journey("live_gate"),
     ),
     "org_chart": (
         Press("org-template-toggle", "app/workforce-ui.tsx", expect=_tid("org-templates")),
