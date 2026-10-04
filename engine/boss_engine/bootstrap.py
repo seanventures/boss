@@ -210,15 +210,17 @@ def _seed_project_defaults(
             sync_role_mcp(connection, project_id=project_id, actor=actor)
     except Exception:  # noqa: BLE001 — a fresh project must still come up
         _log.warning("role_mcp_sync_failed", exc_info=True)
-    # EVERY AGENT IS SOMEBODY: an agt_ id, a birth and a version for any role that predates
-    # Agent World (agent_identity.backfill; idempotent, quiet).
-    from .services.agent_identity import backfill as backfill_identity
+    # THE WHOLE SHIPPED CAST, AND EVERY AGENT IS SOMEBODY: the archetypes and any role of a
+    # baked pack this project has that the core install did not cover, their grants, and an
+    # agt_ id, a birth and a version for any role that predates Agent World. The same function
+    # the API runs on every boot for every project (shipped_cast.sync_project; idempotent).
+    from .services.shipped_cast import sync_project as sync_shipped_cast
 
     try:
         with connection.begin_nested():
-            backfill_identity(connection, project_id)
+            sync_shipped_cast(connection, settings, project_id, specpack=specpack, actor=actor)
     except Exception:  # noqa: BLE001
-        _log.warning("agent_identity_backfill_failed", exc_info=True)
+        _log.warning("shipped_cast_sync_failed", exc_info=True)
     seed_default_event_subscriptions(connection, project_id)
     FeatureCatalog(settings).seed_from_traceability(connection, project_id)
     seed_specpack_workflows(

@@ -67,6 +67,16 @@ CALLERS = {
     # Agent World: role specs name the MCP servers their agent holds; the seed grants them the
     # way sync_role_skills grants skills, and asks seed_exclusions first (SEED_PATHS below).
     "services/agents.py::sync_role_mcp -> grant_mcp": "seed path below",
+    # The upgrade's half of the install seed: every boot, every project (shipped_cast).
+    "services/shipped_cast.py::sync_project -> _upsert_role_spec":
+        "seed path below (install_or_fill is its nested helper)",
+    "services/shipped_cast.py::install_or_fill -> _upsert_role_spec":
+        "seed path below; and a role the operator deleted is never reinstalled",
+    # Register on the roster, for a key BOSS ships: the operator asked for the shipped agent.
+    "services/agents.py::_install_shipped -> _upsert_role_spec":
+        "operator: Register lifts the key's exclusions, then installs the shipped role",
+    "services/shipped_cast.py::_ensure_builtin_mcp_servers -> ensure_mcp_server":
+        "seed path below; only a missing server, never one the operator removed",
 }
 
 #: The seed paths, each of which must consult the exclusions before it writes.
@@ -76,6 +86,8 @@ SEED_PATHS = [
     mcp_registry.ensure_mcp_server,
     specpack.SpecPackService._upsert_role_spec,
     agent_studio.AgentStudioService._seed_agent,
+    __import__("boss_engine.services.shipped_cast", fromlist=["x"]).sync_project,
+    __import__("boss_engine.services.shipped_cast", fromlist=["x"])._ensure_builtin_mcp_servers,
 ]
 
 
@@ -179,6 +191,8 @@ SPEC_WRITERS = {
     "services/specpack.py::_upsert_role_spec": "seed",
     "services/agents.py::create_agent": "operator",
     "services/agents.py::update_agent": "operator",
+    # Fills only ABSENT persona/MCP fields, and asks whether the operator edited the role.
+    "services/shipped_cast.py::install_or_fill": "seed",
 }
 
 
