@@ -1379,7 +1379,10 @@ def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[s
     apps = len(group_into_apps(runs))
     out: Floor = {
         "project_id": project_id, "etag": "", "generated_at": now.isoformat(),
-        "counts": {"building": len(builds), "needs_you": len(attention),
+        # ONE NUMBER (agents-home D2): decisions, as the pill and Approvals count them. A build
+        # stopped at its checks is a card too, counted with stopped work.
+        "counts": {"building": len(builds),
+                   "needs_you": sum(1 for a in attention if a.get("kind") == "approval"),
                    "shipped_7d": len({o["run_id"] for o in outcomes if o["kind"] != "preview"}),
                    "stopped": len(stopped), "apps": apps},
         "attention": attention, "builds": builds, "outcomes": outcomes[:8],

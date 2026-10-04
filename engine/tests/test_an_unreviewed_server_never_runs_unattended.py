@@ -91,7 +91,7 @@ def mcp_calls(monkeypatch):
                         lambda self, url, headers=None: [{"name": TOOL, "inputSchema": {
                             "type": "object", "properties": {"title": {"type": "string"}}}}])
     monkeypatch.setattr(MCPClient, "call_tool",
-                        lambda self, url, tool, args: calls.append((tool, args))
+                        lambda self, url, tool, args, headers=None: calls.append((tool, args))
                         or {"issue": 42})
     return calls
 

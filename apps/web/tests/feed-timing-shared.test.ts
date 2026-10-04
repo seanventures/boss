@@ -29,7 +29,7 @@ beforeEach(() => {
     const url = String(input);
     const wait = delays[url] ?? 0;
     if (wait) await new Promise((r) => setTimeout(r, wait));
-    return { ok: true, status: 200, clone() { return this; } } as unknown as Response;
+    return new Response("{}", { status: 200 });
   }) as typeof fetch;
 
   // A 1ms reuse window, so two calls to the same path are both really timed. The default 5s

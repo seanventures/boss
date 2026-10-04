@@ -150,12 +150,13 @@ class BoardAgent(TypedDict, total=False):
     since: Optional[str]
 
 
-class Counts(TypedDict):
+class Counts(TypedDict, total=False):
     agents: int
     working: int
-    needs_you: int
+    needs_you: int               # decisions only (agents-home D2)
     running: int
     stopped: int
+    setup: int                   # readiness gaps, counted apart
     building: int            # the Factory's BUILDING rows (factory spec §10, decision 2)
 
 
@@ -306,7 +307,10 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
             "content_hash": None,
             "preview": None,
             "risk_tier": n.get("risk_tier"),
-            "fix": ({"area": str(n["fix_area"]), "label": "Fix"} if n.get("fix_area") else None),
+            # Lands on the Repo and models row that needs it (`?area=setup&focus=<row>`).
+            "fix": ({"area": str(n["fix_area"]), "label": "Fix in Repo and models",
+                     **({"focus": str(n["fix_focus"])} if n.get("fix_focus") else {})}
+                    if n.get("fix_area") else None),
             "at": n.get("at"),
             "build": n.get("build"),
         }
@@ -425,8 +429,10 @@ def _person_of(act: Mapping[str, Any]) -> Optional[str]:
 def act_state(act: Mapping[str, Any]) -> str:
     """chain-model.ts actState: what an act's status looks like on a face."""
     status = str(act.get("status") or "")
-    if act.get("kind") == "run" and status not in ("error", "stale"):
-        return "idle"
+    if act.get("kind") == "run":
+        return "done" if status == "complete" else "idle"  # the starter is never stuck
+    if act.get("kind") == "approval":
+        return "done"
     return {"active": "speaking" if act.get("kind") == "seat" else "working",
             "awaiting_input": "needs_you", "complete": "done", "error": "stuck",
             "stale": "stuck"}.get(status, "idle")
@@ -486,7 +492,9 @@ def lane(acts: list[dict[str, Any]], *, viewer: Optional[str] = None) -> list[Ho
                     "edge_label": _label_for(dict(a), viewer), "how": str(a.get("how") or "")}
         if not a.get("role_key"):
             out["person"] = _person_of(a)
-            if a.get("kind") == "step" and a.get("status") == "awaiting_input":
+            if a.get("kind") == "step" and (a.get("status") == "awaiting_input"
+                                            or a.get("decision_id")
+                                            or (a.get("links") or {}).get("decision_id")):
                 # A gate waiting on a person: a real act, flagged so the lane draws it as the
                 # amber `You` hop rather than adding one of its own.
                 out["gate"] = True
@@ -599,7 +607,7 @@ def _next_steps(spec_steps: Mapping[str, Mapping[str, Any]], started: set[str],
     return out
 
 
-_SORT = {"waiting_you": 0, "stopped": 1, "blocked": 2, "running": 3, "waiting_person": 3,
+_SORT = {"stopped": 0, "waiting_you": 1, "blocked": 2, "running": 3, "waiting_person": 3,
          "waiting": 3, "done": 4}
 
 
@@ -657,6 +665,11 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
             elif decision_id and str(current.get("decision_status") or "") in (
                     "approved", "executed"):
                 state = "running"  # answered; a worker picks the answer up next tick
+            elif decision_id and str(current.get("decision_status") or "") in (
+                    "rejected", "expired", "cancelled"):
+                # Answered NO: never "waiting on a person" (agents-home D3). The step fails as
+                # the answer lands; until this read sees it, the run is stopped there.
+                state = "stopped"
             elif decision_id:
                 state = "waiting_person"
                 waiting_role = str(approval.get("approver_role") or "") or None
@@ -670,7 +683,7 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
         created = _aware(run.get("created_at"))
         rows.append({
             "run_id": str(run["id"]),
-            "subject": command_center.run_subject(run) or str(run.get("workflow_name") or ""),
+            "subject": command_center.run_name(run),
             "workflow_key": str(run.get("workflow_key") or ""),
             "workflow_name": str(run.get("workflow_name") or ""),
             "version": run.get("version"),
@@ -770,7 +783,7 @@ def outcomes(connection: Any, project_id: str, read: Mapping[str, Any], *,
 
     `PR #n merged` only when the merge queue recorded the merge (github_merge_authorizations,
     status merged) — never inferred from the PR being old or the run finishing."""
-    from .command_center import run_subject
+    from .command_center import run_name
 
     since = now - OUTCOME_WINDOW
     rows = connection.execute(
@@ -830,7 +843,7 @@ def outcomes(connection: Any, project_id: str, read: Mapping[str, Any], *,
             continue
         found.append({"act_id": None, "role_key": None, "kind": "run", "text": "Finished",
                       "url": None, "run_id": str(run["id"]),
-                      "label": run_subject(run) or str(run.get("workflow_name") or ""),
+                      "label": run_name(run),
                       "at": _iso(finished) or ""})
     found.sort(key=lambda o: str(o.get("at") or ""), reverse=True)
     return found[:OUTCOMES_MAX]
@@ -874,6 +887,13 @@ def force(connection: Any, project_id: str, attention: list[AttentionItem]
             continue
         agents.append(_agent(key, key.replace("_", " ").capitalize(), None, "yours", here,
                              stuck.get(key), "active"))
+    asks = {str(r["role_key"]): int(r["n"]) for r in connection.execute(
+        text("SELECT role_key, count(*) AS n FROM agent_acts WHERE project_id = :p "
+             "AND ended_at IS NULL AND status = 'awaiting_input' AND role_key IS NOT NULL "
+             "AND NOT (kind = 'step' AND decision_id IS NOT NULL) "
+             "GROUP BY role_key"),
+        {"p": project_id},
+    ).mappings().all()}
     order = [k for k, _, _ in TEAMS]
     labels = {k: (label, tip) for k, label, tip in TEAMS}
     custom = sorted({a["team"] for a in agents} - set(order))
@@ -893,7 +913,9 @@ def force(connection: Any, project_id: str, attention: list[AttentionItem]
                     break
         team: Team = {"key": key, "label": label, "members": [a["role_key"] for a in members],
                       "working": sum(1 for a in members if a["state"] in ("working", "in_panel")),
-                      "needs_you": sum(1 for a in members if a["state"] == "needs_you"),
+                      # ITEMS, not agents (D8): this team's agents' OWN open asks. A gate is
+                      # the operator's wait, never a team's (D4 + the lead's follow-up).
+                      "needs_you": sum(asks.get(m["role_key"], 0) for m in members),
                       "in_panel": sum(1 for a in members if a["state"] == "in_panel")}
         if tip:
             team["tip"] = tip
@@ -982,8 +1004,9 @@ def build(connection: Any, settings: Any, project_id: str, *,
             "agents": len(agents),
             "working": sum(1 for a in agents if a["state"] in ("working", "in_panel")),
             # THE SAME NUMBER as the Command Center's counts.needs_you, the pill's attention
-            # count and Approvals' Needs action plus failed steps: one list, counted once.
-            "needs_you": len(attention),
+            # count, Approvals' badge and Needs action: decisions only (agents-home D2).
+            "needs_you": int(cc["counts"]["needs_you"]),
+            "setup": int(cc["counts"]["setup"]),
             "running": sum(1 for m in rows if m["state"] not in ("done", "stopped")),
             "stopped": sum(1 for m in rows if m["state"] == "stopped"),
             "building": len(builds),
@@ -1008,7 +1031,10 @@ def pill(connection: Any, settings: Any, project_id: str, *,
     now = now or datetime.now(timezone.utc)
     read = command_center.read(connection, settings, project_id, now)
     cc = command_center.assemble(**read)
-    items = attention_items(connection, project_id, cc["needs_you"][:5], read["decisions"])
+    # The pill counts DECISIONS, so it lists decisions (agents-home D2): a stopped run and a
+    # setup gap have their own places (Live's cards, the Setup rail).
+    decisions = [n for n in cc["needs_you"] if n.get("kind") == "approval"]
+    items = attention_items(connection, project_id, decisions[:5], read["decisions"])
     return {"count": int(cc["counts"]["needs_you"]),
             "items": [{"id": a["id"], "role_key": a.get("role_key"), "title": a.get("title"),
                        "at": a.get("at"), "decide_inline": bool(a.get("decide_inline"))}

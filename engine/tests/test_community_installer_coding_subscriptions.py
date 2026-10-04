@@ -20,29 +20,34 @@ class _Response(io.BytesIO):
         self.close()
 
 
+def _view(provider, state="working"):
+    """What POST /v1/setup/models answers: the whole Repo and models view."""
+    return {"models": [{"provider": provider, "source_id": f"src-{provider}",
+                        "pill": {"state": state, "label": "Working" if state == "working"
+                                 else "Login expired"}}]}
+
+
 @pytest.mark.parametrize("provider", ["codex", "claude_code", "grok"])
 def test_the_installer_asks_boss_to_prove_the_connection_with_a_live_turn(
         monkeypatch, capsys, provider):
     """Recorded unproved, a wrong Claude credential looked connected until a workflow failed on
-    it with a 401 (boss-1). BOSS now answers one reserved, receipted test turn first."""
+    it with a 401 (boss-1). The installer uses Repo and models' own connect, which answers one
+    reserved, receipted test turn before the row says Working."""
     sent = []
 
     def answer(request, timeout):
         sent.append((request, timeout))
-        return _Response(json.dumps({
-            "connected": True,
-            "entitlement_recorded": True,
-            "proof": {"ok": True, "replied": "BOSS_OK", "receipt_id": "rcpt_1"},
-        }).encode())
+        return _Response(json.dumps(_view(provider)).encode())
 
     monkeypatch.setattr(coding_subscriptions.urllib.request, "urlopen", answer)
     coding_subscriptions.connect("http://127.0.0.1:8000", "private-api-key", provider)
 
     request, timeout = sent[0]
-    assert timeout == 120
-    assert request.full_url.endswith("/v1/setup/coding-agents/connect")
+    assert timeout == 180
+    assert request.full_url.endswith("/v1/setup/models")
     assert json.loads(request.data) == {
-        "project_id": "boss-dogfood", "actor": "ceo", "provider": provider, "prove": True,
+        "project_id": "boss-dogfood", "actor": "ceo", "provider": provider,
+        "kind": "subscription",
     }
     output = capsys.readouterr().out
     assert "answered a test turn" in output
@@ -50,11 +55,10 @@ def test_the_installer_asks_boss_to_prove_the_connection_with_a_live_turn(
 
 
 @pytest.mark.parametrize("reply", [
-    {"connected": False, "entitlement_recorded": False, "proof": {"ok": True}},
-    {"connected": True, "entitlement_recorded": False, "proof": {"ok": True}},
-    {"connected": True, "entitlement_recorded": True, "proof": {"ok": True, "skipped": True}},
-    {"connected": True, "entitlement_recorded": True, "proof": {"ok": False}},
-    {"connected": True, "entitlement_recorded": True, "proof": None},
+    {"models": []},
+    {"models": [{"provider": "codex", "pill": {"state": "working"}}]},
+    _view("claude_code", state="login_expired"),
+    {"models": [{"provider": "claude_code", "pill": {"state": "not_checked"}}]},
 ])
 def test_installer_refuses_to_claim_an_unrecorded_or_unproved_connection(monkeypatch, reply):
     monkeypatch.setattr(coding_subscriptions.urllib.request, "urlopen",
@@ -69,12 +73,12 @@ def test_a_refused_connection_shows_boss_s_own_reason(monkeypatch):
 
     def refuse(*_a, **_k):
         raise urllib.error.HTTPError(
-            "http://x", 422, "Unprocessable", {}, io.BytesIO(json.dumps({"detail": (
-                "The Claude Code subscription login was rejected, so no model call can run. "
-                "Reconnect it in Setup → Model.")}).encode()))
+            "http://x", 422, "Unprocessable", {}, io.BytesIO(json.dumps({"detail": {
+                "state": "login_expired", "headline": "Login expired",
+                "fix": "Make a new token with claude setup-token."}}).encode()))
 
     monkeypatch.setattr(coding_subscriptions.urllib.request, "urlopen", refuse)
-    with pytest.raises(RuntimeError, match="login was rejected"):
+    with pytest.raises(RuntimeError, match="Login expired — Make a new token"):
         coding_subscriptions.connect("http://127.0.0.1:8000", "private-api-key", "claude_code")
 
 

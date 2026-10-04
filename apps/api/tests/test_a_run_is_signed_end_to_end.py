@@ -144,8 +144,9 @@ def test_a_run_is_one_connected_chain_with_truthful_edges_and_cost_on_the_right_
         wf.tick(client)
     view = wf.run_view(client, run_id)
     assert wf.statuses(view)["gate"] == "waiting", wf.statuses(view)
-    # While the gate holds pick_b's finished work, pick_b needs you.
-    assert _live(client).get(pick_b) == "needs_you"
+    # The gate waits on YOU, not on pick_b: the agent whose finished work it holds is never
+    # drawn "needs you" for it (agents-home D4) — the wait is the operator's.
+    assert _live(client).get(pick_b) != "needs_you"
     etag = client.get("/v1/agents/live", params={"project_id": wf.PROJECT}).headers["etag"]
     unchanged = client.get("/v1/agents/live", params={"project_id": wf.PROJECT},
                            headers={"If-None-Match": etag})

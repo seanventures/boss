@@ -62,7 +62,7 @@ export function PassportTest({ projectId, actor, roleKey, persona }: {
           setResult(ev.result);
           setState(ev.result.inRemit && ev.result.saysAi ? "done" : "stuck");
         } else {
-          setFailed(ev.code === "needs_model" ? "Needs a model. Set one in Settings." : ev.message);
+          setFailed(ev.code === "needs_model" ? "Needs a model. Connect one in Repo and models." : ev.message);
           setState("stuck");
         }
       }

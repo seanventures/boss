@@ -78,7 +78,7 @@ def _gated_run(client, monkeypatch):
     return run_id, herald, view
 
 
-def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, monkeypatch):
+def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, engine, monkeypatch):
     run_id, herald, view = _gated_run(client, monkeypatch)
     decision_id = wf.steps_of(view)["publish"]["decision_id"]
 
@@ -109,9 +109,18 @@ def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, 
     assert hops[0]["label"] == "Started" and hops[0]["role_key"] is None
     assert any(h["role_key"] == herald and h["state"] == "done" for h in hops)
     assert hops[-1]["state"] == "needs_you" and hops[-1]["role_key"] is None, row["hops"]
-    # The herald is on the floor, in Yours (a custom agent with no team), needing you.
+    # The herald is on the floor, in Yours (a custom agent with no team). The gate holding its
+    # draft is YOUR wait, so neither the herald nor its team reads "needs you" for it (D4).
     agent = next(a for a in board["agents"] if a["role_key"] == herald)
-    assert agent["team"] == "yours" and agent["state"] == "needs_you"
+    assert agent["team"] == "yours" and agent["state"] != "needs_you"
+    assert next(t for t in board["teams"] if t["key"] == "yours")["needs_you"] == 0
+    # Even a gate act written before D4, which named the captain, is never the agent's wait.
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_acts SET role_key = :h WHERE decision_id = :d "
+                       "AND kind = 'step'"), {"h": herald, "d": decision_id})
+    legacy = _board(client).json()
+    assert next(a for a in legacy["agents"] if a["role_key"] == herald)["state"] != "needs_you"
+    assert next(t for t in legacy["teams"] if t["key"] == "yours")["needs_you"] == 0
     assert [t["key"] for t in board["teams"]][:8] == [
         "leadership", "architecture", "engineering", "quality", "operations", "cost", "media",
         "thinkers"]
@@ -120,7 +129,9 @@ def test_a_gate_is_one_card_and_one_waiting_row_attributed_to_the_agent(client, 
     # ONE NUMBER: the board, the pill and the Command Center.
     pill = client.get("/v1/agents/live", params={"project_id": wf.PROJECT}).json()["attention"]
     cc = client.get("/v1/console/command-center", params={"project_id": wf.PROJECT}).json()
-    assert board["counts"]["needs_you"] == len(board["attention"]) == pill["count"] \
+    # Decisions only (agents-home D2): setup gaps are listed, never counted as needs you.
+    decisions = [a for a in board["attention"] if a["kind"] == "approval"]
+    assert board["counts"]["needs_you"] == len(decisions) == pill["count"] \
         == cc["counts"]["needs_you"]
     assert decision_id in [i["id"] for i in pill["items"]] or pill["count"] > 5
 
@@ -281,26 +292,3 @@ def test_a_finished_run_stays_ten_minutes_then_leaves(client, engine, monkeypatc
     board = finished(11)
     assert _mission(board, run_id) is None
     assert any(o["run_id"] == run_id for o in board["outcomes"])
-
-
-def test_a_rejected_gate_needs_nobody_anywhere(client, monkeypatch):
-    """Rejecting a gate leaves the run blocked and its step row waiting; its act must close,
-    or presence, the teams and Activity go on saying "needs you" with no card to answer."""
-    run_id, herald, view = _gated_run(client, monkeypatch)
-    decision_id = wf.steps_of(view)["publish"]["decision_id"]
-    refused = client.post(f"/v1/decisions/{decision_id}/reject",
-                          json={"actor": "ceo", "note": "not this week"})
-    assert refused.status_code == 200, refused.text
-    wf.tick(client)
-    board = _board(client).json()
-    assert decision_id not in [a["id"] for a in board["attention"]]
-    agent = next(a for a in board["agents"] if a["role_key"] == herald)
-    assert agent["state"] != "needs_you"
-    assert sum(t["needs_you"] for t in board["teams"]) == sum(
-        1 for a in board["agents"] if a["state"] == "needs_you")
-    pill = client.get("/v1/agents/live", params={"project_id": wf.PROJECT}).json()
-    assert pill["attention"]["count"] == board["counts"]["needs_you"]
-    assert all(i["state"] != "needs_you" for i in pill["items"] if i["role_key"] == herald)
-    waiting = client.get("/v1/agents/activity", params={
-        "project_id": wf.PROJECT, "kinds": "needs_you"}).json()["items"]
-    assert not [i for i in waiting if i.get("links", {}).get("workflow_run_id") == run_id]

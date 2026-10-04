@@ -11,7 +11,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import type { V2Agent } from "../../lib/v2/workforce";
-import type { LiveMap } from "../../lib/agents-live";
+import type { LiveMap, LivePresence } from "../../lib/agents-live";
 import { askAgent as talkTo, identityOf, openAgent } from "../../lib/agent-world";
 import { openDockAbout } from "../../lib/dock-subject";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
@@ -24,6 +24,17 @@ export const UNREGISTERED_TIP =
 
 function volumeOf(a: V2Agent): number {
   return (a.calls ?? 0) + (a.steps ?? 0);
+}
+
+/** HAS THIS AGENT DONE WORK? Its counted calls and steps when the feed sends them; otherwise
+ *  its signed work — a live state, or a `Last: …` line, which only an ended act writes. The
+ *  roster sends no counts for an agent with no model calls, and "Has done work 0" beside a card
+ *  saying `Last: Working · Brief …` was a lie. */
+export function hasDoneWork(a: V2Agent, live?: LivePresence): boolean {
+  if (volumeOf(a) > 0) return true;
+  if (live && live.state !== "idle") return true;
+  const line = String((live?.line || a.task || a.last_touched || "")).trim();
+  return /^last:/i.test(line) || (a.status ?? "IDLE") !== "IDLE";
 }
 
 /** Talk to this agent, 1:1, in its own voice (agents/talk-sheet.tsx). By role_key: the name
@@ -54,7 +65,7 @@ export function DirectoryView({ projectId, actor, everyone, retired, live, searc
   const identities = useIdentityVersion();
   const [filter, setFilter] = useState<DirectoryFilter>("all");
   const agents = useMemo(() => {
-    const scoped = filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0)
+    const scoped = filter === "worked" ? everyone.filter((a) => hasDoneWork(a, live.get(a.id)))
       : filter === "retired" ? retired
       : filter === "unregistered" ? everyone.filter((a) => !a.registered) : everyone;
     const query = search.trim().toLowerCase();
@@ -63,10 +74,10 @@ export function DirectoryView({ projectId, actor, everyone, retired, live, searc
       return `${a.name} ${a.role} ${a.task} ${id.callsign ?? ""} ${id.tagline ?? ""}`.toLowerCase();
     };
     return query ? scoped.filter((a) => who(a).includes(query)) : scoped;
-  }, [everyone, retired, filter, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
+  }, [everyone, retired, live, filter, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
 
   // COUNTED, NOT ASSUMED: roles idle all window have recorded no work.
-  const workedCount = everyone.filter((a) => volumeOf(a) > 0).length;
+  const workedCount = everyone.filter((a) => hasDoneWork(a, live.get(a.id))).length;
   const unregisteredCount = everyone.filter((agent) => !agent.registered).length;
   // Once the last one is registered, the "unregistered" view has nothing left to show.
   useEffect(() => {

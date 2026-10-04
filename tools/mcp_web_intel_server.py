@@ -12,6 +12,8 @@ Tools:
   - render_mockup(html, viewport, ...)   -> screenshot a self-contained HTML/CSS
                                             mockup to a PNG (the "designer screen"
                                             capability — free, reuses Chromium)
+  - search_web(query, n=5)               -> top web results {title, url, snippet}
+                                            from Exa (no key needed), Tavily or Brave
 
 Rendering uses Playwright/Chromium (handles SPAs that a plain HTTP GET cannot).
 Results are size-capped so they fit an agent's tool-result budget; an agent that
@@ -26,7 +28,9 @@ tools/list, tools/call (POST /mcp).
 from __future__ import annotations
 
 import json
+import os
 import re
+from contextvars import ContextVar
 from urllib.parse import urljoin, urlparse
 
 from fastapi import FastAPI, Request, Response
@@ -295,7 +299,146 @@ TOOLS = [
         },
     },
 ]
-TOOL_FNS = {"fetch_page": _fetch_page, "study_site": _study_site, "render_mockup": _render_mockup}
+TOOLS.append({
+    "name": "search_web",
+    "description": (
+        "SEARCH the web for sources on a question and return the top results as "
+        "{title, url, snippet}. Use to find pages worth reading; then call fetch_page "
+        "on the ones that matter."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "What to search for"},
+            "n": {"type": "integer", "description": "How many results (1-10, default 5)"},
+        },
+        "required": ["query"],
+    },
+})
+
+
+# ---------------------------------------------------------------- search_web
+#
+# WHICH SEARCH, AND WITH WHOSE KEY, travels with the request, not the arguments: BOSS gives this
+# server a sign-in (X-Search-Provider, and the key as a bearer) from Skills & MCP › Web search, so
+# the key is never in a tool call's inputs and never in a receipt. Exa answers without a key
+# through its hosted MCP server (the default, operator decision D-3); Tavily and Brave need one.
+_REQUEST_HEADERS: ContextVar[dict] = ContextVar("web_intel_request_headers", default={})
+
+SEARCH_PROVIDERS = ("exa", "tavily", "brave")
+EXA_MCP_URL = os.environ.get("BOSS_EXA_MCP_URL", "https://mcp.exa.ai/mcp")
+SEARCH_TIMEOUT_SECONDS = 15.0
+
+
+def _search_identity() -> tuple[str, str]:
+    headers = {k.lower(): v for k, v in (_REQUEST_HEADERS.get() or {}).items()}
+    provider = (headers.get("x-search-provider") or os.environ.get("BOSS_SEARCH_PROVIDER")
+                or "exa").strip().lower()
+    auth = headers.get("authorization") or ""
+    key = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not key:
+        key = os.environ.get({"exa": "EXA_API_KEY", "tavily": "TAVILY_API_KEY",
+                              "brave": "BRAVE_SEARCH_API_KEY"}.get(provider, ""), "")
+    return provider, key
+
+
+def _clip(text: str, n: int = 300) -> str:
+    text = _norm_text(text or "")
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def _results(items: list, title: str, url: str, snippet: str) -> list[dict]:
+    out = []
+    for item in items or []:
+        if isinstance(item, dict) and item.get(url):
+            out.append({"title": str(item.get(title) or item.get(url)),
+                        "url": str(item[url]), "snippet": _clip(str(item.get(snippet) or ""))})
+    return out
+
+
+def _search_exa(query: str, n: int, key: str) -> list[dict]:
+    import httpx
+
+    if key:
+        resp = httpx.post("https://api.exa.ai/search",
+                          headers={"x-api-key": key, "Content-Type": "application/json"},
+                          json={"query": query, "numResults": n,
+                                "contents": {"text": {"maxCharacters": 400}}},
+                          timeout=SEARCH_TIMEOUT_SECONDS)
+        resp.raise_for_status()
+        return _results(resp.json().get("results") or [], "title", "url", "text")
+    # NO KEY: Exa's own hosted MCP server, which answers without one.
+    from boss_engine.services.mcp_client import MCPClient
+
+    found = MCPClient(None, timeout=SEARCH_TIMEOUT_SECONDS).call_tool(
+        EXA_MCP_URL, "web_search_exa", {"query": query, "numResults": n})
+    if isinstance(found, dict) and isinstance(found.get("results"), list):
+        return _results(found["results"], "title", "url", "text")[:n]
+    text = found.get("text") if isinstance(found, dict) else str(found)
+    return _parse_exa_text(str(text or ""))[:n]
+
+
+def _parse_exa_text(text: str) -> list[dict]:
+    """Exa's MCP answers in text blocks of `Title: … URL: … Text:|Highlights: …`; read them back."""
+    out: list[dict] = []
+    for block in re.split(r"\n(?=Title:)", text):
+        title = re.search(r"Title:\s*(.+)", block)
+        url = re.search(r"URL:\s*(\S+)", block)
+        body = re.search(r"(?:Text|Highlights|Summary):\s*([\s\S]+)", block)
+        if url:
+            out.append({"title": (title.group(1).strip() if title else url.group(1)),
+                        "url": url.group(1).strip(),
+                        "snippet": _clip(body.group(1) if body else "")})
+    return out
+
+
+def _search_tavily(query: str, n: int, key: str) -> list[dict]:
+    import httpx
+
+    resp = httpx.post("https://api.tavily.com/search",
+                      headers={"Authorization": f"Bearer {key}"},
+                      json={"query": query, "max_results": n}, timeout=SEARCH_TIMEOUT_SECONDS)
+    resp.raise_for_status()
+    return _results(resp.json().get("results") or [], "title", "url", "content")
+
+
+def _search_brave(query: str, n: int, key: str) -> list[dict]:
+    import httpx
+
+    resp = httpx.get("https://api.search.brave.com/res/v1/web/search",
+                     params={"q": query, "count": n},
+                     headers={"X-Subscription-Token": key, "Accept": "application/json"},
+                     timeout=SEARCH_TIMEOUT_SECONDS)
+    resp.raise_for_status()
+    return _results((resp.json().get("web") or {}).get("results") or [], "title", "url",
+                    "description")
+
+
+def _search_web(args: dict) -> dict:
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+    try:
+        n = max(1, min(int(args.get("n") or 5), 10))
+    except (TypeError, ValueError):
+        n = 5
+    provider, key = _search_identity()
+    if provider not in SEARCH_PROVIDERS:
+        return {"error": f"unknown search provider {provider!r}; use exa, tavily or brave"}
+    if provider in ("tavily", "brave") and not key:
+        return {"error": f"{provider} needs an API key: set it in Skills & MCP › Web search"}
+    try:
+        results = {"exa": _search_exa, "tavily": _search_tavily,
+                   "brave": _search_brave}[provider](query, n, key)
+    except Exception as exc:  # noqa: BLE001 — the provider's refusal IS the answer
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        said = f"{status} from {provider}" if status else f"{type(exc).__name__}: {exc}"
+        return {"error": said[:300], "provider": provider}
+    return {"provider": provider, "query": query, "results": results[:n]}
+
+
+TOOL_FNS = {"fetch_page": _fetch_page, "study_site": _study_site, "render_mockup": _render_mockup,
+            "search_web": _search_web}
 
 
 @app.post("/mcp")
@@ -325,7 +468,11 @@ async def mcp(request: Request):
         fn = TOOL_FNS.get(name)
         if fn is None:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"unknown tool {name}"}}
-        result = await run_in_threadpool(fn, args)
+        token = _REQUEST_HEADERS.set(dict(request.headers))
+        try:
+            result = await run_in_threadpool(fn, args)
+        finally:
+            _REQUEST_HEADERS.reset(token)
         return {
             "jsonrpc": "2.0",
             "id": rid,

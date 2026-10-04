@@ -1199,6 +1199,43 @@
   .ag-mission .ag-chain-edge[data-new="true"] .ag-chain-line { animation: none; }
 }
 
+/* Walk fixes (Live, S2): one header row, names in the lane, the search dims, phone rows whole. */
+@media (min-width: 640px) {
+  .ag-home-head { flex-wrap: nowrap; }
+  .ag-home-tabs { flex: 0 1 auto; min-width: 0; }
+  .ag-home-sum { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  .ag-home-search { flex: 0 1 200px; min-width: 120px; }
+  .ag-home-head > .wf-btn { flex: none; white-space: nowrap; }
+}
+/* The counts are never clipped where there is room: the search gives way first. */
+@media (min-width: 1024px) {
+  .ag-home-sum { flex: none; overflow: visible; }
+}
+.ag-att-face[data-dim="true"], .ag-mission-hop[data-dim="true"] { opacity: 0.3; }
+.ag-zone-extra { font-size: 11px; font-weight: 700; color: var(--red); letter-spacing: 0.04em; }
+.ag-att-title {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.ag-att-why { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 180px; min-width: 0; }
+.ag-att-why input { flex: 1; min-width: 0; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; }
+.ag-live-setup { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.8rem; }
+.ag-live-setup a { color: var(--muted); }
+.ag-crew-more { display: block; margin: 2px 8px 6px; }
+/* The lane is as wide as its faces; the "Now" words follow it, not the far edge (D18). */
+.ag-mission { grid-template-columns: minmax(120px, 200px) minmax(0, max-content) minmax(0, 1fr) 56px auto; }
+.ag-mission-who { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; }
+.ag-mission-hop-name { font-size: 11px; line-height: 1.1; color: var(--muted); max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1279px) { .ag-mission { grid-template-columns: minmax(110px, 170px) minmax(0, max-content) minmax(0, 1fr) 52px auto; } }
+@media (max-width: 1023px) { .ag-mission { grid-template-columns: minmax(100px, 150px) minmax(0, max-content) minmax(0, 1fr) auto; } }
+@media (max-width: 639px) {
+  .ag-mission, .ag-mission[data-density="row"] {
+    grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "name name acts" "lane now now"; gap: 4px 8px;
+  }
+  .ag-mission-now { white-space: normal; overflow: visible; text-overflow: clip; }
+  .ag-mission-hop-name { display: none; }
+}
+
 /* ── Agents home: Organization, Directory, Activity (S3) ── */
 /* Teams are soft zones tinted from their palette hue (--team-hue); state is always a glyph and a
    word as well as a ring. Idle faces here never move; live ones move only inside the budget, and
@@ -1253,7 +1290,9 @@
 .ag-zones-menu button { border: 0; background: transparent; color: var(--ink); text-align: left; padding: 6px 8px; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; }
 .ag-zones-menu button:hover:not(:disabled) { background: var(--accent-soft); }
 .ag-zones-menu button:disabled { color: var(--faint); cursor: default; }
-.ag-zones-map { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+/* A 12-column map so every row fills its width: band 12, three across (4 each), four across
+   (3 each), anything else full width. No empty cell, and a box is as tall as its faces. */
+.ag-zones-map { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .ag-zones-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 2; }
 .ag-zones-edge { fill: none; stroke: var(--accent-text); stroke-opacity: 0.55; stroke-linecap: round; }
 .ag-zones-edge[data-new] { animation: agav-zones-draw 400ms ease-out both; }
@@ -1264,8 +1303,9 @@
   --team-line: color-mix(in srgb, var(--team-hue, #9fb0ce) 12%, transparent);
   background: var(--team-tint); border: 1px solid var(--team-line); border-radius: 14px; padding: 10px 12px 12px; min-width: 0;
 }
-.ag-zones-zone[data-band] { grid-column: 1 / -1; }
-.ag-zones-zone[data-row-start] { grid-column-start: 1; }
+.ag-zones-zone[data-row="band"], .ag-zones-zone[data-row="rest"] { grid-column: span 12; }
+.ag-zones-zone[data-row="mid"] { grid-column: span 4; }
+.ag-zones-zone[data-row="low"] { grid-column: span 3; }
 .ag-zones-zone[data-focus] { border-color: color-mix(in srgb, var(--team-hue) 50%, transparent); }
 .ag-zones-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; font-size: 13px; }
 .ag-zones-faces { display: flex; flex-wrap: wrap; gap: 8px 10px; }
@@ -1280,9 +1320,12 @@
 .ag-zones-agent[data-lit] .ag-team-face { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--team-hue) 70%, transparent)); }
 .ag-zones-name { font-size: 11px; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-zones-skeleton { height: 320px; border-radius: 14px; background: var(--surface-2); }
-@media (max-width: 1279px) { .ag-zones-map { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* Narrower: the four-across row goes two by two; at two columns the three-across row puts its
+   last zone full width. Still no empty cell. */
+@media (max-width: 1279px) { .ag-zones-zone[data-row="low"] { grid-column: span 6; } }
 @media (max-width: 1023px) {
-  .ag-zones-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ag-zones-zone[data-row="mid"] { grid-column: span 6; }
+  .ag-zones-zone[data-row="mid"][data-team="quality"] { grid-column: span 12; }
   .ag-zones-agent .ag-avatar { --ag-size: 32px !important; }
   .ag-zones-agent { width: 60px; }
 }

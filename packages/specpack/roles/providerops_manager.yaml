@@ -17,7 +17,7 @@ boundaries:
     - Execute provider calls directly.
     - Override Budget Governor or Policy Engine.
 permissions:
-  allowed_skills: [provider.connection.review, resource.inventory.inspect, changeset.review, decision.create, artifact.create]
+  allowed_skills: []
   forbidden_skills: [provider.call.direct, provider.secret.read_raw, provider.destructive.apply]
 output_contracts: [ProviderOpsBrief, ChangeSetReviewPacket, ProviderRiskEscalation]
 autonomy:

@@ -100,6 +100,8 @@ export function StepNode(p: {
   detail?: NodeDetail;
 }): React.JSX.Element {
   const { view, mode, selected, problem, run, onSelect, detail } = p;
+  // A run names a named agent by callsign (below), resolved at render: repaint when identities load.
+  useIdentityVersion();
 
   if (mode === "dot") {
     return (
@@ -114,6 +116,14 @@ export function StepNode(p: {
   const unwired = b.unwired.length;
   const phase = run?.phase ?? "future";
   const Mark = mode === "run" ? PHASE_MARK[phase] : undefined;
+  // ON A RUN, THE NAME THE PANEL AND THE CHAIN USE: a named agent's callsign ("Beacon"), its
+  // role leading the tooltip's second line — not "Site Reliability En…" here and "Beacon" once
+  // it has run.
+  const callsign = mode === "run" && view.agent.kind === "named" && view.agent.role_key
+    ? nameOf(view.agent.role_key) : null;
+  const shown = callsign && callsign.name !== view.agent.label
+    ? { ...view.agent, label: callsign.name, tip: [view.agent.label, view.agent.tip].filter(Boolean).join(" · ") }
+    : view.agent;
   return (
     <button type="button" className="wf-node" data-mode={mode} data-type={view.type}
             data-phase={mode === "run" ? phase : undefined}
@@ -138,10 +148,10 @@ export function StepNode(p: {
       ) : mode === "run" && run?.agent ? (
         <RanBy view={view.agent} ran={run.agent} />
       ) : (
-        <span className="wf-node-agent" data-kind={view.agent.kind} data-tip={agentTip(view.agent)}
+        <span className="wf-node-agent" data-kind={view.agent.kind} data-tip={agentTip(shown)}
               data-testid="wf-node-agent">
           <AgentAvatar agent={view.agent} state={mode === "run" ? stateFromRunPhase(phase) : undefined} />
-          <span className="wf-node-agent-name">{view.agent.label}</span>
+          <span className="wf-node-agent-name">{shown.label}</span>
         </span>
       )}
       {mode === "design" ? (

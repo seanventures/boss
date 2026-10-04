@@ -23,7 +23,7 @@ cadence:
   on_demand: Respond to CEO status and command requests.
   hourly: Produce what-changed digest if material changes exist.
 permissions:
-  allowed_skills: [status.query, command.propose, decision.create]
+  allowed_skills: []
   forbidden_skills: [infra.*, github.merge_pr, slack.post_real]
 comms_contract:
   slack_prefix: "[Metatron]"

@@ -5,7 +5,7 @@
  *
  * Three of the five examples end in an email, and the only instruction BOSS gave an operator
  * with no mail server was "POST /v1/email/config" — an API call, from a person at a console
- * (review of the readiness change). This is that call as a form. It is drawn in Repo and model,
+ * (review of the readiness change). This is that call as a form. It is drawn in Skills and MCP (the Email ability),
  * and inline beside the "Outgoing email" item on any start checklist, so the fix is where the
  * problem is reported.
  */

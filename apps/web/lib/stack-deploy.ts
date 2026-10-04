@@ -213,7 +213,7 @@ export function targetFormProblem(input: {
   }
   if (!input.environment.trim()) return "Name the environment (for example production).";
   if (!/^[^/\s]+\/[^/\s]+$/.test(input.repository)) {
-    return "Choose a repository registered under Repo and model.";
+    return "Choose a repository registered under Repo and models.";
   }
   if (input.publicUrl && !/^https?:\/\/\S+$/i.test(input.publicUrl)) {
     return "The public URL must start with http:// or https://.";
@@ -228,7 +228,7 @@ export function targetFormProblem(input: {
 /** What is wrong with a deploy form, or null. */
 export function deployFormProblem(input: { repository: string; ref: string; targetId: string }): string | null {
   if (!/^[^/\s]+\/[^/\s]+$/.test(input.repository)) {
-    return "Choose a repository registered under Repo and model.";
+    return "Choose a repository registered under Repo and models.";
   }
   if (!input.ref.trim() || /\s/.test(input.ref.trim())) {
     return "Give one ref: a branch, a tag, or a commit SHA.";

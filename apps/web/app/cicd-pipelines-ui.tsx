@@ -156,7 +156,7 @@ export function CICDPipelinesPanel({
         {vendors.length === 0 ? (
           <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>
             The pipeline vendor catalog did not load — the BOSS API did not answer for it.
-            Reload the page; if it stays empty, check that the API is running in Repo and model.
+            Reload the page; if it stays empty, check that the API is running in Repo and models.
           </div>
         ) : (
           vendors.map((v) => (

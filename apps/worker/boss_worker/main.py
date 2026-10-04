@@ -267,6 +267,32 @@ def _tick_workflow_schedules(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("workflow_schedules_failed", exc_info=True)
 
 
+#: Repo and models' daily re-check. Asked hourly; only rows whose last check is over a day old
+#: are re-proved (`target: stale`), so a token that expired or was revoked overnight shows on
+#: the Command Center without anybody opening the page.
+SETUP_RECHECK_INTERVAL_SECONDS = 3600
+_last_setup_recheck_monotonic = 0.0
+
+
+def _tick_setup_checks(client: ControlPlaneClient, settings) -> None:
+    """Re-check stale repository and model rows. Never kill the worker."""
+    global _last_setup_recheck_monotonic
+    now = time.monotonic()
+    if now - _last_setup_recheck_monotonic < SETUP_RECHECK_INTERVAL_SECONDS:
+        return
+    _last_setup_recheck_monotonic = now
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        view = client.recheck_setup(str(project_id))
+        LOGGER.info("setup_rechecked verdict=%s", ((view or {}).get("verdict") or {}).get("label"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("setup_recheck_failed", exc_info=True)
+
+
 def _tick_agent_processes(client: ControlPlaneClient, settings) -> None:
     global _last_agent_process_monotonic
     now = time.monotonic()
@@ -547,6 +573,7 @@ def main() -> None:
             _tick_metatron_watch(client, settings)
             _tick_focused_agents(client, settings)
             _tick_workflow_schedules(client, settings)
+            _tick_setup_checks(client, settings)
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)

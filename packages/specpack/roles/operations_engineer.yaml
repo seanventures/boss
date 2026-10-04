@@ -21,16 +21,10 @@ decision_rights:
   must_escalate:
     - Production deploys, provider writes and destructive changes.
 permissions:
-  allowed_skills:
-    - deployment.run.plan
-    - deployment.health.check
-    - ssh_host.workload.health_check
-    - coding_pipeline.generate_ci_config
-    - providerops.sync.readonly
-    - software_factory.sandbox_validation
-    - model.generate_text
-    - work_tracker.issue.ensure
-    - work_tracker.issue.update
+  allowed_skills: [deployment.run.plan, deployment.health.check, ssh_host.workload.health_check, coding_pipeline.generate_ci_config, providerops.sync.readonly, software_factory.sandbox_validation, model.generate_text, work_tracker.issue.ensure, work_tracker.issue.update]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, tests_ci, file_tickets, deploy, watch_health]
+  recommended_abilities: [team_chat]
   forbidden_skills: [ssh_host.workload.teardown, provider.write.direct, provider.secret.read_raw]
   mcp_servers:
     - {server: boss-devops-reference, tools: [engineering_runbook, cloud_reference_pricing]}

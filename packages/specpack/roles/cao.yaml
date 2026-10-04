@@ -18,7 +18,7 @@ decision_rights:
     - Schema-breaking changes.
     - Any proposal to remove safety/accountability mechanisms.
 permissions:
-  allowed_skills: [artifact.create, design.review, adr.create, code.review, coding_pipeline.review_plan, coding_pipeline.review_code, model.generate_text]
+  allowed_skills: [repo.read, coding_pipeline.review_plan, coding_pipeline.review_code, model.generate_text]
   forbidden_skills: [infra.create_node, github.merge_pr]
 output_contracts: [ArchitectureReview, ADR, InvariantReport]
 autonomy:

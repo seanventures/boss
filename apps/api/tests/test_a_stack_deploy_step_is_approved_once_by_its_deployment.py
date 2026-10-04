@@ -169,9 +169,10 @@ def _skip_and_retry(engine, run_id: str) -> dict:
     return {a["key"]: a for a in actions if a.get("step_id") == "deploy"}
 
 
-def test_a_rejected_release_is_never_skipped_only_tried_again(client, engine, stack):
-    from boss_engine.services import workflow_run_actions
-
+def test_a_rejected_release_offers_retry_and_skip_and_skip_never_ships(client, engine, stack):
+    """Agents home D3 (the operator's decision): a refused release stops the run at a failed
+    step offering Retry (ask again) and Skip (carry on WITHOUT the release). A skip is never
+    an approval: the step is `skipped`, not `succeeded`, and nothing is applied."""
     run_id = _deploy_run(engine, _build(engine, '{"owner": "acme", "repo": "shop"}'))
     _tick(engine)
     decision_id = _step(engine, run_id)["output"]["decision_id"]
@@ -181,16 +182,16 @@ def test_a_rejected_release_is_never_skipped_only_tried_again(client, engine, st
     assert _step(engine, run_id)["status"] == "failed"
 
     offered = _skip_and_retry(engine, run_id)
-    assert not offered.get("skip_step", {}).get("enabled"), offered
+    assert offered["skip_step"]["enabled"], offered
     assert offered["retry_step"]["enabled"], offered
+    skipped = client.post(f"/v1/delivery-workflows/runs/{run_id}/skip-step", json={
+        "project_id": HOME, "actor": "ceo", "step_id": "deploy", "reason": "not this release"})
+    assert skipped.status_code == 200, skipped.text
+    assert _step(engine, run_id)["status"] == "skipped"
     with engine.begin() as c:
-        try:
-            workflow_run_actions.require(c, HOME, run_id, "skip_step", step_id="deploy")
-        except Exception:  # noqa: BLE001 — refused, which is the point
-            refused = True
-        else:
-            refused = False
-    assert refused, "a person's no was skippable"
+        approved = c.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                             {"d": decision_id}).scalar()
+    assert approved == "rejected"
 
 
 def test_a_waived_gate_ships_only_to_the_stack_target_it_was_waived_for(

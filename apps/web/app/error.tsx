@@ -46,7 +46,7 @@ export default function ConsoleError({
         <p className="org-gate-sub">
           If you had just pressed a button, it may or may not have reached BOSS: look at the area
           you were in before pressing it again. Otherwise try again; if it fails the same way,
-          check that the BOSS API is running (Repo and model shows its status), then retry.
+          check that the BOSS API is running (Repo and models shows its status), then retry.
         </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" className="cap-btn primary" onClick={() => reset()}>

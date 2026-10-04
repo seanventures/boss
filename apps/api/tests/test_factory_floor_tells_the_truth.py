@@ -104,7 +104,9 @@ def test_a_build_stopped_for_you_is_the_pills_item(client, engine):
     board = client.get("/v1/agents/live-board", params={"project_id": fx.PROJECT}).json()
     assert pill["count"] == board["counts"]["needs_you"]
     assert any(a["id"] == item["id"] for a in board["attention"])
-    assert body["counts"]["needs_you"] == len(body["attention"])
+    # ONE NUMBER (agents-home D2): decisions, as the pill says; the stopped build is a card.
+    assert body["counts"]["needs_you"] == sum(1 for a in body["attention"] if a["kind"] == "approval")
+    assert body["counts"]["needs_you"] == pill["count"]
 
 
 def test_shipped_and_stopped(client, engine):

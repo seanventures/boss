@@ -3492,7 +3492,14 @@ def _open_gate(
     preview = (None if subject["completes_step"] or subject.get("decision_id")
                else _action_preview_for(connection, project_id, spec_step, run_context,
                                         str(subject["label"])))
-    question = action_preview.gate_question(str(subject["label"]), subject_name)
+    # THE STEP AS THE WORKFLOW NAMES IT (agents-home D9): "Publish — Release notes 2.9", the
+    # words the Command Center and Agents › Live use for the same gate, not the capability's.
+    from .command_center import step_label as _named_step_label
+
+    question = action_preview.gate_question(
+        _named_step_label(spec_step, str(step_row.get("step_id") or "")) if spec_step.get(
+            "label") or spec_step.get("name") or spec_step.get("title") else str(subject["label"]),
+        subject_name)
     recommendation_extra: dict[str, Any] = {}
     if preview is not None:
         recommendation_extra["action_preview"] = preview
@@ -3657,7 +3664,7 @@ def _resume_answered_gates(
     rows = connection.execute(
         text(
             """
-            SELECT s.id, s.step_id, s.binding_snapshot, s.iteration,
+            SELECT s.id, s.step_id, s.binding_snapshot, s.iteration, s.decision_id,
                    d.status AS decision_status, d.approved_by AS decision_approved_by
             FROM workflow_step_runs s
             JOIN decisions d ON d.id = s.decision_id
@@ -3674,9 +3681,12 @@ def _resume_answered_gates(
     for row in rows:
         snapshot = row["binding_snapshot"] or {}
         if row["decision_status"] != "approved":
-            workflows._block_run(
-                connection, run["id"],
-                f"step '{row['step_id']}' was {row['decision_status']}",
+            # A NO FAILS THE STEP and stops the run there, offering Retry and Skip — the one
+            # path every refused gate takes (workflows.reject_gate).
+            workflows.reject_gate(
+                connection, run["id"], str(row["step_id"]), int(row["iteration"]),
+                decision_id=str(row.get("decision_id") or ""),
+                outcome=str(row["decision_status"]),
             )
             acted.append({"run_id": run["id"], "step_id": row["step_id"],
                           "outcome": f"gate_{row['decision_status']}"})

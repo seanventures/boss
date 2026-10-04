@@ -335,10 +335,15 @@ def test_live_and_the_pill_count_exactly_what_the_command_center_counts(monkeypa
                       names={}, now=NOW, stopped=stopped)
     attention = _board_attention(monkeypatch, out["needs_you"], rows, owner="media_publisher")
     assert [a["id"] for a in attention] == [n["id"] for n in out["needs_you"]]
-    assert len(attention) == out["counts"]["needs_you"]
     inbox = {r["id"] for r in rows if da.describe(r, NOW)["attention"] == "needs_action"}
     assert {a["id"] for a in attention if a["kind"] == "approval"} == inbox
-    assert out["counts"]["needs_you"] == len(inbox) + 1 + 1  # + the failed step + the setup gap
+    # ONE NUMBER (agents-home D2): decisions only. The failed step and the setup gap are listed
+    # and counted apart, so the pill can never say 3 while Approvals says 1.
+    assert out["counts"]["needs_you"] == len(inbox)
+    assert (out["counts"]["stopped"], out["counts"]["setup"]) == (1, 1)
+    # A stopped run first, then the gates, setup last (agents-home D12).
+    assert [a["kind"] for a in attention][0] == "failed_step"
+    assert [a["kind"] for a in attention][-1] == "readiness"
     failed = next(a for a in attention if a["kind"] == "failed_step")
     assert failed["id"] == "run:wfr_failed:build"
     assert [x["label"] for x in failed["answers"]] == ["Retry", "Skip"]
@@ -443,9 +448,12 @@ def test_a_stopped_build_is_one_item_on_every_surface(monkeypatch):
                       names={}, now=NOW, builds=builds)
     kinds = [n["kind"] for n in out["needs_you"]]
     assert kinds.count("gate_override") == 1 and kinds.count("budget_refused") == 1
-    assert out["counts"]["needs_you"] == 3 and out["counts"]["builds"] == 2
+    # ONE NUMBER (agents-home D2): needs_you counts decisions; a stopped build is a card,
+    # counted with stopped work, the way a failed step is.
+    assert out["counts"]["needs_you"] == 1 and out["counts"]["builds"] == 2
+    assert out["counts"]["stopped"] == 2
     attention = _board_attention(monkeypatch, out["needs_you"], rows)
-    assert len(attention) == out["counts"]["needs_you"]
+    assert len(attention) == out["counts"]["needs_you"] + out["counts"]["stopped"]
     gates = next(a for a in attention if a["kind"] == "gate_override")
     assert gates["id"] == "build:crun_g:gates"
     assert gates["title"] == "2 checks failed"
@@ -465,11 +473,12 @@ def test_a_stopped_build_is_one_item_on_every_surface(monkeypatch):
     assert pr["role_key"] == "software_engineer"
 
 
-def test_a_build_waiting_on_you_ranks_with_failed_steps():
+def test_a_stopped_build_ranks_with_failed_steps():
     builds = _builds()
     rows = [decision("gate", "pending", recommendation={"action": "workflow_step_gate"})]
     out = cc.assemble(project_id="p", runs=[], steps=[], decisions=rows,
                       readiness=[{"id": "model", "title": "Connect a model", "done": False}],
                       names={}, now=NOW, builds=builds)
+    # A STOPPED RUN FIRST (agents-home D12): a build stopped at its checks has stopped too.
     assert [n["kind"] for n in out["needs_you"]] == [
-        "approval", "gate_override", "budget_refused", "readiness"]
+        "gate_override", "budget_refused", "approval", "readiness"]

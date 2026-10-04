@@ -24,7 +24,8 @@ CREATE_ENTITLEMENT_SOURCES = (
     " project_id TEXT, source_id TEXT, provider TEXT, connection_status TEXT,"
     " credential_secret_ref_id TEXT, updated_at TIMESTAMP,"
     " cost_mode TEXT, limit_shape TEXT, observed_capacity TEXT,"
-    " supported_models TEXT, connection_metadata TEXT, auth_method TEXT, status TEXT)"
+    " supported_models TEXT, connection_metadata TEXT, auth_method TEXT, status TEXT,"
+    " created_at TIMESTAMP)"
 )
 
 CREATE_PROJECT_SETTINGS = (
@@ -40,6 +41,26 @@ CREATE_SECRET_REFS = (
 )
 
 
+#: What Repo and models reads for the repository row (setup_view), mirroring the real columns.
+CREATE_GITHUB_TABLES = (
+    "CREATE TABLE github_connections (id TEXT, project_id TEXT, connection_label TEXT,"
+    " auth_method TEXT, credential_ref TEXT, api_base_url TEXT, status TEXT,"
+    " account_login TEXT, expires_at TIMESTAMP, last_test_status TEXT,"
+    " last_tested_at TIMESTAMP, last_error TEXT, created_at TIMESTAMP, updated_at TIMESTAMP)",
+    "CREATE TABLE github_repository_bindings (id TEXT, project_id TEXT, connection_id TEXT,"
+    " full_name TEXT, role TEXT, default_branch TEXT, visibility TEXT, status TEXT,"
+    " checks TEXT, checked_at TIMESTAMP, created_at TIMESTAMP, updated_at TIMESTAMP)",
+    "CREATE TABLE events (id TEXT, project_id TEXT, event_type TEXT, actor TEXT,"
+    " entity_type TEXT, entity_id TEXT, data TEXT, created_at TIMESTAMP)",
+)
+
+
+def create_setup_tables(conn) -> None:
+    """The stub schema Repo and models' rows read (`setup_view.build_basics`)."""
+    for statement in CREATE_GITHUB_TABLES:
+        conn.execute(text(statement))
+
+
 def create_entitlement_tables(conn, *, with_settings: bool = True) -> None:
     """Build the stub schema connected_engines and its callers read."""
     conn.execute(text(CREATE_ENTITLEMENT_SOURCES))
@@ -49,6 +70,12 @@ def create_entitlement_tables(conn, *, with_settings: bool = True) -> None:
 
 
 import pytest
+
+
+@pytest.fixture()
+def setup_tables():
+    """`create_setup_tables`, as a fixture (see `entitlement_tables` for why a fixture)."""
+    return create_setup_tables
 
 
 @pytest.fixture()
@@ -81,3 +108,27 @@ def _no_real_cli_model_catalog(monkeypatch):
     monkeypatch.setattr(cli_harness, "_read_model_catalog",
                         lambda spec: reported.get(spec.name, ()), raising=False)
     monkeypatch.setattr(cli_harness, "_catalog_cache", {}, raising=False)
+
+
+def _stub(name: str):
+    """A module from tests/e2e/stubs, loaded by path (that folder is not a package)."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "tests" / "e2e" / "stubs" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_stub_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture()
+def github_probes():
+    """The fake GitHub's answers to Repo and models' probes, per token profile."""
+    return _stub("github_probes")
+
+
+@pytest.fixture()
+def model_probes():
+    """The model stub's answers to Repo and models' one-question check, per key."""
+    return _stub("model_probes")

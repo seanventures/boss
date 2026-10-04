@@ -47,7 +47,7 @@ class UnreachableMcp:
     def __init__(self, _settings) -> None:
         pass
 
-    def list_tools(self, _url):
+    def list_tools(self, _url, headers=None):
         return [{"name": "post", "description": "Post a message."}]
 
 

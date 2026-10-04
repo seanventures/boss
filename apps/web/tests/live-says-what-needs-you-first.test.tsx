@@ -52,9 +52,9 @@ describe("Live, top to bottom", () => {
       expect.arrayContaining([expect.stringContaining("PR #842 opened"), expect.stringContaining("Minutes ready")]));
   });
 
-  it("a waiting gate comes first in its section, the failed step after it", async () => {
+  it("a failed step comes first (it has stopped a run), then the gate waiting (walk D12)", async () => {
     await mount(view());
-    expect($$("[data-att-card]").map((c) => c.dataset.attId)).toEqual(["dec_gate", "run:wfr_ship:build"]);
+    expect($$("[data-att-card]").map((c) => c.dataset.attId)).toEqual(["run:wfr_ship:build", "dec_gate"]);
   });
 });
 
@@ -98,7 +98,7 @@ describe("the attention card", () => {
     expect($('[data-testid="ag-att-confirm"]')?.textContent).toContain("Reject this?");
     await click($('[data-testid="ag-att-confirm-reject"]'));
     expect(decide.mock.calls[0][0].get("action")).toBe("reject");
-    expect(toasts).toContain("Rejected · run stopped");
+    expect(toasts).toContain("Rejected · step failed");
   });
 
   it("a refusal (409) shows the server's sentence on the card", async () => {

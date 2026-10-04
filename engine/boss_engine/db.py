@@ -115,9 +115,29 @@ def _reconcile_columns(cursor, sql: str) -> tuple[int, list[str]]:
     return attempted, skipped
 
 
-def get_engine(settings: Optional[Settings] = None) -> Engine:
+def get_engine(settings: Optional[Settings] = None, *,
+               idle_in_transaction_seconds: Optional[int] = None) -> Engine:
+    """The SQLAlchemy engine. `idle_in_transaction_seconds` (the API passes its setting) has
+    Postgres end a session that sits inside an open transaction doing nothing for that long:
+    an API request must never hold row locks for hours because something between two
+    statements hung."""
     resolved = settings or get_settings()
-    return create_engine(resolved.database_url, future=True, pool_pre_ping=True)
+    engine = create_engine(resolved.database_url, future=True, pool_pre_ping=True)
+    if idle_in_transaction_seconds:
+        from sqlalchemy import event
+
+        milliseconds = int(idle_in_transaction_seconds) * 1000
+
+        @event.listens_for(engine, "connect")
+        def _limit_idle_transactions(dbapi_connection, _record):  # noqa: ANN001
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute(f"SET idle_in_transaction_session_timeout = {milliseconds}")
+            finally:
+                cursor.close()
+            dbapi_connection.commit()
+
+    return engine
 
 
 def database_is_reachable(engine: Engine) -> bool:

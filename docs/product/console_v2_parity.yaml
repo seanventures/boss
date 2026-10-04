@@ -24,8 +24,8 @@ v2_nav:
   panels: {v1Area: decisions}
   boss: {v1Area: delivery_workflows}
   timeline: {v1Area: activity, label_differs_because: "v2 shows receipts — the recorded effects — not the whole activity log."}
-  infra: {v1Area: delivery, label_differs_because: "v2 puts model spend beside hosts and targets; v1 keeps models in Repo and model."}
-  settings: {v1Area: setup, label_differs_because: "v2 Settings gathers roles, repositories and what this deployment does not have; v1 splits them across Repo and model, Identity and Access."}
+  infra: {v1Area: delivery, label_differs_because: "v2 puts model spend beside hosts and targets; v1 keeps models in Repo and models."}
+  settings: {v1Area: setup, label_differs_because: "/v2/settings redirects to v1 Repo and models, where the repository, models, who does what and the budget live."}
 
 overview:
   to: missions
@@ -77,8 +77,8 @@ meetings:
   risk: The meeting room — rounds, debate, synthesis, the drafted PRD and the consensus record — is v1-only; v2 shows only the decision a meeting produced.
 setup:
   to: settings
-  what: The repositories code tasks have targeted.
-  risk: Connecting a repository, choosing a model and every governing knob are v1-only.
+  what: /v2/settings redirects to Repo and models (?area=setup).
+  risk: None — v2 has no settings screen of its own any more.
 skills:
   to: settings
   what: Not shown yet; Settings lists what is configured at the company level.

@@ -71,11 +71,19 @@ def _first_line(value: Any, limit: int = 220) -> str:
 def run_subject(run: Mapping[str, Any]) -> str:
     """What the run is delivering, in the operator's words — not the workflow's name."""
     data = run.get("input") if isinstance(run.get("input"), dict) else {}
-    for key in ("title", "app_name", "brief", "directive", "topic"):
+    for key in ("title", "name", "app_name", "subject", "brief", "directive", "topic"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             return _first_line(value, 120)
     return ""
+
+
+def run_name(run: Mapping[str, Any]) -> str:
+    """THE ONE NAME for a run on every surface (agents-home D9): what it is delivering, in the
+    operator's words (`run_subject`), else its workflow's name. Never `<workflow> #<hash>`: a
+    hash is an id, and the operator typed a title for this run."""
+    return (run_subject(run) or str(run.get("workflow_name") or "").strip()
+            or humanize(str(run.get("workflow_key") or "")) or "this run")
 
 
 def _spec_steps(run: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -136,6 +144,17 @@ def step_agent(spec_step: Mapping[str, Any], step: Mapping[str, Any],
     return {"role_key": None, "name": None, "how": "none"}
 
 
+def _rec_reason(decision: Mapping[str, Any]) -> str:
+    rec = decision.get("recommendation")
+    if isinstance(rec, str):
+        try:
+            import json as _j
+            rec = _j.loads(rec)
+        except ValueError:
+            rec = {}
+    return str((rec or {}).get("reason") or "") if isinstance(rec, dict) else ""
+
+
 def _latest_per_step(steps: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """One row per step id: the newest attempt or iteration decides its state."""
     latest: dict[str, Mapping[str, Any]] = {}
@@ -165,6 +184,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
              readiness: list[Mapping[str, Any]], names: Mapping[str, str],
              now: datetime,
              stopped: Optional[Mapping[str, list]] = None,
+             notes: Optional[Mapping[str, str]] = None,
              builds: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """Shape the read rows into the three answers. Pure: no I/O, `now` is passed in.
 
@@ -199,6 +219,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "workflow_key": run.get("workflow_key"),
             "workflow_name": run.get("workflow_name") or humanize(str(run.get("workflow_key"))),
             "subject": run_subject(run),
+            # What every title and row calls the run: its subject, else its workflow's name.
+            "name": run_name(run),
             "status": status,
             "steps_done": done,
             "step_count": step_count,
@@ -246,24 +268,32 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             for step, answers in pairs:
                 spec_step = spec.get(str(step.get("step_id")), {})
                 label = step_label(spec_step, str(step.get("step_id")))
+                output = _output_of(step)
+                # A GATE SOMEBODY SAID NO TO (agents-home D3): the step failed on a person's
+                # answer, so the card says so, and its reason is their note.
+                refused = bool(output.get("rejected_by_approver"))
+                note = (notes or {}).get(str(output.get("decision_id") or "")) or ""
                 needs_you.append({
                     "id": f"run:{run_id}:{step.get('step_id')}",
                     "kind": "failed_step",
-                    "title": f"“{label}” failed" + (f" on {base['subject']}"
-                                                    if base["subject"] else ""),
-                    "detail": (_first_line(step.get("last_error"))
+                    "refused": refused,
+                    "title": (f"“{label}” was rejected on {base['name']}" if refused
+                              else f"“{label}” failed on {base['name']}"),
+                    "detail": ((_first_line(note) or "You rejected it.") if refused else (
+                               _first_line(step.get("last_error"))
                                or _first_line(run.get("error"))
                                or "The step stopped without recording why. Open the run to "
-                                  "see its log."),
-                    "what_to_do": ("Fix the cause if the message names one, then Retry the "
-                                   "step. The run carries on from there."),
+                                  "see its log.")),
+                    "what_to_do": ("Retry asks again. Skip carries on without it." if refused
+                                   else "Fix the cause if the message names one, then Retry "
+                                        "the step. The run carries on from there."),
                     "run_id": run_id, "step_id": step.get("step_id"),
                     "workflow_name": base["workflow_name"],
                     "actions": [str(a["key"]) for a in answers],
                     # The run's own answers, as the Workflow screen gets them: what each is
                     # called, whether it can be taken now, and why not.
                     "answers": list(answers),
-                    "run": {"id": run_id, "subject": base["subject"],
+                    "run": {"id": run_id, "subject": base["name"],
                             "step_id": step.get("step_id"), "step_label": label,
                             "step_index": here, "step_count": step_count},
                     "at": _iso(step.get("completed_at") or updated),
@@ -301,8 +331,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             title = f"Merge PR #{build['pr_number']}?" if build.get("pr_number") \
                 else "Merge the PR?"
         elif run:
-            title = f"“{run['step_label']}” is waiting for you" + (
-                f" on {run['subject']}" if run.get("subject") else "")
+            title = f"“{run['step_label']}” is waiting for you on {run['name']}"
         else:
             title = _first_line(decision.get("question"), 160)
         needs_you.append({
@@ -310,9 +339,10 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "kind": "approval",
             "decision_kind": described["kind"],
             "title": title,
-            "detail": hint.get("what_happened") or (
-                described["allowed_actions"][0]["effect"]
-                if described["allowed_actions"] else ""),
+            # WHY IT ASKS, in the server's words (agents-home D6) — never the approve button's
+            # effect, which the card already shows on the button.
+            "detail": (hint.get("what_happened") or _first_line(decision.get("reason"))
+                       or _first_line(_rec_reason(decision)) or ""),
             "what_to_do": hint.get("what_to_do"),
             "fix_area": hint.get("area"),
             "fix_label": hint.get("link_label"),
@@ -324,7 +354,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             # The whole offer — label, tone, effect, what it needs — so a card elsewhere draws
             # exactly the inbox's buttons. `actions` stays the list of names older readers use.
             "allowed_actions": [dict(a) for a in described["allowed_actions"]],
-            "run": ({"id": run["run_id"], "subject": run.get("subject") or "",
+            "run": ({"id": run["run_id"], "subject": run.get("name") or "",
                      "step_id": run["step_id"], "step_label": run["step_label"],
                      "step_index": run.get("step_index"), "step_count": run.get("step_count")}
                     if run else None),
@@ -364,25 +394,31 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "kind": "readiness",
             "title": str(gap.get("title") or "Finish setting up"),
             "detail": str(gap.get("detail") or ""),
-            "what_to_do": "Nothing can be built until this is done. It takes a minute.",
+            "what_to_do": gap.get("what_to_do") or (
+                "Nothing can be built until this is done. It takes a minute."),
             "fix_area": "setup",
-            "fix_label": "Open Repo and model",
+            # Lands on the row that needs it (`?area=setup&focus=<row>`), not the page top.
+            "fix_focus": gap.get("focus"),
+            "fix_label": "Fix in Repo and models",
             "actions": [],
             "at": None,
         })
 
     # WHAT STOPS WORK FIRST. A gate holds a run that is otherwise ready; a failed step has
     # already stopped one; setup gaps stop the next one; a refusal is a notice.
-    def rank(item: Mapping[str, Any]) -> tuple[int, str]:
-        if item["kind"] == "approval" and item.get("decision_kind") != "refusal":
+    # A STOPPED RUN FIRST (agents-home D12): it has already stopped, and its card was hidden
+    # under "+6 more" behind routine gates. Then gates, riskiest first; then notices; setup last.
+    def rank(item: Mapping[str, Any]) -> tuple[int, int, str]:
+        if item["kind"] in ("failed_step", "gate_override", "budget_refused"):
+            # A build stopped at its checks or its budget has stopped too (factory spec §6.5).
             first = 0
-        elif item["kind"] in ("failed_step", "gate_override", "budget_refused"):
+        elif item["kind"] == "approval" and item.get("decision_kind") != "refusal":
             first = 1
-        elif item["kind"] == "readiness":
+        elif item["kind"] == "approval":
             first = 2
         else:
             first = 3
-        return (first, str(item.get("at") or ""))
+        return (first, -int(item.get("risk_tier") or 0), str(item.get("at") or ""))
 
     needs_you.sort(key=rank)
     running.sort(key=lambda r: (r["status"] not in {"waiting", "blocked"},
@@ -396,7 +432,14 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         "recent": recent[:8],
         "counts": {
             "running": len(running),
-            "needs_you": len(needs_you),
+            # ONE NUMBER (agents-home D2): DECISIONS waiting on the operator —
+            # decision_actions.attention, what Approvals' badge and Needs action count. A failed
+            # step and a setup gap are listed, and counted apart (`stopped`, `setup`).
+            "needs_you": sum(1 for n in needs_you if n["kind"] == "approval"),
+            # A build stopped at its checks or its budget is stopped work too (factory §6.5).
+            "stopped": sum(1 for n in needs_you
+                           if n["kind"] in ("failed_step", "gate_override", "budget_refused")),
+            "setup": sum(1 for n in needs_you if n["kind"] == "readiness"),
             "approvals": sum(1 for n in needs_you if n["kind"] == "approval"),
             "expired_answerable": expired_answerable,
             "failed_steps": sum(1 for n in needs_you if n["kind"] == "failed_step"),
@@ -485,11 +528,9 @@ def read(connection, settings, project_id: str,
     }
     readiness: list[dict[str, Any]] = []
     try:
-        from .setup_service import setup_status
-
         with connection.begin_nested():
-            readiness = list(setup_status(connection, settings, project_id).get("steps") or [])
-    except Exception:  # noqa: BLE001 - a setup probe must never blank the landing page
+            readiness = setup_gaps(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 - a setup read must never blank the landing page
         readiness = []
     from .workflow_run_actions import load_runs, stopped_for_operator
 
@@ -505,9 +546,28 @@ def read(connection, settings, project_id: str,
     loaded = load_runs(connection, project_id, [r["id"] for r in runs])
     stopped = {run_id: stopped_for_operator(run, run_steps)
                for run_id, (run, run_steps) in loaded.items()}
+    # The note somebody wrote when they said no to a gate: the reason on its failed-step card.
+    refused_ids = [str(d) for d in (
+        (_output_of(st).get("decision_id")) for pairs in stopped.values() for st, _ in pairs
+        if _output_of(st).get("rejected_by_approver")) if d]
+    notes = {str(r["id"]): str(r["resolution_note"] or "") for r in connection.execute(
+        text("SELECT id, resolution_note FROM decisions WHERE id = ANY(:ids)"),
+        {"ids": refused_ids},
+    ).mappings()} if refused_ids else {}
     return {"project_id": project_id, "runs": runs, "steps": steps, "decisions": decisions,
             "readiness": readiness, "names": names, "now": now, "stopped": stopped,
-            "builds": builds}
+            "notes": notes, "builds": builds}
+
+
+def _output_of(step: Mapping[str, Any]) -> dict[str, Any]:
+    out = step.get("output")
+    if isinstance(out, str):
+        try:
+            import json as _j
+            out = _j.loads(out)
+        except ValueError:
+            out = {}
+    return out if isinstance(out, dict) else {}
 
 
 def build(connection, settings, project_id: str,
@@ -525,7 +585,44 @@ def build(connection, settings, project_id: str,
 
 def needs_you_count(connection, settings, project_id: str,
                     now: Optional[datetime] = None) -> int:
-    """HOW MANY THINGS NEED THE OPERATOR: gates (decision_actions.attention), failed steps and
-    setup gaps — the Command Center's `counts.needs_you`. The top-bar pill, Agents › Live and
+    """HOW MANY DECISIONS WAIT ON THE OPERATOR (decision_actions.attention) — the Command
+    Center's `counts.needs_you`, Approvals' badge and Needs action (agents-home D2). The top-bar pill, Agents › Live and
     the Command Center all say this number; none of them counts its own (spec §6.3)."""
     return int(build(connection, settings, project_id, now)["counts"]["needs_you"])
+
+
+def setup_gaps(connection: Any, settings: Any, project_id: str) -> list[dict[str, Any]]:
+    """What Repo and models says still stops work: unfinished rows, failing rows, and a token
+    that stops working within three days. Read from the same view the page renders, so the
+    Command Center and the page cannot disagree (and nothing here calls GitHub)."""
+    from . import setup_view
+
+    view = setup_view.build_basics(connection, settings, project_id)
+    found = setup_view.basics(view)
+    gaps: list[dict[str, Any]] = []
+    if not found["github"]:
+        failing = next((r for r in view["repository"]["repos"]
+                        if r["pill"]["tone"] == "red"), None)
+        gaps.append({
+            "id": "github", "done": False, "focus": "repository",
+            "title": (f"Repository: {failing['pill']['label']}" if failing
+                      else "Connect a repository"),
+            "detail": failing["pill"]["tip"] if failing else
+            "BOSS needs a repository to open pull requests."})
+    if not found["model"]:
+        failing = next((m for m in view["models"] if m["pill"]["tone"] == "red"), None)
+        gaps.append({
+            "id": "model", "done": False, "focus": "models",
+            "title": (f"{failing['label']}: {failing['pill']['label']}" if failing
+                      else "Connect a model"),
+            "detail": failing["pill"]["tip"] if failing else
+            "A subscription, an API key or a local model."})
+    soon = setup_view.expiring_within({"repository": view["repository"], "models": []}, 3)
+    if soon:
+        days = soon["days"]
+        gaps.append({
+            "id": "expiring", "done": False, "focus": "repository",
+            "title": f"Token expires in {days} day{'s' if days != 1 else ''}",
+            "detail": "Builds stop when it expires. Make a new token now.",
+            "what_to_do": "Paste a new token in Repo and models before it expires."})
+    return gaps

@@ -1,0 +1,21 @@
+# The media pack's ability (skills-mcp spec §3.1, Media). Shown only when the project has the
+# media pack installed; its connection is the existing Google client + channel flow (/v1/channels).
+kit: media
+version: 1
+groups: [media]
+abilities:
+  - key: youtube
+    group: media
+    label: YouTube
+    tip: Publish videos to your channel.
+    icon: YoutubeLogo
+    connection:
+      flow: channels
+      providers:
+        - {key: youtube, label: YouTube}
+    skills: [publish_youtube, drive.list_videos, drive.import_video]
+    tools:
+      - {ref: "skill:publish_youtube", label: Publish a video, policy: ask}
+      - {ref: "skill:drive.list_videos", label: List Drive videos}
+      - {ref: "skill:drive.import_video", label: Import a Drive video}
+    test: channel_connected
