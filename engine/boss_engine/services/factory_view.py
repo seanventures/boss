@@ -1315,7 +1315,45 @@ def _attention_for_builds(connection: Any, settings: Any, project_id: str,
     cc = command_center.assemble(**read)
     items = agents_live_board.attention_items(connection, project_id, cc["needs_you"],
                                               read["decisions"])
+    _attach_builds_to_their_runs(connection, project_id, items)
     return [i for i in items if isinstance(i.get("build"), dict)]
+
+
+def _attach_builds_to_their_runs(connection: Any, project_id: str,
+                                 items: list[dict[str, Any]]) -> None:
+    """A gate or a failed step OF THE WORKFLOW RUN A BUILD BELONGS TO is that build's too
+    (spec §4.2.1): the Floor dropped them, so its NEEDS YOU disagreed with the pill and
+    Approvals. Each such item gains the build it holds up — one query for all of them."""
+    from .code_task_service import load_code_task_run
+
+    wanted = {str((i.get("run") or {}).get("id")) for i in items
+              if not isinstance(i.get("build"), dict) and (i.get("run") or {}).get("id")}
+    if not wanted:
+        return
+    found: dict[str, str] = {}
+    for r in connection.execute(
+        text("SELECT id, COALESCE(finalize_ctx->'origin'->>'workflow_run_id', "
+             "finalize_ctx->>'workflow_run_id') AS wfr FROM code_task_runs "
+             "WHERE project_id = :p AND COALESCE(finalize_ctx->'origin'->>'workflow_run_id', "
+             "finalize_ctx->>'workflow_run_id') = ANY(:w) ORDER BY created_at DESC"),
+        {"p": project_id, "w": sorted(wanted)},
+    ).mappings().all():
+        found.setdefault(str(r["wfr"]), str(r["id"]))
+    runs: dict[str, Mapping[str, Any]] = {}
+    for item in items:
+        if isinstance(item.get("build"), dict):
+            continue
+        wf = item.get("run") or {}
+        build_id = found.get(str(wf.get("id")))
+        if not build_id:
+            continue
+        run = runs.get(build_id) or load_code_task_run(connection, build_id)
+        if not run:
+            continue
+        runs[build_id] = run
+        item["build"] = {"run_id": build_id, "app": app_name(run),
+                         "where": str(wf.get("step_label") or "Workflow"),
+                         "failing": [], "retryable": False}
 
 
 def _etag(material: Any) -> str:

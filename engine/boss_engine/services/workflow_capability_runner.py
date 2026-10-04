@@ -439,6 +439,27 @@ def _adopted_gate(
     }
 
 
+def _no_prd_to_approve(key: str, context: Optional[dict[str, Any]]) -> bool:
+    """A build started as a DIRECT CHANGE has no PRD, so its run's `spec_review` has nothing to
+    approve (factory test D2). It opened a "PRD approval (automatic)" decision that nobody — and
+    no automation — ever answered: one pending decision per build, counted on the pill and in
+    Approvals while the build had long opened its PR. A run that came from a panel (a meeting
+    or a decision to adopt) still waits on that panel's PRD exactly as before."""
+    if key != "spec_review" or not isinstance(context, dict):
+        return False
+    run_input = context.get("input") or {}
+    if not isinstance(run_input, dict) or not run_input.get("adopt_code_task_run_id"):
+        return False
+    if run_input.get("adopt_decision_id") or run_input.get("adopt_meeting_run_id"):
+        return False
+    # The gate is AUTOMATIC by default (BOSS_MEETING_PRD_AUTO_APPROVE). An operator who turned
+    # that off asked for a person to sign — that gate stays, as before.
+    try:
+        return bool(getattr(get_settings(), "meeting_prd_auto_approve", True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 #: Phases that HAPPEN BEFORE a build. On a retrospective run — one started for a project whose
 #: build is already going — running these forwards spends money re-deciding a settled question.
 _RETROSPECTIVE_KINDS = frozenset({"research", "meeting"})
@@ -1781,6 +1802,11 @@ def _execute_step(
         # Except when the run already HAS the answer — `_gate_subject` declined to open a gate,
         # so the step arrived here as ordinary work. Record the approval that was given and move
         # on; the audit trail names the decision, so "who approved this" is still answerable.
+        if _no_prd_to_approve(key, context):
+            return workflow_outcomes.apply(key, {
+                "capability": key, "tool": None, "status": "not_applicable",
+                "note": "No PRD to approve — this build was started as a direct change.",
+            }, {})
         adopted_gate = _adopted_gate(connection, key, context)
         if adopted_gate:
             return workflow_outcomes.apply(key, {
@@ -3352,6 +3378,8 @@ def _gate_subject(
         return None
     capability = get_capability(key)
     if capability.is_gate:
+        if _no_prd_to_approve(key, context):
+            return None  # runs as ordinary work below and records "no PRD"
         if context is not None and _adopted_gate(connection, key, context):
             # Already answered. Returning None sends it down the ordinary path, where
             # execute_step records the approval it was started with.

@@ -144,3 +144,21 @@ def test_agents_live_shows_the_same_builds(client, engine):
     assert [b["run_id"] for b in board["builds"]] == [b["run_id"] for b in body["builds"]]
     mine = next(b for b in board["builds"] if b["run_id"] == run_id)
     assert mine == _row(body, run_id)
+
+
+def test_a_gate_on_the_builds_own_run_is_the_builds(engine):
+    """D2: a gate or failed step of the workflow run a build belongs to is that build's card on
+    the Floor too — the Floor dropped them, so its NEEDS YOU disagreed with the pill."""
+    from boss_engine.services.factory_view import _attach_builds_to_their_runs
+
+    run_id = fx.new_run(engine, title="Invoice export",
+                        fctx={"workflow_run_id": "wfr_own_run"})
+    items = [
+        {"id": "dec_gate", "kind": "approval", "run": {"id": "wfr_own_run", "step_label": "Release"}},
+        {"id": "dec_other", "kind": "approval", "run": {"id": "wfr_someone_else"}},
+        {"id": "dec_plain", "kind": "approval", "run": None},
+    ]
+    with engine.begin() as c:
+        _attach_builds_to_their_runs(c, fx.PROJECT, items)
+    assert items[0]["build"]["run_id"] == run_id and items[0]["build"]["where"] == "Release"
+    assert "build" not in items[1] and "build" not in items[2]
