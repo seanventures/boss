@@ -67,7 +67,9 @@ describe("motion has a still", () => {
 
   it("every Live animation has its still in the stylesheet", () => {
     const css = readFileSync("app/agents/agent-world.css", "utf8");
-    const section = css.slice(css.indexOf("/* ── Agents home: Live (S2)"));
+    const from = css.indexOf("/* ── Agents home: Live (S2)");
+    const next = css.indexOf("/* ── Agents home:", from + 10);
+    const section = css.slice(from, next > from ? next : undefined);
     const reduced = section.slice(section.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
     for (const sel of [".ag-att[data-enter]", ".ag-att[data-pulse]", ".ag-spin", ".ag-chain-edge[data-new=\"true\"]"]) {
       expect(reduced, sel).toContain(sel);

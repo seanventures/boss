@@ -355,12 +355,14 @@ export function WorkforceArea(
                        onNewAgent={() => setCreating(true)} orgId={orgId} />
       ) : view === "org" ? (
         <OrgView projectId={projectId} chart={chart} board={board.board} live={live} search={search}
+                 actor={actor} onChanged={() => board.refresh()}
                  focusRunId={focusRun} focusTeam={focusId}
                  onClearFocus={() => setView("org", { run: null, focus: null })}
                  lines={chart ? <OrgChartArea projectId={projectId} actor={actor} chart={chart} />
                    : <p className="detail">Team unavailable</p>} />
       ) : view === "activity" ? (
         <ActivityRiver projectId={projectId} roleKey={searchedRole} runId={focusRun}
+                       runLabel={board.board?.missions.find((m) => m.runId === focusRun)?.subject || undefined}
                        onClearRun={() => setView("activity", { run: null })} paused={!consoleLive} />
       ) : view === "panels" && studio ? (
         <PanelsView feed={studio} actor={actor} />

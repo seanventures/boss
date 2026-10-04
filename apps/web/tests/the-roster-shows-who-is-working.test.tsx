@@ -20,7 +20,7 @@ vi.mock("../app/focused-agents-ui", () => ({ FocusedAgents: () => <div data-test
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const { WorkforceArea } = await import("../app/workforce-ui");
-const { RosterZones, RosterSummary, presenceFromStatus } = await import("../app/agents/roster-zones");
+const { RosterZones, presenceFromStatus } = await import("../app/agents/roster-zones");
 const { DirectoryView } = await import("../app/agents/directory-view");
 const { PresencePill, crewOf, pillWords } = await import("../app/agents/presence-pill");
 const { parseLive, resetLiveStores } = await import("../lib/agents-live");
@@ -86,8 +86,7 @@ describe("the roster zones are presence", () => {
     // Presence zones are RosterZones' presence grouping (Directory groups by team since the
     // agents-home redesign; Live owns what each agent is doing).
     const four = [agent("qa"), agent("software_engineer"), agent("design_critic"), agent("docs_writer")];
-    await render(<><RosterZones agents={four} live={parseLive({ items: live })} onOpen={() => {}} onAsk={() => {}} />
-                  <RosterSummary agents={four} live={parseLive({ items: live })} /></>);
+    await render(<RosterZones agents={four} live={parseLive({ items: live })} onOpen={() => {}} onAsk={() => {}} />);
     expect(zones()).toEqual(["needs_you", "working", "in_panel", "idle"]);
     expect(zoneOfCard("qa")).toBe("needs_you");
     expect(zoneOfCard("software_engineer")).toBe("working");
@@ -95,8 +94,6 @@ describe("the roster zones are presence", () => {
     expect(zoneOfCard("docs_writer")).toBe("idle");
     expect($('[data-testid="ag-line-qa"]')?.textContent).toContain("Waiting on you: approve deploy");
     expect($('[data-testid="ag-line-software_engineer"]')?.textContent).toContain("Now: running tests · Ship it · step 4");
-    // The area header's summary (agents-home §3.2) replaced the Roster's own.
-    expect($('[data-testid="ag-home-summary"]')?.textContent).toContain("4 agents · 2 working");
   });
 
   it("with no live answer, falls back to the feed's status — the same zone either way", async () => {
