@@ -717,6 +717,9 @@ export default function ConsoleShell({
   // looking at — to have one question answered. The dock exists for exactly this, and it can
   // carry an identity as easily as a run id.
   const [dockRole, setDockRole] = useState<string>("");
+  //: Agent World: who answers BY KEY (the face, the name) and the work the dock is about.
+  const [dockRoleKey, setDockRoleKey] = useState<string>("");
+  const [dockAct, setDockAct] = useState<string>("");
   //: Bumped when the dock is asked to start fresh. Passed to AgentChat as a key, so React
   //: remounts it with no thread and no history rather than the component having to unpick its
   //: own state — a reset that has to remember every field is a reset that misses one.
@@ -745,6 +748,8 @@ export default function ConsoleShell({
       const params = new URLSearchParams(window.location.search);
       setDockedRun(params.get("agent"));
       setDockRole(params.get("dock_role") ?? "");
+      setDockRoleKey(params.get("dock_role_key") ?? "");
+      setDockAct(params.get("dock_act") ?? "");
       setDockDiscussing(params.get("dock_mode") === "discuss");
       // START A NEW CONVERSATION, consumed once. Left in the URL it would reset the thread on
       // every re-render and every back button, wiping a discussion mid-sentence.
@@ -1324,8 +1329,11 @@ export default function ConsoleShell({
                          // And the SUBJECT: see dockChatKey — without it a second Ask door with
                          // the same question sent its turn about the previous subject.
                          fresh={startFresh}
+                         roleKey={dockDiscussing ? undefined : dockRoleKey || undefined}
+                         actId={dockAct || undefined}
                          key={dockChatKey({ agent: dockedRun, ask: dockAsk, role: dockRole,
-                                            discussing: dockDiscussing, fresh: dockFresh })} />
+                                            discussing: dockDiscussing,
+                                            roleKey: dockRoleKey, actId: dockAct, fresh: dockFresh })} />
             </div>
           </aside>
         ) : null}

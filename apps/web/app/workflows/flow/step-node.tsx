@@ -23,6 +23,8 @@ import type { AvatarState } from "../../../lib/agent-world-types";
 import { stateFromRunPhase } from "../../../lib/avatar-kit/states";
 import { AgentAvatar as Face } from "../../agent-avatar";
 import { agentMeta } from "../../agent-chip";
+import type { LaneAgent } from "../../agents/chain-model";
+import { HowGlyph, nameOf, RunFace } from "../../agents/run-face";
 import { NodeIcon } from "./type-icons";
 
 export type RunPhase = "done" | "moving" | "needs_you" | "failed" | "future" | "skipped";
@@ -40,6 +42,29 @@ export function AgentAvatar({ agent, size, state }: { agent: StepView["agent"]; 
                  className={`mr-avatar tone-${meta.tone} wf-avatar ag-face`} />;
   }
   return <Face variant={agent.kind} size={size ?? 20} state={state} className="wf-avatar" />;
+}
+
+/**
+ * Who ran it, on a running workflow: the face of the agent that actually did the step, ringed
+ * with the state its work is in. An `Auto` step keeps its sparkle until BOSS has picked
+ * (`ran_as` exists), and then the sparkle cross-fades into the picked agent's face. A step run
+ * by a person shows `You` (or `A person`): a built-in with no captain says so honestly.
+ */
+function RanBy({ view, ran }: { view: StepView["agent"]; ran: LaneAgent }) {
+  const named = nameOf(ran.roleKey, ran.variant);
+  const morph = view.kind === "auto" && ran.variant === "agent";
+  const tip = [named.name, ran.edgeLabel || (morph ? view.label : "")].filter(Boolean).join("\n");
+  return (
+    <span className="wf-node-agent" data-kind={ran.variant === "agent" ? "named" : ran.variant}
+          data-tip={tip} data-testid="wf-node-agent" data-ran-as={ran.roleKey ?? ran.variant}
+          data-morph={morph ? "true" : undefined}>
+      <span className="ag-morph">
+        {morph ? <span className="ag-morph-from" aria-hidden><AgentAvatar agent={view} /></span> : null}
+        <RunFace roleKey={ran.roleKey} variant={ran.variant} size={20} state={ran.state} />
+      </span>
+      <span className="wf-node-agent-name">{named.name}</span>
+    </span>
+  );
 }
 
 /** How a run phase is said to a screen reader, and marked on the icon so it is never colour alone. */
@@ -65,7 +90,7 @@ function plural(n: number, one: string, many = `${one}s`) {
 
 export function StepNode(p: {
   view: StepView; mode: "design" | "run" | "dot"; selected?: boolean; problem?: string;
-  run?: { phase: RunPhase; meta: string; tip?: string };
+  run?: { phase: RunPhase; meta: string; tip?: string; agent?: LaneAgent };
   onSelect?(): void;
   /** Optional names for the badge tooltips. */
   detail?: NodeDetail;
@@ -106,6 +131,8 @@ export function StepNode(p: {
       </span>
       {BLOCK_TYPES.has(view.type) ? null : view.type === "wait" ? (
         <span className="wf-node-agent wf-node-wait" data-testid="wf-node-wait">{detail?.duration ?? ""}</span>
+      ) : mode === "run" && run?.agent ? (
+        <RanBy view={view.agent} ran={run.agent} />
       ) : (
         <span className="wf-node-agent" data-kind={view.agent.kind} data-tip={agentTip(view.agent)}
               data-testid="wf-node-agent">
@@ -159,6 +186,7 @@ export function StepNode(p: {
       {mode === "run" ? (
         <span className="wf-node-status" data-phase={phase} data-testid="wf-node-status"
               data-tip={run?.tip || undefined}>
+          {run?.agent ? <HowGlyph how={run.agent.how} edgeLabel={run.agent.edgeLabel} size={9} /> : null}
           {run?.meta ?? ""}
         </span>
       ) : null}

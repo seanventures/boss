@@ -65,6 +65,13 @@ export type DockOpening = {
   /** Who answers. `null` asks BOSS in general. Never omitted: `dock_role` survives in the URL,
    *  so silence would inherit whichever agent was addressed last. */
   role: string | null;
+  /** The agent's role key, when the door knows it: the dock draws its face and the turn names
+   *  the agent by key rather than by a display name that can drift (`agentMeta('QA Lead')`).
+   *  Never omitted from the URL for the same reason as `role`. */
+  roleKey?: string | null;
+  /** The piece of work the question is about (an Act card's "Ask about this"): the turn is sent
+   *  with `context.act_id`, so the reply is parented to that work. */
+  actId?: string | null;
   /** Start a new conversation rather than resuming the last one with this agent. */
   fresh?: boolean;
   /** "discuss" for thinking about an idea. Cleared otherwise, for the same reason as role. */
@@ -80,6 +87,8 @@ export function dockParams(o: DockOpening): Record<string, string | null> {
     agent: o.subject ? subjectRef(o.subject) : "general",
     dock_ask: o.question || null,
     dock_role: o.role,
+    dock_role_key: o.roleKey ?? null,
+    dock_act: o.actId ?? null,
     dock_mode: o.mode ?? null,
     dock_fresh: o.fresh ? "1" : null,
     ...(o.also ?? {}),
@@ -127,6 +136,10 @@ export type DockState = {
   role: string;
   discussing: boolean;
   fresh: number;
+  /** `?dock_role_key=`: who answers, by key. */
+  roleKey?: string;
+  /** `?dock_act=`: the work the conversation is about. */
+  actId?: string;
 };
 
 /**
@@ -144,5 +157,8 @@ export type DockState = {
  * happening to differ.
  */
 export function dockChatKey(d: DockState): string {
-  return JSON.stringify([d.agent ?? "", d.role, d.discussing, d.fresh, d.ask]);
+  // The work it is about is part of the subject: "Ask about this" on two different pieces of
+  // work with the same question must not share one mounted conversation.
+  return JSON.stringify([d.agent ?? "", d.role, d.discussing, d.fresh, d.ask,
+    ...(d.roleKey || d.actId ? [d.roleKey ?? "", d.actId ?? ""] : [])]);
 }
