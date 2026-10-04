@@ -736,6 +736,12 @@ def preview_flag(preview: Optional[Mapping[str, Any]], now: Optional[datetime] =
     expires = _aware(preview.get("expires_at"))
     if status == "running" and expires and expires < (now or _now()):
         return None
+    # LIVE ONLY WHEN IT ANSWERS (D10): the row says `running` while its steps still boot the
+    # app; until every step is done it is starting, and nobody is offered a link to it.
+    steps = [x for x in _j(preview.get("steps"), []) or [] if isinstance(x, dict)]
+    if status == "running" and steps and any(
+            x.get("status") not in ("ok", "skipped") for x in steps):
+        status = "starting"
     return {"status": status, "url": preview.get("url") if status == "running" else None}
 
 
@@ -868,7 +874,20 @@ def _verdict(stage: str, state: Mapping[str, Any], failing: set[str]) -> Optiona
     return _VERDICT_OF.get(str(raw or ""))
 
 
-def _skip_tip(station: str, state: Mapping[str, Any]) -> str:
+def _skip_tip(station: str, state: Mapping[str, Any],
+              spec: Optional[Mapping[str, Any]] = None) -> str:
+    """WHY a station was passed, from what the run recorded (factory test D15: a running build
+    said "No Plan act"). The tier the run chose, else the profile, else the plain fact."""
+    tier = state.get("risk_tier")
+    if not isinstance(tier, int):
+        tier = (spec or {}).get("risk_tier")
+    if isinstance(tier, int):
+        if station == "plan" and tier < 2:
+            return "Small change: no planning step"
+        if station == "tests" and tier == 0:
+            return "Small change: tests written with the code"
+        if station == "review" and tier == 0:
+            return "Small change: no review panel"
     profile = str(state.get("profile") or "").strip()
     name = STATION_LABELS[station]
     if profile:
@@ -897,7 +916,6 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
     spec = _j(run.get("spec"), {}) or {}
     evidence = _j(run.get("state"), {}) or {}
     failing = {str(g) for g in fctx.get("failing_gates") or []}
-    steps_run = evidence.get("steps_run") if isinstance(evidence.get("steps_run"), list) else None
     by_station: dict[str, list[Mapping[str, Any]]] = {}
     for a in _stage_acts(acts):
         key = _station_of_stage(a.get("step_id"))
@@ -959,9 +977,7 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
         elif before or (finished and key in ("plan", "tests", "build", "check", "review")):
             # Passed without an act of its own.
             if key in AGENT_STATIONS and key != "build":
-                ran = steps_run is not None
-                s.update(status="skipped", face="none",
-                         tip=_skip_tip(key, evidence) if ran else f"No {STATION_LABELS[key]} act")
+                s.update(status="skipped", face="none", tip=_skip_tip(key, evidence, spec))
             else:
                 s.update(status="done", face="boss" if key in MACHINE_STATIONS else "none",
                          tip=BOSS_TIP if key in MACHINE_STATIONS else None)
@@ -974,8 +990,10 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
             if role:
                 s.update(face="hollow", hollow_role=role,
                          tip=f"Next: {agent_acts.STAGE_TITLES.get(key, STATION_LABELS[key])}")
-            elif key in MACHINE_STATIONS:
+            elif key in MACHINE_STATIONS and key != "check":
                 s.update(face="boss", tip=BOSS_TIP)
+            # A pending Check is an empty slot: whether QA or BOSS runs it is known only when it
+            # runs, and drawing the BOSS glyph first made the bay flip to QA's face (D15).
         # The state at the build's own station overrides what its act says.
         if at_here:
             if state_key in ("budget_wait", "queued") and s["status"] in ("working", "pending"):
@@ -1709,7 +1727,10 @@ def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Fact
         rows.append({
             "id": a["act_id"], "type": "act", "station": station, "act": wire,
             "title": agent_acts.STAGE_TITLES.get(step, step.replace("_", " ").capitalize()),
-            "seat": seat, "round": rnd, "word": word, "verdict": verdict, "files": files,
+            # `round n` only when the build actually repaired (D15: "round 3" with 0 rounds —
+            # a stage that simply ran again, like the check stages, is not a round).
+            "seat": seat, "round": rnd if st.get("rounds") else 1, "word": word,
+            "verdict": verdict, "files": files,
             "tool_calls": facts.tool_calls.get(a["act_id"], 0),
             "comments_authored": authored, "comments_fixed": fixed, "said": said,
             "failure": None, "_at": _aware(a.get("started_at")) or now,
@@ -1725,13 +1746,22 @@ def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Fact
         if not isinstance(g, dict):
             continue
         applied = g.get("applied_act_id")
+        sent = _aware(g.get("at"))
+        # FILED WHERE IT WAS SAID (D8): the station that was working when the guidance was
+        # sent — not the one that later read it.
+        then = _station_at(stages, sent) if sent else None
+        if applied:
+            word = "Read by " + _person_name(connection, project_id, g.get("applied_role"))
+        elif st["state"] in TERMINAL_STATES:
+            word = "Not read · build ended"
+        else:
+            word = "Queued for next station"
         you.append({"id": f"steer:{i}", "type": "you",
-                    "station": next((_station_of_stage(a.get("step_id")) for a in stages
-                                     if a["act_id"] == applied), None) or st.get("station"),
+                    "station": then or st.get("station"),
                     "what": "steered", "actor": str(g.get("actor") or ""),
                     "text": str(g.get("text") or "")[:400], "at": _iso(g.get("at")) or "",
                     "applied_at": _iso(g.get("applied_at")), "applied_act_id": applied,
-                    "applied_role": g.get("applied_role")})
+                    "applied_role": g.get("applied_role"), "word": word})
     if plan_decision and str(plan_decision.get("status") or "") in ("approved", "executed"):
         you.append({"id": "plan", "type": "you", "station": "you_plan", "what": "approved_plan",
                     "actor": str(plan_decision.get("approved_by") or ""),
@@ -1798,10 +1828,46 @@ def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Fact
                          "ms": d.get("duration_ms")})
     for b in boss:
         b["_at"] = _aware(b.get("at")) or now
-    story = sorted(rows + you + boss, key=lambda r: r["_at"])
+    # IN THE LINE'S ORDER (D8): each station's rows together, under its head, the way the Line
+    # reads left to right; time order inside a station. A row with no station is filed under
+    # the station that was working when it happened.
+    rank = {k: i for i, k in enumerate(STATION_ORDER)}
+    for r in rows + you + boss:
+        if not r.get("station"):
+            r["station"] = _station_at(stages, r["_at"]) or st.get("station") or "plan"
+    story = sorted(rows + you + boss,
+                   key=lambda r: (rank.get(str(r.get("station")), len(rank)), r["_at"]))
     for r in story:
         r.pop("_at", None)
     return story
+
+
+TERMINAL_STATES = frozenset({"cancelled", "failed", "pr_open", "merged", "deployed",
+                             "done_no_pr"})
+
+
+def _station_at(stages: list[Mapping[str, Any]], when: Optional[datetime]) -> Optional[str]:
+    """The station whose act was working at `when` (the newest one started by then)."""
+    if when is None:
+        return None
+    found = None
+    for a in stages:
+        start = _aware(a.get("started_at"))
+        if start and start <= when:
+            found = _station_of_stage(a.get("step_id")) or found
+    return found
+
+
+def _person_name(connection: Any, project_id: str, role_key: Any) -> str:
+    """The agent's name as every surface says it (callsign, else display name)."""
+    if not role_key:
+        return "an agent"
+    try:
+        from .agent_acts import _agent_name
+
+        return _agent_name(connection, project_id, str(role_key))
+    except Exception:  # noqa: BLE001
+        return str(role_key).replace("_", " ").title()
 
 
 def _now_line(connection: Any, acts: list[Mapping[str, Any]]) -> Optional[Now]:
@@ -1947,10 +2013,12 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         status = str(p.get("status") or "")
         flag = preview_flag(p, now)
         steps = [s for s in _j(p.get("steps"), []) or [] if isinstance(s, dict)]
-        preview = {"id": str(p["id"]), "status": status,
+        # LIVE ONLY WHEN IT ANSWERS (D10): preview_flag says `starting` while it boots.
+        shown = flag["status"] if flag else status
+        preview = {"id": str(p["id"]), "status": shown,
                    "word": {"running": "Live ↗", "starting": "Starting…",
-                            "failed": "Failed"}.get(status if flag else "", "Not running"),
-                   "url": p.get("url") if flag and status == "running" else None,
+                            "failed": "Failed"}.get(shown if flag else "", "Not running"),
+                   "url": p.get("url") if flag and shown == "running" else None,
                    "expires_at": _iso(p.get("expires_at")),
                    "steps_done": sum(1 for s in steps if s.get("status") in ("ok", "skipped")),
                    "steps_total": len(steps), "error": _first_line(p.get("error")) or None}
@@ -1976,11 +2044,23 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         failed_checks = bool(checks and any(not g["ok"] and not g.get("waived_by")
                                             for g in checks["gates"]))
         tests_ok = not commands or all(c["ok"] for c in commands)
-        if st["state"] == "pr_open" and not failed_checks and tests_ok and not blockers:
+        n_failed = sum(1 for g in (checks or {}).get("gates") or []
+                       if not g["ok"] and not g.get("waived_by"))
+        if st["state"] in ("merged", "deployed"):
+            ready = {"ready": False, "word": "Merged"}
+        elif st["state"] == "pr_open" and not failed_checks and tests_ok and not blockers:
             ready = {"ready": True, "word": "Ready to merge"}
         elif blockers:
             ready = {"ready": False,
                      "word": f"Not ready · {_plural(blockers, 'open blocker', 'open blockers')}"}
+        elif n_failed:
+            # THE REASON, NOT A BARE "Not ready" (lead's ask a).
+            ready = {"ready": False,
+                     "word": f"Not ready · {_plural(n_failed, 'check failed', 'checks failed')}"}
+        elif not tests_ok:
+            ready = {"ready": False, "word": "Not ready · tests failed"}
+        elif st["state"] != "pr_open":
+            ready = {"ready": False, "word": "Not ready · no PR"}
         else:
             ready = {"ready": False, "word": "Not ready"}
     return {"merge_ready": ready, "pr": pr, "checks": checks, "tests": tests, "changes": changes,

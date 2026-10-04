@@ -126,3 +126,19 @@ def test_k_never_passes_n():
     for r, acts in [(run(), []), (run("completed", "done"), [])]:
         k, n = fv.k_of_n(fv.stations_for(r, acts=acts, now=NOW))
         assert 0 <= k <= n
+
+
+def test_a_skipped_station_says_why_while_the_build_runs():
+    """D15: a running build's passed Plan said "No Plan act". It says the run's own reason."""
+    got = line(run(spec={"risk_tier": 1}), [act("implement", "software_engineer", "active", 2)])
+    assert got["plan"]["status"] == "skipped"
+    assert got["plan"]["tip"] == "Small change: no planning step"
+    plain = line(run(), [act("implement", "software_engineer", "active", 2)])
+    assert plain["plan"]["tip"] == "This build skipped Plan"
+
+
+def test_a_pending_check_does_not_claim_boss_before_it_runs():
+    """D15: a pending Check drew the BOSS glyph, then flipped to QA's face when QA ran it."""
+    got = line(run(), [act("implement", "software_engineer", "active", 2)])
+    assert got["check"]["status"] == "pending" and got["check"]["face"] == "none"
+    assert got["pr"]["face"] == "boss"
