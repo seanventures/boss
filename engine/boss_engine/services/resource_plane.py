@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .budget import BudgetGovernor
+from .budget import BudgetGovernor, budget_period
 from .core import (
     create_artifact,
     create_blocking_decision,
@@ -8414,10 +8414,12 @@ class ResourcePlaneService:
                 FROM cost_events
                 WHERE project_id = :project_id
                   AND cost_layer IN ('observed', 'reconciled')
-                  AND created_at >= date_trunc('day', now())
+                  AND created_at >= :day_start
                 """
             ),
-            {"project_id": project_id},
+            # Today as the budget means it (budget.budget_period: UTC midnight), not the
+            # database session's timezone.
+            {"project_id": project_id, "day_start": budget_period("day")["start"]},
         ).scalar_one()
         observed_today = int(observed_today or 0)
         if observed_today < threshold:

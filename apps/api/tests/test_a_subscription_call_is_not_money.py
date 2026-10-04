@@ -248,10 +248,13 @@ def test_a_job_the_red_budget_holds_says_so_not_no_worker(engine, ten_dollar_cap
         error = c.execute(text("SELECT last_error FROM jobs WHERE id = :j"),
                           {"j": job["id"]}).scalar_one()
     assert error["kind"] == "budget_hold"
-    assert error["message"].startswith("Held — the budget is red (95% of $10 used)"), error
+    assert error["message"].startswith(
+        "Held — the budget is red (95% of today's $10 used), so only P0 work runs. "
+        "It resets at 00:00 UTC, or raise the daily cap in Budget."), error
     said = explain(error["message"])
     assert said["kind"] == "budget_hold"
-    assert said["headline"].startswith("Held — the budget is red (95% of $10 used)")
+    assert said["headline"].startswith("Held — the budget is red (95% of today's $10 used)")
+    assert said["action"].startswith("It resets at 00:00 UTC, or raise the daily cap in Budget.")
     assert said["href"] == "/?area=budget"
 
     # The discovery attention reads the job, and says held — not "no worker has picked it up".
@@ -287,5 +290,6 @@ def test_readiness_at_start_flags_a_red_budget_and_notes_an_orange_one(engine, t
     budget = next(m for m in red["missing"] if m["key"] == "budget")
     assert budget["label"] == "Budget is red — work will be held"
     assert budget["area"] == "budget"
-    assert "95% of $10 used" in budget["detail"]
+    assert "95% of today's $10 used" in budget["detail"]
+    assert budget["fix"].startswith("It resets at 00:00 UTC, or raise the daily cap in Budget.")
     assert not red["ready"]

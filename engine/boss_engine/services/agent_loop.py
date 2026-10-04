@@ -486,8 +486,15 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
         {"p": project_id},
     ).mappings().all()
     cap = int(policy["daily_cap_usd_micros"]) if policy else 0
+    # The daily cap is measured against TODAY's money (budget.period_spend), not the total.
+    from .budget import period_spend
+
+    today = period_spend(connection, project_id, "day")
     return {
         "daily_budget_cap_usd": round(cap / 1e6, 2),
+        "spent_today_usd": round(today["actual_usd_micros"] / 1e6, 4),
+        "reserved_today_usd": round(today["reserved_usd_micros"] / 1e6, 4),
+        "daily_cap_resets_at": today["resets_at_label"],
         "total_spend_usd": round(int(spent) / 1e6, 4),
         "spend_by_model": [
             {"model": r["model"], "calls": int(r["calls"]), "usd": round(int(r["micros"]) / 1e6, 4),

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -9,6 +9,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .included_spend import INCLUDED_SQL, MONEY_SQL
+from .model_failures import cap_used_sentence, resets_sentence
 from .core import (
     create_blocking_decision,
     emit_event,
@@ -17,6 +18,83 @@ from .core import (
     now_utc,
     record_policy_eval,
 )
+
+
+# ── EVERY CAP MEASURES ITS OWN PERIOD ─────────────────────────────────────────────────────────
+#
+# `daily_cap_usd_micros` is a cap on a DAY's money and `monthly_cap_usd_micros` on a MONTH's
+# (budget_v0.yaml, the Budget screen's "daily cap" / "monthly cap", the intensity slider's
+# "$5 → $500 / day"). Status used to compare the daily cap with every cost receipt the project
+# ever had: once an install reached its cap it stayed red for ever — waiting never helped, and
+# red holds all non-P0 work, so every install eventually stopped working. The monthly cap was
+# shown and never enforced at all.
+#
+# Now each cap is compared with the money spent and held in ITS period, and the period with the
+# highest utilization is the one the budget state, `available`, the job gate, readiness and the
+# hold messages speak for. A project has no timezone of its own, so a period's boundary is
+# midnight UTC — said wherever a hold is ("It resets at 00:00 UTC").
+
+#: The timezone budget periods turn over in. Projects carry no timezone of their own.
+BUDGET_TIMEZONE = "UTC"
+
+#: (cap column, period) in the order a tie is reported: the day first.
+CAP_PERIODS = (("daily_cap_usd_micros", "day"), ("monthly_cap_usd_micros", "month"))
+
+#: How each period is said: (whose budget, the cap's name).
+PERIOD_WORDS = {"day": ("today's", "daily cap"), "month": ("this month's", "monthly cap")}
+
+
+def budget_period(period: str, now: Optional[datetime] = None) -> dict[str, Any]:
+    """The period `now` falls in: its UTC start, its end (when it resets) and the reset said in
+    words. The one definition of a budget period's boundary."""
+    now = (now or now_utc()).astimezone(timezone.utc)
+    if period == "day":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        label = f"00:00 {BUDGET_TIMEZONE}"
+    elif period == "month":
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = (start + timedelta(days=32)).replace(day=1)
+        label = f"00:00 {BUDGET_TIMEZONE} on {end.day} {end:%B}"
+    else:
+        raise ValueError(f"Unknown budget period {period!r}.")
+    whose, cap_name = PERIOD_WORDS[period]
+    return {"period": period, "start": start, "end": end, "resets_at_label": label,
+            "whose": whose, "cap_name": cap_name}
+
+
+def period_spend(connection: Connection, project_id: str, period: str,
+                 now: Optional[datetime] = None) -> dict[str, Any]:
+    """THE ONE MEASURE OF A PERIOD'S SPEND: the money settled in it (MONEY_SQL — a subscription
+    or local call is $0, included_spend.py) and the active reservations MADE in it. A hold made
+    yesterday counts against yesterday. Every cap, state, forecast and message reads this."""
+    bounds = budget_period(period, now)
+    params = {"p": project_id, "start": bounds["start"], "end": bounds["end"]}
+    actual = connection.execute(
+        text(f"SELECT COALESCE(SUM({MONEY_SQL}), 0) FROM cost_receipts "
+             "WHERE project_id = :p AND created_at >= :start AND created_at < :end"),
+        params).scalar_one()
+    held = connection.execute(
+        text("SELECT COALESCE(SUM(amount_usd_micros), 0) AS total, COUNT(*) AS n "
+             "FROM budget_reservations WHERE project_id = :p AND status = 'active' "
+             "AND created_at >= :start AND created_at < :end"),
+        params).mappings().one()
+    return {**bounds, "actual_usd_micros": int(actual or 0),
+            "reserved_usd_micros": int(held["total"] or 0),
+            "active_reservations_count": int(held["n"] or 0)}
+
+
+def state_for_utilization(cap: int, utilization: float, soft: float, orange: float,
+                          red: float) -> str:
+    if cap == 0:
+        return "unknown"
+    if utilization >= red:
+        return "red"
+    if utilization >= orange:
+        return "orange"
+    if utilization >= soft:
+        return "yellow"
+    return "green"
 
 
 def burst_retry_after_seconds(frees_in: object) -> int:
@@ -103,13 +181,21 @@ class BudgetGovernor:
             )
         return expired_ids
 
-    def status_for_project(self, connection: Connection, project_id: str) -> dict:
+    def status_for_project(self, connection: Connection, project_id: str,
+                           *, now: Optional[datetime] = None) -> dict:
+        """The budget as every gate and screen reads it. Each cap is measured over its own
+        period (period_spend); the period nearest its cap — the binding one — supplies the
+        top-level numbers (`cap`, `actual`, `reserved`, `available`, `utilization`, state), and
+        `periods` carries both. `now` is injectable so a test can stand on either side of a
+        reset."""
+        now = now or now_utc()
         self.expire_stale_reservations(connection, project_id)
         policy_row = connection.execute(
             text(
                 """
-                SELECT daily_cap_usd_micros, soft_cap_pct, auto_lite_mode_pct,
-                       freeze_provisioning_pct, freeze_tier2_pct, operational_intensity
+                SELECT daily_cap_usd_micros, monthly_cap_usd_micros, soft_cap_pct,
+                       auto_lite_mode_pct, freeze_provisioning_pct, freeze_tier2_pct,
+                       operational_intensity
                 FROM budget_policies
                 WHERE scope_type = 'project' AND scope_id = :project_id
                 ORDER BY created_at DESC
@@ -120,6 +206,7 @@ class BudgetGovernor:
         ).mappings().first()
 
         if not policy_row:
+            day = budget_period("day", now)
             return {
                 "budget_state": "unknown",
                 "cap_usd_micros": 0,
@@ -142,53 +229,58 @@ class BudgetGovernor:
                 "freeze_provisioning_pct": 0.9,
                 "freeze_tier2_pct": 0.95,
                 "tier2_frozen": False,
+                "period": "day",
+                "cap_name": day["cap_name"],
+                "period_start": day["start"].isoformat(),
+                "resets_at": day["end"].isoformat(),
+                "resets_at_label": day["resets_at_label"],
+                "budget_timezone": BUDGET_TIMEZONE,
+                "periods": {},
             }
 
-        reservation_snapshot = connection.execute(
-            text(
-                """
-                SELECT
-                    COALESCE(SUM(amount_usd_micros), 0) AS total,
-                    COUNT(*) AS active_count
-                FROM budget_reservations
-                WHERE project_id = :project_id AND status = 'active'
-                """
-            ),
-            {"project_id": project_id},
-        ).mappings().one()
-        reserved = int(reservation_snapshot["total"])
-        active_reservations_count = int(reservation_snapshot["active_count"])
+        soft = float(policy_row["soft_cap_pct"])
+        orange = float(policy_row["auto_lite_mode_pct"])
+        red = float(policy_row["freeze_provisioning_pct"])
+        tier2 = float(policy_row["freeze_tier2_pct"] or 0.95)
 
-        actual = connection.execute(
-            text(
-                f"""
-                SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total
-                FROM cost_receipts
-                WHERE project_id = :project_id
-                """
-            ),
-            {"project_id": project_id},
-        ).scalar_one()
-        actual = int(actual)
+        periods: dict[str, dict[str, Any]] = {}
+        for column, period in CAP_PERIODS:
+            cap = int(policy_row[column] or 0)
+            spend = period_spend(connection, project_id, period, now)
+            committed = spend["actual_usd_micros"] + spend["reserved_usd_micros"]
+            utilization = 0.0 if cap == 0 else committed / cap
+            periods[period] = {
+                "period": period,
+                "cap_usd_micros": cap,
+                "actual_usd_micros": spend["actual_usd_micros"],
+                "reserved_usd_micros": spend["reserved_usd_micros"],
+                "active_reservations_count": spend["active_reservations_count"],
+                "committed_usd_micros": committed,
+                "available_usd_micros": max(cap - committed, 0) if cap else 0,
+                "utilization_ratio": round(utilization, 6),
+                "budget_state": state_for_utilization(cap, utilization, soft, orange, red),
+                "period_start": spend["start"].isoformat(),
+                "resets_at": spend["end"].isoformat(),
+                "resets_at_label": spend["resets_at_label"],
+                "resets_in_seconds": max(int((spend["end"] - now).total_seconds()), 0),
+                "whose": spend["whose"],
+                "cap_name": spend["cap_name"],
+                "_start": spend["start"],
+                "_end": spend["end"],
+            }
+        # The binding period: the one nearest its cap (a tie goes to the day). A period with no
+        # cap set binds only when no period has one.
+        capped = [p for p in periods.values() if p["cap_usd_micros"]]
+        binding = max(capped, key=lambda p: p["utilization_ratio"]) if capped else periods["day"]
+        cap = binding["cap_usd_micros"]
+        actual = binding["actual_usd_micros"]
+        reserved = binding["reserved_usd_micros"]
+        committed = binding["committed_usd_micros"]
+        utilization = binding["utilization_ratio"]
+        # Enforced (BOSS-280): past this utilization, tier-2+ risk work is refused at reserve().
+        tier2_frozen = bool(cap and utilization >= tier2)
 
-        burn_window_hours = 24
-        burn_window_start = now_utc() - timedelta(hours=burn_window_hours)
-        recent_actual = connection.execute(
-            text(
-                f"""
-                SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total
-                FROM cost_receipts
-                WHERE project_id = :project_id
-                  AND created_at >= :burn_window_start
-                """
-            ),
-            {
-                "project_id": project_id,
-                "burn_window_start": burn_window_start,
-            },
-        ).scalar_one()
-        recent_actual = int(recent_actual)
-
+        window = {"project_id": project_id, "start": binding["_start"], "end": binding["_end"]}
         top_cost_drivers = [
             {
                 "skill_or_model_id": row["skill_or_model_id"],
@@ -202,30 +294,32 @@ class BudgetGovernor:
                         COALESCE(SUM({MONEY_SQL}), 0) AS amount_usd_micros
                     FROM cost_receipts
                     WHERE project_id = :project_id
+                      AND created_at >= :start AND created_at < :end
                       AND NOT COALESCE(included_in_subscription, false)
                     GROUP BY skill_or_model_id
                     ORDER BY amount_usd_micros DESC, skill_or_model_id ASC
                     LIMIT 5
                     """
                 ),
-                {"project_id": project_id},
+                window,
             ).mappings().all()
         ]
 
-        # WHAT THE SUBSCRIPTIONS DID, AT LIST PRICE (included_spend.py). Not money and not in
-        # any cap — reported beside the money so it is never silently dropped.
+        # WHAT THE SUBSCRIPTIONS DID, AT LIST PRICE (included_spend.py), over the same period.
+        # Not money and not in any cap — reported beside the money so it is never dropped.
         included = connection.execute(
             text(
                 f"""
                 SELECT skill_or_model_id, COALESCE(SUM({INCLUDED_SQL}), 0) AS amount
                 FROM cost_receipts
                 WHERE project_id = :project_id
+                  AND created_at >= :start AND created_at < :end
                   AND COALESCE(included_in_subscription, false)
                 GROUP BY skill_or_model_id
                 ORDER BY amount DESC, skill_or_model_id ASC
                 """
             ),
-            {"project_id": project_id},
+            window,
         ).mappings().all()
         included_total = sum(int(row["amount"] or 0) for row in included)
         included_drivers = [
@@ -234,47 +328,50 @@ class BudgetGovernor:
             for row in included[:5]
         ]
 
-        cap = int(policy_row["daily_cap_usd_micros"])
-        committed = reserved + actual
-        available = max(cap - committed, 0) if cap else 0
-        utilization = 0 if cap == 0 else committed / cap
-        soft = float(policy_row["soft_cap_pct"])
-        orange = float(policy_row["auto_lite_mode_pct"])
-        red = float(policy_row["freeze_provisioning_pct"])
-        tier2 = float(policy_row["freeze_tier2_pct"] or 0.95)
-        # Enforced (BOSS-280): past this utilization, tier-2+ risk work is refused at reserve().
-        tier2_frozen = bool(cap and utilization >= tier2)
-
-        budget_state = self._state_for_totals(
-            cap,
-            committed,
-            soft,
-            orange,
-            red,
-        )
+        # The burn rate is a trailing 24 hours (a rate, not a period total).
+        burn_window_hours = 24
+        recent_actual = int(connection.execute(
+            text(
+                f"""
+                SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total
+                FROM cost_receipts
+                WHERE project_id = :project_id
+                  AND created_at >= :burn_window_start AND created_at <= :now
+                """
+            ),
+            {"project_id": project_id,
+             "burn_window_start": now - timedelta(hours=burn_window_hours), "now": now},
+        ).scalar_one())
         burn_rate = int(recent_actual / burn_window_hours)
         forecasted_24h = recent_actual + reserved
+        # Time to the BINDING cap, within its period. A cap the burn rate would not reach
+        # before the period resets is not "reached in N hours": it is not reached at all.
         time_to_cap_seconds: Optional[int] = None
         if cap and committed >= cap:
             time_to_cap_seconds = 0
         elif cap and burn_rate > 0:
             remaining = max(cap - committed, 0)
-            time_to_cap_seconds = int((remaining / burn_rate) * 3600)
+            seconds = int((remaining / burn_rate) * 3600)
+            if seconds < binding["resets_in_seconds"]:
+                time_to_cap_seconds = seconds
 
+        for entry in periods.values():
+            entry.pop("_start", None)
+            entry.pop("_end", None)
         return {
-            "budget_state": budget_state,
+            "budget_state": binding["budget_state"],
             "cap_usd_micros": cap,
             "reserved_usd_micros": reserved,
             "actual_usd_micros": actual,
-            "available_usd_micros": available,
+            "available_usd_micros": binding["available_usd_micros"],
             "committed_usd_micros": committed,
             "burn_approx_usd_micros": committed,
             "burn_window_hours": burn_window_hours,
             "burn_rate_usd_micros_per_hour": burn_rate,
             "forecasted_24h_usd_micros": forecasted_24h,
             "time_to_cap_seconds": time_to_cap_seconds,
-            "utilization_ratio": round(utilization, 6),
-            "active_reservations_count": active_reservations_count,
+            "utilization_ratio": utilization,
+            "active_reservations_count": binding["active_reservations_count"],
             "top_cost_drivers": top_cost_drivers,
             "included_in_subscription_usd_micros": included_total,
             "included_cost_drivers": included_drivers,
@@ -284,7 +381,35 @@ class BudgetGovernor:
             "freeze_tier2_pct": tier2,
             "tier2_frozen": tier2_frozen,
             "operational_intensity": policy_row["operational_intensity"],
+            # Which period the numbers above are, and when it turns over.
+            "period": binding["period"],
+            "cap_name": binding["cap_name"],
+            "whose": binding["whose"],
+            "period_start": binding["period_start"],
+            "resets_at": binding["resets_at"],
+            "resets_at_label": binding["resets_at_label"],
+            "resets_in_seconds": binding["resets_in_seconds"],
+            "budget_timezone": BUDGET_TIMEZONE,
+            "periods": periods,
         }
+
+    def cap_refusal(self, snapshot: dict, amount_usd_micros: int) -> Optional[dict[str, Any]]:
+        """Would `amount_usd_micros` more break a cap? None if it fits every period. Otherwise
+        the period that refuses it, and how: `cap` when the money ALREADY SPENT in that period
+        leaves no room (a person must act, or the period must reset), `headroom` when only other
+        work's active reservations fill it (clears by itself). `cap` wins over `headroom`."""
+        refusals = []
+        for period in (snapshot.get("periods") or {}).values():
+            cap = int(period.get("cap_usd_micros") or 0)
+            if not cap:
+                continue
+            if period["committed_usd_micros"] + amount_usd_micros <= cap:
+                continue
+            on_actual = period["actual_usd_micros"] + amount_usd_micros > cap
+            refusals.append({**period, "kind": "cap" if on_actual else "headroom"})
+        if not refusals:
+            return None
+        return next((r for r in refusals if r["kind"] == "cap"), refusals[0])
 
     def set_intensity(
         self, connection: Connection, scope_type: str, scope_id: str, intensity: int,
@@ -407,11 +532,12 @@ class BudgetGovernor:
                 )
                 raise ValueError("Child allocation exceeds parent available budget.")
         else:
+            # A root allocation is bounded by the project's DAILY cap, as it always was —
+            # the cap itself, not what is left of today.
             policy = self.status_for_project(connection, project_id)
-            if (
-                policy["cap_usd_micros"]
-                and amount_usd_micros > policy["cap_usd_micros"]
-            ):
+            daily_cap = int(((policy.get("periods") or {}).get("day") or {})
+                            .get("cap_usd_micros") or policy["cap_usd_micros"] or 0)
+            if daily_cap and amount_usd_micros > daily_cap:
                 emit_event(
                     connection,
                     project_id,
@@ -421,7 +547,7 @@ class BudgetGovernor:
                     project_id,
                     {
                         "requested_usd_micros": amount_usd_micros,
-                        "cap_usd_micros": policy["cap_usd_micros"],
+                        "cap_usd_micros": daily_cap,
                         "reason": "root_allocation_exceeds_project_cap",
                     },
                 )
@@ -482,18 +608,24 @@ class BudgetGovernor:
         reason: str,
     ) -> dict[str, Any]:
         snapshot = self.status_for_project(connection, project_id)
-        total_after = (
-            snapshot["reserved_usd_micros"] + snapshot["actual_usd_micros"] + amount_usd_micros
-        )
-        allowed = snapshot["cap_usd_micros"] == 0 or total_after <= snapshot["cap_usd_micros"]
-        post_available = (
-            max(snapshot["cap_usd_micros"] - total_after, 0)
-            if snapshot["cap_usd_micros"]
-            else 0
-        )
+        # Every period's cap must fit the request; the post-reservation numbers are those of
+        # the period it leaves nearest its cap.
+        after = []
+        for period in (snapshot.get("periods") or {}).values():
+            cap = int(period.get("cap_usd_micros") or 0)
+            if not cap:
+                continue
+            total_after = period["committed_usd_micros"] + amount_usd_micros
+            after.append((total_after / cap, cap, total_after))
+        allowed = all(total <= cap for _, cap, total in after)
+        if after:
+            _, post_cap, post_total = max(after)
+            post_available = max(post_cap - post_total, 0)
+        else:
+            post_cap, post_total, post_available = 0, 0, 0
         post_state = self._state_for_totals(
-            snapshot["cap_usd_micros"],
-            total_after,
+            post_cap,
+            post_total,
             snapshot["soft_cap_pct"],
             snapshot["auto_lite_mode_pct"],
             snapshot["freeze_provisioning_pct"],
@@ -670,13 +802,22 @@ class BudgetGovernor:
                 "transient": False,
                 "decision_id": decision_id,
                 "budget_state": snapshot["budget_state"],
-                "message": "Tier-2+ work is frozen at this budget utilization. Decision created.",
+                "message": ("Tier-2+ work is frozen at this budget utilization "
+                            f"({cap_used_sentence(snapshot)}). {resets_sentence(snapshot)} "
+                            "Decision created."),
             }
-        total_after = (
-            snapshot["reserved_usd_micros"] + snapshot["actual_usd_micros"] + amount_usd_micros
-        )
-
-        if snapshot["cap_usd_micros"] and total_after > snapshot["cap_usd_micros"]:
+        refusal = self.cap_refusal(snapshot, amount_usd_micros)
+        if refusal is not None:
+            # Every cap is checked against ITS period (period_spend): today's money against the
+            # daily cap, this month's against the monthly one. Yesterday's spend never refuses
+            # today's work.
+            period_detail = {
+                "period": refusal["period"],
+                "cap_usd_micros": refusal["cap_usd_micros"],
+                "actual_usd_micros": refusal["actual_usd_micros"],
+                "reserved_usd_micros": refusal["reserved_usd_micros"],
+                "resets_at": refusal["resets_at"],
+            }
             # OTHER WORK'S RESERVATIONS ARE A MOMENT, NOT A CAP. `reserved` is what active
             # reservations hold right now — a governed code task alone holds $2 while it runs —
             # and it is consumed or released when that work ends. Five runs started together
@@ -684,16 +825,11 @@ class BudgetGovernor:
             # of $10 free in the incident). Refusing that as `cap_exceeded` opened a blocking
             # decision and told a person to "raise the daily or monthly cap" for something that
             # clears by itself. Only a request the cap refuses on ACTUAL spend needs a person.
-            if (snapshot["reserved_usd_micros"] > 0
-                    and snapshot["actual_usd_micros"] + amount_usd_micros
-                    <= snapshot["cap_usd_micros"]):
+            if refusal["kind"] == "headroom":
                 record_policy_eval(
                     connection, project_id, "budget.reserve", "deny", action=category,
                     reason="budget headroom held by active reservations",
-                    detail={"requested_usd_micros": amount_usd_micros,
-                            "reserved_usd_micros": snapshot["reserved_usd_micros"],
-                            "actual_usd_micros": snapshot["actual_usd_micros"],
-                            "cap_usd_micros": snapshot["cap_usd_micros"],
+                    detail={"requested_usd_micros": amount_usd_micros, **period_detail,
                             "retry_after_seconds": HEADROOM_RETRY_AFTER_SECONDS})
                 return {
                     "status": "denied",
@@ -712,12 +848,8 @@ class BudgetGovernor:
                 {"action": "increase_budget_or_defer"},
                 {
                     "requested_usd_micros": amount_usd_micros,
-                    "available_usd_micros": max(
-                        snapshot["cap_usd_micros"]
-                        - snapshot["reserved_usd_micros"]
-                        - snapshot["actual_usd_micros"],
-                        0,
-                    ),
+                    "available_usd_micros": refusal["available_usd_micros"],
+                    **period_detail,
                 },
                 "budget_denied",
             )
@@ -728,12 +860,13 @@ class BudgetGovernor:
                 "budget_governor",
                 "decision",
                 decision_id,
-                {"requested_usd_micros": amount_usd_micros, "reason": reason},
+                {"requested_usd_micros": amount_usd_micros, "reason": reason,
+                 "period": refusal["period"]},
             )
             record_policy_eval(
                 connection, project_id, "budget.reserve", "deny",
                 action=category, reason="budget cap exceeded",
-                detail={"requested_usd_micros": amount_usd_micros,
+                detail={"requested_usd_micros": amount_usd_micros, **period_detail,
                         "budget_state": snapshot["budget_state"], "decision_id": decision_id})
             return {
                 "status": "denied",
@@ -741,7 +874,12 @@ class BudgetGovernor:
                 "transient": False,
                 "decision_id": decision_id,
                 "budget_state": snapshot["budget_state"],
-                "message": "Budget cap exceeded. Decision created.",
+                "period": refusal["period"],
+                "resets_at": refusal["resets_at"],
+                # "Budget cap exceeded: today's budget is 98% used ($9.80 of $10). It resets
+                # at 00:00 UTC, or raise the daily cap in Budget. Decision created."
+                "message": (f"Budget cap exceeded: {cap_used_sentence(refusal)}. "
+                            f"{resets_sentence(refusal)} Decision created."),
             }
 
         # Burst cap: limit $/min to absorb sudden spikes (spec §22.4 cost-anomaly controls).
@@ -1273,13 +1411,6 @@ class BudgetGovernor:
         auto_lite_mode_pct: float,
         freeze_provisioning_pct: float,
     ) -> str:
-        if cap_usd_micros == 0:
-            return "unknown"
-        utilization = committed_usd_micros / cap_usd_micros
-        if utilization >= freeze_provisioning_pct:
-            return "red"
-        if utilization >= auto_lite_mode_pct:
-            return "orange"
-        if utilization >= soft_cap_pct:
-            return "yellow"
-        return "green"
+        utilization = committed_usd_micros / cap_usd_micros if cap_usd_micros else 0.0
+        return state_for_utilization(cap_usd_micros, utilization, soft_cap_pct,
+                                     auto_lite_mode_pct, freeze_provisioning_pct)
