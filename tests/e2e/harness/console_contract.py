@@ -72,11 +72,16 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
               why="the ask box's worked examples; asking itself starts real work"),
     ),
     "code_tasks": (
-        Press("ct-start-in-workflow", "app/code-tasks-ui.tsx",
-              expect='main[data-testid="console-area"][data-active="delivery_workflows"]',
-              expect_source="app/ConsoleShell.tsx",
-              why="'New project' must land in Workflow, where projects start (the composer is "
-                  "open on a project with no runs, collapsed under 'Start a project' otherwise)"),
+        Press("fx-new-build", "app/code-tasks-ui.tsx", expect=_tid("fx-new-menu"),
+              why="+ New build ▾ opens its doors: Plan it with Juno, a workflow, a direct change"),
+        Press("fx-view-apps", "app/code-tasks-ui.tsx", expect=_tid("fx-apps"),
+              expect_source="app/factory/apps-tab.tsx"),
+        Press("fx-view-floor", "app/code-tasks-ui.tsx", expect=_tid("fx-floor"),
+              expect_source="app/factory/floor.tsx"),
+        Press("fx-build-row-*", "app/factory/build-row.tsx", expect=_tid("fx-cockpit"),
+              expect_source="app/factory/cockpit.tsx",
+              unless=_tid("fx-nothing-building"),
+              why="a build row opens that build's cockpit"),
     ),
     "delivery_workflows": (
         Press("dw-tab-design", "app/delivery-workflows-ui.tsx", expect=_tid("dw-design-ways")),
