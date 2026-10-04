@@ -137,10 +137,11 @@ def building_rows(connection: Any, project_id: str, attention: list[Mapping[str,
                   viewer: Optional[str] = None, now: Optional[datetime] = None) -> list[BuildRow]:
     """The Floor's BUILDING rows alone — what Agents › Live shows of the builds, so the two
     say the same rows with the same counts (factory spec §10 decision 2)."""
-    from .code_task_service import list_code_task_runs
+    from .code_task_service import list_code_task_runs, overlay_stop_requests
 
     now = now or _now()
-    runs = list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+    runs = overlay_stop_requests(
+        connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True))
     latest: dict[str, Mapping[str, Any]] = {}
     for r in runs:
         latest.setdefault(_lineage_key(r), r)
@@ -1327,10 +1328,11 @@ def _etag(material: Any) -> str:
 
 def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None,
           now: Optional[datetime] = None) -> Floor:
-    from .code_task_service import list_code_task_runs
+    from .code_task_service import list_code_task_runs, overlay_stop_requests
 
     now = now or _now()
-    runs = list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+    runs = overlay_stop_requests(
+        connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True))
     latest: dict[str, Mapping[str, Any]] = {}
     for r in runs:  # newest first: the first of a lineage is its latest attempt
         latest.setdefault(_lineage_key(r), r)
@@ -1452,11 +1454,12 @@ def _pre_build(connection: Any, project_id: str) -> list[PreBuild]:
 def state_of(connection: Any, project_id: str, run_id: str, *,
              viewer: Optional[str] = None) -> Optional[dict[str, Any]]:
     """One build's state, as every reader says it (MCP get_code_task, the code-task list)."""
-    from .code_task_service import load_code_task_run
+    from .code_task_service import load_code_task_run, overlay_stop_requests
 
     run = load_code_task_run(connection, run_id)
     if not run or run.get("project_id") != project_id:
         return None
+    overlay_stop_requests(connection, [run])
     facts = load_facts(connection, project_id, [run])
     now = _now()
     row = build_row(run, facts, now=now, viewer=viewer)
@@ -1911,12 +1914,13 @@ def _plan_decision(connection: Any, project_id: str, run_id: str) -> Optional[di
 def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
             viewer: Optional[str] = None, now: Optional[datetime] = None) -> Optional[Cockpit]:
     """One build, whole: header state, line, story, outputs (§4.5). None when not found."""
-    from .code_task_service import load_code_task_run
+    from .code_task_service import load_code_task_run, overlay_stop_requests
 
     now = now or _now()
     run = load_code_task_run(connection, run_id)
     if not run or run.get("project_id") != project_id:
         return None
+    overlay_stop_requests(connection, [run])
     facts = load_facts(connection, project_id, [run], gates=True, tool_calls=True)
     acts = facts.acts.get(run_id, [])
     decision = facts.decisions.get(str(run.get("decision_id") or ""))
@@ -2009,10 +2013,11 @@ def _attempt_of(run: Mapping[str, Any], *, now: datetime,
 def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
          now: Optional[datetime] = None) -> Apps:
     """One row per app, grouped by identity (the logic of app-grouping.ts, server-side)."""
-    from .code_task_service import list_code_task_runs
+    from .code_task_service import list_code_task_runs, overlay_stop_requests
 
     now = now or _now()
-    runs = list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True)
+    runs = overlay_stop_requests(
+        connection, list_code_task_runs(connection, project_id, FLOOR_RUNS, exclude_internal=True))
     groups = group_into_apps(runs)
     newest = [g[0] for g in groups][:ACT_RUNS_CAP]
     facts = load_facts(connection, project_id, newest)

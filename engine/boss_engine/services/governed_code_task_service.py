@@ -2313,6 +2313,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # per-step timings — the operator's main way of seeing where a task spends its time —
         # went blank on every run after the fencing change. A guard that quietly removes
         # behaviour is a regression wearing a safety jacket.
+        # EVERY PHASE IS A STAGE BOUNDARY (factory test D1). Stop was only checked before
+        # write_tests and implement, so a build stopped during its checks ran on through review
+        # and opened its PR. Reads only (MVCC): it never waits on the row `c` may hold.
+        _abort_if_cancelled(f"phase->{name}")
         from .run_fencing import guarded_update
         guarded_update(
             c, run_id, _fence,
@@ -2412,6 +2416,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if st in ("cancelled", "failed", "completed", "superseded"):
             raise CodeTaskCancelled(
                 f"run is already terminal ({st}); stopping this executor at {where}")
+        # A STOP PRESSED WHILE THIS EXECUTOR HELD THE RUN ROW is a request row, not a status
+        # (code_task_service.cancel_run, factory test D1): honoured here, at the boundary.
+        try:
+            from .code_task_service import pending_stop
+            with _transaction(engine) as c:
+                stop = pending_stop(c, run_id)
+        except Exception:  # noqa: BLE001
+            stop = None
+        if stop:
+            raise CodeTaskCancelled(f"stopped by {stop.get('actor')}; stopping at {where}")
         # DUPLICATE-EXECUTION GUARD. If another worker has taken this job's lease, THIS
         # execution is a duplicate and must stop. Measured on job_2fbe88e6: a lease expired,
         # a second worker reclaimed it, the first kept running, and both executed the same
@@ -4904,6 +4918,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _release(budget, c, project_id, reservation_id, "cancelled by operator", run_id=run_id)
             emit_event(c, project_id, "code_task.cancel_honoured", "boss", "code_task_run",
                        run_id, {"detail": str(exc)[:200]})
+        try:
+            # The stop that was only a request becomes the run's status, now that nothing of
+            # this executor holds the row.
+            from .code_task_service import honour_stop_request
+            with _transaction(engine) as c:
+                honour_stop_request(c, run_id)
+        except Exception:  # noqa: BLE001 — the executor has stopped either way
+            pass
         return {"status": "cancelled", "done": True, "reason": str(exc)}
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
         _finish_vms(success=False)  # retain stage VMs for root-causing via the console

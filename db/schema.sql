@@ -6398,6 +6398,19 @@ ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS fingerprint TEXT;
 -- A review panel's seats each sign their own work (factory spec §6.4): 1-based, NULL = no panel.
 ALTER TABLE agent_acts ADD COLUMN IF NOT EXISTS seat INT;
+-- A STOP IS RECORDED AT ONCE, NOT WHEN THE RUN ROW IS FREE (factory test D1). The worker holds
+-- the run row while it checks; a Stop that waited on that lock spun for 30s+. The request is its
+-- own row, written without touching code_task_runs; every reader says `Stopped by <actor>` from
+-- it, and the worker honours it at its next stage boundary (honoured_at).
+CREATE TABLE IF NOT EXISTS code_task_stop_requests (
+  run_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  reason TEXT,
+  phase TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  honoured_at TIMESTAMPTZ
+);
 -- THE LEDGER'S HOT PATHS, each served by an index rather than a scan of a table kept forever.
 -- close_act rolls up an act's calls on every close (each step settle, each build stage change
 -- inside a model call's commit, each chat turn); _live_cost and the Act card read the same way.
