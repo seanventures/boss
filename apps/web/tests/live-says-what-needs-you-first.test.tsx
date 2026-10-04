@@ -98,7 +98,7 @@ describe("the attention card", () => {
     expect($('[data-testid="ag-att-confirm"]')?.textContent).toContain("Reject this?");
     await click($('[data-testid="ag-att-confirm-reject"]'));
     expect(decide.mock.calls[0][0].get("action")).toBe("reject");
-    expect(toasts).toContain("Rejected · step failed");
+    expect(toasts).toContain("Rejected · run stopped");
   });
 
   it("a refusal (409) shows the server's sentence on the card", async () => {

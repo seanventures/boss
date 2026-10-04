@@ -143,7 +143,7 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("live_gate", "app/workforce-ui.tsx", "agents-view-live"),
     ("live_gate", "app/agents/live-board.tsx", "ag-live"),
     ("live_gate", "app/agents/mission-row.tsx", "ag-mission-${mission.runId}"),
-    ("live_gate", "app/agents/mission-row.tsx", "ag-you-hop-${mission.runId}"),
+    ("live_gate", "app/agents/mission-row.tsx", "ag-mission-you-${mission.runId}"),
     ("live_gate", "app/agents/attention-card.tsx", "ag-att-${item.id}"),
 )
 
@@ -1004,7 +1004,7 @@ def live_gate(page, ctx: Context, goto: Callable[[str], None]) -> str:
     _visible(page, "agents-view-live").click()
     _visible(page, "ag-live")
     _wait_for_text(page, f"ag-mission-{run_id}", r"Waiting on you", timeout_s=30)
-    _visible(page, f"ag-you-hop-{run_id}").click()
+    _visible(page, f"ag-mission-you-{run_id}").click()
     page.wait_for_timeout(300)
     focused = page.evaluate(
         "(id) => { const c = document.querySelector(`[data-testid=\"ag-att-${id}\"]`);"

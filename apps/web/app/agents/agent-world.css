@@ -1175,6 +1175,7 @@
   .ag-live-sec[data-sec="directory"] { order: 5; }
   .ag-live-phone-only { display: flex; }
   .ag-att-actions .ag-btn { flex: 1 1 auto; justify-content: center; min-height: 44px; }
+  .ag-att button, .ag-att a.ag-btn, .ag-att a.ag-link { min-height: 44px; }
   .ag-att[data-density="row"] { grid-template-columns: minmax(0, 1fr); }
   .ag-att[data-density="row"] > .ag-att-actions { grid-column: 1; grid-row: auto; }
   .ag-mission, .ag-mission[data-density="row"] {
