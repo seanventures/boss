@@ -12,7 +12,7 @@ import { Lock } from "@phosphor-icons/react";
 import type { Ability, KitTool, ToolPolicy } from "../../lib/kit-types";
 import { kitApi, mcpApi } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
-import { POLICY_LABEL, POLICY_TIP, riskOf, shortError, TIP } from "./kit-copy";
+import { plural, POLICY_LABEL, POLICY_TIP, riskOf, shortError, TIP } from "./kit-copy";
 
 const POLICIES: ToolPolicy[] = ["allow", "ask", "off"];
 
@@ -23,15 +23,23 @@ export function PolicySeg({ tool, disabled, onPick }: { tool: KitTool; disabled?
           data-testid={`kit-policy-${tool.ref}`}>
       {POLICIES.map((p) => {
         const below = locked && p === "allow";
-        const tip = below ? TIP.locked : (p === "ask" && tool.kind === "mcp" ? `${POLICY_TIP.ask} · ${TIP.askInCode}` : POLICY_TIP[p]);
-        return (
+        // A LOCKED ROW SAYS WHY WHERE THE POINTER IS (K16). A disabled button gets no hover, so
+        // its tooltip never showed: the tip sits on a wrapper that does, and Ask (the lock)
+        // carries the same sentence.
+        const tip = locked && p !== "off" ? TIP.locked
+          : p === "ask" && tool.kind === "mcp" ? `${POLICY_TIP.ask} · ${TIP.askInCode}` : POLICY_TIP[p];
+        const button = (
           <button key={p} type="button" role="radio" aria-checked={tool.policy === p}
-                  disabled={disabled || below} data-tip={tip} data-testid={`kit-policy-${tool.ref}-${p}`}
+                  disabled={disabled || below} data-tip={below ? undefined : tip}
+                  data-testid={`kit-policy-${tool.ref}-${p}`}
                   onClick={() => { if (tool.policy !== p) onPick(p); }}>
             {p === "ask" && locked ? <Lock size={11} aria-hidden="true" /> : null}
             {POLICY_LABEL[p]}
           </button>
         );
+        return below
+          ? <span key={p} className="kit-seg-lock" data-tip={tip} data-testid={`kit-policy-${tool.ref}-${p}-tip`}>{button}</span>
+          : button;
       })}
     </span>
   );
@@ -43,7 +51,7 @@ export function RiskDot({ tier }: { tier: number }) {
 }
 
 export function ReviewRow({ server, projectId, actor, onReviewed, tools }: {
-  server: { server_id: string; name: string }; projectId: string; actor: string;
+  server: { server_id: string; name: string; url?: string }; projectId: string; actor: string;
   onReviewed: () => void; tools: KitTool[];
 }) {
   const [open, setOpen] = useState(false);
@@ -67,7 +75,8 @@ export function ReviewRow({ server, projectId, actor, onReviewed, tools }: {
         {open ? (
           <span className="kit-pop" role="dialog" aria-label="Mark reviewed" data-testid="kit-review-pop">
             <strong data-tip={server.name}>{server.name}</strong>
-            <span>{tools.length} tools · {riskOf(top).label}</span>
+            {server.url ? <span className="kit-fact" data-tip={server.url} data-testid="kit-review-url" data-user-text>{server.url}</span> : null}
+            <span data-testid="kit-review-facts">{plural(tools.length, "tool")} · Highest: {riskOf(top).label}</span>
             <span className="kit-pop-actions">
               <button type="button" className="kit-btn kit-btn-primary kit-btn-sm" disabled={busy}
                       data-testid="kit-review-confirm" onClick={() => void review()}>Mark reviewed</button>
@@ -89,7 +98,7 @@ export function ToolsSection({ ability, projectId, actor, onChanged }: {
     const r = await kitApi.policy(projectId, actor, ability.key, tool.ref, policy);
     setBusy(null);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", "Saved");
+    showToast("success", `${tool.label} · ${POLICY_LABEL[policy]}`);
     onChanged(r.data);
   };
   const unreviewed = ability.mcp.filter((m) => !m.trusted);

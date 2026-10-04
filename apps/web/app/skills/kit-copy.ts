@@ -7,17 +7,17 @@ import { agentIdentity } from "../../lib/agent-identity";
 import type { AbilityStatus, ToolPolicy } from "../../lib/kit-types";
 
 export const PILL: Record<AbilityStatus, string> = {
-  ready: "Ready", unheld: "No one holds", setup: "Set up", needs_repo: "Needs repo",
+  ready: "Ready", untested: "Not tested", unheld: "No one holds", setup: "Set up", needs_repo: "Needs repo",
   testing: "Testing…", failing: "Failing", review: "Review", off: "Off",
 };
 
 export const PILL_TONE: Record<AbilityStatus, "green" | "muted" | "accent" | "red" | "amber" | "faint"> = {
-  ready: "green", unheld: "muted", setup: "muted", needs_repo: "muted",
+  ready: "green", untested: "muted", unheld: "muted", setup: "muted", needs_repo: "muted",
   testing: "accent", failing: "red", review: "amber", off: "faint",
 };
 
 export const BUTTON: Record<AbilityStatus, string> = {
-  ready: "Test", unheld: "Give to agents", setup: "Connect", needs_repo: "Connect repo ↗",
+  ready: "Test", untested: "Test", unheld: "Give to agents", setup: "Connect", needs_repo: "Connect repo ↗",
   testing: "Testing…", failing: "Fix", review: "Review", off: "Turn on",
 };
 
@@ -28,6 +28,7 @@ export const TIP = {
   essentials: "The four abilities a software crew needs first",
   testCrew: "Checks each essential works for at least one agent",
   unheld: "Works, but no agent may use it yet",
+  untested: "Set up, but no passing test yet",
   setup: "Needs an account or key first",
   needsRepo: "Connect your GitHub repo in Setup first",
   review: "Unreviewed: every call waits for a person",
@@ -68,21 +69,37 @@ export const GROUP_LABEL: Record<string, string> = {
 export const POLICY_LABEL: Record<ToolPolicy, string> = { allow: "Allow", ask: "Ask", off: "Off" };
 export const POLICY_TIP: Record<ToolPolicy, string> = { allow: TIP.allow, ask: TIP.ask, off: TIP.offTool };
 
-/** The risk words for a tier: never the number on screen. */
+/** The risk words for a tier: never the number on screen. Tier 1 writes something recoverable
+ *  (Open an issue is tier 1), so only tier 0 reads (K17). */
 export function riskOf(tier: number): { label: "Reads" | "Writes" | "Public"; tip: string; tone: string } {
-  if (tier <= 1) return { label: "Reads", tip: TIP.reads, tone: "green" };
-  if (tier === 2) return { label: "Writes", tip: TIP.writes, tone: "amber" };
+  if (tier <= 0) return { label: "Reads", tip: TIP.reads, tone: "green" };
+  if (tier <= 2) return { label: "Writes", tip: TIP.writes, tone: "amber" };
   return { label: "Public", tip: TIP.public, tone: "red" };
 }
 
-/** At most six words, for a red line on a card; the whole message goes in its tooltip. */
+/** "1 tool" / "3 tools". */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * At most six words, for a red line, a field's error or a toast; the whole message goes in its
+ * tooltip. THE SAME RULES AS kit_connections.short_error on the server, in the same order, so a
+ * card's line and the drawer's never disagree: token, reach, TLS, not found, an already-short
+ * curated sentence, a missing setting, else "Test failed". A raw provider body
+ * (`HTTP 502: {"message": …`, `SMTPNotSupportedError…`) never reaches the screen.
+ */
 export function shortError(message: string | null | undefined): string {
   const said = String(message ?? "").trim();
-  const low = said.toLowerCase();
-  if (/(401|403|bad credentials|unauthori[sz]ed|forbidden|invalid api key|token rejected|invalid_auth)/.test(low)) return "Token rejected";
-  if (/(connecterror|connection refused|unreachable|timed out|can't reach|no answer|name or service|nodename|gaierror|urlopen error)/.test(low)) return "Can't reach server";
+  if (!said) return "Test failed";
+  if (/\b40[13]\b|bad credentials|unauthori[sz]ed|forbidden|invalid api key|invalid_auth|token rejected|authentication|\b535\b/i.test(said)) return "Token rejected";
+  if (/connecterror|connection refused|unreachable|timed out|timeout|can't reach|no answer|name or service|nodename|gaierror|urlopen error|\b5\d\d\b|bad gateway|service unavailable/i.test(said)) return "Can't reach server";
+  if (/starttls|smtpnotsupported|ssl|wrong version number|tls/i.test(said)) return "TLS setting mismatch";
+  if (/\b404\b|not found/i.test(said)) return "Not found";
   const words = said.split(/\s+/).filter(Boolean);
-  return words.length ? words.slice(0, 6).join(" ") : "Test failed";
+  if (words.length <= 6 && !/[{}":]|error|exception|http/i.test(said)) return said;
+  if (/\bneeds\b|\brequired\b|\bfirst\b/i.test(said)) return "Missing a setting";
+  return "Test failed";
 }
 
 /** What the console calls an agent: its callsign (Juno), else its role's name. */

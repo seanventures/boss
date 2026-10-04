@@ -19,7 +19,7 @@ import { useTips } from "../workflows/flow/tip-layer";
 import { AbilityCard, type CardAction } from "./ability-card";
 import { AbilityDrawer, type DrawerFocus } from "./ability-drawer";
 import { crewKey, dismissKey, EssentialsStrip, readFlag, writeFlag } from "./essentials-strip";
-import { GROUP_LABEL, shortError, TIP } from "./kit-copy";
+import { GROUP_LABEL, plural, shortError, TIP } from "./kit-copy";
 import { readKitParams, writeKitParams, type KitParams, type KitTab } from "./kit-url";
 import { Library } from "./library";
 import { TestCrewModal } from "./test-crew-modal";
@@ -92,7 +92,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     if (action === "turn_on") {
       const r = await kitApi.enabled(projectId, actor, key, true);
       if (!r.ok) { showToast("error", shortError(r.error)); return; }
-      showToast("success", "Saved");
+      showToast("success", `${r.data.label} on`);
       replace(r.data);
     }
   }, [runTest, openAbility, projectId, actor, replace]);
@@ -104,14 +104,14 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     setTesting(new Set());
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
     const failed = Object.values(r.data.tests).filter((t) => !t.ok).length;
-    showToast(failed ? "error" : "success", failed ? `Test failed · ${failed} abilities` : "Test passed · all");
+    showToast(failed ? "error" : "success", failed ? `Test failed · ${plural(failed, "ability", "abilities")}` : "Test passed · all");
     setKit(r.data.kit);
   };
 
   const applyRecommended = async () => {
     const r = await kitApi.recommended(projectId, actor);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", `Applied recommended · ${r.data.granted.length} grants`);
+    showToast("success", `Applied recommended · ${plural(r.data.granted.length, "grant")}`);
     void load("none");
   };
 
@@ -187,6 +187,12 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
                                  onAction={(k, a) => void act(k, a)}
                                  onTestCrew={() => setCrewOpen(true)}
                                  onDismiss={() => { writeFlag(dismissKey(projectId), true); setDismissed(true); writeKitParams({ setup: null }); }} />
+              ) : null}
+              {query.trim() && shown.length === 0 ? (
+                <div className="kit-list-empty" data-testid="kit-empty">
+                  <span>No matches</span>
+                  <button type="button" className="kit-link" onClick={() => setQuery("")}>Clear</button>
+                </div>
               ) : null}
               {kit.groups.map((g) => {
                 const cards = shown.filter((a) => a.group === g);

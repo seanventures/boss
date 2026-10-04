@@ -246,8 +246,8 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
           Nothing to bind yet{" "}
           <HelpTip label="Nothing to bind yet"
                    text={unreachable.length
-                     ? `${unreachable.join(", ")} registered but not answering. Fix them on Skills and MCP.`
-                     : "Register a skill, or connect an MCP server, on Skills and MCP."} />
+                     ? `${unreachable.join(", ")} registered but not answering. Fix them in Skills & MCP.`
+                     : "Register a skill, or connect an MCP server, in Skills & MCP."} />
         </div>
       ) : unreachable.length ? (
         // Said even when there is something else to pick. An unreachable server's tools are its

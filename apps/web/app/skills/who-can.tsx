@@ -8,7 +8,7 @@
  * that is not set up cannot be given (its cells are disabled, with why), only taken away. Every
  * change is counted and the last one can be undone. At phone width the matrix becomes a list.
  */
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { Sparkle, Star } from "@phosphor-icons/react";
 
@@ -18,7 +18,7 @@ import { AgentAvatar } from "../agent-avatar";
 import { showToast } from "../client-forms";
 import { AbilityIcon } from "./ability-icons";
 import { blocked } from "./agents-section";
-import { GROUP_LABEL, shortError, TIP, agentName } from "./kit-copy";
+import { GROUP_LABEL, plural, shortError, TIP, agentName } from "./kit-copy";
 
 const CREW_GROUP: Record<string, number> = {
   engineering_captain: 0, chief_architect: 0, backend_engineer: 0, frontend_engineer: 0,
@@ -29,7 +29,21 @@ const CREW_GROUP: Record<string, number> = {
 };
 const GROUP_NAMES = ["Build", "Review", "Product", "Ops", "Others"];
 
-type Change = { ability: string; before: string[] };
+/**
+ * ONE PRESS, ONE UNDOABLE ACTION, recorded as what it ADDED and REMOVED per ability — never as a
+ * snapshot. Undo puts back exactly that against the holders as they are NOW: re-adds what the
+ * action removed, removes what it added, and leaves every other holder alone. (A snapshot Undo
+ * after Apply recommended restored a stale holder set and silently took Email from three agents.)
+ */
+export type Delta = { ability: string; added: string[]; removed: string[] };
+export type Action = { label: string; deltas: Delta[] };
+
+/** The holder set that undoes `delta`, given the holders now. */
+export function undone(current: string[], delta: Delta): string[] {
+  const out = current.filter((r) => !delta.added.includes(r));
+  for (const r of delta.removed) if (!out.includes(r)) out.push(r);
+  return out;
+}
 
 export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onReload, onOpenAbility }: {
   kit: KitWithCrew; crew: CrewMember[]; projectId: string; actor: string; focusRole: string | null;
@@ -37,8 +51,26 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
 }) {
   const identities = useIdentityVersion(); // names repaint when identities load
   const [show, setShow] = useState<"all" | "gaps">("all");
-  const [changes, setChanges] = useState<Change[]>([]);
+  const [actions, setActions] = useState<Action[]>([]);
   const [busy, setBusy] = useState(false);
+  // Apply recommended reloads the Kit; Undo waits for that reload so it works on fresh holders.
+  const [reloading, setReloading] = useState(false);
+  useEffect(() => { setReloading(false); }, [kit]);
+  const record = (action: Action) => setActions((a) => [...a, action]);
+
+  // MORE COLUMNS THAN FIT say so (K18): a fade and a `More →` that scrolls, instead of Deploy
+  // and Watch health sitting unseen past the edge of an inner scroll.
+  const wrap = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  const measure = useCallback(() => {
+    const el = wrap.current;
+    setMore(Boolean(el && el.scrollWidth - el.clientWidth - el.scrollLeft > 4));
+  }, []);
+  useEffect(() => {
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure, kit]);
   const [expanded, setExpanded] = useState<string | null>(focusRole);
 
   const rows = useMemo(() => [...crew].sort((a, b) =>
@@ -48,47 +80,74 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
   const gap = (a: Ability, role: string) => a.recommended.includes(role) && !a.holders.includes(role);
   const visibleRows = show === "gaps" ? rows.filter((r) => abilities.some((a) => gap(a, r.role_key))) : rows;
 
-  const setHolders = async (ability: Ability, roles: string[], toast: string, record = true) => {
-    setBusy(true);
+  const write = async (ability: Ability, roles: string[]) => {
     const r = await kitApi.holders(projectId, actor, ability.key, roles);
-    setBusy(false);
     if (!r.ok) { showToast("error", shortError(r.error)); return false; }
-    if (record) setChanges((c) => [...c, { ability: ability.key, before: ability.holders }]);
-    showToast("success", toast);
     onChanged(r.data);
     return true;
   };
 
-  const toggle = (ability: Ability, role: string) => {
+  const toggle = async (ability: Ability, role: string) => {
     const name = agentName(role);
     const holds = ability.holders.includes(role);
     if (!holds && blocked(ability)) return;
-    void setHolders(ability, holds ? ability.holders.filter((r) => r !== role) : [...ability.holders, role],
-                    holds ? `Took ${ability.label} from ${name}` : `Gave ${ability.label} to ${name}`);
+    setBusy(true);
+    const ok = await write(ability, holds ? ability.holders.filter((r) => r !== role) : [...ability.holders, role]);
+    setBusy(false);
+    if (!ok) return;
+    const label = holds ? `Took ${ability.label} from ${name}` : `Gave ${ability.label} to ${name}`;
+    record({ label, deltas: [{ ability: ability.key, added: holds ? [] : [role], removed: holds ? [role] : [] }] });
+    showToast("success", label);
   };
 
   const toggleRow = async (role: string) => {
     const grantable = abilities.filter((a) => !blocked(a));
     const giving = grantable.some((a) => !a.holders.includes(role));
+    const deltas: Delta[] = [];
+    setBusy(true);
     for (const a of giving ? grantable : abilities) {
       const holds = a.holders.includes(role);
-      if (giving && !holds) await setHolders(a, [...a.holders, role], `Gave ${a.label} to ${agentName(role)}`);
-      if (!giving && holds) await setHolders(a, a.holders.filter((r) => r !== role), `Took ${a.label} from ${agentName(role)}`);
+      if (giving && !holds && await write(a, [...a.holders, role])) deltas.push({ ability: a.key, added: [role], removed: [] });
+      if (!giving && holds && await write(a, a.holders.filter((r) => r !== role))) deltas.push({ ability: a.key, added: [], removed: [role] });
     }
+    setBusy(false);
+    if (!deltas.length) return;
+    const label = `${giving ? "Gave" : "Took"} ${plural(deltas.length, "ability", "abilities")} ${giving ? "to" : "from"} ${agentName(role)}`;
+    record({ label, deltas });
+    showToast("success", label);
   };
 
   const undo = async () => {
-    const last = changes[changes.length - 1];
+    const last = actions[actions.length - 1];
     if (!last) return;
-    const ability = kit.abilities.find((a) => a.key === last.ability);
-    if (!ability) return;
-    if (await setHolders(ability, last.before, "Saved", false)) setChanges((c) => c.slice(0, -1));
+    setBusy(true);
+    let ok = true;
+    for (const delta of last.deltas) {
+      const ability = kit.abilities.find((a) => a.key === delta.ability);
+      if (!ability) continue;
+      const next = undone(ability.holders, delta);
+      const same = next.length === ability.holders.length && next.every((r) => ability.holders.includes(r));
+      if (!same) ok = (await write(ability, next)) && ok;
+    }
+    setBusy(false);
+    if (!ok) return;
+    setActions((a) => a.slice(0, -1));
+    showToast("success", `Undid ${last.label}`);
   };
 
   const applyRecommended = async () => {
+    setBusy(true);
     const r = await kitApi.recommended(projectId, actor);
+    setBusy(false);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", `Applied recommended · ${r.data.granted.length} grants`);
+    const byAbility = new Map<string, string[]>();
+    for (const g of r.data.granted) byAbility.set(g.ability, [...(byAbility.get(g.ability) ?? []), g.role_key]);
+    if (byAbility.size) {
+      record({ label: "Apply recommended",
+               deltas: [...byAbility].map(([ability, added]) => ({ ability, added, removed: [] })) });
+    }
+    showToast("success", `Applied recommended · ${plural(r.data.granted.length, "grant")}`);
+    setReloading(true);
     onReload();
   };
 
@@ -102,7 +161,7 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
       <button type="button" className="kit-cell" aria-pressed={holds} disabled={busy || (off && !holds)}
               data-held={holds || undefined} data-rec={(rec && !holds) || undefined} data-off={off || undefined}
               data-tip={tip} aria-label={tip} data-testid={`kit-cell-${role}-${a.key}`}
-              onClick={(e) => { if (e.shiftKey) void toggleRow(role); else toggle(a, role); }}>
+              onClick={(e) => { if (e.shiftKey) void toggleRow(role); else void toggle(a, role); }}>
         {holds ? <span className="kit-cell-dot" /> : rec ? <span className="kit-cell-ring"><Star size={8} weight="fill" /></span> : null}
       </button>
     );
@@ -119,15 +178,17 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
           <button type="button" role="radio" aria-checked={show === "gaps"} data-tip={TIP.gaps} data-testid="kit-who-gaps" onClick={() => setShow("gaps")}>Gaps</button>
         </span>
         <span className="kit-spacer" />
-        {changes.length ? (
+        {actions.length ? (
           <>
-            <span className="kit-faint" data-testid="kit-who-changes">{changes.length} changes</span>
-            <button type="button" className="kit-link" disabled={busy} data-testid="kit-who-undo" onClick={() => void undo()}>Undo last</button>
+            <span className="kit-faint" data-testid="kit-who-changes">{plural(actions.length, "change")}</span>
+            <button type="button" className="kit-link" disabled={busy || reloading} data-testid="kit-who-undo"
+                    data-tip={`Undo ${actions[actions.length - 1].label}`} onClick={() => void undo()}>Undo last</button>
           </>
         ) : null}
       </div>
 
-      <div className="kit-matrix-wrap">
+      <div className="kit-matrix-frame" data-more={more || undefined}>
+      <div className="kit-matrix-wrap" ref={wrap} onScroll={measure} data-testid="kit-matrix-wrap">
         <table className="kit-matrix" data-testid="kit-matrix">
           <thead>
             <tr>
@@ -137,7 +198,7 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
                   <button type="button" className="kit-col" data-tip={`${GROUP_LABEL[a.group] ?? a.group} · ${a.tip}`}
                           data-testid={`kit-col-${a.key}`} onClick={() => onOpenAbility(a.key)}>
                     <AbilityIcon name={a.icon} size={16} />
-                    <span>{a.label}</span>
+                    <span className="kit-col-label">{a.label}</span>
                   </button>
                 </th>
               ))}
@@ -166,6 +227,11 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
           </tbody>
         </table>
       </div>
+      {more ? (
+        <button type="button" className="kit-matrix-more" data-testid="kit-matrix-more"
+                onClick={() => wrap.current?.scrollBy?.({ left: 320, behavior: "smooth" })}>More →</button>
+      ) : null}
+      </div>
 
       <ul className="kit-who-list" data-testid="kit-who-list">
         {visibleRows.map((row) => (
@@ -181,7 +247,7 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
                 {abilities.map((a) => (
                   <div key={a.key} className="kit-who-item">
                     <AbilityIcon name={a.icon} size={16} />
-                    <span>{a.label}</span>
+                    <span className="kit-col-label">{a.label}</span>
                     {cell(a, row.role_key)}
                   </div>
                 ))}

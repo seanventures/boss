@@ -59,6 +59,8 @@ export function installKitApi(kit: KitWithCrew = clone(KITS.fresh), on?: Handler
       status, headers: { "Content-Type": "application/json" } });
     const custom = on?.(url, body, method);
     if (custom instanceof Response) return custom;
+    // A pending answer (a test that controls when a read lands).
+    if (custom && typeof (custom as Promise<Response>).then === "function") return custom as Promise<Response>;
     if (custom !== undefined) return answer(custom);
     if (url.startsWith("/api/kit") && method === "GET") {
       const key = new URL(url, "http://x").searchParams.get("ability");

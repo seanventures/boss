@@ -12,6 +12,7 @@ import { mcpApi } from "../../lib/kit-api";
 import { importSkillAction } from "../actions";
 import { showToast } from "../client-forms";
 import { shortError } from "./kit-copy";
+import { ModalShell } from "./overlay";
 
 export function ImportSheet({ projectId, actor, onClose, onImported }: {
   projectId: string; actor: string; onClose: () => void; onImported: () => void;
@@ -50,9 +51,7 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
   };
 
   return (
-    <div className="kit-modal" role="dialog" aria-label="Import" data-testid="kit-import">
-      <div className="kit-modal-scrim" onClick={onClose} />
-      <div className="kit-modal-card">
+    <ModalShell label="Import" testId="kit-import" onClose={onClose}>
         <header className="kit-modal-head">
           <h3 data-tip="A skill YAML bundle, or MCP servers as JSON">Import</h3>
           <button type="button" className="kit-icon-btn" aria-label="Close" onClick={onClose}>×</button>
@@ -65,7 +64,6 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
           <button type="button" className="kit-btn kit-btn-primary" disabled={busy || !text.trim()}
                   data-testid="kit-import-run" onClick={() => void run()}>Import</button>
         </footer>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

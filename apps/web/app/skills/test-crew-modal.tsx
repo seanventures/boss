@@ -14,6 +14,7 @@ import type { Ability, CrewTest } from "../../lib/kit-types";
 import { kitApi } from "../../lib/kit-api";
 import { AgentAvatar } from "../agent-avatar";
 import { TIP, agentName } from "./kit-copy";
+import { ModalShell } from "./overlay";
 
 export function TestCrewModal({ projectId, actor, abilities, onClose, onDone, onOpenAbility }: {
   projectId: string;
@@ -42,9 +43,7 @@ export function TestCrewModal({ projectId, actor, abilities, onClose, onDone, on
 
   const passed = result ? result.rows.every((r) => r.ok) && (result.live ?? []).every((c) => c.ok) : false;
   return (
-    <div className="kit-modal" role="dialog" aria-label="Test crew" data-testid="kit-crew-modal">
-      <div className="kit-modal-scrim" onClick={onClose} />
-      <div className="kit-modal-card">
+    <ModalShell label="Test crew" testId="kit-crew-modal" onClose={onClose}>
         <header className="kit-modal-head">
           <h3 data-tip={TIP.testCrew}>{passed ? "Crew ready" : "Test crew"}</h3>
           <button type="button" className="kit-icon-btn" aria-label="Close" onClick={onClose}>×</button>
@@ -87,7 +86,6 @@ export function TestCrewModal({ projectId, actor, abilities, onClose, onDone, on
             {running ? "Testing…" : "Run"}
           </button>
         </footer>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

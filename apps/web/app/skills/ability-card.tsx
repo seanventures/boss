@@ -21,7 +21,7 @@ export const REPO_HREF = "?area=setup&focus=repository";
 export type CardAction = "test" | "agents" | "connect" | "repo" | "fix" | "review" | "turn_on";
 
 export const ACTION_OF: Record<AbilityStatus, CardAction | null> = {
-  ready: "test", unheld: "agents", setup: "connect", needs_repo: "repo", testing: null,
+  ready: "test", untested: "test", unheld: "agents", setup: "connect", needs_repo: "repo", testing: null,
   failing: "fix", review: "review", off: "turn_on",
 };
 

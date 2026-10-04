@@ -5,16 +5,16 @@
  * custom server. Skills BOSS uses itself (machinery only, held by nobody, in no ability) are
  * behind `Show internal` — the old page explained them in a sentence per row.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DotsThree, MagnifyingGlass, Plus, Sparkle } from "@phosphor-icons/react";
 
-import type { Ability } from "../../lib/kit-types";
+import type { Ability, AbilityStatus } from "../../lib/kit-types";
 import { mcpApi, type CrewMember, type KitWithCrew, type McpServer } from "../../lib/kit-api";
 import { openDockAbout } from "../../lib/dock-subject";
 import { HolderStack, StatusPill } from "./ability-card";
 import { AddMcpSheet } from "./add-mcp-sheet";
 import { ImportSheet } from "./import-sheet";
-import { riskOf, TIP, PROVENANCE } from "./kit-copy";
+import { plural, riskOf, TIP, PROVENANCE } from "./kit-copy";
 import { writeKitParams, type KitParams } from "./kit-url";
 import { McpDrawer, serverStatus } from "./mcp-drawer";
 import { RiskDot } from "./tools-section";
@@ -35,6 +35,39 @@ export function askBossAboutSkills(projectId: string): void {
       + ` Start by telling me which skills ${projectId} already has, so I do not ask for one`
       + " that exists.",
   });
+}
+
+/** A skill's name on screen (K13): the Kit's label for it, else its id said as words. */
+export function skillLabel(id: string, ability: Ability | undefined): string {
+  const row = ability?.tools.find((t) => t.ref === `skill:${id}`);
+  if (row?.label) return row.label;
+  const words = id.split(".").slice(-2).join(" ").replace(/[_-]+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : id;
+}
+
+/** How many workflow steps use THIS item (K13), not the whole ability it belongs to. A step
+ *  record names what it uses (`via`); one that does not is counted for nobody rather than for
+ *  every skill of the ability. */
+export function usedBy(ability: Ability | undefined, ref: string): number {
+  if (!ability) return 0;
+  const server = ref.startsWith("mcp:") ? ref.slice(4) : null;
+  return ability.used_in.filter((u) => u.via === ref || (server !== null && u.via?.startsWith(`mcp:${server}`))).length;
+}
+
+/**
+ * A shipped skill's status (K13). One in a Kit ability is as ready as its ability — Open an
+ * issue is not Ready while File tickets is not set up. One outside every ability is Ready only
+ * when the catalogue says it can run (`usable`); a cost sync with no provider key is Set up.
+ */
+export function builtInStatus(b: BuiltIn, ability: Ability | undefined, holders: number): AbilityStatus {
+  if (b.enabled === false && !b.system) return "off";
+  if (ability) {
+    if (ability.status === "ready" || ability.status === "unheld") return holders ? "ready" : "unheld";
+    return ability.status;
+  }
+  if (b.usable === false) return "setup";
+  if (b.usable === undefined) return holders ? "untested" : "unheld";
+  return holders ? "ready" : "unheld";
 }
 
 export function serverProvenance(s: McpServer): "built_in" | "official" | "custom" {
@@ -63,21 +96,46 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
   const [filters, setFilters] = useState({ yours: false, builtIn: false, internal: false });
 
   const enc = encodeURIComponent(projectId);
+  // THE LATEST READ WINS (K12). Two reads in flight (a review's, then a grant's) could land out of
+  // order, and the older answer then put back the row as it was before the grant.
+  const skillSeq = useRef(0);
+  const serverSeq = useRef(0);
+  // CAN'T REACH IS SAID, NOT SHOWN AS EMPTY (K14): a 502 or a dropped connection is a red bar
+  // with Retry, never "no skills".
+  const [skillsError, setSkillsError] = useState<string | null>(null);
+  const [serversError, setServersError] = useState<string | null>(null);
   const loadSkills = useCallback(async () => {
+    const mine = ++skillSeq.current;
     try {
       const [a, b, c] = await Promise.all([
         fetch(`/api/skills?project_id=${enc}`, { cache: "no-store" }),
         fetch(`/api/skills?view=builtin&project_id=${enc}`, { cache: "no-store" }),
         fetch(`/api/skills?view=assignments&project_id=${enc}`, { cache: "no-store" }),
       ]);
-      setSkills(a.ok ? (((await a.json()).skills ?? []) as Skill[]) : []);
-      setBuiltIn(b.ok ? (((await b.json()).items ?? []) as BuiltIn[]).filter((s) => s.source !== "authored") : []);
-      if (c.ok) setAssignments(((await c.json()).assignments ?? []) as Assignment[]);
-    } catch { setSkills((s) => s ?? []); setBuiltIn((s) => s ?? []); }
+      if (mine !== skillSeq.current) return;
+      const bad = [a, b, c].find((r) => !r.ok);
+      if (bad) {
+        const said = await bad.json().catch(() => ({})) as { error?: string };
+        setSkillsError(String(said.error ?? `HTTP ${bad.status}`));
+        return;
+      }
+      const [sa, sb, sc] = await Promise.all([a.json(), b.json(), c.json()]);
+      if (mine !== skillSeq.current) return;
+      setSkills((sa.skills ?? []) as Skill[]);
+      setBuiltIn(((sb.items ?? []) as BuiltIn[]).filter((x) => x.source !== "authored"));
+      setAssignments((sc.assignments ?? []) as Assignment[]);
+      setSkillsError(null);
+    } catch (e) {
+      if (mine === skillSeq.current) setSkillsError(String((e as Error)?.message ?? e));
+    }
   }, [enc]);
   const loadServers = useCallback(async (check: "none" | "stale" = "stale") => {
+    const mine = ++serverSeq.current;
     const r = await mcpApi.list(projectId, check);
-    setServers(r.ok ? r.data.items : []);
+    if (mine !== serverSeq.current) return;
+    if (!r.ok) { setServersError(r.error); return; }
+    setServers(r.data.items);
+    setServersError(null);
   }, [projectId]);
 
   useEffect(() => { void loadSkills(); void loadServers(); }, [loadSkills, loadServers]);
@@ -111,9 +169,10 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
       const callers = b.permissions?.allowed_callers ?? [];
       const internal = !ability && holders.length === 0 && !callers.includes("*")
         && callers.every((c) => !crewKeys.has(c));
-      out.push({ id: b.id, label: b.id, origin: "built_in", tier: b.risk_tier ?? 0,
-                 status: skillStatus(b.enabled !== false || Boolean(b.system), true, false, holders.length),
-                 holders, ability, used: ability?.used_in.length ?? 0, internal, tip: b.description ?? b.id });
+      out.push({ id: b.id, label: skillLabel(b.id, ability), origin: "built_in", tier: b.risk_tier ?? 0,
+                 status: builtInStatus(b, ability, holders.length),
+                 holders, ability, used: usedBy(ability, `skill:${b.id}`), internal,
+                 tip: b.description ? `${b.id} · ${b.description}` : b.id });
     }
     return out;
   }, [skills, builtIn, assignments, abilityOfSkill, crewKeys]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -165,6 +224,14 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
         </span>
       </div>
 
+      {(segment === "skills" ? skillsError : serversError) ? (
+        <div className="kit-bar-err" role="alert" data-testid="kit-lib-error">
+          <span data-tip={(segment === "skills" ? skillsError : serversError) ?? undefined}>Can&apos;t reach BOSS API</span>
+          <button type="button" className="kit-link" data-testid="kit-lib-retry"
+                  onClick={() => void (segment === "skills" ? loadSkills() : loadServers("none"))}>Retry</button>
+        </div>
+      ) : null}
+
       {segment === "skills" ? (
         <>
           <div className="kit-filters">
@@ -173,8 +240,14 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
             <button type="button" className="kit-chip kit-chip-btn" aria-pressed={filters.internal} data-tip={TIP.showInternal}
                     data-testid="kit-lib-internal" onClick={() => setFilters((f) => ({ ...f, internal: !f.internal }))}>Show internal</button>
           </div>
-          {skills === null ? <div className="kit-row kit-skeleton" aria-busy="true" /> : (
+          {skills === null ? (skillsError ? null : <div className="kit-row kit-skeleton" aria-busy="true" />) : (
             <ul className="kit-list" data-testid="kit-skill-list">
+              {visibleSkills.length === 0 ? (
+                <li className="kit-list-empty" data-testid="kit-lib-empty">
+                  <span>No matches</span>
+                  {q ? <button type="button" className="kit-link" onClick={() => setQuery("")}>Clear</button> : null}
+                </li>
+              ) : null}
               {visibleSkills.map((r) => (
                 <li key={`${r.origin}:${r.id}`} className="kit-list-row" data-testid={`kit-skill-${r.id}`}
                     onClick={() => showSkill(r.id)}>
@@ -186,15 +259,21 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
                   <RiskDot tier={r.tier} />
                   <HolderStack holders={r.holders} max={3} size={20} />
                   <span className="kit-faint" data-tip={TIP.usedIn}>Used in {r.used}</span>
-                  <StatusPill status={r.status} />
+                  <StatusPill status={r.status} tip={r.ability ? r.ability.status_tip : undefined} />
                 </li>
               ))}
             </ul>
           )}
         </>
       ) : (
-        servers === null ? <div className="kit-row kit-skeleton" aria-busy="true" /> : (
+        servers === null ? (serversError ? null : <div className="kit-row kit-skeleton" aria-busy="true" />) : (
           <ul className="kit-list" data-testid="kit-mcp-list">
+            {visibleServers.length === 0 ? (
+              <li className="kit-list-empty" data-testid="kit-lib-empty">
+                <span>No matches</span>
+                {q ? <button type="button" className="kit-link" onClick={() => setQuery("")}>Clear</button> : null}
+              </li>
+            ) : null}
             {visibleServers.map((s) => {
               const prov = PROVENANCE[serverProvenance(s)];
               const holders = (s.references?.agents ?? []).map((a) => a.role_key);
@@ -202,7 +281,7 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
                 <li key={s.id} className="kit-list-row" data-testid={`kit-mcp-${s.name}`} onClick={() => showServer(s.id)}>
                   <span className="kit-list-name" data-tip={s.description ?? s.url} data-user-text>{s.name}</span>
                   <span className="kit-chip" data-tip={prov.tip}>{prov.label}</span>
-                  <span className="kit-faint">{s.tools.length} tools</span>
+                  <span className="kit-faint">{plural(s.tools.length, "tool")}</span>
                   <span className="kit-risk" data-tone={riskOf(s.risk_tier).tone} data-tip={riskOf(s.risk_tier).tip}>{riskOf(s.risk_tier).label}</span>
                   <HolderStack holders={holders} max={3} size={20} />
                   <span />
@@ -222,9 +301,12 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
                      onSaved={(key) => { void loadSkills(); onKitChanged(); if (key) { setCreating(false); showSkill(key); } }} />
       ) : null}
       {server ? (
-        <McpDrawer projectId={projectId} actor={actor} server={server} crew={crew}
+        <McpDrawer projectId={projectId} actor={actor} server={server} crew={crew} abilities={abilities}
                    onClose={() => showServer(null)}
-                   onChanged={() => { void loadServers("none"); onKitChanged(); }}
+                   onChanged={(next) => {
+                     if (next) setServers((all) => (all ?? []).map((x) => (x.id === next.id ? next : x)));
+                     void loadServers("none"); onKitChanged();
+                   }}
                    onRemoved={() => { showServer(null); void loadServers("none"); onKitChanged(); }} />
       ) : null}
       {adding ? (

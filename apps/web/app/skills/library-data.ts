@@ -18,6 +18,8 @@ export type Skill = {
 
 export type BuiltIn = { id: string; kind?: string; source?: string; risk_tier?: number;
                         enabled?: boolean; description?: string; system?: boolean;
+                        /** From the skill catalogue: whether it can run here, and why not. */
+                        usable?: boolean; reason?: string | null;
                         permissions?: { allowed_callers?: string[] } };
 
 export const BLANK = {

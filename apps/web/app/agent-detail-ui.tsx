@@ -711,7 +711,7 @@ export function AgentMcp({ projectId, roleKey, actor, panel, onChanged }: {
               <span className="detail"> · {m.tools.length ? `only ${m.tools.join(", ")}` : "every tool it offers"}</span>
               {!m.enabled ? (
                 <span className="ad-bad"> · disabled in this project, so it is not offered until
-                  enabled on the Skills and MCP page</span>
+                  turned on in Skills & MCP</span>
               ) : null}
               {m.risk_tier != null && m.risk_tier >= 2 ? (
                 <span className="detail"> · its calls wait for approval (tier {m.risk_tier})</span>

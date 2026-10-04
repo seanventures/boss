@@ -8,17 +8,33 @@
  */
 import React, { useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
-import { DotsThree, X } from "@phosphor-icons/react";
+import { DotsThree, Star, X } from "@phosphor-icons/react";
 
-import type { AbilityStatus, KitTool, ToolPolicy } from "../../lib/kit-types";
+import type { Ability, AbilityStatus, KitTool, ToolPolicy } from "../../lib/kit-types";
 import { mcpApi, type CrewMember, type McpAuthInput, type McpServer } from "../../lib/kit-api";
 import { AgentAvatar } from "../agent-avatar";
 import { showToast } from "../client-forms";
 import { StatusPill } from "./ability-card";
+import { DrawerShell } from "./overlay";
 import { Section } from "./ability-drawer";
-import { PROVENANCE, shortError, TIP, agentName } from "./kit-copy";
+import { plural, POLICY_LABEL, PROVENANCE, shortError, TIP, agentName } from "./kit-copy";
 import { serverProvenance } from "./library";
 import { PolicySeg, ReviewRow, RiskDot } from "./tools-section";
+import { TrySection } from "./try-section";
+
+/** The Kit abilities a server backs (Library docs for context7; Web research and Web search for
+ *  web-intel). Their recommendations star the drawer's agents and their Try it runs here too. */
+export function abilitiesOfServer(abilities: Ability[], name: string): Ability[] {
+  return abilities.filter((a) => a.mcp.some((m) => m.name === name) || (a.mcp_names ?? []).includes(name)
+    || a.tools.some((t) => t.ref.startsWith(`mcp:${name}.`)));
+}
+
+/** The server with one agent's grant added or taken, as the list will say once re-read. */
+export function withAgent(server: McpServer, role: string, on: boolean): McpServer {
+  const refs = server.references ?? { custom_steps: [], skills: [], agents: [] };
+  const agents = refs.agents.filter((a) => a.role_key !== role);
+  return { ...server, references: { ...refs, agents: on ? [...agents, { role_key: role, tools: [] }] : agents } };
+}
 
 export function serverStatus(s: McpServer, holders: number): AbilityStatus {
   if (s.reachable === false) return "failing";
@@ -38,9 +54,12 @@ function effective(tier: number, chosen: string | undefined): ToolPolicy {
   return p === "allow" && tier >= 2 ? "ask" : p;
 }
 
-export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, onRemoved }: {
-  projectId: string; actor: string; server: McpServer; crew: CrewMember[];
-  onClose: () => void; onChanged: () => void; onRemoved: () => void;
+export function McpDrawer({ projectId, actor, server, crew, abilities = [], onClose, onChanged, onRemoved }: {
+  projectId: string; actor: string; server: McpServer; crew: CrewMember[]; abilities?: Ability[];
+  onClose: () => void;
+  /** `next`: the server as this change left it, shown at once while the list is re-read. */
+  onChanged: (next?: McpServer) => void;
+  onRemoved: () => void;
 }) {
   useIdentityVersion(); // names repaint when identities load
   const [url, setUrl] = useState(server.url);
@@ -55,6 +74,12 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
   const holders = (server.references?.agents ?? []).map((a) => a.role_key);
   const status = serverStatus(server, holders.length);
   const prov = PROVENANCE[serverProvenance(server)];
+  const backs = abilitiesOfServer(abilities, server.name);
+  const recommended = new Set(backs.flatMap((a) => a.recommended));
+  const tries = backs.filter((a) => a.try);
+  const ordered = [...crew].sort((a, b) =>
+    Number(recommended.has(b.role_key)) - Number(recommended.has(a.role_key))
+    || agentName(a.role_key).localeCompare(agentName(b.role_key)));
 
   const tools: KitTool[] = server.tools.map((t) => {
     const tier = toolTier(server, t.name) as 0 | 1 | 2 | 3;
@@ -89,7 +114,7 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
       setError({ field: "url", message: fresh.last_error ?? "Can't reach server" });
       showToast("error", `Test failed · ${shortError(fresh.last_error)}`);
     } else {
-      showToast("success", `Connected · ${fresh?.tools.length ?? server.tools.length} tools`);
+      showToast("success", `Connected · ${plural(fresh?.tools.length ?? server.tools.length, "tool")}`);
     }
     setSecret(""); setReplacing(false);
     onChanged();
@@ -98,7 +123,7 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
   const pick = async (tool: KitTool, policy: ToolPolicy) => {
     const r = await mcpApi.policy(projectId, actor, server.id, tool.label, policy);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", "Saved");
+    showToast("success", `${tool.label} · ${POLICY_LABEL[policy]}`);
     onChanged();
   };
 
@@ -107,14 +132,16 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
     const r = on ? await mcpApi.revoke(projectId, actor, server.id, role) : await mcpApi.grant(projectId, actor, server.id, role);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
     showToast("success", on ? `Took ${server.name} from ${agentName(role)}` : `Gave ${server.name} to ${agentName(role)}`);
-    onChanged();
+    // SHOWN NOW (K12): the row and this drawer say who holds it the moment the grant lands,
+    // then the list is re-read.
+    onChanged(withAgent(server, role, !on));
   };
 
   const toggleOn = async () => {
     setMenu(false);
     const r = await mcpApi.update(projectId, actor, server.id, { enabled: !server.enabled });
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", server.enabled ? `${server.name} off` : "Saved");
+    showToast("success", server.enabled ? `${server.name} off` : `${server.name} on`);
     onChanged();
   };
 
@@ -122,7 +149,7 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
     setConfirm(false);
     const r = await mcpApi.remove(projectId, actor, server.id, holders.length > 0);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", "Saved");
+    showToast("success", `Removed ${server.name}`);
     onRemoved();
   };
 
@@ -134,7 +161,7 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
   };
 
   return (
-    <aside className="kit-drawer" role="dialog" aria-label={server.name} data-testid="kit-mcp-drawer">
+    <DrawerShell label={server.name} testId="kit-mcp-drawer" onClose={onClose}>
       <header className="kit-drawer-head">
         <h3 className="kit-drawer-title" data-tip={server.description ?? server.url} data-user-text>{server.name}</h3>
         <StatusPill status={status} tip={server.last_error ?? (status === "review" ? TIP.review : undefined)} />
@@ -207,8 +234,8 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
         </Section>
         <Section id="tools" label="Tools" tip="What agents may call, and when they ask">
           {!server.trusted && server.enabled ? (
-            <ReviewRow server={{ server_id: server.id, name: server.name }} projectId={projectId} actor={actor}
-                       tools={tools} onReviewed={onChanged} />
+            <ReviewRow server={{ server_id: server.id, name: server.name, url: server.url }} projectId={projectId} actor={actor}
+                       tools={tools} onReviewed={() => onChanged()} />
           ) : null}
           {tools.length === 0 ? <div className="kit-faint">No tools yet</div> : null}
           {tools.map((t) => (
@@ -221,12 +248,18 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
         </Section>
         <Section id="agents" label="Agents" tip="Who may use this server's tools">
           <ul className="kit-agent-grid">
-            {crew.map((c) => {
+            {ordered.map((c) => {
               const on = holders.includes(c.role_key);
               return (
                 <li key={c.role_key} className="kit-agent" data-on={on} data-testid={`kit-mcp-agent-${c.role_key}`}>
                   <AgentAvatar agent={c.role_key} size={24} aiBadge={false} />
                   <span className="kit-agent-name" data-tip={c.display_name ?? c.role_key}>{agentName(c.role_key)}</span>
+                  {recommended.has(c.role_key) ? (
+                    <span className="kit-star" data-tip={`In ${c.display_name ?? agentName(c.role_key)}'s default loadout`}
+                          data-testid={`kit-mcp-agent-rec-${c.role_key}`}>
+                      <Star size={12} weight="fill" aria-label="Recommended" />
+                    </span>
+                  ) : null}
                   <button type="button" role="switch" aria-checked={on} className="kit-switch"
                           aria-label={`${agentName(c.role_key)} holds ${server.name}`}
                           data-testid={`kit-mcp-agent-toggle-${c.role_key}`} onClick={() => void toggleAgent(c.role_key)} />
@@ -245,6 +278,11 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
               </ul>
             )}
         </Section>
+        {tries.map((a) => (
+          <Section key={a.key} id={`try-${a.key}`} label={tries.length > 1 ? `Try it · ${a.label}` : "Try it"} tip={TIP.tryIt}>
+            <TrySection ability={a} projectId={projectId} actor={actor} />
+          </Section>
+        ))}
         <details className="kit-more">
           <summary>More</summary>
           <label className="kit-field">
@@ -255,6 +293,6 @@ export function McpDrawer({ projectId, actor, server, crew, onClose, onChanged, 
           </label>
         </details>
       </div>
-    </aside>
+    </DrawerShell>
   );
 }
