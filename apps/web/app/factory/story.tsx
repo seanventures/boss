@@ -21,6 +21,12 @@ import { nameOf, RunFace } from "../agents/run-face";
 import { fetchTools } from "./cockpit-actions";
 import { clockOf, money, secondsWord, spanOf, whoName } from "./cockpit-util";
 
+
+/** `1 file` · `2 files`. */
+function plural(n: number, one: string): string {
+  return `${n} ${one}${n === 1 ? "" : "s"}`;
+}
+
 export type StoryProps = {
   projectId: string;
   runId: string;
@@ -120,8 +126,8 @@ function ActRow({ row, props, live, enter }: { row: StoryAct; props: StoryProps;
     : [];
   const fixed = row.commentsFixed > 0 ? props.comments.filter((c) => c.status === "addressed" && c.round < row.round) : [];
   return (
-    <li className="fx-row" data-enter={enter || undefined} data-type="act" data-status={row.status} data-testid={`fx-story-${row.id}`} data-role={row.roleKey ?? undefined}>
-      <time className="fx-time" dateTime={row.startedAt} title={row.startedAt}>{clockOf(row.startedAt)}</time>
+    <li className="fx-ck-row" data-enter={enter || undefined} data-type="act" data-status={row.status} data-testid={`fx-story-${row.id}`} data-role={row.roleKey ?? undefined}>
+      <time className="fx-ck-time" dateTime={row.startedAt} title={row.startedAt}>{clockOf(row.startedAt)}</time>
       <button ref={face} type="button" className="fx-row-face" aria-label={`${whoName(row.roleKey)}: who did this`}
               data-testid={`fx-story-face-${row.id}`} onClick={() => face.current && props.onFace(row.actId, face.current)}>
         <RunFace roleKey={row.roleKey} variant={row.roleKey ? "agent" : "boss"} size={24} state={still && state === "working" ? "idle" : state} />
@@ -133,14 +139,14 @@ function ActRow({ row, props, live, enter }: { row: StoryAct; props: StoryProps;
           <span data-user-text title={row.label}>{title}</span>
         </span>
         <span className="fx-row-folds">
-          <Fold label={`${row.files?.length ?? 0} files`} count={row.files?.length ?? 0} testId={`fx-files-${row.id}`}>
+          <Fold label={plural(row.files?.length ?? 0, "file")} count={row.files?.length ?? 0} testId={`fx-files-${row.id}`}>
             {() => <span className="fx-files">{(row.files ?? []).map((f) => <span key={f} className="fx-mono" data-user-text>{f}</span>)}</span>}
           </Fold>
           <ToolsFold projectId={props.projectId} runId={props.runId} act={row} />
-          <Fold label={`${authored.length || row.commentsAuthored} comments`} count={row.commentsAuthored} testId={`fx-authored-${row.id}`}>
+          <Fold label={plural(authored.length || row.commentsAuthored, "comment")} count={row.commentsAuthored} testId={`fx-authored-${row.id}`}>
             {() => <CommentList items={authored} />}
           </Fold>
-          <Fold label={`Fixing ${row.commentsFixed} comments`} count={row.commentsFixed} testId={`fx-fixing-${row.id}`}>
+          <Fold label={`Fixing ${plural(row.commentsFixed, "comment")}`} count={row.commentsFixed} testId={`fx-fixing-${row.id}`}>
             {() => <CommentList items={fixed} />}
           </Fold>
           <Fold label="Said" count={row.said ? 1 : 0} testId={`fx-said-${row.id}`}>
@@ -173,8 +179,8 @@ function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?:
   const mine = !row.actor || row.actor === viewer;
   const word = row.what === "waived" ? `Waived ${row.count ?? ""} checks`.replace("  ", " ") : YOU_WORDS[row.what] ?? row.what;
   return (
-    <li className="fx-row" data-enter={enter || undefined} data-type="you" data-what={row.what} data-testid={`fx-story-${row.id}`}>
-      <time className="fx-time" dateTime={row.at} title={row.at}>{clockOf(row.at)}</time>
+    <li className="fx-ck-row" data-enter={enter || undefined} data-type="you" data-what={row.what} data-testid={`fx-story-${row.id}`}>
+      <time className="fx-ck-time" dateTime={row.at} title={row.at}>{clockOf(row.at)}</time>
       <span className="fx-row-face">
         <RunFace roleKey={null} variant={mine ? "you" : "person"} personId={row.actor} size={24} state="idle" />
       </span>
@@ -206,20 +212,20 @@ function BossRow({ row, enter }: { row: StoryBoss; enter?: boolean }) {
   const cmds = Array.isArray(row.detail?.commands) ? (row.detail?.commands as Record<string, unknown>[]) : [];
   const steps = Array.isArray(row.detail?.steps) ? (row.detail?.steps as Record<string, unknown>[]) : [];
   return (
-    <li className="fx-row" data-enter={enter || undefined} data-type="boss" data-what={row.what} data-testid={`fx-story-${row.id}`}>
-      <time className="fx-time" dateTime={row.at} title={row.at}>{clockOf(row.at)}</time>
+    <li className="fx-ck-row" data-enter={enter || undefined} data-type="boss" data-what={row.what} data-testid={`fx-story-${row.id}`}>
+      <time className="fx-ck-time" dateTime={row.at} title={row.at}>{clockOf(row.at)}</time>
       <span className="fx-row-face" title="BOSS machinery. No agent at this station.">
         <RunFace roleKey={null} variant="boss" size={24} state="idle" />
       </span>
       <span className="fx-row-main">
         <span className="fx-row-what"><span className="fx-verb">{row.text}</span></span>
         <span className="fx-row-folds">
-          <Fold label={`${cmds.length} commands`} count={cmds.length} testId={`fx-cmds-${row.id}`}>
+          <Fold label={plural(cmds.length, "command")} count={cmds.length} testId={`fx-cmds-${row.id}`}>
             {() => <span className="fx-files">{cmds.map((c, i) => (
               <span key={i} className="fx-mono" data-user-text>{String(c.command ?? "")} · exit {String(c.exit_code ?? "?")}</span>
             ))}</span>}
           </Fold>
-          <Fold label={`${steps.length} steps`} count={steps.length} testId={`fx-steps-${row.id}`}>
+          <Fold label={plural(steps.length, "step")} count={steps.length} testId={`fx-steps-${row.id}`}>
             {() => <span className="fx-files">{steps.map((s, i) => (
               <span key={i} data-user-text>{String(s.name ?? s.label ?? s.step ?? "")}</span>
             ))}</span>}

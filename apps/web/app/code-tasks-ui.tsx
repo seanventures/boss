@@ -209,7 +209,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previ
   const opener = useRef<{ runId: string; el: HTMLElement | null } | null>(null);
   const find = useRef<HTMLInputElement>(null);
   const live = useConsoleLive();
-  const floor = useFactoryFloor(projectId, apiReachable);
+  const floor = useFactoryFloor(projectId, apiReachable, actor);
   const reloadFloor = floor.refresh;
 
   // THE URL IS THE STATE: read on mount and on every back/forward. `run=` becomes `build=`.

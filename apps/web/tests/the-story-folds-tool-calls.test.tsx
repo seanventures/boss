@@ -93,6 +93,6 @@ describe("the Story", () => {
   it("rows at first paint never animate", async () => {
     stubFetch(cockpit());
     await mount(view());
-    expect($$(".fx-row[data-enter]")).toHaveLength(0);
+    expect($$(".fx-ck-row[data-enter]")).toHaveLength(0);
   });
 });

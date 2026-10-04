@@ -72,7 +72,7 @@ function usePaused(): boolean {
 }
 
 export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: CockpitProps) {
-  const { data, error, loading, refresh } = useCockpit(projectId, runId);
+  const { data, error, loading, refresh } = useCockpit(projectId, runId, actor);
   // Before the build has loaded (or while BOSS can't be reached) Esc still goes back.
   useEffect(() => {
     if (data) return undefined;
@@ -270,10 +270,10 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
     <section ref={root} className="fx-cockpit" data-testid="fx-cockpit" data-run={c.run.id} data-state={s.state}
              data-still={still || undefined} data-band={band}>
       <span className="ag-sr" aria-live="polite" data-testid="fx-announce">{announce}</span>
-      <header className="fx-head">
+      <header className="fx-ck-head">
         <div className="fx-head-1">
           <button type="button" className="ag-link fx-back" onClick={onClose} data-testid="fx-back">← Floor</button>
-          <h1 ref={h1} tabIndex={-1} className="fx-app ag-trunc" title={c.app} data-user-text>{c.app}</h1>
+          <h1 ref={h1} tabIndex={-1} className="fx-ck-app ag-trunc" title={c.app} data-user-text>{c.app}</h1>
           <span className="fx-state" data-state={s.state} data-testid="fx-state">
             <span className="fx-state-word" title={s.tip || undefined}>{s.word}</span>
             {s.n ? <span className="fx-k" title="Stations done. BOSS doesn't guess finish times." data-testid="fx-k">{s.k} of {s.n}</span> : null}
@@ -305,7 +305,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                 <DotsThree size={16} weight="bold" aria-hidden />
               </button>
               {menu ? (
-                <span id={menuId} role="menu" className="fx-menu" data-testid="fx-menu">
+                <span id={menuId} role="menu" className="fx-ck-menu" data-testid="fx-ck-menu">
                   {c.stoppable ? <button type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</button> : null}
                   {c.stoppable ? <button type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</button> : null}
                   {c.retryable ? <button type="button" role="menuitem" data-testid="fx-menu-retry" onClick={() => void doRetry()}>Retry</button> : null}
@@ -326,7 +326,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           </span>
         </div>
         <div className="fx-head-2">
-          <span className="fx-title ag-trunc" title={c.run.title} data-user-text>{c.run.title}</span>
+          <span className="fx-ck-title ag-trunc" title={c.run.title} data-user-text>{c.run.title}</span>
           {c.lineage.length > 1 ? (
             <span className="fx-pop-anchor">
               <button type="button" className="ag-link" aria-haspopup="menu" aria-expanded={attempts} data-testid="fx-attempts"
@@ -334,7 +334,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                 attempt {attempt} ▾
               </button>
               {attempts ? (
-                <span role="menu" className="fx-menu" data-testid="fx-attempts-menu">
+                <span role="menu" className="fx-ck-menu" data-testid="fx-attempts-menu">
                   {c.lineage.map((l) => (
                     <button key={l.runId} type="button" role="menuitem" aria-current={l.runId === c.run.id || undefined}
                             onClick={() => { setAttempts(false); if (l.runId !== c.run.id) onOpenBuild(l.runId); }}>

@@ -189,3 +189,12 @@
   .fx .ag-chain-edge[data-new="true"] .ag-chain-line { animation: none; }
   .fx-row, .fx-tab { transition: none; }
 }
+
+/* Phone: the Floor keeps its order (Needs you → Building → Shipped → Stopped). Live's phone
+   rules order its own sections; these give the Floor's the places after Needs you. */
+@media (max-width: 639px) {
+  .fx-floor .ag-live-sec[data-sec="needs"] { order: 1; }
+  .fx-floor .ag-live-sec[data-sec="building"] { order: 2; }
+  .fx-floor .ag-live-sec[data-sec="shipped"] { order: 3; }
+  .fx-floor .ag-live-sec[data-sec="stopped"] { order: 4; }
+}

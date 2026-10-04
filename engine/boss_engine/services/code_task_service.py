@@ -1443,8 +1443,14 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
                      f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
             files=files, created_by_job_id=fctx.get("created_by_job_id"))
     status = proposal.get("status")
-    if status not in ("created", "succeeded"):
-        return {"status": "error", "detail": f"PR not created: {status}", **proposal}
+    # `reused`: this build's PR effect already happened (a prior receipt) — the PR is open.
+    if status not in ("created", "succeeded", "reused"):
+        # No PR opened: the build is still waiting on the operator's waiver. Leaving it parked
+        # at `opening_pr` made it read Blocked with nothing to press (the card was gone).
+        with _transaction(engine) as c:
+            _set_phase(c, run_id, "awaiting_gate_override")
+        # `status` last: the proposal's own status ("failed") used to overwrite "error".
+        return {**proposal, "status": "error", "detail": f"PR not created: {status}"}
     with _transaction(engine) as c:
         override_error = f"Gate {qg} OVERRIDDEN by {actor}: waived {waive_gates}."
         if hasattr(c, "save_run"):

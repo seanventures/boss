@@ -315,10 +315,12 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
   return { data, error, loading: loading && data === null && !error, refresh };
 }
 
-export function floorUrl(projectId: string): string {
-  return `/v1/factory/floor?project_id=${encodeURIComponent(projectId)}`;
+/** `viewer` is the signed-in person: what they did reads "you" (`Stopped by you`). */
+export function floorUrl(projectId: string, viewer?: string): string {
+  return `/v1/factory/floor?project_id=${encodeURIComponent(projectId)}`
+    + (viewer ? `&viewer=${encodeURIComponent(viewer)}` : "");
 }
 
-export function useFactoryFloor(projectId: string, enabled = true): Polled<Floor> {
-  return usePolled(projectId && enabled ? floorUrl(projectId) : null, parseFloor, () => FLOOR_POLL_MS);
+export function useFactoryFloor(projectId: string, enabled = true, viewer?: string): Polled<Floor> {
+  return usePolled(projectId && enabled ? floorUrl(projectId, viewer) : null, parseFloor, () => FLOOR_POLL_MS);
 }

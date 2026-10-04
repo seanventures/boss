@@ -57,8 +57,8 @@ export function AgFaceStack({ roleKeys, size = 24, max = 4, states, label, decor
     <span className="ag-stack" data-size={size}
           {...(decorative ? { "aria-hidden": true as const }
             : { role: "img", "aria-label": label ?? roleKeys.map((k) => identityOf(k).name).join(", ") })}>
-      {shown.map((k) => (
-        <AgFace key={k} roleKey={k} size={size} state={states?.get(k) ?? "idle"} decorative />
+      {shown.map((k, i) => (
+        <AgFace key={`${k}:${i}`} roleKey={k} size={size} state={states?.get(k) ?? "idle"} decorative />
       ))}
       {more > 0 ? <span className="ag-stack-more" aria-hidden>+{more}</span> : null}
     </span>

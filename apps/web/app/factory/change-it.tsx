@@ -109,9 +109,9 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
   };
 
   return (
-    <div className="fx-sheet-back" data-testid="fx-change-it" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={box} className="fx-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-        <header className="fx-sheet-head">
+    <div className="fx-ck-sheet-back" data-testid="fx-change-it" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={box} className="fx-ck-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <header className="fx-ck-sheet-head">
           <h2 id={titleId} className="fx-sheet-title">Change it</h2>
           <button type="button" className="ag-link" onClick={onClose} aria-label="Close">×</button>
         </header>
@@ -138,16 +138,16 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
                 </button>
               ))}
             </span>
-            <label className="fx-field">
+            <label className="fx-ck-field">
               <span>What to change</span>
               <textarea className="textarea" rows={3} value={message} onChange={(e) => setMessage(e.target.value)}
                         data-testid="fx-change-what" />
             </label>
-            <label className="fx-field">
+            <label className="fx-ck-field">
               <span>Done when</span>
               <input className="input" value={expected} onChange={(e) => setExpected(e.target.value)} data-testid="fx-change-done" />
             </label>
-            <label className="fx-field">
+            <label className="fx-ck-field">
               <span>Run through</span>
               <select className="mr-select" value={through} onChange={(e) => setThrough(e.target.value)} data-testid="fx-change-through">
                 <option value="">Inline</option>

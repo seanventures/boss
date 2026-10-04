@@ -47,7 +47,10 @@ export async function waiveChecksAction(form: FormData): Promise<FloorResult> {
   try {
     const res = await client.overrideCodeTask(runId, gates, reason, field(form, "actor") || "executive_console");
     revalidatePath("/");
-    return { ok: true, url: res?.pull_request_url };
+    // The API answers 200 with `status: "error"` when the PR could not be opened.
+    const out = (res ?? {}) as { status?: string; detail?: string; pull_request_url?: string };
+    if (out.status === "error") return { ok: false, error: out.detail || "The PR could not be opened." };
+    return { ok: true, url: out.pull_request_url };
   } catch (e) {
     return { ok: false, error: said(e) };
   }

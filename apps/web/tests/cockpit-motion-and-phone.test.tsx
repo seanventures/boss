@@ -36,7 +36,7 @@ describe("motion has a still", () => {
     stubFetch(cockpit());
     await mount(view());
     expect(moving().length).toBeGreaterThan(0);
-    expect($$(".fx-row[data-enter]")).toHaveLength(0);
+    expect($$(".fx-ck-row[data-enter]")).toHaveLength(0);
   });
 
   for (const state of ["quiet", "budget_wait", "blocked"]) {
@@ -76,8 +76,8 @@ describe("motion has a still", () => {
   });
 
   it("the stylesheet stills every animation under reduced motion and when still", () => {
-    expect(CSS).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.fx-row\[data-enter\] \{ animation: none; \}/);
-    expect(CSS).toMatch(/\.fx-cockpit\[data-still\] \.fx-row\[data-enter\] \{ animation: none; \}/);
+    expect(CSS).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.fx-ck-row\[data-enter\] \{ animation: none; \}/);
+    expect(CSS).toMatch(/\.fx-cockpit\[data-still\] \.fx-ck-row\[data-enter\] \{ animation: none; \}/);
   });
 });
 
@@ -97,7 +97,7 @@ describe("at 390px", () => {
     stubFetch(cockpit());
     await mount(view());
     await click($('[data-testid="fx-more"]'));
-    expect($$('[data-testid="fx-menu"] .fx-phone-only').map((b) => b.textContent)).toEqual(["Steer", "Stop"]);
+    expect($$('[data-testid="fx-ck-menu"] .fx-phone-only').map((b) => b.textContent)).toEqual(["Steer", "Stop"]);
   });
 
   it("the stylesheet folds the Line, shows the list, keeps 44px targets and no page scroll", () => {
