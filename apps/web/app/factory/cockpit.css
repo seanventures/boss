@@ -4,7 +4,8 @@
    at any width: the Line scrolls inside its own box. */
 
 .fx-cockpit {
-  display: flex; flex-direction: column; gap: 12px; min-width: 0; max-width: 1280px; margin: 0 auto;
+  /* A stable width (walk D19): the page does not resize as rows open, fold or arrive. */
+  display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; max-width: 1280px; margin: 0 auto;
   padding: 0 16px 64px; color: var(--ink);
 }
 .fx-cockpit * { box-sizing: border-box; }
@@ -55,8 +56,11 @@
 .fx-strip { display: grid; gap: 8px; }
 
 /* the Line (header density) — sticky on desktop; the vertical list is the phone's. The bays are station-line.tsx's (factory.css). */
+/* STICKY UNDER THE CONSOLE'S TOP BAR (walk D6): `top: 0` slid the Line under the 62px bar.
+   The cockpit measures the Line into --fx-line-h so Outputs sticks below it, not under it. */
+.fx-cockpit { --fx-topbar: 62px; }
 .fx-line-wrap {
-  position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--border-soft);
+  position: sticky; top: var(--fx-topbar); z-index: 5; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--border-soft);
   overflow-x: auto; overscroll-behavior-x: contain;
 }
 .fx-face, .fx-face-wait { display: inline-flex; }
@@ -66,7 +70,6 @@
 .fx-stations-v { display: none; list-style: none; margin: 0; padding: 0; }
 
 /* body: Story 60 / Outputs 40 */
-.fx-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; align-items: start; }
 .fx-sec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .fx-sec-title { margin: 0; font-size: 11px; letter-spacing: 0.08em; font-weight: 650; color: var(--muted); }
 .fx-chip {
@@ -87,7 +90,8 @@ span.fx-row-face { cursor: default; }
 .fx-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .fx-row-what { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-verb { font-weight: 600; }
-.fx-quote { color: var(--ink-soft); }
+.fx-quote { color: var(--ink-soft); overflow-wrap: anywhere; white-space: normal; }
+.fx-credits { min-height: 30px; }
 .fx-row-right { font-size: 12px; color: var(--muted); white-space: nowrap; padding-top: 3px; }
 .fx-row-folds { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .fx-fold { display: inline-flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -108,7 +112,7 @@ span.fx-row-face { cursor: default; }
 @keyframes fx-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* Outputs */
-.fx-outputs { position: sticky; top: 96px; min-width: 0; outline: none; }
+.fx-outputs { position: sticky; top: calc(var(--fx-topbar) + var(--fx-line-h, 132px) + 8px); min-width: 0; outline: none; }
 .fx-ready { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--ink-soft); }
 .fx-ready[data-ready] { color: var(--green); }
 .fx-out-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--r); background: var(--card); }
@@ -143,6 +147,7 @@ span.fx-row-face { cursor: default; }
 
 /* Logs drawer */
 .fx-logs-toggle { align-self: flex-start; }
+.fx-logs, .fx-logs * { box-sizing: border-box; }
 .fx-logs {
   position: fixed; left: 0; right: 0; bottom: 0; height: 40vh; z-index: 60; display: flex; flex-direction: column;
   background: var(--card); border-top: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); outline: none;
@@ -212,7 +217,15 @@ span.fx-row-face { cursor: default; }
   .fx-row-right { grid-column: 3; padding-top: 0; }
   .fx-story-list { max-height: none; }
   .fx-cockpit .ag-btn, .fx-chip, .fx-ck-tab { min-height: 44px; }
-  .fx-logs { top: 0; height: auto; }
+  /* A full-screen sheet (walk D5): portalled to <body>, so the viewport is its box. */
+  .fx-logs { top: 0; bottom: 0; left: 0; right: 0; height: 100dvh; max-height: 100dvh; border-top: 0; }
+  .fx-logs .fx-ck-tab, .fx-logs .ag-link, .fx-logs select { min-height: 44px; }
+  /* ⋯ opens inline under the header, not as a floating popover off the edge (walk D18). */
+  .fx-ck-head .fx-ck-menu { position: static; width: 100%; box-shadow: none; margin-top: 4px; }
+  .fx-ck-head .fx-pop-anchor { flex-wrap: wrap; }
+  .fx-actions { flex-wrap: wrap; }
+  .fx-ck-menu > button, .fx-ck-menu > a { min-height: 44px; }
+  .fx-row-what { white-space: normal; }
   .fx-ck-app { max-width: 100%; }
   .fx-ck-title { max-width: 100%; }
   .fx-confirm { right: auto; left: 0; white-space: normal; }

@@ -20,7 +20,7 @@ import { DeploymentLine } from "./legacy-build-parts";
 import { AgFaceStack } from "../agents/agent-face";
 import { nameOf, RunFace } from "../agents/run-face";
 import { resolveComment, stopPreview } from "./cockpit-actions";
-import { kilo, money, whoName } from "./cockpit-util";
+import { costWord, kilo, money, whoName } from "./cockpit-util";
 
 export type OutputKey = "pr" | "checks" | "tests" | "changes" | "comments" | "preview" | "deploy" | "cost";
 
@@ -270,17 +270,22 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   const p = c.outputs.preview;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Pressed and not yet read back: it says so at once (walk D9, D10), not after the boot.
+  const [starting, setStarting] = useState(false);
   const start = async () => {
     setBusy(true);
     setError("");
+    setStarting(true);
+    showToast("success", "Preview starting");
     const form = new FormData();
     form.set("run_id", c.run.id);
     form.set("actor", actor);
     const res = await callAction(startPreviewAction)(null, form);
     setBusy(false);
-    if (res?.error) setError(res.error);
-    else { showToast("success", "Preview starting"); notifyChanged("previews"); onRefresh(); }
+    if (res?.error) { setError(res.error); setStarting(false); }
+    else { notifyChanged("previews"); onRefresh(); }
   };
+  const booting = p?.status === "starting" || (starting && (!p || p.status !== "running"));
   const stop = async () => {
     if (!p) return;
     setBusy(true);
@@ -293,6 +298,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   if (!p) {
     return (
       <span className="fx-out-links">
+        {booting ? <span className="fx-muted" data-testid="fx-preview-starting">Starting…</span> : null}
         <button type="button" className="ag-btn" disabled={busy || !canRun} data-testid="fx-preview-run"
                 title={canRun ? undefined : "Runs once the build has finished"} onClick={() => void start()}>
           Run preview
@@ -304,6 +310,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   const running = p.status === "running";
   return (
     <span className="fx-out-links">
+      {booting ? <span className="fx-muted" data-testid="fx-preview-starting">Starting…</span> : null}
       {running ? <a className="ag-link" href={previewWebHref(p.id)} target="_blank" rel="noreferrer" data-testid="fx-preview-open">Open ↗</a> : null}
       <button type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart" onClick={() => void start()}>Restart</button>
       {running ? <button type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</button> : null}
@@ -338,7 +345,7 @@ function CostBody({ c }: { c: Cockpit }) {
           <span>{whoName(a.roleKey)}</span>
           <span className="fx-muted">{a.turns} turns</span>
           <span className="fx-muted" title="Model input and output, in thousands">{kilo(a.tokens)}</span>
-          {c.metered && a.usd > 0 ? <span title="Metered model spend so far">{money(a.usd)}</span> : null}
+          {c.metered && costWord(a.usd) ? <span title="Metered model spend so far">{costWord(a.usd)}</span> : null}
         </span>
       ))}
       {c.metered && stations.length ? (

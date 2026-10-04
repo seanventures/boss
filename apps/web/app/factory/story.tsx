@@ -19,7 +19,7 @@ import type { Station, StationKey } from "../../lib/factory-floor";
 import type { ToolCalls } from "../../lib/agents-live-board";
 import { nameOf, RunFace } from "../agents/run-face";
 import { fetchTools } from "./cockpit-actions";
-import { clockOf, money, secondsWord, spanOf, whoName } from "./cockpit-util";
+import { clockOf, costWord, secondsWord, spanOf, whoName } from "./cockpit-util";
 
 
 /** `1 file` · `2 files`. */
@@ -118,9 +118,12 @@ function ActRow({ row, props, live, enter }: { row: StoryAct; props: StoryProps;
   const face = useRef<HTMLButtonElement>(null);
   const state = ACT_STATE[row.status] ?? "idle";
   const still = props.still || state === "idle";
-  const title = [row.title, row.seat ? `seat ${row.seat}` : "", row.round > 1 ? `round ${row.round}` : ""].filter(Boolean).join(" · ");
+  // `round n` only on a build that went round (walk D15): a stage re-opened for another reason
+  // on a build with no repair rounds is not a round.
+  const looped = props.stations.some((st) => st.rounds > 0);
+  const title = [row.title, row.seat ? `seat ${row.seat}` : "", looped && row.round > 1 ? `round ${row.round}` : ""].filter(Boolean).join(" · ");
   const right = [row.word, spanOf(row.startedAt, row.endedAt ?? null, row.endedAt ? null : Date.now()),
-    row.costUsd > 0 ? money(row.costUsd) : ""].filter(Boolean);
+    costWord(row.costUsd)].filter(Boolean);
   const authored = row.commentsAuthored > 0
     ? props.comments.filter((c) => c.authorRoleKey && c.authorRoleKey === row.roleKey && (!row.round || c.round === row.round))
     : [];
@@ -199,9 +202,12 @@ function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?:
       </span>
       <span className="fx-row-right">
         {row.what === "steered" ? (
-          row.appliedAt
-            ? <span data-testid="fx-steer-read">Read by {whoName(row.appliedRole)}</span>
-            : <span data-testid="fx-steer-queued" title="Agents read guidance between stations">Queued for next station</span>
+          row.word && !row.word.startsWith("Queued") && !row.word.startsWith("Read by")
+            // The server's last word on it: `Not read · build ended` (walk D11).
+            ? <span data-testid="fx-steer-unread" title="The build ended before the next station">{row.word}</span>
+            : row.appliedAt || row.word?.startsWith("Read by")
+              ? <span data-testid="fx-steer-read">{row.word ?? `Read by ${whoName(row.appliedRole)}`}</span>
+              : <span data-testid="fx-steer-queued" title="Agents read guidance between stations">Queued for next station</span>
         ) : null}
       </span>
     </li>
@@ -253,7 +259,7 @@ export function Story(props: StoryProps) {
     ...rows,
     // Guidance sent here and not echoed yet: shown at once, as queued (spec §4.5.6).
     ...pending.filter((p) => !rows.some((r) => r.type === "you" && r.what === "steered" && r.text === p.text))
-      .map((p): StoryYou => ({ type: "you", id: p.id, station: null, what: "steered", actor: props.viewer, text: p.text,
+      .map((p): StoryYou => ({ type: "you", id: p.id, station: currentStation(stations), what: "steered", actor: props.viewer, text: p.text,
                                at: p.at, appliedRole: null })),
   ];
   const shown = filter ? all.filter((r) => r.station === filter) : all;
@@ -279,14 +285,8 @@ export function Story(props: StoryProps) {
     if (atBottom.current) setUnseen(0);
   };
 
-  // Group under station heads, in the Line's order of first appearance.
   const label = (key: StationKey | null) => (key ? stations.find((s) => s.key === key)?.label ?? key : "");
-  const groups: { key: StationKey | null; rows: StoryRow[] }[] = [];
-  for (const r of shown) {
-    const last = groups[groups.length - 1];
-    const key = r.station ?? last?.key ?? null;
-    if (last && last.key === key) last.rows.push(r); else groups.push({ key, rows: [r] });
-  }
+  const groups = groupByStation(shown, stations);
 
   return (
     <section className="fx-story" aria-labelledby="fx-story-h" data-testid="fx-story">
@@ -321,6 +321,39 @@ export function Story(props: StoryProps) {
       ) : null}
     </section>
   );
+}
+
+/** The station the build is at: where guidance sent now is filed. */
+export function currentStation(stations: Station[]): StationKey | null {
+  for (const want of ["needs_you", "stuck", "working", "waiting"]) {
+    const hit = stations.find((st) => st.status === want);
+    if (hit) return hit.key;
+  }
+  const done = stations.filter((st) => st.status === "done");
+  return done.length ? done[done.length - 1].key : null;
+}
+
+/**
+ * The Story under ONE head per station, in the LINE'S order (walk D8): `Check` once, not again
+ * after `PR` because a test re-ran later. Inside a station, rows keep their time order. A row the
+ * server filed under no station goes with the row before it in time.
+ */
+export function groupByStation(rows: StoryRow[], stations: Station[]): { key: StationKey | null; rows: StoryRow[] }[] {
+  const order = new Map<string, number>(stations.map((st, i) => [st.key, i]));
+  const byKey = new Map<string, { key: StationKey | null; rows: StoryRow[]; first: number }>();
+  let prev: StationKey | null = null;
+  rows.forEach((r, i) => {
+    const key = r.station ?? prev;
+    prev = key;
+    const k = key ?? "";
+    const g = byKey.get(k) ?? { key, rows: [], first: i };
+    g.rows.push(r);
+    byKey.set(k, g);
+  });
+  const rank = (g: { key: StationKey | null; first: number }) =>
+    g.key === null ? -1 : order.get(g.key) ?? stations.length + g.first;
+  return [...byKey.values()].sort((a, b) => rank(a) - rank(b) || a.first - b.first)
+    .map(({ key, rows: rs }) => ({ key, rows: rs }));
 }
 
 /** Who a station's work belongs to, for an aria label: `Build, Forge, coding`. */

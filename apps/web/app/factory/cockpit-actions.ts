@@ -8,7 +8,9 @@
  * Retry, the preview and the Change-it proposal reuse the server actions the old Factory posted
  * (app/actions.ts), so the engine refuses here exactly what it refused there.
  */
+import { mapActivityLog } from "../../lib/activity-log";
 import { parseToolCalls, type ToolCalls } from "../../lib/agents-live-board";
+import { stepLogSentence } from "../workflows/step-run";
 
 export type Posted<T = Record<string, unknown>> = { ok: boolean; data?: T; error?: string; status?: number };
 
@@ -78,17 +80,24 @@ export async function fetchTools(projectId: string, actId: string): Promise<Tool
 
 export type LogLine = { id: string; at: string; title: string; agent: string; level: string; body: string };
 
-/** This build's log, oldest first, from the activity log (the same rows Activity log shows). */
+/** This build's log, oldest first, from the activity log (the same rows Activity log shows),
+ *  each said as a plain sentence by the run-step log's helper (walk D20): `Opened pull request
+ *  #842`, not `Code Task Pr Opened`. Bookkeeping rows are left out, repeats folded. */
 export async function fetchBuildLog(projectId: string, runId: string): Promise<LogLine[] | null> {
   try {
     const q = new URLSearchParams({ project_id: projectId, run_id: runId, order: "asc", limit: "200" });
     const r = await fetch(`/api/activity?${q.toString()}`, { cache: "no-store" });
     if (!r.ok) return null;
-    const body = (await r.json()) as { items?: Record<string, unknown>[] };
-    return (body.items ?? []).map((x, i) => ({
-      id: String(x.id ?? i), at: String(x.created_at ?? ""), title: String(x.title ?? ""),
-      agent: String(x.agent ?? ""), level: String(x.level ?? "info"), body: String(x.body ?? ""),
-    }));
+    const out: LogLine[] = [];
+    for (const item of mapActivityLog(await r.json(), projectId).items) {
+      if (item.level === "verbose") continue;
+      const title = stepLogSentence(item);
+      if (!title) continue;
+      const prev = out[out.length - 1];
+      if (prev && prev.title === title && prev.agent === item.agent) continue;
+      out.push({ id: item.id, at: item.createdAt, title, agent: item.agent, level: item.level || "info", body: item.body });
+    }
+    return out;
   } catch {
     return null;
   }

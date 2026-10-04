@@ -280,7 +280,8 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previ
   return (
     <div className="fx" data-testid="fx">
       <header className="fx-head" hidden={!!url.build}>
-        <h2 className="fx-title">Factory</h2>
+        {/* The console title already says Factory (walk D19): this heading is for screen readers. */}
+        <h2 className="ag-sr">Factory</h2>
         <span className="fx-tabs" role="tablist" aria-label="Factory views">
           <button type="button" role="tab" aria-selected={url.view === "floor"} className="fx-tab" data-testid="fx-view-floor"
                   title="What needs you and what's building" onClick={() => setView("floor")}>Floor</button>

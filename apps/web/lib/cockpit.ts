@@ -43,6 +43,9 @@ export type StoryYou = {
   what: "steered" | "approved_plan" | "waived" | "retried" | "stopped" | string;
   actor: string; text?: string; at: string;
   appliedAt?: string; appliedActId?: string; appliedRole: string | null; count?: number;
+  /** The server's word for a steer: `Queued for next station` · `Read by <name>` ·
+   *  `Not read · build ended`. Absent from an older API (then derived from appliedAt). */
+  word?: string;
 };
 export type StoryBoss = {
   type: "boss"; id: string; station: StationKey | null;
@@ -135,7 +138,7 @@ export function parseStory(w: unknown): StoryRow {
   if (type === "you") {
     return { type: "you", id: str(o.id), station: station(o.station), what: str(o.what), actor: str(o.actor),
              text: opt(o.text), at: str(o.at), appliedAt: opt(o.applied_at), appliedActId: opt(o.applied_act_id),
-             appliedRole: roleOf(o.applied_role), count: optNum(o.count) };
+             appliedRole: roleOf(o.applied_role), count: optNum(o.count), word: opt(o.word) };
   }
   if (type === "boss") {
     return { type: "boss", id: str(o.id), station: station(o.station), what: str(o.what), text: str(o.text),

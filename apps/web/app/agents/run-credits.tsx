@@ -183,8 +183,12 @@ export function CreditsDialog({ chain, runId, projectId, viewer, title, onClose 
  * The run header's `Credits` button. Hidden until the run has signed work to credit. Opens by
  * itself once when a run you are watching goes from live to finished.
  */
-export function CreditsButton({ chain, runId, projectId, viewer, title, live }: {
+export function CreditsButton({ chain, runId, projectId, viewer, title, live, autoOpen = true, className }: {
   chain: Chain | null; runId: string; projectId: string; viewer: string; title: string; live: boolean;
+  /** Open by itself at the finish (the run view). The Factory cockpit never pops it. */
+  autoOpen?: boolean;
+  /** Its look where a tag would read as disabled (the cockpit header: a real button). */
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   // Seen live in this view. The chain's last read can land after the run's status flips, so the
@@ -193,16 +197,16 @@ export function CreditsButton({ chain, runId, projectId, viewer, title, live }: 
   const hasWork = !!chain && chain.acts.some((a) => a.roleKey);
   useEffect(() => {
     if (live) { sawLive.current = true; return; }
-    if (sawLive.current && hasWork) {
+    if (autoOpen && sawLive.current && hasWork) {
       sawLive.current = false;
       if (!shownBefore(runId)) { markShown(runId); setOpen(true); }
     }
-  }, [live, hasWork, runId]);
+  }, [live, hasWork, runId, autoOpen]);
   const close = useCallback(() => setOpen(false), []);
   if (!chain || !hasWork) return null;
   return (
     <>
-      <button type="button" className="wf-tag ag-credits-btn" data-testid="ag-credits-open"
+      <button type="button" className={className ?? "wf-tag ag-credits-btn"} data-testid="ag-credits-open"
               data-tip="Who made this run" aria-haspopup="dialog"
               onClick={() => { markShown(runId); setOpen(true); }}>
         Credits

@@ -51,7 +51,7 @@
 .fx-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .fx-row {
   display: grid; grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) minmax(170px, auto) 56px auto;
-  align-items: center; gap: 12px; min-height: 56px; padding: 6px 12px; cursor: pointer; min-width: 0;
+  align-items: center; gap: 10px; min-height: 44px; padding: 4px 12px; cursor: pointer; min-width: 0;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .fx-row:hover { border-color: var(--accent-line); }
@@ -83,7 +83,13 @@
 .fx-line { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; min-width: 0; overflow: hidden; }
 .fx-bay { display: inline-flex; align-items: center; flex: none; position: relative; }
 .fx-bay-face { display: inline-flex; align-items: center; position: relative; }
-.fx-edge { width: 18px; margin: 0 2px; }
+.fx-edge { width: 10px; margin: 0 1px; }
+/* The storm at a glance (walk D22): the line wrapper, and BOSS's hourglass while it waits. */
+.fx-row-line { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
+.fx-wait {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%;
+  border: 1.5px dashed var(--amber); color: var(--amber);
+}
 .fx-rounds {
   position: absolute; left: 50%; top: -4px; transform: translateX(-50%); padding: 0 3px; border-radius: 6px;
   background: var(--surface); color: var(--amber); font-size: 0.68rem; font-weight: 700; font-variant-numeric: tabular-nums;
@@ -171,7 +177,7 @@
     grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name line" "now go"; gap: 4px 10px;
   }
   .fx-row-name { grid-area: name; }
-  .fx-row > .fx-line { grid-area: line; }
+  .fx-row > .fx-row-line { grid-area: line; }
   .fx-row-now { grid-area: now; }
   .fx-row-go, .fx-prebuild > a { grid-area: go; min-height: 44px; min-width: 44px; justify-content: center; }
   .fx-row-cost { display: none; }
