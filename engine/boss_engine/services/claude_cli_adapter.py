@@ -307,14 +307,17 @@ class CliChatBrain:
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
     ) -> Tuple[str, str, dict]:
-        full = (f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
+        # A ONE-SHOT TEXT RESPONSE IS A GENERATION, on the same lean form as the plain answer:
+        # for the Claude CLI that is its own short system prompt and nothing of Claude Code's
+        # toolbelt (ClaudeCliAdapter._invoke_plain); every other CLI gets the prompt as before.
+        #
         # EVERY CLI CHAT ENGINE PASSES THROUGH HERE, which is why the capacity observation
         # sits on the base rather than in each adapter's own raise. The chat and panel path
         # reports no llm_calls row at all, so the hook in record_llm_call — which covers the
         # BUILD path — never saw a panel failure: a subscription hit its weekly cap, the
         # meeting stalled for fifteen minutes, and nothing anywhere recorded why.
         try:
-            data = self._invoke(full)
+            data = self._invoke_plain(system_prompt or "", prompt)
         except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged
             self._observe_capacity(ok=False, error=str(exc))
             raise
@@ -337,7 +340,7 @@ class CliChatBrain:
         return (data.get("result") or ""), self._usage(data)
 
     def _invoke_plain(self, system_prompt: str, prompt: str) -> dict:
-        return self._invoke(f"{system_prompt}\n\n{prompt}")
+        return self._invoke(f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
 
     def _observe_capacity(self, *, ok: bool, error: Optional[str]) -> None:
         """Fold this call's outcome into what BOSS knows about the provider's capacity.
@@ -388,17 +391,84 @@ class ClaudeCliAdapter(CliChatBrain):
     # "MultiEdit" matches no known tool' — while it had added tools the list never named
     # (Cron*, EnterWorktree, DesignSync, …: 26 built-ins, measured on boss-1, 0 with this flag).
     # (An empty --allowedTools does NOT disable server tools like WebSearch; --tools "" does.)
-    _NO_BUILTIN_TOOLS = ("--tools", "")
+    #
+    # AND NO TOOLBELT OF ITS OWN BEYOND THE BUILT-INS. `--tools ""` leaves every MCP server the
+    # CLI finds in its own config — and the connectors a claude.ai login brings — loaded and
+    # CALLABLE (asked on a Mac with the flag: "Yes — I currently have callable tools (the boss
+    # MCP tool set and the claude_ai_Claude_Docs tool set)"). `--strict-mcp-config` with no
+    # `--mcp-config` loads none; `--disable-slash-commands` drops the skills. Every call: BOSS
+    # never wants the CLI to reach for anything itself.
+    _NO_BUILTIN_TOOLS = ("--strict-mcp-config", "--disable-slash-commands", "--tools", "")
 
     #: THE FIRST ANSWER'S PER-CALL OVERHEAD, MEASURED (this Mac, Claude Code 2.1.284, a
     #: one-word reply): Claude Code's own system prompt is ~34,000 input tokens on every `-p`
     #: call; with `--system-prompt` it is ~450. An answer-from-the-record call has no use for an
     #: agentic coding persona, and no tools, so it runs on its own short prompt, one turn, and
     #: with no MCP servers loaded (subject_answer.py).
-    _PLAIN_FLAGS = ("--max-turns", "2", "--strict-mcp-config", "--disable-slash-commands")
+    #:
+    #: EVERY ONE-SHOT GENERATION RUNS THIS WAY, not only the first answer: `create_text_response`
+    #: (a workflow's `model.generate_text`, meetings, routing) and `stream_text_response` (talks).
+    #: They used to run under Claude Code's own system prompt — an agentic coding persona whose
+    #: "auto memory" section says when to read memories, with the user's CLAUDE.md and every MCP
+    #: server's instructions — while holding no tool to act on any of it. On boss-1 a "Trend to
+    #: content" assess step, asked what "we" have standing to say, answered
+    #:     I'll check memory for context on who "we" are …  **Tool: skill**
+    #: and that preamble SUCCEEDED as the step's text; the next step wrote "no angle" about it.
+    _PLAIN_FLAGS = ("--max-turns", "2")
+
+    #: The system prompt a generation runs on when its caller gives none. It replaces Claude
+    #: Code's own, so nothing in the call mentions a tool, a file or a memory to go and read.
+    GENERATION_SYSTEM = (
+        "You write the answer you are asked for, directly, as plain text. Everything you need "
+        "is in the request: you have no tools, no files and no memory in this call. Do not "
+        "announce what you will do and do not try to look anything up — reply with the answer "
+        "itself.")
 
     def _invoke_plain(self, system_prompt: str, prompt: str) -> dict:
-        return self._invoke(prompt, system_prompt=system_prompt)
+        return self._invoke(prompt, system_prompt=(system_prompt or self.GENERATION_SYSTEM))
+
+    @staticmethod
+    def _tool_attempt(data: Any) -> Optional[str]:
+        """What the CLI's OWN result says about a tool attempt in a call that had no tools, or
+        None when the model answered in one turn. Read from its metadata, never from the text:
+        `permission_denials` (it named a tool and was refused), `num_turns` above one (a tool
+        round-trip), `stop_reason: tool_use`, `terminal_reason: max_turns`, or any subtype but
+        success. Measured on Claude Code 2.1.284: a denied MCP call that ends the reply comes back
+        `subtype: success, num_turns: 2, permission_denials: [...]` and exit 0, its `result` the
+        model's last words ("Permission for that tool wasn't granted, so I'll stop here."); one
+        cut at the turn ceiling is `error_max_turns`, `is_error: true`, exit 1."""
+        if not isinstance(data, dict) or data.get("type", "result") != "result":
+            return None
+        said: list[str] = []
+        denied = [str((d or {}).get("tool_name") or "a tool")
+                  for d in (data.get("permission_denials") or []) if isinstance(d, dict)]
+        if denied:
+            said.append("tried " + ", ".join(dict.fromkeys(denied)))
+        if str(data.get("stop_reason") or "") == "tool_use":
+            said.append("stopped on a tool call")
+        if str(data.get("terminal_reason") or "") == "max_turns" \
+                or str(data.get("subtype") or "") == "error_max_turns":
+            said.append("hit the turn limit")
+        try:
+            turns = int(data.get("num_turns") or 0)
+        except (TypeError, ValueError):
+            turns = 0
+        if turns > 1:
+            said.append(f"took {turns} turns")
+        return "; ".join(said) or None
+
+    @classmethod
+    def _judge_generation(cls, data: Any) -> None:
+        """A generation that reached for a tool did not answer: raise a model failure
+        (model_failures.NO_DIRECT_ANSWER) rather than hand its preamble on as the answer."""
+        from .model_failures import NO_DIRECT_ANSWER
+
+        attempt = cls._tool_attempt(data)
+        if attempt:
+            raise RuntimeError(
+                f"the model {NO_DIRECT_ANSWER} ({attempt}): a text generation has no tools, so "
+                f"what it returned is not an answer — "
+                f"{str((data or {}).get('result') or '')[:160]!r}")
 
     def _command(self, prompt: str, system_prompt: Optional[str], *,
                  output: tuple[str, ...] = ("--output-format", "json")) -> tuple[list[str], bool]:
@@ -425,6 +495,8 @@ class ClaudeCliAdapter(CliChatBrain):
             # It was latent and count-sensitive: 52 registered tools answered fine and the
             # 53rd tipped it over, so it would have looked like whichever tool was added last
             # broke the console. Leave room to recover from one stray attempt.
+            # A generation (its own --system-prompt) has no BOSS tool list to recover into, so a
+            # tool attempt there is judged as a failure instead (_judge_generation).
             *(("--max-turns", "6") if system_prompt is None else self._PLAIN_FLAGS),
             # VARIADIC: `--tools` takes every argument up to the next flag, so it never sits
             # last before a positional prompt — the prompt is passed with -p above.
@@ -483,7 +555,16 @@ class ClaudeCliAdapter(CliChatBrain):
             ) from exc
         except subprocess.TimeoutExpired as exc:
             raise self._timed_out(timeout, own_timeout) from exc
+        generation = system_prompt is not None
         if proc.returncode != 0:
+            if generation:
+                # A run cut at the turn ceiling exits 1 with its result on stdout. That is the
+                # model's turn failing, not the backend being down — "exited 1" would read as
+                # unavailable to FallingBackAdapter and move the call to another brain.
+                try:
+                    self._judge_generation(json.loads(proc.stdout or ""))
+                except ValueError:
+                    pass
             raise RuntimeError(
                 f"claude CLI exited {proc.returncode}: {(proc.stderr or proc.stdout or '')[:300]}"
             )
@@ -491,6 +572,8 @@ class ClaudeCliAdapter(CliChatBrain):
             data = json.loads(proc.stdout)
         except Exception as exc:
             raise RuntimeError(f"claude CLI returned non-JSON: {proc.stdout[:300]}") from exc
+        if generation:
+            self._judge_generation(data)
         if data.get("is_error"):
             raise RuntimeError(f"claude CLI error: {data.get('result') or data.get('subtype')}")
         return data
@@ -510,15 +593,16 @@ class ClaudeCliAdapter(CliChatBrain):
         Same prompt, flags, credential, timeout and capacity observation as the one-shot form;
         closing the generator (the person pressed Stop, or left) ends the CLI process.
         """
-        full = (f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
+        # A generation, on the same lean form as create_text_response (_invoke_plain).
         try:
-            yield from self._stream_confirming_login(full)
+            yield from self._stream_confirming_login(
+                prompt, system_prompt or self.GENERATION_SYSTEM)
         except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged
             self._observe_capacity(ok=False, error=str(exc))
             raise
         self._observe_capacity(ok=True, error=None)
 
-    def _stream_confirming_login(self, prompt: str) -> Iterator[Any]:
+    def _stream_confirming_login(self, prompt: str, system_prompt: str) -> Iterator[Any]:
         """`_stream`, asked once more when it is refused as a login before saying anything —
         the streaming form of model_failures.confirm_login_rejection. Once text has been
         shown, nothing is repeated: the person already has part of an answer."""
@@ -526,7 +610,7 @@ class ClaudeCliAdapter(CliChatBrain):
 
         said_anything = False
         try:
-            for piece in self._stream(prompt):
+            for piece in self._stream(prompt, system_prompt):
                 said_anything = said_anything or isinstance(piece, str)
                 yield piece
             return
@@ -534,11 +618,11 @@ class ClaudeCliAdapter(CliChatBrain):
             if said_anything or not is_login_rejected(error):
                 raise
         time.sleep(LOGIN_RECHECK_SECONDS)
-        yield from self._stream(prompt)
+        yield from self._stream(prompt, system_prompt)
 
-    def _stream(self, prompt: str) -> Iterator[Any]:
+    def _stream(self, prompt: str, system_prompt: str) -> Iterator[Any]:
         timeout, own_timeout = self._timeouts()
-        cmd, via_stdin = self._command(prompt, None, output=self._STREAM_OUTPUT)
+        cmd, via_stdin = self._command(prompt, system_prompt, output=self._STREAM_OUTPUT)
         try:
             proc = subprocess.Popen(
                 low_priority(cmd),
@@ -598,6 +682,8 @@ class ClaudeCliAdapter(CliChatBrain):
         if result is None:
             said = ("".join(errors) or "\n".join(raw))[:300]
             raise RuntimeError(f"claude CLI exited {proc.returncode}: {said}")
+        # Before is_error: a run cut at the turn ceiling is the model's failure, named as such.
+        self._judge_generation(result)
         if result.get("is_error"):
             raise RuntimeError(
                 f"claude CLI error: {result.get('result') or result.get('subtype')}")
