@@ -75,12 +75,12 @@ def test_the_server_sees_the_token_and_no_read_contains_it(client, fake_server):
 def test_save_and_test_a_typed_token_stores_nothing(client, fake_server):
     before = client.get("/v1/mcp/servers", params={"project_id": PROJECT}).json()["items"]
     tested = client.post("/v1/mcp/servers/test", json={
-        "project_id": PROJECT, "url": "https://mcp.example/mcp",
+        "project_id": PROJECT, "actor": "ceo", "url": "https://mcp.example/mcp",
         "auth": {"type": "bearer", "secret": SECRET}})
     assert tested.status_code == 200 and tested.json()["ok"] is True
     assert [t["name"] for t in tested.json()["tools"]] == ["list_issues"]
     wrong = client.post("/v1/mcp/servers/test", json={
-        "project_id": PROJECT, "url": "https://mcp.example/mcp",
+        "project_id": PROJECT, "actor": "ceo", "url": "https://mcp.example/mcp",
         "auth": {"type": "bearer", "secret": "wrong-token-0000"}})
     assert wrong.json()["ok"] is False and wrong.json()["error"].startswith("401")
     after = client.get("/v1/mcp/servers", params={"project_id": PROJECT}).json()["items"]

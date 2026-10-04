@@ -56,6 +56,7 @@ class CrewBody(KitBody):
 
 class McpTestBody(BaseModel):
     project_id: str
+    actor: Optional[str] = None
     url: str
     auth: Optional[dict[str, Any]] = None
 
@@ -315,8 +316,10 @@ def build_kit_router(
         """Test a URL and sign-in as TYPED. Stores nothing (Save & test, then register)."""
         from boss_engine.services.mcp_registry import test_entered
 
+        # A WRITER'S CHECK, not a reader's: it makes the API call a URL somebody typed, which is
+        # the first half of registering a server.
         with begin(engine) as connection:
-            require_reader(connection, body.project_id)
+            require_write_actor(connection, body.project_id, body.actor, "pack_manage")
         try:
             return test_entered(settings(), None, body.project_id, body.url, body.auth)
         except McpServerError as error:
