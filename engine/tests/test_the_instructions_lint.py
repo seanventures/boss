@@ -33,3 +33,28 @@ def test_frontmatter_and_tokens():
     assert head == {"name": "a-b", "description": "Does X"} and rest == "Body"
     assert parse_frontmatter("No front") == ({}, "No front")
     assert tokens_est(4000) == 1000 and tokens_est(1) == 1
+
+
+def _corpora():
+    """HOSTILE and BENIGN from the API test, read without importing it (it needs a database)."""
+    import ast
+    import pathlib
+
+    path = (pathlib.Path(__file__).resolve().parents[2] / "apps" / "api" / "tests"
+            / "test_instructions_cannot_widen_what_an_agent_may_do.py")
+    out = {}
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and node.targets[0].id in ("HOSTILE", "BENIGN"):
+            out[node.targets[0].id] = ast.literal_eval(node.value)
+    return out["HOSTILE"], out["BENIGN"]
+
+
+def test_the_whole_corpus_both_ways():
+    """Every hostile line is refused on its own line; the whole benign checklist passes (D1/D2)."""
+    hostile, benign = _corpora()
+    assert len(hostile) >= 40
+    missed = [line for line in hostile
+              if [e["line"] for e in lint_instructions(normalise(f"# Rules\n{line}"))[0]][:1] != [2]]
+    assert missed == []
+    errors, _ = lint_instructions(normalise(benign))
+    assert errors == [], errors

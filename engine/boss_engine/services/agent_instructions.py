@@ -144,20 +144,61 @@ _OVERRIDE = [
     re.compile(r"\byou\s+are\s+(?:now\s+)?(?:unrestricted|unfiltered|free\s+of)\b", re.I),
     re.compile(r"\breveal\b.{0,20}\b(?:your|the)\s+(?:prompt|instructions)\b", re.I),
 ]
+#: The privileged acts a grant would name. A line ADDRESSED TO THE MODEL that says it may do one
+#: of these is a grant written in prose, whatever the verb in front.
+_ACT = (r"(?:merge|deploy|publish|push|release|ship|delete|drop|approve|send|force[- ]push|"
+        r"bypass|skip|override|disable|run\s+in\s+prod\w*|rotate|revoke)")
 _REACH = [
+    # "you can / may / are allowed to / are permitted to / are authorised to / have permission to
+    #  <act>", with "now", "also", "always", "just" or "freely" in between.
+    re.compile(r"\byou(?:'re|\s+are)?\s+(?:(?:now|also|always|just|freely|then)\s+)*"
+               r"(?:can|may|could|are\s+(?:now\s+)?(?:allowed|permitted|authori[sz]ed|free|cleared)\s+to|"
+               r"have\s+(?:been\s+)?(?:permission|clearance|authority)\s+to|"
+               r"(?:have\s+been|were)\s+(?:permitted|authori[sz]ed|allowed|cleared)\s+to)\s+"
+               r"(?:(?:now|also|always|just|freely|directly)\s+)*" + _ACT + r"\b", re.I),
     re.compile(r"\byou\s+(?:are|have\s+been)\s+(?:now\s+)?(?:permitted|authori[sz]ed|allowed)\s+to\b",
                re.I),
     re.compile(r"\byou\s+(?:now\s+)?have\s+(?:admin|root|full|unrestricted)\s+"
                r"(?:access|rights|privileges|permissions)\b", re.I),
     re.compile(r"\b(?:grant|give)\s+yourself\b", re.I),
-    re.compile(r"\bcan\s+now\s+(?:merge|deploy|publish|push|delete|send)\b", re.I),
+    re.compile(r"\bcan\s+now\s+" + _ACT + r"\b", re.I),
 ]
+#: "Merge it yourself", "approve your own PR", "deploy on your own" — unless negated before it
+#: ("Never merge your own PR" is a restraint).
+_SELF = re.compile(r"\b" + _ACT + r"\b[^.;]{0,25}\b(?:yourself|on\s+your\s+own|"
+                   r"your\s+own\s+(?:pr|pull|change|code))", re.I)
 _GATES = [
     re.compile(r"\b(?:override|bypass|skip|disable|turn\s+off)\s+(?:your|the|all|any)\s+"
                r"(?:rules|guardrails|safety|approvals?|reviews?|gates?|limits?|checks?)\b", re.I),
     re.compile(r"\b(?:merge|deploy|publish|push|release)\b.{0,30}\bwithout\b.{0,20}"
                r"\b(?:review|approval|a\s+person|asking)\b", re.I),
+    # "Approvals are not required for you", "review is no longer needed".
+    re.compile(r"\b(?:approvals?|reviews?|sign-?offs?|permission|a\s+person|human\s+review)\s+"
+               r"(?:is|are|isn'?t|aren'?t)\s+(?:not\s+|no\s+longer\s+)?(?:required|needed|necessary)\b"
+               r"|\b(?:approvals?|reviews?)\s+(?:is|are)\s+optional\b", re.I),
+    # "nobody needs to review", "no one has to approve".
+    re.compile(r"\b(?:nobody|no\s*-?\s*one|no\s+person|no\s+human)\s+(?:needs?|has|have|must|should)"
+               r"(?:\s+to)?\s+(?:review|approve|check|sign)", re.I),
 ]
+#: PRECEDENCE: text that puts itself above BOSS's rules or the agent's grants.
+_PRECEDENCE = [
+    re.compile(r"\b(?:above|over|before|instead\s+of|ahead\s+of|outrank\w*|supersed\w*|override\w*)\s+"
+               r"(?:all\s+|any\s+)?(?:of\s+)?(?:the\s+)?(?:boss(?:'s)?|system|your\s+other|other|default)\s+"
+               r"(?:rules|instructions|policy|policies|guardrails|prompt)\b", re.I),
+    re.compile(r"\bhighest[- ]priority\s+(?:instructions?|rules?)\b", re.I),
+    re.compile(r"\btakes?\s+precedence\b", re.I),
+]
+#: A line that DESCRIBES what to look for ("Flag any code that can skip the review step",
+#: "Check that the deploy script cannot run without approval") names a gate as the thing to
+#: find, not as an order. Such a line is not read for gate-skipping (_GATES, _SKIPS_A_GATE); the
+#: reach and precedence shapes, which address the model ("you can …"), still apply to it.
+_DESCRIBES = re.compile(
+    r"^\s*(?:[-*+]|\d+[.)])?\s*(?:\[[ x]\]\s*)?(?:flag|check|look\s+for|verify|find|report|ensure|"
+    r"confirm|make\s+sure|test|detect|spot|catch|watch\s+for|note|warn\s+(?:on|about)|call\s+out|"
+    r"block|reject|refuse|question)\b", re.I)
+#: …unless it then turns into an order ("Check the diff; then skip the review").
+_THEN_ORDERS = re.compile(r"[;:]|,\s*(?:then|and\s+then)\b|\band\s+then\b|\bthen\s+(?:skip|merge|deploy)", re.I)
+
 #: A line that negates something: only then is the persona's _NEGATES_A_GATE read ("Never wait
 #: for approval"). Applied to every line it would refuse "ask a person before any deploy".
 _NEGATION = re.compile(r"\b(?:never|don'?t|do\s+not|no\s+need\s+to|stop)\b", re.I)
@@ -186,10 +227,19 @@ def _refusal(line: str) -> Optional[str]:
     """The phrase on this line that tries to change what the agent may do, or None."""
     from .agent_persona import _NEGATES_A_GATE, _SKIPS_A_GATE
 
-    for pattern in (*_OVERRIDE, *_REACH, *_GATES, _SKIPS_A_GATE):
+    for pattern in (*_OVERRIDE, *_REACH, *_PRECEDENCE):
         found = pattern.search(line)
         if found:
             return found.group(0)
+    found = _SELF.search(line)
+    if found and not _NEGATION.search(line[:found.start()]):
+        return found.group(0)
+    describes = bool(_DESCRIBES.search(line)) and not _THEN_ORDERS.search(line)
+    if not describes:
+        for pattern in (*_GATES, _SKIPS_A_GATE):
+            found = pattern.search(line)
+            if found:
+                return found.group(0)
     if _NEGATION.search(line):
         found = _NEGATES_A_GATE.search(line)
         # "Never refuse…", "Don't wait for approval…": a grant written backwards. A plain
