@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterator, Optional, Tuple
 
@@ -122,11 +123,9 @@ class CliChatBrain:
         one interface a customer talks to was the one that could not reach the model.
         """
         from .agent_env import agent_environment
-        from .cli_harness import stored_credential
+        from .cli_harness import claude_login_token
 
-        token = str(getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
-        if not token and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
+        token = claude_login_token(self.settings)
         extra = {"CLAUDE_CODE_OAUTH_TOKEN": token} if token else {}
         env = agent_environment(os.environ, extra)
         if token:
@@ -456,6 +455,13 @@ class ClaudeCliAdapter(CliChatBrain):
         return RuntimeError(f"claude CLI timed out after {int(timeout)}s")
 
     def _invoke(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
+        # One "Not logged in" is a report, not a verdict (model_failures.confirm_login_rejection).
+        from .model_failures import confirm_login_rejection
+
+        return confirm_login_rejection(
+            lambda: self._invoke_once(prompt, system_prompt=system_prompt))
+
+    def _invoke_once(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
         timeout, own_timeout = self._timeouts()
         cmd, via_stdin = self._command(prompt, system_prompt)
         try:
@@ -506,11 +512,29 @@ class ClaudeCliAdapter(CliChatBrain):
         """
         full = (f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
         try:
-            yield from self._stream(full)
+            yield from self._stream_confirming_login(full)
         except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged
             self._observe_capacity(ok=False, error=str(exc))
             raise
         self._observe_capacity(ok=True, error=None)
+
+    def _stream_confirming_login(self, prompt: str) -> Iterator[Any]:
+        """`_stream`, asked once more when it is refused as a login before saying anything —
+        the streaming form of model_failures.confirm_login_rejection. Once text has been
+        shown, nothing is repeated: the person already has part of an answer."""
+        from .model_failures import LOGIN_RECHECK_SECONDS, is_login_rejected
+
+        said_anything = False
+        try:
+            for piece in self._stream(prompt):
+                said_anything = said_anything or isinstance(piece, str)
+                yield piece
+            return
+        except Exception as error:  # noqa: BLE001 — only a login refusal is looked at again
+            if said_anything or not is_login_rejected(error):
+                raise
+        time.sleep(LOGIN_RECHECK_SECONDS)
+        yield from self._stream(prompt)
 
     def _stream(self, prompt: str) -> Iterator[Any]:
         timeout, own_timeout = self._timeouts()
@@ -594,11 +618,9 @@ class ClaudeCliAdapter(CliChatBrain):
         one interface a customer talks to was the one that could not reach the model.
         """
         from .agent_env import agent_environment
-        from .cli_harness import stored_credential
+        from .cli_harness import claude_login_token
 
-        token = str(getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
-        if not token and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
+        token = claude_login_token(self.settings)
         extra = {"CLAUDE_CODE_OAUTH_TOKEN": token} if token else {}
         env = agent_environment(os.environ, extra)
         if token:

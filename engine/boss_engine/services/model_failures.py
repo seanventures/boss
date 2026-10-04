@@ -123,11 +123,84 @@ def is_login_rejected(error: object) -> bool:
     return any(term in text for term in _LOGIN_REJECTED) or bool(_HTTP_401.search(text))
 
 
+#: Kinds that are NOT failures: the work could not start yet, for a reason that clears by
+#: itself. Every surface that decides "fail or wait" asks `waiting_for`, so a new kind of wait
+#: added here waits everywhere — a workflow step (workflow_capability_runner._as_wait), a
+#: discovery (discovery_service.execute_discovery_job), a typed decision.
+WAIT_KINDS = frozenset({"budget_wait", "capacity_wait", "credential_store_wait"})
+
+#: The gateway's refusal when every concurrent lease on the source is held (model_gateway).
+CAPACITY_BUSY = "no concurrent lease capacity"
+
+
+def waiting_for(error: object, *, source_id: Optional[str] = None) -> Optional[dict]:
+    """The explained wait this failure really is, or None when it is a failure.
+
+    THE ONE CLASSIFICATION of transient-vs-terminal for model work. On boss-1 (2026-10-04)
+    three example workflows started together; the third discovery's stage found the Claude
+    subscription's one lease held by the other two and was FAILED with "Selected model source
+    has no concurrent lease capacity" — a queue, read as a verdict."""
+    said = explain(error, source_id=source_id)
+    return said if said["kind"] in WAIT_KINDS else None
+
+
+#: How long to wait before asking once more whether a refused login really is refused.
+LOGIN_RECHECK_SECONDS = 3.0
+
+
+def confirm_login_rejection(call, *, sleep=None):
+    """Run `call`; when it fails as a REJECTED LOGIN, run it once more before believing that.
+
+    A rejected login is the one failure every surface stops at for good — the run fails, Setup
+    shows the subscription broken, nothing retries — so a single report of it must not be
+    enough. On boss-1 one research call out of many concurrent ones said "Not logged in" while
+    the calls a few seconds either side of it succeeded on the same login. A second refusal is
+    a login that is really rejected; a success means it never was."""
+    try:
+        return call()
+    except Exception as error:  # noqa: BLE001 — only a login refusal is looked at again
+        if not is_login_rejected(error):
+            raise
+    import time
+
+    (sleep or time.sleep)(LOGIN_RECHECK_SECONDS)
+    return call()
+
+
 def explain(error: object, *, source_id: Optional[str] = None) -> dict:
     """{kind, headline, action, href, retry} for a failure. Never repeats a credential."""
     text = str(error or "")
     lowered = text.lower()
     who = provider_name(source_id)
+    #: "the Claude Code subscription", or "the model" when the source is not known.
+    the_source = who if who.startswith("the ") else f"the {who}"
+    # THE STORE HOLDING THE LOGIN DID NOT ANSWER (cli_harness.CredentialStoreUnavailable).
+    # Before the login check: the login was never tried, so nothing about it was rejected.
+    if "could not reach its secret store to read" in lowered:
+        return {
+            "kind": "credential_store_wait",
+            "headline": "Waiting for BOSS's secret store to answer, so the model's login can "
+                        "be read.",
+            "action": "Nothing to do — it resumes by itself when the store answers. If this "
+                      "keeps happening, check the secret store (Infisical) is running.",
+            "href": None, "retry": True,
+        }
+    if "boss could not read the stored" in lowered:
+        return {
+            "kind": "credential_unreadable",
+            "headline": f"BOSS could not read the login it stored for {the_source}.",
+            "action": f"Reconnect {the_source} in Setup → Model to store it again.",
+            "href": SETUP_HREF, "retry": False,
+        }
+    # EVERY LEASE ON THE SOURCE IS HELD BY OTHER WORK. A queue, not a verdict: it frees when
+    # that work's call settles (model_gateway.acquire).
+    if CAPACITY_BUSY in lowered:
+        return {
+            "kind": "capacity_wait",
+            "headline": f"Waiting for {the_source} — other work is using it right now.",
+            "action": "Nothing to do — it starts by itself when the work using it finishes.",
+            "href": None, "retry": True,
+        }
     if is_login_rejected(lowered):
         return {
             "kind": "login_rejected",

@@ -997,7 +997,7 @@ class TestALongConversationIsNotAnArgument:
         from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter
 
         body = (inspect.getsource(ClaudeCliAdapter._command)
-                + inspect.getsource(ClaudeCliAdapter._invoke))
+                + inspect.getsource(ClaudeCliAdapter._invoke_once))
         assert 'via_stdin = len(prompt.encode("utf-8", "ignore")) > 96_000' in body
         assert '*(("-p",) if via_stdin else ("-p", prompt))' in body
         assert "input=(prompt if via_stdin else None)" in body
@@ -1006,7 +1006,7 @@ class TestALongConversationIsNotAnArgument:
         """Unchanged for the common case: this is a ceiling, not a redesign."""
         from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter
 
-        body = inspect.getsource(ClaudeCliAdapter._invoke)
+        body = inspect.getsource(ClaudeCliAdapter._invoke_once)
         assert "stdin=(None if via_stdin else subprocess.DEVNULL)" in body
 
     def test_the_threshold_is_under_the_kernel_limit(self):
