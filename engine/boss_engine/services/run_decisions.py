@@ -30,7 +30,15 @@ WHAT A RUN OWNS. A decision belongs to a run when the run raised it for itself:
     "Workflow wfr_… is waiting at decision step …".
 A decision the run BORROWED — a panel's own PRD approval used as a spec-review gate — is the
 panel's, means something without the run, and is left alone. So is a decision another live run
-is still waiting on (create_blocking_decision can hand two runs one row for the same question).
+is still waiting on (only a borrowed one can be: see ONE GATE, ONE RUN below).
+
+ONE GATE, ONE RUN. Every decision a run raises to gate one of its steps is opened by
+`open_step_decision`, and belongs to exactly that run and step: the run identity is written into
+its recommendation, its question is kept distinct from another run's open card in words, and
+create_blocking_decision's "one open decision per cause" merge counts the run and step as part of
+the cause. Two runs of one workflow at the same Approval gate used to share ONE card, and one
+Approve released both. engine/tests/test_one_gate_one_run.py fails on any code that raises a
+step's decision any other way.
 
 Answering is guarded as well: `refusal_to_answer` is what DecisionService.transition asks before
 acting, so a card withdrawn here, or one whose run went some way this module did not see, is
@@ -45,7 +53,7 @@ from typing import Any, Mapping, Optional
 from sqlalchemy import bindparam, text
 
 from . import decision_actions
-from .core import emit_event
+from .core import create_blocking_decision, emit_event
 
 #: The terminal status of a decision whose run ended before anybody answered it.
 WITHDRAWN = "withdrawn"
@@ -73,6 +81,49 @@ def _recommendation(decision: Mapping[str, Any]) -> dict[str, Any]:
         except ValueError:
             rec = None
     return rec if isinstance(rec, dict) else {}
+
+
+def step_gate_question(connection, project_id: str, task_id: Optional[str], question: str,
+                       run_id: str, step_id: str) -> str:
+    """The question in words, kept distinct from another run's (or step's) open decision.
+
+    Two runs of one workflow ask the same words at the same step. A second open card with the
+    same words gets "(2)" — readable on the Approvals page, where a raw run id was not. The ids
+    stay in the recommendation, which is the evidence.
+    """
+    for n in range(1, 50):
+        candidate = question if n == 1 else f"{question} ({n})"
+        row = connection.execute(
+            text("SELECT recommendation->>'workflow_run_id' AS run_id, "
+                 "recommendation->>'step_id' AS step_id FROM decisions "
+                 "WHERE project_id=:p AND question=:q AND status='pending' "
+                 "AND task_id IS NOT DISTINCT FROM :t LIMIT 1"),
+            {"p": project_id, "q": candidate, "t": task_id},
+        ).mappings().first()
+        if row is None or (row["run_id"] == run_id and row["step_id"] == step_id):
+            return candidate
+    return f"{question} · {run_id[-8:]}"
+
+
+def open_step_decision(
+    connection, project_id: str, task_id: Optional[str], question: str,
+    recommendation: Mapping[str, Any], cost_summary: Mapping[str, Any], reason: str, *,
+    run_id: str, step_id: str, risk_tier: int = 2, default_action: str = "hold",
+) -> str:
+    """THE ONE WAY a decision that gates a run's step is raised: it belongs to that run+step.
+
+    Answering it releases only that run's step. The run identity goes in LAST, so a spec's own
+    recommendation cannot replace it, and the merge in create_blocking_decision then only ever
+    folds a repeat of this same run's same step into the open card.
+    """
+    if not run_id or not step_id:
+        raise ValueError("a step's decision needs the run and the step it gates")
+    rec = {**dict(recommendation), "workflow_run_id": run_id, "step_id": step_id}
+    return create_blocking_decision(
+        connection, project_id, task_id,
+        step_gate_question(connection, project_id, task_id, question, run_id, step_id),
+        rec, dict(cost_summary), reason, risk_tier=risk_tier, default_action=default_action,
+    )
 
 
 def owning_run_id(connection, decision: Mapping[str, Any]) -> Optional[str]:

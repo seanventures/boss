@@ -1159,26 +1159,36 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             rollback_plan=[f"Deploy the previous healthy commit to {target.get('app_name')} "
                            "through the same governed path (Rollback in the console)."],
             risk_tier=1, approval_required=False, actor=actor)
-        decision_id = create_blocking_decision(
-            connection, project_id, None,
-            f"Deploy {owner}/{repo}@{short} to {host['name']} ({manifest.dir})?",
-            {"action": "deploy_stack", "deployment_id": deployment_id,
-             "changeset_id": changeset["id"], "target_id": target_id,
-             "repository": f"{owner}/{repo}", "ref": ref, "commit": commit,
-             "host": host["name"], "dir": manifest.dir, "steps": summary["steps"],
-             "env_keys": summary["env_keys"],
-             # Which BOSS secret each key carries to the host: the approver sees the names.
-             "env_secrets": dict(rendered["env_secrets"]),
-             "generated_env_keys": summary["generated_env_keys"],
-             # A workflow's deploy step has no gate of its own when it ships to a stack: THIS
-             # decision is that gate. So it carries the step's approver and where it came
-             # from, and approving it here is approving the release (one approval, not two).
-             **({"approver_role": approver_role} if approver_role else {}),
-             **({"workflow_run_id": workflow_run_id, "step_id": workflow_step_id}
-                if workflow_run_id else {})},
-            {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
-             "cost_confidence": "no_provider_spend"},
-            "stack_deploy_requires_approval", risk_tier=2, default_action="hold")
+        # ONE GATE, ONE RUN. From a workflow's deploy step this decision IS that step's gate,
+        # so it is opened as that run's step's own (run_decisions.open_step_decision): two runs
+        # shipping the same commit to the same host get a card each, and approving one queues
+        # one apply. A deploy started from the console has no run and merges as an alert does.
+        from .run_decisions import open_step_decision
+
+        question = f"Deploy {owner}/{repo}@{short} to {host['name']} ({manifest.dir})?"
+        recommendation = {"action": "deploy_stack", "deployment_id": deployment_id,
+            "changeset_id": changeset["id"], "target_id": target_id,
+            "repository": f"{owner}/{repo}", "ref": ref, "commit": commit,
+            "host": host["name"], "dir": manifest.dir, "steps": summary["steps"],
+            "env_keys": summary["env_keys"],
+            # Which BOSS secret each key carries to the host: the approver sees the names.
+            "env_secrets": dict(rendered["env_secrets"]),
+            "generated_env_keys": summary["generated_env_keys"],
+            # A workflow's deploy step has no gate of its own when it ships to a stack: THIS
+            # decision is that gate. So it carries the step's approver and where it came
+            # from, and approving it here is approving the release (one approval, not two).
+            **({"approver_role": approver_role} if approver_role else {})}
+        cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
+                "cost_confidence": "no_provider_spend"}
+        if workflow_run_id:
+            decision_id = open_step_decision(
+                connection, project_id, None, question, recommendation, cost,
+                "stack_deploy_requires_approval", run_id=workflow_run_id,
+                step_id=str(workflow_step_id or "deploy"), risk_tier=2, default_action="hold")
+        else:
+            decision_id = create_blocking_decision(
+                connection, project_id, None, question, recommendation, cost,
+                "stack_deploy_requires_approval", risk_tier=2, default_action="hold")
         # The deploy is a tier-2 effect on somebody's machine, so its ChangeSet says so and
         # waits on THIS decision — the one whose approval queues the apply.
         connection.execute(

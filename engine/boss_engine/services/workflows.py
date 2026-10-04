@@ -18,7 +18,7 @@ import yaml
 from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
-from .core import create_blocking_decision, emit_event, json_hash, make_id, now_utc
+from .core import emit_event, json_hash, make_id, now_utc
 from .workflow_custom_steps import (
     optional_inputs as custom_step_optional_inputs,
     validate_step as defined_step_problems,
@@ -3627,18 +3627,19 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             # gate: approving it must release the step, and the buttons the inbox draws are
             # decided by this action (decision_actions). It came first, before the spread.
             "action": "resume_workflow",
-            # WHOSE QUESTION THIS IS. Without it the card was linked to its run only by the step
-            # row, which removing the run deletes — and the card stayed answerable (boss-1,
-            # 2026-10-04). run_decisions withdraws it when the run ends.
-            "workflow_run_id": run["id"],
-            "step_id": row["step_id"],
         }
         where = ""
         if review.get("view_url"):
             where = f" Review it at {review['view_url']}."
         elif review.get("produced_by"):
             where = f" It was produced by step '{review['produced_by']}'."
-        decision_id = create_blocking_decision(
+        # ONE GATE, ONE RUN. The card belongs to this run's step: open_step_decision records
+        # whose question it is (run_decisions withdraws it when the run ends) and keeps a second
+        # run at the same gate from being merged onto this card — one Approve used to release
+        # every run waiting here.
+        from .run_decisions import open_step_decision
+
+        decision_id = open_step_decision(
             connection,
             run["project_id"],
             None,
@@ -3647,6 +3648,8 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             template.get("cost_summary") or {},
             (f"{guidance} " if guidance else "")
             + f"Workflow {run['id']} is waiting at decision step {row['step_id']}.{where}",
+            run_id=run["id"],
+            step_id=row["step_id"],
             risk_tier=int(template.get("risk_tier", 2)),
             default_action=str(template.get("default_action", "hold")),
         )

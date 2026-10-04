@@ -146,19 +146,73 @@ def test_stopping_a_parent_stops_its_child_and_withdraws_the_childs_gate(client,
     _assert_withdrawn(client, gate, because="cancelled")
 
 
-def test_a_gate_another_live_run_still_waits_on_is_not_withdrawn(client, monkeypatch):
-    """create_blocking_decision hands two runs of one workflow one row for the same question.
-    Stopping one must not take the other's question away."""
+def test_two_runs_at_one_gate_get_a_card_each_and_one_approve_releases_one(client,
+                                                                          monkeypatch):
+    """ONE GATE, ONE RUN. Two runs of one workflow at the same Approval gate used to share ONE
+    card (create_blocking_decision merged them on the question), so one Approve released both.
+    Each now has its own card in Approvals, and approving one moves only that run."""
     wf.install_model(monkeypatch)
     made = _gate_then_agent(client)
-    first, shared = _at_the_gate(client, made)
-    second, also = _at_the_gate(client, made)
-    assert also == shared, "the two runs no longer share a decision; this guard needs a new test"
+    first, first_card = _at_the_gate(client, made)
+    second, second_card = _at_the_gate(client, made)
+
+    assert first_card != second_card, "two runs share one approval"
+    inbox, listed = _waiting_on_the_operator(client)
+    assert {first_card, second_card} <= inbox and {first_card, second_card} <= listed
+    cards = {c: _decision(client, c) for c in (first_card, second_card)}
+    assert cards[first_card]["recommendation"]["workflow_run_id"] == first
+    assert cards[second_card]["recommendation"]["workflow_run_id"] == second
+    assert cards[first_card]["question"] != cards[second_card]["question"], (
+        "two cards the Approvals page cannot tell apart")
+
+    assert _approve(client, second_card).status_code == 200
+    wf.tick(client)
+
+    assert wf.statuses(wf.run_view(client, second))["look"] == "succeeded"
+    assert wf.statuses(wf.run_view(client, first))["look"] == "waiting", (
+        "approving one run's gate released another run")
+    assert _decision(client, first_card)["status"] == "pending"
+
+
+def test_stopping_one_of_two_runs_at_a_gate_withdraws_only_its_own_card(client, monkeypatch):
+    """Each run owns its card, so stopping one takes its card and leaves the other's answerable
+    — and the other's answer still releases it."""
+    wf.install_model(monkeypatch)
+    made = _gate_then_agent(client)
+    first, first_card = _at_the_gate(client, made)
+    second, second_card = _at_the_gate(client, made)
+    assert first_card != second_card
+
     _cancel(client, first)
-    assert _decision(client, shared)["status"] == "pending"
-    assert _approve(client, shared).status_code == 200
+
+    _assert_withdrawn(client, first_card, because="cancelled")
+    assert _decision(client, second_card)["status"] == "pending"
+    assert _approve(client, second_card).status_code == 200
     wf.tick(client)
     assert wf.statuses(wf.run_view(client, second))["look"] == "succeeded"
+
+
+def test_a_borrowed_decision_another_live_run_still_waits_on_is_not_withdrawn(client, engine,
+                                                                              monkeypatch):
+    """A decision a run BORROWED (a panel's PRD approval used as a gate) can still be awaited by
+    more than one run. Stopping one must not take the other's question away."""
+    wf.install_model(monkeypatch)
+    made = _gate_then_agent(client)
+    first, first_card = _at_the_gate(client, made)
+    second, second_card = _at_the_gate(client, made)
+    with engine.begin() as c:
+        # As a borrowed decision is: no run identity of its own, both runs' steps waiting on it.
+        c.execute(text("UPDATE decisions SET recommendation = recommendation - 'workflow_run_id' "
+                       "- 'step_id' WHERE id = :d"), {"d": first_card})
+        c.execute(text("UPDATE workflow_step_runs SET decision_id = :d "
+                       "WHERE workflow_run_id = :r AND step_id = 'look'"),
+                  {"d": first_card, "r": second})
+    _cancel(client, first)
+    assert _decision(client, first_card)["status"] == "pending"
+    assert _approve(client, first_card).status_code == 200
+    wf.tick(client)
+    assert wf.statuses(wf.run_view(client, second))["look"] == "succeeded"
+    assert second_card
 
 
 def test_answering_a_gate_whose_run_ended_some_other_way_is_refused(client, engine,
