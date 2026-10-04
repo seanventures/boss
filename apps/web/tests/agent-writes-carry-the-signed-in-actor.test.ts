@@ -61,6 +61,8 @@ const KNOWN_AGENT_WRITERS = [
   "lib/agent-studio.ts",
   "lib/agent-world.ts",
   "lib/agents-live.ts",
+  // Agents › Live's one read (/v1/agents/live-board): a GET, no actor, no write.
+  "lib/agents-live-board.ts",
   "lib/agents.ts",
   // Agent World's one resolver: it only READS /v1/agents/identities (no actor, no write), but
   // it names the agent resource, so it is listed and held to the same rule.

@@ -36,7 +36,8 @@ let host: HTMLElement | null = null;
 let live: unknown[] = [];
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/?area=workforce");
+  // The grid is Agents › Directory; Live is the default (agents-home spec §3.1).
+  window.history.replaceState(null, "", "/?area=workforce&view=directory");
   document.title = "BOSS";
   live = [];
   vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
@@ -90,7 +91,8 @@ describe("the roster zones are presence", () => {
     expect(zoneOfCard("docs_writer")).toBe("idle");
     expect($('[data-testid="ag-line-qa"]')?.textContent).toContain("Waiting on you: approve deploy");
     expect($('[data-testid="ag-line-software_engineer"]')?.textContent).toContain("Now: running tests · Ship it · step 4");
-    expect($('[data-testid="ag-roster-sum"]')?.textContent).toContain("4 agents · 2 working");
+    // The area header's summary (agents-home §3.2) replaced the Roster's own.
+    expect($('[data-testid="ag-home-summary"]')?.textContent).toContain("4 agents · 2 working");
   });
 
   it("with no live answer, falls back to the feed's status — the same zone either way", async () => {

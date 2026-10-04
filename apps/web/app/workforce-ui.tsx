@@ -1,5 +1,6 @@
 "use client";
 
+import { DotsThree, MagnifyingGlass } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentStudioFeed } from "../lib/agent-studio";
@@ -8,19 +9,25 @@ import { PanelsView, orphanProfiles } from "./agent-profile-ui";
 import { AgentQuickCreate } from "./agent-quick-create";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
-import { identityOf, openAgent } from "../lib/agent-world";
-import { useLivePresence } from "../lib/agents-live";
+import { identityOf, isLive, openAgent } from "../lib/agent-world";
+import { useAttention, useLivePresence } from "../lib/agents-live";
+import { useLiveBoard } from "../lib/agents-live-board";
+import { useConsoleLive } from "../lib/console-live";
 import { useIdentityVersion } from "../lib/use-agent-identities";
 import { AgFace } from "./agents/agent-face";
-import { RosterSummary } from "./agents/roster-zones";
 import { DirectoryView } from "./agents/directory-view";
-import { TeamSwarm } from "./agents/team-swarm";
+import { LiveBoardView, liveDot } from "./agents/live-board";
+import { OrgView } from "./agents/org-view";
+import { ActivityRiver } from "./agents/activity-river";
 import { openRoom } from "../lib/agent-converse";
 
 /**
- * The Agents area: Roster, Team and Panels, in v1's own styling.
+ * The Agents area: Live, Organization, Directory, Activity (and Panels when there is one) —
+ * agents-home spec §3.
  *
- * The data is the same the v2 screens read — one fetch each, already bounded server-side.
+ * Live is the default: what needs you, what is moving, what got done, who is idle. Directory is
+ * the card grid, to find and set up an agent. Organization is the teams, reporting lines and
+ * Swarm. Activity is what agents did, newest first. `?role=` opens the Passport over any tab.
  */
 
 /** Acronyms stay acronyms: "Qa" and "Cto" read as typos. */
@@ -33,62 +40,117 @@ function humanise(key: string): string {
     .join(" ");
 }
 
-export type AgentsView = "roster" | "team" | "panels";
+export type AgentsView = "live" | "org" | "directory" | "activity" | "panels";
 
 export { UNREGISTERED_TIP } from "./agents/directory-view";
 
+/** Old links keep working: the Roster is the Directory now, the Team is Organization. */
+const LEGACY_VIEWS: Record<string, AgentsView> = { roster: "directory", team: "org" };
+const VIEWS = new Set<AgentsView>(["live", "org", "directory", "activity", "panels"]);
+
 /** The view the URL names. `view` is shared with other areas (the workflow editor uses
- *  visual|json), so anything this area does not know is the roster. */
+ *  visual|json), so anything this area does not know is Live. */
 export function readAgentsView(search: string): AgentsView {
-  const v = new URLSearchParams(search).get("view");
-  return v === "team" || v === "panels" ? v : "roster";
+  const v = new URLSearchParams(search).get("view") ?? "";
+  if (LEGACY_VIEWS[v]) return LEGACY_VIEWS[v];
+  return VIEWS.has(v as AgentsView) ? v as AgentsView : "live";
+}
+
+const TAB_TIP: Record<AgentsView, string | undefined> = {
+  live: "What needs you and what's moving",
+  org: "Teams, and who hands work to whom",
+  directory: "Every agent, to find and set up",
+  activity: "What agents did, newest first",
+  panels: undefined,
+};
+
+/** Agents the header's search names: by name, callsign, key or role. */
+export function matchAgents(agents: V2Agent[], query: string): V2Agent[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return agents.filter((a) => {
+    const id = identityOf(a.id, a.name);
+    return `${a.name} ${a.id} ${a.role} ${id.callsign ?? ""}`.toLowerCase().includes(q);
+  });
+}
+
+function areaIsAgents(): boolean {
+  try {
+    const area = new URLSearchParams(window.location.search).get("area");
+    return area === "workforce";
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Agents: every agent, keyed by `role_key` — the thing a workflow step's `captain` names, so
  * the roster, the team, a step's agent picker and an agent's "Used in" all count the same.
- *
- * Three views of one set: the Roster (who they are and what they have done), the Team (planned
- * reporting lines; it does not route work) and Panels (agents that decide together; hidden
- * until there is one). One "+ New agent" makes an agent wherever it is pressed.
+ * One "+ New agent" makes an agent wherever it is pressed.
  */
 export function WorkforceArea(
-  { workforce, chart, studio, actor }: {
+  { workforce, chart, studio, actor, initialView = "live" }: {
     workforce: Workforce;
     chart?: OrgChart;
     /** The Studio catalog: Profiles, Panels, and orphan definitions offered as templates. */
     studio?: AgentStudioFeed;
     /** The signed-in actor every agent write is made as — never a literal. */
     actor: string;
+    /** The view before the URL is read (a server render has no URL): Live unless told. */
+    initialView?: AgentsView;
   },
 ) {
-  const [view, setViewState] = useState<AgentsView>("roster");
+  const projectId = workforce.project_id;
+  const [view, setViewState] = useState<AgentsView>(initialView);
   // Retired and the search read identities: a load (lifecycle, callsign) re-runs them.
   const identities = useIdentityVersion();
   const [search, setSearch] = useState("");
-  const [teamLayout, setTeamLayout] = useState<"list" | "swarm">("list");
-  // WHO IS DOING WHAT, from open work: the same store the top-bar pill reads.
-  const live = useLivePresence(workforce.project_id);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const searchBox = useRef<HTMLInputElement>(null);
+  // WHO IS DOING WHAT, and WHAT NEEDS YOU, from open work: the same store the top-bar pill reads.
+  const live = useLivePresence(projectId);
+  const attention = useAttention(projectId);
+  const consoleLive = useConsoleLive();
+  // ONE READ OF THE BOARD for Live and Organization, polled only while one of them is open.
+  const board = useLiveBoard(projectId, workforce.apiReachable && (view === "live" || view === "org"));
   // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
   const [openRole, setOpenRole] = useState("");
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [focusRun, setFocusRun] = useState<string | null>(null);
+  const [orgId, setOrgId] = useState<string | null>(null);
   useEffect(() => {
     const sync = () => {
       try {
         const url = new URL(window.location.href);
         setOpenRole(url.searchParams.get("role") ?? "");
+        const raw = url.searchParams.get("view") ?? "";
         setViewState(readAgentsView(url.search));
+        // AN OLD LINK IS REWRITTEN, not just read: the URL says what is on screen.
+        if (LEGACY_VIEWS[raw] && url.searchParams.get("area") === "workforce") {
+          url.searchParams.set("view", LEGACY_VIEWS[raw]);
+          window.history.replaceState(null, "", url.toString());
+        }
+        setFocusId(url.searchParams.get("focus"));
+        setFocusRun(url.searchParams.get("run"));
+        setOrgId(url.searchParams.get("org"));
       } catch { /* non-browser */ }
     };
     sync();
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
-  const setView = (next: AgentsView) => {
+  const setView = (next: AgentsView, patch: Record<string, string | null> = {}) => {
     setViewState(next);
     try {
       const url = new URL(window.location.href);
-      if (next === "roster") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+      if (next === "live") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null) url.searchParams.delete(k); else url.searchParams.set(k, v);
+      }
       window.history.pushState(null, "", url.toString());
+      if ("run" in patch) setFocusRun(patch.run ?? null);
+      if ("focus" in patch) setFocusId(patch.focus ?? null);
     } catch { /* non-browser */ }
   };
   // `true` for a blank agent; a name to register an agent that works with no registered role.
@@ -118,6 +180,72 @@ export function WorkforceArea(
   const panels = studio?.panels ?? [];
   const orphans = useMemo(() => studio ? orphanProfiles(studio, everyone.map((a) => a.id)) : [],
                           [studio, everyone]);
+  const matches = useMemo(() => matchAgents(everyone, search), [everyone, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
+  // Activity filters by one agent: the one the search names exactly, or the only match.
+  const searchedRole = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return null;
+    const exact = matches.find((a) => a.id === q || a.name.toLowerCase() === q
+      || (identityOf(a.id, a.name).callsign ?? "").toLowerCase() === q);
+    return exact?.id ?? (matches.length === 1 ? matches[0].id : null);
+  }, [matches, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
+
+  // THE SAME COUNTS AS THE PILL: working agents from presence, needs-you from attention items.
+  const working = useMemo(() => [...live.values()].filter((p) => isLive(p) && p.state !== "needs_you").length, [live]);
+  const needs = attention ? attention.count : [...live.values()].filter((p) => p.state === "needs_you").length;
+  const dot = liveDot(needs, working);
+
+  // `/` finds an agent, from anywhere in the area.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || !areaIsAgents()) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable='true']"))) return;
+      e.preventDefault();
+      setSearchOpen(true);
+      window.setTimeout(() => searchBox.current?.focus(), 0);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const tabs: { key: AgentsView; label: React.ReactNode; testid: string }[] = [
+    { key: "live", testid: "agents-view-live", label: (
+      <>
+        {dot ? (
+          <span className="ag-home-dot" data-tone={dot.tone} title={dot.tip} data-testid="agents-live-dot">
+            <span className="ag-sr">{dot.tip}</span>
+          </span>
+        ) : null}
+        Live
+      </>
+    ) },
+    { key: "org", testid: "agents-view-org", label: "Organization" },
+    { key: "directory", testid: "agents-view-directory",
+      label: <>Directory <em data-testid="wf-roster-count">({everyone.length})</em></> },
+    { key: "activity", testid: "agents-view-activity", label: "Activity" },
+    ...(panels.length ? [{ key: "panels" as const, testid: "agents-view-panels",
+                           label: <>Panels <em>({panels.length})</em></> }] : []),
+  ];
+
+  function onTabsKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft" && e.key !== "Home" && e.key !== "End") return;
+    const at = tabs.findIndex((t) => t.key === view);
+    const next = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1
+      : (at + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    e.preventDefault();
+    setView(tabs[next].key);
+    window.setTimeout(() => e.currentTarget?.querySelectorAll<HTMLElement>("[role='tab']")[next]?.focus(), 0);
+  }
+
+  function goLiveSection(id: string, focusFirstCard = false) {
+    if (view !== "live") setView("live");
+    window.setTimeout(() => {
+      const el = document.getElementById(id);
+      el?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      if (focusFirstCard) el?.querySelector<HTMLElement>("[data-att-card]")?.focus();
+    }, 0);
+  }
 
   if (!workforce.apiReachable) {
     return (
@@ -127,45 +255,90 @@ export function WorkforceArea(
     );
   }
 
+  const openMap = (team?: string) => setView("org", { focus: team ?? null, run: null });
+  const showDropdown = (view === "live" || view === "org") && search.trim() && matches.length > 0;
+
   return (
-    <div className="wf-agents" data-testid="agents-area">
-      <header className="wf-lib-head">
-        <div className="wf-tabs" role="tablist" aria-label="Agents">
-          <button type="button" role="tab" className="wf-tab" aria-selected={view === "roster"}
-                  data-testid="agents-view-roster" onClick={() => setView("roster")}>
-            Roster <em data-testid="wf-roster-count">({everyone.length})</em>
-          </button>
-          <button type="button" role="tab" className="wf-tab" aria-selected={view === "team"}
-                  data-testid="agents-view-team" title="Planned reporting lines. Doesn't change who runs a step."
-                  onClick={() => setView("team")}>Team</button>
-          {panels.length ? (
-            <button type="button" role="tab" className="wf-tab" aria-selected={view === "panels"}
-                    data-testid="agents-view-panels" onClick={() => setView("panels")}>
-              Panels <em>({panels.length})</em>
+    <div className="wf-agents ag-home" data-testid="agents-area" data-view={view}>
+      <header className="wf-lib-head ag-home-head">
+        <div className="wf-tabs ag-home-tabs" role="tablist" aria-label="Agents" onKeyDown={onTabsKey}>
+          {tabs.map((t) => (
+            <button key={t.key} type="button" role="tab" className="wf-tab" aria-selected={view === t.key}
+                    tabIndex={view === t.key ? 0 : -1} data-testid={t.testid} title={TAB_TIP[t.key]}
+                    onClick={() => setView(t.key)}>
+              {t.label}
             </button>
+          ))}
+        </div>
+        <span className="ag-home-sum" data-testid="ag-home-summary">
+          <button type="button" className="ag-home-count" title="Every agent, in Directory"
+                  onClick={() => setView("directory")}>{everyone.length} agents</button>
+          {working ? (
+            <>
+              <span aria-hidden> · </span>
+              <button type="button" className="ag-home-count" data-tone="accent" title="See the work in Live"
+                      onClick={() => goLiveSection("ag-live-work")}>{working} working</button>
+            </>
+          ) : null}
+          {needs ? (
+            <>
+              <span aria-hidden> · </span>
+              <button type="button" className="ag-home-count" data-tone="amber" data-testid="ag-home-needs"
+                      title="Go to the first thing that needs you"
+                      onClick={() => goLiveSection("ag-live-needs", true)}>
+                {needs === 1 ? "1 needs you" : `${needs} need you`}
+              </button>
+            </>
+          ) : null}
+        </span>
+        <span className="wf-lib-spacer" />
+        <div className="ag-home-search" data-open={searchOpen || search ? "true" : undefined}>
+          <button type="button" className="ag-icon-btn ag-home-search-icon" aria-label="Find an agent"
+                  title="Find an agent (/)" onClick={() => { setSearchOpen(true); window.setTimeout(() => searchBox.current?.focus(), 0); }}>
+            <MagnifyingGlass size={14} weight="bold" aria-hidden />
+          </button>
+          <label className="wf-lib-search">
+            <input ref={searchBox} type="search" aria-label="Find an agent" placeholder="Find an agent"
+                   data-testid="ag-home-search" value={search} title="Press / to search"
+                   onChange={(event) => setSearch(event.target.value)}
+                   onBlur={() => { if (!search) setSearchOpen(false); }}
+                   onKeyDown={(e) => {
+                     if (e.key === "Enter" && showDropdown) { e.preventDefault(); openAgent(matches[0].id); }
+                     if (e.key === "Escape") { setSearch(""); setSearchOpen(false); }
+                   }} />
+          </label>
+          {showDropdown ? (
+            <ul className="ag-home-matches" role="listbox" aria-label="Matching agents" data-testid="ag-home-matches">
+              {matches.slice(0, 8).map((a) => {
+                const id = identityOf(a.id, a.name);
+                return (
+                  <li key={a.id} role="option" aria-selected={false}>
+                    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => openAgent(a.id)}
+                            data-testid={`ag-home-match-${a.id}`}>
+                      <AgFace roleKey={a.id} size={20} decorative />
+                      <span>{id.callsign || id.name}</span>
+                      {id.callsign ? <span className="ag-muted">{id.name}</span> : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           ) : null}
         </div>
-        {view === "roster" ? <RosterSummary agents={everyone} live={live} /> : null}
-        <span className="wf-lib-spacer" />
-        {view === "team" ? (
-          <span className="wf-seg" role="group" aria-label="Layout">
-            <button type="button" aria-pressed={teamLayout === "list"} data-active={teamLayout === "list"}
-                    data-testid="agents-team-list" onClick={() => setTeamLayout("list")}>List</button>
-            <button type="button" aria-pressed={teamLayout === "swarm"} data-active={teamLayout === "swarm"}
-                    data-testid="agents-team-swarm" title="Who handed work to whom, live"
-                    onClick={() => setTeamLayout("swarm")}>Swarm</button>
-          </span>
-        ) : null}
-        {view === "roster" ? (
-          <label className="wf-lib-search">
-            <input type="search" aria-label="Find an agent" placeholder="Find an agent"
-                   value={search} onChange={(event) => setSearch(event.target.value)} />
-          </label>
-        ) : null}
-        <button type="button" className="wf-btn" data-testid="wf-open-room"
+        <button type="button" className="wf-btn ag-home-wide" data-testid="wf-open-room"
                 title="Ask 2-5 agents at once" onClick={() => openRoom()}>Room</button>
-        <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-new-agent"
+        <button type="button" className="wf-btn wf-btn-primary ag-home-wide" data-testid="wf-new-agent"
                 onClick={() => setCreating(true)}>+ New agent</button>
+        <div className="ag-home-menu">
+          <button type="button" className="ag-icon-btn" aria-label="More" aria-expanded={menuOpen}
+                  onClick={() => setMenuOpen((v) => !v)}><DotsThree size={16} weight="bold" aria-hidden /></button>
+          {menuOpen ? (
+            <div className="ag-home-menu-pop" role="menu">
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); openRoom(); }}>Room</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setCreating(true); }}>+ New agent</button>
+            </div>
+          ) : null}
+        </div>
       </header>
 
       {creating ? (
@@ -175,21 +348,31 @@ export function WorkforceArea(
                           onCreated={(roleKey) => { setCreating(false); openAgent(roleKey); }} />
       ) : null}
 
-      {view === "team" ? (
-        !chart ? <p className="detail">Team unavailable</p>
-          : teamLayout === "swarm" ? <TeamSwarm projectId={workforce.project_id} chart={chart} live={live} />
-          : <OrgChartArea projectId={workforce.project_id} actor={actor} chart={chart} />
+      {view === "live" ? (
+        <LiveBoardView projectId={projectId} actor={actor} live={board} paused={!consoleLive}
+                       focusId={focusId} search={search} onOpenMap={openMap}
+                       onActivity={() => setView("activity")} onDirectory={() => setView("directory")}
+                       onNewAgent={() => setCreating(true)} orgId={orgId} />
+      ) : view === "org" ? (
+        <OrgView projectId={projectId} chart={chart} board={board.board} live={live} search={search}
+                 focusRunId={focusRun} focusTeam={focusId}
+                 onClearFocus={() => setView("org", { run: null, focus: null })}
+                 lines={chart ? <OrgChartArea projectId={projectId} actor={actor} chart={chart} />
+                   : <p className="detail">Team unavailable</p>} />
+      ) : view === "activity" ? (
+        <ActivityRiver projectId={projectId} roleKey={searchedRole} runId={focusRun}
+                       onClearRun={() => setView("activity", { run: null })} paused={!consoleLive} />
       ) : view === "panels" && studio ? (
         <PanelsView feed={studio} actor={actor} />
       ) : (
-        <DirectoryView projectId={workforce.project_id} actor={actor} everyone={everyone}
+        <DirectoryView projectId={projectId} actor={actor} everyone={everyone}
                        retired={retired} live={live} search={search} onCreate={setCreating} />
       )}
 
       {/* The detail view, over every view. Rendered here rather than as a route because the
           console mounts every area at once and a route would be a second place agents live. */}
       {openRole ? (
-        <AgentDetail projectId={workforce.project_id} roleKey={openRole} actor={actor}
+        <AgentDetail projectId={projectId} roleKey={openRole} actor={actor}
                      studio={studio} onClose={closeAgent}
                      onDeleted={(key) => setDeleted((d) => new Set(d).add(key))} />
       ) : null}
