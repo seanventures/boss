@@ -13,7 +13,8 @@ import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import React, { useEffect, useMemo, useState } from "react";
 
 import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
-import { arr, num, obj, opt, str } from "../../lib/factory-floor";
+import { arr, num, obj, opt, parseBuildRow, str, type BuildRow as BuildRowData } from "../../lib/factory-floor";
+import { BuildRow } from "./build-row";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFaceStack } from "../agents/agent-face";
 import { ago, useNow } from "../agents/live-util";
@@ -21,7 +22,9 @@ import { groupRunsIntoApps } from "../app-grouping";
 import { appIdentity } from "../app-identity";
 import { previewWebHref } from "../../lib/browser-links";
 
-export type AppBuild = { runId: string; attempt: number; word: string; at?: string };
+/** One build of an app. `row` is the full Floor row when the server sends one (walk D21): then
+ *  the attempt is drawn as a compact BuildRow with its stations, else as a line of words. */
+export type AppBuild = { runId: string; attempt: number; word: string; at?: string; row?: BuildRowData };
 export type AppRow = {
   key: string; app: string; builders: string[]; word: string;
   preview: { status: string; url?: string } | null;
@@ -79,7 +82,9 @@ export function parseApps(w: unknown): AppRow[] {
       }),
       builds: arr(o.attempts).map((b) => {
         const y = obj(b);
-        return { runId: str(y.run_id), attempt: num(y.attempt, 1), word: str(y.word), at: opt(y.at) };
+        const full = Array.isArray(y.stations) && y.stations.length > 0;
+        return { runId: str(y.run_id), attempt: num(y.attempt, 1), word: str(y.word), at: opt(y.at),
+                 ...(full ? { row: parseBuildRow(y) } : {}) };
       }),
       rank: rankOf(word),
     };
@@ -164,7 +169,9 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
               </div>
               {expanded ? (
                 <ul className="fx-app-builds" aria-label={`Builds of ${a.app}`}>
-                  {a.builds.map((b) => (
+                  {a.builds.map((b) => b.row ? (
+                    <BuildRow key={b.runId} build={b.row} density="compact" now={now} onOpen={onOpen} />
+                  ) : (
                     <li key={b.runId}>
                       <button type="button" className="fx-app-build" data-testid={`fx-app-build-${b.runId}`}
                               onClick={(e) => onOpen(b.runId, e.currentTarget)}>

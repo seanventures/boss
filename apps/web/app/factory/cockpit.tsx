@@ -16,6 +16,7 @@
  */
 import { DotsThree, SpinnerGap } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { AvatarState } from "../../lib/agent-world-types";
 import { useCockpit, type Cockpit as CockpitData } from "../../lib/cockpit";
@@ -70,9 +71,6 @@ function usePaused(): boolean {
   }, []);
   return paused;
 }
-
-/** Credits open by themselves only when a build ships — never on a stop or a failure. */
-const SHIPPED_STATES = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
 
 export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: CockpitProps) {
   const { data, error, loading, refresh } = useCockpit(projectId, runId, actor);
@@ -134,6 +132,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const [menu, setMenu] = useState(false);
   const [attempts, setAttempts] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
+  // STOP IS INSTANT (walk D1): the press says `Stopped by you` at once; the server's answer
+  // confirms it on the next read, or the press is undone with its sentence.
+  const [stopped, setStopped] = useState(false);
   const [steering, setSteering] = useState(false);
   const [guidance, setGuidance] = useState("");
   const [pending, setPending] = useState<{ id: string; text: string; at: string }[]>([]);
@@ -143,6 +144,17 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const [pop, setPop] = useState<{ actId: string; anchor: HTMLElement | null } | null>(null);
   const [announce, setAnnounce] = useState("");
   const lastWord = useRef(c.state.word);
+  const lineWrap = useRef<HTMLDivElement>(null);
+  // Outputs stick below the sticky Line: its real height, measured (walk D6).
+  useEffect(() => {
+    const el = lineWrap.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const set = () => root.current?.style.setProperty("--fx-line-h", `${Math.round(el.getBoundingClientRect().height)}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const quietOpened = useRef(false);
   const gPressed = useRef(false);
 
@@ -179,12 +191,14 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
 
   const doStop = async () => {
     setConfirmStop(false);
-    setBusy("stop");
     setErr("");
+    setStopped(true);
+    showToast("success", "Build stopped");
     const r = await stopBuild(runId, actor);
-    setBusy(null);
-    if (r.ok) { showToast("success", "Build stopped"); notifyChanged("code-tasks"); refresh(); }
-    else { setErr(r.error ?? ""); refresh(); }
+    // 409: it had already ended — nothing to undo; the next read says how.
+    if (!r.ok && r.status !== 409) { setStopped(false); setErr(r.error ?? ""); }
+    notifyChanged("code-tasks");
+    refresh();
   };
 
   const doRetry = async () => {
@@ -255,16 +269,21 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
     return () => document.removeEventListener("keydown", onKey);
   }, [pop, changeIt, menu, attempts, confirmStop, logs, filter, steering, onClose]);
 
-  const s = c.state;
-  const still = paused || quietish(s.state);
+  const settled = c.state.state === "cancelled" || c.state.state === "failed";
+  const s = stopped && !settled
+    ? { ...c.state, state: "cancelled" as const, word: "Stopped by you", tip: "Keeps the work so far. Retry resumes it." }
+    : c.state;
+  const stoppable = c.stoppable && !stopped;
+  const still = paused || quietish(s.state) || s.state === "cancelled";
   const elapsed = c.startedAt ? spanOf(c.startedAt, c.live ? null : c.run.updatedAt ?? null, c.live ? now : null) : "";
   const current = c.stations.find((st) => st.key === s.station);
   const currentAgent = current?.roleKey ? nameOf(current.roleKey).name : "the agents";
   const faceStates = new Map<string, AvatarState>(c.agents.map((a) => [a.roleKey,
     (still && (a.state === "working" || a.state === "needs_you") ? "idle" : AGENT_STATES.has(a.state) ? a.state : "idle") as AvatarState]));
   const attempt = c.lineage.find((l) => l.runId === c.run.id)?.attempt ?? c.run.attempt;
-  const workflowRun = c.origin?.kind === "workflow_run" ? c.origin.id : null;
-  const { chain } = useRunChain(projectId, workflowRun, c.live);
+  // CREDITS ARE THIS BUILD'S ACTS (its own chain, /v1/code-tasks/{id}/acts) — not the workflow
+  // run that started it, which credited one agent and $0.00 while Outputs said five.
+  const { chain } = useRunChain(projectId, c.run.id, c.live);
   const latestDeploy = (c.outputs.deploy.items[0]?.id as string | undefined) ?? null;
   const stopTip = "Keeps the work so far. Retry resumes it.";
   const steerTip = "Guide the agents. They read it between stations.";
@@ -290,11 +309,11 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           </span>
           <span className="fx-spacer" />
           <span className="fx-actions">
-            {c.stoppable ? (
+            {stoppable ? (
               <button type="button" className="ag-btn fx-wide-only" title={steerTip} aria-expanded={steering}
                       data-testid="fx-steer" onClick={() => setSteering((v) => !v)}>Steer</button>
             ) : null}
-            {c.stoppable ? (
+            {stoppable ? (
               <span className="fx-pop-anchor">
                 <button type="button" className="ag-btn fx-wide-only" title={stopTip} data-testid="fx-stop"
                         disabled={busy !== null} onClick={() => setConfirmStop(true)}>
@@ -309,8 +328,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
               </button>
               {menu ? (
                 <span id={menuId} role="menu" className="fx-ck-menu" data-testid="fx-ck-menu">
-                  {c.stoppable ? <button type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</button> : null}
-                  {c.stoppable ? <button type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</button> : null}
+                  {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</button> : null}
+                  {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</button> : null}
                   {c.retryable ? <button type="button" role="menuitem" data-testid="fx-menu-retry" onClick={() => void doRetry()}>Retry</button> : null}
                   <button type="button" role="menuitem" data-testid="fx-menu-change" onClick={() => { setMenu(false); setChangeIt(true); }}>Change it</button>
                   <button type="button" role="menuitem" onClick={() => { setMenu(false); openDockAbout({ subject: { kind: "code_task", id: c.run.id }, question: "", role: null, history: "push" }); }}>Ask BOSS</button>
@@ -355,10 +374,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           ) : null}
           <span className="fx-spacer" />
           {c.agents.length ? <AgFaceStack roleKeys={c.agents.map((a) => a.roleKey)} size={24} max={6} states={faceStates} /> : null}
-          {workflowRun ? (
-            <CreditsButton chain={chain} runId={workflowRun} projectId={projectId} viewer={actor} title={c.app}
-                           live={c.live || !SHIPPED_STATES.has(c.state.state)} />
-          ) : null}
+          <CreditsButton chain={chain} runId={c.run.id} projectId={projectId} viewer={actor} title={c.app}
+                         live={c.live} autoOpen={false} className="ag-btn fx-credits" />
         </div>
         {steering ? (
           <form className="fx-steer" onSubmit={(e) => { e.preventDefault(); void doSteer(); }} data-testid="fx-steer-box">
@@ -379,7 +396,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         </div>
       ) : null}
 
-      <div className="fx-line-wrap">
+      <div className="fx-line-wrap" ref={lineWrap}>
         <StationLine stations={c.stations} density="header" still={still} now={now} viewer={actor}
                      selected={filter} onBay={(k) => setFilter((f) => (f === k ? null : k))} />
       </div>
@@ -407,9 +424,12 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
               onClick={() => setLogs((v) => (v ? null : "build"))}>
         Logs {logs ? "▴" : "▾"}
       </button>
-      {logs ? (
-        <LogsDrawer projectId={projectId} runId={c.run.id} previewId={c.outputs.preview?.id ?? null} deployId={latestDeploy}
-                    tab={logs} onTab={setLogs} onClose={() => setLogs(null)} />
+      {/* Portalled to <body>: on a phone it is a full-screen sheet, which a fixed box inside a
+          filtered ancestor never was (walk D5: 2521px tall, top −1677). */}
+      {logs ? createPortal(
+        <LogsDrawer projectId={projectId} runId={c.run.id} previewId={c.outputs.preview?.id ?? null}
+                    previewStatus={c.outputs.preview?.status} deployId={latestDeploy}
+                    tab={logs} onTab={setLogs} onClose={() => setLogs(null)} />, document.body,
       ) : null}
       {changeIt ? <ChangeIt projectId={projectId} runId={c.run.id} actor={actor} onClose={() => setChangeIt(false)} onStarted={onOpenBuild} /> : null}
       {pop ? <ActPopover projectId={projectId} actId={pop.actId} viewer={actor} anchor={pop.anchor} onClose={() => setPop(null)} /> : null}
