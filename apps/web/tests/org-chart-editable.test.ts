@@ -199,7 +199,8 @@ describe("the preview step can be acted on", () => {
   it("never prints a loopback address as if it were openable", () => {
     // 127.0.0.1:42543 is where the app listens ON THE HOST. Printing it under a heading
     // reading PREVIEW URL invites somebody to copy it, paste it, and get nothing.
-    expect(DW).toContain("isLoopbackPreviewUrl(v)");
+    // The step's Output (app/workflows/step-run.tsx) drops it with the shared rule.
+    expect(codeOnly("app/workflows/step-run.tsx")).toContain("isLoopbackPreviewUrl(text)");
   });
 });
 

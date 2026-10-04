@@ -238,14 +238,14 @@ describe("talking to one agent", () => {
       if ((init?.method ?? "GET") === "GET" && path === "") return Response.json({ items: [] });
       if ((init?.method ?? "GET") === "GET") return Response.json(conversation("cnv_9", "talk", ["qa"]));
       if (path === "") return Response.json(conversation("cnv_9", "talk", ["qa"]), { status: 201 });
-      return Response.json({ error: "Needs a model. Set one in Settings.", code: "needs_model" }, { status: 409 });
+      return Response.json({ error: "Needs a model. Connect one in Repo and models.", code: "needs_model" }, { status: 409 });
     }));
     await act(async () => { converse.openTalk("qa"); });
     await settle();
     const problem = q('[data-testid="ag-problem"]')!;
     expect(problem.getAttribute("data-code")).toBe("needs_model");
     expect(problem.textContent).toContain("Needs a model");
-    expect(problem.querySelector("a")!.getAttribute("href")).toBe("/?area=setup&step=model");
+    expect(problem.querySelector("a")!.getAttribute("href")).toBe("/?area=setup&focus=models");
   });
 });
 

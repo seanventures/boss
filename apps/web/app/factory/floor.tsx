@@ -18,6 +18,7 @@ import type { BuildRow as Build, Floor, FloorOutcome, PreBuild, StoppedRow } fro
 import { callAction } from "../../lib/call-action";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AttentionCard } from "../agents/attention-card";
+import { splitAttention } from "../agents/live-board";
 import { AgFaceStack } from "../agents/agent-face";
 import { RunFace, nameOf } from "../agents/run-face";
 import { RING_BUDGET, ago, linkTo, navigate, plainClick, useBand, useNow, type Band } from "../agents/live-util";
@@ -60,11 +61,12 @@ function agentsOf(b: Build): string[] {
   return [...keys].map((k) => nameOf(k).name);
 }
 
-function SectionHead({ id, label, count, children }: { id: string; label: string; count?: number; children?: React.ReactNode }) {
+function SectionHead({ id, label, count, extra, children }: { id: string; label: string; count?: number; extra?: string; children?: React.ReactNode }) {
   return (
     <header className="ag-live-head">
       <h2 id={id} className="ag-zone-label">{label}</h2>
-      {count !== undefined && count > 0 ? <span className="ag-zone-count">{count}</span> : null}
+      {count !== undefined && count > 0 ? <span className="ag-zone-count" data-testid={`${id}-count`}>{count}</span> : null}
+      {extra ? <span className="ag-zone-extra" data-testid={`${id}-extra`}>{extra}</span> : null}
       <span className="ag-spacer" />
       {children}
     </header>
@@ -244,7 +246,11 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
   const stopped = floor.stopped.filter((s) => matches(query, s.app, s.title));
   const outcomes = floor.outcomes.filter((o) => matches(query, o.app, o.text)).slice(0, OUTCOMES_SHOWN);
   const preBuild = floor.preBuild.filter((p) => matches(query, p.title));
-  const cards = moreCards ? attention : attention.slice(0, CARDS_SHOWN);
+  // As Agents › Live (walk D2, D12): the number is DECISIONS, the pill's number; a stopped build
+  // is a card too, first, and never folded under `+n more`.
+  const split = splitAttention(attention);
+  const decisions = split.decisions;
+  const cards = [...split.stopped, ...(moreCards ? decisions : decisions.slice(0, CARDS_SHOWN))];
   const grouped = builds.length > GROUP_AT;
   const rows = grouped || moreRows ? builds : builds.slice(0, ROWS_SHOWN);
   const stoppedShown = moreStopped ? stopped : stopped.slice(0, STOPPED_SHOWN);
@@ -290,7 +296,8 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
       ) : null}
 
       <section className="ag-live-sec" data-sec="needs" role="region" aria-labelledby="fx-needs-h">
-        <SectionHead id="fx-needs-h" label="NEEDS YOU" count={attention.length}>
+        <SectionHead id="fx-needs-h" label="NEEDS YOU" count={decisions.length}
+                     extra={split.stopped.length ? `· ${split.stopped.length} stopped` : undefined}>
           {attention.length ? (
             <a className="ag-link" href={linkTo(approvalsPatch, orgId)}
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(approvalsPatch); } }}>
@@ -313,9 +320,9 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
                                onRefresh={refresh} />
               ))}
             </div>
-            {attention.length > CARDS_SHOWN ? (
+            {decisions.length > CARDS_SHOWN ? (
               <button type="button" className="ag-zone-more" aria-expanded={moreCards} onClick={() => setMoreCards((v) => !v)}>
-                {moreCards ? "Show fewer" : `+${attention.length - CARDS_SHOWN} more`}
+                {moreCards ? "Show fewer" : `+${decisions.length - CARDS_SHOWN} more`}
               </button>
             ) : null}
           </>

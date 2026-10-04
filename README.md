@@ -127,9 +127,9 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
-**4. Sign in** at your address, such as `https://boss.example.com`, with the password from `boss password`.
+**4. Sign in** at your address with the password from `boss password`. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR.
 
-Export a provider key such as `OPENAI_API_KEY` before installing, paste an OpenAI key at the hidden prompt, or [connect a model](docs/community/MODEL_CONNECTIONS.md) later; keys are never accepted as command-line arguments. The installer reports Codex, Claude Code, and Grok logins it finds and asks before copying one; `boss connect` does the same later. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
+Models found by the installer appear there already; `boss connect` does the same from a terminal. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
 > [!TIP]
 > **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal. [Getting started](docs/community/GETTING_STARTED.md) goes on to your first project and a pull request BOSS built.

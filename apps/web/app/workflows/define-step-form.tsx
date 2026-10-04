@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 
 import type { Bindable, CustomStep } from "../delivery-workflows-ui";
 import { HelpTip } from "../help-tip";
+import { notSetUp, setUpHref, useKitAbilities } from "../../lib/use-kit-abilities";
 import { ChipInput } from "./editor/inspector/chip-input";
 
 /** Defining a step: name it, choose what it runs, say what it needs.
@@ -75,8 +76,23 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
   // TWO GROUPS, NAMED FOR WHAT THEY ARE. "Your skills" used to list project_skills — on a real
   // install five BOSS system skills and none of the operator's — while the operator's authored
   // skills and most shipped ones were missing. Both come from the one catalogue now.
-  const yours = bindable.skills.filter((s) => s.source === "authored");
-  const shipped = bindable.skills.filter((s) => s.source !== "authored");
+  // GROUPED BY ABILITY FIRST (skills-mcp spec §3.3): the Kit's outcomes, each with the skills
+  // and MCP tools behind it, said `Not set up` when it is not. Everything else follows as before.
+  const abilities = useKitAbilities(projectId);
+  const inAbility = new Set<string>();
+  const abilityGroups = (abilities ?? []).map((a) => {
+    const skills = bindable.skills.filter((sk) => a.tools.some((t) => t.ref === `skill:${sk.skill_id}`));
+    const tools = bindable.mcp_servers.flatMap((server) => server.tools
+      .filter((t) => a.tools.some((x) => x.ref === `mcp:${server.name}.${t.name}`))
+      .map((t) => ({ server, tool: t })));
+    skills.forEach((sk) => inAbility.add(`skill:${sk.skill_id}`));
+    tools.forEach(({ server, tool }) => inAbility.add(`mcp:${server.id}:${tool.name}`));
+    return { ability: a, skills, tools };
+  }).filter((g) => g.skills.length || g.tools.length);
+  const chosenAbility = abilityGroups.find((g) => g.skills.some((sk) => `skill:${sk.skill_id}` === bindingRef)
+    || g.tools.some(({ server, tool }) => `mcp:${server.id}:${tool.name}` === bindingRef))?.ability;
+  const yours = bindable.skills.filter((s) => s.source === "authored" && !inAbility.has(`skill:${s.skill_id}`));
+  const shipped = bindable.skills.filter((s) => s.source !== "authored" && !inAbility.has(`skill:${s.skill_id}`));
   const skillOption = (skill: Bindable["skills"][number]) => (
     <option key={skill.skill_id} value={`skill:${skill.skill_id}`}
             disabled={skill.usable === false}
@@ -130,23 +146,42 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
         <select className="input" value={bindingRef} data-testid="dw-define-binding"
                 onChange={(e) => setBindingRef(e.target.value)}>
           <option value="">Choose a skill or tool</option>
+          {abilityGroups.map(({ ability, skills, tools }) => (
+            <optgroup key={ability.key} label={notSetUp(ability) ? `${ability.label} · Not set up` : ability.label}>
+              {skills.map(skillOption)}
+              {tools.map(({ server, tool }) => (
+                <option key={`${server.id}:${tool.name}`} value={`mcp:${server.id}:${tool.name}`}>
+                  {server.name} · {tool.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
           {yours.length ? (
             <optgroup label="Your skills">{yours.map(skillOption)}</optgroup>
           ) : null}
           {shipped.length ? (
             <optgroup label="Skills BOSS ships">{shipped.map(skillOption)}</optgroup>
           ) : null}
-          {bindable.mcp_servers.map((server) => (
-            <optgroup key={server.id}
-                      label={server.reachable ? server.name : `${server.name} (unreachable)`}>
-              {server.tools.map((tool) => (
-                <option key={tool.name} value={`mcp:${server.id}:${tool.name}`}>
-                  {tool.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
+          {bindable.mcp_servers.map((server) => {
+            const rest = server.tools.filter((tool) => !inAbility.has(`mcp:${server.id}:${tool.name}`));
+            return rest.length ? (
+              <optgroup key={server.id}
+                        label={server.reachable ? server.name : `${server.name} (unreachable)`}>
+                {rest.map((tool) => (
+                  <option key={tool.name} value={`mcp:${server.id}:${tool.name}`}>
+                    {tool.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null;
+          })}
         </select>
+        {chosenAbility && notSetUp(chosenAbility) ? (
+          <a className="wf-chip" data-tone="red" href={setUpHref(chosenAbility.key)}
+             title="Open this ability in Skills & MCP" data-testid="dw-define-setup">
+            Not set up · Set up ↗
+          </a>
+        ) : null}
       </label>
       <div className="field">
         <span>Needs</span>
@@ -211,8 +246,8 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
           Nothing to bind yet{" "}
           <HelpTip label="Nothing to bind yet"
                    text={unreachable.length
-                     ? `${unreachable.join(", ")} registered but not answering. Fix them on Skills and MCP.`
-                     : "Register a skill, or connect an MCP server, on Skills and MCP."} />
+                     ? `${unreachable.join(", ")} registered but not answering. Fix them in Skills & MCP.`
+                     : "Register a skill, or connect an MCP server, in Skills & MCP."} />
         </div>
       ) : unreachable.length ? (
         // Said even when there is something else to pick. An unreachable server's tools are its

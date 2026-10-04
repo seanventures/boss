@@ -4,39 +4,56 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from sqlalchemy import text
+
 from boss_engine.services.work_tracker_adapters import IssueCreateResult
 
 
 PROJECT_ID = "boss-dogfood"
 
 
-def test_work_tracker_catalog_includes_plane_default_and_alternatives(client):
+def test_work_tracker_catalog_offers_github_issues_first_and_the_alternatives(client):
+    # skills-mcp spec E10: GitHub Issues (it reuses the repo connection) is the default option.
     response = client.get("/v1/work-trackers/catalog")
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["default_provider_key"] == "plane"
+    assert payload["default_provider_key"] == "github_issues"
     keys = [item["provider_key"] for item in payload["items"]]
-    assert keys == ["plane", "jira", "linear", "github_issues", "azure_devops"]
-    plane = payload["items"][0]
-    assert plane["is_default_option"] is True
+    assert keys == ["github_issues", "linear", "jira", "plane", "azure_devops"]
+    assert [i["provider_key"] for i in payload["items"] if i["is_default_option"]] == ["github_issues"]
+    plane = next(i for i in payload["items"] if i["provider_key"] == "plane")
     assert any(f["secret"] for f in plane["connection_fields"])
 
 
-def test_list_work_trackers_seeds_plane_default(client):
+def test_list_work_trackers_seeds_every_provider_and_no_unconnected_default(client, engine):
+    # skills-mcp spec E10: Plane was seeded as the default while nothing was connected, a default
+    # that could not create a ticket. A FRESH project seeds every provider and makes none default.
+    from boss_engine.config import get_settings
+    from boss_engine.services.work_orchestration import WorkOrchestrationService
+
+    fresh = "tracker-seed-fresh"
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO projects (id, workspace_id, name, slug) "
+            "SELECT :id, workspace_id, :id, :id FROM projects WHERE id = :seeded "
+            "ON CONFLICT DO NOTHING"
+        ), {"id": fresh, "seeded": PROJECT_ID})
+        WorkOrchestrationService(get_settings()).seed_defaults(connection, fresh)
+    seeded = client.get("/v1/work-trackers", params={"project_id": fresh}).json()
+    assert seeded["default_provider_key"] is None
+    assert not [i for i in seeded["items"] if i["is_default"]]
+
     response = client.get(
         "/v1/work-trackers", params={"project_id": PROJECT_ID}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["default_provider_key"] == "plane"
     keys = {item["provider_key"] for item in payload["items"]}
     assert "plane" in keys
     assert "jira" in keys
     assert "linear" in keys
     assert "github_issues" in keys
     assert "azure_devops" in keys
-    plane = next(i for i in payload["items"] if i["provider_key"] == "plane")
-    assert plane["is_default"] is True
     # Secrets never leak
     for item in payload["items"]:
         cfg = item.get("configuration") or {}

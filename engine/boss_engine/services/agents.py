@@ -313,8 +313,20 @@ def sync_role_mcp(connection: Connection, *, project_id: str,
             grant_mcp(connection, project_id, actor=actor, role_key=row["role_key"],
                       mcp_server_id=server["id"], tools=tools)
             granted.append({"role_key": row["role_key"], "server": name, "tools": tools})
+    # AND THE ABILITIES ITS ROLE NAMES (`permissions.abilities`, skills-mcp spec §6.2): each one
+    # expands through the kit file into the same role_skills and role_mcp_servers rows, run here
+    # because the servers they name exist by now. Additive; a removal stays removed.
+    from ..config import get_settings
+    from .kit import sync_role_abilities
+
+    abilities: dict[str, Any] = {}
+    try:
+        with connection.begin_nested():
+            abilities = sync_role_abilities(connection, get_settings(), project_id, actor=actor)
+    except Exception as error:  # noqa: BLE001 — a fresh project must still come up; say why
+        abilities = {"granted": [], "unavailable": [{"reason": str(error)}]}
     return {"granted": granted, "granted_count": len(granted), "unavailable": missing,
-            "kept_off_by_operator": kept_off}
+            "kept_off_by_operator": kept_off, "abilities": abilities}
 
 
 def held_mcp_servers(connection: Connection, project_id: str, role_key: str, *,

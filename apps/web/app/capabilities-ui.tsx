@@ -1,5 +1,4 @@
 import type { NativeTool, McpServerWithTools, SkillSummary } from "../lib/capabilities";
-import { McpServersPanel, type McpServerRow } from "./mcp-servers-ui";
 
 function riskLabel(tier: number): { label: string; tone: string } {
   if (tier <= 0) return { label: "read-only", tone: "muted" };
@@ -156,8 +155,11 @@ export function CapabilitiesView({
       {!apiReachable ? (
         <p className="detail">Capabilities API unreachable.</p>
       ) : (
-        <McpServersPanel projectId={projectId} actor={actor}
-                         initial={mcpServers as unknown as McpServerRow[]} />
+        // ONE HOME FOR MCP SERVERS: Skills & MCP › Library manages them; this links there.
+        <a className="kit-link" href="?area=skills&tab=library&lib=mcp" data-testid="capabilities-mcp-link">
+          MCP servers · {(mcpServers as Array<{ enabled?: boolean; reachable?: boolean | null; trusted?: boolean }>)
+            .filter((s) => s.enabled !== false && s.reachable === true && s.trusted).length} ready ↗
+        </a>
       )}
     </div>
   );

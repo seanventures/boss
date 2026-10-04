@@ -39,7 +39,6 @@ import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
 
 const PALETTE_W = 240;
-const RAIL_W = 48;
 /** What the lane loses to its column beyond the palette: the grid gap and the lane's border. */
 const LANE_CHROME = 12 + 2;
 const UNDO_TOAST_MS = 6000;
@@ -192,7 +191,10 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     if (!bodyWidth || !spec.steps.length) return false;
     const types = new Map([...views].map(([id, v]) => [id, v.type] as [string, StepView["type"]]));
     const compact = laneGeometry(layoutFlow(spec), types, "compact").width * minScale("compact");
-    return compact > bodyWidth - PALETTE_W - LANE_CHROME && compact <= bodyWidth - RAIL_W - LANE_CHROME;
+    // FOLD WHENEVER THE OPEN PALETTE MAKES THE FLOW SCROLL, not only when folding makes it fit:
+    // a 10-step flow beside the full console nav was left scrolling with the palette open,
+    // when folding it shows most of the flow (walk of ws/step-detail, 2026-10-04).
+    return compact > bodyWidth - PALETTE_W - LANE_CHROME;
   }, [bodyWidth, spec, views]);
   const rail = pref ? pref === "rail" : autoRail;
   const togglePalette = () => { const next = rail ? "open" : "rail"; setPref(next); writePref(next); };

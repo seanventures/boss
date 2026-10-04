@@ -928,7 +928,8 @@ from .services.specpack import (
 )
 
 settings = get_settings()
-engine = get_engine(settings)
+engine = get_engine(
+    settings, idle_in_transaction_seconds=settings.api_db_idle_in_transaction_seconds)
 engine_ports = build_ports(settings, engine)
 configure_engine_ports(engine_ports)
 LOGGER = logging.getLogger("boss.api")
@@ -3026,7 +3027,24 @@ def skill_summary_from_service(payload) -> SkillSummary:
         policy=payload.get("policy") or {},
         publisher=payload.get("publisher") or {},
         provenance=payload.get("provenance") or {},
+        usable=payload.get("usable"),
+        reason=payload.get("reason"),
     )
+
+
+def skill_usability(skill: dict) -> tuple[bool, Optional[str]]:
+    """Can BOSS run this catalogue skill here? A skill with no executor (and not one BOSS runs
+    itself, nor an MCP or authored one) cannot, whatever its row says."""
+    from boss_engine.services.skill_executors import registered_executor_ids
+
+    if skill.get("system") or str(skill.get("source") or "module") not in (
+            "module", "catalog", "builtin"):
+        return True, None
+    if skill.get("mock_mode"):
+        return True, None
+    if str(skill.get("id")) in set(registered_executor_ids()):
+        return True, None
+    return False, "Agents can't run this skill on this install"
 
 
 def entitlement_source_summary_from_service(
@@ -5914,6 +5932,8 @@ def register_mcp(payload: McpServerRegisterRequest):
                 provenance=payload.provenance,
                 tool_risk_overrides=payload.tool_risk_overrides,
                 actor=payload.actor,
+                auth=payload.auth,
+                settings=get_settings(),
             )
         except McpServerConflict as error:
             # 409: the name is taken — a double-pressed Register used to make a second server
@@ -5987,7 +6007,7 @@ def toggle_mcp(
                                       actor=actor)
             else:
                 row = update_mcp_server(connection, project_id, server_id, actor=actor,
-                                        **changes)
+                                        settings=get_settings(), **changes)
         except McpServerConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
@@ -6416,6 +6436,8 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
                 repair_retries=payload.get("repair_retries"),
                 review_panel_size=payload.get("review_panel_size"),
                 simulated=simulated,
+                # RUN AS AN AGENT: its held MCP servers reach the harness (skills-mcp E6).
+                role_key=payload.get("role_key"),
             )
     except ValueError as error:
         # Preflight rejections (e.g. non-allowlisted test executables) are the CALLER's
@@ -15242,9 +15264,11 @@ def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
                 project_id,
                 connection=connection,
             )
-    return SkillListResponse(
-        items=[skill_summary_from_service(skill) for skill in skills]
-    )
+    items = []
+    for skill in skills:
+        usable, reason = skill_usability(skill)
+        items.append(skill_summary_from_service({**skill, "usable": usable, "reason": reason}))
+    return SkillListResponse(items=items)
 
 
 @app.get("/v1/skills/invocations")
@@ -16330,13 +16354,45 @@ def delete_skill_definition(
 
 
 # --------------------------------------------------------------------------- #
-# FIRST-RUN SETUP. See services/setup_service for why this is its own surface.
+# REPO AND MODELS. The surface is routers/setup.py (GET /v1/setup, checks, one connect per
+# object). The routes below are DEPRECATED for one release: thin wrappers over the same
+# services, each answering with a `Deprecation` header, kept for the installer and older MCP
+# clients (spec §6.10).
 # --------------------------------------------------------------------------- #
+from .routers.setup import build_setup_router  # noqa: E402
+
+app.include_router(build_setup_router(
+    engine=engine,
+    # The module's own settings object, which the rest of this API (and its tests) use.
+    get_settings=lambda: settings,
+    require_actor=require_project_actor,
+    principal=lambda: current_api_principal.get(),
+))
+
+
+def _deprecated(response: Response, successor: str) -> None:
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = f'<{successor}>; rel="successor-version"'
+
+
+def _setup_failure(error) -> HTTPException:
+    """A Repo and models refusal, as the old routes phrased it: a sentence, or a decision."""
+    detail = error.detail
+    if detail.get("state") == "needs_consent":
+        return HTTPException(status_code=409, detail={
+            "error": "secret_store_fallback_not_accepted", "message": detail.get("fix"),
+            "backend": detail.get("backend"),
+            "resend_with": {"accept_database_fallback": True}})
+    return HTTPException(status_code=error.status,
+                         detail=f"{detail.get('headline')}: {detail.get('fix')}".strip(": "))
+
+
 @app.get("/v1/setup/status")
-def setup_status_endpoint(project_id: str) -> dict:
-    """What is connected, what is not, and what to do about it."""
+def setup_status_endpoint(project_id: str, response: Response) -> dict:
+    """DEPRECATED: GET /v1/setup. The same view, plus the old `steps` list."""
     from .services.setup_service import setup_status
 
+    _deprecated(response, "/v1/setup")
     with begin(engine) as connection:
         require_project_actor(
             connection, project_id, current_api_principal.get() or "ceo",
@@ -16346,35 +16402,24 @@ def setup_status_endpoint(project_id: str) -> dict:
 
 
 @app.get("/v1/setup/model-providers")
-def setup_model_providers() -> dict:
-    """The providers the wizard offers, with the base URL and an example model for each.
-
-    A catalogue rather than a free-text form: the two things a new user gets wrong are the base
-    URL and the model name, and both are knowable.
-    """
+def setup_model_providers(response: Response) -> dict:
+    """DEPRECATED: `catalogue` in GET /v1/setup."""
     from .services.setup_service import provider_catalogue
 
+    _deprecated(response, "/v1/setup")
     return {"providers": provider_catalogue()}
 
 
 @app.get("/v1/setup/coding-agents")
-def setup_coding_agents(project_id: str = "") -> dict:
-    """Which coding-agent CLIs this machine has, what each still needs, and what was connected.
-
-    A subscription is not a key. A Codex or Cursor plan is an OAuth session held by that CLI,
-    so there is nothing for an operator to paste and a form asking them to would be asking for
-    a credential that does not exist. BOSS looks for the CLI they already use instead.
-
-    `connected` reports what was RECORDED, separately from what detection finds now. Returning
-    detection alone made a completed connection look undone: after a refresh or a redeploy the
-    wizard showed the same Connect button as a fresh install, with nothing saying the work had
-    already been done — so an operator reasonably concluded it had not been saved.
-    """
+def setup_coding_agents(response: Response, project_id: str = "") -> dict:
+    """DEPRECATED: `detected` in GET /v1/setup. Which coding-agent CLIs this machine has, what
+    each still needs, and which were recorded as connected."""
     from .services.setup_service import (
         coding_agent_live_proof_available, list_coding_agents,
         with_recorded_connections,
     )
 
+    _deprecated(response, "/v1/setup")
     runtime_settings = get_settings()
 
     if project_id:
@@ -16401,16 +16446,10 @@ def setup_coding_agents(project_id: str = "") -> dict:
 
 
 @app.post("/v1/setup/coding-agents/credential", status_code=201)
-def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredentialBody) -> dict:
-    """Hand BOSS a subscription's credential and let it choose where that lives.
-
-    Removes the step customers were being asked to perform for us. Before this, a subscription
-    on a server meant getting the credential into the process yourself: an env file you may not
-    be able to reach, or a secret store you may not run, followed by a redeploy — none of which
-    is BOSS's business to make somebody's problem. `default_secret_backend` already knows the
-    best store this installation has, down to Postgres when it has nothing else, so the honest
-    interface is "give it to BOSS" and the rest is an implementation detail.
-    """
+def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredentialBody,
+                                        response: Response) -> dict:
+    """DEPRECATED: POST /v1/setup/models with `credential` (stores and proves in one press).
+    Stores a subscription's credential in whatever store this installation has."""
     payload = payload.payload()
     from .services.setup_service import (
         SecretFallbackNotAccepted,
@@ -16418,6 +16457,7 @@ def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredenti
         store_coding_agent_credential,
     )
 
+    _deprecated(response, "/v1/setup/models")
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip() or (
         current_api_principal.get() or "ceo")
@@ -16433,9 +16473,7 @@ def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredenti
                 connection, get_settings(), project_id, provider, credential, actor=actor,
                 accept_database_fallback=accept)
         except SecretFallbackNotAccepted as exc:
-            # 409, not 422. Nothing is wrong with the request and retrying it unchanged will
-            # fail identically — what is missing is a decision, and the body says which one so
-            # a client can put it to the operator rather than guessing.
+            # 409, not 422: what is missing is a decision, named so a client can ask for it.
             raise HTTPException(status_code=409, detail={
                 "error": "secret_store_fallback_not_accepted",
                 "message": str(exc),
@@ -16443,16 +16481,16 @@ def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredenti
                 "resend_with": {"accept_database_fallback": True},
             }) from exc
         except SetupError as exc:
-            # 422: the operator can fix every one of these, and the message says how.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/v1/setup/decision-model")
-def setup_decision_model_status(project_id: str) -> dict:
-    """Which model answers this project's typed decisions, and whether a Jev key is held.
-    Read like /v1/setup/status: it names whether a key exists, never the key."""
+def setup_decision_model_status(project_id: str, response: Response) -> dict:
+    """DEPRECATED: the `decisions` job in GET /v1/setup. Which model answers typed decisions,
+    and whether a Jev key is held — never the key."""
     from .services.setup_service import decision_model_status
 
+    _deprecated(response, "/v1/setup")
     with begin() as connection:
         require_project_actor(
             connection, project_id, current_api_principal.get() or "ceo",
@@ -16462,11 +16500,18 @@ def setup_decision_model_status(project_id: str) -> dict:
 
 
 @app.post("/v1/setup/decision-model/key", status_code=201)
-def setup_store_decision_key(payload: DecisionModelKeyBody) -> dict:
-    """Hand BOSS a TypeSafe key. It is proved with one tiny decision before it is stored, and
-    storing it switches this project's decisions to Jev (Claude still answers when Jev is
-    unsure). Optional: BOSS decides on the Claude subscription without it."""
+def setup_store_decision_key(payload: DecisionModelKeyBody, response: Response) -> dict:
+    """DEPRECATED: POST /v1/setup/decisions/key. A TypeSafe key, proved with one governed
+    decision before it is stored; storing it switches this project's decisions to Jev."""
+    _deprecated(response, "/v1/setup/decisions/key")
     payload = payload.payload()
+    return _store_decision_key(
+        str(payload.get("project_id") or "").strip(),
+        str(payload.get("actor") or "").strip() or (current_api_principal.get() or "ceo"),
+        str(payload.get("api_key") or ""), bool(payload.get("accept_database_fallback")))
+
+
+def _store_decision_key(project_id: str, actor: str, api_key: str, accept: bool) -> dict:
     from .services.setup_service import (
         DecisionModelGovernanceHold,
         SecretFallbackNotAccepted,
@@ -16474,18 +16519,13 @@ def setup_store_decision_key(payload: DecisionModelKeyBody) -> dict:
         store_decision_key,
     )
 
-    project_id = str(payload.get("project_id") or "").strip()
-    actor = str(payload.get("actor") or "").strip() or (
-        current_api_principal.get() or "ceo"
-    )
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     with begin() as connection:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
         try:
-            return store_decision_key(
-                connection, get_settings(), project_id, str(payload.get("api_key") or ""),
-                actor=actor, accept_database_fallback=bool(payload.get("accept_database_fallback")))
+            return store_decision_key(connection, get_settings(), project_id, api_key,
+                                      actor=actor, accept_database_fallback=accept)
         except DecisionModelGovernanceHold as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except SecretFallbackNotAccepted as exc:
@@ -16499,16 +16539,30 @@ def setup_store_decision_key(payload: DecisionModelKeyBody) -> dict:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.post("/v1/setup/coding-agents/connect", status_code=201)
-def setup_connect_coding_agent(payload: open_bodies.CodingAgentConnectBody) -> dict:
-    """Import an existing subscription. Community records eligible CLIs without live proof.
+@app.post("/v1/setup/decisions/key")
+def setup_decisions_key(payload: DecisionModelKeyBody) -> dict:
+    """Decisions › TypeSafe Jev › Add key: proved with one governed decision, then stored.
+    Answers with the Repo and models view."""
+    from boss_engine.services import setup_view
 
-    A live proof turn is available only where model cost is governed; otherwise the first
-    governed job tests the recorded connection and reports any authentication failure.
-    """
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(current_api_principal.get() or payload.get("actor") or "ceo")
+    _store_decision_key(project_id, actor, str(payload.get("api_key") or ""),
+                        bool(payload.get("accept_database_fallback")))
+    with begin(engine) as connection:
+        return setup_view.build(connection, settings, project_id)
+
+
+@app.post("/v1/setup/coding-agents/connect", status_code=201)
+def setup_connect_coding_agent(payload: open_bodies.CodingAgentConnectBody,
+                               response: Response) -> dict:
+    """DEPRECATED: POST /v1/setup/models {kind: "subscription"}. Records a subscription signed
+    in on this server after one governed, receipted proof turn."""
     payload = payload.payload()
     from .services.setup_service import SetupError, connect_coding_agent
 
+    _deprecated(response, "/v1/setup/models")
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip() or (
         current_api_principal.get() or "ceo")
@@ -16523,103 +16577,43 @@ def setup_connect_coding_agent(payload: open_bodies.CodingAgentConnectBody) -> d
             return connect_coding_agent(connection, get_settings(), project_id, provider,
                                         actor=actor, prove=payload.get("prove") is not False)
         except SetupError as exc:
-            # 422, not 500: the operator can fix every one of these, and the message says how.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/setup/model", status_code=201)
-def setup_model_endpoint(payload: open_bodies.ModelSetupBody) -> dict:
-    """Save a model key; paid editions also probe it before storing.
-
-    Community stores it as unverified because a live one-token completion needs a governed
-    budget reservation, leased job, and cost receipt that this setup route does not create.
-    """
+def setup_model_endpoint(payload: open_bodies.ModelSetupBody, response: Response) -> dict:
+    """DEPRECATED: POST /v1/setup/models. Stores a model key after one governed completion
+    proves it — in every edition, reserved against the budget and receipted."""
     payload = payload.payload()
-    from .services.secret_backends import default_secret_backend
-    from .services.setup_service import (
-        PROVIDERS, SetupError, live_model_probe_allowed, model_key_details, verify_model_key,
-    )
+    from boss_engine.services import setup_actions, setup_view
 
+    _deprecated(response, "/v1/setup/models")
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip() or "executive_console"
     provider = str(payload.get("provider") or "").strip()
-    api_key = str(payload.get("api_key") or "").strip()
-    base_url = str(payload.get("base_url") or "").strip()
-    model = str(payload.get("model") or "").strip()
     if not project_id or not provider:
         raise HTTPException(status_code=400, detail="project_id and provider are required")
-    spec = PROVIDERS.get(provider)
-    if spec is None:
-        raise HTTPException(status_code=400,
-                            detail=f"unknown provider {provider!r}; "
-                                   f"one of: {', '.join(sorted(PROVIDERS))}")
-    if spec.get("kind") == "decision":
-        # Jev cannot write code; its separate key path is paused by BOSS-451.
+    entry = setup_view.CATALOGUE_BY_PROVIDER.get(provider)
+    if entry is None or entry["kind"] == "subscription":
         raise HTTPException(
-            status_code=409,
-            detail=(f"{spec['label']} decides, it does not build. BOSS-451 pauses "
-                    "decision-model key proof until model spend has durable controls."))
-    if spec.get("kind") == "subscription":
-        # NOT A REFUSAL, A REDIRECT. BOSS's own policy is that a subscription is authenticated
-        # through its provider's login, never by a pasted credential — so the wizard says where
-        # that flow lives instead of showing a key box that would be rejected on submit.
-        raise HTTPException(
-            status_code=409,
-            detail=(f"{spec['label']} is a subscription, not an API key — it is authorised "
-                    f"through its own login. Use /v1/entitlements/sources/{{source_id}}/connect."))
-    if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
-
-    # Check authority before either storing a credential or contacting a provider.
+            status_code=409 if entry else 400,
+            detail=(f"{entry['label']} is a subscription, not an API key — connect it with "
+                    "POST /v1/setup/models {kind: subscription}." if entry else
+                    f"unknown provider {provider!r}"))
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
-
-    try:
-        live_probe = live_model_probe_allowed(settings)
-        if live_probe:
-            proof = verify_model_key(settings=settings, provider=provider, api_key=api_key,
-                                     base_url=base_url, model=model)
-        else:
-            proof = {"ok": True, **model_key_details(
-                provider=provider, base_url=base_url, model=model,
-            )}
-    except SetupError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    if not proof.get("ok"):
-        # A failed paid-edition probe does not store the key.
-        raise HTTPException(status_code=422, detail=proof.get("error") or "the key did not work")
-
-    source_id = f"setup-{provider}"
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "entitlement_manage")
-        entitlements.upsert_source(
-            connection,
-            {
-                "project_id": project_id, "provider": provider, "source_id": source_id,
-                "source_kind": "api", "entitlement_kind": "api_key",
-                "owner_type": "project", "owner_id": project_id,
-                "cost_mode": "usage_based_api", "auth_method": "api_key",
-                "status": "declared", "runtime_supported": True,
-                "supported_models": [proof["model"]],
-                "connection_metadata": {"base_url": base_url or spec.get("base_url") or "",
-                                        "verification_state": (
-                                            "verified" if live_probe else "unverified"
-                                        ),
-                                        "verified_endpoint": (
-                                            proof.get("endpoint") if live_probe else None
-                                        )},
-            },
-            actor=actor,
-        )
-        stored = model_gateway.upload_credential(
-            connection, project_id, source_id,
-            value=api_key, backend=default_secret_backend(settings), actor=actor,
-        )
-    secret = stored["secret"]
-    return {"ok": True, "provider": provider, "source_id": source_id,
-            "model": proof["model"], "verified": live_probe,
-            "verification_state": "verified" if live_probe else "unverified",
-            "backend": secret["backend"], "last4": secret.get("last4"),
+        try:
+            done = setup_actions.connect_model(
+                connection, settings, project_id, provider=provider,
+                kind=entry["kind"], api_key=str(payload.get("api_key") or ""),
+                base_url=str(payload.get("base_url") or ""),
+                model=str(payload.get("model") or ""),
+                accept_database_fallback=True, actor=actor)
+        except setup_actions.SetupActionError as error:
+            raise _setup_failure(error) from error
+    return {"ok": True, "provider": provider, "source_id": done["source_id"],
+            "verified": bool(done.get("ok")),
+            "verification_state": "verified" if done.get("ok") else str(done.get("state")),
             "raw_secret_stored": False}
 
 
@@ -17040,11 +17034,12 @@ def create_github_connection(
 def easy_connect_github_to_project(
     payload: GitHubEasyConnectRequest,
 ) -> GitHubEasyConnectResponse:
-    """Easy project GitHub auth: env SecretRef + connection + optional repo link/test.
+    """Easy project GitHub auth: a SecretRef + connection + optional repo link/test.
 
-    Operators never paste raw tokens into BOSS. Place a PAT or App private key in
-    the API runtime environment, then call this endpoint (or the Mission Control
-    form) with the env var name and optional owner/repo to bind to the project.
+    Two ways in: name an environment variable that holds a PAT or App private key, or send a
+    pasted `token`, which is written through to the secret store and only its reference kept.
+    Repo and models uses POST /v1/setup/repository/token and /select instead, which also
+    list the token's repositories and prove read, write and pull-request access.
     """
     with begin(engine) as connection:
         require_project_actor(
@@ -24061,7 +24056,11 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
 
 def _editor_problems(problems: list) -> list[dict]:
     """Problems as the editor reads them: {step_id, field, message}."""
-    return [{"step_id": p.get("step_id"), "field": p.get("field"), "message": p.get("message")}
+    return [{"step_id": p.get("step_id"), "field": p.get("field"), "message": p.get("message"),
+             # A warning (an ability not set up yet) is said on the step and does not block Save;
+             # `ability` is what the Studio links to (?area=skills&ability=<key>).
+             **({"severity": p["severity"]} if p.get("severity") else {}),
+             **({"ability": p["ability"]} if p.get("ability") else {})}
             for p in problems]
 
 
@@ -25537,11 +25536,10 @@ def upsert_ranked_work_item(
                 source=payload.source,
                 actor=payload.actor,
             )
-            binding = work_orchestration.bind_tracker(
+            binding = work_orchestration.bind_default_tracker(
                 connection,
                 project_id=payload.project_id,
                 work_item_id=work_item["id"],
-                provider_key=None,
                 actor=payload.actor,
             )
             allocation = work_orchestration.ensure_allocation(
@@ -25550,11 +25548,15 @@ def upsert_ranked_work_item(
                 work_item_id=work_item["id"],
                 actor=payload.actor,
             )
-            sync_job = work_orchestration.enqueue_tracker_sync(
-                connection,
-                project_id=payload.project_id,
-                binding_id=binding["id"],
-                actor=payload.actor,
+            sync_job = (
+                work_orchestration.enqueue_tracker_sync(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=binding["id"],
+                    actor=payload.actor,
+                )
+                if binding
+                else {"status": "no_tracker", "binding_id": None, "job_id": None}
             )
             return {
                 "work_item": work_item,
@@ -25666,21 +25668,23 @@ def plan_resource_allocations(
 
 @app.get("/v1/work-trackers/catalog")
 def work_tracker_catalog() -> dict[str, Any]:
-    """Selectable bug/work trackers (Plane is the default option)."""
+    """Selectable bug/work trackers (GitHub Issues, reusing the repo connection, is the default
+    option — skills-mcp spec E10)."""
     return {
-        "default_provider_key": "plane",
+        "default_provider_key": "github_issues",
         "items": work_orchestration.tracker_catalog(),
     }
 
 
 @app.get("/v1/work-trackers")
 def list_work_trackers(project_id: str) -> dict[str, Any]:
-    """Installed tracker providers for a project (Plane seeded as default)."""
+    """Installed tracker providers for a project. None is the default until one is connected
+    (skills-mcp spec E10), and then `default_provider_key` says which."""
     with begin(engine) as connection:
         items = work_orchestration.list_tracker_providers(connection, project_id)
         default_key = next(
             (i["provider_key"] for i in items if i.get("is_default")),
-            "plane",
+            None,
         )
         return {
             "project_id": project_id,
@@ -28216,6 +28220,15 @@ from .routers.agents import build_agents_router
 
 app.include_router(build_agents_router(
     engine=engine,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# THE KIT: Skills & MCP's abilities, connections, tests, holders and tool policy (routers/kit.py).
+from .routers.kit import build_kit_router
+
+app.include_router(build_kit_router(
+    engine=engine,
+    settings=get_settings,
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))

@@ -17,7 +17,7 @@ boundaries:
     - Execute provider cleanup directly.
     - Read raw provider secrets.
 permissions:
-  allowed_skills: [resource.inventory.inspect, drift.report, savings.estimate, changeset.propose, artifact.create, decision.create]
+  allowed_skills: []
   forbidden_skills: [provider.destroy.direct, provider.secret.read_raw, production.delete.auto]
 output_contracts: [OrphanResourceReport, CleanupChangeSetProposal, SavingsEstimate]
 autonomy:

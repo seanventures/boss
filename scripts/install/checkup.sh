@@ -166,9 +166,26 @@ else
 fi
 
 # 6. repository, pushable
-setup=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/setup/status?project_id=$PROJECT" 2>/dev/null)
-if printf '%s' "$setup" | grep -q '"github"[^}]*"done": *true' 2>/dev/null; then ok "repository: connected"
-else warn "repository: not connected — builds cannot open a pull request"; fi
+# Repo and models' own verdict (GET /v1/setup): the repository's last read/write/PR check.
+setup=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/setup?project_id=$PROJECT" 2>/dev/null)
+repo_line=$(printf '%s' "$setup" | python3 -c '
+import json, sys
+try:
+    repos = (json.load(sys.stdin).get("repository") or {}).get("repos") or []
+except ValueError:
+    repos = []
+if not repos:
+    print("none")
+else:
+    r = next((x for x in repos if x.get("default")), repos[0])
+    p = r.get("pill") or {}
+    print(("ok " if p.get("tone") in ("green", "amber", "busy") else "bad ") + str(r.get("full_name")) + " " + str(p.get("label") or ""))
+' 2>/dev/null || echo none)
+case "$repo_line" in
+  ok\ *) ok "repository: ${repo_line#ok }" ;;
+  bad\ *) bad "repository: ${repo_line#bad } — fix it in Repo and models" ;;
+  *) warn "repository: not connected — builds cannot open a pull request" ;;
+esac
 
 # 7. can this machine run BOSS at all
 if [ -n "$blocked" ]; then warn "host: $blocked"; else ok "host: scheduling BOSS normally"; fi

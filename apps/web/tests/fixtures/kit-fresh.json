@@ -1,0 +1,1288 @@
+{
+ "project_id": "boss-dogfood",
+ "ready": 4,
+ "total": 12,
+ "essentials": [
+  "open_prs",
+  "web_research",
+  "file_tickets",
+  "email"
+ ],
+ "groups": [
+  "code",
+  "research",
+  "coordinate",
+  "ship"
+ ],
+ "abilities": [
+  {
+   "key": "read_repo",
+   "group": "code",
+   "label": "Read the repo",
+   "tip": "Read code, history and PRs in your repo.",
+   "icon": "BookOpen",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "needs_repo",
+   "status_line": null,
+   "status_tip": "Connect your GitHub repo in Setup first",
+   "connection": null,
+   "tools": [
+    {
+     "ref": "skill:repo.read",
+     "label": "Read code and history",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "skill"
+    }
+   ],
+   "holders": [
+    "adversarial_reviewer",
+    "backend_engineer",
+    "cao",
+    "chief_architect",
+    "cto",
+    "design_critic",
+    "docs_writer",
+    "engineering_captain",
+    "frontend_engineer",
+    "integration_validator",
+    "operations_engineer",
+    "pm",
+    "program_manager",
+    "qa",
+    "release_manager",
+    "security_reviewer",
+    "software_engineer",
+    "sre"
+   ],
+   "recommended": [
+    "adversarial_reviewer",
+    "backend_engineer",
+    "chief_architect",
+    "design_critic",
+    "docs_writer",
+    "engineering_captain",
+    "frontend_engineer",
+    "operations_engineer",
+    "pm",
+    "program_manager",
+    "qa",
+    "release_manager",
+    "security_reviewer",
+    "software_engineer",
+    "sre"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": {
+    "field": {
+     "name": "file",
+     "label": "Path",
+     "placeholder": "README.md"
+    }
+   },
+   "depends_on": [
+    "github"
+   ],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [],
+   "mcp_names": []
+  },
+  {
+   "key": "open_prs",
+   "group": "code",
+   "label": "Open pull requests",
+   "tip": "Branch, commit and open a PR on your repo.",
+   "icon": "GitPullRequest",
+   "provenance": "built_in",
+   "essential": true,
+   "status": "needs_repo",
+   "status_line": null,
+   "status_tip": "Connect your GitHub repo in Setup first",
+   "connection": null,
+   "tools": [
+    {
+     "ref": "skill:github.create_pr_real",
+     "label": "Open a PR",
+     "tier": 2,
+     "policy": "ask",
+     "floor": "ask",
+     "kind": "skill"
+    },
+    {
+     "ref": "skill:github.create_pr_sandbox",
+     "label": "Open a sandbox PR",
+     "tier": 2,
+     "policy": "ask",
+     "floor": "ask",
+     "kind": "skill"
+    },
+    {
+     "ref": "skill:github.merge_pr_real",
+     "label": "Merge a PR",
+     "tier": 3,
+     "policy": "off",
+     "floor": "ask",
+     "kind": "skill"
+    }
+   ],
+   "holders": [
+    "backend_engineer",
+    "docs_writer",
+    "frontend_engineer",
+    "software_engineer"
+   ],
+   "recommended": [
+    "backend_engineer",
+    "docs_writer",
+    "frontend_engineer",
+    "software_engineer"
+   ],
+   "used_in": [
+    {
+     "workflow_key": "backend_service_setup",
+     "workflow_name": "Backend Service Setup",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "compliance_release",
+     "workflow_name": "Compliance-Ready Release",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "data_migration",
+     "workflow_name": "Data / Migration Change",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "deprecation_sunset",
+     "workflow_name": "Deprecation / Sunset",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "fast_fix",
+     "workflow_name": "Fast Fix / Hotfix",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "ux_certification",
+     "workflow_name": "Frontend / UX Certification",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "major_feature",
+     "workflow_name": "Major Feature",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "minor_feature",
+     "workflow_name": "Minor Feature",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "security_hardening",
+     "workflow_name": "Security Hardening",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "standard_product_delivery",
+     "workflow_name": "Standard Product Delivery",
+     "step_id": "build",
+     "step_title": "build"
+    },
+    {
+     "workflow_key": "third_party_integration",
+     "workflow_name": "Third-Party Integration",
+     "step_id": "build",
+     "step_title": "build"
+    }
+   ],
+   "last_test": null,
+   "try": null,
+   "depends_on": [
+    "github"
+   ],
+   "connect_href": null,
+   "scopes_tip": "repo, workflow",
+   "mcp": [],
+   "mcp_names": []
+  },
+  {
+   "key": "tests_ci",
+   "group": "code",
+   "label": "Tests & CI",
+   "tip": "Run tests and read CI results.",
+   "icon": "TestTube",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "needs_repo",
+   "status_line": null,
+   "status_tip": "Connect your GitHub repo in Setup first",
+   "connection": null,
+   "tools": [
+    {
+     "ref": "skill:ci.status",
+     "label": "Read CI results",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "skill"
+    }
+   ],
+   "holders": [
+    "adversarial_reviewer",
+    "backend_engineer",
+    "engineering_captain",
+    "frontend_engineer",
+    "integration_validator",
+    "operations_engineer",
+    "qa",
+    "release_manager",
+    "security_reviewer",
+    "software_engineer"
+   ],
+   "recommended": [
+    "adversarial_reviewer",
+    "backend_engineer",
+    "engineering_captain",
+    "frontend_engineer",
+    "operations_engineer",
+    "qa",
+    "release_manager",
+    "security_reviewer",
+    "software_engineer"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": null,
+   "depends_on": [
+    "github"
+   ],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [],
+   "mcp_names": []
+  },
+  {
+   "key": "library_docs",
+   "group": "code",
+   "label": "Library docs",
+   "tip": "Up-to-date docs for the libraries you use.",
+   "icon": "Books",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "setup",
+   "status_line": null,
+   "status_tip": "Needs an account or key first",
+   "connection": {
+    "providers": [
+     {
+      "key": "context7",
+      "label": "Context7",
+      "fields": []
+     }
+    ],
+    "provider": "context7",
+    "set_fields": {},
+    "acts_as": null,
+    "flow": null,
+    "connected": false
+   },
+   "tools": [],
+   "holders": [],
+   "recommended": [
+    "backend_engineer",
+    "chief_architect",
+    "docs_writer",
+    "frontend_engineer",
+    "software_engineer"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": null,
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [],
+   "mcp_names": [
+    "context7"
+   ]
+  },
+  {
+   "key": "web_research",
+   "group": "research",
+   "label": "Web research",
+   "tip": "Read and study live websites.",
+   "icon": "Globe",
+   "provenance": "built_in",
+   "essential": true,
+   "status": "ready",
+   "status_line": null,
+   "status_tip": "Not tested yet \u00b7 Test",
+   "connection": null,
+   "tools": [
+    {
+     "ref": "mcp:web-intel.fetch_page",
+     "label": "Fetch page",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "mcp"
+    },
+    {
+     "ref": "mcp:web-intel.study_site",
+     "label": "Study site",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "mcp"
+    }
+   ],
+   "holders": [
+    "chief_architect",
+    "design_critic",
+    "first_principles_researcher",
+    "frontend_engineer",
+    "pm",
+    "qa",
+    "security_reviewer"
+   ],
+   "recommended": [
+    "chief_architect",
+    "design_critic",
+    "frontend_engineer",
+    "pm",
+    "qa",
+    "security_reviewer"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": {
+    "field": {
+     "name": "url",
+     "label": "URL",
+     "placeholder": "https://example.com"
+    }
+   },
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [
+    {
+     "server_id": "mcp_6229629bb1384e61b4fe",
+     "name": "web-intel",
+     "trusted": true,
+     "reachable": true
+    }
+   ],
+   "mcp_names": [
+    "web-intel"
+   ]
+  },
+  {
+   "key": "web_search",
+   "group": "research",
+   "label": "Web search",
+   "tip": "Search the web for sources.",
+   "icon": "MagnifyingGlass",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "ready",
+   "status_line": null,
+   "status_tip": "Not tested yet \u00b7 Test",
+   "connection": {
+    "providers": [
+     {
+      "key": "exa",
+      "label": "Exa",
+      "keyless": true,
+      "token_url": "https://dashboard.exa.ai/api-keys",
+      "fields": [
+       {
+        "name": "api_key",
+        "label": "API key",
+        "secret": true,
+        "optional": true
+       }
+      ]
+     },
+     {
+      "key": "tavily",
+      "label": "Tavily",
+      "token_url": "https://app.tavily.com/home",
+      "fields": [
+       {
+        "name": "api_key",
+        "label": "API key",
+        "secret": true
+       }
+      ]
+     },
+     {
+      "key": "brave",
+      "label": "Brave",
+      "token_url": "https://api-dashboard.search.brave.com/app/keys",
+      "fields": [
+       {
+        "name": "api_key",
+        "label": "API key",
+        "secret": true
+       }
+      ]
+     }
+    ],
+    "provider": "exa",
+    "set_fields": {},
+    "acts_as": null,
+    "flow": null,
+    "connected": true
+   },
+   "tools": [
+    {
+     "ref": "mcp:web-intel.search_web",
+     "label": "Search web",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "mcp"
+    }
+   ],
+   "holders": [
+    "chief_architect",
+    "pm"
+   ],
+   "recommended": [
+    "backend_engineer",
+    "chief_architect",
+    "frontend_engineer",
+    "pm",
+    "security_reviewer",
+    "software_engineer"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": {
+    "field": {
+     "name": "query",
+     "label": "Query",
+     "placeholder": "open source agent frameworks"
+    }
+   },
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [
+    {
+     "server_id": "mcp_6229629bb1384e61b4fe",
+     "name": "web-intel",
+     "trusted": true,
+     "reachable": true
+    }
+   ],
+   "mcp_names": [
+    "web-intel"
+   ]
+  },
+  {
+   "key": "render_docs",
+   "group": "research",
+   "label": "Render docs",
+   "tip": "Turn drafts into formatted documents.",
+   "icon": "FileText",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "ready",
+   "status_line": null,
+   "status_tip": "Not tested yet \u00b7 Test",
+   "connection": null,
+   "tools": [
+    {
+     "ref": "skill:docs.draft",
+     "label": "Draft a document",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "skill"
+    },
+    {
+     "ref": "mcp:doc-render.render_markdown_pdf",
+     "label": "Render markdown pdf",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "mcp"
+    }
+   ],
+   "holders": [
+    "docs_writer",
+    "pm",
+    "release_manager"
+   ],
+   "recommended": [
+    "docs_writer",
+    "pm",
+    "release_manager"
+   ],
+   "used_in": [
+    {
+     "workflow_key": "backend_service_setup",
+     "workflow_name": "Backend Service Setup",
+     "step_id": "document",
+     "step_title": "document"
+    },
+    {
+     "workflow_key": "compliance_release",
+     "workflow_name": "Compliance-Ready Release",
+     "step_id": "document",
+     "step_title": "document"
+    },
+    {
+     "workflow_key": "data_migration",
+     "workflow_name": "Data / Migration Change",
+     "step_id": "document",
+     "step_title": "document"
+    },
+    {
+     "workflow_key": "deprecation_sunset",
+     "workflow_name": "Deprecation / Sunset",
+     "step_id": "document",
+     "step_title": "document"
+    },
+    {
+     "workflow_key": "research_led_discovery",
+     "workflow_name": "Research-Led Discovery",
+     "step_id": "document",
+     "step_title": "document"
+    }
+   ],
+   "last_test": null,
+   "try": null,
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [
+    {
+     "server_id": "mcp_11afbc9161b84dd1be45",
+     "name": "doc-render",
+     "trusted": true,
+     "reachable": true
+    }
+   ],
+   "mcp_names": [
+    "doc-render"
+   ]
+  },
+  {
+   "key": "file_tickets",
+   "group": "coordinate",
+   "label": "File tickets",
+   "tip": "Open and update issues in your tracker.",
+   "icon": "Ticket",
+   "provenance": "built_in",
+   "essential": true,
+   "status": "setup",
+   "status_line": null,
+   "status_tip": "Needs an account or key first",
+   "connection": {
+    "providers": [
+     {
+      "key": "github_issues",
+      "label": "GitHub Issues",
+      "reuses": "github",
+      "fields": []
+     },
+     {
+      "key": "linear",
+      "label": "Linear",
+      "token_url": "https://linear.app/settings/api",
+      "fields": [
+       {
+        "name": "api_token",
+        "label": "API key",
+        "secret": true
+       },
+       {
+        "name": "team_key",
+        "label": "Team",
+        "placeholder": "ENG"
+       }
+      ]
+     },
+     {
+      "key": "jira",
+      "label": "Jira",
+      "token_url": "https://id.atlassian.com/manage-profile/security/api-tokens",
+      "fields": [
+       {
+        "name": "base_url",
+        "label": "Site URL",
+        "placeholder": "https://acme.atlassian.net"
+       },
+       {
+        "name": "email",
+        "label": "Email"
+       },
+       {
+        "name": "api_token",
+        "label": "API token",
+        "secret": true
+       },
+       {
+        "name": "project_key",
+        "label": "Project key",
+        "placeholder": "ENG"
+       }
+      ]
+     },
+     {
+      "key": "plane",
+      "label": "Plane",
+      "token_url": "https://app.plane.so/profile/api-tokens",
+      "fields": [
+       {
+        "name": "api_base_url",
+        "label": "Site URL",
+        "placeholder": "https://api.plane.so"
+       },
+       {
+        "name": "workspace_slug",
+        "label": "Workspace"
+       },
+       {
+        "name": "project_id",
+        "label": "Project ID"
+       },
+       {
+        "name": "api_token",
+        "label": "API key",
+        "secret": true
+       }
+      ]
+     },
+     {
+      "key": "azure_devops",
+      "label": "Azure DevOps",
+      "token_url": "https://dev.azure.com/_usersSettings/tokens",
+      "fields": [
+       {
+        "name": "organization",
+        "label": "Organization"
+       },
+       {
+        "name": "project",
+        "label": "Project"
+       },
+       {
+        "name": "api_token",
+        "label": "Token",
+        "secret": true
+       }
+      ]
+     }
+    ],
+    "provider": null,
+    "set_fields": {},
+    "acts_as": null,
+    "flow": null,
+    "connected": false
+   },
+   "tools": [
+    {
+     "ref": "skill:work_tracker.issue.ensure",
+     "label": "Open an issue",
+     "tier": 1,
+     "policy": "allow",
+     "floor": null,
+     "kind": "skill"
+    },
+    {
+     "ref": "skill:work_tracker.issue.update",
+     "label": "Update an issue",
+     "tier": 1,
+     "policy": "allow",
+     "floor": null,
+     "kind": "skill"
+    },
+    {
+     "ref": "skill:tracker.issues.create",
+     "label": "File many issues",
+     "tier": 2,
+     "policy": "ask",
+     "floor": "ask",
+     "kind": "skill"
+    }
+   ],
+   "holders": [
+    "engineering_captain",
+    "operations_engineer",
+    "pm",
+    "program_manager",
+    "sre"
+   ],
+   "recommended": [
+    "engineering_captain",
+    "operations_engineer",
+    "pm",
+    "program_manager",
+    "qa",
+    "sre"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": null,
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [],
+   "mcp_names": []
+  },
+  {
+   "key": "email",
+   "group": "coordinate",
+   "label": "Email",
+   "tip": "Send email from your address.",
+   "icon": "EnvelopeSimple",
+   "provenance": "built_in",
+   "essential": true,
+   "status": "setup",
+   "status_line": null,
+   "status_tip": "Needs an account or key first",
+   "connection": {
+    "providers": [
+     {
+      "key": "smtp",
+      "label": "SMTP",
+      "fields": [
+       {
+        "name": "host",
+        "label": "Host",
+        "placeholder": "smtp.example.com"
+       },
+       {
+        "name": "port",
+        "label": "Port",
+        "placeholder": "587"
+       },
+       {
+        "name": "from_address",
+        "label": "Send as",
+        "placeholder": "you@example.com"
+       },
+       {
+        "name": "username",
+        "label": "User",
+        "optional": true
+       },
+       {
+        "name": "password",
+        "label": "Password",
+        "secret": true,
+        "optional": true
+       }
+      ]
+     }
+    ],
+    "provider": null,
+    "set_fields": {},
+    "acts_as": null,
+    "flow": null,
+    "connected": false
+   },
+   "tools": [
+    {
+     "ref": "skill:email.send_real_guarded",
+     "label": "Send an email",
+     "tier": 2,
+     "policy": "ask",
+     "floor": "ask",
+     "kind": "skill"
+    }
+   ],
+   "holders": [
+    "program_manager"
+   ],
+   "recommended": [
+    "pm",
+    "program_manager",
+    "release_manager"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": null,
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [],
+   "mcp_names": []
+  },
+  {
+   "key": "team_chat",
+   "group": "coordinate",
+   "label": "Team chat",
+   "tip": "Post to Slack or Mattermost.",
+   "icon": "ChatsCircle",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "setup",
+   "status_line": null,
+   "status_tip": "Needs an account or key first",
+   "connection": {
+    "providers": [
+     {
+      "key": "slack",
+      "label": "Slack",
+      "token_url": "https://api.slack.com/apps",
+      "scopes_tip": "chat:write",
+      "fields": [
+       {
+        "name": "bot_token",
+        "label": "Bot token",
+        "secret": true
+       },
+       {
+        "name": "channel",
+        "label": "Channel",
+        "placeholder": "#eng-alerts"
+       }
+      ]
+     },
+     {
+      "key": "mattermost",
+      "label": "Mattermost",
+      "fields": [
+       {
+        "name": "base_url",
+        "label": "Server URL",
+        "placeholder": "https://chat.example.com"
+       },
+       {
+        "name": "token",
+        "label": "Bot token",
+        "secret": true
+       },
+       {
+        "name": "channel",
+        "label": "Channel ID"
+       }
+      ]
+     }
+    ],
+    "provider": null,
+    "set_fields": {},
+    "acts_as": null,
+    "flow": null,
+    "connected": false
+   },
+   "tools": [
+    {
+     "ref": "skill:slack.post_real_guarded",
+     "label": "Post to Slack",
+     "tier": 2,
+     "policy": "ask",
+     "floor": "ask",
+     "kind": "skill"
+    },
+    {
+     "ref": "skill:mattermost.post_real",
+     "label": "Post to Mattermost",
+     "tier": 2,
+     "policy": "ask",
+     "floor": "ask",
+     "kind": "skill"
+    }
+   ],
+   "holders": [],
+   "recommended": [
+    "engineering_captain",
+    "operations_engineer",
+    "pm",
+    "program_manager",
+    "release_manager",
+    "sre"
+   ],
+   "used_in": [],
+   "last_test": null,
+   "try": null,
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [],
+   "mcp_names": []
+  },
+  {
+   "key": "deploy",
+   "group": "ship",
+   "label": "Deploy",
+   "tip": "Plan and check deploys to your targets.",
+   "icon": "RocketLaunch",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "setup",
+   "status_line": null,
+   "status_tip": "Needs an account or key first",
+   "connection": null,
+   "tools": [
+    {
+     "ref": "skill:deployment.run.plan",
+     "label": "Plan a deploy",
+     "tier": 2,
+     "policy": "ask",
+     "floor": "ask",
+     "kind": "skill"
+    },
+    {
+     "ref": "skill:deployment.health.check",
+     "label": "Check a deploy",
+     "tier": 1,
+     "policy": "allow",
+     "floor": null,
+     "kind": "skill"
+    }
+   ],
+   "holders": [
+    "deployment_manager",
+    "operations_engineer",
+    "release_manager"
+   ],
+   "recommended": [
+    "operations_engineer",
+    "release_manager",
+    "sre"
+   ],
+   "used_in": [
+    {
+     "workflow_key": "backend_service_setup",
+     "workflow_name": "Backend Service Setup",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "compliance_release",
+     "workflow_name": "Compliance-Ready Release",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "data_migration",
+     "workflow_name": "Data / Migration Change",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "deprecation_sunset",
+     "workflow_name": "Deprecation / Sunset",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "fast_fix",
+     "workflow_name": "Fast Fix / Hotfix",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "ux_certification",
+     "workflow_name": "Frontend / UX Certification",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "major_feature",
+     "workflow_name": "Major Feature",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "minor_feature",
+     "workflow_name": "Minor Feature",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "security_hardening",
+     "workflow_name": "Security Hardening",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "standard_product_delivery",
+     "workflow_name": "Standard Product Delivery",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    },
+    {
+     "workflow_key": "third_party_integration",
+     "workflow_name": "Third-Party Integration",
+     "step_id": "deploy",
+     "step_title": "deploy"
+    }
+   ],
+   "last_test": null,
+   "try": null,
+   "depends_on": [
+    "deploy_target"
+   ],
+   "connect_href": "?area=infra",
+   "scopes_tip": null,
+   "mcp": [],
+   "mcp_names": []
+  },
+  {
+   "key": "watch_health",
+   "group": "ship",
+   "label": "Watch health",
+   "tip": "Check health and drift of running apps.",
+   "icon": "Heartbeat",
+   "provenance": "built_in",
+   "essential": false,
+   "status": "ready",
+   "status_line": null,
+   "status_tip": "Not tested yet \u00b7 Test",
+   "connection": null,
+   "tools": [
+    {
+     "ref": "skill:deployment.health.check",
+     "label": "Check a deploy",
+     "tier": 1,
+     "policy": "allow",
+     "floor": null,
+     "kind": "skill"
+    },
+    {
+     "ref": "mcp:boss-devops-reference.engineering_runbook",
+     "label": "Engineering runbook",
+     "tier": 0,
+     "policy": "allow",
+     "floor": null,
+     "kind": "mcp"
+    }
+   ],
+   "holders": [
+    "backend_engineer",
+    "chief_architect",
+    "engineering_captain",
+    "operations_engineer",
+    "release_manager",
+    "software_engineer",
+    "sre"
+   ],
+   "recommended": [
+    "backend_engineer",
+    "chief_architect",
+    "engineering_captain",
+    "operations_engineer",
+    "release_manager",
+    "software_engineer",
+    "sre"
+   ],
+   "used_in": [
+    {
+     "workflow_key": "backend_service_setup",
+     "workflow_name": "Backend Service Setup",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    },
+    {
+     "workflow_key": "compliance_release",
+     "workflow_name": "Compliance-Ready Release",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    },
+    {
+     "workflow_key": "data_migration",
+     "workflow_name": "Data / Migration Change",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    },
+    {
+     "workflow_key": "ux_certification",
+     "workflow_name": "Frontend / UX Certification",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    },
+    {
+     "workflow_key": "major_feature",
+     "workflow_name": "Major Feature",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    },
+    {
+     "workflow_key": "security_hardening",
+     "workflow_name": "Security Hardening",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    },
+    {
+     "workflow_key": "standard_product_delivery",
+     "workflow_name": "Standard Product Delivery",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    },
+    {
+     "workflow_key": "third_party_integration",
+     "workflow_name": "Third-Party Integration",
+     "step_id": "monitor",
+     "step_title": "monitor"
+    }
+   ],
+   "last_test": null,
+   "try": null,
+   "depends_on": [],
+   "connect_href": null,
+   "scopes_tip": null,
+   "mcp": [
+    {
+     "server_id": "mcp_f1e0b659663d47d7b801",
+     "name": "boss-devops-reference",
+     "trusted": true,
+     "reachable": true
+    }
+   ],
+   "mcp_names": [
+    "boss-devops-reference"
+   ]
+  }
+ ],
+ "crew": [
+  {
+   "role_key": "adversarial_reviewer",
+   "display_name": "Adversarial Reviewer"
+  },
+  {
+   "role_key": "backend_engineer",
+   "display_name": "Backend Engineer"
+  },
+  {
+   "role_key": "cao",
+   "display_name": "Chief Architecture Officer"
+  },
+  {
+   "role_key": "chief_architect",
+   "display_name": "Chief Architect"
+  },
+  {
+   "role_key": "coo",
+   "display_name": "COO"
+  },
+  {
+   "role_key": "cto",
+   "display_name": "CTO"
+  },
+  {
+   "role_key": "deployment_manager",
+   "display_name": "Deployment Manager"
+  },
+  {
+   "role_key": "design_critic",
+   "display_name": "Design Critic"
+  },
+  {
+   "role_key": "docs_writer",
+   "display_name": "Documentation Writer"
+  },
+  {
+   "role_key": "engineering_captain",
+   "display_name": "Engineering Captain"
+  },
+  {
+   "role_key": "finops_sentinel",
+   "display_name": "FinOps Sentinel"
+  },
+  {
+   "role_key": "first_principles_researcher",
+   "display_name": "The First-Principles Researcher"
+  },
+  {
+   "role_key": "frontend_engineer",
+   "display_name": "Frontend Engineer"
+  },
+  {
+   "role_key": "infra_steward",
+   "display_name": "Infra Steward"
+  },
+  {
+   "role_key": "integration_validator",
+   "display_name": "Integration Validator"
+  },
+  {
+   "role_key": "metatron",
+   "display_name": "Metatron"
+  },
+  {
+   "role_key": "model_spend_analyst",
+   "display_name": "Model Spend Analyst"
+  },
+  {
+   "role_key": "operations_engineer",
+   "display_name": "Operations Engineer"
+  },
+  {
+   "role_key": "pm",
+   "display_name": "Product Manager"
+  },
+  {
+   "role_key": "program_manager",
+   "display_name": "Program Manager"
+  },
+  {
+   "role_key": "providerops_manager",
+   "display_name": "ProviderOps Manager"
+  },
+  {
+   "role_key": "qa",
+   "display_name": "QA Lead"
+  },
+  {
+   "role_key": "release_manager",
+   "display_name": "Release Manager"
+  },
+  {
+   "role_key": "relentless_operator",
+   "display_name": "The Relentless Operator"
+  },
+  {
+   "role_key": "resource_janitor",
+   "display_name": "Resource Janitor"
+  },
+  {
+   "role_key": "secrets_steward",
+   "display_name": "Secrets Steward"
+  },
+  {
+   "role_key": "security_reviewer",
+   "display_name": "Security Reviewer"
+  },
+  {
+   "role_key": "software_engineer",
+   "display_name": "Software Engineer"
+  },
+  {
+   "role_key": "sre",
+   "display_name": "Site Reliability Engineer"
+  },
+  {
+   "role_key": "teacher_who_simplifies",
+   "display_name": "The Teacher Who Simplifies"
+  },
+  {
+   "role_key": "visionary_founder",
+   "display_name": "The Visionary Founder"
+  },
+  {
+   "role_key": "vp_agents",
+   "display_name": "VP Agents"
+  }
+ ]
+}

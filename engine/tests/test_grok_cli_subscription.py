@@ -223,13 +223,15 @@ def test_a_failed_grok_process_stops_the_stage(
         agent.run_role("hello", tmp_path)
 
 
-def test_connect_records_owner_only_entitlement_and_code_engine_hint(
+def test_connect_records_owner_only_entitlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Recorded after one governed proof turn, owned by the workspace operator — and the
+    answer names no environment variable: Repo and models never tells a browser to set one."""
     found = {"installed": True, "authenticated": True, "version": "grok 1.0.40",
              "auth_detail": "Available models", "ready": True}
     monkeypatch.setattr(cli_harness, "detect", lambda *_a, **_kw: found)
-    monkeypatch.setattr(setup_service, "prove_coding_agent",
+    monkeypatch.setattr(setup_service, "governed_proof",
                         lambda *_a, **_kw: {"ok": True, "exit_code": 0})
     payloads = []
     monkeypatch.setattr("boss_engine.services.entitlements.EntitlementBrokerService",
@@ -237,9 +239,11 @@ def test_connect_records_owner_only_entitlement_and_code_engine_hint(
                             lambda _conn, payload, **_kw: payloads.append(payload))))
 
     out = setup_service.connect_coding_agent(
-        None, SimpleNamespace(boss_edition="enterprise"), "project", "grok")
+        SimpleNamespace(engine=object()), SimpleNamespace(boss_edition="enterprise"),
+        "project", "grok")
 
-    assert out["ok"] and out["use_it_with"] == "BOSS_CODE_AGENT_ENGINE=grok"
+    assert out["ok"] and "use_it_with" not in out
+    assert "BOSS_" not in repr(out)
     assert out["entitlement_recorded"]
     assert payloads[0]["source_id"] == "xai_grok_build"
     assert payloads[0]["multi_tenant_allowed"] is False

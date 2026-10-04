@@ -17,7 +17,7 @@ import { draftFromDescription, fetchLibrary, fetchSpec } from "../../../lib/work
 import { TOAST_EVENT } from "../../../lib/api-write";
 import { MiniLane } from "../flow/mini-lane";
 
-export const NO_MODEL_TIP = "Needs a model. Set one in Settings.";
+export const NO_MODEL_TIP = "Needs a model. Connect one in Repo and models.";
 
 function toastError(message: string) {
   try { window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: { type: "error", message } })); } catch { /* no window */ }

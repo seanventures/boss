@@ -209,14 +209,14 @@ describe("Test is a real call, streamed", () => {
 
   it("hears the unsaved voice, and says when there is no model", async () => {
     const { calls } = installAgentWorldApi([(url) => (url.includes("/v1/agents/qa/test")
-      ? Response.json({ detail: { code: "needs_model", message: "Needs a model. Set one in Settings." } }, { status: 409 })
+      ? Response.json({ detail: { code: "needs_model", message: "Needs a model. Connect one in Repo and models." } }, { status: 409 })
       : undefined)]);
     await mount();
     await act(async () => { type($('[data-testid="ag-tagline"]') as HTMLInputElement, "Draft line"); });
     await settle();
     await click($('[data-testid="ag-probe-out_of_scope"]'));
     expect(sent(calls, "POST", "/v1/agents/qa/test")[0].body?.persona).toMatchObject({ tagline: "Draft line" });
-    expect($('[data-testid="ag-test-failed"]')?.textContent).toBe("Needs a model. Set one in Settings.");
+    expect($('[data-testid="ag-test-failed"]')?.textContent).toBe("Needs a model. Connect one in Repo and models.");
   });
 });
 

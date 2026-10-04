@@ -249,6 +249,21 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     from .step_agents import agent_keys
 
     offered = set(agent_keys(connection, project_id))
+    # SIGNED WORK, COUNTED (agents-home D14): the step/stage/seat/chat acts each agent did in the
+    # scoring window. `steps` came only from step outputs' ran_as, so an agent whose work is in
+    # the ledger read "Has done work 0" on Directory.
+    def _signed_work(conn) -> dict[str, tuple[int, int]]:
+        return {str(r["role_key"]): (int(r["steps"]), int(r["acts"])) for r in conn.execute(
+            sql("SELECT role_key, count(*) FILTER (WHERE kind = 'step') AS steps, "
+                "count(*) AS acts FROM agent_acts WHERE project_id = :p "
+                "AND role_key IS NOT NULL AND kind <> 'approval' "
+                "AND started_at > now() - make_interval(hours => :h) GROUP BY role_key"),
+            {"p": project_id, "h": SCORE_WINDOW_HOURS},
+        ).mappings().all()}
+
+    from .agent_acts import quietly as _quietly
+
+    signed = _quietly(connection, "count signed work", _signed_work) or {}
     agents = []
     roster = []
     for role in roles:
@@ -310,7 +325,9 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             # Pipeline work, kept as its own figures rather than added to the call counts: a
             # step and a model call are different units and summing them would invent a total
             # that means nothing.
-            "steps": sw.get("steps"),
+            "steps": sw.get("steps") or (signed.get(key, (0, 0))[0] or None),
+            # Every unit of signed work (steps, build stages, seats, talks) in the window.
+            "acts": signed.get(key, (0, 0))[1] or None,
             "steps_ok": sw.get("steps_ok"),
             "steps_failed": sw.get("steps_failed"),
             "runs": sw.get("runs"),

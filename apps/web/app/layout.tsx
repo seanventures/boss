@@ -10,6 +10,8 @@ import "./workflows/inspector.css";
 import "./workflows/library.css";
 // Agent World (avatars, motion, Passport, Roster, Chain, conversations): ag- classes, agav- keyframes.
 import "./agents/agent-world.css";
+import "./setup/setup.css";
+import "./skills/kit.css";
 // Factory (Floor, Line, Apps, the cockpit): fx- classes.
 import "./factory/factory.css";
 import "./factory/cockpit.css";

@@ -964,11 +964,16 @@ class AgentStudioService:
         work_item = tracked["work_item"]
         tracker_binding = tracked["tracker_binding"]
         allocation = tracked["allocation"]
-        tracker_sync_job = work_orchestration.enqueue_tracker_sync(
-            connection,
-            project_id=project_id,
-            binding_id=tracker_binding["id"],
-            actor=actor,
+        tracker_binding_id = tracker_binding["id"] if tracker_binding else None
+        tracker_sync_job = (
+            work_orchestration.enqueue_tracker_sync(
+                connection,
+                project_id=project_id,
+                binding_id=tracker_binding_id,
+                actor=actor,
+            )
+            if tracker_binding_id
+            else {"status": "no_tracker", "binding_id": None, "job_id": None}
         )
         payload = {
             "agent_studio_run_id": run_id,
@@ -988,7 +993,7 @@ class AgentStudioService:
             "data_boundary": compiled["data_boundary"],
             "requires_reservation": False,
             "work_item_id": work_item["id"],
-            "tracker_binding_id": tracker_binding["id"],
+            "tracker_binding_id": tracker_binding_id,
             "allocation_id": allocation["id"],
         }
         queued_job = enqueue_job(
@@ -1009,7 +1014,7 @@ class AgentStudioService:
                 else f"agent-studio-run:{run_id}"
             ),
             work_item_id=work_item["id"],
-            tracker_binding_id=tracker_binding["id"],
+            tracker_binding_id=tracker_binding_id,
             allocation_id=allocation["id"],
         )
         job_id = queued_job["id"]
@@ -1032,7 +1037,7 @@ class AgentStudioService:
                 "execution_mode": execution_mode,
                 "panel_run_id": panel_run_id,
                 "work_item_id": work_item["id"],
-                "tracker_binding_id": tracker_binding["id"],
+                "tracker_binding_id": tracker_binding_id,
                 "allocation_id": allocation["id"],
                 "tracker_sync_job_id": tracker_sync_job["job_id"],
             },

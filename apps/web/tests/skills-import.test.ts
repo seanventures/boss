@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -191,35 +192,18 @@ describe("skill import/export actions", async () => {
   });
 });
 
-describe("Community skill YAML island", async () => {
-  const { SkillExportButton, SkillImportForm } = await import("../app/skills-import-ui");
-
-  it("renders import/export controls and does not render marketplace", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(
-        "div",
-        null,
-        React.createElement(SkillImportForm, {
-          projectId: "boss-dogfood",
-          actor: "ceo",
-        }),
-        React.createElement(SkillExportButton, {
-          projectId: "boss-dogfood",
-          skillId: "local.community.skill",
-          actor: "ceo",
-        }),
-      ),
-    );
-
-    expect(html).toContain('data-testid="skill-import"');
-    expect(html).toContain('data-testid="skill-export"');
-    expect(html).toMatch(/Local Community import/i);
-    expect(html).toMatch(/pack_manage/i);
-    expect(html).toContain("Export");
-    expect(html).not.toMatch(/sync hosted catalog/i);
-    expect(html).not.toMatch(/hosted marketplace catalog/i);
-    expect(html).not.toContain('data-testid="hosted-marketplace-card"');
-    expect(html).not.toContain("paid-surface-hidden-marketplace");
+describe("skill import lives in the Library", () => {
+  // REWRITTEN for the Kit (skills-mcp spec §5.5): import is Library › ⋯ › Import, and the
+  // Access and packs card is a link to it. The server action contract above is unchanged.
+  it("the Library's Import posts the YAML through importSkillAction", () => {
+    const SHEET = readFileSync("app/skills/import-sheet.tsx", "utf8");
+    expect(SHEET).toContain("callAction(importSkillAction)(form)");
+    expect(SHEET).toContain('form.set("yaml", body)');
   });
 
+  it("Access and packs links there instead of carrying a second form", () => {
+    const PAGE = readFileSync("app/page.tsx", "utf8");
+    expect(PAGE).not.toContain("SkillImportForm");
+    expect(PAGE).toContain('href="?area=skills&tab=library" data-testid="org-skills-link"');
+  });
 });

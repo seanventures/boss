@@ -24,6 +24,8 @@ corrupt the one place BOSS answers "what did this cost".
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 from dataclasses import dataclass
 import json
 import logging
@@ -32,6 +34,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import time
 import tomllib
 from typing import Optional
@@ -660,8 +663,52 @@ def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20,
 
 
 _CATALOG_TTL = 600.0
+#: The most a catalog read may take before its CLI is killed.
+CATALOG_TIMEOUT_SECONDS = 20.0
 _CATALOG_RETRY = 60.0
 _catalog_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+
+
+#: Set while a READ is being served (Repo and models' GET /v1/setup): catalogs then come from
+#: the cache only, and a stale one is refreshed on a background thread. A request that spawned
+#: `claude -p` to read a catalog held its database transaction open for as long as the CLI took
+#: — and the CLI could take for ever — so one hung CLI per page load hung the whole console.
+_CACHE_ONLY: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "boss_catalog_cache_only", default=False)
+_refreshing: set[str] = set()
+_refresh_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def catalogs_from_cache_only():
+    """Within this block `offered_models` never spawns a CLI: cache, else () and a refresh."""
+    token = _CACHE_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _CACHE_ONLY.reset(token)
+
+
+def _refresh_in_background(spec: "CliHarnessSpec") -> None:
+    """One refresh per harness at a time, off the caller's thread."""
+    with _refresh_lock:
+        if spec.name in _refreshing:
+            return
+        _refreshing.add(spec.name)
+
+    def run() -> None:
+        try:
+            try:
+                found = tuple(_read_model_catalog(spec))
+            except Exception:  # noqa: BLE001
+                found = ()
+            _catalog_cache[spec.name] = (time.monotonic() + (_CATALOG_TTL if found
+                                                             else _CATALOG_RETRY), found)
+        finally:
+            with _refresh_lock:
+                _refreshing.discard(spec.name)
+
+    threading.Thread(target=run, name=f"boss-catalog-{spec.name}", daemon=True).start()
 
 
 def offered_models(name: str) -> tuple[str, ...]:
@@ -679,6 +726,9 @@ def offered_models(name: str) -> tuple[str, ...]:
     cached = _catalog_cache.get(spec.name)
     if cached and now < cached[0]:
         return cached[1]
+    if _CACHE_ONLY.get():
+        _refresh_in_background(spec)
+        return cached[1] if cached else ()
     try:
         found = tuple(_read_model_catalog(spec))
     except Exception:  # noqa: BLE001 — a picker must not break because a CLI did
@@ -725,17 +775,31 @@ def _claude_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:
     env = GenericCliCodeAgent(get_settings(), spec)._env()
     request = json.dumps({"type": "control_request", "request_id": "boss-models",
                           "request": {"subtype": "initialize"}})
+    import queue
+
     proc = subprocess.Popen(
         [binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
          "--verbose"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         env=env, cwd=os.path.expanduser("~") or "/")
+    # A HARD DEADLINE. `readline()` blocks until the CLI writes a line, so a deadline checked
+    # between reads never fired when the CLI wrote nothing: the read is on its own thread and
+    # this one waits on a queue with a timeout, then kills the process either way.
+    lines: "queue.Queue[str]" = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(l) for l in iter(proc.stdout.readline, "")]
+                     + [lines.put("")], daemon=True).start()
     try:
         proc.stdin.write(request + "\n")
         proc.stdin.flush()
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            line = proc.stdout.readline()
+        deadline = time.monotonic() + CATALOG_TIMEOUT_SECONDS
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return ()
+            try:
+                line = lines.get(timeout=left)
+            except queue.Empty:
+                return ()
             if not line:
                 return ()
             try:
@@ -749,10 +813,12 @@ def _claude_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:
             return tuple(str(m["value"]) for m in body.get("models") or []
                          if isinstance(m, dict) and m.get("value")
                          and str(m["value"]) != "default")
-        return ()
     finally:
         proc.kill()
-        proc.wait(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def _grok_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:

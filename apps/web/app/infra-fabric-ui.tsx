@@ -56,7 +56,7 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
       {!anyReachable ? (
         <p className="detail" role="alert">
           The BOSS API did not answer for multi-cloud, elastic capacity or provider usage.
-          Reload the page; if it stays like this, check that the API is running (Repo and model
+          Reload the page; if it stays like this, check that the API is running (Repo and models
           shows its status).
         </p>
       ) : null}

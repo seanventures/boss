@@ -19,6 +19,7 @@ import { openTalk } from "../../lib/agent-converse";
 import { shortLabel, whoDid, actState } from "./chain-model";
 import { AiBadge, nameOf, RunFace, StateWord } from "./run-face";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { usd } from "../../lib/money";
 
 /** A URL in this console with `patch` applied, keeping the org and project the page is on. */
 export function consoleHref(patch: Record<string, string>): string {
@@ -87,8 +88,10 @@ function Row({ label, tip, children, testId }: { label: string; tip?: string; ch
 }
 
 /** The card itself. `inline` drops the popover chrome for the step drawer. */
-export function ActCard({ act, viewer, inline, onClose }: {
+export function ActCard({ act, viewer, inline, onClose, askless }: {
   act: Act; viewer: string; inline?: boolean; onClose?(): void;
+  /** Leave out "Ask about this": the surface around the card already offers the one Ask. */
+  askless?: boolean;
 }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const who = whoDid(act, viewer);
@@ -103,7 +106,7 @@ export function ActCard({ act, viewer, inline, onClose }: {
   const considered = act.considered.map((k) => nameOf(k).name);
   const howTip = [considered.join(", "), act.why].filter(Boolean).join(" · ");
   const took = tookLabel(act);
-  const cost = act.costUsd ? `$${act.costUsd.toFixed(act.costUsd >= 1 ? 2 : 3)}` : "";
+  const cost = act.costUsd ? usd(act.costUsd) : "";
   const turnsHref = act.links.code_task_run_id && act.kind === "stage"
     ? consoleHref({ area: "activity", run: act.links.code_task_run_id })
     : act.links.workflow_run_id ? consoleHref({ area: "activity", wfr: act.links.workflow_run_id }) : null;
@@ -180,11 +183,13 @@ export function ActCard({ act, viewer, inline, onClose }: {
         ) : null}
       </dl>
       <footer className="ag-act-foot">
-        <button type="button" className="ag-act-btn" data-testid="ag-act-ask"
-                data-tip={`Talk with ${named.name} about this work`}
-                onClick={() => { askAboutAct(act, "What did you do here, and why?"); onClose?.(); }}>
-          Ask about this
-        </button>
+        {askless ? null : (
+          <button type="button" className="ag-act-btn" data-testid="ag-act-ask"
+                  data-tip={`Talk with ${named.name} about this work`}
+                  onClick={() => { askAboutAct(act, "What did you do here, and why?"); onClose?.(); }}>
+            Ask about this
+          </button>
+        )}
         {turnsHref ? <a className="ag-act-link" href={turnsHref} data-testid="ag-act-turns">Turns ↗</a> : null}
         {who.roleKey ? (
           <a className="ag-act-link" href={consoleHref({ area: "workforce", role: who.roleKey })}

@@ -21,14 +21,15 @@
 }
 .wf-lane-sizer { position: relative; margin: 0 auto; }
 .wf-lane-canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
-.wf-lane[data-mode="design"] .wf-lane-viewport { padding-bottom: 28px; }
+.wf-lane[data-mode="design"] .wf-lane-viewport { padding-bottom: 12px; }
 /* In the editor the lane is a region, not a strip: tall enough that the flow sits in the middle
    of a calm surface and reads at a glance, never taller than the window leaves room for (a deep
    branched flow scrolls inside it). The drawing is centred in it, top to bottom. A workflow
    with no steps keeps the plain Start → End strip, so the empty state's choices stay on top. */
 .wf-lane[data-mode="design"]:not([data-empty]) {
   display: flex; flex-direction: column; justify-content: center;
-  min-height: clamp(240px, 40vh, 360px);
+  /* Tall enough to read as a region, not so tall the flow floats in a dead canvas. */
+  min-height: clamp(180px, 26vh, 260px);
   max-height: max(360px, calc(100vh - 180px));
 }
 .wf-lane[data-mode="design"] .wf-lane-viewport { flex: 0 1 auto; min-height: 0; padding-top: 12px; }
@@ -39,17 +40,55 @@
 .wf-slot[data-origin] { opacity: 0; pointer-events: none; }
 .wf-slot-end { align-items: center; }
 
+/* Start and End: a small bubble on each end of the line, its word under it. The start bubble
+   sits where the line leaves it and the end bubble where the line arrives, so the line touches
+   both. On a run they fill green once the work has reached them. */
 .wf-flag {
   position: absolute;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
+  display: inline-flex; align-items: center;
   color: var(--muted);
   font: 600 0.75rem/1 var(--sans);
   white-space: nowrap;
 }
+.wf-flag[data-kind="start"] { justify-content: flex-end; }
+.wf-flag[data-kind="end"] { justify-content: flex-start; }
 .wf-slot-end .wf-flag { position: static; width: 100%; height: 100%; }
+.wf-bubble {
+  flex: none; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--faint) 80%, transparent);
+  background: var(--bg);
+}
+.wf-flag[data-flow="past"] .wf-bubble, .wf-flag[data-flow="moving"] .wf-bubble { border-color: var(--green); background: var(--green); }
+.wf-flag-label {
+  position: absolute; top: calc(50% + 10px);
+  color: var(--faint); letter-spacing: 0.02em;
+}
+.wf-flag[data-kind="start"] .wf-flag-label { right: -6px; }
+.wf-flag[data-kind="end"] .wf-flag-label { left: -2px; }
+
+/* A lane wider than its box scrolls inside itself. While it does, a gutter on each side holds
+   an arrow — beside the steps, never over them — and each edge with more to see fades. */
+.wf-lane-row { position: relative; display: flex; align-items: stretch; min-width: 0; }
+.wf-lane-row > .wf-lane-viewport { flex: 1 1 auto; min-width: 0; }
+.wf-lane[data-mode="design"] .wf-lane-row { flex: 0 1 auto; min-height: 0; }
+.wf-lane-fade {
+  position: absolute; top: 0; bottom: 0; width: 40px; z-index: 2;
+  pointer-events: none; opacity: 0; transition: opacity 150ms ease;
+}
+.wf-lane-fade[data-side="left"] { left: 40px; background: linear-gradient(90deg, var(--surface), transparent); }
+.wf-lane-fade[data-side="right"] { right: 40px; background: linear-gradient(270deg, var(--surface), transparent); }
+.wf-lane-fade[data-on] { opacity: 1; }
+.wf-lane-arrow {
+  flex: none; align-self: center; margin: 0 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--border); border-radius: 50%;
+  background: var(--bg); color: var(--ink);
+  font: 600 1.125rem/1 var(--sans);
+  cursor: pointer;
+}
+.wf-lane-arrow[data-off] { opacity: 0.3; cursor: default; }
+.wf-lane-arrow:not([data-off]):hover { border-color: var(--accent); color: var(--accent); }
 
 /* Connectors: in a linear flow each slot carries the line into it, so it moves with its node. */
 .wf-conn {
@@ -225,6 +264,7 @@
 [data-density="compact"] .wf-node[data-mode="run"] .wf-node-icon { display: contents; }
 [data-density="compact"] .wf-node[data-mode="run"] .wf-node-icon > svg { display: none; }
 [data-density="compact"] .wf-flag { font-size: 0.875rem; }
+[data-density="compact"] .wf-flag-label { font-size: 0.875rem; }
 [data-density="compact"] .wf-edge-label { font-size: 14px; }
 [data-density="compact"] .wf-gap-add { width: 18px; height: 18px; }
 
@@ -269,8 +309,9 @@
 :root[data-wf-dragging] * { user-select: none; }
 
 /* Zoom toggle, bottom-right of the lane. */
+/* Top right, beside the flow it scales, not floating at the foot of the region. */
 .wf-zoom {
-  position: absolute; right: 8px; bottom: 6px;
+  position: absolute; right: 8px; top: 6px;
   display: inline-flex; border: 1px solid var(--border); border-radius: var(--r);
   background: var(--bg); overflow: hidden; z-index: 2;
 }
@@ -287,7 +328,7 @@
   background: color-mix(in srgb, var(--bg) 70%, transparent);
   cursor: pointer; touch-action: none;
 }
-.wf-lane[data-mode="design"] .wf-minimap { margin-right: 108px; }
+.wf-lane[data-mode="design"] .wf-lane-viewport { padding-top: 34px; }
 .wf-minimap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wf-minimap-dot {
   position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
@@ -341,3 +382,51 @@
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
 
+
+/* ── A run step's panel: who in one line, then what it made and what it did ─────────── */
+.wf-doneby { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 10px; }
+.wf-doneby-line {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  font: 400 0.8125rem/1.3 var(--sans); color: var(--muted);
+}
+.wf-doneby-verb { color: var(--faint); }
+.wf-doneby-name { color: var(--ink); font-weight: 600; }
+.wf-doneby-fact { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
+/* Who, what it cost and the model: three groups that wrap as wholes, so a narrow panel never
+   starts a line with "· model". */
+.wf-doneby-who { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.wf-doneby-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.wf-doneby-fact + .wf-doneby-fact::before { content: "·"; margin-right: 10px; color: var(--faint); }
+.wf-doneby-why { color: var(--muted); }
+.wf-doneby-acts { display: inline-flex; gap: 12px; margin-left: auto; }
+.wf-doneby-card { border-top: 1px dashed var(--border); padding-top: 8px; }
+.wf-step-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 10px; font-size: 0.75rem; color: var(--faint); }
+.wf-step-sec { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+.wf-step-sec-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.wf-step-sec-count { font-size: 0.75rem; color: var(--faint); }
+.wf-step-sec-link { margin-left: auto; font-size: 0.8125rem; }
+.wf-step-empty { font-size: 0.8125rem; color: var(--faint); }
+.wf-step-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.wf-step-log li {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: baseline;
+  font-size: 0.8125rem; color: var(--muted);
+}
+.wf-step-log time { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--faint); }
+.wf-step-log-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-step-log li[data-level="error"] .wf-step-log-title { color: var(--red); }
+.wf-step-log li[data-level="warn"] .wf-step-log-title { color: var(--amber); }
+.wf-step-sec .dw-step-out dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-step-sec .dw-step-out > div { min-width: 0; }
+.wf-stepout {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 16px; margin: 8px 0 0;
+}
+.wf-stepout > div { min-width: 0; }
+.wf-stepout dt { font-size: 0.75rem; color: var(--faint); }
+.wf-stepout dd { margin: 2px 0 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+             font-size: 0.8125rem; color: var(--ink); }
+.wf-stepout-mono dd { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
+.wf-stepout-details { margin-top: 10px; }
+.wf-stepout-details > summary { cursor: pointer; font-size: 0.75rem; color: var(--faint); }
+.wf-step-sec-loud { font-size: 0.75rem; font-weight: 600; color: var(--amber); }
+.wf-step-sec-loud[data-level="error"] { color: var(--red); }

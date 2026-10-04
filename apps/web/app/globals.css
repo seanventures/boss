@@ -848,6 +848,9 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: center;
 }
+/* Repo and models: amber while setup is unfinished, red while a check is failing. */
+.bx-nav-badge[data-tone="amber"] { background: var(--amber); color: #1a1205; }
+.bx-nav-badge[data-tone="red"] { background: var(--red); color: #fff; }
 
 .bx-sidebar-foot {
   margin-top: auto;
@@ -2690,16 +2693,24 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
   max-width: 46ch;
 }
 
-/* A HEADING THAT WANTS THE EYEBROW TYPE. `.section-head h2` (0,1,1) outranks `.eyebrow`
-   (0,1,0), so the class alone loses the cascade and the heading keeps its 1.55rem. This says
-   the combination explicitly rather than leaving it to look like the class did nothing. */
-.section-head h2.eyebrow {
-  font-size: 0.75rem;
+/* THE SECTION LABEL: Setup's green MODEL, shared (app/section-label.tsx). One rule so Setup,
+   the Passport and the Kit cannot drift. `.section-head h2` (0,1,1) outranks `.eyebrow` (0,1,0),
+   so the heading form is named here explicitly rather than looking like the class did nothing. */
+.section-head h2.eyebrow, .section-label {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 0.75rem/1.2 var(--sans);
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--accent-text);
-  font-weight: 700;
-  margin: 0;
+  color: var(--accent-text);            /* #2EC5C5 on --surface #101A30, about 8.6:1 */
+}
+.section-label[data-level="1"] {        /* a section title: ink, larger, not shouting */
+  font-size: 0.9375rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
 }
 
 .stack-grid {
@@ -4348,154 +4359,6 @@ select.input:focus {
 /* ============================================================
    Agent Studio — signal-rich authoring and live A2A topology
    ============================================================ */
-.as-shell {
-  --as-cyan: #63e6d8;
-  --as-cyan-dim: rgba(99, 230, 216, 0.12);
-  --as-blue: #7aa7ff;
-  --as-purple: #b999ff;
-  --as-line: rgba(151, 177, 205, 0.18);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: #09111c;
-  overflow: hidden;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.25);
-}
-
-.as-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 28px;
-  padding: 28px 30px 24px;
-  border-bottom: 1px solid var(--as-line);
-  background: #0b1522;
-}
-.as-header h2 {
-  margin: 7px 0 5px;
-  font-family: var(--display);
-  font-size: clamp(1.65rem, 3vw, 2.65rem);
-  line-height: 1;
-  letter-spacing: -0.035em;
-}
-.as-header p { margin: 0; max-width: 700px; color: var(--muted); font-size: 0.88rem; }
-.as-kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--as-cyan);
-}
-
-.as-metrics {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  background: #0a1320;
-  border-bottom: 1px solid var(--as-line);
-}
-.as-metrics > div {
-  display: grid;
-  min-width: 0;
-  padding: 13px 16px 14px;
-  border-left: 1px solid var(--as-line);
-}
-.as-metrics > div:first-child { border-left: 0; }
-.as-metrics span, .as-metrics small {
-  font-family: var(--mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.as-metrics b { margin: 4px 0 2px; font-family: var(--display); font-size: 1.45rem; color: var(--ink); }
-.as-metrics small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 0; text-transform: none; }
-
-.as-workbench {
-  display: grid;
-  grid-template-columns: minmax(210px, 0.78fr) minmax(460px, 2.1fr) minmax(260px, 0.9fr);
-  min-height: 720px;
-}
-.as-library {
-  min-width: 0;
-  background: #0a1320;
-}
-.as-library { border-right: 1px solid var(--as-line); }
-.as-pane-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 48px;
-  padding: 0 15px;
-  border-bottom: 1px solid var(--as-line);
-  font-family: var(--mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-.as-pane-head small { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); letter-spacing: 0; text-transform: none; }
-.as-object-list {
-  max-height: 588px;
-  overflow: auto;
-  scrollbar-width: thin;
-}
-.as-object {
-  position: relative;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 9px;
-  width: 100%;
-  padding: 11px 13px;
-  border: 0;
-  border-top: 1px solid rgba(151, 177, 205, 0.09);
-  border-radius: 0;
-  background: transparent;
-  color: var(--ink);
-  text-align: left;
-  box-shadow: none;
-}
-.as-object:hover { background: rgba(255, 255, 255, 0.025); transform: none; }
-.as-object.active { background: var(--as-cyan-dim); }
-.as-object.active::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: var(--as-cyan);
-  box-shadow: 0 0 14px rgba(99, 230, 216, 0.5);
-}
-.as-object > span:nth-child(2) { display: grid; min-width: 0; align-content: center; }
-.as-object b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.73rem; }
-.as-object small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 0.58rem; }
-.as-object i {
-  grid-column: 2;
-  font-family: var(--mono);
-  font-size: 0.53rem;
-  font-style: normal;
-  text-transform: uppercase;
-}
-.as-object i.ok { color: var(--as-cyan); }
-.as-object i.warn { color: var(--amber); }
-.as-object i.bad { color: var(--red); }
-.as-object i.quiet { color: var(--muted); }
-.as-mini-orb {
-  grid-row: span 2;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid rgba(122, 167, 255, 0.45);
-  border-radius: 50%;
-  background: #102038;
-  color: #b7ccff;
-  font-family: var(--display);
-  font-size: 0.64rem;
-  font-weight: 800;
-}
-.as-mini-orb.panel { border-radius: 8px; border-color: rgba(185, 153, 255, 0.45); color: var(--as-purple); }
-.as-mini-orb.workflow { border-radius: 5px; border-color: rgba(99, 230, 216, 0.45); color: var(--as-cyan); }
 
 /* WHO ANSWERS FOR THIS STEP. It takes the slot the step KIND used to occupy — every node in a
    delivery workflow says CAPABILITY, which is the same word three times and tells a reader
@@ -4503,67 +4366,17 @@ select.input:focus {
 /* How much wiring the step has. A count, because the wiring itself belongs in the editor —
    printing the object is what produced `inputs: [object Object]` on every node. */
 
-.as-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 0 13px;
-  border-radius: 5px;
-  font-family: var(--mono);
-  font-size: 0.62rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  box-shadow: none;
-}
-.as-button.primary { border: 1px solid var(--as-cyan); background: var(--as-cyan); color: #06131a; }
-.as-button.secondary { border: 1px solid var(--as-line); background: transparent; color: var(--ink-soft); }
-.as-button:hover:not(:disabled) { transform: translateY(-1px); }
-
 /* CHANNELS, BUILT ON THE STUDIO SHELL.
    Two panes rather than three: there is a list and a thing, and no third column of inspector
    detail to fill. The middle column's minmax would otherwise leave a 260px gap on the right. */
-.as-workbench.as-two { grid-template-columns: minmax(230px, 0.8fr) minmax(460px, 2.4fr); }
-.as-detail { min-width: 0; background: #0a1320; }
-.as-detail-body { display: grid; gap: 14px; padding: 18px 20px 24px; align-content: start; }
-.as-detail-title { margin: 0; font-family: var(--display); font-size: 1.15rem; }
-.as-detail-body .detail { margin: 0; line-height: 1.55; }
-.as-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+
 /* THE NEXT STEP, where the last one finished. A bordered block so it reads as a conclusion
    rather than as more explanation, and above the form it supersedes. */
-.as-next {
-  display: grid; gap: 10px; justify-items: start;
-  padding: 14px 16px; border: 1px solid rgba(99, 230, 216, 0.35); border-radius: 6px;
-  background: var(--as-cyan-dim);
-}
-.as-next .detail { margin: 0; }
 
 /* Label/value rows. `dt` in the mono face because these are field names, not prose. */
-.as-facts { display: grid; gap: 0; margin: 4px 0 0; }
-.as-facts > div {
-  display: grid; grid-template-columns: minmax(110px, 0.4fr) minmax(0, 1.6fr); gap: 14px;
-  padding: 9px 0; border-top: 1px solid var(--as-line);
-}
-.as-facts dt { color: var(--muted); font-family: var(--mono); font-size: 0.62rem; }
-.as-facts dd { margin: 0; font-size: 0.78rem; overflow-wrap: anywhere; }
-.as-facts dd.tone-green { color: var(--green, #89b482); }
-.as-facts dd.tone-amber { color: var(--amber, #d8a657); }
-/* The answer to the last press, directly under the header that holds the buttons. */
-.as-note { margin: 0; padding: 10px 18px; border-bottom: 1px solid var(--as-line); }
-.as-empty { padding: 14px 15px; }
-/* The client is not an agent; a square orb marks it as a different kind of thing in the list. */
-.as-mini-orb.workflow { border-radius: 8px; }
 
-.as-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  min-height: 280px;
-  padding: 28px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-}
+/* The answer to the last press, directly under the header that holds the buttons. */
+
 
 /* Guided agent commissioning wizard */
 .aw-backdrop {
@@ -4734,16 +4547,8 @@ select.input:focus {
   .aw-backdrop, .aw-dialog { animation: none; }
 }
 
-@media (max-width: 1080px) {
-  .as-workbench { grid-template-columns: 210px minmax(0, 1fr); }
-}
-
 @media (max-width: 760px) {
-  .as-header { align-items: flex-start; flex-direction: column; padding: 22px 18px; }
-  .as-metrics { grid-template-columns: repeat(2, 1fr); }
-  .as-workbench { display: block; }
-  .as-library { border-right: 0; border-bottom: 1px solid var(--as-line); }
-  .as-object-list { max-height: 300px; }
+
   .aw-backdrop { padding: 0; }
   .aw-dialog { height: 100vh; border: 0; border-radius: 0; }
   .aw-header { padding: 16px; }
@@ -4752,7 +4557,7 @@ select.input:focus {
   .aw-footer { align-items: stretch; flex-direction: column; }
   .aw-footer > span { display: none; }
   .aw-footer > div { display: grid; grid-template-columns: repeat(2, 1fr); }
-  .aw-footer .as-button { justify-content: center; }
+
 }
 
 /* ================================================================
@@ -8314,15 +8119,6 @@ a.agent-chip-name:hover { text-decoration: underline; }
   background: color-mix(in srgb, var(--amber, #d29922) 10%, transparent);
 }
 
-/* What the step recorded: evidence, kept and filed rather than printed. */
-.dw-step-out-wrap { margin-top: 10px; }
-.dw-step-out-wrap > summary {
-  cursor: pointer; width: fit-content;
-  font-size: .72rem; letter-spacing: .07em; text-transform: uppercase;
-  color: var(--faint, #8092B3);
-}
-.dw-step-out-wrap > summary:hover { color: var(--muted, #B4C4E0); }
-.dw-step-out-wrap[open] > summary { margin-bottom: 8px; }
 
 /* A STEP THAT IS WORKING SHOULD LOOK LIKE IT IS WORKING.
    The rail already animates the CONNECTOR into the running step, which says work is flowing
@@ -8875,7 +8671,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 /* The same checklist where a start was refused outside the form: Build, Re-run, Fix, Run. */
 .dw-refusal { margin: 8px 0; }
 .dw-refusal-foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-/* Outgoing email: in Repo and model, and inline beside an email item on a checklist. */
+/* Outgoing email: in Skills and MCP, and inline beside an email item on a checklist. */
 .email-setup-grid {
   display: grid; gap: 8px; margin: 8px 0;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

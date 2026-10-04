@@ -51,6 +51,13 @@ describe("the Floor's order", () => {
 });
 
 describe("the cards", () => {
+  it("counts decisions like the pill; a stopped build is a card first, never folded", async () => {
+    await mount(view());
+    expect($("[data-testid=fx-needs-h-count]")?.textContent).toBe("2");
+    expect($("[data-testid=fx-needs-h-extra]")?.textContent).toBe("· 1 stopped");
+    expect($$("[data-att-card]")[0]?.getAttribute("data-att-id")).toBe("build:crun_cf:gates");
+  });
+
   it("a PR card is Review ↗, never merged in place, and opens the PR", async () => {
     await mount(view());
     const card = $("[data-testid='ag-att-dec_pr842']")!;

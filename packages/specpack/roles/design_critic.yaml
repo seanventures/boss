@@ -20,7 +20,9 @@ decision_rights:
   must_escalate:
     - Tradeoffs requiring product or risk acceptance.
 permissions:
-  allowed_skills: [code.review, coding_pipeline.design_critique, artifact.create, coding_pipeline.review_plan, model.generate_text]
+  allowed_skills: [repo.read, coding_pipeline.review_plan, model.generate_text]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, web_research]
   forbidden_skills: [code.edit, github.merge_pr_real, infra.*]
   mcp_servers:
     - {server: web-intel, tools: [render_mockup, study_site]}

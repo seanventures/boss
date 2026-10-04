@@ -13,7 +13,7 @@ import { grantSkill } from "../../captain-can-run-it";
  * instead of a sentence. Which skills are lacking is the caller's, from `stepView`, so this row
  * and the node's warning badge always agree.
  */
-export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGranted }: {
+export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGranted, labelOf = (id) => id }: {
   projectId: string;
   /** The signed-in member the grant is made as. Without one, Grant is offered but disabled. */
   actor?: string;
@@ -23,6 +23,8 @@ export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGrante
   /** Refresh what agents hold (the host's palette). Awaited before the row reports success, so
    *  `Lacks` goes because the agent now holds the skill, not because this row remembers a click. */
   onGranted(): Promise<void>;
+  /** What the row calls a skill or server: the Kit's words ("Open a PR", "Library docs"). */
+  labelOf?: (id: string) => string;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<Record<string, string>>({});
@@ -38,7 +40,7 @@ export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGrante
     setBusy(null);
     try {
       window.dispatchEvent(new CustomEvent(TOAST_EVENT, {
-        detail: { type: "success", message: `Granted ${skillId} to ${agentName}` },
+        detail: { type: "success", message: `Granted ${labelOf(skillId)} to ${agentName}` },
       }));
     } catch { /* no window */ }
   };
@@ -48,13 +50,13 @@ export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGrante
       {lacks.map((skill) => (
         <div key={skill} className="wf-grant-row">
           <Warning size={14} weight="bold" className="wf-amber" aria-hidden />
-          <span className="wf-grant-text" title={`${agentName} lacks ${skill}`}>Lacks {skill}</span>
+          <span className="wf-grant-text" title={`${agentName} lacks ${skill}`}>Lacks {labelOf(skill)}</span>
           {failed[skill] ? (
             <span className="wf-red wf-grant-fail" title={failed[skill]} role="alert">Not granted</span>
           ) : null}
           <button type="button" className="wf-btn wf-btn-sm" data-testid={`wf-grant-${skill}`}
                   disabled={!actor || busy !== null}
-                  title={actor ? `Give ${skill} to ${agentName}` : "Sign in to grant skills"}
+                  title={actor ? `Give ${labelOf(skill)} to ${agentName}` : "Sign in to grant skills"}
                   onClick={() => void grant(skill)}>
             {busy === skill ? "Granting…" : "Grant"}
           </button>
