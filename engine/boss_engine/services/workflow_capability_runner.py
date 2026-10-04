@@ -50,6 +50,12 @@ class CapabilityExecutionError(RuntimeError):
     """The capability could not be performed. Carries the reason the step will record."""
 
 
+#: Set on a RETURNED failure that would fail the same way again — an agent step whose agent
+#: declared it failed or was blocked, or did not produce what the next step needs. The runner
+#: stops the run at once for Retry / Skip instead of spending automatic retries on it.
+SETTLED_FAILURE = "settled_failure"
+
+
 class SettledCapabilityError(CapabilityExecutionError):
     """The capability failed on a FACT that cannot change, so retrying is pointless.
 
@@ -1435,6 +1441,89 @@ def _preview_answers(url: Any, timeout: float = 6.0) -> bool:
         return False
 
 
+def _step_name(step: dict[str, Any]) -> str:
+    name = str(step.get("title") or step.get("label") or step.get("name")
+               or step.get("id") or "this step").strip()
+    return name[:1].upper() + name[1:] if name else "This step"
+
+
+def _optional_inputs_of(connection: Connection, project_id: str,
+                        step: dict[str, Any]) -> Optional[frozenset[str]]:
+    """The inputs a step can run without — the SAME rule `_execute_step` resolves them by.
+    None when that cannot be told here, which the caller treats as "not provably optional"."""
+    binding = step.get("binding") or {}
+    wiring = binding.get("inputs") or {}
+    if binding.get("agent_work"):
+        return frozenset(k for k in wiring if k != "instructions")
+    if binding.get("custom_step"):
+        try:
+            return frozenset(custom_steps.optional_inputs(
+                connection, project_id, str(binding["custom_step"])))
+        except Exception:  # noqa: BLE001 — unknown here; the step's own run will say
+            return None
+    key = str(binding.get("capability") or "")
+    if key in CAPABILITY_KEYS:
+        return frozenset(get_capability(key).optional_inputs or ())
+    return None
+
+
+def required_products(connection: Connection, project_id: str, step: dict[str, Any],
+                      spec_steps: Optional[dict[str, dict[str, Any]]]) -> list[str]:
+    """What an agent step MUST hand on: what it declares it requires (`binding.requires`), and
+    every field a later step reads from it as a REQUIRED input.
+
+    DERIVED FROM THE WIRING, so no workflow has to remember to declare it. The video example's
+    publish step reads `media_artifact_id` from `edit`; an edit that rendered nothing has not
+    produced it, and that is decided here, at the edit — before a publish gate can open over it.
+    A reference with `override_from_input` is not required: the run's input may supply it.
+    """
+    step_id = str(step.get("id") or "")
+    wanted: list[str] = [str(f).strip() for f in
+                         ((step.get("binding") or {}).get("requires") or []) if str(f).strip()]
+    for other in (spec_steps or {}).values():
+        if not isinstance(other, dict) or str(other.get("id") or "") == step_id:
+            continue
+        wiring = (other.get("binding") or {}).get("inputs") or {}
+        if not isinstance(wiring, dict):
+            continue
+        optional: Optional[frozenset[str]] = None
+        for name, ref in wiring.items():
+            if not (isinstance(ref, dict) and str(ref.get("from_step") or "") == step_id):
+                continue
+            field = str(ref.get("field") or "").strip()
+            if not field or ref.get("override_from_input") or field in wanted:
+                continue
+            if optional is None:
+                optional = _optional_inputs_of(connection, project_id, other) or frozenset()
+            if name not in optional:
+                wanted.append(field)
+    return wanted
+
+
+def _judged_agent_step(connection: Connection, project_id: str, step: dict[str, Any],
+                       spec_steps: Optional[dict[str, dict[str, Any]]],
+                       output: dict[str, Any]) -> dict[str, Any]:
+    """An agent step's output with its verdict applied (`agent_steps.verdict`).
+
+    The agent loop finishing says nothing about whether the WORK was done. A step whose agent
+    declared failed or blocked, or that is missing a product a later step needs, comes back as
+    status failed/blocked with its one-line reason in `error` — which the runner records as a
+    failed step, stopping the run with Retry / Skip. The full report stays in `summary`.
+    """
+    from . import agent_steps
+
+    judged = agent_steps.verdict(
+        output, required=required_products(connection, project_id, step, spec_steps),
+        step_name=_step_name(step))
+    output = {**output, "agent_outcome": {k: judged[k] for k in
+                                          ("outcome", "reason", "needs", "declared", "missing")}}
+    if judged["outcome"] == agent_steps.COMPLETED:
+        return output
+    return {**output, "status": judged["outcome"], "error": judged["error"],
+            SETTLED_FAILURE: True,
+            **({"needs": judged["needs"]} if judged["needs"] else {})}
+
+
 def execute_step(
     connection: Connection,
     ctx: Any,
@@ -1443,6 +1532,7 @@ def execute_step(
     actor: str,
     step: dict[str, Any],
     context: dict[str, Any],
+    spec_steps: Optional[dict[str, dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Perform one capability. Returns the step's output.
 
@@ -1457,6 +1547,9 @@ def execute_step(
     context.pop(SKIPPED_INPUTS, None)
     output = _execute_step(connection, ctx, project_id=project_id, actor=actor,
                            step=step, context=context)
+    if (step.get("binding") or {}).get("agent_work") and isinstance(output, dict) \
+            and str(output.get("status") or "") != "awaiting":
+        output = _judged_agent_step(connection, project_id, step, spec_steps, output)
     skipped = context.get(SKIPPED_INPUTS)
     if skipped and isinstance(output, dict):
         output = {**output, SKIPPED_INPUTS: skipped}
@@ -2636,9 +2729,24 @@ def resume_awaited(
             # `completed_no_pr` on purpose. Treating a missing URL as "reviewers refused"
             # deadlettered the outer workflow while later slices were still building.
             evidence = _terminal_evidence(connection, kind, awaited_id)
+            finished = {**output, "status": "succeeded", "awaited_status": status, **evidence}
+            if kind == "agent_run":
+                # AN AGENT THAT FINISHED AFTER AN APPROVAL IS JUDGED LIKE ONE THAT DID NOT STOP:
+                # the run reaching `completed` is the loop ending, not the work being done.
+                finished = _finished_agent_step(connection, project_id, run_id,
+                                                str(step["step_id"]), awaited_id, finished)
+            if str(finished.get("status") or "") in _DID_NOT_SHIP:
+                workflows.force_fail_waiting_step(
+                    connection, project_id=project_id, step_run_id=step["id"],
+                    error=str(finished.get("error") or "")[:500], output=finished,
+                )
+                done.append({"run_id": run_id, "step_id": step["step_id"],
+                             "outcome": "failed", "awaited": kind,
+                             "because": finished.get("error")})
+                continue
             workflows.force_complete_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                output={**output, "status": "succeeded", "awaited_status": status, **evidence},
+                output=finished,
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "succeeded", "awaited": kind})
@@ -2713,6 +2821,25 @@ def resume_awaited(
                          "outcome": "failed", "awaited": kind, "awaited_status": status,
                          "because": why})
     return done
+
+
+def _finished_agent_step(connection: Connection, project_id: str, run_id: str, step_id: str,
+                         agent_run_id: str, finished: dict[str, Any]) -> dict[str, Any]:
+    """The output of an agent step whose run finished after an approval, with what it decided
+    (`produces`) read from its final reply and its verdict applied — the same two things a step
+    that never stopped gets in `agent_steps.run` and `execute_step`."""
+    from . import agent_steps
+
+    spec_steps = {s["id"]: s for s in (workflows._run_spec(connection, run_id).get("steps")
+                                        or []) if isinstance(s, dict) and s.get("id")}
+    spec_step = spec_steps.get(step_id) or {"id": step_id}
+    wanted = [str(n).strip() for n in ((spec_step.get("binding") or {}).get("produces") or [])
+              if str(n).strip()]
+    summary = str(finished.get("summary") or "")
+    finished = {**finished,
+                **agent_steps.products_of(connection, agent_run_id, summary, wanted),
+                "agent_outcome": agent_steps.declared_outcome(summary)}
+    return _judged_agent_step(connection, project_id, spec_step, spec_steps, finished)
 
 
 def _evidence_quietly(connection: Connection, kind: str, awaited_id: str) -> dict[str, Any]:
@@ -3663,6 +3790,7 @@ def tick(
                         connection, ctx, project_id=project_id,
                         actor=run.get("actor") or "workflow",
                         step=spec_step,
+                        spec_steps=spec_steps,
                         context={
                             **_run_context(connection, run_id),
                             "step_attempt": int(claimed.get("attempt") or 1),
@@ -3723,7 +3851,10 @@ def tick(
                         reason = _reason_of_last_resort(output, claimed)
                     workflows.fail_step(
                         connection, project_id=project_id, step_run_id=claimed["id"],
-                        worker_id=worker_id, error=reason[:500], retryable=True,
+                        worker_id=worker_id, error=reason[:500],
+                        # A SETTLED failure stops once, for Retry / Skip: an agent that said it
+                        # could not do the work would say so again, at the price of a whole run.
+                        retryable=not output.get(SETTLED_FAILURE),
                         # THE OUTPUT SURVIVES THE FAILURE. It was dropped, so a step that failed
                         # stored `{}` and the only record of what happened was the one sentence
                         # above — which in this case said nothing.

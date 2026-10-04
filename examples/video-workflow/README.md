@@ -98,7 +98,7 @@ Each option can also come from the environment: `BOSS_API`, `BOSS_API_KEY`, `BOS
 
 | Field | What to put in it |
 |---|---|
-| `video_url` | optional link to your recording; you can put it in the instruction instead |
+| `video_url` | optional link to your recording — a Google Drive share link or a direct link to the file (.mp4, .mov), not a YouTube or Vimeo page; you can put it in the instruction instead |
 | `instructions` | *"Keep 0:28 to 1:48, make it portrait for phones, and put the ending slide on the end."* |
 | `asset_url` | optional link to an ending slide, logo, or badge |
 | `title` | optional; overrides the title the editing agent derives from your brief |
