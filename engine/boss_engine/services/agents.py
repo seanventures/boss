@@ -1380,6 +1380,11 @@ def delete_agent(connection: Connection, project_id: str, role_key: str, *,
         text("DELETE FROM project_agents WHERE project_id = :p AND role_key = :k"),
         {"p": project_id, "k": key},
     )
+    # ITS INSTRUCTIONS GO WITH IT, their bodies stay (an old run still shows what it acted on).
+    # Keyed by role_key, so a new agent re-created under this key must not inherit them.
+    from .agent_instructions import drop_for_agent
+
+    drop_for_agent(connection, project_id, key)
     # ITS STUDIO PROFILES ARE RETIRED, NOT DELETED: their runs and tests are evidence.
     profiles = studio_profiles(connection, project_id, key)
     for profile in profiles:

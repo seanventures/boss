@@ -27661,6 +27661,17 @@ def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
     return who, agent_voice.voiced_role(row, persona), spend
 
 
+def _instructions_for(project_id: str, role_key: str, mode: str) -> list[dict[str, Any]]:
+    """The agent's instructions for one prompt (agent_instructions.for_prompt). Never raises."""
+    from boss_engine.services.agent_instructions import for_prompt
+
+    try:
+        with begin(engine) as connection:
+            return for_prompt(connection, project_id, role_key, mode)
+    except Exception:  # noqa: BLE001 — a voice call still answers without them
+        return []
+
+
 @app.get("/v1/agents/identities")
 def agent_identities_endpoint(project_id: str, request: Request):
     """Every agent's face and name, plus the alias table, for the one web resolver. ETag'd."""
@@ -27741,7 +27752,8 @@ def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
         body.project_id, role_key, body.actor, body.persona, "model.agent_persona_draft",
         f"Draft {body.field} for {role_key}")
     try:
-        raw, usage = spend.ask(system=agent_voice.system_prompt(row),
+        raw, usage = spend.ask(system=agent_voice.system_prompt(
+                                   row, _instructions_for(body.project_id, role_key, "chat")),
                                prompt=agent_voice.draft_prompt(body.field))
     except Exception as error:  # noqa: BLE001 — explained, never a bare 500
         spend.close(error=str(error))
@@ -27784,7 +27796,9 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
         # at a yield, and the spend must still be settled (or the hold released) right then.
         try:
             try:
-                reply, usage = spend.ask(system=agent_voice.system_prompt(row),
+                reply, usage = spend.ask(system=agent_voice.system_prompt(
+                                             row, _instructions_for(body.project_id, role_key,
+                                                                    "chat")),
                                          prompt=agent_voice.PROBES[body.probe]["prompt"])
             except Exception as error:  # noqa: BLE001
                 spend.close(error=str(error))

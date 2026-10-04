@@ -6483,3 +6483,40 @@ WHERE mi.receipt_id = cr.receipt_id
   AND cr.project_id = mi.project_id
   AND NOT cr.included_in_subscription
   AND es.entitlement_kind IN ('subscription', 'licensed_seat', 'local_capacity');
+
+-- AN AGENT'S INSTRUCTIONS (agent-loadout spec §4.1): operator-written text — a review
+-- checklist, house rules — that goes into every prompt the agent gets, in the modes it is for.
+-- It shapes HOW the agent works, never what it may do: tools still come only from role_skills
+-- and role_mcp_servers, and the text is linted at save and again before each prompt
+-- (services/agent_instructions.py). Kept out of roles.spec: bodies up to 16k characters would
+-- ride on every roster read. Each change is a new agent version (agent_identity.canonical).
+CREATE TABLE IF NOT EXISTS agent_instructions (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  role_key    TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  source      TEXT NOT NULL CHECK (source IN ('file', 'pasted', 'skill_md')),
+  sha256      TEXT NOT NULL,
+  size_chars  INTEGER NOT NULL,
+  modes       TEXT[] NOT NULL DEFAULT ARRAY['work', 'chat', 'panel'],
+  position    INTEGER NOT NULL DEFAULT 0,
+  -- The agent version that first carried this text (set after the seal), for `Since v<n>`.
+  since_version INTEGER,
+  created_by  TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by  TEXT NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, role_key, name)
+);
+CREATE INDEX IF NOT EXISTS agent_instructions_role
+  ON agent_instructions (project_id, role_key, position);
+
+-- Content-addressed and immutable: every body any version ever used, so an old run can still
+-- show exactly the instructions it acted on after they were edited or the agent deleted.
+CREATE TABLE IF NOT EXISTS agent_instruction_bodies (
+  project_id TEXT NOT NULL,
+  sha256     TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, sha256)
+);
