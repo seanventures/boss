@@ -411,3 +411,5 @@
 .wf-step-log-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-step-log li[data-level="error"] .wf-step-log-title { color: var(--red); }
 .wf-step-log li[data-level="warn"] .wf-step-log-title { color: var(--amber); }
+.wf-step-sec .dw-step-out dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-step-sec .dw-step-out > div { min-width: 0; }

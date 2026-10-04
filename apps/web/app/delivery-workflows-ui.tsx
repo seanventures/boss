@@ -2810,7 +2810,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // are facts about the whole run rather than this step. None of it is an action and none of it
   // is read twice. It is evidence, so it is kept and filed.
   const produced = Object.entries(step.output || {})
-    .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))
+    // Who ran it is the Done-by line's (ran_as, act_id), and the project is the whole run's.
+    .filter(([k]) => !["capability", "tool", "inputs", "note", "status", "ran_as", "act_id",
+                       "project_id"].includes(k))
     // An empty field is a row that says nothing at all.
     .filter(([, v]) => !(v === null || v === undefined || v === ""))
     // A LOOPBACK URL IS NOT AN ADDRESS ANYBODY CAN USE. `preview_url` is where the app listens
@@ -3320,7 +3322,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             {produced.map(([k, v]) => (
               <div key={k}>
                 <dt>{k.replace(/_/g, " ")}</dt>
-                <dd>{summarise(v)}</dd>
+                <dd data-tip={summarise(v)}>{summarise(v)}</dd>
               </div>
             ))}
           </dl>
