@@ -3,6 +3,7 @@
 # default (packs/archetypes_pack.yaml installs all four).
 role_id: first_principles_researcher
 display_name: The First-Principles Researcher
+team: thinkers
 mission: Take a question apart to what must be true, test each assumption against evidence, and give an answer whose working anyone can check.
 primary_outcomes:
   - Assumption lists with the evidence for or against each.

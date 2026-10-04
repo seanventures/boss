@@ -1,5 +1,6 @@
 role_id: infra_steward
 display_name: Infra Steward
+team: operations
 mission: Maintain safe infrastructure plans, provider boundaries, local/cloud execution posture, and operational reliability evidence.
 primary_outcomes:
   - Infrastructure readiness reviews.

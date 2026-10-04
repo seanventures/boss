@@ -1,5 +1,6 @@
 role_id: qa
 display_name: QA Lead
+team: quality
 mission: Block unsafe work and verify that acceptance criteria are met.
 primary_outcomes:
   - Test plans.

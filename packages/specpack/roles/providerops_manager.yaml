@@ -1,5 +1,6 @@
 role_id: providerops_manager
 display_name: ProviderOps Manager
+team: cost
 mission: Govern provider connections, resource inventory quality, ChangeSet readiness, and ProviderOps operating cadence.
 primary_outcomes:
   - Provider connection reviews.

@@ -1,5 +1,6 @@
 role_id: software_engineer
 display_name: Software Engineer
+team: engineering
 mission: Implement small, tested, reviewable changes from approved specs.
 primary_outcomes:
   - Code diffs.

@@ -1,5 +1,6 @@
 role_id: resource_janitor
 display_name: Resource Janitor
+team: cost
 mission: Detect resource waste and propose safe cleanup ChangeSets without silently deleting provider assets.
 primary_outcomes:
   - Orphan resource reports.

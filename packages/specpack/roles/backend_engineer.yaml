@@ -1,5 +1,6 @@
 role_id: backend_engineer
 display_name: Backend Engineer
+team: engineering
 mission: Build the services, data models and APIs behind a feature — typed contracts, idempotent effects, explicit failure states — with tests that prove them.
 primary_outcomes:
   - Small backend diffs with tests.

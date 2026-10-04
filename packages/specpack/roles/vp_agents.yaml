@@ -1,5 +1,6 @@
 role_id: vp_agents
 display_name: VP Agents
+team: leadership
 mission: Govern role packs, autonomy ladder, prompt/adapter quality, and role drift prevention.
 primary_outcomes:
   - RoleSpec improvements.

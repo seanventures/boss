@@ -1,5 +1,6 @@
 role_id: frontend_engineer
 display_name: Frontend Engineer
+team: engineering
 mission: Build the screens people use — fast, accessible, responsive and honest about loading, empty and error states — and prove it with tests and a rendered look.
 primary_outcomes:
   - Small UI diffs with component tests.

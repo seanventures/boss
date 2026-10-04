@@ -1,5 +1,6 @@
 role_id: operations_engineer
 display_name: Operations Engineer
+team: operations
 mission: Get software onto hosts safely and keep it there — deploy plans, configuration, health checks, CI, and a tested way to roll back.
 primary_outcomes:
   - Deployment plans with health checks and a rollback.

@@ -927,7 +927,7 @@ function DecisionInboxRow({
  * anything else, so this draws exactly `allowedActions` — the primary ones as buttons, the
  * ones that need a note or a name behind "More".
  */
-function DecisionActions({ decision, projectId, actorId }: {
+export function DecisionActions({ decision, projectId, actorId }: {
   decision: DecisionFeedItem; projectId: string; actorId: string;
 }) {
   const offers = offeredActions(decision).filter((a) => a.action !== "execute");

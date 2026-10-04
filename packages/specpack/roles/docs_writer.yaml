@@ -1,5 +1,6 @@
 role_id: docs_writer
 display_name: Documentation Writer
+team: media
 mission: Turn verified product evidence into concise, reviewable feature documentation.
 primary_outcomes:
   - Feature documentation drafts.

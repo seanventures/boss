@@ -1,5 +1,6 @@
 role_id: deployment_manager
 display_name: Deployment Manager
+team: operations
 mission: Govern deployment targets, release evidence, rollout health, and rollback readiness.
 primary_outcomes:
   - DeploymentRun plans.

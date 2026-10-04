@@ -1,5 +1,6 @@
 role_id: design_critic
 display_name: Design Critic
+team: architecture
 mission: Catch bad complexity, missing constraints, and risky design before any code is written; defects are cheaper to fix in design than in implementation.
 primary_outcomes:
   - Design critiques (blockers / majors / minors).
