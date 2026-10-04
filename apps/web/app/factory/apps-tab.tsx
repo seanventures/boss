@@ -25,7 +25,7 @@ export type AppBuild = { runId: string; attempt: number; word: string; at?: stri
 export type AppRow = {
   key: string; app: string; builders: string[]; word: string;
   preview: { status: string; url?: string } | null;
-  deploys: { env: string; ok: boolean }[];
+  deploys: { env: string; ok: boolean; word?: string }[];
   builds: AppBuild[];
   rank: number;
 };
@@ -71,10 +71,13 @@ export function parseApps(w: unknown): AppRow[] {
     const p = o.preview ? obj(o.preview) : null;
     const word = str(o.word);
     return {
-      key: str(o.newest_run_id ?? o.key ?? o.app), app: str(o.app), builders: arr(o.builders).map(String), word,
+      key: str(o.run_id ?? o.key ?? o.app), app: str(o.app), builders: arr(o.builders).map(String), word,
       preview: p && opt(p.status) ? { status: str(p.status), url: opt(p.url) } : null,
-      deploys: arr(o.deploys).map((d) => { const y = obj(d); return { env: str(y.env), ok: y.ok === true }; }),
-      builds: arr(o.builds).map((b) => {
+      deploys: arr(o.deploys).map((d) => {
+        const y = obj(d);
+        return { env: str(y.env), ok: y.ok === true, word: opt(y.word) };
+      }),
+      builds: arr(o.attempts).map((b) => {
         const y = obj(b);
         return { runId: str(y.run_id), attempt: num(y.attempt, 1), word: str(y.word), at: opt(y.at) };
       }),
@@ -153,7 +156,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                   ) : a.preview?.status === "starting" ? <span>Starting…</span> : null}
                 </span>
                 <span className="fx-app-deploys">
-                  {a.deploys.map((d) => <span key={d.env} title={d.ok ? "Deployed" : "Not deployed"}>{d.env} {d.ok ? "✓" : "—"}</span>)}
+                  {a.deploys.map((d) => <span key={d.env} title={d.ok ? "Deployed" : "Not deployed"}>{d.word ?? `${d.env} ${d.ok ? "✓" : "—"}`}</span>)}
                 </span>
                 <span className="fx-app-count" title="Builds of this app">{a.builds.length} build{a.builds.length === 1 ? "" : "s"}</span>
                 <button type="button" className="ag-icon-btn fx-row-go" aria-label={`Open ${a.app}`} title="Open the newest build"

@@ -23,6 +23,7 @@ import { AttentionCard } from "./attention-card";
 import { MissionRow, rowAnimates } from "./mission-row";
 import { RunFace, nameOf } from "./run-face";
 import { TeamZones } from "./team-zones";
+import { BuildRow } from "../factory/build-row";
 import { RING_BUDGET, ago, linkTo, navigate, plainClick, runPatch, useBand, useNow } from "./live-util";
 
 /** Cards shown before `+n more`. */
@@ -169,6 +170,8 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
 
   const cards = moreCards ? attention : attention.slice(0, CARDS_SHOWN);
   const missions = sortMissions(board.missions);
+  // Every build the Floor draws under BUILDING, with the Floor's row: same rows, same count.
+  const builds = board.builds ?? [];
   const grouped = missions.length > GROUP_AT;
   const rows = grouped ? missions : moreRows ? missions : missions.slice(0, ROWS_SHOWN);
 
@@ -251,8 +254,18 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
       </section>
 
       <section className="ag-live-sec" data-sec="work" role="region" aria-labelledby="ag-live-work-h" id="ag-live-work">
-        <SectionHead id="ag-live-work-h" label="LIVE WORK" count={missions.length} />
-        {missions.length === 0 ? (
+        <SectionHead id="ag-live-work-h" label="LIVE WORK" count={missions.length + builds.length} />
+        {builds.length ? (
+          <ul className="ag-mission-list fx-rows" aria-label="Builds" data-testid="ag-live-builds">
+            {builds.map((b) => (
+              <li key={b.runId}>
+                <BuildRow build={b} band={band} now={now}
+                          onOpen={(id) => navigate({ area: "code_tasks", build: id, view: null, role: null })} />
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {missions.length === 0 && builds.length ? null : missions.length === 0 ? (
           <div className="ag-live-quiet" data-testid="ag-live-nothing-running">
             <span>Nothing running</span>
             <a className="ag-btn" href={linkTo({ area: "delivery_workflows", tab: "library", view: null, role: null }, orgId)}
