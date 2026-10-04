@@ -26,7 +26,7 @@ from sqlalchemy import text
 
 MissionState = Literal["running", "waiting_you", "waiting_person", "waiting", "stopped",
                        "blocked", "done"]
-AttentionKind = Literal["approval", "failed_step", "readiness"]
+AttentionKind = Literal["approval", "failed_step", "readiness", "gate_override", "budget_refused"]
 
 
 class AttentionAction(TypedDict):
@@ -64,6 +64,10 @@ class AttentionItem(TypedDict, total=False):
     risk_tier: Optional[int]
     fix: Optional[dict[str, str]]
     at: Optional[str]
+    # The build this is about when its subject is a code task (factory spec §6.5):
+    # {run_id, app, where, failing: [{name, label, waivable, reason?}], retryable, retry_reason,
+    #  pr_url?, preview_url?, plan_url?}
+    build: Optional[dict[str, Any]]
 
 
 class Hop(TypedDict, total=False):

@@ -46,7 +46,8 @@ export function teamOfAgent(roleKey: string): { key: string; label: string; tip?
 
 // ── Attention (the cards, the pill) ─────────────────────────────────────────────────────────
 
-export type AttentionKind = "approval" | "failed_step" | "readiness";
+/** `gate_override` / `budget_refused` are a build stopped for you (factory spec §6.5). */
+export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_override" | "budget_refused";
 export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general";
 
 export type AttentionAction = {
@@ -76,6 +77,23 @@ export type AttentionItem = {
   riskTier?: number;
   fix?: { area: string; label: string };
   at?: string;
+  /** The build this is about, when its subject is a code task (factory spec §4.2.1, §6.5). */
+  build?: AttentionBuild;
+};
+
+/** A failing quality gate, as a waiver sheet lists it. `waivable: false` → disabled + reason. */
+export type FailingGate = { name: string; label: string; waivable: boolean; reason?: string };
+export type AttentionBuild = {
+  runId: string;
+  app: string;
+  /** Where it stopped, as the context line says it: `Plan`, `Review · round 2`, `before Build`, `PR open`. */
+  where: string;
+  failing: FailingGate[];
+  retryable: boolean;
+  retryReason?: string;
+  prUrl?: string;
+  previewUrl?: string;
+  planUrl?: string;
 };
 
 /** The pill's slice of attention, on `/v1/agents/live` (§6.3). */
@@ -203,6 +221,20 @@ export function parseAttention(w: unknown): AttentionItem {
     riskTier: optNum(o.risk_tier),
     fix: fix ? { area: str(fix.area), label: str(fix.label) } : undefined,
     at: opt(o.at),
+    build: o.build ? parseAttentionBuild(o.build) : undefined,
+  };
+}
+
+export function parseAttentionBuild(w: unknown): AttentionBuild {
+  const b = obj(w);
+  return {
+    runId: str(b.run_id), app: str(b.app), where: str(b.where),
+    failing: arr(b.failing).map((f) => {
+      const x = obj(f);
+      return { name: str(x.name), label: str(x.label), waivable: x.waivable !== false, reason: opt(x.reason) };
+    }),
+    retryable: b.retryable === true, retryReason: opt(b.retry_reason),
+    prUrl: opt(b.pr_url), previewUrl: opt(b.preview_url), planUrl: opt(b.plan_url),
   };
 }
 
