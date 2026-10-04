@@ -1619,6 +1619,23 @@ def _execute_step(
             raise CapabilityExecutionError(str(error)) from error
         if isinstance(outcome.get("ran_as"), dict):
             outcome["ran_as"]["considered"] = ran_as.get("considered") or []
+        # THE AGENT STOPPED FOR THE PER-MINUTE BUDGET, NOT ON THE WORK. Its tool calls were
+        # refused by a cap that clears by itself, waited out as long as a call may wait
+        # (agent_loop.BudgetWaiter), and the run ended `budget_wait` instead of letting the
+        # agent declare itself blocked. The step waits and runs again (workflows.wait_step);
+        # it is neither a failure nor anything a person has to decide.
+        if str(outcome.get("status") or "") == agent_steps.BUDGET_WAIT:
+            from .model_failures import explain
+
+            budget = outcome.get("budget") or {}
+            said = explain(str(budget.get("message") or "burst cap"))
+            if said.get("kind") != "budget_wait":
+                said = explain("burst cap")
+            raise CapabilityWaitError(
+                said["headline"],
+                wait_seconds=int(outcome.get("retry_after_seconds")
+                                 or budget.get("retry_after_seconds") or 30),
+                kind="budget_wait")
         # SUSPENDED IS NOT DONE.
         #
         # The agent loop stops on a skill above the autonomous risk floor and returns

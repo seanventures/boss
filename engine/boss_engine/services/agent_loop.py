@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -51,6 +52,118 @@ def _unique_tool_name(
 #: How many refused tool calls an agent may make before the step gives up. Three is enough for
 #: a model to read the parameters again; more than that is a loop, not a correction.
 MAX_REFUSED_TOOL_CALLS = 3
+
+
+# ============================================================
+# A transient budget refusal is never the agent's problem.
+# ============================================================
+#
+# The per-minute burst cap refuses a reservation that would be granted a few seconds later.
+# Handed to the agent as a tool error, the agent read it as a broken tool and gave up: five
+# "Video edit and publish" runs started together, the 'edit' step's agent called
+# media.fetch_link four times into a busy minute, and declared "Edit is blocked:
+# skill_media_fetch_link repeatedly denied with transient burst budget cap error" — the step
+# stopped on something that clears by itself and that no person had to decide.
+#
+# So the call WAITS, here, in the one place agent tool calls reach skills and MCP tools, and is
+# made again — every attempt goes through the governor (each one reserves; nothing is
+# bypassed). Bounded per call and per run; past the bound a bounded run (a workflow's agent
+# step) stops with status `budget_wait` and the WORKFLOW step waits and runs again later
+# (workflows.wait_step). Only an unbounded run (chat) hands the agent a plain sentence.
+# A refusal a person must lift (cap, freeze, allocation) is not transient and reaches the
+# agent exactly as before.
+
+#: How long one tool call may wait for the per-minute budget before the bound is reached.
+TOOL_BUDGET_WAIT_SECONDS = 120
+#: How long one drive of an agent run may spend waiting in total, across all its calls.
+RUN_BUDGET_WAIT_SECONDS = 240
+#: Waits are slept in slices so a deadline or a stop request is noticed promptly.
+BUDGET_WAIT_SLICE_SECONDS = 5
+BUDGET_BUSY_MESSAGE = "BOSS's per-minute budget is busy; try again shortly."
+#: The status a bounded run ends with when it stopped to wait for the budget.
+BUDGET_WAIT = "budget_wait"
+
+# Injected by tests (no real sleeping); production reads the real clock.
+_sleep: Callable[[float], None] = time.sleep
+_clock: Callable[[], float] = time.monotonic
+
+
+def transient_budget_refusal(result: Any) -> Optional[dict[str, Any]]:
+    """The refusal's `budget` record when `result` is a skill invocation the budget refused
+    for a reason that clears by itself (skill_runtime.budget_refusal), else None."""
+    if not isinstance(result, dict) or str(result.get("status")) != "denied":
+        return None
+    budget = result.get("budget")
+    if isinstance(budget, dict) and budget.get("transient"):
+        return budget
+    return None
+
+
+class BudgetWaiter:
+    """Makes a tool call again while the budget refuses it transiently, within bounds.
+
+    `invoke(call)` returns `(result, exhausted)`: `exhausted` is None when the call got a real
+    answer (served, or refused for a reason a person must lift); otherwise it is the refusal's
+    budget record and `result` is the plain sentence for whoever reads it next."""
+
+    def __init__(self, *, per_call: float = TOOL_BUDGET_WAIT_SECONDS,
+                 per_run: float = RUN_BUDGET_WAIT_SECONDS, deadline: Optional[float] = None,
+                 should_stop: Optional[Callable[[], bool]] = None,
+                 sleep: Optional[Callable[[float], None]] = None,
+                 clock: Optional[Callable[[], float]] = None):
+        self.per_call = float(per_call)
+        self.per_run = float(per_run)
+        self.deadline = deadline
+        self.should_stop = should_stop
+        self.sleep = sleep or _sleep
+        self.clock = clock or _clock
+        self.waited = 0.0
+        self.retries = 0
+
+    def _stopping(self) -> bool:
+        return bool(self.should_stop and self.should_stop())
+
+    def _room(self, started: float) -> float:
+        now = self.clock()
+        room = min(self.per_call - (now - started), self.per_run - self.waited)
+        if self.deadline is not None:
+            room = min(room, self.deadline - now)
+        return room
+
+    def _wait(self, seconds: float) -> bool:
+        """Sleep `seconds` in slices; False when told to stop part-way."""
+        began = self.clock()
+        end = began + seconds
+        try:
+            while True:
+                left = end - self.clock()
+                if left <= 0:
+                    return True
+                if self._stopping():
+                    return False
+                self.sleep(min(BUDGET_WAIT_SLICE_SECONDS, left))
+        finally:
+            self.waited += max(0.0, self.clock() - began)
+
+    def invoke(self, call: Callable[[], dict[str, Any]]
+               ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+        started = self.clock()
+        result = call()
+        while True:
+            budget = transient_budget_refusal(result)
+            if budget is None:
+                return result, None
+            wait = max(1.0, float(budget.get("retry_after_seconds") or 30))
+            if wait > self._room(started) or self._stopping() or not self._wait(wait):
+                return {
+                    "status": BUDGET_WAIT,
+                    "transient": True,
+                    "retry_after_seconds": int(budget.get("retry_after_seconds") or 30),
+                    "message": BUDGET_BUSY_MESSAGE,
+                    "skill_id": result.get("skill_id"),
+                }, budget
+            self.retries += 1
+            result = call()
 
 
 def _preview_of(result: Any) -> str:
@@ -1693,7 +1806,9 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 "reason": "MCP server or tool is no longer enabled and available",
             }
         else:
-            result = _invoke_mcp_skill(
+            # The approved call waits out a busy minute like any other (BudgetWaiter); past
+            # the bound the agent reads the plain sentence rather than a refusal.
+            result, _ = BudgetWaiter().invoke(lambda: _invoke_mcp_skill(
                 connection,
                 settings,
                 project_id,
@@ -1707,7 +1822,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 # and checks it is THIS run's decision (approval_stands).
                 approved_by=decision_id,
                 approval_about={"run_id": run_id},
-            )
+            ))
             emit_event(
                 connection,
                 project_id,
@@ -1754,7 +1869,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 "skill_id": skill_id,
             }
         else:
-            result = _invoke_agent_skill(
+            result, _ = BudgetWaiter().invoke(lambda: _invoke_agent_skill(
                 connection,
                 settings,
                 project_id,
@@ -1765,7 +1880,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 skill_spec=still_resolved,
                 approved_by=decision_id,
                 approval_about={"run_id": run_id},
-            )
+            ))
             emit_event(
                 connection,
                 project_id,
@@ -1979,6 +2094,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     final_text: Optional[str] = None
     last_step = step0
     refused_calls = 0
+    # One waiter per drive, so the per-run bound covers every call this drive makes.
+    waiter = BudgetWaiter()
+    budget_wait: Optional[dict[str, Any]] = None
     for i in range(steps_cap):
         step = step0 + i
         last_step = step
@@ -2037,6 +2155,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             is_deferred = False
             if deferred is not None:
                 result = {"status": "skipped", "note": "a prior action this turn awaits approval"}
+            elif budget_wait is not None:
+                result = {"status": "skipped", "note": BUDGET_BUSY_MESSAGE}
             elif on_demand_loader is not None and name == on_demand_loader:
                 requested_id = str(args.get("skill_id") or "")
                 current_resolution = _skill_resolution_for_run(
@@ -2155,7 +2275,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         },
                     )
                 else:
-                    result = _invoke_mcp_skill(
+                    result, exhausted = waiter.invoke(lambda: _invoke_mcp_skill(
                         connection,
                         settings,
                         project_id,
@@ -2165,7 +2285,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         run_id=run_id,
                         step=step,
                         actor="agent_loop",
-                    )
+                    ))
+                    if exhausted is not None and bounded:
+                        budget_wait = exhausted
                     emit_event(
                         connection,
                         project_id,
@@ -2301,7 +2423,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         {"skill_id": skill_id, "risk_tier": risk, "step": step},
                     )
                 else:
-                    result = _invoke_agent_skill(
+                    result, exhausted = waiter.invoke(lambda: _invoke_agent_skill(
                         connection,
                         settings,
                         project_id,
@@ -2310,7 +2432,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         args,
                         actor="agent_loop",
                         skill_spec=skill,
-                    )
+                    ))
+                    if exhausted is not None and bounded:
+                        budget_wait = exhausted
                     emit_event(
                         connection,
                         project_id,
@@ -2343,6 +2467,22 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 step_obj["thought"] = thought
             transcript.append(step_obj)
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": json.dumps(result)[:16000]})
+
+        if budget_wait is not None and deferred is None:
+            # THE AGENT DOES NOT DECIDE THIS ONE. It would read "budget busy" as a broken tool
+            # and declare the work blocked; the step instead goes back to wait, and runs again
+            # once the minute has room (agent_steps.run -> workflow wait_step).
+            retry_after = int(budget_wait.get("retry_after_seconds") or 30)
+            _save_run(connection, run_id, project_id, task_id, BUDGET_WAIT, messages, transcript,
+                      total, finalize_ctx, step=step + 1,
+                      pending={"kind": BUDGET_WAIT, "budget": budget_wait})
+            emit_event(connection, project_id, "agent.run_budget_wait", "agent_loop", "agent_run",
+                       run_id, {"retry_after_seconds": retry_after,
+                                "waited_seconds": round(waiter.waited, 1),
+                                "refusal": budget_wait.get("refusal")})
+            return {"status": BUDGET_WAIT, "run_id": run_id, "output_text": "",
+                    "usage": total, "transcript": transcript, "budget": budget_wait,
+                    "retry_after_seconds": retry_after, "message": BUDGET_BUSY_MESSAGE}
 
         if deferred is not None:
             _save_run(connection, run_id, project_id, task_id, "awaiting_approval", messages, transcript, total, finalize_ctx, step=step + 1, pending=deferred)
