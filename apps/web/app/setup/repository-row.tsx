@@ -11,7 +11,7 @@ import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setu
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
 import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
 import { Drawer } from "./drawer";
-import { AskBoss, Consent, RowMenu, toast, useBoard } from "./parts";
+import { AskBoss, CONSENT_REFUSAL, Consent, RowMenu, toast, useBoard } from "./parts";
 import { Out, Pill, Refusal, Tip } from "./pill";
 import { RepoPicker } from "./repo-picker";
 import { SetupRow } from "./setup-row";
@@ -61,8 +61,7 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
     if (!value.trim()) return;
     if (needsConsent && !consent) {
       // NEVER SILENT: the press says what it is waiting for.
-      setRefusal({ state: "needs_consent", headline: "Store in BOSS database",
-                   fix: "No secret store on this server. Encrypted in Postgres." });
+      setRefusal(CONSENT_REFUSAL);
       return;
     }
     if (timer.current) clearTimeout(timer.current);
@@ -134,6 +133,7 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
         </div>
         {phase === "connecting" ? <ChecksRunning /> : (
           <RepoPicker repos={found?.repos ?? []} busy={false} onConnect={connect}
+                      preselect={view.repository.repos.find((r) => !r.binding_id)?.full_name}
                       exclude={view.repository.repos.filter((r) => r.binding_id)
                         .map((r) => r.full_name)} />
         )}

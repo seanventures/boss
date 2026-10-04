@@ -49,7 +49,30 @@ describe("a press waiting on the operator says so", () => {
     await type(input, "github_pat_0123456789abcdefghij");
     await press(input, "Enter");
     expect(api.calls.some((c) => c.op === "repo_token")).toBe(false);
-    expect(q(document.body, "su-refusal")?.textContent).toBe("Store in BOSS database");
+    // The reason, visibly — not the checkbox's own label again; the tooltip has the detail.
+    const refusal = q(document.body, "su-refusal")!;
+    expect(refusal.textContent).toBe("Tick the box to store it");
+    expect(refusal.getAttribute("data-tip")).toContain("No secret store on this server.");
+  });
+});
+
+describe("Replace token on an install repository", () => {
+  it("opens the picker with the install's repository already picked", async () => {
+    const base = board();
+    const install = { ...base.repository.repos[0], binding_id: null, full_name: "owner/site" };
+    const view = { ...base, repository: { connection: { ...base.repository.connection!,
+                                                          id: null, source: "install" as const },
+                                          repos: [install] } } as unknown as typeof base;
+    const api = fakeApi(view);
+    api.answer = (call) => call.op === "repo_token" ? { status: 200, body: FOUND } : null;
+    mounted = await mountBoard(view);
+    await click(q(document.body, "su-repo-menu"));
+    await click(q(document.body, "su-menu-replace"));
+    const input = q(document.body, "su-token-input")!;
+    await type(input, "github_pat_0123456789abcdefghij");
+    await press(input, "Enter");
+    expect(q(document.body, "su-repo-option-owner/site")?.getAttribute("aria-selected")).toBe("true");
+    expect((q(document.body, "su-repo-connect") as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

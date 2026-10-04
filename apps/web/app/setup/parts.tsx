@@ -80,10 +80,16 @@ export function RowMenu({ items, label, testid, open: openFromUrl = false }: {
   );
 }
 
+const CONSENT_TIP = "No secret store on this server. Encrypted in Postgres.";
+/** What a press waiting on the consent box says: the REASON, visibly (not the box's own label
+ *  again); the tooltip keeps the detail. */
+export const CONSENT_REFUSAL = { state: "needs_consent", headline: "Tick the box to store it",
+                                 fix: `Tick Store in BOSS database. ${CONSENT_TIP}` };
+
 /** `☐ Store in BOSS database` — asked once, before submit, when there is no secret store. */
 export function Consent({ checked, onChange }: { checked: boolean;
                                                  onChange: (v: boolean) => void }) {
-  const tip = "No secret store on this server. Encrypted in Postgres.";
+  const tip = CONSENT_TIP;
   return (
     <label className="su-consent" title={tip} data-tip={tip} data-testid="su-consent">
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
