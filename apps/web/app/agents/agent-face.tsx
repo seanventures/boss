@@ -24,7 +24,8 @@ export function AgFace({ roleKey, identity, spec, size, state = "idle", variant 
   identity?: AgentIdentity;
   /** An unsaved face to preview (the Face picker, the birth). */
   spec?: AvatarSpec;
-  size: AvatarSize;
+  /** A kit size, or any pixel size for a hero face (the kit picks its detail level). */
+  size: AvatarSize | number;
   state?: AvatarState;
   variant?: AvatarVariant;
   /** Next to the agent's name: hidden from screen readers, which already hear the name. */

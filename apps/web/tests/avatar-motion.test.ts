@@ -70,9 +70,13 @@ describe("every animation is defined, used, and named agav-", () => {
     expect(Number(rule![1])).toBeGreaterThanOrEqual(0.5); // alternate: a full cycle is twice this
   });
 
-  it("idle faces in lists are still; only the hero sizes breathe", () => {
+  it("idle faces in small lists are still; only the hero sizes and the roster's big faces breathe", () => {
+    // The roster card's face is 64px (the hero of its card), big enough for a calm breathe and
+    // blink to read as life rather than noise. Chips, lanes and pickers stay still.
     expect(ALL).toMatch(/\[data-state="idle"\]:is\(\[data-lod="96"\], \[data-lod="320"\]\) \.av-body \{ animation: agav-breathe/);
-    for (const m of ALL.matchAll(/([^{}]+)\{[^{}]*animation:\s*agav-(breathe|blink)/g)) expect(m[1]).toContain('data-lod="96"');
+    for (const m of ALL.matchAll(/([^{}]+)\{[^{}]*animation:\s*agav-(breathe|blink)/g)) {
+      expect(m[1].includes('data-lod="96"') || m[1].includes(".ag-card-face"), m[1]).toBe(true);
+    }
   });
 
   it("sets no text under 0.75rem", () => {

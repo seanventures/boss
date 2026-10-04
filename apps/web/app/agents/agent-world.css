@@ -192,41 +192,84 @@
 .ag-ai-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-text); }
 .ag-disclosure { font-size: 0.72rem; color: var(--faint); letter-spacing: 0.02em; }
 
-/* Roster: zones, then cards. */
+/* Roster: zones, then cards. The roster takes the whole width it is given: a responsive grid of
+   cards no narrower than 260px, as many columns as fit. The callsign never truncates (it wraps);
+   the role, tagline and presence line give way, each with its full text as a tooltip. The
+   actions live in the card's own footer row, so nothing ever sits on top of the text. */
+/* ...and the width it is given is the whole console. The shell caps every area at 1440px and
+   centres it (design-system.css .bx-content), which suits reading; a floor of faces is a gallery,
+   so on a wide screen the cap left it a centred column (2560px viewport: 1388px of 2316px). */
+.bx-content[data-active="workforce"]:has(.ag-roster) { max-width: none; }
 .ag-roster-sum { display: inline-flex; align-items: center; gap: 8px; margin-left: 12px; font-size: 0.8rem; color: var(--muted); }
-.ag-roster { display: flex; flex-direction: column; gap: 20px; }
-.ag-zone-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ag-roster { display: flex; flex-direction: column; gap: 28px; width: 100%; min-width: 0; margin-top: 16px; }
+.ag-zone { min-width: 0; }
+.ag-zone-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
 .ag-zone-label { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--faint); }
-.ag-zone-count { font-size: 11px; color: var(--faint); }
+.ag-zone-count { font-size: 11px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
 .ag-zone[data-zone="needs_you"] .ag-zone-label, .ag-zone[data-zone="needs_you"] .ag-zone-count { color: var(--amber); }
-.ag-zone[data-zone="working"] .ag-zone-label { color: var(--accent-text); }
-.ag-zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.ag-zone[data-zone="working"] .ag-zone-label, .ag-zone[data-zone="in_panel"] .ag-zone-label { color: var(--accent-text); }
+.ag-zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px; }
 .ag-zone-more {
-  min-height: 72px; border: 1px dashed var(--border-strong); border-radius: var(--r); background: transparent;
-  color: var(--muted); font: inherit; font-weight: 700; cursor: pointer;
+  margin-top: 10px; padding: 6px 12px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
 }
+.ag-zone-more:hover { color: var(--ink); border-color: var(--accent-line); }
+.ag-zone-more:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
+.ag-trunc { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ag-card {
-  position: relative; display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; padding: 12px;
-  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); min-width: 0;
+  position: relative; display: grid; min-width: 0; cursor: pointer;
+  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-areas: "face head" "line line" "foot foot";
+  gap: 12px 14px; padding: 16px 16px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-lg, var(--r)); background: var(--surface);
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
 }
+.ag-card:hover { border-color: var(--accent-line); background: color-mix(in srgb, var(--accent) 4%, var(--surface)); transform: translateY(-1px); }
+.ag-card:focus-within { border-color: var(--accent-line); }
 .ag-card[data-zone="needs_you"] { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); background: color-mix(in srgb, var(--amber) 5%, var(--surface)); }
 .ag-card[data-zone="idle"] { background: var(--surface-2); }
-.ag-card[data-zone="idle"] .ag-card-face { opacity: 0.8; }
-.ag-card-face { border: 0; padding: 0; background: none; cursor: pointer; align-self: start; }
-.ag-card-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.ag-card-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.ag-card-name { font-size: 16px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ag-card-role { font-size: 0.78rem; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ag-card-tagline { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ag-card-line { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--ink-soft); min-width: 0; }
-.ag-card-line > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.ag-card-vitals { display: flex; gap: 10px; font-size: 0.74rem; color: var(--faint); }
-.ag-card-vitals span { display: inline-flex; align-items: center; gap: 3px; }
-.ag-card-actions { grid-column: 1 / -1; display: flex; gap: 6px; }
-@media (hover: hover) {
-  .ag-card-actions { position: absolute; top: 10px; right: 10px; opacity: 0; transition: opacity 120ms; }
-  .ag-card:hover .ag-card-actions, .ag-card:focus-within .ag-card-actions { opacity: 1; }
-  .ag-card-actions .ag-btn { background: var(--surface-3); }
+.ag-card[data-zone="idle"]:hover { background: var(--surface); }
+.ag-card-face { grid-area: face; display: inline-flex; align-self: start; line-height: 0; }
+.ag-card-head { grid-area: head; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
+/* The name is the card's link: a bare button, text-styled, whose focus ring is the card's. */
+.ag-card-open {
+  align-self: flex-start; max-width: 100%; border: 0; padding: 0; margin: 0; background: transparent;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--r-sm);
+}
+.ag-card-open:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+.ag-card-name {
+  display: block; font-size: 1.05rem; font-weight: 650; line-height: 1.25; color: var(--ink);
+  white-space: normal; overflow-wrap: anywhere;
+}
+.ag-card-role { font-size: 0.8rem; color: var(--muted); }
+.ag-card-tagline { font-size: 0.8rem; color: var(--faint); font-style: italic; }
+.ag-card-line {
+  grid-area: line; display: flex; align-items: center; gap: 8px; min-width: 0;
+  font-size: 0.8rem; color: var(--ink-soft);
+}
+.ag-card-line .ag-state { flex: none; }
+.ag-card-foot {
+  grid-area: foot; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 32px; padding-top: 8px; border-top: 1px solid var(--border);
+}
+.ag-card-vitals { display: inline-flex; gap: 12px; font-size: 0.76rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ag-card-vitals span { display: inline-flex; align-items: center; gap: 4px; }
+.ag-card-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.ag-card .ag-btn-sm { height: 28px; min-height: 28px; padding: 0 10px; font-size: 0.76rem; }
+.ag-card .ag-card-talk {
+  width: 32px; height: 32px; justify-content: center; border-radius: 50%;
+  border: 1px solid var(--border-strong); background: var(--surface-3); color: var(--accent-text); cursor: pointer;
+}
+.ag-card .ag-card-talk:hover { background: var(--accent-soft); border-color: var(--accent-line); color: var(--ink); }
+/* A roster face is big enough to show its life: idle breathes and blinks, slowly, here too. */
+.ag-card-face .ag-av[data-state="idle"] .av-body { animation: agav-breathe 5s ease-in-out infinite; }
+.ag-card-face .ag-av[data-state="idle"] .av-eyes {
+  animation: agav-blink var(--agav-blink, 6s) var(--agav-blink-delay, 0s) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-card, .ag-card .ag-card-talk { transition: none; }
+  .ag-card:hover { transform: none; }
 }
 
 /* Presence pill and the crew. */
@@ -259,12 +302,12 @@
 
 /* The Passport. */
 .ag-passport {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(220px, 300px); gap: 20px 24px;
-  align-items: start; padding: 20px; margin-bottom: 12px; border: 1px solid var(--border);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(260px, 340px); gap: 20px 28px;
+  align-items: start; padding: 24px; margin-bottom: 12px; border: 1px solid var(--border);
   border-radius: var(--r-xl); background: linear-gradient(160deg, var(--surface) 0%, var(--bg-tint) 100%);
 }
 .ag-passport[data-lifecycle="paused"], .ag-passport[data-lifecycle="retired"] { border-style: dashed; }
-.ag-passport-hero { position: relative; }
+.ag-passport-hero { position: relative; padding: 4px; }
 .ag-hero-face { border: 0; padding: 0; background: none; cursor: pointer; border-radius: 50%; }
 .ag-hero-bubble {
   position: absolute; left: 70%; top: -8px; z-index: 2; max-width: 220px; padding: 6px 10px;
@@ -297,16 +340,35 @@
 .ag-menu button:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); }
 .ag-menu button:disabled { opacity: 0.45; cursor: not-allowed; }
 .ag-menu button[data-tone="danger"] { color: var(--red); }
+/* The certificate: one row per fact, label left (dotted: it has a tooltip), value right, with
+   a copy button where a value is worth pasting (ID, Version). Values truncate; labels do not. */
 .ag-cert {
-  margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0; font-size: 0.78rem;
+  margin: 0; display: flex; flex-direction: column; font-size: 0.8rem; min-width: 0;
   border: 1px solid var(--border-strong); border-radius: var(--r); overflow: hidden; background: var(--bg);
 }
-.ag-cert > div { display: contents; }
-.ag-cert dt, .ag-cert dd { margin: 0; padding: 5px 10px; border-bottom: 1px solid var(--border); }
-.ag-cert > div:last-child dt, .ag-cert > div:last-child dd { border-bottom: 0; }
-.ag-cert dt { color: var(--faint); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.ag-cert dd { display: flex; align-items: center; gap: 4px; color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.ag-cert code { font-family: var(--mono); font-size: 0.74rem; color: var(--ink); }
+.ag-cert-row {
+  display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px;
+  min-height: 32px; padding: 3px 6px 3px 12px; border-bottom: 1px solid var(--border);
+}
+.ag-cert-row:last-child { border-bottom: 0; }
+.ag-cert-row:hover { background: var(--surface-2); }
+.ag-cert dt {
+  margin: 0; justify-self: start; color: var(--faint); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; white-space: nowrap; cursor: help;
+  text-decoration: underline dotted color-mix(in srgb, var(--faint) 60%, transparent); text-underline-offset: 3px;
+}
+.ag-cert dd { margin: 0; display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--ink-soft); }
+.ag-cert code { font-family: var(--mono); font-size: 0.76rem; color: var(--ink); }
+.ag-cert .ag-cert-copy { flex: none; width: 26px; height: 26px; margin-left: auto; color: var(--faint); border: 0; }
+.ag-cert .ag-cert-copy:hover { color: var(--ink); background: var(--surface-3); }
+.ag-cert .ag-cert-copy:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+/* Not registered: said once, with the one thing to do about it. */
+.ag-unreg {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 12px; padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--border)); border-radius: var(--r);
+  background: color-mix(in srgb, var(--amber) 6%, var(--surface)); color: var(--ink-soft); font-size: 0.86rem;
+}
+.ag-unreg strong { color: var(--amber); font-weight: 700; }
 .ag-vitals { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 14px; padding-top: 12px;
   border-top: 1px solid var(--border); color: var(--muted); font-size: 0.8rem; }
 .ag-vitals span + span::before { content: "·"; margin-right: 14px; color: var(--faint); }
@@ -361,17 +423,31 @@
   font: inherit; font-size: 0.86rem; padding: 6px 8px;
 }
 .ag-row { display: flex; flex-wrap: wrap; gap: 12px; }
-.ag-arch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+/* Archetype picker tiles: a real face (56px), the callsign, the role underneath; picked = ring + tint. */
+.ag-arch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
 .ag-arch {
-  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px;
-  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft);
-  font: inherit; font-size: 0.78rem; text-align: center; cursor: pointer;
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0;
+  padding: 14px 10px 12px; border: 1px solid var(--border); border-radius: var(--r-lg, var(--r));
+  background: var(--surface-2); color: var(--ink-soft); font: inherit; font-size: 0.8rem; text-align: center;
+  cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
 }
-.ag-arch:hover { border-color: var(--accent-line); }
-.ag-arch[aria-checked="true"] { border-color: var(--accent-text); background: var(--accent-soft); color: var(--ink); }
-.ag-arch-name { font-weight: 700; }
-.ag-arch-custom { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
-  border-radius: 50%; border: 1px dashed var(--border-strong); color: var(--faint); font-size: 1.1rem; }
+.ag-arch > .ag-face { margin-bottom: 4px; }
+.ag-arch:hover { border-color: var(--accent-line); background: var(--surface); transform: translateY(-1px); }
+.ag-arch[aria-checked="true"] {
+  border-color: var(--accent-text); background: var(--accent-soft); color: var(--ink);
+  box-shadow: 0 0 0 1px var(--accent-text) inset;
+}
+.ag-arch[aria-checked="true"]::after {
+  content: "✓"; position: absolute; top: 6px; right: 8px; font-size: 0.75rem; font-weight: 800; color: var(--accent-text);
+}
+.ag-arch-name { font-weight: 700; font-size: 0.86rem; color: var(--ink); overflow-wrap: anywhere; }
+.ag-arch-role { max-width: 100%; font-size: 0.75rem; color: var(--faint); }
+.ag-arch-custom { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px;
+  margin-bottom: 4px; border-radius: 50%; border: 1px dashed var(--border-strong); color: var(--faint); font-size: 1.4rem; }
+@media (prefers-reduced-motion: reduce) {
+  .ag-arch { transition: none; }
+  .ag-arch:hover { transform: none; }
+}
 .ag-voice { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 20px; }
 .ag-voice legend { margin-bottom: 6px; }
 .ag-slider { display: grid; grid-template-columns: 62px 1fr 62px; align-items: center; gap: 8px; }
@@ -467,7 +543,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ag-pill, .ag-hero-bubble, .ag-birth-face, .ag-birth-stamp { animation: none; }
-  .ag-swarm-edge, .ag-share-preview img, .ag-card-actions { transition: none; }
+  .ag-swarm-edge, .ag-share-preview img { transition: none; }
 }
 
 @media (max-width: 900px) {

@@ -3,7 +3,7 @@
 /**
  * The Passport header (spec §3.4): who this agent is, in one glance, as a certificate.
  *
- * Left, the 96px face — the only place an idle agent breathes and blinks. Centre, the name, the
+ * Left, the 128px face (PASSPORT_FACE_PX), breathing and blinking when idle. Centre, the name, the
  * role, the `AI agent` badge, its lifecycle and its own two lines about itself. Right, the
  * certificate: an ID that never changes, when and by whom it was born, where it came from, the
  * human accountable for it, the version of its definition, and an honest `Local · tokens coming`.
@@ -66,6 +66,54 @@ export function detailVitalsLine(f: DetailFacts): string[] {
   if (f.spend > 0) out.push(`${money(f.spend)} spent`);
   if (f.panels > 0) out.push(`${f.panels} panel${f.panels === 1 ? "" : "s"}`);
   return out;
+}
+
+/** The Passport's face: the hero of the page. */
+export const PASSPORT_FACE_PX = 128;
+
+/** Tooltips for the certificate, one short line each (spec §9). */
+export const CERT_TIPS = {
+  id: "Never changes. Future tokens and policies attach here.",
+  born: "When this agent was created.",
+  by: "Who created it.",
+  from: "What it was made from: a BOSS pack, a template or an archetype.",
+  sponsor: "The person accountable for this agent.",
+  version: "Changes when its voice, remit or skills change.",
+  reports: "Who it answers to.",
+  identity: "Per-agent tokens and policies come in a later release.",
+} as const;
+
+export type CertRow = {
+  key: keyof typeof CERT_TIPS; label: string; tip: string; value: string;
+  testId: string; mono?: boolean; copy?: string; full?: string;
+};
+
+/** The certificate, row by row. Every value is the API's; a missing one is a dash. */
+export function certRows(passport: Passport | null, actor: string, reportsTo: string | null): CertRow[] {
+  const id = passport?.agentId || "";
+  const sponsor = passport?.sponsor;
+  const fp = (passport?.fingerprint || "").replace(/^sha256:/, "");
+  const rows: CertRow[] = [
+    { key: "id", label: "ID", tip: CERT_TIPS.id, value: id || "—", testId: "ag-cert-id", mono: true, copy: id || undefined },
+    { key: "born", label: "Born", tip: CERT_TIPS.born, value: passport ? bornDate(passport.born.at) : "—", testId: "ag-cert-born" },
+    { key: "by", label: "Born by", tip: CERT_TIPS.by, value: passport ? bornByLabel(passport.born.by, actor) : "—", testId: "ag-cert-by" },
+    { key: "from", label: "From", tip: CERT_TIPS.from, value: passport ? bornFromLabel(passport.born.from) : "—", testId: "ag-cert-from" },
+    { key: "sponsor", label: "Sponsor", tip: CERT_TIPS.sponsor, testId: "ag-cert-sponsor",
+      value: sponsor ? (sponsor === actor ? "You" : sponsor) : "—" },
+    { key: "version", label: "Version", tip: CERT_TIPS.version, testId: "ag-cert-version", mono: true,
+      value: passport ? versionLine(passport.version, passport.fingerprint) : "—",
+      copy: passport ? (fp ? `v${passport.version} ${fp}` : `v${passport.version}`) : undefined,
+      full: passport && fp ? `v${passport.version} · ${fp}` : undefined },
+    { key: "reports", label: "Reports to", tip: CERT_TIPS.reports, testId: "ag-cert-reports",
+      value: reportsTo ? identityOf(reportsTo).name : "—" },
+    { key: "identity", label: "Identity", tip: CERT_TIPS.identity, value: "Local · tokens coming", testId: "ag-cert-identity" },
+  ];
+  return rows;
+}
+
+async function copyText(text: string, label: string): Promise<void> {
+  try { await navigator.clipboard.writeText(text); toast("success", `Copied ${label}`); }
+  catch { toast("error", "Clipboard unavailable"); }
 }
 
 const LIFECYCLE_WORD = { active: "Active", paused: "Paused", retired: "Retired" } as const;
@@ -151,18 +199,12 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
       toast("success", "Copied card JSON");
     } catch { toast("error", "Clipboard unavailable"); }
   };
-  const copyId = async () => {
-    if (!passport?.agentId) return;
-    try { await navigator.clipboard.writeText(passport.agentId); toast("success", "Copied ID"); }
-    catch { toast("error", "Clipboard unavailable"); }
-  };
-
   return (
     <header className="ag-passport" data-testid="ag-passport" data-lifecycle={lifecycle}>
       <div className="ag-passport-hero">
         <button type="button" className="ag-hero-face" data-wave={wave ? true : undefined}
                 onClick={poke} aria-label={`${title}, ${state === "idle" ? "Idle" : state}`}>
-          <AgFace roleKey={roleKey} identity={identity} size={96} state={state} decorative aiBadge={false}
+          <AgFace roleKey={roleKey} identity={identity} size={PASSPORT_FACE_PX} state={state} decorative aiBadge={false}
                   motion={wave ? "wave" : undefined} />
         </button>
         {wave ? <span className="ag-hero-bubble" role="status" data-user-text>{wave}</span> : null}
@@ -225,37 +267,23 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
       </div>
 
       <dl className="ag-cert" data-testid="ag-cert">
-        <div title="Never changes. Future tokens and policies attach here.">
-          <dt>ID</dt>
-          <dd>
-            <code data-testid="ag-cert-id">{passport?.agentId || "—"}</code>
-            {passport?.agentId ? (
-              <button type="button" className="ag-icon-btn" aria-label="Copy ID" onClick={() => void copyId()}>
-                <Copy size={12} aria-hidden />
-              </button>
-            ) : null}
-          </dd>
-        </div>
-        <div><dt>Born</dt><dd data-testid="ag-cert-born">{passport ? bornDate(passport.born.at) : "—"}</dd></div>
-        <div title="Who created it.">
-          <dt>Born by</dt>
-          <dd data-testid="ag-cert-by">{passport ? bornByLabel(passport.born.by, actor) : "—"}</dd>
-        </div>
-        <div><dt>From</dt><dd data-testid="ag-cert-from">{passport ? bornFromLabel(passport.born.from) : "—"}</dd></div>
-        <div title="The person accountable for this agent.">
-          <dt>Sponsor</dt><dd data-testid="ag-cert-sponsor">{sponsor ? (sponsor === actor ? "You" : sponsor) : "—"}</dd>
-        </div>
-        <div title="Changes when its voice, remit or skills change.">
-          <dt>Version</dt>
-          <dd><code data-testid="ag-cert-version">{passport ? versionLine(passport.version, passport.fingerprint) : "—"}</code></dd>
-        </div>
-        <div title="Who it answers to.">
-          <dt>Reports to</dt>
-          <dd data-testid="ag-cert-reports">{reportsTo ? identityOf(reportsTo).name : "—"}</dd>
-        </div>
-        <div title="Per-agent tokens and policies come in a later release.">
-          <dt>Identity</dt><dd>Local · tokens coming</dd>
-        </div>
+        {certRows(passport, actor, reportsTo).map((row) => (
+          <div key={row.label} className="ag-cert-row" data-testid={`ag-cert-row-${row.key}`}>
+            <dt title={row.tip}>{row.label}</dt>
+            <dd title={row.full ?? row.value}>
+              {row.mono
+                ? <code className="ag-trunc" data-testid={row.testId}>{row.value}</code>
+                : <span className="ag-trunc" data-testid={row.testId}>{row.value}</span>}
+              {row.copy ? (
+                <button type="button" className="ag-icon-btn ag-cert-copy" aria-label={`Copy ${row.label}`}
+                        title={`Copy ${row.label}`} data-testid={`ag-copy-${row.key}`}
+                        onClick={() => void copyText(row.copy!, row.label)}>
+                  <Copy size={13} aria-hidden />
+                </button>
+              ) : null}
+            </dd>
+          </div>
+        ))}
       </dl>
 
       {passport || facts ? (

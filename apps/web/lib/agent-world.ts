@@ -90,6 +90,18 @@ export function askAgent(roleKey: string, _name: string, context?: ConversationC
   openTalk(roleKey, context);
 }
 
+/** Open one agent's Passport (`?area=workforce&role=`). Addressable, because a view nobody can
+ *  link to is one nobody can send. The roster, the org chart and Register all open it this way. */
+export function openAgent(roleKey: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("area", "workforce");
+    url.searchParams.set("role", roleKey);
+    window.history.pushState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
 // ── State words (spec §9) ───────────────────────────────────────────────────────────────────
 
 export const STATE_WORD: Record<AvatarState, string> = {

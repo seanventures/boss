@@ -115,14 +115,27 @@ describe("the roster zones are presence", () => {
     expect(zones()).toEqual(["working", "idle"]);
   });
 
-  it("idle past twelve folds into +n, which opens the rest", async () => {
-    const many = Array.from({ length: 15 }, (_, i) => agent(`role_${i}`));
-    await render(<RosterZones agents={many} live={new Map()} onOpen={() => {}} onAsk={() => {}} />);
-    expect(document.querySelectorAll('[data-zone="idle"] article')).toHaveLength(12);
-    const more = $('[data-testid="ag-idle-more"]');
-    expect(more?.textContent).toBe("+3");
-    await act(async () => { more!.click(); });
+  it("shows every agent; only past thirty does the idle tail fold behind Show n more", async () => {
+    // Fifteen agents: all fifteen drawn, no fold (it once hid all but twelve behind "+3").
+    const fifteen = Array.from({ length: 15 }, (_, i) => agent(`role_${i}`));
+    await render(<RosterZones agents={fifteen} live={new Map()} onOpen={() => {}} onAsk={() => {}} />);
     expect(document.querySelectorAll('[data-zone="idle"] article')).toHaveLength(15);
+    expect($('[data-testid="ag-idle-more"]')).toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    // Forty, two of them live: the live ones are never folded; idle fills to thirty, then folds.
+    const forty = Array.from({ length: 40 }, (_, i) => agent(`role_${i}`));
+    await render(<RosterZones agents={forty} live={new Map([["role_0", { state: "working" as const, line: "x" }],
+                                                            ["role_1", { state: "needs_you" as const, line: "y" }]])}
+                              onOpen={() => {}} onAsk={() => {}} />);
+    expect(document.querySelectorAll("article")).toHaveLength(30);
+    expect(document.querySelectorAll('[data-zone="working"] article')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-zone="needs_you"] article')).toHaveLength(1);
+    const more = $('[data-testid="ag-idle-more"]');
+    expect(more?.textContent).toBe("Show 10 more");
+    await act(async () => { more!.click(); });
+    expect(document.querySelectorAll("article")).toHaveLength(40);
+    expect($('[data-testid="ag-idle-more"]')).toBeNull();
   });
 
   it("Needs you is a filter, counted from the same presence", async () => {
