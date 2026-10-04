@@ -76,6 +76,18 @@ export function safeNext(value: string | null): string {
   return value;
 }
 
+/**
+ * NETWORK-TRUSTED CONSOLE: no sign-in of its own. Only an image BUILT with
+ * BOSS_CONSOLE_AUTH=network (a Dockerfile build arg baked into the web image) runs this way —
+ * for a host whose network or SSO proxy already decides who reaches it, as the console on
+ * goldeneye did before it had a sign-in. Never the default, never a runtime toggle someone can
+ * set by accident: every other build keeps the password, the session and the HTTPS check.
+ * Cross-site writes are still refused (sameOriginMutation).
+ */
+export function networkTrustedConsole(): boolean {
+  return process.env.BOSS_CONSOLE_AUTH === "network";
+}
+
 export function sameOriginMutation(request: Request): boolean {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) return true;
   const origin = request.headers.get("origin");
@@ -91,6 +103,12 @@ export function sameOriginMutation(request: Request): boolean {
       const browser = new URL(`http://${host}`);
       return origin === actual.origin && actual.origin === browser.origin;
     } catch { return false; }
+  }
+  if (networkTrustedConsole() && !process.env.BOSS_CONSOLE_PUBLIC_ORIGIN) {
+    // Behind a proxy the internal URL is not the browser's: the page must have come from the
+    // host the browser asked for.
+    const host = request.headers.get("x-forwarded-host") || request.headers.get("host");
+    try { return !!host && new URL(origin).host === host; } catch { return false; }
   }
   return origin === (process.env.BOSS_CONSOLE_PUBLIC_ORIGIN || url.origin);
 }
