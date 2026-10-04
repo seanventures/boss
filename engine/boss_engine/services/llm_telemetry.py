@@ -23,13 +23,15 @@ from sqlalchemy import text
 
 log = logging.getLogger("boss.llm_telemetry")
 
-# {db_engine (sqlalchemy), project_id, run_id, stage}
+# {db_engine (sqlalchemy), project_id, run_id, stage, act_id?, role_key?, workflow_run_id?}
 _llm_ctx: ContextVar[dict] = ContextVar("llm_call_context", default={})
 
 
 def set_llm_context(**kwargs) -> None:
     """Merge fields into the current thread's LLM-call context. Recognised keys:
-    ``db_engine`` (SQLAlchemy engine for the insert), ``project_id``, ``run_id``, ``stage``.
+    ``db_engine`` (SQLAlchemy engine for the insert), ``project_id``, ``run_id``, ``stage``,
+    and the Agent World keys ``act_id`` / ``role_key`` / ``workflow_run_id`` (who is spending:
+    set by a caller that already holds its act; otherwise the stage's act is found per call).
     Pass a key as None to clear it."""
     ctx = dict(_llm_ctx.get())
     for k, v in kwargs.items():
@@ -92,6 +94,29 @@ def role_for_stage(stage: Optional[str]) -> Optional[str]:
     return STAGE_ROLES.get((stage or "").strip().lower())
 
 
+def _signed_by(c, ctx: dict, stage: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """WHICH ACT THIS CALL IS PART OF, and so which agent spent it.
+
+    The context's own act wins (a caller that opened one says so). Otherwise a build stage's
+    act is found — opened on first use — from the code task and stage, so every call a build
+    makes is signed without each of its fifteen call sites knowing the ledger exists. The role
+    written on the row is the ACT's role: STAGE_ROLES is only the fallback when there is no act,
+    because the agent the operator put on a build is who spent its implement stage.
+    """
+    if ctx.get("act_id"):
+        return str(ctx["act_id"]), ctx.get("role_key") or role_for_stage(stage)
+    if not ctx.get("run_id"):
+        return None, ctx.get("role_key") or role_for_stage(stage)
+    from . import agent_acts
+
+    found = agent_acts.quietly(c, "sign a model call", agent_acts.stage_act,
+                               project_id=ctx.get("project_id"),
+                               code_task_run_id=str(ctx["run_id"]), stage=stage)
+    if not found:
+        return None, ctx.get("role_key") or role_for_stage(stage)
+    return found["act_id"], found.get("role_key")
+
+
 def record_llm_call(
     *,
     engine_name: str,
@@ -118,22 +143,27 @@ def record_llm_call(
             _, _, known = price_for_model(model)
             price_estimated = not known
         with begin(ctx.get("db_engine")) as c:
+            act_id, role = _signed_by(c, ctx, stage or ctx.get("stage"))
+            # The act column is written only when there is an act, so a store that predates
+            # the ledger (or a test's minimal table) records the call exactly as before.
+            signed = (", act_id", ", :act") if act_id else ("", "")
             c.execute(
-                text("""
+                text(f"""
                     INSERT INTO llm_calls (
                         id, project_id, code_task_run_id, stage, engine, model, role,
                         prompt_tokens, completion_tokens, total_tokens,
                         cache_read_tokens, cache_write_tokens, cost_usd_micros,
-                        price_estimated, latency_ms, retries, turns, ok, error)
+                        price_estimated, latency_ms, retries, turns, ok, error{signed[0]})
                     VALUES (:id, :p, :run, :stage, :eng, :model, :role, :pt, :ct, :tt,
-                            :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err)
+                            :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err{signed[1]})
                 """),
                 {
                     "id": f"llmc_{uuid4().hex[:20]}",
                     "p": ctx.get("project_id"),
                     "run": ctx.get("run_id"),
                     "stage": stage or ctx.get("stage"),
-                    "role": role_for_stage(stage or ctx.get("stage")),
+                    "role": role,
+                    "act": act_id,
                     "eng": engine_name,
                     "model": model or None,
                     "pt": int(u.get("prompt_tokens") or 0),
@@ -191,13 +221,15 @@ def record_agent_turns(
         ctx = _llm_ctx.get()
         resolved_stage = stage or ctx.get("stage")
         with begin(ctx.get("db_engine")) as c:
+            act_id, role = _signed_by(c, ctx, resolved_stage)
             return record_turns(
                 c,
                 turns,
                 project_id=ctx.get("project_id"),
                 code_task_run_id=ctx.get("run_id"),
                 stage=resolved_stage,
-                role_key=role_for_stage(resolved_stage),
+                role_key=role,
+                act_id=act_id,
                 engine=engine_name,
                 model=model,
                 prompt=prompt,

@@ -147,6 +147,8 @@ def clean_tables(engine):
             "sre_postmortems",
             "incident_evidence",
             "reliability_policies",
+            # Agent World: the signed-work ledger (self-referencing, no FK out; one DELETE).
+            "agent_acts",
             "llm_calls",
             "remediations",
             "anomaly_signals",
