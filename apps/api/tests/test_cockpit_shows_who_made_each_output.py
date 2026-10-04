@@ -101,6 +101,9 @@ def test_a_steer_is_read_by_the_next_stage(client, engine):
     assert sent.status_code == 200, sent.text
     queued = [r for r in _cockpit(client, run_id)["story"] if r.get("what") == "steered"]
     assert queued and queued[0]["applied_act_id"] is None
+    assert queued[0]["word"] == "Queued for next station"
+    # D8: filed under the station that was working when it was said.
+    assert queued[0]["station"] == "tests"
     taken = take_pending_guidance(engine, run_id, stage="implement")
     assert taken and taken[0]["applied_act_id"]
     steered = [r for r in _cockpit(client, run_id)["story"] if r.get("what") == "steered"][0]
@@ -110,6 +113,7 @@ def test_a_steer_is_read_by_the_next_stage(client, engine):
             {"r": run_id}).scalar()
     assert steered["applied_act_id"] == implement
     assert steered["applied_role"] == "software_engineer"
+    assert steered["word"].startswith("Read by ")
 
 
 def test_every_reader_says_the_same_state(client, engine):
@@ -161,3 +165,37 @@ def test_credits_credit_this_build_not_the_run_around_it(client, engine):
     roles = [c["role_key"] for c in body["credits"] if c["role_key"]]
     assert "qa" in roles and "software_engineer" in roles
     assert set(body["totals"]) >= {"steps", "minutes", "cost"}
+
+
+def test_a_steer_never_read_says_so_once_the_build_ends(client, engine):
+    """D11: guidance sent with no station left to read it said `Queued` forever."""
+    run_id = fx.new_run(engine, title="Late steer", status="failed", phase="implement",
+                        fctx={"pending_guidance": [{"text": "Mind the CSV", "actor": fx.ACTOR,
+                                                    "at": "2026-10-04T09:00:00+00:00"}]})
+    steered = [r for r in _cockpit(client, run_id)["story"] if r.get("what") == "steered"][0]
+    assert steered["word"] == "Not read · build ended"
+
+
+def test_the_story_reads_in_the_lines_order(client, engine):
+    """D8: Check rows sat after PR because a check finished late; a station's rows are
+    together, in the Line's order."""
+    run_id = fx.new_run(engine, title="Ordered app", status="completed", phase="done", pr=7,
+                        state={"tests": [{"command": "pytest", "exit_code": 0, "ok": True}]})
+    for step in ("write_tests", "implement", "review_code", "check_tests"):
+        fx.stage(engine, run_id, step)
+    fx.finish(engine, run_id)
+    stations = [r["station"] for r in _cockpit(client, run_id)["story"]]
+    order = ["plan", "you_plan", "tests", "build", "check", "review", "pr", "preview", "ship"]
+    assert stations == sorted(stations, key=order.index)
+    assert stations.count("check") >= 1
+    seen = [s for i, s in enumerate(stations) if i == 0 or stations[i - 1] != s]
+    assert len(seen) == len(set(seen)), f"a station's rows are split: {stations}"
+
+
+def test_merge_readiness_says_why_not(client, engine):
+    """Lead's ask (a): a bare "Not ready" gives the reason."""
+    run_id = fx.new_run(engine, title="Gated app", status="completed", phase="done", pr=9,
+                        state={"tests": [{"command": "pytest", "exit_code": 1, "ok": False}]})
+    fx.stage(engine, run_id, "implement")
+    fx.finish(engine, run_id)
+    assert _cockpit(client, run_id)["outputs"]["merge_ready"]["word"] == "Not ready · tests failed"

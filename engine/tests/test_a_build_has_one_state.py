@@ -145,3 +145,12 @@ def test_a_job_the_budget_holds_is_waiting_on_budget_not_a_worker():
         "word"] == "Queued"
     assert state(run(phase="queued"), job={"status": "queued", "last_error": {}})[
         "word"] == "Queued"
+
+
+def test_a_preview_is_live_only_when_it_has_finished_booting():
+    """D10: a preview row says `running` while its steps still boot the app."""
+    booting = {"status": "running", "url": "http://x", "steps": [
+        {"name": "install", "status": "ok"}, {"name": "start", "status": "running"}]}
+    assert fv.preview_flag(booting, NOW) == {"status": "starting", "url": None}
+    up = {**booting, "steps": [{"name": "install", "status": "ok"}, {"name": "start", "status": "ok"}]}
+    assert fv.preview_flag(up, NOW) == {"status": "running", "url": "http://x"}
