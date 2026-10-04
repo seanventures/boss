@@ -16,6 +16,8 @@ import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
 import { setConsoleLive } from "../lib/console-live";
+import { useAttention } from "../lib/agents-live";
+import { useTitleCount } from "../lib/tab-title";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
 import { CONVERSE_COMMANDS } from "../lib/agent-converse";
@@ -313,6 +315,10 @@ export default function ConsoleShell({
   const community = isCommunityEdition(resolvedEdition);
   // Every agent name and face in the console reads the install's identities from one store.
   useLoadIdentities(scope.projectId ?? scope.project);
+  // THE TAB TITLE'S `(n)` HAS ONE OWNER: the shell, from the decisions that need you (the
+  // pill's own count), re-applied whenever a navigation rewrites the title (lib/tab-title.ts).
+  const titleAttention = useAttention(scope.projectId ?? scope.project);
+  useTitleCount(titleAttention?.count ?? 0);
   const switchOrg = () => {
     try {
       window.localStorage.removeItem("boss.area");

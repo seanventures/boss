@@ -32,7 +32,7 @@ describe("the pill counts what needs you", () => {
                             { role_key: "software_engineer", state: "working", line: "Build" }]);
     await mount(<PresencePill projectId="p1" live={live} attention={gates(3)} />);
     expect(pillWordsShown()).toBe("1 working · 3 need you");
-    expect(document.title).toBe("(3) BOSS");
+    // The title's `(n)` is the shell's now (tests/the-tab-title-has-one-owner.test.tsx).
   });
 
   it("a pull request with no agent is counted, and shows the pill on its own", async () => {
@@ -94,5 +94,16 @@ describe("the pill counts what needs you", () => {
     expect(pillText(4, 2)).toBe("4 working · 2 need you");
     expect(pillText(0, 1)).toBe("1 needs you");
     expect(pillText(3, 0)).toBe("3 working");
+  });
+
+  it("the crew shows five items and says how many more (walk D19), with the BOSS glyph for none", async () => {
+    const seven = parseAttentionSummary({ count: 7, items: Array.from({ length: 5 }, (_, i) => (
+      { id: `dec_${i}`, role_key: null, title: `Gate ${i}`, decide_inline: false })) });
+    await mount(<PresencePill projectId="p1" live={new Map()} attention={seven} />);
+    await click($('[data-testid="ag-presence-pill"]'));
+    expect($$('[data-testid^="ag-crew-need-"]')).toHaveLength(5);
+    expect($('[data-testid="ag-crew-needs-more"]')?.textContent).toBe("+2 more");
+    expect($('[data-testid="ag-crew-need-dec_0"] [data-variant="you"]')).toBeNull();
+    expect($('[data-testid="ag-crew-need-dec_0"] [data-variant="boss"]')).not.toBeNull();
   });
 });
