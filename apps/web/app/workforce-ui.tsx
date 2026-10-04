@@ -14,6 +14,8 @@ import { useLivePresence } from "../lib/agents-live";
 import { AgFace } from "./agents/agent-face";
 import { RosterSummary, RosterZones, placeAgents } from "./agents/roster-zones";
 import { TeamSwarm } from "./agents/team-swarm";
+import { openDockAbout } from "../lib/dock-subject";
+import { openRoom } from "../lib/agent-converse";
 
 /**
  * The Agents area: Roster, Team and Panels, in v1's own styling.
@@ -46,10 +48,12 @@ function openAgent(roleKey: string): void {
   } catch { /* non-browser */ }
 }
 
-/** Talk to one agent, by role key: the 1:1 conversation (Agent World), or the side dock
- *  addressed to it until that lands. The reply comes from that role's lens and voice. */
-function askAgent(roleKey: string, agentName: string): void {
-  talkTo(roleKey, agentName, { from: "roster" });
+/** Talk to this agent, 1:1, in its own voice (agents/talk-sheet.tsx). By role_key: the name
+ *  is a display string, and two agents can share one. An agent with no registered role has no
+ *  voice to talk in yet, so it keeps the dock, addressed by name. */
+function askAgent(agent: Pick<V2Agent, "id" | "name" | "registered">): void {
+  if (agent.registered) talkTo(agent.id, agent.name, { from: "roster" });
+  else openDockAbout({ subject: null, role: agent.name, question: `@${agent.name}: ` });
 }
 
 export type AgentsView = "roster" | "team" | "panels";
@@ -204,6 +208,8 @@ export function WorkforceArea(
                    value={search} onChange={(event) => setSearch(event.target.value)} />
           </label>
         ) : null}
+        <button type="button" className="wf-btn" data-testid="wf-open-room"
+                title="Ask 2-5 agents at once" onClick={() => openRoom()}>Room</button>
         <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-new-agent"
                 onClick={() => setCreating(true)}>+ New agent</button>
       </header>
@@ -260,7 +266,8 @@ export function WorkforceArea(
           ) : (
             // GROUPED BY WHAT THEY ARE DOING: Needs you, Working, In a panel, Idle (spec §3.2).
             <RosterZones agents={agents} live={live} onOpen={openAgent}
-                         onAsk={(roleKey, name) => askAgent(roleKey, name)}
+                         onAsk={(roleKey, name) => askAgent(
+                           agents.find((a) => a.id === roleKey) ?? { id: roleKey, name, registered: true })}
                          onRegister={(name) => setCreating(name)} />
           )}
         </div>

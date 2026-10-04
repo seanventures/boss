@@ -27874,6 +27874,221 @@ from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)
 register_community_cloud_routes(app, engine, cloud_product, require_project_actor)
+# --- agent world: converse ---
+# Talking with agents (spec §0.2 A): a 1:1 talk, "plan it with <agent>" and the room of 2-5
+# SMEs. Every agent reply is a governed model call recorded as an act; nothing starts work but
+# the operator's press on a proposal, which goes through start_delivery_workflow — the
+# composer's own door — so readiness refusals reach the console exactly as they do there.
+from boss_engine.services import agent_converse as _converse
+
+
+class ConversationCreateBody(open_bodies.ProjectBody):
+    kind: str | None = None
+    seats: list[str] | None = None
+    lead_role_key: str | None = None
+    preset: str | None = None
+    title: str | None = None
+    context: dict[str, Any] | None = None
+
+
+class ConversationTurnBody(open_bodies.ProjectBody):
+    message: str | None = None
+    to: list[str] | None = None
+    rounds: int | None = None
+
+
+class ConversationStartBody(open_bodies.ProjectBody):
+    proposal_id: str | None = None
+    start_anyway: list[str] | None = None
+    #: The card's inputs as the operator edited them before pressing Start.
+    inputs: dict[str, Any] | None = None
+
+
+class ConversationDecisionBody(open_bodies.ProjectBody):
+    #: The summary turn the next action belongs to (every summary card opens its own).
+    turn_id: str | None = None
+    index: int | None = None
+
+
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+def _converse_actor(connection, project_id: str, claimed: Optional[str]) -> str:
+    actor = str(current_api_principal.get() or claimed or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    require_project_actor(connection, project_id, actor, "agent_chat")
+    return actor
+
+
+def _converse_refused(error: "_converse.ConverseError") -> HTTPException:
+    return HTTPException(status_code=error.status, detail=error.detail())
+
+
+@app.get("/v1/conversations/presets")
+def conversation_presets(project_id: str, actor: Optional[str] = None) -> dict:
+    """The room presets (each naming the seats this project lacks) and the agents a room can
+    seat."""
+    with begin(engine) as connection:
+        _converse_actor(connection, project_id, actor)
+        return _converse.presets(connection, project_id)
+
+
+@app.get("/v1/conversations")
+def list_conversations_endpoint(project_id: str, actor: Optional[str] = None,
+                                kind: Optional[str] = None, limit: int = 20) -> dict:
+    with begin(engine) as connection:
+        who = _converse_actor(connection, project_id, actor)
+        try:
+            return {"items": _converse.list_conversations(connection, project_id, actor=who,
+                                                          kind=kind, limit=limit)}
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations", status_code=201)
+def create_conversation_endpoint(payload: ConversationCreateBody) -> dict:
+    """Open a talk, a plan or a room. No model call."""
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, str(payload.project_id or ""), payload.actor)
+        try:
+            return _converse.create_conversation(
+                connection, project_id=str(payload.project_id), actor=actor,
+                kind=str(payload.kind or ""), seats=list(payload.seats or []),
+                lead_role_key=payload.lead_role_key, preset=payload.preset,
+                title=str(payload.title or ""), context=payload.context)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.get("/v1/conversations/{conversation_id}")
+def get_conversation_endpoint(conversation_id: str, project_id: str,
+                              actor: Optional[str] = None) -> dict:
+    with begin(engine) as connection:
+        who = _converse_actor(connection, project_id, actor)
+        try:
+            conversation = _converse.get_conversation(connection, project_id, conversation_id)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+        if conversation["actor"] != who:
+            raise HTTPException(status_code=404, detail={"code": "not_found",
+                                                         "message": "No such conversation."})
+        return conversation
+
+
+def _converse_stream(request: Request, project_id: str, claimed: Optional[str], endpoint: str,
+                     open_stream) -> StreamingResponse:
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, claimed)
+    _enforce_high_cost_rate_limit(request, project_id, actor, endpoint=endpoint)
+    try:
+        events = open_stream(actor)
+    except _converse.ConverseError as error:
+        raise _converse_refused(error) from error
+    return StreamingResponse(_converse.sse(events), media_type="text/event-stream",
+                             headers=_SSE_HEADERS)
+
+
+@app.post("/v1/conversations/{conversation_id}/turns")
+def conversation_turn_endpoint(conversation_id: str, payload: ConversationTurnBody,
+                               request: Request) -> StreamingResponse:
+    """Say something; each addressed seat answers in turn (SSE: ConverseEvent)."""
+    project_id = str(payload.project_id or "")
+    return _converse_stream(
+        request, project_id, payload.actor, "/v1/conversations/turns",
+        lambda actor: _converse.take_turn(
+            engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
+            message=str(payload.message or ""), to=list(payload.to or []),
+            rounds=int(payload.rounds or 1), settings=settings))
+
+
+@app.post("/v1/conversations/{conversation_id}/summary")
+def conversation_summary_endpoint(conversation_id: str, payload: open_bodies.ProjectBody,
+                                  request: Request) -> StreamingResponse:
+    """The room's lead sums it up: decisions, dissent and next actions (SSE)."""
+    project_id = str(payload.project_id or "")
+    return _converse_stream(
+        request, project_id, payload.actor, "/v1/conversations/summary",
+        lambda actor: _converse.summarize_room(
+            engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
+            settings=settings))
+
+
+@app.post("/v1/conversations/{conversation_id}/propose")
+def conversation_propose_endpoint(conversation_id: str, payload: open_bodies.ProjectBody,
+                                  request: Request) -> StreamingResponse:
+    """The plan as a card to review: workflow, directive, inputs, who runs each step (SSE)."""
+    project_id = str(payload.project_id or "")
+    return _converse_stream(
+        request, project_id, payload.actor, "/v1/conversations/propose",
+        lambda actor: _converse.propose_start(
+            engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
+            settings=settings))
+
+
+@app.post("/v1/conversations/{conversation_id}/start")
+def conversation_start_endpoint(conversation_id: str, payload: ConversationStartBody) -> dict:
+    """The operator's press on a proposal: one run, through the composer's start door."""
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+    with begin(engine) as connection:
+        try:
+            return _converse.start_from_proposal(
+                connection, project_id=project_id, conversation_id=conversation_id,
+                actor=actor, proposal_id=str(payload.proposal_id or ""),
+                start_anyway=list(payload.start_anyway or []), inputs=payload.inputs,
+                starter=lambda body: start_delivery_workflow(WorkflowStartBody(**body)))
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations/{conversation_id}/proposals/{proposal_id}/dismiss")
+def conversation_dismiss_endpoint(conversation_id: str, proposal_id: str,
+                                  payload: open_bodies.ProjectBody) -> dict:
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+        try:
+            return _converse.dismiss_proposal(connection, project_id=project_id,
+                                              conversation_id=conversation_id, actor=actor,
+                                              proposal_id=proposal_id)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations/{conversation_id}/decisions")
+def conversation_decision_endpoint(conversation_id: str,
+                                   payload: ConversationDecisionBody) -> dict:
+    """Open one of the room summary's `decision` next actions as a real decision."""
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+        try:
+            return _converse.open_decision(connection, project_id=project_id,
+                                           conversation_id=conversation_id, actor=actor,
+                                           index=int(payload.index if payload.index is not None
+                                                     else -1),
+                                           turn_id=payload.turn_id)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+
+
+@app.post("/v1/conversations/{conversation_id}/close")
+def conversation_close_endpoint(conversation_id: str, payload: open_bodies.ProjectBody) -> dict:
+    project_id = str(payload.project_id or "")
+    with begin(engine) as connection:
+        actor = _converse_actor(connection, project_id, payload.actor)
+        try:
+            return _converse.close_conversation(connection, project_id=project_id,
+                                                conversation_id=conversation_id, actor=actor)
+        except _converse.ConverseError as error:
+            raise _converse_refused(error) from error
+# --- end agent world: converse ---
+
+
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)
 
