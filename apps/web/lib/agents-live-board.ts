@@ -12,6 +12,7 @@ import type { AvatarState } from "./agent-world-types";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { agentIdentity } from "./agent-identity";
+import { parseBuildRow, type BuildRow as FloorBuildRow } from "./factory-floor";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
 import { onChanged } from "../app/changed";
 
@@ -147,13 +148,19 @@ export type BoardAgent = {
   state: AvatarState | "in_panel"; line: string; since?: string;
 };
 
-export type LiveBoardCounts = { agents: number; working: number; needsYou: number; running: number; stopped: number };
+export type LiveBoardCounts = {
+  agents: number; working: number; needsYou: number; running: number; stopped: number;
+  /** The Factory's BUILDING rows, the same number the Floor says (factory spec §10, decision 2). */
+  building: number;
+};
 
 export type LiveBoard = {
   projectId: string; etag: string; generatedAt: string;
   counts: LiveBoardCounts;
   attention: AttentionItem[];
   missions: Mission[];
+  /** The Factory's BUILDING rows (lib/factory-floor BuildRow): Live draws them with the Floor's row. */
+  builds: FloorBuildRow[];
   outcomes: Outcome[];
   teams: TeamSummary[];
   agents: BoardAgent[];
@@ -296,9 +303,10 @@ export function parseLiveBoard(w: unknown): LiveBoard {
   return {
     projectId: str(o.project_id), etag: str(o.etag), generatedAt: str(o.generated_at),
     counts: { agents: num(c.agents), working: num(c.working), needsYou: num(c.needs_you),
-              running: num(c.running), stopped: num(c.stopped) },
+              running: num(c.running), stopped: num(c.stopped), building: num(c.building) },
     attention: arr(o.attention).map(parseAttention),
     missions: arr(o.missions).map(parseMission),
+    builds: arr(o.builds).map(parseBuildRow),
     outcomes: arr(o.outcomes).map((x) => {
       const y = obj(x);
       return { actId: opt(y.act_id), roleKey: roleOf(y.role_key), kind: str(y.kind, "run") as Outcome["kind"],

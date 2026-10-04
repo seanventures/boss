@@ -1984,6 +1984,7 @@ class AppRow(TypedDict, total=False):
     deploys: list[AppDeploy]
     builds: int                    # how many builds (attempts included)
     run_ids: list[str]             # every build, newest first (the row expands to these)
+    attempts: list[dict[str, Any]]  # [{run_id, attempt, state, word, at}] newest first
     at: Optional[str]
 
 
@@ -1991,6 +1992,15 @@ class Apps(TypedDict):
     project_id: str
     etag: str
     apps: list[AppRow]
+
+
+def _attempt_of(run: Mapping[str, Any], *, now: datetime,
+                viewer: Optional[str]) -> dict[str, Any]:
+    st = build_state(run, now=now, viewer=viewer)
+    fctx = run.get("finalize_ctx") if isinstance(run.get("finalize_ctx"), dict) else {}
+    return {"run_id": str(run["id"]), "attempt": int((fctx or {}).get("attempt") or 1),
+            "state": st["state"], "word": st["word"],
+            "at": _iso(run.get("created_at"))}
 
 
 def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
@@ -2043,6 +2053,7 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
         rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
                      "state": state, "word": word, "preview": flag, "deploys": deploys,
                      "builds": len(group), "run_ids": [str(r["id"]) for r in group],
+                     "attempts": [_attempt_of(r, now=now, viewer=viewer) for r in group],
                      "at": _iso(head.get("updated_at") or head.get("created_at"))})
     rank = {"needs_plan": 0, "needs_waiver": 0, "budget_refused": 0, "pr_open": 0}
     rows.sort(key=lambda r: (rank.get(r["state"], 1 if section_of(r["state"]) == "building"
