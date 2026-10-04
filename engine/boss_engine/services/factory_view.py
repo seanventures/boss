@@ -2035,7 +2035,7 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
     if commands:
         bad = sum(1 for c in commands if not c["ok"])
         word = (f"{bad} of {len(commands)} failed" if bad else
-                f"{len(commands)} of {len(commands)} commands passed")
+                f"{len(commands)} of {_plural(len(commands), 'command', 'commands')} passed")
         tests = {"word": word, "role_key": role_at.get("tests"), "commands": commands,
                  "output_tail": tail}
     else:

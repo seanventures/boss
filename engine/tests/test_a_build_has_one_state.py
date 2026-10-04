@@ -154,3 +154,9 @@ def test_a_preview_is_live_only_when_it_has_finished_booting():
     assert fv.preview_flag(booting, NOW) == {"status": "starting", "url": None}
     up = {**booting, "steps": [{"name": "install", "status": "ok"}, {"name": "start", "status": "ok"}]}
     assert fv.preview_flag(up, NOW) == {"status": "running", "url": "http://x"}
+
+
+def test_counts_in_words_are_singular_for_one():
+    """`Not ready · 1 check failed`, `1 of 1 command passed`: never `1 checks`."""
+    assert fv._plural(1, "check failed", "checks failed") == "1 check failed"
+    assert fv._plural(2, "check failed", "checks failed") == "2 checks failed"

@@ -1410,6 +1410,18 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] decisions of ended runs withdrawn: {len(orphaned)}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] orphaned-decision sweep skipped: {exc}")
+    # A BUILD'S QUESTIONS NOTHING WILL ANSWER (factory walk D2): a direct change's automatic
+    # PRD approval on a build that already opened its PR, and a retry's duplicate merge question.
+    # Idempotent: every boot after the first finds nothing.
+    try:
+        from boss_engine.services.run_decisions import withdraw_stale_build_questions
+
+        with begin(engine) as connection:
+            stale = withdraw_stale_build_questions(connection, actor="boss")
+        if stale:
+            print(f"[lifespan] stale build questions withdrawn: {len(stale)}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] stale build-question sweep skipped: {exc}")
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:

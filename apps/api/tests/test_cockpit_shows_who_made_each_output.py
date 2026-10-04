@@ -59,7 +59,7 @@ def test_each_output_names_its_maker(client, engine):
     assert out["changes"]["code_role_key"] == "software_engineer"
     assert out["changes"]["word"] == "2 files"
     assert out["tests"]["role_key"] == "qa"
-    assert out["tests"]["word"] == "1 of 1 commands passed"
+    assert out["tests"]["word"] == "1 of 1 command passed"
     assert out["pr"]["role_key"] == "software_engineer" and out["pr"]["number"] == 842
     comment = out["comments"]["items"][0]
     assert comment["author_role_key"] == "adversarial_reviewer"

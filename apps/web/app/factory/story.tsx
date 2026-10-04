@@ -15,17 +15,13 @@ import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ReviewComment, StoryAct, StoryBoss, StoryRow, StoryYou, NowLine } from "../../lib/cockpit";
-import type { Station, StationKey } from "../../lib/factory-floor";
+import { plural, type Station, type StationKey } from "../../lib/factory-floor";
 import type { ToolCalls } from "../../lib/agents-live-board";
 import { nameOf, RunFace } from "../agents/run-face";
 import { fetchTools } from "./cockpit-actions";
 import { clockOf, costWord, secondsWord, spanOf, whoName } from "./cockpit-util";
 
 
-/** `1 file` · `2 files`. */
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? "" : "s"}`;
-}
 
 export type StoryProps = {
   projectId: string;
@@ -180,7 +176,7 @@ const YOU_WORDS: Record<string, string> = {
 
 function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?: boolean }) {
   const mine = !row.actor || row.actor === viewer;
-  const word = row.what === "waived" ? `Waived ${row.count ?? ""} checks`.replace("  ", " ") : YOU_WORDS[row.what] ?? row.what;
+  const word = row.what === "waived" ? (row.count ? `Waived ${plural(row.count, "check")}` : "Waived checks") : YOU_WORDS[row.what] ?? row.what;
   return (
     <li className="fx-ck-row" data-enter={enter || undefined} data-type="you" data-what={row.what} data-testid={`fx-story-${row.id}`}>
       <time className="fx-ck-time" dateTime={row.at} title={row.at}>{clockOf(row.at)}</time>
