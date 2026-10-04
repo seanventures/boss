@@ -68,6 +68,8 @@ export async function startDirectChangeAction(form: FormData): Promise<FloorResu
       title, instructions,
       acceptance_criteria: lines("acceptance_criteria"),
       test_commands: lines("test_commands"),
+      // The review panel's size (walk D13): 1 reviewer, or a panel whose seats each sign.
+      ...(Number(field(form, "review_panel_size")) > 0 ? { review_panel_size: Number(field(form, "review_panel_size")) } : {}),
       owner: field(form, "owner") || undefined,
       repo: field(form, "repo") || undefined,
       base_branch: field(form, "base_branch") || undefined,

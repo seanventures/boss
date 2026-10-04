@@ -1120,6 +1120,8 @@ export type CodeTaskCreatePayload = {
   // to reproduce a run's cost/rigor silently got the project default instead. Re-running a
   // `lean` task as whatever-comes-next is not a re-run.
   profile?: string;
+  /** Reviewers on the code-review panel (each seat signs its own work). */
+  review_panel_size?: number;
   risk_tier?: number;
   /** The workflow version this project should follow. Picked by the operator; outranks any
    *  mapping resolved on their behalf. Omit to let the project's mapping (or the standard

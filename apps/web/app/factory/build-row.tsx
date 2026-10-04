@@ -81,6 +81,8 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
                 data-testid={`fx-build-open-${b.runId}`}>
           <span data-user-text>{density === "compact" ? `Attempt ${b.attempt}` : b.app}</span>
         </button>
+        {b.internal && density !== "compact"
+          ? <span className="fx-internal" data-testid={`fx-internal-${b.runId}`} title="BOSS's own build: a quality pass">BOSS</span> : null}
       </span>
       <span className="fx-row-line">
         {(b.state === "queued" || b.state === "budget_wait") && !activeStation(b.stations)

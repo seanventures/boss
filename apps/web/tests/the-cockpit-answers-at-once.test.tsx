@@ -101,4 +101,16 @@ describe("the cockpit answers at once", () => {
     await settle();
     expect(document.querySelector('[role="dialog"][aria-label*="Credits"], .ag-credits-dialog')).toBeNull();
   });
+
+  it("D19: a face's Act card opens on <body>, beside the face, not inside a transformed box", async () => {
+    stubFetch(cockpit());
+    await mount(view());
+    const face = $('[data-testid="fx-story-face-act_TESTS0000000001"]')!;
+    face.getBoundingClientRect = () => ({ left: 300, right: 324, top: 400, bottom: 424, width: 24, height: 24, x: 300, y: 400, toJSON: () => ({}) }) as DOMRect;
+    await click(face);
+    await settle();
+    const pop = $('[data-testid="fx-act-pop"]')!;
+    expect(pop.parentElement).toBe(document.body);
+    expect(Number.parseInt(pop.style.top, 10)).toBeGreaterThanOrEqual(424);
+  });
 });

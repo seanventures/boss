@@ -25,7 +25,8 @@ import { AppsTab } from "./factory/apps-tab";
 import { Cockpit } from "./factory/cockpit";
 import { startDirectChangeAction } from "./factory/floor-actions";
 import { FloorView } from "./factory/floor";
-import { QaBenchmarkCatalog, isInternalRun } from "./factory/legacy-build-parts";
+import { isInternalRun } from "./factory/legacy-build-parts";
+import { BenchmarkSheetBody } from "./factory/benchmark-sheet";
 
 // Kept importable from here: tests and older callers read these from the area module.
 export {
@@ -122,6 +123,18 @@ function DirectChangeSheet({ projectId, actor, owner, repo, onClose, onStarted }
         </label>
         <label className="fx-field"><span title="One check per line">Done when</span>
           <textarea name="acceptance_criteria" rows={2} className="cap-input" />
+        </label>
+        <label className="fx-field"><span title="One command per line, run after the build">Test commands</span>
+          <textarea name="test_commands" rows={2} className="cap-input" data-testid="fx-direct-tests"
+                    placeholder="npm test" />
+        </label>
+        <label className="fx-field"><span title="Reviewers on the code review. Each signs its own work.">Reviewers</span>
+          <select name="review_panel_size" className="cap-input" defaultValue="" data-testid="fx-direct-panel">
+            <option value="">Default</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
         </label>
         <label className="fx-field"><span title="owner/repo">Repo</span>
           <input name="repo_full" className="cap-input" defaultValue={owner && repo ? `${owner}/${repo}` : ""} />
@@ -234,13 +247,26 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previ
   const closeBuild = useCallback(() => {
     writeUrl({ build: null, run: null }, "push");
     setUrl((u) => ({ ...u, build: null }));
-    const back = opener.current;
-    window.setTimeout(() => {
-      const el = back?.el && back.el.isConnected ? back.el
-        : back ? document.querySelector<HTMLElement>(`[data-testid="fx-build-row-${back.runId}"]`) : null;
-      (el?.querySelector<HTMLElement>(".fx-row-open") ?? el)?.focus();
-    }, 0);
-  }, []);
+    const back = opener.current ?? (url.build ? { runId: url.build, el: null } : null);
+    // FOCUS GOES BACK TO WHAT OPENED IT (walk D17) — the same element if it survived, else the
+    // row now drawing that build (a Building row, a Stopped row, its card), once the Floor has
+    // painted again. Tried over a few frames: the Floor re-renders after the URL changes.
+    const target = (): HTMLElement | null => {
+      if (back?.el?.isConnected) return back.el;
+      if (!back) return null;
+      const id = back.runId;
+      return document.querySelector<HTMLElement>(
+        [`[data-testid="fx-build-row-${id}"]`, `[data-testid="fx-stopped-${id}"]`, `[data-testid="fx-app-build-${id}"]`,
+         `[data-att-id="build:${id}:gates"]`, `[data-att-id="build:${id}:budget"]`].join(", "));
+    };
+    const tryFocus = (left: number) => {
+      const el = target();
+      const focusable = el?.matches("button, a, [tabindex]") ? el : el?.querySelector<HTMLElement>(".fx-row-open, button, a") ?? el;
+      if (focusable) { focusable.focus(); return; }
+      if (left > 0) window.setTimeout(() => tryFocus(left - 1), 50);
+    };
+    window.setTimeout(() => tryFocus(6), 0);
+  }, [url.build]);
 
   const setView = (view: View) => {
     writeUrl({ view: view === "apps" ? "apps" : null }, "replace");
@@ -330,14 +356,14 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previ
       ) : null}
       {sheet === "benchmark" ? (
         <Sheet title="From a benchmark" onClose={() => setSheet(null)} testId="fx-benchmark-sheet">
-          <QaBenchmarkCatalog benchmarks={benchmarks} projectId={projectId} actor={actor}
-                              builtBenchmarkIds={new Set(codeTasks
+          <BenchmarkSheetBody benchmarks={benchmarks} projectId={projectId} actor={actor}
+                              builtIds={new Set(codeTasks
                                 .map((c) => ((c.finalize_ctx ?? {}) as Record<string, unknown>).qa_benchmark as { id?: string } | undefined)
                                 .map((b) => b?.id).filter((id): id is string => Boolean(id)))}
                               launched={launched}
                               onLaunched={(key, runId, error, kind) => { setLaunched((m) => ({ ...m, [key]: { run_id: runId, error, kind } })); reloadFloor(); }}
                               onOpen={(id) => { setSheet(null); openBuild(id, null); }}
-                              defaultOwner={lastSpec?.owner ?? undefined} defaultRepo={lastSpec?.repo ?? undefined} />
+                              owner={lastSpec?.owner ?? undefined} repo={lastSpec?.repo ?? undefined} />
         </Sheet>
       ) : null}
     </div>
