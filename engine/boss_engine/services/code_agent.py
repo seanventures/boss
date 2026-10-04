@@ -593,13 +593,13 @@ class ClaudeCodeAgent:
         happened to be started with.
         """
         env = agent_environment(os.environ, _shared_tool_caches())
-        token = (getattr(self.settings, "claude_code_oauth_token", "") or "").strip()
-        if not token and not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
-            # The lane binder runs only where a connection and project are in scope; a
-            # sandboxed agent process has neither, so the store is asked directly.
-            from .cli_harness import stored_credential
+        # The lane binder runs only where a connection and project are in scope; a sandboxed
+        # agent process has neither, so the store is asked directly — through the one
+        # resolution every `claude` child uses (cli_harness.claude_login_token), which raises
+        # rather than start the CLI with no login when the store did not answer.
+        from .cli_harness import claude_login_token
 
-            token = stored_credential(self.settings, "CLAUDE_CODE_OAUTH_TOKEN") or ""
+        token = claude_login_token(self.settings)
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
             # The wizard-connected subscription wins over an inherited API key.
@@ -746,6 +746,9 @@ class ClaudeCodeAgent:
                 return argv, body
             return argv + ["--", body], None
         last_error = ""
+        # Whether a refused login has already been asked about once (model_failures.
+        # confirm_login_rejection): one "Not logged in" is a report, two are a verdict.
+        login_rechecked = False
 
         def _live_sink(live_model: str):
             """Persist turns AS THEY ARRIVE, so a running stage can be watched.
@@ -799,7 +802,7 @@ class ClaudeCodeAgent:
 
             return _on_line, parser, written
 
-        for attempt in range(3):
+        for attempt in range(4):
             # CAPTURE MUST NEVER COST A BUILD.
             #
             # `stream-json` is the only reason this function's flags changed, and it runs on
@@ -939,6 +942,17 @@ class ClaudeCodeAgent:
                 # shape. Retry without capture before treating it as a real failure: a
                 # transcript is never worth a customer's build.
                 capturing = False
+                continue
+            # A REFUSED LOGIN IS CONFIRMED BEFORE IT IS BELIEVED. Every caller stops for good
+            # on one (the run fails, Setup shows the subscription broken), and on boss-1 a
+            # single research call said "Not logged in" between successes on the same login
+            # seconds either side. Ask once more — with the credential resolved afresh, since
+            # the env is rebuilt per attempt — and only a second refusal is raised as one.
+            from .model_failures import LOGIN_RECHECK_SECONDS, is_login_rejected
+
+            if is_login_rejected(detail) and not login_rechecked:
+                login_rechecked = True
+                time.sleep(LOGIN_RECHECK_SECONDS)
                 continue
             # TRANSIENT infra errors (dropped connection, overloaded upstream, gateway
             # blips) must not fail a whole governed run — retry the invocation with a

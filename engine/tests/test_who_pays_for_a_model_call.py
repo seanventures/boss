@@ -36,6 +36,7 @@ def test_entitlement_kinds_that_are_not_money():
 
 
 def test_the_claude_cli_says_subscription_on_its_login_and_metered_on_a_key(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t" * 12)    # the login, not a store lookup
     data = {"usage": {"input_tokens": 10, "output_tokens": 5}, "total_cost_usd": 0.25,
             "modelUsage": {"claude-sonnet-4-5": {}}}
     adapter = ClaudeCliAdapter(Settings(claude_code_oauth_token="t" * 12))

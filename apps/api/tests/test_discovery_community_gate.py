@@ -521,3 +521,68 @@ def test_research_runs_on_a_subscription_connected_through_the_console(
     owned_source(*owner)
     run_id = _start()
     assert _execute(run_id, _lease(engine, run_id)) == {"status": "completed", "retry": False}
+
+
+def _decisions_about(engine, run_id: str) -> int:
+    with engine.connect() as connection:
+        return connection.execute(text(
+            "SELECT count(*) FROM decisions WHERE question LIKE :q"),
+            {"q": f"%Discovery {run_id}%"}).scalar_one()
+
+
+def test_a_stage_whose_model_source_is_busy_waits_its_turn_then_resumes(
+    engine, governed, monkeypatch,
+):
+    """boss-1, 2026-10-04: three workflows started together, and the third discovery's stage
+    found the subscription's lease held by the other two. It FAILED with "Selected model source
+    has no concurrent lease capacity" — a queue, read as a verdict. It waits its turn now."""
+    from apps.api.app.services import model_gateway
+
+    real = model_gateway.ModelGatewayService.acquire
+    busy = {"left": 1}
+
+    def acquire(self, *args, **kwargs):
+        if busy["left"]:
+            busy["left"] -= 1
+            raise model_gateway.ModelCapacityDeniedError(
+                "Selected model source has no concurrent lease capacity.")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(model_gateway.ModelGatewayService, "acquire", acquire)
+    run_id = _start()
+    first = _execute(run_id, _lease(engine, run_id))
+    assert first["status"] == "deferred" and first["retry"] is False, first
+    assert governed.calls == []
+    attention = _attention(engine, run_id)
+    assert attention["kind"] == "capacity_wait" and attention["state"] == "waiting", attention
+    assert _decisions_about(engine, run_id) == 0, "a queue asks nobody to decide anything"
+    assert _events(engine, run_id, "discovery.waiting_for_capacity") == 1
+
+    result = _execute(run_id, _lease(engine, run_id))
+    assert result == {"status": "completed", "retry": False}, result
+    assert governed.calls == STAGES
+
+
+def test_a_secret_store_that_did_not_answer_waits_instead_of_failing_the_research(
+    engine, governed,
+):
+    """The store holding the Claude login did not answer, so the login could not be read. That
+    is not a rejected login and not a failed attempt: the run waits and carries on."""
+    from apps.api.app.services.cli_harness import CredentialStoreUnavailable
+
+    run_id = _start()
+    governed.fail_at = "signal_sweep"
+    governed.fail_with = CredentialStoreUnavailable(
+        "CLAUDE_CODE_OAUTH_TOKEN", "infisical unreachable: TimeoutError", transient=True)
+    first = _execute(run_id, _lease(engine, run_id))
+    assert first["status"] == "deferred" and first["retry"] is False, first
+    attention = _attention(engine, run_id)
+    assert attention["kind"] == "credential_store_wait" and attention["state"] == "waiting"
+    with engine.connect() as connection:
+        state = connection.execute(text(
+            "SELECT observed_capacity->>'credential_state' FROM entitlement_sources "
+            "WHERE project_id = :p AND source_id = 'openai_api'"), {"p": PROJECT}).scalar_one()
+    assert state != "rejected", "Setup must not show a login nobody tried as broken"
+
+    result = _execute(run_id, _lease(engine, run_id))
+    assert result == {"status": "completed", "retry": False}, result
