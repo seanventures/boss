@@ -116,3 +116,24 @@ def test_a_time_in_a_pill_travels_as_an_instant_for_the_viewers_clock():
     assert shown["at"] == "2026-10-04T14:20:00+00:00"
     assert setup_pills.pill("repository", "rate_limited")["label"] == "GitHub busy"
     assert "at" not in setup_pills.pill("repository", "working", at="2026-10-04T14:20:00+00:00")
+
+
+@pytest.mark.parametrize(("kind", "state"), [
+    (kind, state) for kind, catalogue in setup_pills.CATALOGUES.items()
+    for state, entry in catalogue.items() if "{time}" in entry["tip"]])
+def test_a_tip_with_no_known_time_drops_the_phrase_not_the_time(kind, state):
+    """"Auto uses another model until ." reached the page when a limit named no reset time."""
+    tip = setup_pills.pill(kind, state)["tip"]
+    assert not re.search(r"\b(until|at)\s*\.", tip), tip
+    assert tip.endswith(".") and "{" not in tip
+
+
+def test_a_subscription_limit_carries_the_time_the_cli_named(monkeypatch):
+    from boss_engine.services import setup_actions, setup_service
+
+    monkeypatch.setattr(setup_service, "governed_proof", lambda *a, **k: {
+        "ok": False, "error": "Claude AI usage limit reached. Try again at 2026-10-04T16:20:00"})
+    monkeypatch.setattr(setup_actions, "_engine", lambda c: None)
+    proof = setup_actions._subscription_proof(None, None, "p", "claude_code", "ceo")
+    assert proof["state"] == "rate_limited"
+    assert proof["retry_at"].startswith("2026-10-04T16:20:00")
