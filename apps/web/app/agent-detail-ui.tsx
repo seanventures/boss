@@ -36,6 +36,17 @@ import {
   deleteAgent, grantMcp, grantSkill, loadGrantable, parseToolList, repointMapping, revokeMcp,
   revokeSkill, updateAgent, type AgentSummary,
 } from "../lib/agents";
+import type { Passport, Persona } from "../lib/agent-world-types";
+import { askAgent, getPassport } from "../lib/agent-world";
+import { useLivePresence } from "../lib/agents-live";
+import {
+  PassportHeader, PassportNav, goToSection, readTab, type SectionKey,
+} from "./agents/passport-header";
+import { PassportLineage } from "./agents/passport-lineage";
+import { PassportPersona } from "./agents/passport-persona";
+import { PassportTest } from "./agents/passport-test";
+import { PassportWork } from "./agents/passport-work";
+import { ShareCardDialog } from "./agents/share-card-dialog";
 
 type App = {
   app: string; raw_title?: string; calls: number; tokens: number; spend_usd: number;
@@ -169,10 +180,30 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
 
   useEffect(() => { void load(); }, [load]);
 
+  // THE PASSPORT: identity, birth, version and vitals (Agent World). An API without it (before
+  // the identity stream) answers 404 and the page is the agent page it always was.
+  const [passport, setPassport] = useState<Passport | null>(null);
+  const loadPassport = useCallback(async () => {
+    const r = await getPassport(projectId, roleKey);
+    setPassport(r.ok && r.data.roleKey ? r.data : null);
+  }, [projectId, roleKey]);
+  useEffect(() => { void loadPassport(); }, [loadPassport]);
+  const live = useLivePresence(projectId).get(roleKey);
+  const [tab, setTab] = useState<SectionKey>("work");
+  const [sharing, setSharing] = useState(false);
+  const [draftPersona, setDraftPersona] = useState<Persona | null>(null);
+  useEffect(() => {
+    const t = readTab(window.location.search);
+    setTab(t);
+    if (t !== "work" && detail) setTimeout(() => goToSection(t), 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!detail]);
+  const pick = (k: SectionKey) => { setTab(k); goToSection(k); };
+
   // Escape closes it, and the page behind does not scroll. Same rules as the template page —
   // a full-screen view you cannot get out of is the bug that one shipped with.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); };
     window.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -184,7 +215,6 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
 
   const spec = detail?.spec ?? {};
   const worked = new Set((detail?.apps ?? []).map((a) => a.app));
-  const spend = (detail?.apps ?? []).reduce((sum, a) => sum + (a.spend_usd || 0), 0);
 
   // PORTALLED, AND I MADE THIS MISTAKE TWICE.
   //
@@ -212,39 +242,54 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
 
         {detail ? (
           <>
-            <div className="ad-head">
-              <div>
-                <h1 className="tpl-title">{detail.name}</h1>
-                <p className="detail">
-                  <code>{detail.role_key}</code>
-                  {detail.reports_to ? <> · reports to <code>{detail.reports_to}</code></> : null}
-                  {/* An agent doing work with no registered role has no trust score, no
-                      autonomy level and nothing governing it. Said, not hidden. */}
-                  {!detail.registered ? <> · <strong>no registered role — nothing governs
-                    this agent</strong></> : null}
-                </p>
+            <PassportHeader projectId={projectId} actor={actor} roleKey={detail.role_key} name={detail.name}
+                            passport={passport} presenceState={live ? (live.inPanel ? "speaking" : live.state) : undefined}
+                            onAsk={() => askAgent(detail.role_key, detail.name, { from: "passport" })}
+                            onShare={() => setSharing(true)}
+                            onDelete={() => pick("settings")}
+                            onChanged={(next) => setPassport(next)}
+                            facts={{
+                              violations: detail.violations ?? 0, reportsTo: detail.reports_to ?? null,
+                              apps: detail.apps.length, panels: detail.panels.length,
+                              spend: detail.apps.reduce((sum, a) => sum + (a.spend_usd || 0), 0),
+                              trust: detail.registered ? detail.trust_score : null,
+                            }} />
+            {/* An agent doing work with no registered role has nothing governing it. Said. */}
+            {!detail.registered ? (
+              <div className="ad-bad" data-testid="agent-unregistered"
+                   title="Ungoverned: no registered role, so no trust score, limits or violation tracking">
+                No registered role
               </div>
-              <div className="ad-figs">
-                <span className="ad-fig"><b>{detail.apps.length}</b><span>apps</span></span>
-                <span className="ad-fig"><b>{money(spend)}</b><span>spent</span></span>
-                {detail.panels.length
-                  ? <span className="ad-fig"><b>{detail.panels.length}</b><span>panels</span></span>
-                  : null}
-                {detail.registered ? (
-                  <span className="ad-fig" title="configured, not observed">
-                    <b>{detail.trust_score}</b><span>trust set</span>
-                  </span>
-                ) : null}
-                {detail.violations ? (
-                  <span className="ad-fig" data-tone="bad">
-                    <b>{detail.violations}</b><span>violations</span>
-                  </span>
-                ) : null}
+            ) : null}
+            <PassportNav active={tab} onPick={pick} />
+            {sharing && passport ? (
+              <ShareCardDialog projectId={projectId} roleKey={detail.role_key} version={passport.version}
+                               name={passport.persona.callsign || passport.displayName || detail.name}
+                               onClose={() => setSharing(false)} />
+            ) : null}
+
+            <section className="ct-block" id="ag-sec-work">
+              <div className="ct-block-title">Work</div>
+              <PassportWork projectId={projectId} actor={actor} roleKey={detail.role_key} name={detail.name}
+                            presence={live} />
+            </section>
+
+            <section className="ct-block" id="ag-sec-profile">
+              <div className="ct-block-title">
+                Profile <HelpTip label="Profile" text="How it speaks and looks. Never what it may do." />
               </div>
-            </div>
+              {/* ONE Profile: the voice and face, the one Test (a real model call in that voice),
+                  then the Studio definition's rows. */}
+              <PassportPersona projectId={projectId} actor={actor} roleKey={detail.role_key} passport={passport}
+                               onDraft={setDraftPersona}
+                               onSaved={(version, fingerprint, persona) => setPassport((p) => (p
+                                 ? { ...p, version, fingerprint, persona } : p))} />
+              <PassportTest projectId={projectId} actor={actor} roleKey={detail.role_key} persona={draftPersona} />
+              {studio ? <AgentProfile feed={studio} roleKey={detail.role_key} actor={actor} bare /> : null}
+            </section>
 
             {/* WHERE IT IS PUT TO WORK: each workflow step naming it, opening on that step. */}
-            <section className="ct-block" data-testid="agent-used-in">
+            <section className="ct-block" data-testid="agent-used-in" id="ag-sec-used">
               <div className="ct-block-title">
                 Used in <HelpTip label="Used in" text="Workflow steps this agent runs" />
               </div>
@@ -259,6 +304,11 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                   ))}
                 </ul>
               ) : <p className="detail">No workflow step names it</p>}
+            </section>
+
+            <section className="ct-block" id="ag-sec-lineage">
+              <div className="ct-block-title">Lineage</div>
+              <PassportLineage projectId={projectId} actor={actor} roleKey={detail.role_key} />
             </section>
 
             {/* WHAT IT HAS ACTUALLY WORKED ON. Attributed through the same stage→role map BOSS
@@ -345,18 +395,18 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                 operator could look at a fully specced agent and conclude BOSS had given it
                 nothing. Above the history deliberately: the first question about an agent is
                 what it is able to do, not what it has already done. */}
+            <div id="ag-sec-skills" />
             <AgentSkills projectId={projectId} roleKey={detail.role_key} actor={actor}
-                         panel={detail.skills} spec={spec} onChanged={load} />
+                         panel={detail.skills} spec={spec} onChanged={() => { void load(); void loadPassport(); }} />
 
             {/* AND THE MCP SERVERS IT HOLDS — the grant that did not exist. A workflow step this
                 agent works is offered exactly these servers' tools. */}
             {detail.registered ? (
               <AgentMcp projectId={projectId} roleKey={detail.role_key} actor={actor}
-                        panel={detail.mcp} onChanged={load} />
+                        panel={detail.mcp} onChanged={() => { void load(); void loadPassport(); }} />
             ) : null}
 
-            {studio ? <AgentProfile feed={studio} roleKey={detail.role_key} actor={actor} /> : null}
-
+            <div id="ag-sec-settings" />
             {detail.registered ? (
               <AgentEdit projectId={projectId} actor={actor} detail={detail} onChanged={load} />
             ) : null}
@@ -488,6 +538,12 @@ export function AgentSkills({ projectId, roleKey, actor, panel, spec, onChanged 
             <li key={s.skill_id} data-skill={s.skill_id}>
               <code>{s.skill_id}</code>
               {s.summary ? <span className="detail"> — {s.summary}</span> : null}
+              {/* WHO GAVE IT, AND WHEN (Agent World: a grant is part of the agent's version). */}
+              {s.assigned_by || s.assigned_at ? (
+                <span className="detail" title="Granted by, on" data-testid={`agent-skill-granted-${s.skill_id}`}>
+                  {" · "}{[s.assigned_by, formatDate(s.assigned_at ?? null, "")].filter(Boolean).join(" · ")}
+                </span>
+              ) : null}
               {/* A tier at or above the approval floor means a run will stop and wait for a
                   person. Said here, because it is a property of giving the skill out. */}
               {s.risk_tier >= 2 ? (
