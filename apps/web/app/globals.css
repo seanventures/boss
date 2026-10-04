@@ -848,6 +848,9 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: center;
 }
+/* Repo and models: amber while setup is unfinished, red while a check is failing. */
+.bx-nav-badge[data-tone="amber"] { background: var(--amber); color: #1a1205; }
+.bx-nav-badge[data-tone="red"] { background: var(--red); color: #fff; }
 
 .bx-sidebar-foot {
   margin-top: auto;
@@ -8875,7 +8878,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 /* The same checklist where a start was refused outside the form: Build, Re-run, Fix, Run. */
 .dw-refusal { margin: 8px 0; }
 .dw-refusal-foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-/* Outgoing email: in Repo and model, and inline beside an email item on a checklist. */
+/* Outgoing email: in Skills and MCP, and inline beside an email item on a checklist. */
 .email-setup-grid {
   display: grid; gap: 8px; margin: 8px 0;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

@@ -281,7 +281,7 @@ function NeedsYouRow({ item, orgId, projectId, actor, onDone }: {
           </a>
         ) : null}
         {item.fix_area ? (
-          <a className="button secondary" href={areaHref(item.fix_area, orgId)}
+          <a className="button secondary" href={areaHref(item.fix_area, orgId, item.fix_focus)}
              data-testid="cc2-fix">
             {item.fix_label ?? "Fix it"}
           </a>

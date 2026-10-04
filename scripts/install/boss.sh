@@ -141,14 +141,27 @@ cmd_version() {
   printf 'Install   %s\nRelease   %s\n' "$INSTALL_DIR" "$(release_line)"
 }
 
+# What Repo and models says (scripts/install/setup_state.py): `ready`, or the repository line.
+setup_state() {
+  BOSS_API_URL="$(api_url)" BOSS_API_KEY="$(env_value BOSS_API_KEY)" \
+    python3 "$INSTALL_DIR/scripts/install/setup_state.py" "$1" 2>/dev/null </dev/null
+}
+
 cmd_open() {
   need_install
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" != 0 ]] ||
     die "Mission Control is not enabled on this install. Enable it with: boss update --web"
-  local port origin
+  local port origin path=""
   port="$(env_value BOSS_WEB_PORT)"; origin="$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
-  printf 'Mission Control on this machine: http://127.0.0.1:%s\n' "${port:-3000}"
-  [[ -z "$origin" ]] || printf 'Console origin:                  %s\n' "$origin"
+  # UNTIL SETUP IS DONE, THE ADDRESS IS REPO AND MODELS: paste a token, connect a model, open a
+  # first pull request. Once ready, the console's own front page.
+  [[ "$(setup_state ready || true)" == ready ]] || path="/?area=setup"
+  if [[ -n "$path" ]]; then
+    printf 'Finish setup:                    http://127.0.0.1:%s%s\n' "${port:-3000}" "$path"
+  else
+    printf 'Mission Control on this machine: http://127.0.0.1:%s\n' "${port:-3000}"
+  fi
+  [[ -z "$origin" ]] || printf 'Console origin:                  %s%s\n' "${origin%/}" "$path"
   printf 'Sign in with the password from: boss password\n'
 }
 

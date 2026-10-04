@@ -26,6 +26,8 @@ export type ReadinessNeed = {
   label: string;
   fix: string;
   area: string | null;
+  /** Where in that area the fix lands, e.g. `/?area=setup&focus=repository`. */
+  href?: string | null;
   ok: boolean;
   detail: string;
   needed_by: { step_id: string; label: string }[];
@@ -135,7 +137,11 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
             <span className="dw-ready-fix">
               {/* Only an area the console has: the API names it as a string, and a link to an area
                   that is gone did nothing when clicked (console-b, lib/area-ids.ts). */}
-              {isAreaId(need.area) ? (
+              {/* The fix's own landing (`?area=setup&focus=repository`, `?area=skills&ability=email`)
+                  when the API names one; the shell keeps the org and switches in place. */}
+              {need.href && isAreaId(need.area) ? (
+                <a href={need.href} data-testid={`dw-readiness-fix-${need.key}`}>{need.fix}</a>
+              ) : isAreaId(need.area) ? (
                 <AreaLink area={need.area}>{need.fix}</AreaLink>
               ) : need.fix}
             </span>

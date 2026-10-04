@@ -36,7 +36,7 @@ Read the plan before you approve it. If no model is connected, model work is sho
 
 **Goal:** Use an API key or coding subscription you already control, on this machine.
 
-**In the console:** Open **Settings → Repo and model**, then add the provider and key. BOSS stores the key on this machine and marks the model **unverified**. Saving does not contact the provider, so a green setup step is not a model response. Logins on your laptop are not copied to the VM. For supported providers and their limits, see [model connections](MODEL_CONNECTIONS.md).
+**In the console:** Open **Settings → Repo and models**, then **+ Add model** › **API key**, pick the provider and paste the key. BOSS asks the model one tiny question — budgeted and receipted — and keeps the key only if it answers, so **Working** means the model responded. Logins on your laptop are not copied to the VM. For supported providers and their limits, see [model connections](MODEL_CONNECTIONS.md).
 
 **What BOSS records:** The connection, in the local secret store. Saving a key does not create a plan, open a decision, reserve budget, or write a cost receipt. Those records appear only when a governed model job actually runs.
 

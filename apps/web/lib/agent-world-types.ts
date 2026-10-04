@@ -169,7 +169,7 @@ export type ConverseEvent =
  *   POST /v1/conversations/{id}/proposals/{proposal_id}/dismiss { project_id, actor } → Conversation
  *   POST /v1/conversations/{id}/close                       { project_id, actor } → Conversation
  *
- * Refusals: 409 { code: "needs_model", message: "Needs a model. Set one in Settings." } ·
+ * Refusals: 409 { code: "needs_model", message: "Needs a model. Connect one in Repo and models." } ·
  * 409 { code: "budget", … } from the budget gate · 403 not a project actor · 404 other project's id.
  * Acts: each agent turn opens one act — talk/plan: kind chat, how asked_by_person; room: kind seat,
  * how seated (asked_by_person when @mentioned); parent = context.actId or the turn it replies to;
