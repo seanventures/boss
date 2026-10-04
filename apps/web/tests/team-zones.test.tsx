@@ -69,9 +69,10 @@ const live = { software_engineer: ["working", "Now: Coding · Build · Ship it #
 
 describe("Live › Agent force (compact)", () => {
   it("draws every team in order with word badges and live faces first", async () => {
-    await render(<TeamZones projectId="p1" board={board(live)} density="compact" />);
+    await render(<TeamZones projectId="p1" board={board(live, { attention: [{ id: "dec_1", kind: "approval", role_key: "qa", title: "Publish" }] })} density="compact" />);
+    // An empty Yours is not drawn (agents-home walk D17).
     expect($$(".ag-team-zone").map((z) => z.dataset.team)).toEqual(
-      ["leadership", "architecture", "engineering", "quality", "operations", "cost", "media", "thinkers", "yours"]);
+      ["leadership", "architecture", "engineering", "quality", "operations", "cost", "media", "thinkers"]);
     const eng = $('[data-testid="ag-team-engineering"]')!;
     expect(eng.textContent).toContain("Engineering");
     expect(eng.textContent).toContain("1 working");
