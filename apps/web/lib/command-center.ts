@@ -10,6 +10,7 @@ import type { RunAction } from "../app/delivery-workflows-ui";
  * Pure helpers here (hrefs, labels, durations) so the rules are testable without a browser.
  */
 import { API_URL, authHeaders } from "./client";
+import type { AttentionItem, Mission } from "./agents-live-board";
 
 export type AgentOnStep = {
   role_key: string | null;
@@ -51,6 +52,11 @@ export type NeedsYouItem = {
   /** On a failed step: the run's own answers (workflow_run_actions.stopped_for_operator), the
    *  same ones the Workflow screen's run card offers. Only these are offered here. */
   answers?: RunAction[];
+  risk_tier?: number | null;
+  /** Present when the API attributes the item (the live board's fields, if sent here too). */
+  role_key?: string | null;
+  decide_inline?: boolean;
+  content_hash?: string | null;
   at: string | null;
 };
 
@@ -197,4 +203,52 @@ export function outcomeTone(outcome: string): "green" | "red" | "muted" {
   if (outcome === "succeeded") return "green";
   if (outcome === "failed" || outcome === "deadlettered") return "red";
   return "muted";
+}
+
+
+// ── One design with Agents › Live (agents-home spec §3.3): the same card, the same row ────────
+
+/** A needs-you row as the shared AttentionCard reads it. Nothing is added that the API did not
+ *  send: no attributed agent unless it says so (the card then shows the BOSS glyph or You), no
+ *  inline decide unless it says so (the card then says `Review ↗`, into Approvals). */
+export function attentionFromNeedsYou(item: NeedsYouItem): AttentionItem {
+  const id = item.decision_id
+    ?? (item.run_id ? `run:${item.run_id}:${item.step_id ?? ""}` : `ready:${item.title}`);
+  return {
+    id, kind: item.kind,
+    decisionKind: (item.decision_kind as AttentionItem["decisionKind"]) ?? undefined,
+    decisionId: item.decision_id ?? undefined,
+    title: item.title, detail: item.detail, whatToDo: item.what_to_do ?? undefined,
+    roleKey: item.role_key ?? null,
+    run: item.run_id ? { id: item.run_id, subject: item.workflow_name ?? "", stepId: item.step_id ?? undefined } : undefined,
+    actions: [],
+    answers: (item.answers ?? []).map((a) => ({ key: a.key, label: a.label, enabled: a.enabled,
+                                               reason: a.reason ?? undefined, stepId: a.step_id })),
+    decideInline: false,
+    contentHash: item.content_hash ?? undefined,
+    riskTier: typeof item.risk_tier === "number" ? item.risk_tier : undefined,
+    fix: item.fix_area ? { area: item.fix_area, label: item.fix_label ?? "Fix" } : undefined,
+    at: item.at ?? undefined,
+  };
+}
+
+/** A running run as the shared MissionRow reads it: the agent on the step is its one hop. */
+export function missionFromRunning(run: RunningRun, attentionId?: string | null): Mission {
+  const person = run.agent?.how === "person";
+  const state: Mission["state"] = run.status === "blocked" ? "blocked"
+    : run.status === "waiting" && person ? (attentionId ? "waiting_you" : "waiting_person")
+    : run.status === "waiting" ? "waiting" : "running";
+  const hops: Mission["hops"] = run.agent?.role_key ? [{
+    kind: "hop", actId: `${run.run_id}:${run.step_id ?? ""}`, roleKey: run.agent.role_key,
+    state: state === "running" ? "working" : "idle", label: run.step_label ?? "",
+    edgeLabel: agentPhrase(run.agent),
+  }] : [];
+  return {
+    runId: run.run_id, subject: run.subject, workflowKey: run.workflow_key ?? "",
+    workflowName: run.workflow_name, state, standing: "active",
+    stepIndex: run.steps_done, stepCount: run.step_count, stepLabel: run.step_label ?? undefined,
+    verb: "Working", blockedReason: run.blocked_reason, attentionId: attentionId ?? null,
+    startedAt: run.started_at ?? undefined, stepSince: run.since ?? undefined,
+    stepElapsedSeconds: run.elapsed_seconds ?? undefined, costUsd: 0, hops, next: [],
+  };
 }

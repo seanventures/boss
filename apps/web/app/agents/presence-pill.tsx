@@ -1,23 +1,31 @@
 "use client";
 
 /**
- * The top-bar presence pill, and the crew view behind it (spec §3.3, §0.2 C).
+ * The top-bar presence pill, and the crew view behind it — the Human Checkpoint Dock
+ * (agent-world spec §3.3, agents-home spec §4.10).
  *
- * `3 working · 1 needs you` with up to four live faces; hidden when nothing is live, so an idle
- * install has no pill shouting zero. Pressed, it opens the CREW: who is on what right now, one
- * row each, needs-you first — and pressing an agent there opens a 1:1 talk with it, which is the
- * shortest path from "something is happening" to "tell me about it". `Roster ↗` goes to Agents.
+ * `4 working · 2 need you` with up to four faces; hidden only when nothing is working and
+ * nothing needs you. Pressed, it opens the CREW: what needs you first, one row per item with
+ * `Review`, then who is working on what — pressing an agent there opens a 1:1 talk.
  *
- * Needs you is said once to a screen reader (aria-live polite) and as a `(n)` prefix on the tab
- * title, so a background tab still tells the operator they are being waited on.
+ * NEEDS YOU COUNTS DECISIONS, NOT AGENTS. It is `attention.count` from /v1/agents/live: the
+ * same number as the Command Center, Approvals and Agents › Live (command_center's needs_you),
+ * so three gates on one agent say 3, and a pull request nobody is attributed to is counted.
+ * An API from before that sends no `attention`, and only then does the pill count agents.
+ *
+ * Each new item is said once to a screen reader (aria-live polite), by item id — a second gate
+ * on the same agent is still announced — and the count prefixes the tab title as `(n)`.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { askAgent, identityOf, isLive, zoneOf } from "../../lib/agent-world";
-import { useLivePresence, type LiveMap } from "../../lib/agents-live";
+import { useAttention, useLivePresence, type LiveMap } from "../../lib/agents-live";
+import type { AttentionSummary } from "../../lib/agents-live-board";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFace, AgFaceStack, AgState } from "./agent-face";
+import { RunFace } from "./run-face";
 import { presenceLine } from "./roster-zones";
+import { ago, decisionPatch, localTime, navigate, useNow } from "./live-util";
 
 export type CrewRow = { roleKey: string; name: string; zone: ReturnType<typeof zoneOf>; line: string;
                         state: import("../../lib/agent-world-types").AvatarState; since?: string };
@@ -35,38 +43,53 @@ export function crewOf(live: LiveMap): CrewRow[] {
   return rows.sort((a, b) => order[a.zone] - order[b.zone] || a.name.localeCompare(b.name));
 }
 
-/** `3 working · 1 needs you`. Either half is left out when it is zero. */
-export function pillWords(rows: CrewRow[]): string {
-  const needs = rows.filter((r) => r.zone === "needs_you").length;
-  const working = rows.length - needs;
-  return [working ? `${working} working` : "", needs ? `${needs} needs you` : ""].filter(Boolean).join(" · ");
+/** `4 working · 2 need you` / `1 needs you`. Either half is left out when it is zero. */
+export function pillText(working: number, needs: number): string {
+  return [working ? `${working} working` : "",
+          needs ? (needs === 1 ? "1 needs you" : `${needs} need you`) : ""].filter(Boolean).join(" · ");
 }
 
-function openRoster(): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("area", "workforce");
-    url.searchParams.delete("view");
-    url.searchParams.delete("role");
-    window.history.pushState(null, "", url.toString());
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch { /* non-browser */ }
+/** The older words, from agents alone: for an API that sends no `attention`. */
+export function pillWords(rows: CrewRow[]): string {
+  const needs = rows.filter((r) => r.zone === "needs_you").length;
+  return pillText(rows.length - needs, needs);
+}
+
+function openAgents(patch: Record<string, string | null> = {}): void {
+  navigate({ area: "workforce", view: null, role: null, run: null, focus: null, ...patch });
+}
+
+/** Where `Review` goes: Live, on the card, when it can be decided there (or is a run's step or
+ *  setup, which only Live draws); otherwise the decision in Approvals. */
+export function reviewPatch(item: AttentionSummary["items"][number]): Record<string, string | null> {
+  if (item.decideInline || item.id.startsWith("run:") || item.id.startsWith("ready:")) {
+    return { area: "workforce", view: null, role: null, run: null, focus: item.id };
+  }
+  return decisionPatch(item.id);
 }
 
 const TITLE_PREFIX = /^\(\d+\) /;
 
-export function PresencePill({ projectId, live: given }: { projectId: string; live?: LiveMap }) {
+export function PresencePill({ projectId, live: given, attention: givenAttention }: {
+  projectId: string; live?: LiveMap; attention?: AttentionSummary | null;
+}) {
   const polled = useLivePresence(given ? "" : projectId);
+  const polledAttention = useAttention(given ? "" : projectId);
   const live = given ?? polled;
+  const attention = given ? (givenAttention ?? null) : polledAttention;
   const v = useIdentityVersion(); // the crew is named at render: repaint when identities load
+  const now = useNow(30_000);
   const rows = useMemo(() => crewOf(live), [live, v]); // eslint-disable-line react-hooks/exhaustive-deps -- `v` versions the store crewOf reads
-  const needs = rows.filter((r) => r.zone === "needs_you").length;
+  // With attention, needs-you is its items; the agent rows below are the ones at work.
+  const working = attention ? rows.filter((r) => r.zone !== "needs_you") : rows;
+  const needs = attention ? attention.count : rows.filter((r) => r.zone === "needs_you").length;
+  const workingCount = attention ? working.length : rows.length - needs;
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
   const said = useRef<Set<string>>(new Set());
 
-  // The tab title carries `(n)` while somebody is waiting on the operator.
+  // The tab title carries `(n)` while something is waiting on the operator.
   useEffect(() => {
     if (typeof document === "undefined") return;
     const base = document.title.replace(TITLE_PREFIX, "");
@@ -75,13 +98,20 @@ export function PresencePill({ projectId, live: given }: { projectId: string; li
   useEffect(() => () => {
     if (typeof document !== "undefined") document.title = document.title.replace(TITLE_PREFIX, "");
   }, []);
-  // Said once per new wait, not on every poll.
+  // Said once per new item (by id), not on every poll.
   useEffect(() => {
+    if (attention) {
+      const fresh = attention.items.find((i) => !said.current.has(i.id));
+      said.current = new Set([...said.current].filter((id) => attention.items.some((i) => i.id === id)));
+      for (const i of attention.items) said.current.add(i.id);
+      if (fresh) setAnnounced(`Needs you: ${fresh.title}`);
+      return;
+    }
     const waiting = rows.filter((r) => r.zone === "needs_you");
     const fresh = waiting.find((r) => !said.current.has(r.roleKey));
     said.current = new Set(waiting.map((r) => r.roleKey));
     if (fresh) setAnnounced(`${fresh.name} needs you`);
-  }, [rows]);
+  }, [rows, attention]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -92,40 +122,69 @@ export function PresencePill({ projectId, live: given }: { projectId: string; li
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onDown); };
   }, [open]);
 
-  if (!rows.length) return null;
+  if (!workingCount && !needs) return <span className="ag-sr" aria-live="polite">{announced}</span>;
+  const faceKeys = [...new Set([...(attention?.items ?? []).map((i) => i.roleKey).filter((k): k is string => !!k),
+                                ...rows.map((r) => r.roleKey)])];
   const states = new Map(rows.map((r) => [r.roleKey, r.state]));
+  for (const i of attention?.items ?? []) if (i.roleKey) states.set(i.roleKey, "needs_you");
+  const crewRows = attention ? working : rows;
   return (
     <div className="ag-pill-wrap" ref={box}>
       <button type="button" className="ag-pill" data-testid="ag-presence-pill" data-needs={needs > 0 || undefined}
               title="Agents working now" aria-expanded={open} aria-haspopup="dialog"
-              onClick={() => setOpen((v) => !v)}>
-        <AgFaceStack roleKeys={rows.map((r) => r.roleKey)} size={20} max={4} states={states} decorative />
-        <span>{pillWords(rows)}</span>
+              onClick={() => setOpen((x) => !x)}>
+        {faceKeys.length ? <AgFaceStack roleKeys={faceKeys} size={20} max={4} states={states} decorative /> : null}
+        <span>{attention ? pillText(workingCount, needs) : pillWords(rows)}</span>
       </button>
       <span className="ag-sr" aria-live="polite">{announced}</span>
       {open ? (
         <div className="ag-crew" role="dialog" aria-label="Crew" data-testid="ag-crew">
           <header className="ag-crew-head">
             <span>Crew</span>
-            <button type="button" className="ag-link" onClick={() => { setOpen(false); openRoster(); }}
-                    data-testid="ag-crew-roster">Roster ↗</button>
+            <button type="button" className="ag-link" onClick={() => { setOpen(false); openAgents(); }}
+                    data-testid="ag-crew-roster">Agents ↗</button>
           </header>
-          <ul className="ag-crew-list">
-            {rows.map((r) => (
-              <li key={r.roleKey}>
-                <button type="button" className="ag-crew-row" data-zone={r.zone}
-                        data-testid={`ag-crew-${r.roleKey}`} title={`Talk to ${r.name}`}
-                        onClick={() => { setOpen(false); askAgent(r.roleKey, identityOf(r.roleKey).name, { from: "presence" }); }}>
-                  <AgFace roleKey={r.roleKey} size={32} state={r.state} decorative />
-                  <span className="ag-crew-text">
-                    <span className="ag-crew-name">{r.name}</span>
-                    <span className="ag-crew-line" data-user-text>{r.line}</span>
-                  </span>
-                  <AgState state={r.state} compact />
-                </button>
-              </li>
-            ))}
-          </ul>
+          {attention && attention.items.length ? (
+            <>
+              <span className="ag-crew-sub" data-testid="ag-crew-needs-head">Needs you</span>
+              <ul className="ag-crew-list" data-testid="ag-crew-needs">
+                {attention.items.slice(0, 5).map((i) => (
+                  <li key={i.id} className="ag-crew-need" data-testid={`ag-crew-need-${i.id}`}>
+                    {i.roleKey
+                      ? <AgFace roleKey={i.roleKey} size={32} state="needs_you" decorative />
+                      : <RunFace roleKey={null} variant={i.id.startsWith("ready:") ? "boss" : "you"} size={32} state="needs_you" />}
+                    <span className="ag-crew-text">
+                      <span className="ag-crew-line ag-trunc" title={i.title} data-user-text>{i.title}</span>
+                      {ago(i.at, now) ? <span className="ag-crew-age" title={`Waiting since ${localTime(i.at)}`}>{ago(i.at, now)}</span> : null}
+                    </span>
+                    <button type="button" className="ag-btn" data-testid={`ag-crew-review-${i.id}`}
+                            onClick={() => { setOpen(false); navigate(reviewPatch(i)); }}>Review</button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {crewRows.length ? (
+            <>
+              {attention ? <span className="ag-crew-sub">Working</span> : null}
+              <ul className="ag-crew-list">
+                {crewRows.map((r) => (
+                  <li key={r.roleKey}>
+                    <button type="button" className="ag-crew-row" data-zone={r.zone}
+                            data-testid={`ag-crew-${r.roleKey}`} title={`Talk to ${r.name}`}
+                            onClick={() => { setOpen(false); askAgent(r.roleKey, identityOf(r.roleKey).name, { from: "presence" }); }}>
+                      <AgFace roleKey={r.roleKey} size={32} state={r.state} decorative />
+                      <span className="ag-crew-text">
+                        <span className="ag-crew-name">{r.name}</span>
+                        <span className="ag-crew-line" data-user-text>{r.line}</span>
+                      </span>
+                      <AgState state={r.state} compact />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

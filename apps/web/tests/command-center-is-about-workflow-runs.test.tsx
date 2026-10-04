@@ -64,7 +64,8 @@ describe("what is running", () => {
     expect(html).toContain("Build, review and test");
     expect(html).toContain("Engineering Captain");
     expect(html).toContain("12m");
-    expect(html).toContain("3/9 steps");
+    // The shared run row (agents-home §3.3): steps done, never a percent.
+    expect(html).toContain("step 3 of 9");
   });
 
   it("links straight into the run", () => {
@@ -75,13 +76,16 @@ describe("what is running", () => {
 describe("what needs you", () => {
   it("a gate links to its decision and its run", () => {
     expect(html).toContain(decisionHref("dec_1", "org_1").replace(/&/g, "&amp;"));
-    expect(html).toContain("Review and decide");
-    expect(html).toContain("Deploy gate");
+    // The shared attention card: no inline decide unless the server allows it, so Review ↗.
+    expect(html).toContain("Review ↗");
+    expect(html).toContain("Deploy");
   });
 
   it("a failed step says why and offers Retry", () => {
     expect(html).toContain("the sandbox ran out of disk");
-    expect(html).toContain('data-testid="cc2-retry"');
+    // The run's own answer, with its own label.
+    expect(html).toContain('data-testid="ag-att-answer-retry_step"');
+    expect(html).toContain("Try build again");
   });
 
   it("offers Retry only when the run itself offers it", () => {
@@ -94,12 +98,16 @@ describe("what needs you", () => {
                        { key: "retry_step", label: "Try build again", enabled: false,
                          reason: "a newer attempt is running", step_id: "build" }] }] }} />);
     expect(without).toContain("the sandbox ran out of disk");
-    expect(without).not.toContain('data-testid="cc2-retry"');
+    // Drawn, but not pressable, and it says why.
+    expect(without).toMatch(/data-testid="ag-att-answer-retry_step"[^>]*disabled/);
+    expect(without).toContain('title="a newer attempt is running"');
   });
 
-  it("a refusal says what to fix and links there, not to an Approve button", () => {
-    expect(html).toContain("Add credit, then Retry the step.");
-    expect(html).toContain("Open Repo and model");
+  it("a refusal is reviewed in Approvals, never approved from here; setup links to its fix", () => {
+    expect(html).toContain("No model had credit.");
+    expect(html).toContain(decisionHref("dec_9", "org_1").replace(/&/g, "&amp;"));
+    expect(html).not.toContain('data-testid="ag-att-approve"');
+    expect(html).toContain('data-testid="ag-att-fix"');
     expect(html).toContain("area=setup");
   });
 
