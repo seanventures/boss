@@ -7,6 +7,7 @@ import { onboardOrgFormAction, type OnboardOrgResult } from "./org-gate-actions"
 import { callAction } from "../lib/call-action";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
+import { useConsoleRefresh } from "./use-console-refresh";
 
 const ORG_KEY = "boss.org";
 
@@ -15,11 +16,11 @@ const ORG_KEY = "boss.org";
  * the operator out of their session (the "console resets" bug) — this keeps the URL
  * (org/area/deep links intact) and retries until the API answers again. */
 export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string }) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   useEffect(() => {
-    const id = setInterval(() => router.refresh(), 5000);
+    const id = setInterval(() => refresh("poll"), 5000);
     return () => clearInterval(id);
-  }, [router]);
+  }, [refresh]);
   return (
     <div className="org-gate">
       <div className="org-gate-inner">

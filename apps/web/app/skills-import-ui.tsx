@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useConsoleRefresh } from "./use-console-refresh";
 
 import { exportSkillAction, importSkillAction } from "./actions";
 import { SubmitButton } from "./submit-button";
@@ -14,7 +14,7 @@ export function SkillImportForm({
   projectId: string;
   actor: string;
 }) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
@@ -32,7 +32,7 @@ export function SkillImportForm({
               setError(result.error ?? "Skill import failed.");
               return;
             }
-            router.refresh();
+            refresh("now");
           } catch (err) {
             setError(err instanceof Error ? err.message : "Skill import failed.");
           }

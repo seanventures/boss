@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useConsoleRefresh } from "./use-console-refresh";
 
 import {
   bindSecretAction, createTargetAction, deployObservabilityAction,
@@ -752,7 +752,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
  *      `router.refresh()` re-runs the server component with fresh data.
  */
 function useBusyAction(onChanged?: () => void | Promise<void>) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   const [busy, setBusy] = useState<string | null>(null);
   const run = async (label: string, fn: () => Promise<unknown>): Promise<any> => {
     setBusy(label);
@@ -763,7 +763,7 @@ function useBusyAction(onChanged?: () => void | Promise<void>) {
       // Both, and neither is redundant. `router.refresh()` updates every OTHER panel fed by
       // the server render; `onChanged` re-fetches the one panel that owns this row, because
       // the server refresh alone left a deleted target on screen until a manual reload.
-      router.refresh();
+      refresh("now");
       await onChanged?.();
       // ...and the client panels that fetch for themselves (the stack-deploy panel) are not
       // fed by the server render at all: a VM verified here stayed "not verified" there until

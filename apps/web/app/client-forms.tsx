@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useTransition, ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
+import { useConsoleRefresh } from "./use-console-refresh";
 import { useFormStatus } from 'react-dom';
 
 import { describeActionError, isActionResult, type ActionResult } from '../lib/action-result';
@@ -257,7 +257,7 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
   const [localError, setLocalError] = useState<string | null>(null);
   const [secretRefId, setSecretRefId] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
 
   const handleAction = (formData: FormData) => {
     setLocalError(null);
@@ -267,7 +267,7 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
         formRef.current?.reset();
         setSecretRefId(result.secret_ref_id);
         showToast("success", pasteConnectSuccessCopy(result.secret_ref_id));
-        router.refresh();
+        refresh("now");
       } catch (err: unknown) {
         const msg =
           err instanceof Error
