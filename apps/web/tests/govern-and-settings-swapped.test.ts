@@ -64,7 +64,8 @@ describe("identity is a setting, not a platform headline", () => {
 
 describe("what these panels show is not a snapshot from page load", () => {
   it("the console refreshes on its own, backing off to what a render costs", () => {
-    expect(SHELL).toContain("Math.max(20_000, lastRefreshMs.current * 3)");
+    // The cost is measured start-to-landing by the refresh coordinator (lib/console-refresh.ts).
+    expect(SHELL).toContain("Math.max(20_000, refreshCoordinator.lastDurationMs() * 3)");
   });
 
   it("and immediately when something actually changed", () => {
@@ -78,7 +79,9 @@ describe("what these panels show is not a snapshot from page load", () => {
   it("with the same guards the poll has", () => {
     const at = SHELL.indexOf("onChanged(() => {");
     const block = SHELL.slice(at, at + 400);
-    expect(block).toContain("refreshPending || document.hidden");
+    expect(block).toContain("document.hidden");
+    // Never stacked: asked of the coordinator, which owes it until the one in flight lands.
+    expect(block).toContain('refreshCoordinator.request("now")');
     expect(block).toContain('tag === "INPUT"');
   });
 });

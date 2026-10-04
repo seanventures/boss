@@ -92,7 +92,9 @@ describe("both pages and the shell use it", () => {
                                shell.indexOf("const activeLoading"));
     expect(ensure).toContain("loaded.includes(id)");
     expect(ensure).toContain("document.cookie = loadedAreasCookie(");
-    expect(ensure).toContain("router.refresh()");
+    // Through the console's one refresh coordinator (lib/console-refresh.ts), never alongside
+    // a refresh already in flight.
+    expect(ensure).toContain('refreshCoordinator.request("now")');
     expect(shell).toContain('data-testid="area-loading"');
     expect(shell).toContain("Loading {activeDef.label}…");
     // And a load that never lands says so, with a way out.

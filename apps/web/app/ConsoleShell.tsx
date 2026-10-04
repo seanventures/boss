@@ -4,6 +4,7 @@ import { IDENTITY_PARAMS, searchForNewProject } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
 import { resolveLegacyArea } from "./legacy-areas";
 import { onChanged } from "./changed";
+import { createRefreshCoordinator, registerConsoleRefresh } from "../lib/console-refresh";
 import {
   cookieWith,
   loadedAreasCookie,
@@ -452,7 +453,24 @@ export default function ConsoleShell({
   //    console 502'd mid-session. The comment above says this happened once before at 7s; 15s
   //    only moved the threshold. Measuring the cost and backing off removes it.
   const [refreshPending, startRefresh] = useTransition();
-  const lastRefreshMs = useRef(0);
+  // EVERY REFRESH GOES THROUGH ONE COORDINATOR (lib/console-refresh.ts): at most one in flight,
+  // at most one more owed. Refreshes asked for faster than they complete never commit — React
+  // renders every pending transition together and waits for the newest — which is how the
+  // Discovery area sat on "Loading…" forever on boss-1 while the server rendered it four times.
+  // This is the one `router.refresh()` in the console; panels ask via useConsoleRefresh().
+  const refreshCoordinator = useMemo(() => createRefreshCoordinator({
+    start: () => startRefresh(() => { router.refresh(); }),
+  }), [router]);
+  useEffect(() => {
+    const unregister = registerConsoleRefresh(refreshCoordinator);
+    return () => { unregister(); refreshCoordinator.dispose(); };
+  }, [refreshCoordinator]);
+  // The transition settling IS the refresh landing: React committed what it fetched.
+  const refreshWasPending = useRef(false);
+  useEffect(() => {
+    if (refreshWasPending.current && !refreshPending) refreshCoordinator.landed();
+    refreshWasPending.current = refreshPending;
+  }, [refreshPending, refreshCoordinator]);
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
@@ -460,29 +478,25 @@ export default function ConsoleShell({
 
     const schedule = () => {
       // At least 20s, and at least three times what the last refresh cost — so a slow console
-      // polls itself gently instead of continuously, and a fast one stays responsive.
-      const delay = Math.min(180_000, Math.max(20_000, lastRefreshMs.current * 3));
+      // polls itself gently instead of continuously, and a fast one stays responsive. The cost
+      // is measured start-to-landing by the coordinator; timing the synchronous call to
+      // router.refresh() measured nothing, so this was 20s however slow the console was.
+      const delay = Math.min(180_000, Math.max(20_000, refreshCoordinator.lastDurationMs() * 3));
       timer = window.setTimeout(tick, delay);
     };
 
     const tick = () => {
       if (cancelled) return;
-      if (paletteOpen || refreshPending || document.hidden) { schedule(); return; }
+      if (paletteOpen || refreshCoordinator.busy() || document.hidden) { schedule(); return; }
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") { schedule(); return; }
-      const started = Date.now();
-      startRefresh(() => {
-        router.refresh();
-        // Not exact — the transition resolves when React has the payload — but it is the right
-        // order of magnitude, which is all the backoff needs.
-        lastRefreshMs.current = Date.now() - started;
-      });
+      refreshCoordinator.request("poll");
       schedule();
     };
 
     schedule();
     return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
-  }, [live, paletteOpen, refreshPending, router]);
+  }, [live, paletteOpen, refreshCoordinator]);
 
   // AND IMMEDIATELY WHEN SOMETHING ACTUALLY CHANGED.
   //
@@ -495,11 +509,12 @@ export default function ConsoleShell({
   // The same guards, for the same reasons: never while a render is in flight, never in a
   // hidden tab, never while somebody is typing.
   useEffect(() => onChanged(() => {
-    if (refreshPending || document.hidden) return;
+    if (document.hidden) return;
     const tag = document.activeElement?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-    startRefresh(() => { router.refresh(); });
-  }, "console-shell"), [refreshPending, router]);
+    // Coalesced: asked during a refresh, it runs once that one lands, so the change is shown.
+    refreshCoordinator.request("now");
+  }, "console-shell"), [refreshCoordinator]);
 
   // Depend on the query STRING (stable across router.refresh(), changes on real
   // navigation) so the area syncs from the URL on deep links like "View in Work →"
@@ -534,7 +549,6 @@ export default function ConsoleShell({
   // rather than remount. Every later click on it is the pure reveal below.
   const loadedRef = useRef<string[] | undefined>(loadedAreas);
   loadedRef.current = loadedAreas;
-  const [areaLoadPending, startAreaLoad] = useTransition();
   const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
   const ensureLoaded = useCallback((id: string) => {
     const loaded = loadedRef.current;
@@ -546,8 +560,10 @@ export default function ConsoleShell({
       /* cookies blocked: the requested area still renders, from the URL */
     }
     setAreaLoadAsked({ id, at: Date.now() });
-    startAreaLoad(() => { router.refresh(); });
-  }, [router]);
+    // Through the coordinator: if a refresh is in flight (fetched before the cookie named this
+    // area), this one is owed and starts the moment it lands — never alongside it.
+    refreshCoordinator.request("now");
+  }, [refreshCoordinator]);
   const activeLoading = !!loadedAreas && !loadedAreas.includes(active);
   useEffect(() => {
     // Opened by a deep link, Back/Forward or anything else that set `active` without going
@@ -561,9 +577,14 @@ export default function ConsoleShell({
   // first click on an area sat on "Loading …" for 10-30 seconds on boss-1 (2026-10-03),
   // while the server answered in under a second. Ask again, a few times, then let the
   // "taking longer than usual" note speak.
+  //
+  // ONLY ONCE NOTHING IS IN FLIGHT. A retry is a request to the coordinator, so it can never
+  // start a refresh alongside one still streaming; and it waits for the console to be idle,
+  // because a refresh in flight (or owed) is already going to bring the area.
   const areaRetries = useRef<{ id: string; n: number }>({ id: "", n: 0 });
   useEffect(() => {
-    if (!activeLoading || areaLoadPending || areaLoadAsked?.id !== active) return;
+    if (!activeLoading || refreshPending || refreshCoordinator.busy()
+        || areaLoadAsked?.id !== active) return;
     if (areaRetries.current.id !== active) areaRetries.current = { id: active, n: 0 };
     if (areaRetries.current.n >= 5) return;
     const t = window.setTimeout(() => {
@@ -571,7 +592,7 @@ export default function ConsoleShell({
       setAreaLoadAsked(null);  // the effect above sees an area not yet asked for, and asks
     }, 250);
     return () => window.clearTimeout(t);
-  }, [activeLoading, areaLoadPending, areaLoadAsked, active]);
+  }, [activeLoading, refreshPending, refreshCoordinator, areaLoadAsked, active]);
   const [loadSlow, setLoadSlow] = useState(false);
   useEffect(() => {
     setLoadSlow(false);
