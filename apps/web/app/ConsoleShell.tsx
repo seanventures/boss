@@ -15,6 +15,7 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
+import { setConsoleLive } from "../lib/console-live";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
 import { CONVERSE_COMMANDS } from "../lib/agent-converse";
@@ -432,6 +433,8 @@ export default function ConsoleShell({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [live, setLive] = useState(true);
+  // Published for the panels that poll on their own (Agents › Live, the presence pill).
+  useEffect(() => { setConsoleLive(live); }, [live]);
   const paletteInput = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const searchParams = useSearchParams();

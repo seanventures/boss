@@ -28,14 +28,19 @@ const { TeamSwarm } = await import("../app/agents/team-swarm");
 const { AgentBirth } = await import("../app/agents/agent-birth");
 const { ShareCardDialog } = await import("../app/agents/share-card-dialog");
 const { parseLive, resetLiveStores } = await import("../lib/agents-live");
+const { LiveBoardView } = await import("../app/agents/live-board");
+const { parseLiveBoard } = await import("../lib/agents-live-board");
+const fixture = await import("./_helpers/live-board-fixture");
 const { identityOf } = await import("../lib/agent-world");
 
 const SURFACES = [".ag-passport", ".ag-pnav", ".ag-work", ".ag-persona", ".ag-test", ".ag-lineage", ".ag-share",
                   ".ag-roster", ".ag-roster-sum", ".ag-pill-wrap", ".ag-crew", ".ag-team", ".ag-fv",
-                  ".ag-archetypes", ".ag-birth"];
+                  ".ag-archetypes", ".ag-birth",
+                  // Agents home (agents-home spec §5.1): Live, its cards and its run rows.
+                  ".ag-live", ".ag-att", ".ag-mission"];
 const SKIP = "[data-tip], [role='tooltip'], [title], textarea, script, style, option, [hidden], "
   + "[aria-hidden='true'], .ag-sr, [data-user-text]";
-const BANNED = /\b(persona|fingerprint|ledger|act|acts|sentient|alive|conscious|impersonate|signed|tokens?)\b/i;
+const BANNED = /\b(persona|fingerprint|ledger|act|acts|sentient|alive|conscious|impersonate|signed|tokens?|eta|estimated|missions?|office)\b/i;
 const ALLOWED = ["No signed work yet", "Local · tokens coming", "Lineage"];
 
 function visibleRuns(root: Element): string[] {
@@ -125,6 +130,31 @@ describe("the Agent World copy budget", () => {
     await act(async () => { $('[data-testid="ag-presence-pill"]')!.click(); });
     const r = audit();
     expect(r.surfaces).toBeGreaterThanOrEqual(3);
+    expect([r.over, r.paragraphs, r.banned]).toEqual([[], [], []]);
+  });
+
+  it("Agents › Live: cards (Details open), run rows, outcomes, every empty state", async () => {
+    installAgentWorldApi();
+    const noop = () => {};
+    const live = (body: Record<string, unknown>) => ({ board: parseLiveBoard(body), error: null, loading: false, refresh: noop });
+    const draw = (body: Record<string, unknown>) => (
+      <LiveBoardView projectId="p1" actor="ceo" live={live(body)} onOpenMap={noop} onActivity={noop}
+                     onDirectory={noop} onNewAgent={noop} paused />);
+    await render(draw(fixture.board({ attention: [fixture.gate(), fixture.failed(), fixture.prReview()],
+      missions: [fixture.mission(), fixture.mission({ run_id: "w2", state: "waiting", waiting_on: "build to finish" }),
+                 fixture.mission({ run_id: "w3", state: "done", elapsed_seconds: 2520 }),
+                 fixture.mission({ run_id: "w4", state: "blocked", blocked_reason: "no credit" })] })));
+    await act(async () => { document.querySelectorAll<HTMLElement>('[data-testid="ag-att-details"]').forEach((b) => b.click()); });
+    await act(async () => { document.querySelector<HTMLElement>('[data-testid="ag-att-reject"]')?.click(); });
+    let r = audit();
+    expect(r.surfaces).toBeGreaterThanOrEqual(5);
+    // No percent next to a run (spec §5.1): nothing on Live can honestly compute one.
+    expect(visibleRuns(document.querySelector(".ag-live")!).filter((t) => t.includes("%"))).toEqual([]);
+    expect([r.over, r.paragraphs, r.banned]).toEqual([[], [], []]);
+    act(() => root?.unmount());
+    await render(draw(fixture.board({ attention: [], missions: [], outcomes: [] })));
+    r = audit();
+    expect(r.surfaces).toBe(1);
     expect([r.over, r.paragraphs, r.banned]).toEqual([[], [], []]);
   });
 
