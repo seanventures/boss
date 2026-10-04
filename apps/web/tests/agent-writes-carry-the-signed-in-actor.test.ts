@@ -65,6 +65,8 @@ const KNOWN_AGENT_WRITERS = [
   "app/skills/skill-drawer.tsx",
   "lib/agent-studio.ts",
   "lib/agent-world.ts",
+  // The Passport's Loadout: an agent's instructions, its prompt preview and skills-from-a-file.
+  "lib/agent-instructions.ts",
   "lib/agents-live.ts",
   // Agents › Live's one read (/v1/agents/live-board): a GET, no actor, no write.
   "lib/agents-live-board.ts",

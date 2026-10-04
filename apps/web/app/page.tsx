@@ -4872,7 +4872,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("workforce") ? (
-        <section className="panel-stack" data-area="workforce" aria-label="Agents">
+        <section className="panel-stack" data-area="workforce" aria-label="Agent Studio">
           <WorkforceArea workforce={workforceData} chart={orgChartData} studio={agentStudioFeed}
                          actor={activeActorId} />
         </section>

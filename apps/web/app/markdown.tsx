@@ -5,6 +5,18 @@ import React from "react";
 // fences, horizontal rules, and paragraphs. Good enough to make LLM output read
 // cleanly without pulling in a markdown library.
 
+/**
+ * The only hrefs this renderer will make: http(s), and same-origin paths and anchors. Whatever
+ * a pre-pass did, the renderer is safe on its own — text an operator uploaded (an agent's
+ * instructions) or a model wrote is rendered here, and `[x](javascript:…)` is a script.
+ */
+export function safeHref(href: string): boolean {
+  const h = href.trim();
+  if (/^https?:\/\/[^\s]/i.test(h)) return true;
+  if (h.startsWith("//")) return false;
+  return /^[/#]/.test(h) && !/[\u0000-\u001f\\]/.test(h);
+}
+
 function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   const pattern =
@@ -22,12 +34,15 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
       nodes.push(<strong key={key}>{tok.slice(2, -2)}</strong>);
     } else if (tok.startsWith("[")) {
       const mm = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(tok);
-      if (mm) {
+      if (mm && safeHref(mm[2])) {
         nodes.push(
-          <a key={key} href={mm[2]} target="_blank" rel="noreferrer">
+          <a key={key} href={mm[2]} target="_blank" rel="noopener noreferrer">
             {mm[1]}
           </a>,
         );
+      } else if (mm) {
+        // Not a link we will make: javascript:, data:, a protocol-relative host… shown as text.
+        nodes.push(mm[1]);
       } else {
         nodes.push(tok);
       }

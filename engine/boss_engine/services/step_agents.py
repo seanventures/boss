@@ -13,7 +13,7 @@ none of them was written down in one place:
     approval gate         nobody; `human` was accepted on every kind of step
 
 and the agents a step could NAME came from a hard-coded set of 29 role keys, so an agent made on
-the Agents page could never be put on a step ("names captain 'docs_writer', which is not a role
+Agent Studio could never be put on a step ("names captain 'docs_writer', which is not a role
 this workforce has") while five roles no project has were offered in the picker.
 
 THE ONE RULE, in the order it is applied
@@ -284,7 +284,7 @@ def project_agents(connection: Connection, project_id: str,
                    settings: Any = None) -> list[dict[str, Any]]:
     """Every agent this project has, with what it is for and what it holds.
 
-    THE ROLES TABLE, NOT A CONSTANT. An agent made on the Agents page is a `roles` row; the
+    THE ROLES TABLE, NOT A CONSTANT. An agent made in Agent Studio is a `roles` row; the
     old picker read a frozenset and could never offer it.
 
     `holds` is what an agent step can actually OFFER the agent — read through
@@ -350,7 +350,7 @@ def _on_duty(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _listed(agents: Iterable[dict[str, Any]], limit: int = 8) -> str:
     keys = [a["role_key"] for a in agents]
     if not keys:
-        return "none yet — create one on the Agents page"
+        return "none yet — create one in Agent Studio"
     return ", ".join(keys[:limit]) + (", …" if len(keys) > limit else "")
 
 
@@ -475,7 +475,7 @@ def nobody_may_run_problem(connection: Connection, project_id: str,
         server = _server_name(connection, project_id, str(definition.get("mcp_server_id") or ""))
         return (f"'{label}' calls '{definition.get('mcp_tool_name')}' on MCP server '{server}', "
                 f"and no agent holds MCP server '{server}', so nobody can do this step. Give "
-                "it to an agent on the Agents page (Give this agent an MCP server), or name an "
+                "it to an agent in Agent Studio (Loadout › MCP › + Add), or name an "
                 "agent that holds it on the step.")
     skill_id = str(definition.get("skill_id") or "")
     # A HOLDER WITHOUT THE SERVER is a different repair from "nobody holds it", so it is named:
@@ -486,7 +486,7 @@ def nobody_may_run_problem(connection: Connection, project_id: str,
             if short:
                 return f"nobody can do '{label}': {short}"
     return (f"'{label}' runs {skill_id}, and no agent on this project may run it, so nobody can "
-            f"do this step. Give {skill_id} to an agent on the Agents page, or name an agent "
+            f"do this step. Give {skill_id} to an agent in Agent Studio, or name an agent "
             "that holds it on the step.")
 
 
@@ -498,13 +498,13 @@ def named_agent_problem(connection: Connection, project_id: str, definition: dic
     step naming an agent without the server (or the skill) published cleanly and failed at run
     time with the raw gate string "caller 'x' not in allowed_callers [...]". This asks what
     the runtime gate asks — `who_may_run`, the same pool the auto-pick uses — and says it in
-    the gate's own words (agents.mcp_grant_gap), which name the Agents page.
+    the gate's own words (agents.mcp_grant_gap), which name Agent Studio.
     """
     label = definition.get("label")
     if not any(a["role_key"] == named for a in agents):
         return (f"names agent '{named}', which this project does not have, so nothing on it "
                 f"holds what '{label}' runs. Its agents are: {_listed(agents)}. Pick one of "
-                f"them, or create '{named}' on the Agents page and give it what the step runs.")
+                f"them, or create '{named}' in Agent Studio and give it what the step runs.")
     pool, _, _ = who_may_run(connection, project_id, definition, agents)
     if any(a["role_key"] == named for a in pool):
         return None
@@ -523,7 +523,7 @@ def named_agent_problem(connection: Connection, project_id: str, definition: dic
     if short:
         return short
     return (f"{named} may not run {skill_id}: it does not hold it and the skill does not list "
-            f"it as a caller. Give {skill_id} to {named} on the Agents page, or name an agent "
+            f"it as a caller. Give {skill_id} to {named} in Agent Studio, or name an agent "
             "that holds it.")
 
 
@@ -613,7 +613,7 @@ def _no_pool_problem(skills: list[str], agents: list[dict[str, Any]]) -> str:
                 if problem:
                     return problem
         return (f"no agent holds all of {', '.join(skills)}, so nobody can do this step. Give "
-                "those skills to one agent on the Agents page, or name the agent on the step.")
+                "those skills to one agent in Agent Studio, or name the agent on the step.")
     return ("no agent on this project holds a skill it can use or an MCP server, so there is "
             "nobody to give this step to. Open an agent and give it what this work needs.")
 
@@ -659,7 +659,7 @@ def assignment_problems(connection: Connection, project_id: str,
             problems.append(
                 f"step '{step_id}' names agent '{named}', which this project does not have. "
                 f"Its agents are: {_listed(agents)}. Pick one of them, or create '{named}' on "
-                "the Agents page first.")
+                "Agent Studio first.")
             continue
         if step.get("kind") != "capability":
             continue
@@ -700,7 +700,7 @@ def assignment_problems(connection: Connection, project_id: str,
                 if mcp and not skills:
                     problems.append(
                         f"step '{step_id}': no agent holds MCP server {', '.join(mcp)}, so "
-                        "nobody can do this step. Give it to an agent on the Agents page, or "
+                        "nobody can do this step. Give it to an agent in Agent Studio, or "
                         "take it off the step.")
                 else:
                     problems.append(f"step '{step_id}': {_no_pool_problem(skills, agents)}")
@@ -832,7 +832,7 @@ def resolve(
         if not pool:
             raise StepAgentError(
                 f"no agent holds MCP server {', '.join(mcp)}, so nobody can do this step. Give "
-                "it to an agent on the Agents page, or take it off the step."
+                "it to an agent in Agent Studio, or take it off the step."
                 if mcp and not skills else _no_pool_problem(skills, agents))
         if skills or mcp:
             return _choose(connection, settings, project_id, pool, instructions,
@@ -867,7 +867,7 @@ def resolve(
             return _record(
                 WORKFLOW_RUNNER, "workflow_runner",
                 f"no agent holds {runs}; its own policy lets the workflow call it, so it ran as "
-                "the workflow. Give it to an agent on the Agents page to have that agent run it.")
+                "the workflow. Give it to an agent in Agent Studio to have that agent run it.")
         if ran_under_old_rules(step):
             # PUBLISHED UNDER THE OLD RULES, where "no agent — runs as the workflow" was the
             # builder's default for this step, and an MCP tool nobody held always ran that way.
@@ -877,7 +877,7 @@ def resolve(
                 WORKFLOW_RUNNER, "legacy_workflow_runner",
                 f"no agent holds {runs}. This workflow was published before a step needed an "
                 f"agent holding what it runs, so it ran as the workflow, as it always has. Give "
-                f"{runs} to an agent on the Agents page and publish the workflow again to have "
+                f"{runs} to an agent in Agent Studio and publish the workflow again to have "
                 "that agent run it — a new version is refused until one holds it.")
         raise StepAgentError(nobody_may_run_problem(connection, project_id, definition))
 

@@ -16,7 +16,8 @@ import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
 
-const DETAIL = codeOnly("app/agent-detail-ui.tsx");
+// The Passport's first section (Loadout) is its own file; it says what the page cannot show too.
+const DETAIL = codeOnly("app/agent-detail-ui.tsx") + codeOnly("app/agents/passport-loadout.tsx");
 const CSS = codeOnly("app/globals.css");
 
 describe("a full-screen view has to leave the shell", () => {

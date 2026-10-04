@@ -28,6 +28,7 @@ const HOW = [
   { id: "mcp_tool", label: "MCP tool", tip: "Calls one tool on an MCP server" },
   { id: "builtin", label: "Built-in", tip: "Wraps a skill BOSS ships, with your knowledge" },
   { id: "agent_program", label: "Program", tip: "A program an agent wrote on an earlier run" },
+  { id: "guide", label: "Guide", tip: "Instructions an agent reads when it needs them" },
 ];
 const RISKS = [
   { tier: "0", label: "Reads", tip: TIP.reads },
@@ -77,12 +78,15 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
           : draft.behaviour_kind === "agent_program"
             ? { ...(skill?.config ?? {}), language: draft.language, source: draft.source,
                 timeout_seconds: Number(draft.program_timeout) || 60 }
-            : { executor_id: draft.executor_id.trim() };
+            : draft.behaviour_kind === "guide"
+              ? {}  // a guide only explains: no settings, nothing in or out, risk Reads
+              : { executor_id: draft.executor_id.trim() };
+    const guide = draft.behaviour_kind === "guide";
     const key = skill ? skill.skill_key : (draft.skill_key.trim() || keyOf(draft.label));
     const r = await skillsWrite({
       project_id: projectId, actor, skill_key: key, label: draft.label.trim(), summary: draft.summary.trim(),
-      behaviour_kind: draft.behaviour_kind, knowledge: draft.knowledge, inputs: names(draft.inputs),
-      produces: names(draft.produces), config, risk_tier: Number(draft.risk_tier), trusted: draft.trusted,
+      behaviour_kind: draft.behaviour_kind, knowledge: draft.knowledge, inputs: guide ? [] : names(draft.inputs),
+      produces: guide ? [] : names(draft.produces), config, risk_tier: guide ? 0 : Number(draft.risk_tier), trusted: draft.trusted,
       enabled: draft.enabled, mode: skill ? "update" : "create",
     });
     setBusy(false);
@@ -231,13 +235,14 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                   {builtIns.map((b) => <option key={b.id} value={b.id}>{b.id}</option>)}
                 </select>
               </label>
-            ) : (
+            ) : draft.behaviour_kind === "guide" ? null : (
               <label className="kit-field">
                 <span className="kit-field-label" data-tip="Written by an agent; read it before relying on it">Program</span>
                 <textarea rows={8} value={draft.source} spellCheck={false} readOnly={!skill} data-testid="skill-program-source"
                           onChange={(e) => set({ source: e.target.value })} />
               </label>
             )}
+            {draft.behaviour_kind !== "guide" ? (<>
             <label className="kit-field">
               <span className="kit-field-label" data-tip="Names, comma-separated">Inputs</span>
               <input type="text" value={draft.inputs.replace(/\n/g, ", ")} data-testid="skill-inputs" placeholder="video, start, end"
@@ -248,10 +253,17 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
               <input type="text" value={draft.produces.replace(/\n/g, ", ")} data-testid="skill-produces" placeholder="clip"
                      onChange={(e) => set({ produces: e.target.value })} />
             </label>
+            </>) : null}
             <label className="kit-field">
               <span className="kit-field-label" data-tip="Markdown: the house rules this work is held to">Knowledge</span>
               <textarea rows={8} value={draft.knowledge} data-testid="skill-knowledge" onChange={(e) => set({ knowledge: e.target.value })} />
             </label>
+            {draft.behaviour_kind === "guide" ? (
+              <div className="kit-field">
+                <span className="kit-field-label">Risk</span>
+                <span className="kit-chip" data-tip="A guide only explains; it can't act" data-testid="skill-risk-guide">Reads</span>
+              </div>
+            ) : (
             <div className="kit-field">
               <span className="kit-field-label" data-tip="Never safer than what it runs">Risk</span>
               <span className="kit-seg kit-seg-sm" role="radiogroup" aria-label="Risk" data-testid="skill-risk">
@@ -261,6 +273,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                 ))}
               </span>
             </div>
+            )}
             <div className="kit-field">
               <span className="kit-field-label" data-tip="A person has read this and vouches for it">Reviewed</span>
               <button type="button" role="switch" aria-checked={draft.trusted} className="kit-switch" data-testid="skill-trusted"

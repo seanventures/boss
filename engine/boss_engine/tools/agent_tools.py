@@ -2,7 +2,7 @@
 
 An operator says "give the editor the trim skill" or "let the publisher use our Mattermost
 server". BOSS could author a skill (draft_skill) and place it in a step (draft_custom_step) but
-could not hand one to an agent — the one act the Agents page exists for — so the conversation
+could not hand one to an agent — the one act Agent Studio exists for — so the conversation
 ended in "open the agent and press Give this agent a skill". These write through the same
 functions the console and POST /v1/role-skills | /v1/role-mcp-servers use
 (services/agents.py), so the chat, the API and the page cannot disagree about what a grant is.

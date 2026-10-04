@@ -32,11 +32,9 @@ import type { AgentStudioFeed } from "../lib/agent-studio";
 import { openPlan } from "../lib/agent-converse";
 import { formatDate } from "../lib/datetime";
 import { AgentProfile } from "./agent-profile-ui";
-import { HelpTip } from "./help-tip";
 import { AgentQuickCreate } from "./agent-quick-create";
 import {
-  deleteAgent, grantMcp, grantSkill, loadGrantable, parseToolList, repointMapping, revokeMcp,
-  revokeSkill, updateAgent, type AgentSummary,
+  deleteAgent, loadGrantable, repointMapping, updateAgent, type AgentSummary,
 } from "../lib/agents";
 import type { Passport, Persona } from "../lib/agent-world-types";
 import { askAgent, getPassport, openAgent } from "../lib/agent-world";
@@ -49,7 +47,10 @@ import { PassportPersona } from "./agents/passport-persona";
 import { PassportTest } from "./agents/passport-test";
 import { PassportWork } from "./agents/passport-work";
 import { ShareCardDialog } from "./agents/share-card-dialog";
-import { AgentAbilities } from "./skills/agent-abilities";
+import { PassportLoadout } from "./agents/passport-loadout";
+import { popOpen } from "./agents/loadout-pop";
+import { overlayJustClosed } from "./skills/overlay";
+import { SectionLabel } from "./section-label";
 
 type App = {
   app: string; raw_title?: string; calls: number; tokens: number; spend_usd: number;
@@ -192,14 +193,14 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
   }, [projectId, roleKey]);
   useEffect(() => { void loadPassport(); }, [loadPassport]);
   const live = useLivePresence(projectId).get(roleKey);
-  const [tab, setTab] = useState<SectionKey>("work");
+  const [tab, setTab] = useState<SectionKey>("loadout");
   const [sharing, setSharing] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [draftPersona, setDraftPersona] = useState<Persona | null>(null);
   useEffect(() => {
     const t = readTab(window.location.search);
     setTab(t);
-    if (t !== "work" && detail) setTimeout(() => goToSection(t), 0);
+    if (t !== "loadout" && detail) setTimeout(() => goToSection(t), 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!detail]);
   const pick = (k: SectionKey) => { setTab(k); goToSection(k); };
@@ -207,7 +208,10 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
   // Escape closes it, and the page behind does not scroll. Same rules as the template page —
   // a full-screen view you cannot get out of is the bug that one shipped with.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); };
+    // Not while a sheet, drawer or menu is open, nor in the moment after one closed (D4).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented && !overlayJustClosed() && !popOpen()) onClose();
+    };
     window.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -232,8 +236,8 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
     <div className="tpl-page" data-testid="agent-detail" role="dialog" aria-modal="true"
          aria-label={detail?.name ?? roleKey}>
       <header className="tpl-page-head">
-        <button type="button" className="tpl-back" onClick={onClose}>← Back to agents</button>
-        <span className="tpl-crumb">Agents · {detail?.name ?? roleKey}</span>
+        <button type="button" className="tpl-back" onClick={onClose}>← Back to Agent Studio</button>
+        <span className="tpl-crumb">Agent Studio · {detail?.name ?? roleKey}</span>
         {/* PLAN SOMETHING WITH IT (agents/converse-host.tsx). Talking to it is the Passport's
             own Ask, below: one door for one action. */}
         {detail?.registered ? (
@@ -267,18 +271,6 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                               spend: detail.apps.reduce((sum, a) => sum + (a.spend_usd || 0), 0),
                               trust: detail.registered ? detail.trust_score : null,
                             }} />
-            {/* An agent doing work with no registered role has nothing governing it. Said. */}
-            {/* Said as what to do about it, not as an error: Register makes it a governed agent
-                (skills, limits, a trust score) under the name it already works under. */}
-            {!detail.registered ? (
-              <div className="ag-unreg" data-testid="agent-unregistered"
-                   title="Ungoverned: no registered role, so no limits or trust score">
-                <strong>Not registered</strong>
-                <button type="button" className="ag-btn ag-btn-primary" data-testid="agent-register"
-                        title="Make it an agent: skills, limits and a trust score"
-                        onClick={() => setRegistering(true)}>Register</button>
-              </div>
-            ) : null}
             {registering ? (
               <AgentQuickCreate projectId={projectId} actor={actor} initialName={detail.name}
                                 onClose={() => setRegistering(false)}
@@ -291,57 +283,25 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                                onClose={() => setSharing(false)} />
             ) : null}
 
+            {/* LOADOUT FIRST (agent-loadout spec §3): what it can do and how it is told to work,
+                above everything it has done. An unregistered agent shows Register here. */}
+            <PassportLoadout projectId={projectId} roleKey={detail.role_key} actor={actor}
+                             agentName={passport?.persona.callsign || detail.name}
+                             registered={detail.registered} skills={detail.skills} mcp={detail.mcp}
+                             allowed={spec.allowed_skills ?? []} forbidden={spec.forbidden_skills ?? []}
+                             onRegister={() => setRegistering(true)}
+                             onChanged={() => { void load(); void loadPassport(); }}
+                             onVersion={(version) => { setPassport((p) => (p ? { ...p, version } : p)); void loadPassport(); }} />
+
             <section className="ct-block" id="ag-sec-work">
-              <div className="ct-block-title">Work</div>
+              <SectionLabel level={1} as="h2">Work</SectionLabel>
               <PassportWork projectId={projectId} actor={actor} roleKey={detail.role_key} name={detail.name}
                             presence={live} />
-            </section>
 
-            <section className="ct-block" id="ag-sec-profile">
-              <div className="ct-block-title">
-                Profile <HelpTip label="Profile" text="How it speaks and looks. Never what it may do." />
-              </div>
-              {/* ONE Profile: the voice and face, the one Test (a real model call in that voice),
-                  then the Studio definition's rows. */}
-              <PassportPersona projectId={projectId} actor={actor} roleKey={detail.role_key} passport={passport}
-                               onDraft={setDraftPersona}
-                               onSaved={(version, fingerprint, persona) => setPassport((p) => (p
-                                 ? { ...p, version, fingerprint, persona } : p))} />
-              <PassportTest projectId={projectId} actor={actor} roleKey={detail.role_key} persona={draftPersona} />
-              {studio ? <AgentProfile feed={studio} roleKey={detail.role_key} actor={actor} bare /> : null}
-            </section>
-
-            {/* WHERE IT IS PUT TO WORK: each workflow step naming it, opening on that step. */}
-            <section className="ct-block" data-testid="agent-used-in" id="ag-sec-used">
-              <div className="ct-block-title">
-                Used in <HelpTip label="Used in" text="Workflow steps this agent runs" />
-              </div>
-              {usedIn(detail.named_on_steps).length ? (
-                <ul className="ad-list">
-                  {usedIn(detail.named_on_steps).map((u) => (
-                    <li key={`${u.workflow_key}:${u.step_id}`}>
-                      <a href={u.href} data-testid={`agent-used-in-${u.workflow_key}-${u.step_id}`}>
-                        {u.workflow} · {u.step}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              ) : <p className="detail">No workflow step names it</p>}
-            </section>
-
-            <section className="ct-block" id="ag-sec-lineage">
-              <div className="ct-block-title">Lineage</div>
-              <PassportLineage projectId={projectId} actor={actor} roleKey={detail.role_key} />
-            </section>
-
-            {/* WHAT IT HAS ACTUALLY WORKED ON. Attributed through the same stage→role map BOSS
-                uses for the cost ledger, so this page and the spend figures cannot disagree
-                about who did what. */}
-            <section className="ct-block">
-              <div className="ct-block-title">
-                Apps it has worked on
-                <span className="detail"> · last {Math.round(detail.window_hours / 24)} days</span>
-              </div>
+              {/* WHAT IT HAS ACTUALLY WORKED ON. Attributed through the same stage→role map BOSS
+                  uses for the cost ledger, so this page and the spend figures cannot disagree
+                  about who did what. */}
+              <SectionLabel tip={`Last ${Math.round(detail.window_hours / 24)} days`}>Apps it worked on</SectionLabel>
               {detail.apps.length ? (
                 <table className="ad-table" data-testid="agent-apps">
                   <thead>
@@ -373,27 +333,25 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                     : <>, and it owns no pipeline stage — its work is panels and process steps</>}.
                 </p>
               )}
-            </section>
 
-            {detail.panels.length ? (
-              <section className="ct-block">
-                <div className="ct-block-title">Panels it sat on</div>
-                <ul className="ad-list" data-testid="agent-panels">
-                  {detail.panels.map((p) => (
-                    <li key={p.id}>
-                      {p.subject}
-                      <span className="detail"> · {p.status}{p.phase ? ` · ${p.phase}` : ""}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
+              {detail.panels.length ? (
+                <>
+                  <SectionLabel>Panels it sat on</SectionLabel>
+                  <ul className="ad-list" data-testid="agent-panels">
+                    {detail.panels.map((p) => (
+                      <li key={p.id}>
+                        {p.subject}
+                        <span className="detail"> · {p.status}{p.phase ? ` · ${p.phase}` : ""}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
 
-            {/* ASSIGNED IS NOT THE SAME AS TOUCHED, and the difference is the point: an agent
-                assigned to an app it has never worked on is either idle or blocked, and one
-                working on an app it is not assigned to will be refused at the next gate. */}
-            <section className="ct-block">
-              <div className="ct-block-title">Assigned to</div>
+              {/* ASSIGNED IS NOT THE SAME AS TOUCHED, and the difference is the point: an agent
+                  assigned to an app it has never worked on is either idle or blocked, and one
+                  working on an app it is not assigned to will be refused at the next gate. */}
+              <SectionLabel testid="agent-assigned-label">Assigned to</SectionLabel>
               {detail.assigned_to.length ? (
                 <ul className="ad-list" data-testid="agent-assigned">
                   {detail.assigned_to.map((a) => (
@@ -414,34 +372,19 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
               )}
             </section>
 
-            {/* WHAT IT CAN DO — the section this page was missing, and the reason an
-                operator could look at a fully specced agent and conclude BOSS had given it
-                nothing. Above the history deliberately: the first question about an agent is
-                what it is able to do, not what it has already done. */}
-            <div id="ag-sec-skills" />
-            {/* ITS ABILITIES, as the Kit shows them (Skills & MCP), with the same grant. */}
-            {detail.registered ? (
-              <AgentAbilities projectId={projectId} roleKey={detail.role_key} actor={actor}
-                              onChanged={() => { void load(); void loadPassport(); }} />
-            ) : null}
-            <AgentSkills projectId={projectId} roleKey={detail.role_key} actor={actor}
-                         panel={detail.skills} spec={spec} onChanged={() => { void load(); void loadPassport(); }} />
+            <section className="ct-block" id="ag-sec-profile">
+              <SectionLabel level={1} as="h2" tip="How it speaks and looks. Never what it may do.">Profile</SectionLabel>
+              {/* ONE Profile: the voice and face, the one Test (a real model call in that voice),
+                  then the Studio definition's rows. */}
+              <PassportPersona projectId={projectId} actor={actor} roleKey={detail.role_key} passport={passport}
+                               onDraft={setDraftPersona}
+                               onSaved={(version, fingerprint, persona) => setPassport((p) => (p
+                                 ? { ...p, version, fingerprint, persona } : p))} />
+              <PassportTest projectId={projectId} actor={actor} roleKey={detail.role_key} persona={draftPersona} />
+              {studio ? <AgentProfile feed={studio} roleKey={detail.role_key} actor={actor} bare /> : null}
 
-            {/* AND THE MCP SERVERS IT HOLDS — the grant that did not exist. A workflow step this
-                agent works is offered exactly these servers' tools. */}
-            {detail.registered ? (
-              <AgentMcp projectId={projectId} roleKey={detail.role_key} actor={actor}
-                        panel={detail.mcp} onChanged={() => { void load(); void loadPassport(); }} />
-            ) : null}
-
-            <div id="ag-sec-settings" />
-            {detail.registered ? (
-              <AgentEdit projectId={projectId} actor={actor} detail={detail} onChanged={load} />
-            ) : null}
-
-            {/* THE CAPABILITY MODEL, on screen for the first time. */}
-            <section className="ct-block">
-              <div className="ct-block-title">What it is for</div>
+              {/* ITS REMIT: the capability model, on screen. What it may run is the Loadout's. */}
+              <SectionLabel testid="agent-remit-label">Remit</SectionLabel>
               {spec.mission ? <p className="ad-mission">{spec.mission}</p> : (
                 <p className="detail" data-testid="agent-no-spec">
                   This agent has no spec. A spec is what states its mission, its boundaries and
@@ -450,13 +393,13 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
               )}
               {spec.primary_outcomes?.length ? (
                 <>
-                  <h4 className="ad-h">Owns these outcomes</h4>
+                  <SectionLabel as="h4">Owns these outcomes</SectionLabel>
                   <ul className="ad-list">{spec.primary_outcomes.map((o) => <li key={o}>{o}</li>)}</ul>
                 </>
               ) : null}
               {spec.boundaries?.must?.length || spec.boundaries?.must_not?.length ? (
                 <>
-                  <h4 className="ad-h">Boundaries</h4>
+                  <SectionLabel as="h4">Boundaries</SectionLabel>
                   <ul className="ad-list">
                     {(spec.boundaries?.must ?? []).map((b) => (
                       <li key={`m${b}`}><span className="ad-must">must</span> {b}</li>
@@ -467,22 +410,9 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                   </ul>
                 </>
               ) : null}
-              {spec.allowed_skills?.length || spec.forbidden_skills?.length ? (
-                <>
-                  <h4 className="ad-h">Skills</h4>
-                  <div className="ad-chips">
-                    {(spec.allowed_skills ?? []).map((s) => (
-                      <span className="ad-chip" key={`a${s}`}>{s}</span>
-                    ))}
-                    {(spec.forbidden_skills ?? []).map((s) => (
-                      <span className="ad-chip" data-forbidden="true" key={`f${s}`}>{s}</span>
-                    ))}
-                  </div>
-                </>
-              ) : null}
               {spec.output_contracts?.length ? (
                 <>
-                  <h4 className="ad-h">What it must produce</h4>
+                  <SectionLabel as="h4">What it must produce</SectionLabel>
                   <ul className="ad-list">
                     {spec.output_contracts.map((c) => <li key={String(c)}>{String(c)}</li>)}
                   </ul>
@@ -490,281 +420,42 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
               ) : null}
             </section>
 
+            {/* WHERE IT IS PUT TO WORK: each workflow step naming it, opening on that step. */}
+            <section className="ct-block" data-testid="agent-used-in" id="ag-sec-used">
+              <SectionLabel level={1} as="h2" tip="Workflow steps this agent runs">Used in</SectionLabel>
+              {usedIn(detail.named_on_steps).length ? (
+                <ul className="ad-list">
+                  {usedIn(detail.named_on_steps).map((u) => (
+                    <li key={`${u.workflow_key}:${u.step_id}`}>
+                      <a href={u.href} data-testid={`agent-used-in-${u.workflow_key}-${u.step_id}`}>
+                        {u.workflow} · {u.step}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="detail">No workflow step names it</p>}
+            </section>
+
+            <section className="ct-block" id="ag-sec-lineage">
+              <SectionLabel level={1} as="h2">Lineage</SectionLabel>
+              <PassportLineage projectId={projectId} actor={actor} roleKey={detail.role_key} />
+            </section>
+
             {detail.registered ? (
-              <AgentDelete projectId={projectId} actor={actor} detail={detail}
-                           onChanged={() => void load()}
-                           onDeleted={() => { onDeleted?.(detail.role_key); onClose(); }} />
-            ) : null}
+              <div className="ld-settings" id="ag-sec-settings">
+                <SectionLabel level={1} as="h2">Settings</SectionLabel>
+                <AgentEdit projectId={projectId} actor={actor} detail={detail} onChanged={load} />
+                <AgentDelete projectId={projectId} actor={actor} detail={detail}
+                             onChanged={() => void load()}
+                             onDeleted={() => { onDeleted?.(detail.role_key); onClose(); }} />
+              </div>
+            ) : <div id="ag-sec-settings" />}
           </>
         ) : null}
       </div>
     </div>
   );
   return typeof document !== "undefined" ? createPortal(page, document.body) : null;
-}
-
-
-/**
- * The skills one agent holds, and the ones it could be given.
- *
- * THE DIRECTION THIS FIXES. `role_skills` has always been many-to-many — an agent holds many
- * skills, a skill is held by many agents — but the only place to write it was the Skills page,
- * one skill at a time, choosing an agent from a dropdown. That is backwards from how anyone
- * builds a team: you open the editor and say what it can do. Same table, same endpoint, read
- * and written from the agent's side.
- *
- * AND IT IS NOT `spec.allowed_skills`. That list is prose in a spec pack — what an agent MAY be
- * given. This is the grant, and it is the one `skill_runtime` checks before the agent is allowed
- * to call anything. A page that showed only the first is why an agent with eleven allowed skills
- * and an empty `role_skills` row looked capable and could do nothing.
- */
-export function AgentSkills({ projectId, roleKey, actor, panel, spec, onChanged }: {
-  projectId: string; roleKey: string; actor: string; panel?: SkillPanel; spec: Spec;
-  onChanged: () => void;
-}) {
-  const [busy, setBusy] = useState("");
-  const [failed, setFailed] = useState("");
-  const [pick, setPick] = useState("");
-  const [open, setOpen] = useState(false);
-
-  const holds = panel?.holds ?? [];
-  const available = panel?.available ?? [];
-
-  // AS THE SIGNED-IN ACTOR. This posted the literal 'executive_console', so the audit event
-  // for every grant named the console rather than the person who pressed the button.
-  const write = useCallback(async (action: "assign" | "unassign", skillId: string) => {
-    setBusy(skillId);
-    setFailed("");
-    const r = action === "assign"
-      ? await grantSkill(projectId, actor, roleKey, skillId)
-      : await revokeSkill(projectId, actor, roleKey, skillId);
-    setBusy("");
-    if (!r.ok) { setFailed(r.error); return; }
-    onChanged();
-  }, [projectId, roleKey, actor, onChanged]);
-
-  // GROUPED THE WAY THE DECISION IS MADE. A skill the agent's own spec already names is the
-  // uncontroversial one; anything else works too — the grant itself is the permission — but
-  // it is a wider decision and worth seeing as one.
-  const named = new Set(spec.allowed_skills ?? []);
-  const forbidden = new Set(spec.forbidden_skills ?? []);
-  const suggested = available.filter((s) => named.has(s.skill_id));
-  const rest = available.filter((s) => !named.has(s.skill_id) && !forbidden.has(s.skill_id));
-
-  return (
-    <section className="ct-block" data-testid="agent-skills">
-      <div className="ct-block-title">
-        What it can do
-        <span className="detail"> · {holds.length
-          ? `${holds.length} skill${holds.length === 1 ? "" : "s"} held`
-          : "nothing yet"}</span>
-      </div>
-
-      {holds.length ? (
-        <ul className="ad-list" data-testid="agent-skills-held">
-          {holds.map((s) => (
-            <li key={s.skill_id} data-skill={s.skill_id}>
-              <code>{s.skill_id}</code>
-              {s.summary ? <span className="detail"> — {s.summary}</span> : null}
-              {/* WHO GAVE IT, AND WHEN (Agent World: a grant is part of the agent's version). */}
-              {s.assigned_by || s.assigned_at ? (
-                <span className="detail" title="Granted by, on" data-testid={`agent-skill-granted-${s.skill_id}`}>
-                  {" · "}{[s.assigned_by, formatDate(s.assigned_at ?? null, "")].filter(Boolean).join(" · ")}
-                </span>
-              ) : null}
-              {/* A tier at or above the approval floor means a run will stop and wait for a
-                  person. Said here, because it is a property of giving the skill out. */}
-              {s.risk_tier >= 2 ? (
-                <span className="detail"> · needs approval each time (tier {s.risk_tier})</span>
-              ) : null}
-              {!s.enabled && !s.missing ? (
-                <span className="detail"> · not enabled in this project</span>
-              ) : null}
-              {s.missing ? (
-                <span className="ad-bad"> · no such skill here any more — this grant does
-                  nothing</span>
-              ) : null}
-              <button type="button" className="linklike" disabled={busy === s.skill_id}
-                      data-testid={`agent-skill-drop-${s.skill_id}`}
-                      title={`Take ${s.skill_id} off this agent`}
-                      onClick={() => void write("unassign", s.skill_id)}>
-                {busy === s.skill_id ? "…" : "remove"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="detail" data-testid="agent-skills-empty">
-          This agent holds no skills. Unless it holds an MCP server, every step that names it
-          will be refused at the gate.
-          {named.size
-            ? " Its spec says it may use " + [...named].slice(0, 6).join(", ")
-              + " — give it those below."
-            : ""}
-        </p>
-      )}
-
-      {failed ? <p className="ad-bad" data-testid="agent-skills-failed">{failed}</p> : null}
-
-      {open ? (
-        <div className="skill-assign-pick">
-          <select value={pick} data-testid="agent-skill-select"
-                  onChange={(e) => setPick(e.target.value)}>
-            <option value="">Choose a skill…</option>
-            {suggested.length ? (
-              <optgroup label="Its spec already allows these">
-                {suggested.map((s) => (
-                  <option key={s.skill_id} value={s.skill_id}>{s.skill_id}</option>
-                ))}
-              </optgroup>
-            ) : null}
-            {rest.length ? (
-              <optgroup label={suggested.length ? "Anything else in this project" : "Skills"}>
-                {rest.map((s) => (
-                  <option key={s.skill_id} value={s.skill_id}>{s.skill_id}</option>
-                ))}
-              </optgroup>
-            ) : null}
-          </select>
-          <button type="button" className="cap-btn" disabled={!pick || busy !== ""}
-                  data-testid="agent-skill-confirm"
-                  onClick={() => { void write("assign", pick); setPick(""); setOpen(false); }}>
-            Give it this skill
-          </button>
-          <button type="button" className="linklike"
-                  onClick={() => { setOpen(false); setPick(""); }}>Cancel</button>
-        </div>
-      ) : (
-        <div className="skill-assign-actions">
-          {available.length ? (
-            <button type="button" className="linklike" data-testid="agent-skill-open"
-                    onClick={() => setOpen(true)}>
-              Give this agent a skill
-            </button>
-          ) : (
-            <span className="detail">It already holds every skill in this project.</span>
-          )}
-        </div>
-      )}
-      {forbidden.size ? (
-        <p className="detail">
-          Its spec forbids {[...forbidden].join(", ")}. Those are left out of the list above.
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-
-/**
- * The MCP servers one agent holds, and the ones it could be given.
- *
- * THE GRANT THAT DID NOT EXIST. There was no way to give an agent an MCP server: the Studio
- * wizard's "integrations" was free text nothing read, and a bounded agent step was offered no MCP
- * tool at all. A server given here (all its tools, or only those named) is what a workflow step
- * this agent works is offered; the server's own risk tier still decides when a call waits for a
- * person.
- */
-export function AgentMcp({ projectId, roleKey, actor, panel, onChanged }: {
-  projectId: string; roleKey: string; actor: string; panel?: McpPanel; onChanged: () => void;
-}) {
-  const [busy, setBusy] = useState("");
-  const [failed, setFailed] = useState("");
-  const [pick, setPick] = useState("");
-  const [tools, setTools] = useState("");
-  const [open, setOpen] = useState(false);
-  const holds = panel?.holds ?? [];
-  const available = panel?.available ?? [];
-
-  const give = useCallback(async () => {
-    if (!pick) return;
-    setBusy(pick);
-    setFailed("");
-    const r = await grantMcp(projectId, actor, roleKey, pick, parseToolList(tools));
-    setBusy("");
-    if (!r.ok) { setFailed(r.error); return; }
-    setPick(""); setTools(""); setOpen(false);
-    onChanged();
-  }, [pick, tools, projectId, actor, roleKey, onChanged]);
-
-  const take = useCallback(async (serverId: string) => {
-    setBusy(serverId);
-    setFailed("");
-    const r = await revokeMcp(projectId, actor, roleKey, serverId);
-    setBusy("");
-    if (!r.ok) { setFailed(r.error); return; }
-    onChanged();
-  }, [projectId, actor, roleKey, onChanged]);
-
-  return (
-    <section className="ct-block" data-testid="agent-mcp">
-      <div className="ct-block-title">
-        MCP servers it can use
-        <span className="detail"> · {holds.length
-          ? `${holds.length} server${holds.length === 1 ? "" : "s"} held` : "none yet"}</span>
-      </div>
-      {holds.length ? (
-        <ul className="ad-list" data-testid="agent-mcp-held">
-          {holds.map((m) => (
-            <li key={m.mcp_server_id} data-server={m.mcp_server_id}>
-              <code>{m.server}</code>
-              <span className="detail"> · {m.tools.length ? `only ${m.tools.join(", ")}` : "every tool it offers"}</span>
-              {!m.enabled ? (
-                <span className="ad-bad"> · disabled in this project, so it is not offered until
-                  turned on in Skills & MCP</span>
-              ) : null}
-              {m.risk_tier != null && m.risk_tier >= 2 ? (
-                <span className="detail"> · its calls wait for approval (tier {m.risk_tier})</span>
-              ) : null}
-              <button type="button" className="linklike" disabled={busy === m.mcp_server_id}
-                      data-testid={`agent-mcp-drop-${m.mcp_server_id}`}
-                      onClick={() => void take(m.mcp_server_id)}>
-                {busy === m.mcp_server_id ? "…" : "remove"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="detail" data-testid="agent-mcp-empty">
-          It holds no MCP server, so a workflow step it works is offered no MCP tool.
-        </p>
-      )}
-      {failed ? <p className="ad-bad" data-testid="agent-mcp-failed">{failed}</p> : null}
-      {open ? (
-        <div className="skill-assign-pick">
-          <select value={pick} data-testid="agent-mcp-select"
-                  onChange={(e) => setPick(e.target.value)}>
-            <option value="">Choose an MCP server…</option>
-            {available.map((m) => (
-              <option key={m.mcp_server_id} value={m.mcp_server_id}>
-                {m.server}{m.enabled ? "" : " (disabled)"}
-              </option>
-            ))}
-          </select>
-          <input placeholder="Only these tools (comma-separated) — empty for all" value={tools}
-                 data-testid="agent-mcp-tools" onChange={(e) => setTools(e.target.value)} />
-          <button type="button" className="cap-btn" disabled={!pick || busy !== ""}
-                  data-testid="agent-mcp-confirm" onClick={() => void give()}>
-            Give it this server
-          </button>
-          <button type="button" className="linklike"
-                  onClick={() => { setOpen(false); setPick(""); setTools(""); }}>Cancel</button>
-        </div>
-      ) : (
-        <div className="skill-assign-actions">
-          {available.length ? (
-            <button type="button" className="linklike" data-testid="agent-mcp-open"
-                    onClick={() => setOpen(true)}>Give this agent an MCP server</button>
-          ) : holds.length ? (
-            <span className="detail">It already holds every MCP server in this project.</span>
-          ) : (
-            <span className="detail">No MCP servers are registered — register one on the Skills
-              and MCP page first.</span>
-          )}
-        </div>
-      )}
-    </section>
-  );
 }
 
 
@@ -829,8 +520,8 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
 
   return (
     <section className="ct-block" data-testid="agent-edit">
-      <div className="ct-block-title">
-        Edit this agent
+      <div className="ld-head">
+        <SectionLabel testid="agent-edit-label">Edit this agent</SectionLabel>
         {!open ? (
           <button type="button" className="linklike" data-testid="agent-edit-open"
                   onClick={() => setOpen(true)}> change name, mission, boundaries or manager</button>
@@ -947,7 +638,7 @@ export function AgentDelete({ projectId, actor, detail, onDeleted, onChanged }: 
 
   return (
     <section className="ct-block ad-danger" data-testid="agent-delete">
-      <div className="ct-block-title">Delete this agent</div>
+      <SectionLabel testid="agent-delete-label">Delete this agent</SectionLabel>
       {blocking.length ? (
         <>
           <p className="detail" data-testid="agent-delete-blocked">

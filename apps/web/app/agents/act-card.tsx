@@ -19,6 +19,8 @@ import { openTalk } from "../../lib/agent-converse";
 import { shortLabel, whoDid, actState } from "./chain-model";
 import { AiBadge, nameOf, RunFace, StateWord } from "./run-face";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { identitiesProject } from "../../lib/agent-identity";
+import { instructionsApi, type VersionDoc } from "../../lib/agent-instructions";
 import { usd } from "../../lib/money";
 
 /** A URL in this console with `patch` applied, keeping the org and project the page is on. */
@@ -85,6 +87,49 @@ function Row({ label, tip, children, testId }: { label: string; tip?: string; ch
       <dd>{children}</dd>
     </div>
   );
+}
+
+/** `Instructions · 2 files` (agent-loadout §3.4): the instructions this version of the agent
+ *  carried — read from that version, so an edit since does not rewrite history. */
+export function ActInstructionsView({ docs }: { docs: VersionDoc[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [list, setList] = useState(false);
+  if (!docs.length) return null;
+  const names = docs.map((d) => d.name).join(", ");
+  return (
+    <Row label="Instructions" testId="ag-act-instructions">
+      <button type="button" className="ag-act-link" data-tip={names} aria-expanded={list}
+              data-testid="ag-act-instructions-open" onClick={() => setList((v) => !v)}>
+        {docs.length} file{docs.length === 1 ? "" : "s"}
+      </button>
+      {list ? (
+        <span className="ag-act-ins" data-testid="ag-act-instructions-list">
+          {docs.map((d) => (
+            <span key={d.sha256} className="ag-act-ins-doc">
+              <span>{d.name}</span>
+              <button type="button" className="ag-act-link" data-testid="ag-act-instructions-view"
+                      onClick={() => setOpen(open === d.sha256 ? null : d.sha256)}>View</button>
+              {open === d.sha256 ? <pre className="ag-act-ins-body" data-user-text>{d.body}</pre> : null}
+            </span>
+          ))}
+        </span>
+      ) : null}
+    </Row>
+  );
+}
+
+function ActInstructions({ roleKey, version }: { roleKey: string; version: number }) {
+  // The project is the one the identities were loaded for: re-read when they load.
+  const loaded = useIdentityVersion();
+  const [docs, setDocs] = useState<VersionDoc[]>([]);
+  useEffect(() => {
+    const project = identitiesProject();
+    if (!project) return;
+    let live = true;
+    void instructionsApi.atVersion(project, roleKey, version).then((r) => { if (live && r.ok) setDocs(r.data); });
+    return () => { live = false; };
+  }, [roleKey, version, loaded]);
+  return <ActInstructionsView docs={docs} />;
 }
 
 /** The card itself. `inline` drops the popover chrome for the step drawer. */
@@ -179,8 +224,9 @@ export function ActCard({ act, viewer, inline, onClose, askless }: {
           </Row>
         ) : null}
         {act.version ? (
-          <Row label="Version" tip="Changes when its voice, remit or skills change.">v{act.version}</Row>
+          <Row label="Version" tip="Changes when its voice, remit, skills or instructions change.">v{act.version}</Row>
         ) : null}
+        {act.version && act.roleKey ? <ActInstructions roleKey={act.roleKey} version={act.version} /> : null}
       </dl>
       <footer className="ag-act-foot">
         {askless ? null : (

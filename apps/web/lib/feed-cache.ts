@@ -118,6 +118,21 @@ export function installFeedCache(apiUrl: string): void {
       : input instanceof URL ? input.toString()
       : input.url;
 
+    // A WRITE MAKES EVERY KEPT READ STALE. The browser's own re-read after a press (give a
+    // skill, then read the agent back) comes through a proxy in this process, so it hit the
+    // TTL entry from just before the press and the page showed the old state: the chip it had
+    // just removed stayed, the server it had just given did not appear (agent Loadout walk).
+    // Which reads a write changes is not knowable here, so every write drops them all, before
+    // it is sent and again when it lands (a read cached while it was in flight is stale too).
+    if (method !== "GET" && method !== "HEAD" && url.startsWith(apiUrl)) {
+      completed.clear();
+      try {
+        return await original(input as RequestInfo, init);
+      } finally {
+        completed.clear();
+      }
+    }
+
     // Only idempotent reads of the control plane. A POST that deploys something must never be
     // collapsed into another caller's POST, and a cached DELETE would be a genuine hazard.
     if (ttl === 0 || method !== "GET" || !url.startsWith(apiUrl)

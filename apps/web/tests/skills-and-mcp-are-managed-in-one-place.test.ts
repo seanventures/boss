@@ -72,7 +72,8 @@ describe("the skill editor edits what it loaded", () => {
 
   it("tier 0 is saved as 0", () => {
     expect(UI).not.toMatch(/Number\(draft\.risk_tier\)\s*\|\|/);
-    expect(UI).toContain("risk_tier: Number(draft.risk_tier)");
+    // A guide is always Reads (0); every other skill saves the tier as picked, 0 included.
+    expect(UI).toContain("risk_tier: guide ? 0 : Number(draft.risk_tier)");
   });
 
   it("an MCP tool skill picks its server and tool instead of typing an id", () => {

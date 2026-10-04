@@ -52,7 +52,8 @@ AGENT_ID = re.compile(r"^agt_[0-9a-hjkmnp-tv-z]{10}$")
 LIFECYCLES = ("active", "paused", "retired")
 #: When several kinds of change land in one sealing batch, the version is labelled with the
 #: most significant one.
-_CHANGE_ORDER = ("born", "persona", "remit", "grant", "revoke", "model", "lifecycle")
+_CHANGE_ORDER = ("born", "persona", "remit", "instructions", "grant", "revoke", "model",
+                 "lifecycle")
 #: Actors that are BOSS rather than a person: never a sponsor.
 _SYSTEM_ACTORS = {"spec-pack", "system", "bootstrap", "boss", "onboarding", "seed", ""}
 #: Columns a client may never set: they are facts about the agent, not settings.
@@ -107,11 +108,16 @@ def _jcs(value: Any) -> str:
     return _jcs(str(value))
 
 
-def canonical(role_row: dict, grants: list, model_policy: dict) -> dict:
-    """The document an agent's fingerprint is the sha256 of. Plain JSON, deterministic."""
+def canonical(role_row: dict, grants: list, model_policy: dict,
+              instructions: Optional[list] = None) -> dict:
+    """The document an agent's fingerprint is the sha256 of. Plain JSON, deterministic.
+
+    `instructions` ([{name, sha256, modes}], agent_instructions) is added ONLY when non-empty:
+    an agent with none keeps the exact fingerprint (and version) it had before they existed.
+    """
     spec = role_row.get("spec") if isinstance(role_row.get("spec"), dict) else {}
     spec = {k: v for k, v in spec.items() if k not in _VOLATILE_SPEC_KEYS}
-    return {
+    document = {
         "agent": {
             "role_key": role_row.get("role_key"),
             "display_name": role_row.get("display_name"),
@@ -123,6 +129,12 @@ def canonical(role_row: dict, grants: list, model_policy: dict) -> dict:
         "grants": sorted(str(g) for g in grants or []),
         "model_policy": json.loads(json.dumps(model_policy or {}, default=str)),
     }
+    if instructions:
+        document["instructions"] = [
+            {"name": str(i.get("name") or ""), "sha256": str(i.get("sha256") or ""),
+             "modes": sorted(str(m) for m in i.get("modes") or [])}
+            for i in instructions]
+    return document
 
 
 def fingerprint_of(document: dict) -> str:
@@ -200,8 +212,11 @@ def _model_policy(connection: Connection, project_id: str, role_key: str,
 
 def _canonical_for(connection: Connection, project_id: str, row: dict[str, Any]) -> dict:
     spec = row["spec"] if isinstance(row.get("spec"), dict) else {}
+    from .agent_instructions import fingerprint_entries
+
     return canonical(row, _grants(connection, project_id, row["role_key"]),
-                     _model_policy(connection, project_id, row["role_key"], spec))
+                     _model_policy(connection, project_id, row["role_key"], spec),
+                     fingerprint_entries(connection, project_id, row["role_key"]))
 
 
 # ── Sealing ──────────────────────────────────────────────────────────────────────────────────
@@ -730,7 +745,7 @@ def paused_message(name: str, lifecycle: str) -> str:
     if lifecycle == "retired":
         return (f"{name} is retired. Give the step to another agent, or leave it for BOSS "
                 "to pick.")
-    return (f"{name} is paused. Resume it on its Agents page, or give the step to another "
+    return (f"{name} is paused. Resume it on its page in Agent Studio, or give the step to another "
             "agent.")
 
 

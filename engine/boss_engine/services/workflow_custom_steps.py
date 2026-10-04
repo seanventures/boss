@@ -573,7 +573,7 @@ def validate_step_fields(
     # never have run. Both facts are known when the workflow is saved.
     captain = str(step.get("captain") or "").strip().lower()
     # Only for an agent this project HAS. Telling the operator to "give engineering_captain that
-    # skill on the Agents page" is impossible advice when there is no such agent to open — and
+    # skill in Agent Studio" is impossible advice when there is no such agent to open — and
     # `step_agents.assignment_problems` already says that, with the agents there are.
     if captain and not _is_project_agent(connection, project_id, captain):
         return problems
@@ -592,8 +592,8 @@ def validate_step_fields(
             problems.append((
                 "captain",
                 f"step '{step_id}' gives '{definition['label']}' to {captain}, which is not "
-                f"allowed to run {skill_id}. Either give {captain} that skill on the Agents "
-                f"page, or use one of: {', '.join(sorted(callers))}."))
+                f"allowed to run {skill_id}. Either give {captain} that skill in Agent Studio, "
+                f"or use one of: {', '.join(sorted(callers))}."))
     return problems
 
 

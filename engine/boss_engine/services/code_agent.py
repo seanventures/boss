@@ -345,6 +345,9 @@ class CodeTaskSpec:
     acceptance_criteria: list[str] = field(default_factory=list)
     # Authoritative verification commands BOSS re-runs after the agent stops.
     test_commands: list[str] = field(default_factory=list)
+    # The instructions of the agent the task runs AS (agent-loadout §4.8): its operator's
+    # working instructions for work, under a heading naming it and its version. "" otherwise.
+    agent_instructions: str = ""
 
 
 @dataclass
@@ -621,6 +624,8 @@ class ClaudeCodeAgent:
             "\n\nREPO GUIDE (the repository's own instructions - follow them):\n"
             + guide_text + "\n"
         ) if guide_text else ""
+        if spec.agent_instructions:
+            guide += "\n\n" + spec.agent_instructions + "\n"
         # Hand the agent a relevance-ranked map of the repo instead of making it discover the
         # codebase with Read/ls/cat on every run. Bounded (a focused pack, not the whole tree)
         # so it orients the agent rather than flooding the context it re-sends each turn.
