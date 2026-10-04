@@ -21,6 +21,9 @@ import {
 import { AgFace } from "./agent-face";
 import { FacePicker } from "./face-picker";
 
+/** Archetype tiles are pickers: each face big enough to tell the characters apart. */
+export const ARCH_FACE_PX = 56;
+
 export const LIMITS = { callsign: 16, tagline: 60, about_me: 280, phrases: 3, never: 5 } as const;
 
 /** Client-side bounds, the same the server enforces: said before Save, not after. */
@@ -129,15 +132,17 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
                       className="ag-arch" data-testid={`ag-arch-${k}`}
                       title={`Inspired by a way of thinking${a.tagline ? ` · ${a.tagline}` : ""}`}
                       onClick={() => set("archetype", k)}>
-                <AgFace roleKey={k} identity={a} size={32} decorative />
-                <span>{a.callsign || a.name}</span>
+                <AgFace roleKey={k} identity={a} size={ARCH_FACE_PX} decorative aiBadge={false} />
+                <span className="ag-arch-name" data-user-text>{a.callsign || a.name}</span>
+                {a.callsign ? <span className="ag-arch-role ag-trunc" data-user-text>{a.name}</span> : null}
               </button>
             );
           })}
           <button type="button" role="radio" aria-checked={!p.archetype} className="ag-arch"
                   data-testid="ag-arch-custom" onClick={() => set("archetype", null)}>
             <span className="ag-arch-custom" aria-hidden>+</span>
-            <span>Custom</span>
+            <span className="ag-arch-name">Custom</span>
+            <span className="ag-arch-role">Your own</span>
           </button>
         </div>
       </div>

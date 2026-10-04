@@ -30,6 +30,7 @@ const { PassportLineage, actsAcross } = await import("../app/agents/passport-lin
 const { resetLiveStores, subscribeLive } = await import("../lib/agents-live");
 const { identityOf, toAct, toLineage } = await import("../lib/agent-world");
 const { CAST_BY_KEY } = await import("../lib/avatar-kit/cast");
+const { PASSPORT_FACE_PX } = await import("../app/agents/passport-header");
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -153,7 +154,7 @@ describe("the Passport face is the face everywhere", () => {
     await render(<AgentDetail projectId="p1" roleKey="qa" actor="ceo" onClose={() => {}} />);
     const hero = svgIn($(".ag-hero-face"));
     const chip = document.createElement("div");
-    chip.innerHTML = renderToStaticMarkup(<AgentAvatar agent="qa" size={96} />);
+    chip.innerHTML = renderToStaticMarkup(<AgentAvatar agent="qa" size={PASSPORT_FACE_PX} />);
     expect(hero).not.toBe("");
     expect(hero).toBe(svgIn(chip));
   });

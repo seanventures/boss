@@ -398,6 +398,7 @@ class SpecPackService:
         *,
         source_module_id: str | None = None,
         source_module_version: str | None = None,
+        born_from: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         display_name = role_spec.get("display_name", role_key.replace("_", " ").title())
         autonomy_level = int(((role_spec.get("autonomy") or {}).get("level")) or 0)
@@ -472,8 +473,8 @@ class SpecPackService:
 
             agent_identity.quietly(
                 connection, agent_identity.birth, project_id, role_key, born_by="spec-pack",
-                born_from={"kind": "pack", "module_id": source_module_id,
-                           "module_version": source_module_version},
+                born_from=born_from or {"kind": "pack", "module_id": source_module_id,
+                                        "module_version": source_module_version},
                 actor=actor)
             status = "installed"
         elif operator_edited:
@@ -818,6 +819,21 @@ class SpecPackService:
             agent_identity.quietly(connection, agent_identity.seal_identity, project_id, key,
                                    "remit", actor)
         else:
+            # REGISTERING A SHIPPED ROLE INSTALLS THE SHIPPED ROLE. "Register" on an agent the
+            # roster found doing work used to make an empty row: no persona, no remit, no
+            # grants — a registered nobody. When BOSS ships a definition for the key, that is
+            # what is registered (persona, skills, MCP holdings); anything the caller gave wins.
+            shipped: dict[str, Any] = {}
+            if not spec and getattr(self.settings, "specpack_root", None) is not None:
+                try:
+                    shipped = self.load_role_spec(key)
+                except (RoleNotFoundError, ValueError):
+                    shipped = {}
+            if shipped:
+                spec = shipped
+                display_name = display_name or shipped.get("display_name")
+                if autonomy_level is None:
+                    autonomy_level = int(((shipped.get("autonomy") or {}).get("level")) or 0)
             connection.execute(
                 text(
                     """
@@ -838,7 +854,15 @@ class SpecPackService:
             from . import agent_identity
 
             agent_identity.quietly(connection, agent_identity.birth, project_id, key,
-                                   born_by=actor, born_from={"kind": "blank"}, actor=actor)
+                                   born_by=actor,
+                                   born_from={"kind": "pack"} if shipped else {"kind": "blank"},
+                                   actor=actor)
+            if shipped:
+                # Its grants, by the seed's own additive syncs (an operator removal holds).
+                from .shipped_cast import _grant
+
+                _grant(connection, project_id, actor)
+                return self.get_role_for_project(connection, project_id, key)
         # A SPEC OR NAME AN OPERATOR WROTE STAYS WRITTEN. This path recorded nothing, so editing
         # a bundled role through POST /v1/roles lasted until the next seed, which found the spec
         # differed from the pack's YAML and put the YAML back. An autonomy- or manager-only
@@ -1788,6 +1812,9 @@ class SpecPackService:
                 role_key,
                 self.load_role_spec(role_key),
                 actor,
+                # The Passport's "From": which pack, which version (not a module it never had).
+                born_from={"kind": "pack", "pack_id": pack_id,
+                           "module_version": str(pack_spec.get("version") or "0.0.0")},
             )
             if role_result["status"] != "present":
                 changed = True

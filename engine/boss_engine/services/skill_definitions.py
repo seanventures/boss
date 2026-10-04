@@ -715,6 +715,11 @@ def sync_role_skills(
         {"p": project_id},
     ).mappings().all()
 
+    # A GRANT ALREADY HELD IS LEFT ALONE: re-assigning it wrote a `skill.assigned_to_agent`
+    # event per grant per run, and this now runs on every boot for every project.
+    held = {(str(r["role_key"]), str(r["skill_id"])) for r in connection.execute(
+        text("SELECT role_key, skill_id FROM role_skills WHERE project_id = :p"),
+        {"p": project_id}).mappings()}
     assigned: list[dict[str, str]] = []
     missing: list[dict[str, str]] = []
     for row in roles:
@@ -722,6 +727,8 @@ def sync_role_skills(
         wanted = ((spec.get("permissions") or {}).get("allowed_skills")) or []
         for skill_id in wanted:
             skill_id = str(skill_id).strip()
+            if (str(row["role_key"]), skill_id) in held:
+                continue
             # A wildcard is a description, not a grant. "infra.*" cannot be cashed in, and
             # expanding it here would hand an agent whatever happens to match it next week.
             if not skill_id or "*" in skill_id:
