@@ -26,11 +26,16 @@ def _gate_source() -> str:
 
 
 class TestTheQuestionIdentifiesTheRun:
-    def test_the_run_id_is_in_the_question(self):
+    def test_the_question_is_kept_distinct_per_run(self):
+        """In words now ("Email the newsletter — Weekly newsletter"), without a raw run id —
+        so a second open gate with the same words is told apart by `_unique_question`, which
+        compares the run each pending decision belongs to."""
         source = _gate_source()
-        assert "run['id']" in source or 'run["id"]' in source, (
+        assert "_unique_question(" in source and 'run["id"]' in source, (
             "two runs of one workflow produce the same question and collide onto one decision"
         )
+        unique = inspect.getsource(runner._unique_question)
+        assert "workflow_run_id" in unique and "status='pending'" in unique
 
     def test_the_workflow_key_alone_is_no_longer_the_question(self):
         source = _gate_source()

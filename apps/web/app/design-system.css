@@ -3583,3 +3583,59 @@ select.input:focus,
   font: inherit; cursor: pointer; padding: 2px 4px;
 }
 .cc-coord-freshness button:hover { text-decoration: underline; }
+
+/* WHAT APPROVING WILL DO (action-preview.tsx): the email, the tickets, the video — drawn as
+   themselves, compactly. The body scrolls inside a capped box so a long newsletter never
+   pushes the buttons off the card. */
+.ap {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--raised);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ink, #e6edf3);
+  min-width: 0;
+}
+.ap dl { margin: 0; display: grid; gap: 4px; }
+.ap-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
+.ap-row dt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.ap-row dd { margin: 0; overflow-wrap: anywhere; }
+.ap-body {
+  margin-top: 8px;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--raised) 45%, transparent);
+}
+.ap-body-short { max-height: 120px; }
+.ap-issues { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.ap-issues li { overflow-wrap: anywhere; }
+.ap-chip {
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.ap-excerpt {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ap-long { white-space: pre-wrap; display: block; max-height: 120px; overflow: auto; }
+.ap-more, .ap-redacted, .ap-unresolved { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.dw-step-decide .ap { flex-basis: 100%; }
