@@ -6,7 +6,7 @@ scope:
   id: boss-dogfood
 daily_cap_usd_micros: 10000000      # $10.00
 monthly_cap_usd_micros: 200000000   # $200.00
-burst_cap_usd_micros_per_min: 100000 # $0.10/min
+burst_cap_usd_micros_per_min: 100000 # $0.10/min of ACTUAL settled spend (not reservation estimates)
 max_concurrent_jobs: 3
 max_workers_total: 2
 allowed_model_tiers: [cheap]
