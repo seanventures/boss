@@ -160,10 +160,45 @@ def test_agents_live_and_the_pill_count_what_the_inbox_and_command_center_count(
     items = client.get("/v1/decisions/inbox", params={"project_id": pid}).json()["items"]
     needs_action = {i["id"] for i in items if i["attention"] == "needs_action"}
 
-    assert board["counts"]["needs_you"] == len(board["attention"]) == pill["count"] \
-        == cc["counts"]["needs_you"]
+    badge = client.get("/v1/status", params={"project_id": pid}).json()["pending_decisions"]
+
+    # ONE NUMBER (agents-home D2): DECISIONS waiting on the operator. The pill, Live's header,
+    # the Command Center, the Approvals badge and its Needs action all say it.
+    assert board["counts"]["needs_you"] == pill["count"] == cc["counts"]["needs_you"] \
+        == badge == len(needs_action)
     assert {a["id"] for a in board["attention"] if a["kind"] == "approval"} == needs_action
     assert "dec_agree_stuck_pr" in {a["id"] for a in board["attention"]}  # no agent, counted
     # The overdue one was expired by the same sweep, so no surface lists it.
     assert "dec_agree_overdue" not in {a["id"] for a in board["attention"]}
-    assert [i["id"] for i in pill["items"]] == [a["id"] for a in board["attention"]][:5]
+    # The pill lists what it counts: decisions, in the shared order.
+    decisions = [a["id"] for a in board["attention"] if a["kind"] == "approval"]
+    assert [i["id"] for i in pill["items"]] == decisions[:5]
+
+
+def test_a_setup_gap_is_listed_but_never_counted_as_needs_you(engine, client, monkeypatch):
+    """Agents home D2: "Connect a repository" and "Connect a model" made the pill say 3 while
+    Approvals said 1. A setup gap has its own badge (Setup); it is listed on Live and the
+    Command Center, and counted apart as `setup`, never in needs_you."""
+    from boss_engine.services import setup_service
+
+    pid = get_settings().default_project_id
+    _seed(engine, pid)
+    gaps = [{"id": "github", "title": "Connect a repository", "done": False},
+            {"id": "model", "title": "Connect a model", "done": False}]
+    monkeypatch.setattr(setup_service, "setup_status",
+                        lambda *a, **k: {"steps": gaps})
+    items = client.get("/v1/decisions/inbox", params={"project_id": pid}).json()["items"]
+    needs_action = sum(1 for i in items if i["attention"] == "needs_action")
+    board = client.get("/v1/agents/live-board", params={"project_id": pid}).json()
+    pill = client.get("/v1/agents/live", params={"project_id": pid}).json()["attention"]
+    cc = client.get("/v1/console/command-center", params={"project_id": pid}).json()
+    badge = client.get("/v1/status", params={"project_id": pid}).json()["pending_decisions"]
+    assert {a["id"] for a in board["attention"] if a["kind"] == "readiness"} == {
+        "ready:github", "ready:model"}
+    assert board["counts"]["setup"] == cc["counts"]["setup"] == 2
+    assert board["counts"]["needs_you"] == pill["count"] == cc["counts"]["needs_you"] \
+        == badge == needs_action
+    assert not [i for i in pill["items"] if i["id"].startswith("ready:")]
+    # Setup comes last in the shared order.
+    kinds = [a["kind"] for a in board["attention"]]
+    assert kinds[-2:] == ["readiness", "readiness"]
