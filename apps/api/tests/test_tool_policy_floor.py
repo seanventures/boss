@@ -80,6 +80,17 @@ def test_a_skill_turned_off_is_refused_by_the_runtime(client, engine):
 
 
 def test_turning_an_ability_off_turns_its_tools_off(client, engine):
+    # A failed test and an unreviewed server both outrank Off (spec §5.2 precedence), and
+    # doc-render is not running here, so the earlier failure is cleared and the server reviewed
+    # first: this test is about Off alone.
+    from boss_engine.services import mcp_registry
+
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM kit_tests WHERE project_id = :p AND ability = 'render_docs'"),
+                  {"p": PROJECT})
+        server = mcp_registry.find_mcp_server(c, PROJECT, "doc-render")
+        if server is not None:
+            mcp_registry.review_mcp_server(c, PROJECT, server["id"], actor="ceo")
     r = client.post("/v1/kit/render_docs/enabled",
                     json={"project_id": PROJECT, "actor": "ceo", "enabled": False})
     assert r.status_code == 200 and r.json()["status"] == "off"
