@@ -19,8 +19,9 @@ from .core import (
 
 
 def burst_retry_after_seconds(frees_in: object) -> int:
-    """Seconds until the per-minute window has room again: when its oldest reservation ages
-    out. Never below 5 (a tight loop of refusals helps nobody) nor above 60 (the window)."""
+    """Seconds until the per-minute window has room again: when enough of the last minute's
+    actual spend ages out. Never below 5 (a tight loop of refusals helps nobody) nor above 60
+    (the window)."""
     try:
         seconds = int(float(frees_in)) + 1  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -34,9 +35,24 @@ def burst_retry_after_seconds(frees_in: object) -> int:
 HEADROOM_MESSAGE = "Budget headroom is held by other work's active reservations. Retry shortly."
 HEADROOM_RETRY_AFTER_SECONDS = 60
 
-#: Taken (try-only) by a reservation larger than the per-minute cap that the empty-window rule
-#: is about to let through. See BudgetGovernor.reserve.
-_OVERSIZE_LOCK = "budget-burst-oversize:"
+#: The per-minute cap refusals. Both are `refusal: "burst"`, transient, and read by
+#: model_failures.explain as "Waiting for the per-minute budget to free up."
+BURST_MESSAGE = "Burst cap exceeded ($/min). Retry shortly."
+BURST_QUEUED_MESSAGE = ("Waiting for the per-minute budget: requests that have waited longer "
+                        "are served first (burst cap). Retry shortly.")
+
+#: The trailing window the burst cap measures, and how long past its expected return a waiting
+#: request keeps its place in line before it is presumed gone.
+BURST_WINDOW_SECONDS = 60
+BURST_WAITER_GRACE_SECONDS = 30
+
+
+def burst_waiter_key(category: str, reason: str) -> str:
+    """Who is waiting, stable across that request's retries — even when each retry is a fresh
+    job, as a deferred discovery stage is. A request with a job is ALSO matched by its job, so
+    one whose reason changes between attempts keeps its place. Two requests sharing a key share
+    one place in line — harmless."""
+    return f"{category}:{reason}"[:500]
 
 
 class BudgetGovernor:
@@ -476,6 +492,117 @@ class BudgetGovernor:
         ).mappings().first()
         return int(row["burst_cap_usd_micros_per_min"]) if row else 0
 
+    def burst_window(self, connection: Connection, project_id: str,
+                     burst_cap: int) -> dict[str, Any]:
+        """The actual spend settled in the trailing minute, and in how many seconds enough of
+        it ages out for the window to be under `burst_cap` again."""
+        rows = connection.execute(
+            text(
+                "SELECT COALESCE(actual_usd_micros, estimated_usd_micros) AS amount, "
+                "       EXTRACT(EPOCH FROM (created_at + make_interval(secs => :w) "
+                "                           - clock_timestamp())) AS ages_out_in "
+                "FROM cost_receipts "
+                "WHERE project_id = :p "
+                "  AND created_at >= clock_timestamp() - make_interval(secs => :w) "
+                "ORDER BY created_at"
+            ),
+            {"p": project_id, "w": BURST_WINDOW_SECONDS},
+        ).mappings().all()
+        spent = sum(int(row["amount"] or 0) for row in rows)
+        remaining, frees_in = spent, 0.0
+        for row in rows:
+            if remaining < burst_cap:
+                break
+            remaining -= int(row["amount"] or 0)
+            frees_in = float(row["ages_out_in"] or 0)
+        return {"spent_usd_micros": spent, "frees_in": frees_in}
+
+    def _burst_gate(self, connection: Connection, project_id: str, burst_cap: int,
+                    amount_usd_micros: int, category: str, key: str,
+                    job_id: Optional[str] = None) -> Optional[dict]:
+        """None when the request may pass the per-minute cap; otherwise its transient refusal.
+
+        Waiting rows are touched only with SKIP LOCKED: a tick runs its steps (model calls,
+        minutes) inside one transaction, and blocking on another request's row would stall
+        every reservation on the project behind it. A refusal rolled back by its caller simply
+        leaves no row — that request loses its place in line, nothing else."""
+        window = self.burst_window(connection, project_id, burst_cap)
+        spent = window["spent_usd_micros"]
+        live = "retry_at > clock_timestamp() - make_interval(secs => :grace)"
+        own = "(waiter_key = :k OR COALESCE(job_id = CAST(:j AS text), false))"
+        params = {"p": project_id, "k": key, "j": job_id, "grace": BURST_WAITER_GRACE_SECONDS}
+        mine = connection.execute(
+            text(f"SELECT MIN(first_refused_at) FROM budget_burst_waiters "
+                 f"WHERE project_id = :p AND {own} AND {live}"),
+            params).scalar()
+        ahead = connection.execute(
+            text(f"SELECT EXTRACT(EPOCH FROM (retry_at - clock_timestamp())) AS back_in "
+                 f"FROM budget_burst_waiters "
+                 f"WHERE project_id = :p AND NOT {own} AND {live} "
+                 f"  AND first_refused_at < COALESCE(CAST(:mine AS timestamptz), "
+                 f"                                  clock_timestamp()) "
+                 f"ORDER BY first_refused_at LIMIT 1"),
+            {**params, "mine": mine}).mappings().first()
+
+        if spent < burst_cap and ahead is None:
+            # Granted: this request no longer waits.
+            connection.execute(
+                text(f"DELETE FROM budget_burst_waiters WHERE id IN ("
+                     f"  SELECT id FROM budget_burst_waiters "
+                     f"  WHERE project_id = :p AND {own} FOR UPDATE SKIP LOCKED)"),
+                params)
+            return None
+
+        over = spent >= burst_cap
+        retry_after = burst_retry_after_seconds(
+            window["frees_in"] if over else (ahead or {}).get("back_in"))
+        self._record_burst_waiter(connection, project_id, key, job_id, retry_after)
+        record_policy_eval(
+            connection, project_id, "budget.reserve", "deny", action=category,
+            reason=("burst cap exceeded ($/min)" if over
+                    else "burst cap: an earlier request is waiting"),
+            detail={"burst_cap_usd_micros_per_min": burst_cap,
+                    "actual_60s_usd_micros": spent,
+                    "requested_usd_micros": amount_usd_micros,
+                    "queued_behind_earlier_request": not over,
+                    "retry_after_seconds": retry_after})
+        return {
+            "status": "denied",
+            "refusal": "burst",
+            "transient": True,
+            "retry_after_seconds": retry_after,
+            "decision_id": None,
+            "message": BURST_MESSAGE if over else BURST_QUEUED_MESSAGE,
+        }
+
+    def _record_burst_waiter(self, connection: Connection, project_id: str, key: str,
+                             job_id: Optional[str], retry_after: int) -> None:
+        own = "(waiter_key = :k OR COALESCE(job_id = CAST(:j AS text), false))"
+        params = {"p": project_id, "k": key, "j": job_id, "ra": int(retry_after)}
+        refreshed = connection.execute(
+            text(f"UPDATE budget_burst_waiters "
+                 f"SET retry_at = clock_timestamp() + make_interval(secs => :ra) "
+                 f"WHERE id IN (SELECT id FROM budget_burst_waiters "
+                 f"             WHERE project_id = :p AND {own} "
+                 f"             FOR UPDATE SKIP LOCKED)"),
+            params).rowcount
+        if not refreshed and not connection.execute(
+                text(f"SELECT 1 FROM budget_burst_waiters "
+                     f"WHERE project_id = :p AND {own} LIMIT 1"), params).first():
+            connection.execute(
+                text("INSERT INTO budget_burst_waiters "
+                     "(id, project_id, waiter_key, job_id, first_refused_at, retry_at) "
+                     "VALUES (:id, :p, :k, :j, clock_timestamp(), "
+                     "        clock_timestamp() + make_interval(secs => :ra))"),
+                {**params, "id": make_id("bwait")})
+        # Rows whose holder never came back.
+        connection.execute(
+            text("DELETE FROM budget_burst_waiters WHERE id IN ("
+                 "  SELECT id FROM budget_burst_waiters WHERE project_id = :p "
+                 "  AND retry_at < clock_timestamp() - interval '10 minutes' "
+                 "  FOR UPDATE SKIP LOCKED)"),
+            {"p": project_id})
+
     def reserve(
         self,
         connection: Connection,
@@ -591,72 +718,30 @@ class BudgetGovernor:
 
         # Burst cap: limit $/min to absorb sudden spikes (spec §22.4 cost-anomaly controls).
         #
-        # IT LIMITS THE RATE, SO IT NEVER REFUSES FOR EVER. The cap sums the last minute's
-        # reservations, and a single reservation larger than the cap used to be refused even
-        # with nothing else spent in the minute — every time, because waiting never shrinks
-        # it. Callers patched that one at a time (discovery and the connection proof clamp
-        # their estimate to the cap), and every caller that did not was unservable on a
-        # project whose per-minute cap is below its estimate. Here, once: with the window
-        # empty, one reservation of any size is let through, and the cap applies to what comes
-        # after it. The daily and monthly caps above still govern its size.
+        # IT MEASURES MONEY ACTUALLY SPENT, NOT ESTIMATES. The cap sums the cost receipts
+        # settled in the trailing minute (their actual cost, or the estimate where no actual
+        # is known). It used to sum the last minute's RESERVATIONS: an estimate is a ceiling,
+        # a research stage reserves $2 against a $0.10/min cap, and with subscriptions whose
+        # real cost is $0 the whole project got about one model call a minute while every
+        # other run sat "waiting for the per-minute budget" for 11+ minutes (boss-1, five
+        # bundled examples). Reservations still count in full against the daily, monthly and
+        # allocation caps above and below — governance of total spend is unchanged. A call
+        # that costs $0 (a subscription, a local model) never fills this window.
         #
-        # A refusal here CLEARS BY ITSELF, so it says so: `transient` and `retry_after_seconds`
+        # A REFUSAL HERE CLEARS BY ITSELF, so it says so: `transient` and `retry_after_seconds`
         # tell the caller to wait and try again rather than fail or ask a person.
         #
-        # THE MINUTE IS MEASURED ON THE WALL CLOCK, NOT THE TRANSACTION'S. `now()` is the
-        # transaction's start, and a workflow tick runs its steps — an agent's many tool calls
-        # among them — inside one transaction. Measured with `now()` the window never moved for
-        # a caller that waited out a refusal and asked again (agent_loop.BudgetWaiter), and a
-        # reservation made minutes into a tick was dated at its start, so it left the window
-        # early. clock_timestamp() on both sides: the row is dated when it is made, and the
-        # window is the real last sixty seconds.
+        # AND IT IS SERVED IN ORDER. A refused request is recorded as waiting; once the window
+        # has room, a request is granted only if no request that has waited longer is still
+        # live. Busy runs therefore cannot keep a patient one out for ever.
         burst_cap = self._burst_cap(connection, project_id)
         if burst_cap:
-            window = connection.execute(
-                text(
-                    "SELECT COALESCE(SUM(amount_usd_micros), 0) AS recent, "
-                    "       EXTRACT(EPOCH FROM (MIN(created_at) + interval '60 seconds' - clock_timestamp())) "
-                    "         AS frees_in "
-                    "FROM budget_reservations "
-                    "WHERE project_id = :p AND created_at >= clock_timestamp() - interval '60 seconds' "
-                    "AND status IN ('active', 'consumed')"
-                ),
-                {"p": project_id},
-            ).mappings().one()
-            recent = int(window["recent"] or 0)
-            # THE EMPTY-WINDOW ALLOWANCE IS ONE RESERVATION, NOT ONE PER RACER. The window is
-            # read with a plain SELECT, so two reservers in separate transactions (two worker
-            # processes, the API and a worker) each see an empty minute; each would be granted
-            # a reservation of ANY size, and the §22.4 cost-anomaly control would overshoot by
-            # the sum of them. A reservation larger than the cap therefore takes a per-project
-            # advisory lock first, held until its transaction ends — by which time its row is
-            # visible and the window is no longer empty. TRY-only, never blocking: a tick runs
-            # its steps (model calls, minutes) inside one transaction, and a blocking project
-            # lock would stall every other reservation on the project behind it. A racer that
-            # cannot take it is refused as burst — transient, it looks again shortly. Ordinary
-            # reservations never take it, so they keep the bound they always had.
-            if recent == 0 and amount_usd_micros > burst_cap and not connection.execute(
-                    text("SELECT pg_try_advisory_xact_lock(hashtext(:k))"),
-                    {"k": _OVERSIZE_LOCK + project_id}).scalar():
-                recent = burst_cap  # another oversize grant is in flight: the minute is taken
-            if recent > 0 and recent + amount_usd_micros > burst_cap:
-                retry_after = burst_retry_after_seconds(window["frees_in"])
-                record_policy_eval(
-                    connection, project_id, "budget.reserve", "deny", action=category,
-                    reason="burst cap exceeded ($/min)",
-                    detail={"burst_cap_usd_micros_per_min": burst_cap,
-                            "recent_60s_usd_micros": recent,
-                            "requested_usd_micros": amount_usd_micros,
-                            "retry_after_seconds": retry_after})
-                return {
-                    "status": "denied",
-                    "refusal": "burst",
-                    "transient": True,
-                    "retry_after_seconds": retry_after,
-                    "decision_id": None,
-                    "budget_state": snapshot["budget_state"],
-                    "message": "Burst cap exceeded ($/min). Retry shortly.",
-                }
+            refused = self._burst_gate(
+                connection, project_id, burst_cap, amount_usd_micros, category,
+                burst_waiter_key(category, reason), job_id)
+            if refused is not None:
+                refused["budget_state"] = snapshot["budget_state"]
+                return refused
 
         if allocation_id:
             allocation = self._get_allocation(
