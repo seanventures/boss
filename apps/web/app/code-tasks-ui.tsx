@@ -32,6 +32,7 @@ import { groupRunsIntoApps } from "./app-grouping";
 
 import React, { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useConsoleRefresh } from "./use-console-refresh";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
 import { forgetRunDeployment, loadRunDeployment } from "../lib/run-deployments";
 import { operatorPreviewOpenHref } from "../lib/code-tasks";
@@ -609,18 +610,20 @@ const PHASE_LABEL: Record<string, string> = {
 // Poll the server (router.refresh re-runs the server fetch) while any task is mid-flight,
 // so the phase/activity updates live instead of needing a manual refresh.
 function useLiveRefresh(active: boolean, intervalMs = 4000, reload?: () => void | Promise<void>) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   useEffect(() => {
     if (!active) return;
     const t = setInterval(() => {
-      // Both: the router refresh updates every other server-rendered panel, and `reload`
+      // Both: the console refresh updates every other server-rendered panel, and `reload`
       // re-reads the one list this component owns. The refresh alone was demonstrably not
-      // enough — the server re-rendered and the client kept the old rows.
-      router.refresh();
+      // enough — the server re-rendered and the client kept the old rows. ASKED, not issued:
+      // a bare 4s router.refresh() against a 20s render kept the console's refresh queue
+      // full, and nothing on screen committed (lib/console-refresh.ts).
+      refresh("poll");
       void reload?.();
     }, intervalMs);
     return () => clearInterval(t);
-  }, [active, intervalMs, router, reload]);
+  }, [active, intervalMs, refresh, reload]);
 }
 
 function statusTone(status: string): string {

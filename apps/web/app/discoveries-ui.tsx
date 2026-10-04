@@ -1,15 +1,18 @@
 "use client";
 
 import React, { useActionState, useEffect, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 
-import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome, ModelAttention } from "@boss/api-client";
+import type {
+  DiscoveryRun, DiscoveryFinding, DiscoveryListItem, DiscoveryOutcome, ModelAttention,
+} from "@boss/api-client";
 
 import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 import { AreaLink } from "./area-link";
 
 import { callAction } from "../lib/call-action";
+import { fetchDiscoveryDetail } from "../lib/discovery-detail";
+import { useConsoleRefresh } from "./use-console-refresh";
 const PHASE_LABEL: Record<string, string> = {
   queued: "Queued",
   signal_sweep: "Signal sweep (web)",
@@ -99,13 +102,15 @@ function VerdictBadge({ v }: { v?: string }) {
   return <span className="cap-badge tone-warn">needs more research</span>;
 }
 
+/** While a run is live, ask the console for a refresh. Asked, not issued: the console's one
+ *  refresh coordinator coalesces it with every other panel's (lib/console-refresh.ts). */
 function useLiveRefresh(active: boolean, intervalMs = 4000) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(() => router.refresh(), intervalMs);
+    const t = setInterval(() => refresh("poll"), intervalMs);
     return () => clearInterval(t);
-  }, [active, intervalMs, router]);
+  }, [active, intervalMs, refresh]);
 }
 
 // --------------------------------------------------------------------------- //
@@ -161,7 +166,7 @@ export function DiscoveriesHome({
 }: {
   projectId: string;
   orgId?: string;
-  discoveries: DiscoveryRun[];
+  discoveries: DiscoveryListItem[];
   apiReachable: boolean;
   researchAvailable?: boolean;
   /** A dossier named in the URL — `?area=discovery&run=drun_…`, which is what the workflow's
@@ -185,7 +190,7 @@ export function DiscoveriesHome({
   useLiveRefresh(anyLive);
 
   const run = selected ? discoveries.find((d) => d.id === selected) : null;
-  if (run) return <DiscoveryDetail run={run} orgId={orgId}
+  if (run) return <DiscoveryDetail row={run} orgId={orgId}
     researchAvailable={researchAvailable} onBack={() => setSelected(null)} />;
 
   // ASKED FOR ONE, GOT THE SHELF. A link naming a dossier that is not in this feed — older
@@ -210,10 +215,11 @@ export function DiscoveriesHome({
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {discoveries.map((d, i) => {
-            const st = d.state ?? {};
-            const verdict = st.gate?.verdict;
-            const findings = st.signal_findings?.length ?? 0;
-            const outcomes = st.candidate_outcomes?.length ?? 0;
+            // THE ROW READS THE SUMMARY. The dossier is the detail, fetched when it is opened.
+            const sum = d.summary;
+            const verdict = sum?.verdict ?? undefined;
+            const findings = sum?.findings ?? 0;
+            const outcomes = sum?.outcomes ?? 0;
             const title = (d.seed && d.seed.trim()) || d.title || "(untitled)";
             // THE LIST IS WHAT THE OPERATOR SEES.
             //
@@ -261,8 +267,8 @@ export function DiscoveriesHome({
                   <span className="dx-row-stats">
                     <span className="dx-pill"><b>{findings}</b> cited signals</span>
                     <span className="dx-pill"><b>{outcomes}</b> outcome{outcomes === 1 ? "" : "s"}</span>
-                    {st.gate?.confidence != null ? (
-                      <span className="dx-pill"><b>{Math.round((st.gate.confidence ?? 0) * 100)}%</b> confidence</span>
+                    {sum?.confidence != null ? (
+                      <span className="dx-pill"><b>{Math.round(sum.confidence * 100)}%</b> confidence</span>
                     ) : null}
                     {d.usage?.cost_usd_micros != null ? (
                       <span className="dx-pill muted">{fmtUsd(d.usage.cost_usd_micros)}</span>
@@ -279,14 +285,33 @@ export function DiscoveriesHome({
 }
 
 // --------------------------------------------------------------------------- //
-function DiscoveryDetail({ run, orgId, researchAvailable, onBack }: {
-  run: DiscoveryRun;
+/** One dossier. The row from the list paints the header at once; the dossier itself is fetched
+ *  here, when it is opened, and re-read while the run is live. */
+function DiscoveryDetail({ row, orgId, researchAvailable, onBack }: {
+  row: DiscoveryListItem;
   orgId?: string;
   researchAvailable: boolean;
   onBack: () => void;
 }) {
-  const live = run.status === "running";
-  useLiveRefresh(live);
+  const [loaded, setLoaded] = useState<DiscoveryRun | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const live = row.status === "running" || loaded?.status === "running";
+  const rowStamp = `${row.status}|${row.phase}|${row.updated_at ?? ""}`;
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => fetchDiscoveryDetail(row.id).then((res) => {
+      if (cancelled) return;
+      if (res.ok) { setLoaded(res.run); setLoadError(null); } else setLoadError(res.error);
+    });
+    void load();
+    if (!live) return () => { cancelled = true; };
+    const t = setInterval(() => { void load(); }, 4000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [row.id, rowStamp, live]);
+  const have = loaded !== null && loaded.id === row.id;
+  const run: DiscoveryRun = have && loaded
+    ? loaded
+    : { ...row, context: null, state: {} };
   const d = run.state ?? {};
   const gate = d.gate;
   const buildable = gate?.verdict === "pursue" || gate?.verdict === "promising";
@@ -334,6 +359,12 @@ function DiscoveryDetail({ run, orgId, researchAvailable, onBack }: {
           );
         })}
       </div>
+
+      {!have ? (
+        <div className="detail" data-testid="discovery-dossier-loading">
+          {loadError ? `The dossier did not load: ${loadError}` : "Loading the dossier…"}
+        </div>
+      ) : null}
 
       {run.attention ? <AttentionBanner attention={run.attention} /> : run.error
         ? <div className="panel" style={{ padding: 12, color: "#f85149" }}>⚠ {run.error}</div> : null}
