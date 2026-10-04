@@ -81,6 +81,17 @@ def fill_missing(current: dict[str, Any], shipped: dict[str, Any], *,
                 if field not in merged and field in shipped_persona:
                     merged[field] = shipped_persona[field]
             out["persona"] = merged
+    # THE KIT'S ABILITIES, when a role predates them: an upgraded install gets the loadout its
+    # role now names, the same way a fresh one does (kit.sync_role_abilities). A role that has
+    # its own list keeps it.
+    for field in ("abilities", "recommended_abilities"):
+        shipped_list = (shipped.get("permissions") or {}).get(field)
+        if shipped_list:
+            permissions = out.get("permissions")
+            permissions = dict(permissions) if isinstance(permissions, dict) else {}
+            if field not in permissions:
+                permissions[field] = list(shipped_list)
+                out["permissions"] = permissions
     shipped_mcp = (shipped.get("permissions") or {}).get("mcp_servers")
     if shipped_mcp:
         permissions = out.get("permissions")
@@ -312,9 +323,17 @@ def _grant(connection: Connection, project_id: str, actor: str) -> None:
 def _ensure_builtin_mcp_servers(connection: Connection, project_id: str) -> None:
     """The servers the cast's roles name, so a holding can be granted. Only a MISSING one is
     registered; one the operator removed stays removed (seed_exclusions)."""
-    from ..bootstrap import BUILTIN_MCP_SERVERS
+    from ..bootstrap import BUILTIN_MCP_SERVERS, builtin_provenance, migrate_builtin_mcp_servers
     from .mcp_registry import ensure_mcp_server
 
+    # AN UPGRADE MOVES THE SEEDED SERVERS TO mcp-tools (skills-mcp spec E3, J11): rows the
+    # release seeded at 127.0.0.1 and no person has touched get the served address.
+    try:
+        with connection.begin_nested():
+            migrate_builtin_mcp_servers(connection, project_id)
+    except Exception:  # noqa: BLE001 — a boot must still come up; the Kit shows the dead server
+        _log.warning("shipped cast: built-in MCP migration failed for %s", project_id,
+                     exc_info=True)
     have = {str(n).lower() for n in connection.execute(
         text("SELECT name FROM mcp_servers WHERE project_id = :p"), {"p": project_id}).scalars()}
     for srv in BUILTIN_MCP_SERVERS:
@@ -327,7 +346,7 @@ def _ensure_builtin_mcp_servers(connection: Connection, project_id: str) -> None
                     risk_tier=srv["risk_tier"], data_boundary=srv["data_boundary"],
                     description=srv["description"],
                     publisher={"id": "boss", "name": "BOSS", "kind": "system"},
-                    provenance={"source": "builtin", "version": "1", "trusted": True},
+                    provenance=builtin_provenance(),
                     respect_operator=True,
                 )
         except Exception:  # noqa: BLE001 — the MCP sync reports a server it cannot find

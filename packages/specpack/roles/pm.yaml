@@ -17,7 +17,10 @@ decision_rights:
   must_escalate:
     - Product scope expansion with budget impact.
 permissions:
-  allowed_skills: [artifact.create, research.real, decision.create, work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update, discovery.research, typed_decision]
+  allowed_skills: [work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update, discovery.research, typed_decision]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, web_research, web_search, render_docs, file_tickets]
+  recommended_abilities: [email, team_chat]
   forbidden_skills: [github.merge_pr, infra.*]
   mcp_servers:
     - {server: web-intel, tools: [study_site, fetch_page]}

@@ -208,6 +208,22 @@ class SkillRuntimeService:
                         f"this project has assigned {skill_id} to it"),
                 detail={"caller": caller, "mode": mode, "grant": "role_assignment"})
 
+        # OFF IN SKILLS & MCP (kit.skill_policy): never runs, whoever asks. The agent loop does
+        # not offer it; this is the backstop for every other road (a workflow step, a job).
+        if not mock and _turned_off(connection, self.settings, project_id, skill_id, skill):
+            reason = (f"'{skill_id}' is turned off in Skills & MCP. Turn it back on there to "
+                      "use it.")
+            record_policy_eval(
+                connection, project_id, "skill.invoke", "deny",
+                action=skill_id, reason=reason, detail={"caller": caller, "mode": mode,
+                                                        "policy": "off"})
+            return self._record(
+                connection, project_id, skill_id, caller, mode,
+                status="denied", permission_decision="deny", attempts=0,
+                max_attempts=max_attempts, estimate=estimate, reservation_id=None,
+                actual_cost=None, cost_receipt_id=None,
+                created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
+
         if not mock and executor is None:
             if executor_context is not None and executor_context.caller is None:
                 # WHO IS CALLING travels to the executor, so an effect that depends on the
@@ -528,3 +544,16 @@ def _serverless_mcp_allowed(caller: str, reach: Optional[str]) -> bool:
     from .agents import serverless_mcp_allowed
 
     return serverless_mcp_allowed(caller, reach)
+
+
+def _turned_off(connection: Connection, settings: Settings, project_id: str, skill_id: str,
+                skill: dict[str, Any]) -> bool:
+    """Whether the operator turned this skill Off in Skills & MCP (services/kit.py)."""
+    from .kit import skill_policy
+
+    try:
+        with connection.begin_nested():
+            return skill_policy(connection, settings, project_id, skill_id,
+                                int(skill.get("risk_tier") or 0)) == "off"
+    except Exception:  # noqa: BLE001 — no kit state means nobody turned it off
+        return False

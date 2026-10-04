@@ -12,7 +12,10 @@ boundaries:
   must_not:
     - Deploy to production autonomously in v0.
 permissions:
-  allowed_skills: [release.plan, coding_pipeline.generate_ci_config, artifact.create, decision.create, deployment.run.plan, deployment.health.check]
+  allowed_skills: [coding_pipeline.generate_ci_config, deployment.run.plan, deployment.health.check]
+  # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
+  abilities: [read_repo, tests_ci, render_docs, deploy, watch_health]
+  recommended_abilities: [email, team_chat]
   forbidden_skills: [deploy.prod_real]
   mcp_servers:
     - {server: doc-render, tools: [render_markdown_pdf]}

@@ -77,6 +77,17 @@ CALLERS = {
         "operator: Register lifts the key's exclusions, then installs the shipped role",
     "services/shipped_cast.py::_ensure_builtin_mcp_servers -> ensure_mcp_server":
         "seed path below; only a missing server, never one the operator removed",
+    # Skills & MCP's Kit (skills-mcp spec §6.3): giving an ability is a person's press — PUT
+    # holders, Apply recommended — and lifts what it grants; the seed's half (abilities a role
+    # names) is _grant_quietly, below, which asks seed_exclusions and never lifts one.
+    "services/kit.py::_grant -> assign_skill_to_role": "operator: PUT /v1/kit/{ability}/holders",
+    "services/kit.py::_grant -> grant_mcp": "operator: PUT /v1/kit/{ability}/holders",
+    "services/kit.py::_revoke -> grant_mcp":
+        "operator: taking an ability off narrows the server's tools to what the agent still needs",
+    "services/kit.py::_grant_quietly -> assign_skill_to_role": "seed path below",
+    "services/kit.py::_grant_quietly -> grant_mcp": "seed path below",
+    "services/kit_connections.py::add_catalogue_server -> register_mcp_server":
+        "operator: Add from the MCP catalogue (or Library docs' Save & test)",
 }
 
 #: The seed paths, each of which must consult the exclusions before it writes.
@@ -88,6 +99,8 @@ SEED_PATHS = [
     agent_studio.AgentStudioService._seed_agent,
     __import__("boss_engine.services.shipped_cast", fromlist=["x"]).sync_project,
     __import__("boss_engine.services.shipped_cast", fromlist=["x"])._ensure_builtin_mcp_servers,
+    __import__("boss_engine.services.kit", fromlist=["x"]).sync_role_abilities,
+    __import__("boss_engine.services.kit", fromlist=["x"])._grant_quietly,
 ]
 
 

@@ -32,6 +32,7 @@ WHAT CHANGED, AND THE INCIDENTS BEHIND IT
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable, ContextManager, Optional
 from urllib.parse import urlparse
 
@@ -44,7 +45,7 @@ from .core import emit_event, make_id, normalize_data_boundary
 _MCP_COLUMNS = (
     "id, name, url, transport, risk_tier, data_boundary, enabled, description, "
     "publisher, provenance, tool_risk_overrides, created_at, updated_at, reachable, "
-    "last_checked_at, last_error, tools"
+    "last_checked_at, last_error, tools, auth, tool_policy"
 )
 
 #: How long a recorded probe is good for before a screen asks the server again. Short, because
@@ -143,6 +144,14 @@ def _row(r) -> dict[str, Any]:
         "last_checked_at": _iso(col("last_checked_at")),
         "last_error": col("last_error"),
         "tools": tools if isinstance(tools, list) else [],
+        # HOW BOSS SIGNS IN TO IT, without the secret: the kind, the header and whether one is
+        # set (with its last four, which tell two tokens apart and are not one). The secret
+        # itself lives in the secret store and is resolved to a header only at call time
+        # (:func:`auth_headers`). Never the ref id either: a list response names nothing a
+        # reader could resolve.
+        "auth": public_auth(_loads(col("auth"), {}) or {}),
+        # {tool: allow|ask|off} as the operator set it; :func:`tool_policy` applies defaults.
+        "tool_policy": _loads(col("tool_policy"), {}) or {},
     }
     # The same answer the agent loop, the catalogue and resolve_risk get (reviewed), so a badge
     # cannot say "unreviewed" about a server the runtime treats as reviewed.
@@ -184,6 +193,284 @@ def tool_tier(server: dict[str, Any], tool_name: str, declared: Any = None) -> i
     base = MANUAL_APPROVAL_RISK_FLOOR if blanket is None else blanket
     claimed = _tier(declared)
     return base if claimed is None else max(base, claimed)
+
+
+# --------------------------------------------------------------------------- #
+# Auth: how BOSS signs in to a server (skills-mcp spec E2)                       #
+# --------------------------------------------------------------------------- #
+
+#: The kinds of sign-in a server may need. OAuth is later (spec §7): BOSS's agents run headless.
+AUTH_TYPES = ("none", "bearer", "header")
+
+#: Header names a server may NOT be given through `auth`: BOSS sets these itself.
+_RESERVED_HEADERS = {"accept", "content-type", "mcp-session-id", "mcp-protocol-version",
+                     "content-length", "host"}
+
+
+def public_auth(auth: dict[str, Any]) -> dict[str, Any]:
+    """The auth a screen may see: kind, header, whether a secret is set and its last four."""
+    kind = str(auth.get("type") or "none")
+    return {
+        "type": kind if kind in AUTH_TYPES else "none",
+        "header_name": auth.get("header_name") or None,
+        "set": bool(auth.get("secret_ref_id")),
+        "last4": auth.get("last4") if auth.get("secret_ref_id") else None,
+        "headers": {str(k): str(v) for k, v in (auth.get("headers") or {}).items()},
+    }
+
+
+def _validated_auth(auth: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """{type, header_name?, secret?, headers?} → a checked copy. The secret is kept only long
+    enough to be written to the store by :func:`_stored_auth`."""
+    if auth is None:
+        return {"type": "none"}
+    if not isinstance(auth, dict):
+        raise McpServerError("auth must be {type: none | bearer | header, ...}.")
+    kind = str(auth.get("type") or "none").strip().lower()
+    if kind not in AUTH_TYPES:
+        raise McpServerError("auth type must be none, bearer or header.")
+    out: dict[str, Any] = {"type": kind}
+    if kind == "header":
+        name = str(auth.get("header_name") or "").strip()
+        if not name or not re.fullmatch(r"[A-Za-z0-9-]{1,64}", name) \
+                or name.lower() in _RESERVED_HEADERS:
+            raise McpServerError("a header sign-in needs a header name, e.g. X-API-Key.")
+        out["header_name"] = name
+    secret = auth.get("secret")
+    if secret is not None and not isinstance(secret, str):
+        raise McpServerError("the token must be text.")
+    if isinstance(secret, str) and secret.strip():
+        if kind == "none":
+            raise McpServerError("choose Bearer token or Header to give the server a token.")
+        out["secret"] = secret.strip()
+    static = auth.get("headers") or {}
+    if not isinstance(static, dict):
+        raise McpServerError("headers must map a header name to a value.")
+    clean: dict[str, str] = {}
+    for key, value in static.items():
+        name = str(key or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", name) or name.lower() in _RESERVED_HEADERS \
+                or name.lower() == "authorization":
+            raise McpServerError(f"header {name!r} cannot be set on an MCP server.")
+        clean[name] = str(value or "")[:200]
+    if clean:
+        out["headers"] = clean
+    return out
+
+
+def _stored_auth(connection: Connection, settings: Any, project_id: str, name: str,
+                 auth: dict[str, Any], *, actor: str,
+                 keep: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """What goes in the `auth` column: the secret written THROUGH to the store and replaced by
+    its reference and last four. `keep` is the current column, so an edit that does not retype
+    the token keeps the one already stored (the same courtesy the email form gives)."""
+    stored = {k: v for k, v in auth.items() if k != "secret"}
+    secret = auth.get("secret")
+    if secret:
+        from .secret_backends import default_secret_backend
+        from .secrets_service import put_secret
+
+        settings = settings if settings is not None else _settings_now()
+        written = put_secret(connection, settings, project_id=project_id,
+                             name=f"mcp_{name}_token", value=secret, secret_kind="api_token",
+                             backend=default_secret_backend(settings), actor=actor)
+        stored["secret_ref_id"] = written["secret_ref_id"]
+        stored["last4"] = written.get("last4") or (secret[-4:] if len(secret) >= 8 else None)
+    elif keep and keep.get("secret_ref_id") and stored["type"] != "none":
+        stored["secret_ref_id"] = keep["secret_ref_id"]
+        stored["last4"] = keep.get("last4")
+    return stored
+
+
+def _settings_now() -> Any:
+    from ..config import get_settings
+
+    return get_settings()
+
+
+def _raw_auth(connection: Connection, project_id: str, server_id: str) -> dict[str, Any]:
+    try:
+        found = connection.execute(
+            text("SELECT auth FROM mcp_servers WHERE id = :id AND project_id = :p"),
+            {"id": server_id, "p": project_id}).scalar()
+    except Exception:  # noqa: BLE001 — an install that predates the column has no auth
+        return {}
+    return _loads(found, {}) or {}
+
+
+def headers_for_auth(connection: Connection, settings: Any, auth: dict[str, Any]
+                     ) -> dict[str, str]:
+    """The request headers one stored auth means, the secret resolved from the store NOW."""
+    headers = {str(k): str(v) for k, v in (auth.get("headers") or {}).items()}
+    kind = str(auth.get("type") or "none")
+    ref = str(auth.get("secret_ref_id") or "")
+    if kind == "none" or not ref:
+        return headers
+    from .secret_backends import resolve_secret_ref
+
+    secret = resolve_secret_ref(connection, ref, settings if settings is not None
+                                else _settings_now())
+    if kind == "bearer":
+        headers["Authorization"] = f"Bearer {secret}"
+    elif kind == "header" and auth.get("header_name"):
+        headers[str(auth["header_name"])] = secret
+    return headers
+
+
+def auth_headers(connection: Connection, settings: Any, project_id: str,
+                 server: dict[str, Any]) -> dict[str, str]:
+    """The headers a call to `server` carries. Empty for a server that needs no sign-in.
+
+    A token that cannot be resolved raises: calling a server that needs one without it gets a
+    401 that reads like the server's fault."""
+    return headers_for_auth(connection, settings,
+                            _raw_auth(connection, project_id, str(server.get("id") or "")))
+
+
+# --------------------------------------------------------------------------- #
+# Tool policy: Allow / Ask / Off per tool (skills-mcp spec E7)                    #
+# --------------------------------------------------------------------------- #
+
+POLICIES = ("allow", "ask", "off")
+
+
+class PolicyBelowFloor(McpServerError):
+    """A tool that changes the world was set to run without asking. The API answers 409."""
+
+
+def policy_floor(tier: int) -> Optional[str]:
+    """The least a tool of this tier may be set to: tier >= 2 always asks a person."""
+    return "ask" if int(tier) >= 2 else None
+
+
+def default_policy(tier: int) -> str:
+    """Reads run (0-1), writes ask (2), the irreversible start off (3)."""
+    tier = int(tier)
+    return "allow" if tier <= 1 else ("ask" if tier == 2 else "off")
+
+
+def effective_policy(tier: int, chosen: Optional[str]) -> str:
+    """What the runtime does: the operator's choice, never below the floor; else the default."""
+    policy = chosen if chosen in POLICIES else default_policy(tier)
+    if policy == "allow" and policy_floor(tier) == "ask":
+        return "ask"
+    return policy
+
+
+def checked_policy(tier: int, policy: str) -> str:
+    """A policy an operator may set on a tool of this tier, or PolicyBelowFloor."""
+    if policy not in POLICIES:
+        raise McpServerError("policy must be allow, ask or off.")
+    if policy == "allow" and policy_floor(tier) == "ask":
+        raise PolicyBelowFloor(
+            "this tool changes the world, so it always asks a person; choose Ask or Off.")
+    return policy
+
+
+def tool_policy(server: dict[str, Any], tool_name: str, declared: Any = None) -> str:
+    """The effective policy of one MCP tool on one server."""
+    chosen = (server.get("tool_policy") or {}).get(tool_name)
+    return effective_policy(tool_tier(server, tool_name, declared), chosen)
+
+
+def set_tool_policy(connection: Connection, project_id: str, server_id: str, tool_name: str,
+                    policy: str, *, actor: str) -> dict[str, Any]:
+    """Allow / Ask / Off for one tool of one server. Refuses Allow below the floor."""
+    server = get_mcp_server(connection, project_id, server_id)
+    if server is None:
+        raise McpServerError("MCP server not found.")
+    tool = str(tool_name or "").strip()
+    if not tool:
+        raise McpServerError("tool is required.")
+    declared = next((t.get("annotations", {}).get("risk_tier") for t in server["tools"]
+                     if t.get("name") == tool and isinstance(t.get("annotations"), dict)), None)
+    checked_policy(tool_tier(server, tool, declared), policy)
+    current = dict(server.get("tool_policy") or {})
+    current[tool] = policy
+    connection.execute(
+        text("UPDATE mcp_servers SET tool_policy = CAST(:tp AS JSONB), updated_at = now() "
+             "WHERE id = :id AND project_id = :p"),
+        {"tp": json.dumps(current), "id": server_id, "p": project_id})
+    emit_event(connection, project_id, "mcp.tool_policy_set", actor, "mcp_server", server_id,
+               {"tool": tool, "policy": policy})
+    return get_mcp_server(connection, project_id, server_id)  # type: ignore[return-value]
+
+
+def set_tool_policies(connection: Connection, project_id: str, server_id: str,
+                      policies: dict[str, str], *, actor: str) -> None:
+    """Replace a server's whole policy map (the Kit turning an ability off or back on). The
+    floor still holds: the runtime reads it through :func:`effective_policy`."""
+    clean = {str(k): v for k, v in (policies or {}).items() if v in POLICIES}
+    connection.execute(
+        text("UPDATE mcp_servers SET tool_policy = CAST(:tp AS JSONB), updated_at = now() "
+             "WHERE id = :id AND project_id = :p"),
+        {"tp": json.dumps(clean), "id": server_id, "p": project_id})
+    emit_event(connection, project_id, "mcp.tool_policy_set", actor, "mcp_server", server_id,
+               {"policies": clean})
+
+
+def set_seeded_auth(connection: Connection, project_id: str, server_id: str,
+                    auth: dict[str, Any], *, actor: str) -> None:
+    """Give a server BOSS seeded a sign-in that a CONNECTION decides (web-intel's search key,
+    from Skills & MCP › Web search) — by reference, never a value.
+
+    Not :func:`update_mcp_server`: that is a person editing the server, which takes a built-in
+    over (provenance "builtin_edited") and stops the release refreshing it. Configuring a search
+    key is not taking the server over."""
+    stored = {k: v for k, v in (auth or {}).items()
+              if k in ("type", "header_name", "secret_ref_id", "last4", "headers")}
+    connection.execute(
+        text("UPDATE mcp_servers SET auth = CAST(:a AS JSONB), updated_at = now() "
+             "WHERE id = :id AND project_id = :p"),
+        {"a": json.dumps(stored), "id": server_id, "p": project_id})
+    emit_event(connection, project_id, "mcp.server_auth_set", actor, "mcp_server", server_id,
+               {"type": stored.get("type"), "set": bool(stored.get("secret_ref_id"))})
+
+
+def migrate_seeded_server(connection: Connection, project_id: str, server_id: str, *,
+                          url: str, risk_tier: int, description: Optional[str],
+                          provenance: dict[str, Any]) -> None:
+    """Move a server the release seeded (and no person touched) to the release's current
+    address and tier (bootstrap.migrate_builtin_mcp_servers). The recorded reachability
+    described the old address, so it is forgotten."""
+    _validated_server_identity("seeded", url, "http")
+    connection.execute(
+        text("UPDATE mcp_servers SET url = :url, risk_tier = :risk, description = :d, "
+             "provenance = CAST(:prov AS JSONB), reachable = NULL, last_checked_at = NULL, "
+             "last_error = NULL, updated_at = now() WHERE id = :id AND project_id = :p"),
+        {"url": url, "risk": _validated_risk(risk_tier), "d": description,
+         "prov": json.dumps(provenance), "id": server_id, "p": project_id})
+
+
+class McpToolOff(McpServerError):
+    """A tool the operator turned off was called anyway. Not retryable: only a person lifts it."""
+
+    retryable = False
+
+
+def review_mcp_server(connection: Connection, project_id: str, server_id: str, *,
+                      actor: str) -> Optional[dict[str, Any]]:
+    """A person vouches for a server: trusted, with who, when, and the URL they looked at.
+
+    The console's one road to "reviewed" (spec §6.5). A later URL change voids it
+    (:func:`update_mcp_server`)."""
+    from datetime import datetime, timezone
+
+    server = get_mcp_server(connection, project_id, server_id)
+    if server is None:
+        return None
+    provenance = dict(server["provenance"])
+    provenance.update({"trusted": True, "reviewed_by": actor,
+                       "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                       "reviewed_url": server["url"]})
+    provenance.pop("review_voided_by_url_change", None)
+    connection.execute(
+        text("UPDATE mcp_servers SET provenance = CAST(:prov AS JSONB), updated_at = now() "
+             "WHERE id = :id AND project_id = :p"),
+        {"prov": json.dumps(provenance), "id": server_id, "p": project_id})
+    emit_event(connection, project_id, "mcp.server_reviewed", actor, "mcp_server", server_id,
+               {"name": server["name"], "url": server["url"]})
+    return get_mcp_server(connection, project_id, server_id)
 
 
 def status_note(server: dict[str, Any]) -> Optional[str]:
@@ -399,24 +686,33 @@ def register_mcp_server(
     tool_risk_overrides: Optional[dict[str, int]] = None,
     actor: str = "system",
     enabled: bool = True,
+    auth: Optional[dict[str, Any]] = None,
+    tool_policy: Optional[dict[str, str]] = None,
+    settings: Any = None,
 ) -> dict:
     _validated_server_identity(name, url, transport)
     risk_tier = _validated_risk(risk_tier)
     data_boundary = normalize_data_boundary(data_boundary)
     tool_risk_overrides = _validated_overrides(tool_risk_overrides)
+    checked_auth = _validated_auth(auth)
+    policies = {str(k): v for k, v in (tool_policy or {}).items() if v in POLICIES}
     name = name.strip()
     if _name_taken(connection, project_id, name):
         raise McpServerConflict(_name_taken_sentence(name))
+    stored_auth = _stored_auth(connection, settings, project_id, name, checked_auth,
+                               actor=actor)
     server_id = make_id("mcp")
     _write_unique_name(connection, name, lambda: connection.execute(
         text(
             """
             INSERT INTO mcp_servers
               (id, project_id, name, url, transport, risk_tier, data_boundary,
-               description, publisher, provenance, tool_risk_overrides, enabled)
+               description, publisher, provenance, tool_risk_overrides, enabled, auth,
+               tool_policy)
             VALUES (:id, :p, :name, :url, :transport, :risk, :db, :desc,
                     CAST(:publisher AS JSONB), CAST(:provenance AS JSONB),
-                    CAST(:tool_risk_overrides AS JSONB), :enabled)
+                    CAST(:tool_risk_overrides AS JSONB), :enabled, CAST(:auth AS JSONB),
+                    CAST(:tool_policy AS JSONB))
             """
         ),
         {
@@ -432,6 +728,8 @@ def register_mcp_server(
             "provenance": json.dumps(_reviewed(dict(provenance or {}), actor)),
             "tool_risk_overrides": json.dumps(tool_risk_overrides or {}),
             "enabled": bool(enabled),
+            "auth": json.dumps(stored_auth),
+            "tool_policy": json.dumps(policies),
         },
     ))
     # REGISTERED BY HAND, so a deletion recorded earlier no longer stands in its way: the newer
@@ -455,7 +753,7 @@ def register_mcp_server(
 #: The fields an edit may change. Everything a server IS, except its id — the id is what custom
 #: steps and authored skills point at, which is the whole reason to edit rather than re-register.
 UPDATABLE_FIELDS = ("name", "url", "transport", "description", "risk_tier", "data_boundary",
-                    "tool_risk_overrides", "enabled", "trusted")
+                    "tool_risk_overrides", "enabled", "trusted", "auth")
 
 
 def update_mcp_server(
@@ -464,6 +762,7 @@ def update_mcp_server(
     server_id: str,
     *,
     actor: str,
+    settings: Any = None,
     **changes: Any,
 ) -> Optional[dict]:
     """Change a registered server in place. Only the fields given are touched.
@@ -528,12 +827,19 @@ def update_mcp_server(
 
     provenance["edited_by"] = actor
     provenance["edited_at"] = datetime.now(timezone.utc).isoformat()
+    # A NEW SIGN-IN IS WRITTEN THROUGH TO THE STORE; a form that does not retype the token
+    # keeps the one already stored. Changing the kind to `none` drops it.
+    current_auth = _raw_auth(connection, project_id, server_id)
+    auth = current_auth
+    if "auth" in given:
+        auth = _stored_auth(connection, settings, project_id, name,
+                            _validated_auth(given["auth"]), actor=actor, keep=current_auth)
     row = _write_unique_name(connection, name, lambda: connection.execute(
         text(
             "UPDATE mcp_servers SET name = :name, url = :url, transport = :transport, "
             "description = :desc, risk_tier = :risk, data_boundary = :db, "
             "tool_risk_overrides = CAST(:o AS JSONB), enabled = :enabled, "
-            "provenance = CAST(:prov AS JSONB), updated_at = now()"
+            "provenance = CAST(:prov AS JSONB), auth = CAST(:auth AS JSONB), updated_at = now()"
             + (", reachable = NULL, last_checked_at = NULL, last_error = NULL, "
                "tools = '[]'::jsonb" if url_changed else "")
             + f" WHERE id = :id AND project_id = :p RETURNING {_MCP_COLUMNS}"
@@ -541,7 +847,8 @@ def update_mcp_server(
         {"name": name, "url": url, "transport": transport,
          "desc": given.get("description", current["description"]),
          "risk": risk, "db": boundary, "o": json.dumps(overrides), "enabled": enabled,
-         "prov": json.dumps(provenance), "id": server_id, "p": project_id},
+         "prov": json.dumps(provenance), "auth": json.dumps(auth), "id": server_id,
+         "p": project_id},
     ).mappings().first())
     changed = sorted(k for k in given if k in UPDATABLE_FIELDS)
     emit_event(
@@ -778,15 +1085,62 @@ def _tool_summary(tools: Any) -> list[dict[str, Any]]:
     return out
 
 
-def probe(settings: Any, url: str, *, timeout: float = PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
-    """Ask a server for its tools. Never raises: the answer is reachable or not, with why."""
+def probe(settings: Any, url: str, *, timeout: float = PROBE_TIMEOUT_SECONDS,
+          headers: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """Ask a server for its tools. Never raises: the answer is reachable or not, with why.
+
+    `headers` is the server's sign-in (:func:`auth_headers`). The error is the server's own
+    words where it gave some — "401 Unauthorized" is what tells an operator the token is wrong.
+    """
+    import time as _time
+
     from .mcp_client import MCPClient
 
+    started = _time.monotonic()
     try:
-        tools = MCPClient(settings, timeout=timeout).list_tools(url) or []
-        return {"reachable": True, "tools": _tool_summary(tools), "error": None}
+        tools = MCPClient(settings, timeout=timeout).list_tools(url, headers=headers) or []
+        return {"reachable": True, "tools": _tool_summary(tools), "error": None,
+                "latency_ms": int((_time.monotonic() - started) * 1000)}
     except Exception as error:  # noqa: BLE001 — the reason IS the result
-        return {"reachable": False, "tools": [], "error": f"{type(error).__name__}: {error}"[:500]}
+        return {"reachable": False, "tools": [], "latency_ms":
+                int((_time.monotonic() - started) * 1000),
+                "error": _said(error)[:500]}
+
+
+def _said(error: BaseException) -> str:
+    """An error as an operator reads it: an HTTP status with its reason, not a traceback name."""
+    try:
+        import httpx
+
+        if isinstance(error, httpx.HTTPStatusError):
+            return f"{error.response.status_code} {error.response.reason_phrase}".strip()
+        if isinstance(error, httpx.ConnectError):
+            return f"ConnectError: {error}"
+        if isinstance(error, httpx.TimeoutException):
+            return "Timed out"
+    except Exception:  # noqa: BLE001
+        pass
+    return f"{type(error).__name__}: {error}"
+
+
+def test_entered(settings: Any, connection: Optional[Connection], project_id: str, url: str,
+                 auth: Optional[dict[str, Any]], *, timeout: float = 15.0) -> dict[str, Any]:
+    """Probe the URL and sign-in an operator TYPED, before anything is stored (Save & test).
+
+    The token is used for this one call and dropped; nothing is written."""
+    _validated_server_identity("test", url, "http")
+    checked = _validated_auth(auth)
+    headers = {str(k): str(v) for k, v in (checked.get("headers") or {}).items()}
+    secret = checked.get("secret")
+    if secret and checked["type"] == "bearer":
+        headers["Authorization"] = f"Bearer {secret}"
+    elif secret and checked["type"] == "header":
+        headers[str(checked["header_name"])] = secret
+    found = probe(settings, url, timeout=timeout, headers=headers)
+    return {"ok": bool(found["reachable"]),
+            "tools": [{"name": t["name"], "description": t["description"]}
+                      for t in found["tools"]],
+            "latency_ms": found.get("latency_ms") or 0, "error": found["error"]}
 
 
 def record_reachability(
@@ -874,12 +1228,23 @@ def servers_with_tools(
     """
     with begin() as connection:
         servers = list_mcp_servers(connection, project_id, enabled_only=enabled_only)
-    if server_id:
-        servers = [s for s in servers if s["id"] == server_id]
+        if server_id:
+            servers = [s for s in servers if s["id"] == server_id]
+        stale = [s for s in servers if s["enabled"] and _stale(s, max_age_seconds)]
+        signed: dict[str, Any] = {}
+        for server in stale:
+            try:
+                signed[server["id"]] = auth_headers(connection, settings, project_id, server)
+            except Exception as error:  # noqa: BLE001 — a token that cannot be read is the result
+                signed[server["id"]] = error
     found: dict[str, dict[str, Any]] = {}
-    for server in servers:
-        if server["enabled"] and _stale(server, max_age_seconds):
-            found[server["id"]] = probe(settings, server["url"])
+    for server in stale:
+        headers = signed.get(server["id"])
+        if isinstance(headers, Exception):
+            found[server["id"]] = {"reachable": False, "tools": [],
+                                   "error": f"Token unavailable: {_said(headers)}"[:500]}
+            continue
+        found[server["id"]] = probe(settings, server["url"], headers=headers)
     if found:
         with begin() as connection:
             for sid, result in found.items():
@@ -934,6 +1299,18 @@ def call_tool_with_receipt(
     if needs_person(server) and not approval_stands(connection, project_id, approved_by,
                                                     approval_about):
         raise McpServerUnreviewed(_refusal(tool_name, server, approved_by))
+    # THE OPERATOR'S ALLOW / ASK / OFF (spec E7), the backstop for every road like the review:
+    # an Off tool never runs, an Ask tool runs only with a person's approval about this call.
+    policy = tool_policy(server, tool_name, _declared_tier(server, tool_name))
+    if policy == "off":
+        raise McpToolOff(f"Did not call {tool_name}: it is turned off for "
+                         f"'{server.get('name')}' in Skills & MCP.")
+    if policy == "ask" and not approval_stands(connection, project_id, approved_by,
+                                               approval_about):
+        raise McpServerUnreviewed(
+            f"Did not call {tool_name}: it is set to ask a person each time, and this call "
+            "carried no approval about it.")
+    headers = auth_headers(connection, settings, project_id, server)
     org_id, workspace_id = tenant_scope
     receipts = ReceiptService()
     receipt, created = receipts.create_or_reuse(
@@ -965,7 +1342,8 @@ def call_tool_with_receipt(
             f"MCP effect receipt already exists with status {receipt.get('status')}"
         )
     try:
-        output = MCPClient(settings).call_tool(server["url"], tool_name, inputs)
+        output = MCPClient(settings).call_tool(server["url"], tool_name, inputs,
+                                               headers=headers)
     except Exception as exc:
         receipts.mark_failed(
             connection,
@@ -1015,6 +1393,7 @@ def call_tool_unattended(
     inputs: dict[str, Any],
     *,
     timeout: Optional[float] = None,
+    headers: Optional[dict[str, str]] = None,
 ) -> Any:
     """Call a REGISTERED server's tool where no person is present to ask and no receipt is
     kept — the meeting's shared research crawl.
@@ -1037,8 +1416,21 @@ def call_tool_unattended(
 
     if needs_person(server):
         raise McpServerUnreviewed(unreviewed_sentence(server))
+    if tool_policy(server, tool_name, _declared_tier(server, tool_name)) != "allow":
+        # Nobody is present on this road to ask, so Ask is refused like Off.
+        raise McpToolOff(f"Did not call {tool_name}: it is not set to run without asking.")
     client = MCPClient(settings) if timeout is None else MCPClient(settings, timeout=timeout)
-    return client.call_tool(server["url"], tool_name, inputs)
+    return client.call_tool(server["url"], tool_name, inputs, headers=headers or {})
+
+
+def _declared_tier(server: dict[str, Any], tool_name: str) -> Any:
+    """The tier a server's last tool list said this tool claims, if any (it may only raise)."""
+    for tool in server.get("tools") or []:
+        if isinstance(tool, dict) and tool.get("name") == tool_name:
+            annotations = tool.get("annotations") or {}
+            return tool.get("risk_tier", annotations.get("risk_tier")
+                            if isinstance(annotations, dict) else None)
+    return None
 
 
 def _is_transport_failure(error: BaseException) -> bool:

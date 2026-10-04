@@ -15,7 +15,7 @@ boundaries:
     - Deploy directly outside Resource Plane Kernel.
     - Bypass CI, health checks, or rollback requirements.
 permissions:
-  allowed_skills: [deployment.plan, changeset.review, health.check, artifact.create, decision.create]
+  allowed_skills: [deployment.run.plan, deployment.health.check]
   forbidden_skills: [provider.deploy.direct, production.deploy.auto]
 output_contracts: [DeploymentPlan, ReleasePacketReview, RollbackReadinessBrief]
 autonomy:

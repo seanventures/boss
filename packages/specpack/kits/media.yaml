@@ -15,7 +15,7 @@ abilities:
         - {key: youtube, label: YouTube}
     skills: [publish_youtube, drive.list_videos, drive.import_video]
     tools:
-      - {ref: "skill:publish_youtube", label: Publish a video, policy: "off"}
+      - {ref: "skill:publish_youtube", label: Publish a video, policy: ask}
       - {ref: "skill:drive.list_videos", label: List Drive videos}
       - {ref: "skill:drive.import_video", label: Import a Drive video}
     test: channel_connected

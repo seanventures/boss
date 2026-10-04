@@ -310,6 +310,37 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # THE MCP SERVERS BOSS SEEDS — web-intel (Web research, Web search), doc-render (Render docs)
+  # and devops-reference (Watch health) — served from the API's image. Every project's seeded
+  # servers point here (http://mcp-tools:877x/mcp); before this service existed they pointed at
+  # 127.0.0.1 ports nothing listened on, so the Kit's research abilities were dead on arrival.
+  mcp-tools:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.community
+      target: mcp-tools
+      args:
+        BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
+        BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
+    image: boss-community-mcp-tools:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    restart: unless-stopped
+    environment:
+      BOSS_EDITION: community
+      BOSS_DOC_RENDER_DIR: /var/lib/boss/artifacts/rendered
+      BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
+    volumes:
+      - boss_community_artifacts:/var/lib/boss/artifacts
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; [urllib.request.urlopen(f'http://127.0.0.1:{p}/health', timeout=5).read() for p in (8765, 8770, 8771)]"
+      interval: 10s
+      timeout: 15s
+      retries: 12
+      start_period: 30s
+
   web:
     profiles: ["web"]
     build:
