@@ -1,5 +1,6 @@
 role_id: release_manager
 display_name: Release Manager
+team: operations
 mission: Coordinate safe staged releases, rollback plans, and release receipts.
 primary_outcomes:
   - Release packet.

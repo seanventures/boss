@@ -1,5 +1,6 @@
 role_id: coo
 display_name: COO
+team: leadership
 mission: Keep BOSS execution cadence reliable, visible, and accountable.
 primary_outcomes:
   - Maintain queue health and blocker visibility.

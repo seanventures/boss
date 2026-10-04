@@ -1,5 +1,6 @@
 role_id: sre
 display_name: Site Reliability Engineer
+team: operations
 mission: Keep running software observable and recoverable — signals for every feature, service objectives, alerts that mean something, and incidents closed with a cause.
 primary_outcomes:
   - Signals and service objectives for each feature.

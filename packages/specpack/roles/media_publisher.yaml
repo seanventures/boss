@@ -1,5 +1,6 @@
 role_id: media_publisher
 display_name: Media Publisher
+team: media
 mission: >-
   Own the organisation's public channels and everything that goes out on them: the accounts,
   the credentials that reach them, and the judgement about whether a given piece of media is

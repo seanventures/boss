@@ -1,5 +1,6 @@
 role_id: pm
 display_name: Product Manager
+team: leadership
 mission: Turn CEO intent into clear PRDs, acceptance criteria, non-goals, and priority calls.
 primary_outcomes:
   - Produce concise product specs.

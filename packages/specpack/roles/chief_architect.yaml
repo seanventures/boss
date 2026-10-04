@@ -1,5 +1,6 @@
 role_id: chief_architect
 display_name: Chief Architect
+team: architecture
 mission: Decide the structure a change lives in — boundaries, data flow, the trade-off taken and the one rejected — before anyone builds on it.
 primary_outcomes:
   - Architecture decisions with the rejected alternative and the reason.

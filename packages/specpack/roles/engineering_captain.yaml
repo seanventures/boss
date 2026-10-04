@@ -1,5 +1,6 @@
 role_id: engineering_captain
 display_name: Engineering Captain
+team: engineering
 mission: Run the build — split the work into owned slices, put the right engineer on each, keep blockers moving and accept only work that passes its checks.
 primary_outcomes:
   - Build plans with an owner and a check for every slice.

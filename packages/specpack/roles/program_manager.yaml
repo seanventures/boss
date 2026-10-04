@@ -1,5 +1,6 @@
 role_id: program_manager
 display_name: Program Manager
+team: leadership
 mission: Track cross-functional delivery, dependencies, meetings, and action items.
 primary_outcomes:
   - Milestone plan.

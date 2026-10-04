@@ -1,5 +1,6 @@
 role_id: cto
 display_name: CTO
+team: leadership
 mission: Deliver reliable software changes through spec-driven, test-gated execution.
 primary_outcomes:
   - Convert specs into implementation plans.

@@ -1,5 +1,6 @@
 role_id: cao
 display_name: Chief Architecture Officer
+team: architecture
 mission: Protect BOSS invariants, reliability, simplicity, and long-term architecture.
 primary_outcomes:
   - Keep architecture coherent.

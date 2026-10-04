@@ -1,5 +1,6 @@
 role_id: finops_sentinel
 display_name: FinOps Sentinel
+team: cost
 mission: Monitor provider/model/resource cost, commitments, anomalies, billing confidence, and budget pressure.
 primary_outcomes:
   - Cost anomaly reports.

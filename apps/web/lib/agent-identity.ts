@@ -49,6 +49,8 @@ export const ALIASES: Readonly<Record<string, string>> = {
 type Wire = {
   role_key?: string; agent_id?: string | null; display_name?: string; callsign?: string | null;
   tagline?: string | null; archetype?: string | null; avatar?: Partial<AvatarSpec> | null; lifecycle?: string | null;
+  /** agent_identity.team_of(spec).key — the one team resolver (agents-home spec §6.1). */
+  team?: string | null;
 };
 
 // ── The store: identities the API returned, keyed by role key ─────────────────────────────
@@ -136,6 +138,7 @@ function fromWire(roleKey: string, w: Wire): AgentIdentity {
     ...(w.tagline || cast?.tagline ? { tagline: (w.tagline || cast?.tagline)! } : {}),
     archetype: w.archetype ?? (cast?.archetype ? roleKey : null),
     avatar, lifecycle,
+    ...(w.team ? { team: w.team } : {}),
   };
 }
 

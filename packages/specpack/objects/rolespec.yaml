@@ -4,6 +4,11 @@ version: 0.1.0
 fields:
   role_id: string
   display_name: string
+  # WHICH TEAM THE AGENT SITS IN on Agents › Live and Organization, and the row group of the
+  # Skills "Who can" matrix. Optional. One of the shipped keys below, or free text for a team
+  # the operator made; absent means `yours`. Read only through agent_identity.team_of.
+  # leadership | architecture | engineering | quality | operations | cost | media | thinkers
+  team: { type: string, optional: true }
   mission: string
   primary_outcomes: { array: string }
   boundaries:

@@ -31,6 +31,8 @@ export type Lifecycle = "active" | "paused" | "retired";
 export type AgentIdentity = {
   roleKey: string; agentId: string | null; name: string; callsign?: string; tagline?: string;
   archetype?: string | null; avatar: AvatarSpec; lifecycle: Lifecycle;
+  /** The team key from the server's one resolver (agent_identity.team_of); absent = `yours`. */
+  team?: string;
 };
 export type Presence = { state: AvatarState; actId?: string; line: string; since?: string };
 

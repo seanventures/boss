@@ -482,8 +482,59 @@ def identities(connection: Connection, project_id: str) -> list[dict]:
             "archetype": persona.get("archetype"),
             "avatar": avatar_of(r["role_key"], r["agent_id"], persona),
             "lifecycle": r["lifecycle"] or "active",
+            "team": team_of(r["spec"])["key"],
         })
     return out
+
+
+# ── Teams (agents-home spec §4.6, §6.1) ──────────────────────────────────────────────────────
+
+#: The shipped teams, in the order every surface draws them, with their label and tooltip.
+#: `yours` is where an operator's agent with no team, and an unregistered name doing work, sit.
+TEAMS: tuple[tuple[str, str, Optional[str]], ...] = (
+    ("leadership", "Leadership", None),
+    ("architecture", "Architecture", None),
+    ("engineering", "Engineering", None),
+    ("quality", "Quality", "Quality and security"),
+    ("operations", "Operations", None),
+    ("cost", "Cost", "Cost and providers"),
+    ("media", "Media", None),
+    ("thinkers", "Thinkers", "Inspired by a way of thinking. Not real people."),
+    ("yours", "Yours", None),
+)
+TEAM_KEYS = tuple(key for key, _, _ in TEAMS)
+_TEAM_LABELS = {key: (label, tip) for key, label, tip in TEAMS}
+_TEAM_KEY = re.compile(r"[^a-z0-9]+")
+
+
+def team_of(spec: Any) -> dict[str, Any]:
+    """THE ONE RESOLVER for which team an agent sits in: `spec.team`, else `yours`.
+
+    Live's Agent force, Organization › Zones, Directory's sections and the Skills "Who can"
+    matrix all group by this, so an agent is in one team everywhere. A shipped key gets its
+    label (and tooltip); free text an operator typed is its own team, labelled as written.
+    Pass the role's spec (a dict, or a row with `spec`); anything else is `yours`."""
+    if isinstance(spec, dict) and "spec" in spec and "team" not in spec:
+        spec = spec.get("spec")
+    raw = spec.get("team") if isinstance(spec, dict) else None
+    text_value = str(raw or "").strip()
+    key = _TEAM_KEY.sub("_", text_value.lower()).strip("_")[:40]
+    if not key:
+        key = "yours"
+    if key in _TEAM_LABELS:
+        label, tip = _TEAM_LABELS[key]
+        return {"key": key, "label": label, **({"tip": tip} if tip else {})}
+    return {"key": key, "label": text_value[:40] or key}
+
+
+def teams_by_role(connection: Connection, project_id: str) -> dict[str, dict[str, Any]]:
+    """{role_key: team_of(spec)} for every agent on the project. A role_key missing from the
+    answer (an unregistered name doing work) is `yours`: call team_of(None)."""
+    rows = connection.execute(
+        text("SELECT role_key, spec FROM roles WHERE project_id = :p AND role_key <> 'human'"),
+        {"p": project_id},
+    ).mappings().all()
+    return {str(r["role_key"]): team_of(r["spec"]) for r in rows}
 
 
 def aliases(connection: Connection, project_id: str) -> dict[str, str]:

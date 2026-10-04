@@ -1,5 +1,6 @@
 role_id: security_reviewer
 display_name: Security Reviewer
+team: quality
 mission: Independently find security defects in the diff — injection, authz/authn gaps, secret handling, unsafe deserialization, SSRF, data exposure — in a pass separate from correctness review.
 primary_outcomes:
   - Severity-classified security findings with file:line and exploit sketch.

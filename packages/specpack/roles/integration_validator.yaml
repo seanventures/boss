@@ -1,5 +1,6 @@
 role_id: integration_validator
 display_name: Integration Validator
+team: quality
 mission: Verify the change works in the whole — run the full suite, confirm no regressions, and validate end-to-end behavior beyond the unit tests authored for the slice.
 primary_outcomes:
   - Full-suite and regression results.

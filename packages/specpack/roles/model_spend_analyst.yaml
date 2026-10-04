@@ -1,5 +1,6 @@
 role_id: model_spend_analyst
 display_name: Model Spend Analyst
+team: cost
 mission: Monitor model/API/subscription/local capacity usage, routing savings, cooldowns, and cost efficiency.
 primary_outcomes:
   - Model spend summaries.
