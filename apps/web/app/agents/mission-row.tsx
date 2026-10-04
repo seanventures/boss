@@ -42,6 +42,34 @@ function actOf(hop: Hop, mission: Mission): Act {
   };
 }
 
+/** The lane as drawn (walk D11). A wait for a person is drawn ONCE, as the amber You / A person
+ *  hop the row adds from its state: an agent's hop is never ringed amber for it. The person who
+ *  started the run is never "stuck" — a run that failed failed at a step, not at its start. */
+export function laneHops(m: Pick<Mission, "hops" | "state">): MissionHop[] {
+  return m.hops.map((h) => {
+    if (h.kind !== "hop") return h;
+    if (h.state === "needs_you") return { ...h, state: "idle" };
+    if (!h.roleKey && h.state === "stuck") return { ...h, state: "done" };
+    return h;
+  });
+}
+
+/** Does this face match the header's `Find an agent` text? Empty text matches everyone. */
+export function faceMatches(roleKey: string | null, query: string | undefined): boolean {
+  const q = (query ?? "").trim().toLowerCase();
+  if (!q) return true;
+  if (!roleKey) return false;
+  const n = nameOf(roleKey);
+  return [roleKey, n.name, n.role, n.callsign ?? ""].some((x) => x.toLowerCase().includes(q));
+}
+
+/** A tooltip of ours stays ≤14 words (walk D20); a long server sentence is clipped. */
+export function clipWords(text: string | null | undefined, max = 14): string | undefined {
+  const words = String(text ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return undefined;
+  return words.length > max ? `${words.slice(0, max).join(" ")}…` : words.join(" ");
+}
+
 /** The hop doing the work now: the last one in a live state, else the last one. */
 export function currentHopIndex(hops: MissionHop[]): number {
   for (let i = hops.length - 1; i >= 0; i -= 1) {
@@ -56,8 +84,9 @@ export function currentHopIndex(hops: MissionHop[]): number {
 /** Whether this row's current face moves (it counts against Live's ring budget). */
 export function rowAnimates(m: Mission): boolean {
   if (m.state === "waiting_you") return true;
-  const i = currentHopIndex(m.hops);
-  const h = i >= 0 ? m.hops[i] : null;
+  const hops = laneHops(m);
+  const i = currentHopIndex(hops);
+  const h = i >= 0 ? hops[i] : null;
   return !!h && h.kind === "hop" && ANIMATED_STATES.has(h.state);
 }
 
@@ -95,8 +124,8 @@ export function nowParts(m: Mission, stepSeconds: number | null): { text: string
       return parts({ text: `Waiting on ${who}` }, step);
     }
     case "waiting": return parts({ text: m.waitingOn ? `Waiting · ${m.waitingOn}` : "Waiting" }, step, time);
-    case "stopped": return parts({ text: `Failed · step ${m.stepIndex}`, tip: m.error ?? undefined, cls: "ag-mission-failed" });
-    case "blocked": return parts({ text: "Blocked", tip: m.blockedReason ?? undefined, cls: "ag-mission-blocked" }, step);
+    case "stopped": return parts({ text: `Failed · step ${m.stepIndex}`, tip: clipWords(m.error), cls: "ag-mission-failed" });
+    case "blocked": return parts({ text: "Blocked", tip: clipWords(m.blockedReason), cls: "ag-mission-blocked" }, step);
     case "done": return parts({ text: `Finished · ${m.stepCount} steps${m.elapsedSeconds ? ` · ${span(m.elapsedSeconds)}` : ""}` });
     default: return parts({ text: m.verb || "Working" }, step, time);
   }
@@ -114,6 +143,8 @@ export type MissionRowProps = {
   onYou?: (attentionId: string) => void;
   /** For links that open in a new tab (presses navigate in place). */
   orgId?: string | null;
+  /** The header's `Find an agent` text: faces that don't match dim (walk D10). */
+  search?: string;
 };
 
 function stepSecondsOf(m: Mission, now: number | null): number | null {
@@ -132,7 +163,7 @@ function totalSecondsOf(m: Mission, now: number | null): number | null {
   return m.elapsedSeconds ?? null;
 }
 
-export function MissionRow({ mission: m, density = "lane", band = "wide", now, still, onYou, orgId }: MissionRowProps) {
+export function MissionRow({ mission: m, density = "lane", band = "wide", now, still, onYou, orgId, search }: MissionRowProps) {
   useIdentityVersion();
   // The hops here when the row first drew: only a hop that arrives while you watch draws in.
   const seen = useRef<Set<string> | null>(null);
@@ -151,11 +182,13 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
   const runHref = linkTo(runPatch(m.runId), orgId);
   const mapPatch = { area: "workforce", view: "org", run: m.runId, role: null, focus: null };
 
-  const cur = currentHopIndex(m.hops);
-  const curHop = cur >= 0 ? m.hops[cur] : null;
+  const hops = laneHops(m);
+  const cur = currentHopIndex(hops);
+  const curHop = cur >= 0 ? hops[cur] : null;
   let shown: MissionHop[] = band === "phone" && density === "lane"
     ? (curHop ? [curHop] : [])
-    : foldHops(m.hops, band);
+    : foldHops(hops, band);
+  const named = density === "lane" && band !== "phone";
   if (density === "row") shown = curHop ? [curHop] : [];
   const youHop = m.state === "waiting_you" || m.state === "waiting_person";
 
@@ -203,6 +236,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
           const isCur = h === curHop;
           return (
             <li key={h.actId || `hop-${i}`} className="ag-mission-hop" data-current={isCur || undefined}
+                data-dim={faceMatches(h.roleKey, search) ? undefined : "true"}
                 aria-label={`${who}, ${h.state.replace("_", " ")}, ${h.label}`}>
               {i > 0 && density === "lane" ? (
                 <span className="ag-chain-edge" data-new={fresh.has(h.actId) ? "true" : undefined}
@@ -210,7 +244,10 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
                   <i className="ag-chain-line" /><span className="ag-chain-arrow">→</span>
                 </span>
               ) : null}
-              <ActFace act={actOf(h, m)} viewer={h.person ?? ""} size={24} />
+              <span className="ag-mission-who">
+                <ActFace act={actOf(h, m)} viewer={h.person ?? ""} size={24} />
+                {named ? <span className="ag-mission-hop-name" aria-hidden>{who}</span> : null}
+              </span>
             </li>
           );
         })}
@@ -218,12 +255,16 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
           <li className="ag-mission-hop ag-mission-you-hop" aria-label={m.state === "waiting_you" ? "You, needs you" : "A person, needs you"}>
             {shown.length ? <span className="ag-chain-edge" aria-hidden><i className="ag-chain-line" /><span className="ag-chain-arrow">→</span></span> : null}
             {m.state === "waiting_you" && m.attentionId ? (
-              <button type="button" className="ag-face-btn" data-testid={`ag-mission-you-${m.runId}`}
+              <button type="button" className="ag-face-btn ag-mission-who" data-testid={`ag-mission-you-${m.runId}`}
                       title="Waiting on you · open the card" onClick={() => onYou?.(m.attentionId!)}>
                 <RunFace roleKey={null} variant="you" size={24} state="needs_you" />
+                {named ? <span className="ag-mission-hop-name" aria-hidden>You</span> : null}
               </button>
             ) : (
-              <RunFace roleKey={null} variant={m.state === "waiting_you" ? "you" : "person"} size={24} state="needs_you" standalone />
+              <span className="ag-mission-who">
+                <RunFace roleKey={null} variant={m.state === "waiting_you" ? "you" : "person"} size={24} state="needs_you" standalone />
+                {named ? <span className="ag-mission-hop-name" aria-hidden>{m.state === "waiting_you" ? "You" : "A person"}</span> : null}
+              </span>
             )}
           </li>
         ) : null}
@@ -233,9 +274,6 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
             {n.roleKey ? <RunFace roleKey={n.roleKey} size={16} /> : <Sparkle size={12} weight="bold" aria-hidden />}
           </li>
         )) : null}
-        {band === "phone" && density === "lane" && m.stepCount ? (
-          <li className="ag-mission-kn" title="Steps done so far. BOSS doesn't guess finish times.">{m.stepIndex}/{m.stepCount}</li>
-        ) : null}
       </ol>
 
       <span className="ag-mission-now" title={total !== null ? `Run time ${span(total)}` : undefined}>

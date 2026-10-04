@@ -17,10 +17,10 @@ import { CaretDown, CaretRight, CheckCircle, WarningCircle } from "@phosphor-ico
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { openPlan } from "../../lib/converse-doors";
-import type { LiveBoardState, Mission, Outcome } from "../../lib/agents-live-board";
+import type { AttentionItem, LiveBoardState, Mission, Outcome } from "../../lib/agents-live-board";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AttentionCard } from "./attention-card";
-import { MissionRow, rowAnimates } from "./mission-row";
+import { MissionRow, faceMatches, rowAnimates } from "./mission-row";
 import { RunFace, nameOf } from "./run-face";
 import { TeamZones } from "./team-zones";
 import { RING_BUDGET, ago, linkTo, navigate, plainClick, runPatch, useBand, useNow } from "./live-util";
@@ -38,6 +38,20 @@ const MISSION_RANK: Record<string, number> = {
   waiting_you: 0, stopped: 1, blocked: 2, running: 3, waiting: 3, waiting_person: 3, done: 4,
 };
 
+/** What NEEDS YOU draws (walk D2, D12). The number is DECISIONS — the same one the pill, the
+ *  Command Center and Approvals say. A step that failed is a card too, and is never folded away
+ *  under `+n more`: it has stopped a run, so it comes first. Setup gaps are not cards here; they
+ *  are one quiet line each, to Setup, which has its own badge. */
+export function splitAttention(items: AttentionItem[]): {
+  stopped: AttentionItem[]; decisions: AttentionItem[]; setup: AttentionItem[];
+} {
+  return {
+    stopped: items.filter((a) => a.kind === "failed_step"),
+    decisions: items.filter((a) => a.kind === "approval"),
+    setup: items.filter((a) => a.kind === "readiness"),
+  };
+}
+
 /** The spec's order: waiting on you, failed, blocked, running, just finished. Stable inside. */
 export function sortMissions(missions: Mission[]): Mission[] {
   return missions.map((m, i) => ({ m, i }))
@@ -45,11 +59,12 @@ export function sortMissions(missions: Mission[]): Mission[] {
     .map(({ m }) => m);
 }
 
-function SectionHead({ id, label, count, children }: { id: string; label: string; count?: number; children?: React.ReactNode }) {
+function SectionHead({ id, label, count, extra, children }: { id: string; label: string; count?: number; extra?: string; children?: React.ReactNode }) {
   return (
     <header className="ag-live-head">
       <h2 id={id} className="ag-zone-label">{label}</h2>
-      {count !== undefined && count > 0 ? <span className="ag-zone-count">{count}</span> : null}
+      {count !== undefined && count > 0 ? <span className="ag-zone-count" data-testid={`${id}-count`}>{count}</span> : null}
+      {extra ? <span className="ag-zone-extra" data-testid={`${id}-extra`}>{extra}</span> : null}
       <span className="ag-spacer" />
       {children}
     </header>
@@ -133,9 +148,10 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
   }, [board]);
 
   function focusCard(id: string) {
-    const index = attention.findIndex((a) => a.id === id);
-    if (index < 0) return;
-    if (index >= CARDS_SHOWN) setMoreCards(true);
+    const item = attention.find((a) => a.id === id);
+    if (!item) return;
+    const parts = splitAttention(attention);
+    if (item.kind === "approval" && parts.decisions.indexOf(item) >= Math.max(0, CARDS_SHOWN - parts.stopped.length)) setMoreCards(true);
     setFocus((f) => ({ id, n: (f?.n ?? 0) + 1 }));
   }
   useEffect(() => {
@@ -167,7 +183,12 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
     );
   }
 
-  const cards = moreCards ? attention : attention.slice(0, CARDS_SHOWN);
+  const { stopped, decisions, setup } = splitAttention(attention);
+  const room = Math.max(0, CARDS_SHOWN - stopped.length);
+  const overflow = decisions.length > room;
+  const hiddenDecisions = decisions.length - room;
+  const cards = [...stopped, ...(moreCards ? decisions : decisions.slice(0, room))];
+  const asking = stopped.length + decisions.length;
   const missions = sortMissions(board.missions);
   const grouped = missions.length > GROUP_AT;
   const rows = grouped ? missions : moreRows ? missions : missions.slice(0, ROWS_SHOWN);
@@ -201,7 +222,7 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
 
   const renderRow = (m: Mission) => (
     <MissionRow key={m.runId} mission={m} band={band} now={now} still={stillRow.get(m.runId)}
-                onYou={(id) => focusCard(id)} orgId={orgId} />
+                onYou={(id) => focusCard(id)} orgId={orgId} search={search} />
   );
 
   const groups = grouped ? groupBy(rows) : [];
@@ -216,15 +237,16 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
 
       <section className="ag-live-sec" data-sec="needs" role="region" aria-labelledby="ag-live-needs-h"
                id="ag-live-needs" onKeyDown={onCardsKey}>
-        <SectionHead id="ag-live-needs-h" label="NEEDS YOU" count={attention.length}>
-          {attention.length ? (
+        <SectionHead id="ag-live-needs-h" label="NEEDS YOU" count={decisions.length}
+                     extra={stopped.length ? `· ${stopped.length} stopped` : undefined}>
+          {decisions.length ? (
             <a className="ag-link" href={linkTo({ area: "decisions", decision_filter: "needs_action", role: null, view: null }, orgId)}
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: "decisions", decision_filter: "needs_action", role: null, view: null }); } }}>
               All in Approvals ↗
             </a>
           ) : null}
         </SectionHead>
-        {attention.length === 0 ? (
+        {asking === 0 ? (
           <div className="ag-live-quiet" data-testid="ag-live-nothing-needs">
             <CheckCircle size={14} weight="bold" aria-hidden />
             <span title="Agents will ask here before anything risky.">Nothing needs you</span>
@@ -236,18 +258,35 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
                 <AttentionCard key={a.id} item={a} projectId={projectId} actor={actor}
                                enter={!firstIds.current?.has(a.id)} still={stillCard.get(a.id)}
                                focusKey={focus?.id === a.id ? focus.n : undefined} orgId={orgId}
+                               dim={!faceMatches(a.roleKey, search)}
                                onDone={() => { setGone((g) => new Set(g).add(a.id)); refresh(); }}
                                onRefresh={refresh} />
               ))}
             </div>
-            {attention.length > CARDS_SHOWN ? (
+            {overflow ? (
               <button type="button" className="ag-zone-more" aria-expanded={moreCards} data-testid="ag-att-more"
                       onClick={() => setMoreCards((v) => !v)}>
-                {moreCards ? "Show fewer" : `+${attention.length - CARDS_SHOWN} more`}
+                {moreCards ? "Show fewer" : `+${hiddenDecisions} more`}
               </button>
             ) : null}
           </>
         )}
+        {setup.length ? (
+          <ul className="ag-live-setup" data-testid="ag-live-setup">
+            {setup.map((a) => {
+              const patch = { area: a.fix?.area || "setup", view: null, role: null };
+              return (
+                <li key={a.id}>
+                  <a className="ag-link" href={linkTo(patch, orgId)} data-testid={`ag-live-setup-${a.id}`}
+                     title={a.whatToDo || undefined}
+                     onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(patch); } }}>
+                    Setup: <span data-user-text>{a.title}</span> ↗
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
       </section>
 
       <section className="ag-live-sec" data-sec="work" role="region" aria-labelledby="ag-live-work-h" id="ag-live-work">

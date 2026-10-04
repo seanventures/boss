@@ -15,6 +15,8 @@ import {
   type CommandCenterData,
 } from "../lib/command-center";
 import { AttentionCard } from "./agents/attention-card";
+import { splitAttention } from "./agents/live-board";
+import { linkTo } from "./agents/live-util";
 import { MissionRow } from "./agents/mission-row";
 
 /** How often the landing page re-reads itself while it is being looked at. */
@@ -115,16 +117,40 @@ export function CommandCenter({ projectId, orgId, actor, initial }: {
           </p>
         ) : (
           // ONE DESIGN WITH AGENTS › LIVE: the same card, at row density (agents-home §3.3).
-          <div className="cc2-list ag-att-rows">
-            {data.needs_you.map((item) => {
-              const card = attentionFromNeedsYou(item);
+          // ONE DESIGN WITH AGENTS › LIVE: the same card, at row density (agents-home §3.3). Failed
+          // steps first (they have stopped a run), then decisions; setup gaps are one line each,
+          // to Setup — they are not in the "need you" number (walk D2).
+          <>
+            {(() => {
+              const cards = data.needs_you.map(attentionFromNeedsYou);
+              const { stopped, decisions, setup } = splitAttention(cards);
               return (
-                <AttentionCard key={`${item.kind}:${card.id}`} item={card} projectId={projectId}
-                               actor={actor} density="row" orgId={orgId} onDone={() => void load()}
-                               onRefresh={() => void load()} />
+                <>
+                  {stopped.length + decisions.length ? (
+                    <div className="cc2-list ag-att-rows">
+                      {[...stopped, ...decisions].map((card) => (
+                        <AttentionCard key={`${card.kind}:${card.id}`} item={card} projectId={projectId}
+                                       actor={actor} density="row" orgId={orgId} onDone={() => void load()}
+                                       onRefresh={() => void load()} />
+                      ))}
+                    </div>
+                  ) : null}
+                  {setup.length ? (
+                    <ul className="ag-live-setup" data-testid="cc2-setup">
+                      {setup.map((a) => (
+                        <li key={a.id}>
+                          <a className="ag-link" href={linkTo({ area: a.fix?.area || "setup", view: null, role: null }, orgId)}
+                             title={a.whatToDo || undefined}>
+                            Setup: <span data-user-text>{a.title}</span> ↗
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </>
               );
-            })}
-          </div>
+            })()}
+          </>
         )}
         {/* Not in the list above: an expired hold decision applied nothing and can still be
             answered, but most are about work that has moved on (127 of 165 on the live

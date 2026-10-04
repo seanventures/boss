@@ -68,8 +68,6 @@ export function reviewPatch(item: AttentionSummary["items"][number]): Record<str
   return decisionPatch(item.id);
 }
 
-const TITLE_PREFIX = /^\(\d+\) /;
-
 export function PresencePill({ projectId, live: given, attention: givenAttention }: {
   projectId: string; live?: LiveMap; attention?: AttentionSummary | null;
 }) {
@@ -89,15 +87,8 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   const [announced, setAnnounced] = useState("");
   const said = useRef<Set<string>>(new Set());
 
-  // The tab title carries `(n)` while something is waiting on the operator.
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const base = document.title.replace(TITLE_PREFIX, "");
-    document.title = needs ? `(${needs}) ${base}` : base;
-  }, [needs]);
-  useEffect(() => () => {
-    if (typeof document !== "undefined") document.title = document.title.replace(TITLE_PREFIX, "");
-  }, []);
+  // The tab title's `(n)` is the shell's (lib/tab-title.ts): one owner, re-applied after Next
+  // rewrites the title on a navigation or refresh.
   // Said once per new item (by id), not on every poll.
   useEffect(() => {
     if (attention) {
@@ -152,7 +143,7 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
                   <li key={i.id} className="ag-crew-need" data-testid={`ag-crew-need-${i.id}`}>
                     {i.roleKey
                       ? <AgFace roleKey={i.roleKey} size={32} state="needs_you" decorative />
-                      : <RunFace roleKey={null} variant={i.id.startsWith("ready:") ? "boss" : "you"} size={32} state="needs_you" />}
+                      : <RunFace roleKey={null} variant="boss" size={32} state="needs_you" />}
                     <span className="ag-crew-text">
                       <span className="ag-crew-line ag-trunc" title={i.title} data-user-text>{i.title}</span>
                       {ago(i.at, now) ? <span className="ag-crew-age" title={`Waiting since ${localTime(i.at)}`}>{ago(i.at, now)}</span> : null}
@@ -162,6 +153,13 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
                   </li>
                 ))}
               </ul>
+              {attention.count > Math.min(5, attention.items.length) ? (
+                <button type="button" className="ag-link ag-crew-more" data-testid="ag-crew-needs-more"
+                        title="See them all on Live"
+                        onClick={() => { setOpen(false); navigate({ area: "workforce", view: null, role: null, run: null, focus: null }); }}>
+                  +{attention.count - Math.min(5, attention.items.length)} more
+                </button>
+              ) : null}
             </>
           ) : null}
           {crewRows.length ? (

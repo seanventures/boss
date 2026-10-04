@@ -34,7 +34,7 @@ describe("Live never guesses", () => {
     expect(all).not.toMatch(/almost done/i);
   });
 
-  it("an item attributed to nobody shows the BOSS glyph or You, never an agent face", async () => {
+  it("an item attributed to nobody shows the BOSS glyph, never an agent face or a person", async () => {
     await mount(view(board({ attention: [
       prReview(),
       { id: "ready:repo", kind: "readiness", title: "Connect a repository", detail: "", role_key: null,
@@ -42,8 +42,10 @@ describe("Live never guesses", () => {
     ] })));
     const variants = (id: string) => [...$(`[data-testid="ag-att-${id}"] .ag-att-face`)!.querySelectorAll(".ag-avatar")]
       .map((a) => (a as HTMLElement).dataset.variant);
-    expect(variants("dec_pr")).toEqual(["you"]);
-    expect(variants("ready:repo")).toEqual(["boss"]);
+    expect(variants("dec_pr")).toEqual(["boss"]);
+    // Setup is a line to Setup now, not a card (walk D2).
+    expect($('[data-testid="ag-att-ready:repo"]')).toBeNull();
+    expect($('[data-testid="ag-live-setup-ready:repo"]')).not.toBeNull();
     // The attributed one is the agent's own face.
     unmount();
     await mount(view(board()));
