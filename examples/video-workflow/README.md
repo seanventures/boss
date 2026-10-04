@@ -66,8 +66,10 @@ says the same thing: Google is listed against the publish step, and against the 
 when the link you gave is a Drive link. Because publishing stops for you anyway, you can start a
 run, review the edit, and connect Google before you approve.
 
-To keep the files in Drive as well, give the step a `store_provider` of `google` (or an
-`output_folder_id`); without a Google connection they stay in BOSS and the step says so.
+**Where the edits are kept.** An edit of a video that came from Drive goes back to Drive when
+Google is connected, as it always has. Anything else — a direct link, or a Drive source with no
+Google connection — is kept in BOSS, and the step says so. To choose explicitly, give the step a
+`store_provider`: `google` (or an `output_folder_id`) for Drive, `boss` for BOSS's own storage.
 
 *Several channels?* Connect each one; they get their own keys (`youtube_default`, `youtube_2`, …),
 each with its own token. To pin a step to a particular channel, open that step's **inputs** in the

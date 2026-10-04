@@ -287,6 +287,7 @@ def store(
     container: str = "",
     connection_key: Optional[str] = None,
     actor: str = "system",
+    source_storage: Optional[str] = None,
 ) -> dict[str, Any]:
     """Put a finished file where the project keeps its media, as a NEW file.
 
@@ -300,8 +301,16 @@ def store(
     or write Drive when a workflow asks for that; it is not needed to keep an intermediate file.
     A named provider that is not connected falls back to BOSS's storage and says so in `note`,
     rather than stopping a run whose only use of that provider was somewhere to put a file.
+
+    WHERE THE SOURCE CAME FROM DECIDES THE DEFAULT. An edit of a video that came out of Drive
+    goes back to Drive when nothing else was asked and Google is connected — the behaviour every
+    Drive-based workflow was built on, an operator's YouTube pipeline included. A source that did
+    not come from Drive (a direct link, a file BOSS already keeps) stays in BOSS. An explicit
+    `provider_key` always wins, `boss` included.
     """
     asked = str(provider_key or "").strip().lower()
+    if not asked and str(source_storage or "").strip().lower() == "google":
+        asked = "google"
     if asked in ("", LOCAL_PROVIDER, "local"):
         return store_local(settings, project_id=project_id, local_path=local_path, name=name)
 

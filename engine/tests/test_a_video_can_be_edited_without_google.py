@@ -175,6 +175,85 @@ def test_asking_for_drive_without_google_keeps_the_file_in_boss_and_says_so(
     assert "Google is not connected" in fetched["storage_note"]
 
 
+def _connect_google(db, project):
+    definition = f"idef_{uuid.uuid4().hex[:10]}"
+    db.execute(text(
+        "INSERT INTO integration_definitions (id, project_id, integration_key, version, name, "
+        "category, status, skill_contracts, provenance, content_hash, created_by) VALUES "
+        "(:i, :p, 'google', 1, 'Google', 'media', 'active', '[]'::jsonb, '{}'::jsonb, 'x', "
+        "'ceo')"), {"i": definition, "p": project})
+    db.execute(text(
+        "INSERT INTO integration_connections (id, project_id, integration_definition_id, "
+        "connection_key, scope_type, scope_id, owner_ref, status, created_by) VALUES "
+        "(:i, :p, :d, 'youtube_default', 'project', :p, 'ceo', 'active', 'ceo')"),
+        {"i": f"icon_{uuid.uuid4().hex[:10]}", "p": project, "d": definition})
+
+
+def _drive_source(db, project, monkeypatch, tmp_path):
+    """A video that came out of Drive, as `drive.import_video` records it, with Drive itself
+    stood in for: downloads hand back a file, uploads are recorded."""
+    from boss_engine.services import drive_media
+
+    _stand_in_for_the_network_and_ffmpeg(monkeypatch, tmp_path)
+    uploads = []
+
+    def fake_download(connection, settings, *, project_id, file_id, dest_dir,
+                      connection_key="youtube_default"):
+        os.makedirs(dest_dir, exist_ok=True)
+        path = os.path.join(dest_dir, "from-drive.mp4")
+        Path(path).write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"drive-video" * 64)
+        return {"path": path, "name": "from-drive.mp4", "bytes": os.path.getsize(path),
+                "file_id": file_id}
+
+    def fake_upload(connection, settings, *, project_id, local_path, name, folder_id="",
+                    connection_key="youtube_default", actor="system"):
+        uploads.append({"name": name, "connection_key": connection_key})
+        return {"file_id": "1EditedInDrive", "name": name, "bytes": 200,
+                "view_url": "https://drive.google.com/file/d/1EditedInDrive/view"}
+
+    monkeypatch.setattr(drive_media, "download", fake_download)
+    monkeypatch.setattr(drive_media, "upload", fake_upload)
+    source_id = drive_media.record_artifact(
+        db, project_id=project, actor="video_editor", kind="media_video",
+        drive_file={"file_id": "1SourceInDrive", "name": "MS_latest.mp4",
+                    "view_url": "https://drive.google.com/file/d/1SourceInDrive/view"},
+        detail=dict(VIDEO_INFO))
+    return source_id, uploads
+
+
+@needs_db
+def test_an_edit_of_a_drive_source_goes_back_to_drive_when_google_is_connected(
+        db, settings, project, monkeypatch, tmp_path):
+    """The operator's own workflow: source in Drive, edits in Drive. Unchanged."""
+    _connect_google(db, project)
+    source_id, uploads = _drive_source(db, project, monkeypatch, tmp_path)
+    edited = se.execute_video_trim(_context(db, settings, project),
+                                   {"media_artifact_id": source_id, "start": "0", "end": "2"})
+    assert edited["stored_in"] == "google" and "storage_note" not in edited
+    assert edited["drive_file_id"] == "1EditedInDrive"
+    assert edited["view_url"] == "https://drive.google.com/file/d/1EditedInDrive/view"
+    assert len(uploads) == 1
+    _row, content = _content(db, edited["media_artifact_id"])
+    assert content["storage"] == "google" and not content.get("local_path")
+    assert not (Path(settings.artifact_root) / project / "media").exists()
+
+    # ASKING OTHERWISE WINS: the step names BOSS's storage, and Drive is not written.
+    kept = se.execute_video_trim(_context(db, settings, project),
+                                 {"media_artifact_id": source_id, "start": "0", "end": "2",
+                                  "store_provider": "boss"})
+    assert kept["stored_in"] == "boss" and len(uploads) == 1
+
+
+@needs_db
+def test_an_edit_of_a_drive_source_stays_in_boss_when_google_is_not_connected(
+        db, settings, project, monkeypatch, tmp_path):
+    source_id, uploads = _drive_source(db, project, monkeypatch, tmp_path)
+    edited = se.execute_video_trim(_context(db, settings, project),
+                                   {"media_artifact_id": source_id, "start": "0", "end": "2"})
+    assert edited["stored_in"] == "boss" and uploads == []
+    assert "Google is not connected" in edited["storage_note"]
+
+
 def test_a_stored_file_never_overwrites_and_never_leaves_its_project(settings, tmp_path):
     source = tmp_path / "out.mp4"
     source.write_bytes(b"video")
