@@ -3,7 +3,8 @@
 /**
  * Agents › Directory: every agent, to find and set up (agents-home spec §4.8).
  *
- * Moved out of workforce-ui.tsx unchanged in Phase 0 so the Live stream (which owns the area
+ * Grouped by team, in the order every Agents surface uses; the presence zones moved to Live.
+ * Moved out of workforce-ui.tsx in Phase 0 so the Live stream (which owns the area
  * shell) and the Directory stream (which owns this grid) never edit one file. Testids are
  * preserved: wf-filter-*, roster-ungoverned, workforce-empty, and RosterZones' own.
  */
@@ -15,7 +16,7 @@ import { askAgent as talkTo, identityOf, openAgent } from "../../lib/agent-world
 import { openDockAbout } from "../../lib/dock-subject";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { FocusedAgents } from "../focused-agents-ui";
-import { RosterZones, placeAgents } from "./roster-zones";
+import { RosterZones } from "./roster-zones";
 
 /** What "N unregistered" means, and what pressing it does. */
 export const UNREGISTERED_TIP =
@@ -33,7 +34,8 @@ function askAgent(agent: Pick<V2Agent, "id" | "name" | "registered">): void {
   else openDockAbout({ subject: null, role: agent.name, question: `@${agent.name}: ` });
 }
 
-export type DirectoryFilter = "all" | "needs_you" | "worked" | "duty" | "retired" | "unregistered";
+/** `Needs you` left Directory for Live, which owns what is waiting (agents-home spec §3.3). */
+export type DirectoryFilter = "all" | "worked" | "duty" | "retired" | "unregistered";
 
 export type DirectoryViewProps = {
   projectId: string;
@@ -51,11 +53,8 @@ export type DirectoryViewProps = {
 export function DirectoryView({ projectId, actor, everyone, retired, live, search, onCreate }: DirectoryViewProps) {
   const identities = useIdentityVersion();
   const [filter, setFilter] = useState<DirectoryFilter>("all");
-  const needsYou = useMemo(() => new Set(placeAgents(everyone, live)
-    .filter((p) => p.zone === "needs_you").map((p) => p.agent.id)), [everyone, live]);
   const agents = useMemo(() => {
-    const scoped = filter === "needs_you" ? everyone.filter((a) => needsYou.has(a.id))
-      : filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0)
+    const scoped = filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0)
       : filter === "retired" ? retired
       : filter === "unregistered" ? everyone.filter((a) => !a.registered) : everyone;
     const query = search.trim().toLowerCase();
@@ -64,7 +63,7 @@ export function DirectoryView({ projectId, actor, everyone, retired, live, searc
       return `${a.name} ${a.role} ${a.task} ${id.callsign ?? ""} ${id.tagline ?? ""}`.toLowerCase();
     };
     return query ? scoped.filter((a) => who(a).includes(query)) : scoped;
-  }, [everyone, retired, needsYou, filter, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
+  }, [everyone, retired, filter, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
 
   // COUNTED, NOT ASSUMED: roles idle all window have recorded no work.
   const workedCount = everyone.filter((a) => volumeOf(a) > 0).length;
@@ -75,16 +74,15 @@ export function DirectoryView({ projectId, actor, everyone, retired, live, searc
   }, [filter, unregisteredCount]);
 
   return (
-    <div className="roster">
+    <div className="roster ag-dir-view">
       <div className="roster-filterbar">
         <span className="roster-filters">
-          {(["all", "duty", "needs_you", "worked", ...(retired.length ? ["retired" as const] : [])] as const).map((f) => (
+          {(["all", "duty", "worked", ...(retired.length ? ["retired" as const] : [])] as const).map((f) => (
             <button key={f} type="button" className="cap-btn" data-active={filter === f}
                     onClick={() => setFilter(f)} data-testid={`wf-filter-${f}`}
                     title={f === "duty" ? "Agents that watch and act on their own"
                       : f === "retired" ? "Kept for their work. Hidden from pickers." : undefined}>
-              {f === "all" ? `All ${everyone.length}` : f === "needs_you" ? `Needs you ${needsYou.size}`
-                : f === "worked" ? `Has done work ${workedCount}`
+              {f === "all" ? `All ${everyone.length}` : f === "worked" ? `Has done work ${workedCount}`
                 : f === "retired" ? `Retired ${retired.length}` : "On duty"}
             </button>
           ))}
@@ -109,10 +107,10 @@ export function DirectoryView({ projectId, actor, everyone, retired, live, searc
             <span className="detail">No agents yet</span>
             <button type="button" className="wf-btn" onClick={() => onCreate(true)}>+ New agent</button>
           </div>
-        ) : <p className="detail">No match</p>
+        ) : <span className="detail" data-testid="roster-no-match">No match</span>
       ) : (
-        // GROUPED BY WHAT THEY ARE DOING: Needs you, Working, In a panel, Idle (spec §3.2).
-        <RosterZones agents={agents} live={live} onOpen={openAgent}
+        // GROUPED BY TEAM (agents-home spec §4.8): what each agent is doing is Live's job.
+        <RosterZones agents={agents} live={live} onOpen={openAgent} groupBy="team"
                      onAsk={(roleKey, name) => askAgent(
                        agents.find((a) => a.id === roleKey) ?? { id: roleKey, name, registered: true })}
                      onRegister={(name) => onCreate(name)} />

@@ -42,6 +42,7 @@ import type { BornFrom } from "../lib/agents";
 import { AgFace } from "./agents/agent-face";
 import { AgentBirth } from "./agents/agent-birth";
 import { useIdentityVersion } from "../lib/use-agent-identities";
+import { TEAM_LABELS, TEAM_ORDER } from "../lib/agents-live-board";
 
 type Template = {
   id: string; name: string; description: string; role_key: string;
@@ -137,6 +138,8 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   const [skills, setSkills] = useState<string[]>([]);
   const [servers, setServers] = useState<Record<string, string>>({});
   const [reportsTo, setReportsTo] = useState("");
+  // WHICH TEAM it sits in on Live, Organization and Directory (agents-home spec §4.6).
+  const [team, setTeam] = useState("yours");
   const [skillFilter, setSkillFilter] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advanced, setAdvanced] = useState<Advanced>(initialAdvanced);
@@ -229,7 +232,8 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
         setBusy(false); setFailed(result.message); return;
       }
       const persona = birthPersona({ face, callsign, tagline });
-      await updateAgent(projectId, actor, key, { ...(reportsTo ? { reports_to: reportsTo } : {}), persona });
+      await updateAgent(projectId, actor, key, {
+        ...(reportsTo ? { reports_to: reportsTo } : {}), ...(team !== "yours" ? { team } : {}), persona });
       setBusy(false);
       born(key, "", name.trim(), persona);
       return;
@@ -238,11 +242,12 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
     // REGISTER ON A SHIPPED AGENT REGISTERS THE SHIPPED AGENT: from the roster, with nothing
     // written here, the API installs BOSS's own definition for the key (Splice for
     // video_editor), and a blank agent only when BOSS ships none.
-    const shipped = asShipped({ registering: !!initialName, purpose, skills, mcpServers, reportsTo, callsign, tagline });
+    const shipped = team === "yours"
+      && asShipped({ registering: !!initialName, purpose, skills, mcpServers, reportsTo, callsign, tagline });
     const r = await createAgent(projectId, actor, {
       name: name.trim(), purpose: purpose.trim(), skills, mcpServers, reportsTo: reportsTo || null,
       ...(nameMakesNoKey && key ? { roleKey: key } : {}),
-      ...(shipped ? { bornFrom: { kind: "shipped" } } : { bornFrom: { kind: "blank" }, persona }),
+      ...(shipped ? { bornFrom: { kind: "shipped" } } : { bornFrom: { kind: "blank" }, persona, team }),
     });
     setBusy(false);
     if (!r.ok) { setFailed(r.error); return; }
@@ -315,6 +320,15 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                 <option value="">Nobody</option>
                 {(grantable?.agents ?? []).map((a) => (
                   <option key={a.role_key} value={a.role_key}>{a.name}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="aw-field">
+              <span>Team</span>
+              <select value={team} data-testid="aq-team" onChange={(e) => setTeam(e.target.value)}>
+                {TEAM_ORDER.map((k) => (
+                  <option key={k} value={k} title={TEAM_LABELS[k]?.tip}>{TEAM_LABELS[k]?.label ?? k}</option>
                 ))}
               </select>
             </label>
