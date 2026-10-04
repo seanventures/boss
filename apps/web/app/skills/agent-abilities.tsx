@@ -80,6 +80,17 @@ export function offerSkills(available: HeldSkill[], allowed: string[], forbidden
   return { itsRole, others: offer.filter((s) => !itsRole.includes(s)) };
 }
 
+/** A touch screen has no hover, so a chip's tap must not be its grant toggle: it opens the
+ *  chip's menu, which says Give or Remove in words (independent test, D9). */
+export function coarsePointer(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    && window.matchMedia("(pointer: coarse)").matches;
+}
+/** Open the ⋯ menu that sits beside a chip. */
+function openMenuOf(chip: HTMLElement): void {
+  chip.parentElement?.querySelector<HTMLButtonElement>(".ld-more")?.click();
+}
+
 const asks = (a: Ability) => a.tools.some((t) => t.policy === "ask" || t.tier >= 2);
 const libSkill = (id: string) => `?area=skills&tab=library&lib=skills&skill=${encodeURIComponent(id)}`;
 const libMcp = (id: string) => `?area=skills&tab=library&lib=mcp&mcp=${encodeURIComponent(id)}`;
@@ -143,18 +154,22 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
       <span className="ld-chip" key={`a:${a.key}`} data-held={holds || undefined}>
         <button type="button" className="kit-chip kit-chip-btn" aria-pressed={holds}
                 disabled={busy === `a:${a.key}` || off || !canEdit} data-tip={tip}
-                data-testid={`agent-ability-${a.key}`} onClick={() => void toggle(a)}>
+                data-testid={`agent-ability-${a.key}`}
+                onClick={(e) => { if (coarsePointer()) openMenuOf(e.currentTarget); else void toggle(a); }}>
           <AbilityIcon name={a.icon} size={14} />
           {a.label}
           {holds && asks(a) ? <span className="ld-dot" aria-label={LOADOUT_TIPS.asks} data-tip={LOADOUT_TIPS.asks} /> : null}
           {!holds ? <Star size={10} weight="fill" aria-label="Recommended" /> : null}
         </button>
-        {holds && canEdit ? (
+        {canEdit && !off ? (
           <ChipMenu testId={`agent-ability-${a.key}-more`} label={a.label}>
             {(close) => (<>
               {single ? <ToolsItem projectId={projectId} actor={actor} roleKey={roleKey} server={single} onDone={() => { close(); void load(); onChanged(); }} /> : null}
               <a href={kitAbility(a.key)} role="menuitem">Open in Library ↗</a>
-              <button type="button" role="menuitem" onClick={() => { close(); void toggle(a); }}>Remove</button>
+              {holds
+                ? <button type="button" role="menuitem" onClick={() => { close(); void toggle(a); }}>Remove</button>
+                : <button type="button" role="menuitem" data-testid={`agent-ability-${a.key}-give`}
+                          onClick={() => { close(); void toggle(a); }}>Give</button>}
             </>)}
           </ChipMenu>
         ) : null}
@@ -168,7 +183,10 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
     const tip = off ? `Off · ${s.missing ? "not in this project" : "turned off"}` : (s.summary || s.label);
     return (
       <span className="ld-chip" key={`s:${s.skill_id}`} data-held>
-        <span className="kit-chip ld-plain" data-off={off || undefined} data-tip={tip} data-testid={`agent-skill-${s.skill_id}`}>
+        <span className="kit-chip ld-plain" data-off={off || undefined} data-tip={tip} data-testid={`agent-skill-${s.skill_id}`}
+              role={canEdit ? "button" : undefined} tabIndex={canEdit ? 0 : undefined}
+              onClick={canEdit ? (e) => openMenuOf(e.currentTarget) : undefined}
+              onKeyDown={canEdit ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openMenuOf(e.currentTarget); } } : undefined}>
           {guide ? <FileText size={13} aria-label="Guide" /> : null}
           {s.label || s.skill_id}
           {s.risk_tier >= 2 ? <span className="ld-dot" aria-label={LOADOUT_TIPS.asks} data-tip={LOADOUT_TIPS.asks} /> : null}
@@ -192,6 +210,9 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
     return (
       <span className="ld-chip" key={`m:${m.mcp_server_id}`} data-held>
         <span className="kit-chip ld-plain" data-off={!m.enabled || undefined}
+              role={canEdit ? "button" : undefined} tabIndex={canEdit ? 0 : undefined}
+              onClick={canEdit ? (e) => openMenuOf(e.currentTarget) : undefined}
+              onKeyDown={canEdit ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openMenuOf(e.currentTarget); } } : undefined}
               data-tip={!m.enabled ? "Off · turned off in Skills & MCP" : (m.tools.length ? m.tools.join(", ") : m.description || m.server)}
               data-testid={`agent-mcp-${m.mcp_server_id}`}>
           {label}
@@ -328,16 +349,22 @@ function ToolsItem({ projectId, actor, roleKey, server, onDone }: {
   const [all, setAll] = useState<McpServer["tools"] | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!open) return;
+    setFailed(false);
+    setAll(null);
     void mcpApi.list(projectId).then((r) => {
-      const found = r.ok ? r.data.items.find((s) => s.id === server.mcp_server_id) : undefined;
+      // A failed read says so and offers Retry; it never sits on "Reading…" (D5).
+      if (!r.ok) { setFailed(true); return; }
+      const found = r.data.items.find((s) => s.id === server.mcp_server_id);
       const tools = found?.tools ?? [];
       setAll(tools);
       // An empty allowlist means every tool: shown as every box ticked.
       setPicked(new Set(server.tools.length ? server.tools : tools.map((t) => t.name)));
     });
-  }, [open, projectId, server.mcp_server_id, server.tools]);
+  }, [open, projectId, server.mcp_server_id, server.tools, attempt]);
   if (!open) {
     return <button type="button" role="menuitem" data-tip={LOADOUT_TIPS.tools} data-testid={`agent-mcp-tools-${server.mcp_server_id}`}
                    onClick={() => setOpen(true)}>Tools…</button>;
@@ -353,7 +380,10 @@ function ToolsItem({ projectId, actor, roleKey, server, onDone }: {
   };
   return (
     <span className="ld-tools" data-testid={`agent-mcp-tools-list-${server.mcp_server_id}`}>
-      {all === null ? <span className="kit-faint">Reading…</span> : all.length === 0 ? <span className="kit-faint">No tools listed</span> : all.map((t) => (
+      {failed ? (
+        <button type="button" role="menuitem" className="ld-retry" data-testid={`agent-mcp-tools-retry-${server.mcp_server_id}`}
+                onClick={() => setAttempt((n) => n + 1)}>Can&apos;t reach BOSS API · Retry</button>
+      ) : all === null ? <span className="kit-faint">Reading…</span> : all.length === 0 ? <span className="kit-faint">No tools listed</span> : all.map((t) => (
         <label key={t.name} className="ld-tool" data-tip={t.description || undefined}>
           <input type="checkbox" checked={picked.has(t.name)}
                  onChange={(e) => setPicked((prev) => {
