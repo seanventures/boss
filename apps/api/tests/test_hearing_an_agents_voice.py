@@ -156,3 +156,107 @@ def test_a_tagline_draft_is_held_to_its_limit(client, model):
     body = client.post("/v1/agents/release_manager/persona/draft", json={
         "project_id": PROJECT, "actor": "ceo", "field": "tagline"}).json()
     assert 0 < len(body["draft"]) <= 60
+
+
+# ── A voice call is spend the budget sees ───────────────────────────────────────────────────
+
+
+class PricedModel(StubModel):
+    """Each call reports what it cost, the way the Claude CLI does."""
+
+    def __init__(self, *replies: str, cost: int = 1234):
+        super().__init__(*replies)
+        self.cost = cost
+
+    def create_text_response(self, prompt, system_prompt=None, model=None):
+        tag, reply, usage = super().create_text_response(prompt, system_prompt, model)
+        return tag, reply, {**usage, "cost_usd_micros": self.cost}
+
+
+@pytest.fixture
+def priced(monkeypatch):
+    from boss_engine.services import agent_voice, claude_cli_adapter
+
+    stub = PricedModel()
+    monkeypatch.setattr(agent_voice, "model_ready", lambda *_a, **_k: True)
+    monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter", lambda _s: stub)
+    return stub
+
+
+def _spend(engine, receipt_id: str) -> dict:
+    with engine.connect() as c:
+        row = c.execute(text(
+            "SELECT r.status AS receipt_status, r.effect_kind, c.actual_usd_micros, "
+            "c.reservation_id, b.status AS hold FROM receipts r "
+            "LEFT JOIN cost_receipts c ON c.receipt_id = r.id "
+            "LEFT JOIN budget_reservations b ON b.id = c.reservation_id "
+            "WHERE r.id = :r"), {"r": receipt_id}).mappings().first()
+    return dict(row or {})
+
+
+def test_a_test_settles_both_its_calls_against_a_real_receipt(client, engine, priced):
+    priced.replies = ["I'm Vera, an AI agent. Show me the test.",
+                      '{"voice": 4, "in_remit": true, "says_ai": true}']
+    result = _sse(_test(client, "qa", "intro"))[-1][1]
+    assert result["receipt_id"].startswith("rcpt"), "the receipt, not the reservation"
+    spent = _spend(engine, result["receipt_id"])
+    assert spent["receipt_status"] == "succeeded"
+    assert spent["effect_kind"] == "model.agent_voice_test"
+    assert spent["actual_usd_micros"] == 2 * 1234, "the reply AND the judge are paid for"
+    assert spent["hold"] == "consumed"
+
+
+def test_a_draft_settles_against_a_real_receipt(client, engine, priced):
+    priced.replies = ["Release when green."]
+    body = client.post("/v1/agents/release_manager/persona/draft", json={
+        "project_id": PROJECT, "actor": "ceo", "field": "tagline"}).json()
+    spent = _spend(engine, body["receipt_id"])
+    assert spent["receipt_status"] == "succeeded" and spent["actual_usd_micros"] == 1234
+    assert spent["hold"] == "consumed"
+
+
+def test_a_failed_draft_releases_its_hold_and_records_the_failure(client, engine, monkeypatch):
+    from boss_engine.services import agent_voice, claude_cli_adapter
+
+    class Broken:
+        def create_text_response(self, *_a, **_k):
+            raise RuntimeError("401 invalid api key")
+
+    monkeypatch.setattr(agent_voice, "model_ready", lambda *_a, **_k: True)
+    monkeypatch.setattr(claude_cli_adapter, "make_agent_chat_adapter", lambda _s: Broken())
+    assert client.post("/v1/agents/qa/persona/draft", json={
+        "project_id": PROJECT, "actor": "ceo", "field": "tagline"}).status_code == 502
+    with engine.connect() as c:
+        row = c.execute(text(
+            "SELECT status FROM budget_reservations WHERE project_id = :p "
+            "AND reason = 'Draft tagline for qa' ORDER BY created_at DESC LIMIT 1"),
+            {"p": PROJECT}).scalar()
+    assert row == "released"
+
+
+def test_a_client_that_drops_mid_stream_still_pays_for_what_it_heard(client, engine, priced,
+                                                                    monkeypatch):
+    from apps.api.app import main as api_main
+
+    captured = {}
+
+    def keep(content, **kwargs):
+        captured["stream"] = content
+        return content
+
+    monkeypatch.setattr(api_main, "StreamingResponse", keep)
+    priced.replies = ["I'm Vera, an AI agent, and I check that what we call done is "
+                      "proven by a test someone can rerun.", "{}"]
+    stream = api_main.agent_voice_test_endpoint("qa", api_main.AgentVoiceTestBody(
+        project_id=PROJECT, actor="ceo", probe="intro"))
+    first = next(stream)
+    assert first.startswith("event: token")
+    stream.close()  # what the server does when the client goes away
+    with engine.connect() as c:
+        row = c.execute(text(
+            "SELECT b.status, c.actual_usd_micros FROM budget_reservations b "
+            "JOIN cost_receipts c ON c.reservation_id = b.id WHERE b.project_id = :p "
+            "AND b.reason = 'Test intro for qa' ORDER BY b.created_at DESC LIMIT 1"),
+            {"p": PROJECT}).first()
+    assert row is not None, "the hold was left on the budget"
+    assert row[0] == "consumed" and row[1] == 1234

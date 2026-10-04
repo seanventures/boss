@@ -118,9 +118,88 @@ def ask_model(engine: Any, settings: Any, project_id: str, *, system: str,
     return text_out.strip(), usage
 
 
-def reserve(connection: Any, settings: Any, project_id: str, reason: str) -> str:
-    """A budget reservation for one voice call, or VoiceError(budget)."""
+class VoiceSpend:
+    """One voice request's spend: a budget hold, a receipt, and every model call it paid for.
+
+    The house pattern (intent_router): reserve, open a receipt, call the model, then SETTLE the
+    reservation against the receipt at what the calls actually cost — so a Test or a Draft is
+    spend the budget sees. Only a request that reached no model releases its hold. A Test makes
+    two calls (the reply and the judge) on one hold; both are added up and settled once.
+
+    `close()` is idempotent and is what a `finally` calls, so a client that drops the stream
+    mid-reply still settles what was spent instead of leaving the hold to expire.
+    """
+
+    def __init__(self, engine: Any, settings: Any, project_id: str, reservation_id: str,
+                 receipt_id: str, estimate_usd_micros: int):
+        self.engine = engine
+        self.settings = settings
+        self.project_id = project_id
+        self.reservation_id = reservation_id
+        self.receipt_id = receipt_id
+        self.estimate_usd_micros = estimate_usd_micros
+        self.calls = 0
+        self.actual_usd_micros = 0
+        self.model_id = ""
+        self.closed = False
+
+    def add(self, usage: Optional[dict[str, Any]]) -> None:
+        """Count one answered model call."""
+        from .openai_adapter import estimate_cost_usd_micros
+
+        usage = usage or {}
+        self.calls += 1
+        self.actual_usd_micros += int(estimate_cost_usd_micros(usage) or 0)
+        self.model_id = self.model_id or str(usage.get("model") or "")
+
+    def ask(self, *, system: str, prompt: str) -> tuple[str, dict[str, Any]]:
+        """ask_model, counted."""
+        reply, usage = ask_model(self.engine, self.settings, self.project_id, system=system,
+                                 prompt=prompt)
+        self.add(usage)
+        return reply, usage
+
+    def close(self, error: Optional[str] = None) -> None:
+        """Settle what was spent, or release a hold that bought nothing. Once."""
+        if self.closed:
+            return
+        self.closed = True
+        from ..db import begin
+        from .budget import BudgetGovernor
+        from .receipts import ReceiptService
+
+        governor, receipts = BudgetGovernor(self.settings), ReceiptService()
+        try:
+            with begin(self.engine) as connection:
+                if self.calls:
+                    if error:
+                        receipts.mark_failed(connection, self.receipt_id,
+                                             {"message": error[:1000], "calls": self.calls})
+                    else:
+                        receipts.mark_succeeded(connection, self.receipt_id,
+                                                self.model_id or None, {"calls": self.calls})
+                    governor.settle(connection, self.project_id, self.reservation_id,
+                                    self.receipt_id, "model", self.model_id or "agent-voice",
+                                    self.estimate_usd_micros, self.actual_usd_micros)
+                else:
+                    receipts.mark_failed(connection, self.receipt_id,
+                                         {"message": (error or "No model call was made.")[:1000]})
+                    governor.release(connection, self.project_id, self.reservation_id,
+                                     "Agent voice call reached no model.")
+        except Exception:  # noqa: BLE001 — never mask the answer; the hold still expires
+            import logging
+
+            logging.getLogger(__name__).warning("agent voice spend not settled", exc_info=True)
+
+
+def open_spend(connection: Any, engine: Any, settings: Any, project_id: str, effect: str,
+               reason: str, payload: dict[str, Any]) -> VoiceSpend:
+    """Reserve and open the receipt for one voice request, or VoiceError(budget)."""
+    from sqlalchemy import text
+
     from .budget import BudgetGovernor
+    from .core import make_id
+    from .receipts import ReceiptService
 
     amount = int(getattr(settings, "agent_router_budget_usd_micros", 0) or 0)
     reservation = BudgetGovernor(settings).reserve(connection, project_id, "model", amount,
@@ -129,18 +208,16 @@ def reserve(connection: Any, settings: Any, project_id: str, reason: str) -> str
         raise VoiceError({"code": "budget",
                           "message": "The budget refused this model call.",
                           "reason": reservation.get("reason") or reservation.get("status")})
-    return str(reservation["reservation_id"])
-
-
-def release(engine: Any, settings: Any, project_id: str, reservation_id: str) -> None:
-    from ..db import begin
-    from .budget import BudgetGovernor
-
-    try:
-        with begin(engine) as connection:
-            BudgetGovernor(settings).release(connection, project_id, reservation_id, "answered")
-    except Exception:  # noqa: BLE001 — an expired reservation releases itself
-        pass
+    scope = connection.execute(
+        text("SELECT w.org_id, p.workspace_id FROM projects p "
+             "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
+        {"p": project_id}).mappings().one()
+    receipt, _created = ReceiptService().create_or_reuse(
+        connection, scope["org_id"], scope["workspace_id"], project_id,
+        make_id("agent-voice"), effect, {"project_id": project_id, "data_boundary": "internal"},
+        payload)
+    return VoiceSpend(engine, settings, project_id, str(reservation["reservation_id"]),
+                      str(receipt["id"]), amount)
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────────────────────

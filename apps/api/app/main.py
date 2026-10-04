@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.routing import Match
 from sqlalchemy import text
@@ -27488,9 +27489,10 @@ def _agent_voice_row(connection, project_id: str, role_key: str) -> dict[str, An
 
 
 def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
-                      persona: Optional[dict[str, Any]], reason: str):
+                      persona: Optional[dict[str, Any]], effect: str, reason: str):
     """Everything checked before a voice call spends anything: who, which agent, a model, the
-    budget. Returns (actor, role row with any unsaved persona, reservation id)."""
+    budget. Returns (actor, role row with any unsaved persona, the request's VoiceSpend —
+    which the caller must close(), in a finally, so the spend is settled or released)."""
     from boss_engine.services import agent_voice
 
     with begin(engine) as connection:
@@ -27502,10 +27504,11 @@ def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
         if not agent_voice.model_ready(connection, settings, project_id):
             raise HTTPException(status_code=409, detail=agent_voice.NEEDS_MODEL)
         try:
-            reservation = agent_voice.reserve(connection, settings, project_id, reason)
+            spend = agent_voice.open_spend(connection, engine, settings, project_id, effect,
+                                           reason, {"role_key": role_key, "actor": who})
         except agent_voice.VoiceError as refused:
             raise HTTPException(status_code=409, detail=refused.payload) from refused
-    return who, agent_voice.voiced_role(row, persona), reservation
+    return who, agent_voice.voiced_role(row, persona), spend
 
 
 @app.get("/v1/agents/identities")
@@ -27581,26 +27584,27 @@ def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
     from boss_engine.services.core import emit_event
     from boss_engine.services.model_failures import explain
 
-    who, row, reservation = _agent_voice_gate(
-        body.project_id, role_key, body.actor, body.persona, f"Draft {body.field} for {role_key}")
+    who, row, spend = _agent_voice_gate(
+        body.project_id, role_key, body.actor, body.persona, "model.agent_persona_draft",
+        f"Draft {body.field} for {role_key}")
     try:
-        raw, usage = agent_voice.ask_model(engine, settings, body.project_id,
-                                           system=agent_voice.system_prompt(row),
-                                           prompt=agent_voice.draft_prompt(body.field))
+        raw, usage = spend.ask(system=agent_voice.system_prompt(row),
+                               prompt=agent_voice.draft_prompt(body.field))
     except Exception as error:  # noqa: BLE001 — explained, never a bare 500
-        agent_voice.release(engine, settings, body.project_id, reservation)
+        spend.close(error=str(error))
         raise HTTPException(status_code=502, detail={"code": "model_failed",
                                                      "error": explain(error)}) from error
-    agent_voice.release(engine, settings, body.project_id, reservation)
+    finally:
+        spend.close()
     draft = agent_voice.clip_draft(body.field, raw)
     errors, warnings = lint_persona({body.field: draft})
     with begin(engine) as connection:
         emit_event(connection, body.project_id, "agent.persona_drafted", who, "agent",
                    str(row.get("agent_id") or role_key),
-                   {"role_key": role_key, "field": body.field, "reservation_id": reservation,
+                   {"role_key": role_key, "field": body.field, "receipt_id": spend.receipt_id,
                     "usage": usage})
     return {"role_key": role_key, "field": body.field, "draft": draft,
-            "problems": errors, "warnings": warnings, "receipt_id": reservation}
+            "problems": errors, "warnings": warnings, "receipt_id": spend.receipt_id}
 
 
 @app.post("/v1/agents/{role_key}/test")
@@ -27615,49 +27619,56 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
     from boss_engine.services.core import emit_event
     from boss_engine.services.model_failures import explain
 
-    who, row, reservation = _agent_voice_gate(
-        body.project_id, role_key, body.actor, body.persona, f"Test {body.probe} for {role_key}")
+    who, row, spend = _agent_voice_gate(
+        body.project_id, role_key, body.actor, body.persona, "model.agent_voice_test",
+        f"Test {body.probe} for {role_key}")
 
     def sse(event: str, data: dict[str, Any]) -> str:
         return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
     def stream():
+        # A finally, not a trailing call: a client that drops mid-stream closes this generator
+        # at a yield, and the spend must still be settled (or the hold released) right then.
         try:
-            reply, usage = agent_voice.ask_model(
-                engine, settings, body.project_id, system=agent_voice.system_prompt(row),
-                prompt=agent_voice.PROBES[body.probe]["prompt"])
-        except Exception as error:  # noqa: BLE001
-            agent_voice.release(engine, settings, body.project_id, reservation)
-            yield sse("error", {"error": explain(error)})
-            return
-        for piece in agent_voice.chunks(reply):
-            yield sse("token", {"text": piece})
-        judgement = None
-        try:
-            raw, _ = agent_voice.ask_model(
-                engine, settings, body.project_id,
-                system="You grade replies. You output JSON only.",
-                prompt=agent_voice.judge_prompt(row, body.probe, reply))
-            judgement = agent_voice.parse_judgement(raw)
-        except Exception:  # noqa: BLE001 — the plain checks still score it
+            try:
+                reply, usage = spend.ask(system=agent_voice.system_prompt(row),
+                                         prompt=agent_voice.PROBES[body.probe]["prompt"])
+            except Exception as error:  # noqa: BLE001
+                spend.close(error=str(error))
+                yield sse("error", {"error": explain(error)})
+                return
+            for piece in agent_voice.chunks(reply):
+                yield sse("token", {"text": piece})
             judgement = None
-        agent_voice.release(engine, settings, body.project_id, reservation)
-        result = {**agent_voice.score(row, body.probe, reply, judgement),
-                  "probe": body.probe, "fingerprint": row.get("fingerprint") or "",
-                  "version": int(row.get("identity_version") or 1),
-                  "draft": body.persona is not None, "receipt_id": reservation}
-        try:
-            with begin(engine) as connection:
-                emit_event(connection, body.project_id, "agent.tested", who, "agent",
-                           str(row.get("agent_id") or role_key),
-                           {"role_key": role_key, **result, "usage": usage,
-                            "reply": reply[:2000]})
-        except Exception:  # noqa: BLE001 — the operator still gets the result
-            logging.getLogger(__name__).warning("agent.tested not recorded", exc_info=True)
-        yield sse("result", result)
+            try:
+                raw, _ = spend.ask(system="You grade replies. You output JSON only.",
+                                   prompt=agent_voice.judge_prompt(row, body.probe, reply))
+                judgement = agent_voice.parse_judgement(raw)
+            except Exception:  # noqa: BLE001 — the plain checks still score it
+                judgement = None
+            spend.close()
+            result = {**agent_voice.score(row, body.probe, reply, judgement),
+                      "probe": body.probe, "fingerprint": row.get("fingerprint") or "",
+                      "version": int(row.get("identity_version") or 1),
+                      "draft": body.persona is not None, "receipt_id": spend.receipt_id}
+            try:
+                with begin(engine) as connection:
+                    emit_event(connection, body.project_id, "agent.tested", who, "agent",
+                               str(row.get("agent_id") or role_key),
+                               {"role_key": role_key, **result, "usage": usage,
+                                "model_calls": spend.calls,
+                                "cost_usd_micros": spend.actual_usd_micros,
+                                "reply": reply[:2000]})
+            except Exception:  # noqa: BLE001 — the operator still gets the result
+                logging.getLogger(__name__).warning("agent.tested not recorded", exc_info=True)
+            yield sse("result", result)
+        finally:
+            spend.close()
 
+    # The background close covers a stream that was never started at all (idempotent).
     return StreamingResponse(stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                             background=BackgroundTask(spend.close))
 # --- end agent world: identity ---
 
 
