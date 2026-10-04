@@ -51,5 +51,21 @@ def test_try_it_starts_one_run_on_the_default_repository(client, engine, monkeyp
                          {"p": PROJECT}).scalar()
     assert run["input"]["repository"] == "e2e/app"
     assert run["input"]["directive"] == "Fix the typo in README"
-    assert run["namespace"] == "system"                   # not in the operator's Library
+    # Product namespace: the capability runner advances product runs only (a system-namespace
+    # Try it sat "ready" forever and never opened a PR) — and hidden from the Library.
+    assert run["namespace"] == "product"
     assert runs == 1
+    library = client.get("/v1/delivery-workflows", params={"project_id": PROJECT},
+                         headers=AUTH).json()["items"]
+    assert "setup_first_pr" not in {item["workflow_key"] for item in library}
+
+    from boss_engine.context import EngineContext
+    from boss_engine.services import workflow_capability_runner
+
+    with engine.begin() as c:
+        workflow_capability_runner.tick(c, EngineContext.create(), project_id=PROJECT)
+    with engine.begin() as c:
+        build = c.execute(text("SELECT status, output FROM workflow_step_runs "
+                               "WHERE workflow_run_id = :r AND step_id = 'build'"),
+                          {"r": last["run_id"]}).mappings().one()
+    assert build["status"] != "ready", "the capability runner never picked up the Try it build"

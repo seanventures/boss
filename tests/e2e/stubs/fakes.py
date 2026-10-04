@@ -250,11 +250,9 @@ class Handler(BaseHTTPRequestHandler):
             # one with no pull-request permission, an expired or org-pending one. Any other
             # token, and every other path, is the git-backed fake as before.
             token = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
-            probed = github_probes.answer(token, method, path)
+            probed = github_probes.answer(token, method, path, body=body)
             if probed is not None:
                 status, probe_headers, payload = probed
-                if method == "POST" and "/git/refs" in path:
-                    raise AssertionError("a setup check must never create a branch")
                 self._extra_headers = dict(probe_headers)
                 ctype = "application/json"
             else:
