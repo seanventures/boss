@@ -63,6 +63,16 @@ describe("the cockpit answers at once", () => {
     expect(text('[data-testid="fx-error"]')).toBe("not yours to stop");
   });
 
+  it("D1 a Stop the build outran says so, and the build reads as what it is", async () => {
+    const body = cockpitPrOpen();
+    (body.story as Record<string, unknown>[]).push({ type: "you", id: "stopped", station: "pr", what: "stopped",
+      actor: "ceo", word: "Too late · it had finished", at: "2026-10-04T09:30:00.000Z" });
+    stubFetch(body);
+    await mount(view());
+    expect($('[data-testid="fx-state"]')?.textContent).toContain("PR open");
+    expect($('[data-testid="fx-you-word-stopped"]')?.textContent).toBe("Too late · it had finished");
+  });
+
   it("D9 Steer: Guidance queued, and the box is empty and closed", async () => {
     stubFetch(cockpit());
     await mount(view());
