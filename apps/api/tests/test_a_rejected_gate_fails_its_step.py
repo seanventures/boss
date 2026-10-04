@@ -3,10 +3,16 @@
 Rejecting a gate used to BLOCK the run with the gate still `waiting`: Live said "Waiting on a
 person" about a person who had already answered, nothing offered a way forward, and the agent
 the gate named was drawn amber (or Stuck) for a wait that was never its work. Now a no fails
-the gate's step, the run stops at it like any failed step, and the run's own two answers are
-offered: Retry (asks again: a fresh decision) and Skip (carries on without it, with a reason).
-Pinned for both shapes of gate — a decision step, and a capability step held at its manual
-approval — through the HTTP API the console and the worker use.
+the gate's step, the run stops at it like any failed step, and Retry (asks again: a fresh
+decision) is offered.
+
+What else is offered depends on what the no was about (workflow_run_actions.skip_refusal):
+  * A STANDALONE GATE (a decision step) exists to release the steps after it. Skipping it
+    would run exactly what the person refused, so it offers Stop, never Skip, and the server
+    refuses a Skip with 409 — the steps after it never run.
+  * A STEP HELD AT ITS OWN APPROVAL (a capability with `approval: manual`) may be skipped:
+    the refused action never runs, and the run carries on without it, with a reason.
+Pinned through the HTTP API the console and the worker use.
 """
 from __future__ import annotations
 
@@ -60,7 +66,7 @@ def _reject(client, decision_id, note="not this week"):
 
 
 @pytest.mark.parametrize("shape", ["decision", "capability"])
-def test_a_no_fails_the_step_and_the_run_offers_retry_and_skip(client, monkeypatch, shape):
+def test_a_no_fails_the_step_and_offers_what_is_safe(client, monkeypatch, shape):
     run_id, pilot, decision_id = _run(client, monkeypatch, shape)
     # While it waits, the wait is the person's: the gate's hop names no agent.
     waiting = next(m for m in _board(client)["missions"] if m["run_id"] == run_id)
@@ -82,8 +88,9 @@ def test_a_no_fails_the_step_and_the_run_offers_retry_and_skip(client, monkeypat
     assert card["kind"] == "failed_step"
     assert card["title"] == "“Publish” was rejected on Release notes 2.9", card["title"]
     assert card["detail"] == "not this week"
+    second = {"decision": ("stop", "Stop this run"), "capability": ("skip_step", "Skip")}[shape]
     assert {a["key"]: a["label"] for a in card["answers"]} == {"retry_step": "Retry",
-                                                                "skip_step": "Skip"}
+                                                                second[0]: second[1]}
     assert all(a["enabled"] for a in card["answers"])
     assert row["attention_id"] == card["id"]
     # A stopped run ranks first (D12); the starter is never stuck (D11).
@@ -103,7 +110,7 @@ def test_a_no_fails_the_step_and_the_run_offers_retry_and_skip(client, monkeypat
 
 
 @pytest.mark.parametrize("shape", ["decision", "capability"])
-def test_retry_asks_again_and_skip_carries_on(client, monkeypatch, shape):
+def test_retry_asks_again(client, monkeypatch, shape):
     run_id, _, decision_id = _run(client, monkeypatch, shape)
     _reject(client, decision_id)
 
@@ -116,7 +123,29 @@ def test_retry_asks_again_and_skip_carries_on(client, monkeypatch, shape):
     view = wf.run_view(client, run_id)
     again = wf.steps_of(view)["publish"]
     assert again["status"] == "waiting" and again["decision_id"] not in (None, decision_id)
-    _reject(client, again["decision_id"], note="still no")
+
+
+def test_a_refused_standalone_gate_is_never_skipped_past(client, monkeypatch):
+    """A no on a gate whose job is to release what comes after it: Skip is refused (409, in a
+    sentence) and the steps after it never run."""
+    run_id, _, decision_id = _run(client, monkeypatch, "decision")
+    _reject(client, decision_id)
+    refused = client.post(f"/v1/delivery-workflows/runs/{run_id}/skip-step",
+                          json={"project_id": wf.PROJECT, "step_id": "publish", "actor": "ceo",
+                                "reason": "ship anyway"})
+    assert refused.status_code == 409, refused.text
+    assert "would run what you just refused" in str(refused.json()["detail"])
+    for _ in range(4):
+        wf.tick(client)
+    statuses = wf.statuses(wf.run_view(client, run_id))
+    assert statuses["publish"] == "failed", statuses
+    assert statuses.get("wrap") in (None, "pending"), statuses
+
+
+def test_a_refused_action_is_skipped_and_never_runs(client, monkeypatch):
+    """A no on a step's OWN action: Skip carries on without it, and the action never ran."""
+    run_id, _, decision_id = _run(client, monkeypatch, "capability")
+    _reject(client, decision_id)
 
     # Skip needs a reason, and says so in a sentence.
     bare = client.post(f"/v1/delivery-workflows/runs/{run_id}/skip-step",
@@ -130,5 +159,9 @@ def test_retry_asks_again_and_skip_carries_on(client, monkeypatch, shape):
     assert skipped.json()["message"] == "Skipped Publish"
     for _ in range(4):
         wf.tick(client)
-    assert wf.statuses(wf.run_view(client, run_id))["wrap"] in ("succeeded", "running", "leased",
-                                                                "ready")
+    view = wf.run_view(client, run_id)
+    publish = wf.steps_of(view)["publish"]
+    # Skipped, never approved and never run: no agent work was recorded for it.
+    assert publish["status"] == "skipped", publish
+    assert not (publish.get("output") or {}).get("agent"), publish.get("output")
+    assert wf.statuses(view)["wrap"] in ("succeeded", "running", "leased", "ready")

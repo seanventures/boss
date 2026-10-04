@@ -91,6 +91,25 @@ describe("D1 Skip asks why, and sends it", () => {
     expect(toasts).toEqual(["Skipped step 3"]);
   });
 
+  it("a refused standalone gate offers Retry and Stop, never Skip; Stop asks first", async () => {
+    post.mockResolvedValue({ ok: true, data: {} });
+    const refusedGate = failed({
+      title: "“Approve release” was rejected on Ship it #182",
+      answers: [
+        { key: "retry_step", label: "Retry", enabled: true, reason: null, step_id: "approve" },
+        { key: "stop", label: "Stop this run", enabled: true, reason: null, step_id: "approve" },
+      ],
+    });
+    await mount(view(board({ attention: [refusedGate] })));
+    expect($('[data-testid="ag-att-answer-skip_step"]')).toBeNull();
+    await click($('[data-testid="ag-att-answer-stop"]'));
+    expect(post).not.toHaveBeenCalled();
+    expect($('[data-testid="ag-att-stop"]')?.textContent).toContain("Stop this run?");
+    await click($('[data-testid="ag-att-stop-confirm"]'));
+    expect(post.mock.calls[0][0]).toBe("stop");
+    expect(toasts).toEqual(["Run stopped"]);
+  });
+
   it("Retry needs no reason", async () => {
     post.mockResolvedValue({ ok: true, data: {} });
     await mount(view(board({ attention: [skippable()] })));

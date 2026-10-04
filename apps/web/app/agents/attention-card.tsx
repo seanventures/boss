@@ -99,6 +99,8 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState<AttentionAction | null>(null);
   const [skipping, setSkipping] = useState<AttentionAnswer | null>(null);
+  // STOPPING A RUN ENDS IT: asked once, like Reject (a refused gate offers Stop, never Skip).
+  const [stopping, setStopping] = useState<AttentionAnswer | null>(null);
   const [skipWhy, setSkipWhy] = useState("");
   const [errorTip, setErrorTip] = useState("");
   const [leaving, setLeaving] = useState(false);
@@ -158,8 +160,10 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     }
   }
 
-  async function answer(a: AttentionAnswer, why?: string) {
+  async function answer(a: AttentionAnswer, why?: string, sure = false) {
     if (!run?.id || busy || !a.enabled) return;
+    if (a.key === "stop" && !sure) { setStopping(a); return; }
+    setStopping(null);
     // GOING ON WITHOUT A STEP IS A DECISION: Skip asks why first, like Reject asks to confirm.
     if (a.key === "skip_step" && !(why ?? "").trim()) { setSkipping(a); return; }
     setSkipping(null);
@@ -171,7 +175,8 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           step_id: a.stepId ?? run.stepId } as RunAction, why);
       if (r.ok) {
         finish(a.key === "retry_step" ? `Retrying step ${k ?? ""}`.trim()
-          : a.key === "skip_step" ? `Skipped step ${k ?? ""}`.trim() : a.label);
+          : a.key === "skip_step" ? `Skipped step ${k ?? ""}`.trim()
+          : a.key === "stop" ? "Run stopped" : a.label);
       } else {
         setError(answerRefusal(a.key, k)); setErrorTip(r.error ?? "");
         onRefresh?.();
@@ -289,6 +294,16 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           <button type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-confirm-reject"
                   title={confirming.effect || undefined} onClick={() => void decide(confirming)}>Reject</button>
           <button type="button" className="ag-link" onClick={() => setConfirming(null)}>Cancel</button>
+        </div>
+      ) : null}
+
+      {stopping ? (
+        <div className="ag-att-confirm" role="alertdialog" aria-label="Stop this run?" data-testid="ag-att-stop">
+          <span>Stop this run?</span>
+          <button type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-stop-confirm"
+                  title="It ends here; nothing after the refused approval runs"
+                  onClick={() => void answer(stopping, undefined, true)}>Stop</button>
+          <button type="button" className="ag-link" onClick={() => setStopping(null)}>Cancel</button>
         </div>
       ) : null}
 
