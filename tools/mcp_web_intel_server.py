@@ -379,12 +379,12 @@ def _search_exa(query: str, n: int, key: str) -> list[dict]:
 
 
 def _parse_exa_text(text: str) -> list[dict]:
-    """Exa's MCP answers in text blocks of `Title: … URL: … Text: …`; read them back."""
+    """Exa's MCP answers in text blocks of `Title: … URL: … Text:|Highlights: …`; read them back."""
     out: list[dict] = []
     for block in re.split(r"\n(?=Title:)", text):
         title = re.search(r"Title:\s*(.+)", block)
         url = re.search(r"URL:\s*(\S+)", block)
-        body = re.search(r"Text:\s*([\s\S]+)", block)
+        body = re.search(r"(?:Text|Highlights|Summary):\s*([\s\S]+)", block)
         if url:
             out.append({"title": (title.group(1).strip() if title else url.group(1)),
                         "url": url.group(1).strip(),

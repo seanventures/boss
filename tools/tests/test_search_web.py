@@ -100,7 +100,7 @@ def test_exa_without_a_key_takes_the_keyless_path(monkeypatch):
 
         def call_tool(self, url, name, args, headers=None):
             called.update(url=url, name=name, args=args, headers=headers)
-            return {"text": "Title: Exa\nURL: https://exa.ai\nText: search for agents\n"}
+            return {"text": "Title: Exa\nURL: https://exa.ai\nPublished: N/A\nHighlights:\nsearch for agents\n"}
 
     import boss_engine.services.mcp_client as client_module
 
