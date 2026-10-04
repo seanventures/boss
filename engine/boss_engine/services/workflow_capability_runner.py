@@ -29,10 +29,11 @@ from sqlalchemy.engine import Connection
 
 from . import agent_acts, change_record, step_agents, workflows
 from . import workflow_custom_steps as custom_steps
-from .core import create_blocking_decision, emit_event, now_utc
+from .core import emit_event, now_utc
 # Named import so "who approved this" is compared against one constant rather than a
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
+from .run_decisions import open_step_decision
 from . import workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
@@ -3158,29 +3159,6 @@ def _action_preview_for(
                                 connection=connection, project_id=project_id)
 
 
-def _unique_question(
-    connection: Connection, project_id: str, task_id: Optional[str], question: str,
-    run_id: str,
-) -> str:
-    """The question in words, kept distinct from another run's open gate.
-
-    create_blocking_decision merges a pending decision with the same question — which once
-    attached five runs' deploys to ONE decision. The run id used to keep them apart, at the
-    cost of a raw id in the title; now a second open gate with the same words gets "(2)".
-    """
-    for n in range(1, 50):
-        candidate = question if n == 1 else f"{question} ({n})"
-        row = connection.execute(
-            text("SELECT recommendation->>'workflow_run_id' AS run_id FROM decisions "
-                 "WHERE project_id=:p AND question=:q AND status='pending' "
-                 "AND task_id IS NOT DISTINCT FROM :t LIMIT 1"),
-            {"p": project_id, "q": candidate, "t": task_id},
-        ).mappings().first()
-        if row is None or row["run_id"] == run_id:
-            return candidate
-    return f"{question} · {run_id[-8:]}"
-
-
 def _approved_content_refusal(
     connection: Connection, project_id: str, step: dict[str, Any], context: dict[str, Any],
 ) -> Optional[str]:
@@ -3497,8 +3475,11 @@ def _open_gate(
     #
     # IN WORDS, NOT KEYS. "Email the newsletter: weekly_newsletter · run 4715a965" named a
     # workflow key and a run id; the question now reads "<step label> — <run title>", and a
-    # second open gate with the same words is told apart by `_unique_question`. The ids stay
-    # in the recommendation, which is the evidence.
+    # second open gate with the same words is told apart by run_decisions.step_gate_question.
+    # The ids stay in the recommendation, which is the evidence.
+    #
+    # ONE GATE, ONE RUN: a gate this run raises goes through run_decisions.open_step_decision,
+    # the one way a step's decision is opened, so it belongs to exactly this run and step.
     from . import action_preview
 
     run_context = _run_context(connection, run["id"])
@@ -3511,9 +3492,7 @@ def _open_gate(
     preview = (None if subject["completes_step"] or subject.get("decision_id")
                else _action_preview_for(connection, project_id, spec_step, run_context,
                                         str(subject["label"])))
-    question = _unique_question(
-        connection, project_id, run.get("task_id"),
-        action_preview.gate_question(str(subject["label"]), subject_name), run["id"])
+    question = action_preview.gate_question(str(subject["label"]), subject_name)
     recommendation_extra: dict[str, Any] = {}
     if preview is not None:
         recommendation_extra["action_preview"] = preview
@@ -3521,15 +3500,13 @@ def _open_gate(
     # a fact about where the email went.
     if capability_key in {"deploy", "redeploy", "monitor"}:
         recommendation_extra["environment"] = str(run_input.get("environment") or "staging")
-    decision_id = subject.get("decision_id") or create_blocking_decision(
+    decision_id = subject.get("decision_id") or open_step_decision(
         connection,
         project_id,
         run.get("task_id"),
         question,
         {
             "capability": subject["key"],
-            "step_id": step_row["step_id"],
-            "workflow_run_id": run["id"],
             "approver_role": approval.get("approver_role"),
             # WHAT THE APPROVER IS ACTUALLY DECIDING ABOUT.
             #
@@ -3555,6 +3532,8 @@ def _open_gate(
         },
         {"estimated_usd": 0.0},
         subject["summary"],
+        run_id=run["id"],
+        step_id=step_row["step_id"],
         risk_tier=max(2, int(subject["risk_tier"])),
     )
     if not subject.get("decision_id"):
@@ -3622,20 +3601,22 @@ def _park_for_decision(
     The lease is released along with it: a parked step holds no lease, or the reclaimer treats
     the worker as crashed and re-runs a step that is waiting on a person.
     """
-    decision_id = create_blocking_decision(
+    # The question is the finding's ("Continue this workflow?" for every run), so the decision
+    # is opened as this run's step's own — another run parked on the same finding gets its own.
+    decision_id = open_step_decision(
         connection,
         project_id,
         run.get("task_id"),
         str(output.get("question") or "Continue this workflow?"),
         {
             "capability": output.get("capability"),
-            "step_id": step_row["step_id"],
-            "workflow_run_id": run["id"],
             "findings": output.get("findings") or [],
             "code_task_run_id": output.get("code_task_run_id"),
         },
         {"estimated_usd": 0.0},
         str(output.get("note") or ""),
+        run_id=run["id"],
+        step_id=step_row["step_id"],
         risk_tier=3,
     )
     connection.execute(

@@ -28,13 +28,17 @@ def _gate_source() -> str:
 class TestTheQuestionIdentifiesTheRun:
     def test_the_question_is_kept_distinct_per_run(self):
         """In words now ("Email the newsletter — Weekly newsletter"), without a raw run id —
-        so a second open gate with the same words is told apart by `_unique_question`, which
-        compares the run each pending decision belongs to."""
+        the gate is opened by run_decisions.open_step_decision, which keeps a second open gate
+        with the same words apart (step_gate_question compares the run and step each pending
+        decision belongs to) and makes the run and step part of the merge key.
+        engine/tests/test_one_gate_one_run.py holds the whole class."""
         source = _gate_source()
-        assert "_unique_question(" in source and 'run["id"]' in source, (
+        assert "open_step_decision(" in source and 'run_id=run["id"]' in source, (
             "two runs of one workflow produce the same question and collide onto one decision"
         )
-        unique = inspect.getsource(runner._unique_question)
+        from boss_engine.services import run_decisions
+
+        unique = inspect.getsource(run_decisions.step_gate_question)
         assert "workflow_run_id" in unique and "status='pending'" in unique
 
     def test_the_workflow_key_alone_is_no_longer_the_question(self):
@@ -55,6 +59,8 @@ class TestTheDeduplicationItselfIsUnchanged:
 
         source = inspect.getsource(core._create_blocking_decision_postgres)
         assert "AND question = :question" in source
+        # A step's gate is its run's: the run and step are part of the cause (ONE GATE, ONE RUN).
+        assert ":gate_run" in source and ":gate_step" in source
         assert "occurrences" in source, (
             "a repeat still extends the deadline and counts the occurrence, rather than "
             "stacking copies an operator cannot act on"

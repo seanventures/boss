@@ -339,6 +339,15 @@ def _create_blocking_decision_postgres(
     # A repeat is evidence the cause is ongoing, so it extends the deadline and counts the
     # occurrence on the decision already open. Approving or resolving it clears the cause; the
     # next occurrence after that legitimately opens a new one.
+    #
+    # A STEP'S GATE IS ITS RUN'S, NOT ITS WORDS'. A decision that gates a workflow step carries
+    # the run and step it belongs to (run_decisions.open_step_decision), and they are part of the
+    # cause: two runs of one workflow at the same Approval gate ask the same question, and
+    # merging them handed both runs ONE card, so one Approve released both. A decision with no
+    # run identity merges exactly as before (NULL IS NOT DISTINCT FROM NULL).
+    rec_in = recommendation if isinstance(recommendation, dict) else {}
+    gate_run = str(rec_in.get("workflow_run_id") or "").strip() or None
+    gate_step = (str(rec_in.get("step_id") or "").strip() or None) if gate_run else None
     existing = connection.execute(
         sql(
             """
@@ -347,11 +356,15 @@ def _create_blocking_decision_postgres(
               AND question = :question
               AND status = 'pending'
               AND task_id IS NOT DISTINCT FROM :task_id
+              AND recommendation->>'workflow_run_id' IS NOT DISTINCT FROM :gate_run
+              AND (CAST(:gate_run AS TEXT) IS NULL
+                   OR recommendation->>'step_id' IS NOT DISTINCT FROM :gate_step)
             ORDER BY created_at DESC
             LIMIT 1
             """
         ),
-        {"project_id": project_id, "question": question, "task_id": task_id},
+        {"project_id": project_id, "question": question, "task_id": task_id,
+         "gate_run": gate_run, "gate_step": gate_step},
     ).mappings().first()
     if existing:
         prior = existing["recommendation"] or {}
