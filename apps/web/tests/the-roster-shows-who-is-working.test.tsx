@@ -20,7 +20,8 @@ vi.mock("../app/focused-agents-ui", () => ({ FocusedAgents: () => <div data-test
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const { WorkforceArea } = await import("../app/workforce-ui");
-const { RosterZones, presenceFromStatus } = await import("../app/agents/roster-zones");
+const { RosterZones, RosterSummary, presenceFromStatus } = await import("../app/agents/roster-zones");
+const { DirectoryView } = await import("../app/agents/directory-view");
 const { PresencePill, crewOf, pillWords } = await import("../app/agents/presence-pill");
 const { parseLive, resetLiveStores } = await import("../lib/agents-live");
 
@@ -82,8 +83,11 @@ describe("the roster zones are presence", () => {
       { role_key: "software_engineer", state: "working", line: "running tests · Ship it · step 4" },
       { role_key: "design_critic", state: "in_panel", line: "PRD review" },
     ];
-    await render(<WorkforceArea workforce={workforce([agent("qa"), agent("software_engineer"), agent("design_critic"),
-                                                      agent("docs_writer")])} actor="ceo" />);
+    // Presence zones are RosterZones' presence grouping (Directory groups by team since the
+    // agents-home redesign; Live owns what each agent is doing).
+    const four = [agent("qa"), agent("software_engineer"), agent("design_critic"), agent("docs_writer")];
+    await render(<><RosterZones agents={four} live={parseLive({ items: live })} onOpen={() => {}} onAsk={() => {}} />
+                  <RosterSummary agents={four} live={parseLive({ items: live })} /></>);
     expect(zones()).toEqual(["needs_you", "working", "in_panel", "idle"]);
     expect(zoneOfCard("qa")).toBe("needs_you");
     expect(zoneOfCard("software_engineer")).toBe("working");
@@ -96,9 +100,9 @@ describe("the roster zones are presence", () => {
   });
 
   it("with no live answer, falls back to the feed's status — the same zone either way", async () => {
-    await render(<WorkforceArea workforce={workforce([agent("qa", { status: "AT GATE", task: "approve deploy" }),
-                                                      agent("cto", { status: "WORKING", task: "review" }),
-                                                      agent("pm")])} actor="ceo" />);
+    await render(<RosterZones agents={[agent("qa", { status: "AT GATE", task: "approve deploy" }),
+                                       agent("cto", { status: "WORKING", task: "review" }), agent("pm")]}
+                              live={new Map()} onOpen={() => {}} onAsk={() => {}} />);
     expect(zones()).toEqual(["needs_you", "working", "idle"]);
     expect(presenceFromStatus(agent("x", { status: "STUCK", task: "build failed" })).state).toBe("stuck");
   });
@@ -140,15 +144,14 @@ describe("the roster zones are presence", () => {
     expect($('[data-testid="ag-idle-more"]')).toBeNull();
   });
 
-  it("Needs you is a filter, counted from the same presence", async () => {
+  it("Needs you is not a Directory filter: Live owns what is waiting (agents-home §3.3)", async () => {
     live = [{ role_key: "qa", state: "needs_you", line: "approve" }];
-    await render(<WorkforceArea workforce={workforce([agent("qa"), agent("pm")])} actor="ceo" />);
-    const chip = $('[data-testid="wf-filter-needs_you"]');
-    expect(chip?.textContent).toBe("Needs you 1");
-    await act(async () => { chip!.click(); });
-    await settle();
+    await render(<DirectoryView projectId="p1" actor="ceo" everyone={[agent("qa"), agent("pm")]} retired={[]}
+                                live={parseLive({ items: live })} search="" onCreate={() => {}} />);
+    expect($('[data-testid="wf-filter-needs_you"]')).toBeNull();
+    expect($('[data-testid="wf-filter-all"]')?.textContent).toBe("All 2");
     expect($('[data-testid="wf-agent-qa"]')).not.toBeNull();
-    expect($('[data-testid="wf-agent-pm"]')).toBeNull();
+    expect($('[data-testid="wf-agent-pm"]')).not.toBeNull();
   });
 });
 
