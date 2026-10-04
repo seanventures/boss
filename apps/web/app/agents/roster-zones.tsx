@@ -18,7 +18,7 @@ import type { AvatarState } from "../../lib/agent-world-types";
 import { ZONES, zoneOf, type Zone } from "../../lib/agent-world";
 import { useIdentity, useIdentityVersion } from "../../lib/use-agent-identities";
 import type { LiveMap, LivePresence } from "../../lib/agents-live";
-import { AgFace, AgFaceStack, AgState } from "./agent-face";
+import { AgFace, AgState } from "./agent-face";
 import { TEAM_ORDER, teamOfAgent } from "../../lib/agents-live-board";
 
 /** The feed's status, as presence, for when the live endpoint has nothing to say. */
@@ -273,16 +273,3 @@ function RosterCard({ placed, onOpen, onAsk, onRegister }: {
   );
 }
 
-/** `n agents · k working`, with the live faces beside it. */
-export function RosterSummary({ agents, live }: { agents: V2Agent[]; live: LiveMap }) {
-  const placed = placeAgents(agents, live);
-  const working = placed.filter((p) => p.zone === "working" || p.zone === "in_panel");
-  const needs = placed.filter((p) => p.zone === "needs_you");
-  const liveKeys = [...needs, ...working].map((p) => p.agent.id);
-  return (
-    <span className="ag-roster-sum" data-testid="ag-roster-sum">
-      {liveKeys.length ? <AgFaceStack roleKeys={liveKeys} size={20} max={5} /> : null}
-      <span>{agents.length} agent{agents.length === 1 ? "" : "s"} · {working.length} working</span>
-    </span>
-  );
-}
