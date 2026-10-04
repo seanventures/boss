@@ -28,6 +28,7 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from egress import CertificateAuthority, GitRemotes, host_route  # noqa: E402
 from github_fake import GitHubFake  # noqa: E402
+import github_probes  # noqa: E402
 
 
 class World:
@@ -245,7 +246,19 @@ class Handler(BaseHTTPRequestHandler):
         self._extra_headers = {}
         body = self._json(raw)
         if route == "github-api":
-            status, payload, ctype = self._github(method, path, body, query)
+            # REPO AND MODELS' PROBES, per token profile (github_probes.py): a read-only token,
+            # one with no pull-request permission, an expired or org-pending one. Any other
+            # token, and every other path, is the git-backed fake as before.
+            token = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+            probed = github_probes.answer(token, method, path)
+            if probed is not None:
+                status, probe_headers, payload = probed
+                if method == "POST" and "/git/refs" in path:
+                    raise AssertionError("a setup check must never create a branch")
+                self._extra_headers = dict(probe_headers)
+                ctype = "application/json"
+            else:
+                status, payload, ctype = self._github(method, path, body, query)
         elif route == "app":
             status, payload, ctype = (self._media(path) if path.startswith("/media/")
                                       else self._dispatch(method, "/app" + path, body))
