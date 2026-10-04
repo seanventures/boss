@@ -1,0 +1,69 @@
+# Curated remote MCP servers the Library offers with one press (skills-mcp spec §5.5).
+#
+# Only servers that answer Streamable HTTP with no key or a token are listed: BOSS's agents run
+# headless, so an OAuth-only server cannot be offered until OAuth lands (spec §7). Each entry
+# starts UNREVIEWED when added — the operator reviews it with one press in its drawer.
+catalogue:
+  - key: context7
+    name: context7
+    label: Context7
+    url: "https://mcp.context7.com/mcp"
+    auth: none
+    risk_default: 0
+    provenance: official
+    description: Up-to-date docs for the libraries you use.
+  - key: exa
+    name: exa
+    label: Exa
+    url: "https://mcp.exa.ai/mcp"
+    auth: none
+    risk_default: 0
+    provenance: official
+    token_url: "https://dashboard.exa.ai/api-keys"
+    description: Web search built for agents.
+  - key: github
+    name: github
+    label: GitHub
+    url: "https://api.githubcopilot.com/mcp/"
+    auth: bearer
+    risk_default: 2
+    provenance: official
+    token_url: "https://github.com/settings/personal-access-tokens"
+    scopes_tip: "repo, read:org"
+    description: Issues, PRs and code on GitHub.
+  - key: sentry
+    name: sentry
+    label: Sentry
+    url: "https://mcp.sentry.dev/mcp"
+    auth: bearer
+    risk_default: 1
+    provenance: official
+    token_url: "https://sentry.io/settings/account/api/auth-tokens/"
+    description: Errors and issues from Sentry.
+  - key: linear
+    name: linear
+    label: Linear
+    url: "https://mcp.linear.app/mcp"
+    auth: bearer
+    risk_default: 2
+    provenance: official
+    token_url: "https://linear.app/settings/api"
+    description: Issues and projects in Linear.
+  - key: atlassian
+    name: atlassian
+    label: Atlassian
+    url: "https://mcp.atlassian.com/v1/mcp"
+    auth: bearer
+    risk_default: 2
+    provenance: official
+    token_url: "https://id.atlassian.com/manage-profile/security/api-tokens"
+    description: Jira and Confluence.
+  - key: notion
+    name: notion
+    label: Notion
+    url: "https://mcp.notion.com/mcp"
+    auth: bearer
+    risk_default: 2
+    provenance: official
+    token_url: "https://www.notion.so/profile/integrations"
+    description: Pages and databases in Notion.
