@@ -133,7 +133,8 @@ def test_the_sliders_become_directives():
 
 
 def test_a_role_with_no_persona_still_gets_a_voice_from_its_tone():
-    row = {"role_key": "cto", "display_name": "CTO",
+    # An operator's own agent: a shipped key would read its shipped persona (persona_of).
+    row = {"role_key": "pricing_analyst", "display_name": "Pricing Analyst",
            "spec": {"mission": "Ship", "comms_contract": {"tone": "concise and precise"}}}
     voice = agent_persona.compose_agent_prompt(row, mode="chat")[3]["text"]
     assert "Short: the answer and one reason." in voice
