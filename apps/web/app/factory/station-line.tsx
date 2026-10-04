@@ -77,7 +77,8 @@ function seconds(s: Station, now: number | null): number | null {
 function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; still: boolean; viewer: string }) {
   const state = still && (s.status === "working" || s.status === "needs_you") ? "idle" : AVATAR[s.status];
   if (s.key === "review" && s.seats.length > 1) {
-    const states = new Map(s.seats.filter((x) => x.roleKey).map((x) => [x.roleKey!, AVATAR[x.status]] as const));
+    const states = new Map(s.seats.filter((x) => x.roleKey).map((x) => [x.roleKey!,
+      still && (x.status === "working" || x.status === "needs_you") ? "idle" as AvatarState : AVATAR[x.status]] as const));
     return (
       <span className="fx-seats" data-seats={s.seats.length}>
         <AgFaceStack roleKeys={s.seats.map((x) => x.roleKey).filter((k): k is string => !!k)} size={size === 16 ? 16 : 24}
@@ -87,7 +88,7 @@ function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; stil
   }
   if (s.face === "agent" && s.roleKey) {
     if (s.actId && size !== 16) {
-      return <ActFace act={actOf(s)} viewer={viewer} size={size === 32 ? 32 : 24} />;
+      return <ActFace act={actOf(s)} viewer={viewer} size={size === 32 ? 32 : 24} state={still ? state : undefined} />;
     }
     return <RunFace roleKey={s.roleKey} size={size} state={state} standalone />;
   }
