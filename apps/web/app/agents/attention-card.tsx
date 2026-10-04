@@ -31,25 +31,38 @@ import {
 } from "./live-util";
 
 const KIND_WORD: Record<string, string> = {
-  workflow_gate: "Gate", general: "Gate", deploy_gate: "Deploy", pull_request: "Pull request",
+  workflow_gate: "Gate", general: "Decision", deploy_gate: "Deploy", pull_request: "Pull request",
   refusal: "Refusal",
 };
 
-/** The word for what kind of thing this is: `Gate`, `Deploy`, `Pull request`, `Refusal`, `Setup`. */
+/** The word for what kind of thing this is: `Gate`, `Decision`, `Deploy`, `Pull request`,
+ *  `Refusal`, `Setup`. A plain decision is not a gate (walk D16). */
 export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind">): string {
   if (item.kind === "readiness") return "Setup";
   if (item.kind === "failed_step") return "Failed";
-  return KIND_WORD[item.decisionKind ?? ""] ?? "Gate";
+  return KIND_WORD[item.decisionKind ?? ""] ?? "Decision";
 }
 
-/** Who a card is about: the attributed agent, else the BOSS glyph or You — never a guess. */
+/** Who a card is about: the attributed agent, else the BOSS glyph — never a guess, and never
+ *  the person glyph: the card is asking you, it is not by you (walk D16). */
 export function cardWho(item: Pick<AttentionItem, "roleKey" | "kind" | "decisionKind" | "id">):
-    { roleKey: string | null; variant: "agent" | "boss" | "you" } {
+    { roleKey: string | null; variant: "agent" | "boss" } {
   if (item.roleKey) return { roleKey: item.roleKey, variant: "agent" };
-  if (item.kind === "readiness" || item.decisionKind === "refusal" || item.id.startsWith("ready:")) {
-    return { roleKey: null, variant: "boss" };
-  }
-  return { roleKey: null, variant: "you" };
+  return { roleKey: null, variant: "boss" };
+}
+
+/** Why it needs you: the server's `detail`, unless it only repeats what a button will do (the
+ *  approve effect already shows under "If approved"). Walk D6. */
+export function whyOf(item: Pick<AttentionItem, "detail" | "actions">): string {
+  const detail = (item.detail ?? "").trim();
+  if (!detail) return "";
+  return item.actions.some((a) => (a.effect ?? "").trim() === detail) ? "" : detail;
+}
+
+/** A run answer refused: a short sentence of ours; the server's words go in the tooltip. */
+export function answerRefusal(key: string, k?: number): string {
+  const step = k ? ` step ${k}` : " the step";
+  return key === "skip_step" ? `Couldn't skip${step}` : key === "retry_step" ? `Couldn't retry${step}` : "Couldn't do that";
 }
 
 export type AttentionCardProps = {
@@ -69,11 +82,13 @@ export type AttentionCardProps = {
   onRefresh?: () => void;
   /** For links that open in a new tab (presses navigate in place). */
   orgId?: string | null;
+  /** The header's search names someone else: this card's face dims (walk D10). */
+  dim?: boolean;
 };
 
 type Busy = null | string;
 
-export function AttentionCard({ item, projectId, actor, density = "card", focusKey, enter, still, onDone, onRefresh, orgId }: AttentionCardProps) {
+export function AttentionCard({ item, projectId, actor, density = "card", focusKey, enter, still, onDone, onRefresh, orgId, dim }: AttentionCardProps) {
   useIdentityVersion();
   const titleId = useId();
   const hintId = useId();
@@ -83,6 +98,9 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState<AttentionAction | null>(null);
+  const [skipping, setSkipping] = useState<AttentionAnswer | null>(null);
+  const [skipWhy, setSkipWhy] = useState("");
+  const [errorTip, setErrorTip] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [pulse, setPulse] = useState(false);
 
@@ -128,7 +146,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
       if (result.ok) {
         finish(action.action === "approve"
           ? (run ? `Approved · ${subject} continues` : "Approved")
-          : (run ? "Rejected · run stopped" : "Rejected"));
+          : (run ? "Rejected · step failed" : "Rejected"));
       } else {
         setError(result.error ?? "");
         onRefresh?.();
@@ -140,23 +158,26 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     }
   }
 
-  async function answer(a: AttentionAnswer) {
+  async function answer(a: AttentionAnswer, why?: string) {
     if (!run?.id || busy || !a.enabled) return;
+    // GOING ON WITHOUT A STEP IS A DECISION: Skip asks why first, like Reject asks to confirm.
+    if (a.key === "skip_step" && !(why ?? "").trim()) { setSkipping(a); return; }
+    setSkipping(null);
     setBusy(a.key);
-    setError("");
+    setError(""); setErrorTip("");
     try {
       const r = await sendRunAnswer(projectId, actor, run.id,
-        { key: a.key, label: a.label, enabled: a.enabled, reason: a.reason ?? null,
-          step_id: a.stepId ?? run.stepId } as RunAction);
+        { key: a.key, label: a.label, enabled: a.enabled, reason: null,
+          step_id: a.stepId ?? run.stepId } as RunAction, why);
       if (r.ok) {
         finish(a.key === "retry_step" ? `Retrying step ${k ?? ""}`.trim()
           : a.key === "skip_step" ? `Skipped step ${k ?? ""}`.trim() : a.label);
       } else {
-        setError(r.error ?? "");
+        setError(answerRefusal(a.key, k)); setErrorTip(r.error ?? "");
         onRefresh?.();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(answerRefusal(a.key, k)); setErrorTip(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
@@ -190,14 +211,14 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
          data-density={density} data-enter={enter || undefined} data-leaving={leaving || undefined}
          data-pulse={pulse || undefined} data-still={still || undefined} onKeyDown={onKey}>
       <div className="ag-att-head">
-        <span className="ag-att-face" title={named}>
+        <span className="ag-att-face" title={named} data-dim={dim ? "true" : undefined}>
           {who.roleKey
             ? <AgFace roleKey={who.roleKey} size={density === "row" ? 24 : 32}
                       state={item.kind === "failed_step" ? "stuck" : "needs_you"} />
             : <RunFace roleKey={null} variant={who.variant} size={density === "row" ? 24 : 32}
                        state={item.kind === "failed_step" ? "stuck" : "needs_you"} standalone />}
         </span>
-        <span id={titleId} className="ag-att-title ag-trunc" title={item.title} data-user-text>{item.title}</span>
+        <span id={titleId} className="ag-att-title" title={item.title} data-user-text>{item.title}</span>
         {age ? <span className="ag-att-age" title={`Waiting since ${localTime(item.at)}`}>{age}</span> : null}
       </div>
 
@@ -217,7 +238,10 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         <span className="ag-att-detail ag-trunc" title={item.detail} data-user-text>{item.detail}</span>
       ) : null}
 
-      {error ? <span className="ag-att-error" role="alert" data-testid="ag-att-error" data-user-text>{error}</span> : null}
+      {error ? (
+        <span className="ag-att-error" role="alert" data-testid="ag-att-error" title={errorTip || undefined}
+              {...(errorTip ? {} : { "data-user-text": true })}>{error}</span>
+      ) : null}
 
       <div className="ag-att-actions">
         {direct.map((a) => (
@@ -268,9 +292,23 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         </div>
       ) : null}
 
+      {skipping ? (
+        <form className="ag-att-confirm" role="alertdialog" aria-label="Why skip?" data-testid="ag-att-skip"
+              onSubmit={(e) => { e.preventDefault(); if (skipWhy.trim()) void answer(skipping, skipWhy); }}>
+          <label className="ag-att-why">
+            <span>Why skip?</span>
+            <input type="text" value={skipWhy} autoFocus maxLength={200} data-testid="ag-att-skip-why"
+                   aria-label="Why skip?" onChange={(e) => setSkipWhy(e.target.value)} />
+          </label>
+          <button type="submit" className="ag-btn" data-testid="ag-att-skip-confirm" disabled={!skipWhy.trim()}
+                  title="Kept on the step and in the run's history">Skip</button>
+          <button type="button" className="ag-link" onClick={() => setSkipping(null)}>Cancel</button>
+        </form>
+      ) : null}
+
       {open ? (
         <dl className="ag-att-details" data-testid="ag-att-details-body">
-          {item.detail ? <><dt>Why</dt><dd data-user-text>{item.detail}</dd></> : null}
+          {whyOf(item) ? <><dt>Why</dt><dd data-user-text>{whyOf(item)}</dd></> : null}
           {approveFx ? <><dt>If approved</dt><dd data-user-text>{approveFx}</dd></> : null}
           {rejectFx ? <><dt>If rejected</dt><dd data-user-text>{rejectFx}</dd></> : null}
           {run?.id ? (

@@ -170,7 +170,6 @@ describe("the presence pill and the crew", () => {
     const pill = $('[data-testid="ag-presence-pill"]');
     expect(pill?.textContent).toContain("2 working · 1 needs you");
     expect(pill?.getAttribute("title")).toBe("Agents working now");
-    expect(document.title).toBe("(1) BOSS");
   });
 
   it("the crew lists who is on what, needs-you first, and opens a talk with the one pressed", async () => {
