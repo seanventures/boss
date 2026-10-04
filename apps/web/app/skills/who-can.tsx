@@ -12,7 +12,6 @@ import React, { useMemo, useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { Sparkle, Star } from "@phosphor-icons/react";
 
-import { agentIdentity } from "../../lib/agent-identity";
 import type { Ability } from "../../lib/kit-types";
 import { kitApi, type CrewMember, type KitWithCrew } from "../../lib/kit-api";
 import { AgentAvatar } from "../agent-avatar";

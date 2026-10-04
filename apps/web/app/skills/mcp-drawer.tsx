@@ -10,7 +10,6 @@ import React, { useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { DotsThree, X } from "@phosphor-icons/react";
 
-import { agentIdentity } from "../../lib/agent-identity";
 import type { AbilityStatus, KitTool, ToolPolicy } from "../../lib/kit-types";
 import { mcpApi, type CrewMember, type McpAuthInput, type McpServer } from "../../lib/kit-api";
 import { AgentAvatar } from "../agent-avatar";

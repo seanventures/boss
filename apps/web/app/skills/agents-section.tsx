@@ -10,7 +10,6 @@ import React, { useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { DotsThree, Star } from "@phosphor-icons/react";
 
-import { agentIdentity } from "../../lib/agent-identity";
 import type { Ability } from "../../lib/kit-types";
 import { kitApi, type CrewMember } from "../../lib/kit-api";
 import { AgentAvatar } from "../agent-avatar";
@@ -80,21 +79,21 @@ export function AgentsSection({ ability, crew, projectId, actor, onChanged }: {
       <ul className="kit-agent-grid">
         {ordered.map((c) => {
           const on = held.has(c.role_key);
-          const identity = agentIdentity(c.role_key);
+          const name = agentName(c.role_key);
           const disabled = busy || (!on && cantGive);
           return (
             <li key={c.role_key} className="kit-agent" data-on={on} data-testid={`kit-agent-${c.role_key}`}>
               <AgentAvatar agent={c.role_key} size={24} aiBadge={false} />
-              <span className="kit-agent-name" data-tip={`${identity.name} · ${c.display_name ?? c.role_key} · AI agent`}>
-                {identity.name}
+              <span className="kit-agent-name" data-tip={`${name} · ${c.display_name ?? c.role_key} · AI agent`}>
+                {name}
               </span>
               {recommended.has(c.role_key) ? (
-                <span className="kit-star" data-tip={`In ${c.display_name ?? identity.name}'s default loadout`}
+                <span className="kit-star" data-tip={`In ${c.display_name ?? name}'s default loadout`}
                       data-testid={`kit-agent-rec-${c.role_key}`}>
                   <Star size={12} weight="fill" aria-label="Recommended" />
                 </span>
               ) : null}
-              <button type="button" role="switch" aria-checked={on} aria-label={`${identity.name} holds ${ability.label}`}
+              <button type="button" role="switch" aria-checked={on} aria-label={`${name} holds ${ability.label}`}
                       className="kit-switch" disabled={disabled}
                       data-tip={!on && cantGive ? `Set up ${ability.label} first` : undefined}
                       data-testid={`kit-agent-toggle-${c.role_key}`} onClick={() => toggle(c.role_key)} />

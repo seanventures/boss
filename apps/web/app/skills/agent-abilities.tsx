@@ -12,7 +12,6 @@ import { Star } from "@phosphor-icons/react";
 
 import type { Ability } from "../../lib/kit-types";
 import { kitApi } from "../../lib/kit-api";
-import { agentIdentity } from "../../lib/agent-identity";
 import { showToast } from "../client-forms";
 import { AbilityIcon } from "./ability-icons";
 import { blocked } from "./agents-section";

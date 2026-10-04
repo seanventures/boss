@@ -10,7 +10,6 @@ import React, { useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { CheckCircle, XCircle } from "@phosphor-icons/react";
 
-import { agentIdentity } from "../../lib/agent-identity";
 import type { Ability, CrewTest } from "../../lib/kit-types";
 import { kitApi } from "../../lib/kit-api";
 import { AgentAvatar } from "../agent-avatar";
