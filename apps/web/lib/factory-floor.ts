@@ -115,6 +115,11 @@ export type Floor = {
   preBuild: PreBuild[];
 };
 
+/** `1 check` · `2 checks`: every count the Factory says goes through here. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 // ── Parsers (the only place the wire is mapped) ─────────────────────────────────────────────
 
 type Wire = Record<string, unknown>;

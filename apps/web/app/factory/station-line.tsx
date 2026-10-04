@@ -16,7 +16,7 @@ import { Hourglass } from "@phosphor-icons/react";
 import React, { useRef } from "react";
 
 import type { Act, ActStatus, AvatarState } from "../../lib/agent-world-types";
-import type { Station, StationStatus } from "../../lib/factory-floor";
+import { plural, type Station, type StationStatus } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 import { ActFace } from "../agents/act-card";
@@ -161,14 +161,14 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
   if (density === "row" && (band === "narrow" || band === "phone")) {
     return (
       <span className="fx-line fx-line-folded" role="list" aria-label={label} data-still={still || undefined}>
-        {band === "narrow" && done ? <span role="listitem" className="fx-fold-done" title={`${done} stations done`}>✓{done}</span> : null}
+        {band === "narrow" && done ? <span role="listitem" className="fx-fold-done" title={`${plural(done, "station")} done`}>✓{done}</span> : null}
         {active ? (
           <span role="listitem" className="fx-bay" data-status={active.status} data-face={active.face} data-key={active.key}
                 aria-label={[active.label, whoAt(active), active.word].filter(Boolean).join(", ")}>
             <Face s={active} size={24} still={still} viewer={viewer} />
           </span>
         ) : null}
-        {band === "narrow" && pending ? <span role="listitem" className="fx-fold-next" title={`${pending} stations next`}>{pending} next</span> : null}
+        {band === "narrow" && pending ? <span role="listitem" className="fx-fold-next" title={`${plural(pending, "station")} next`}>{pending} next</span> : null}
       </span>
     );
   }
@@ -213,7 +213,7 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
                         onClick={() => onBay?.(s.key)} data-testid={`fx-bay-${s.key}`}>{s.label}</button>
                 <span className="fx-bay-face">
                   {s.loopWith && s.rounds > 1 ? (
-                    <span className="fx-loop" aria-label={`${who} and ${nameOf(s.loopWith).name}, ${s.rounds} rounds`}>
+                    <span className="fx-loop" aria-label={`${who} and ${nameOf(s.loopWith).name}, ${plural(s.rounds, "round")}`}>
                       <Face s={s} size={32} still={still} viewer={viewer} />
                       <span className="ag-chain-swap" aria-hidden>↔</span>
                       <RunFace roleKey={s.loopWith} size={24} state="done" standalone />

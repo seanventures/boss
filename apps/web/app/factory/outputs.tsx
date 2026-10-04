@@ -7,6 +7,7 @@
  * not served: `View diff ↗` goes to the PR).
  */
 import { CaretDown, CaretRight, Check, X } from "@phosphor-icons/react";
+import { plural } from "../../lib/factory-floor";
 import React, { useState } from "react";
 
 import type { CodeTaskRun } from "@boss/api-client";
@@ -316,7 +317,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
       {running ? <button type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</button> : null}
       <button type="button" className="ag-link" onClick={onLogs} data-testid="fx-preview-logs">Logs ▾</button>
       {p.expiresAt ? <span className="fx-muted" title={p.expiresAt}>Expires {new Date(p.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span> : null}
-      {typeof p.stepsDone === "number" && p.stepsTotal ? <span className="fx-muted">{p.stepsDone} of {p.stepsTotal} steps</span> : null}
+      {typeof p.stepsDone === "number" && p.stepsTotal ? <span className="fx-muted">{p.stepsDone} of {plural(p.stepsTotal, "step")}</span> : null}
       {p.error ? <span className="fx-err" title={p.error}>Failed</span> : null}
       {err}
     </span>
@@ -343,7 +344,7 @@ function CostBody({ c }: { c: Cockpit }) {
         <span key={a.roleKey ?? i} className="fx-cost-row" data-role={a.roleKey ?? undefined}>
           <Maker roleKey={a.roleKey} boss={!a.roleKey} />
           <span>{whoName(a.roleKey)}</span>
-          <span className="fx-muted">{a.turns} turns</span>
+          <span className="fx-muted">{plural(a.turns, "turn")}</span>
           <span className="fx-muted" title="Model input and output, in thousands">{kilo(a.tokens)}</span>
           {c.metered && costWord(a.usd) ? <span title="Metered model spend so far">{costWord(a.usd)}</span> : null}
         </span>

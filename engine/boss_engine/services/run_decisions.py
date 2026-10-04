@@ -288,3 +288,118 @@ def withdraw_orphaned(connection, project_id: Optional[str] = None, *,
                      actor=actor):
             withdrawn.append(str(decision["id"]))
     return withdrawn
+
+
+# ── a build's questions that nothing will answer (factory walk D2) ───────────────────────────
+
+
+def _withdraw_with_note(connection, decision_id: str, project_id: str, note: str, *,
+                        actor: str, why: dict[str, Any]) -> bool:
+    """Close one open decision as `withdrawn` with its note: the same status and the same event
+    as `_withdraw`, for a question its build answered another way."""
+    changed = connection.execute(
+        text("UPDATE decisions SET status = :withdrawn, resolution_note = :note, "
+             "updated_at = now() WHERE id = :d AND status IN :open"
+             ).bindparams(bindparam("open", expanding=True)),
+        {"d": decision_id, "withdrawn": WITHDRAWN, "note": note[:1000],
+         "open": list(UNANSWERED)},
+    ).rowcount
+    if changed != 1:
+        return False
+    emit_event(connection, project_id, "decision.withdrawn", actor, "decision", decision_id, why)
+    return True
+
+
+def withdraw_superseded_pr_questions(connection, run_id: str, *, actor: str = "boss") -> list[str]:
+    """ONE MERGE QUESTION PER PULL REQUEST. A retry lands on the same branch, reuses the open PR
+    and asks to merge it again: the earlier attempt's question stayed pending beside the new
+    one, so `Merge PR #1?` showed twice on the Floor, the pill and in Approvals. The newest
+    attempt's question stands; earlier attempts' questions about the same PR are withdrawn."""
+    run = connection.execute(
+        text("SELECT id, project_id, decision_id, pull_request_number, pull_request_url, "
+             "COALESCE(finalize_ctx->>'root_run_id', id) AS root, "
+             "COALESCE((finalize_ctx->>'attempt')::int, 1) AS attempt "
+             "FROM code_task_runs WHERE id = :id"), {"id": run_id}).mappings().first()
+    if not run or not run["decision_id"] or not (run["pull_request_number"]
+                                                 or run["pull_request_url"]):
+        return []
+    earlier = connection.execute(
+        text("SELECT decision_id FROM code_task_runs WHERE project_id = :p AND id <> :id "
+             "AND decision_id IS NOT NULL AND decision_id <> :d "
+             "AND COALESCE(finalize_ctx->>'root_run_id', id) = :root "
+             "AND (pull_request_number = :n OR pull_request_url = :u)"),
+        {"p": run["project_id"], "id": run_id, "d": run["decision_id"], "root": run["root"],
+         "n": run["pull_request_number"], "u": run["pull_request_url"]}).scalars().all()
+    out: list[str] = []
+    for decision_id in earlier:
+        if _withdraw_with_note(connection, str(decision_id), str(run["project_id"]),
+                               f"Superseded by attempt {run['attempt']}", actor=actor,
+                               why={"code_task_run_id": run_id, "superseded_by": run["decision_id"]}):
+            out.append(str(decision_id))
+    return out
+
+
+_DIRECT_PRD = """
+    SELECT d.id AS decision_id, d.project_id, s.id AS step_run_id, r.id AS workflow_run_id,
+           c.id AS code_task_run_id
+    FROM decisions d
+    JOIN workflow_step_runs s ON s.decision_id = d.id AND s.step_id = 'spec_review'
+                              AND s.status = 'waiting'
+    JOIN workflow_runs r ON r.id = s.workflow_run_id
+    JOIN code_task_runs c ON c.id = r.input->>'adopt_code_task_run_id'
+    WHERE d.status IN :open
+      AND COALESCE(r.input->>'adopt_decision_id', '') = ''
+      AND COALESCE(r.input->>'adopt_meeting_run_id', '') = ''
+      AND (c.pull_request_url IS NOT NULL OR c.pull_request_number IS NOT NULL)
+"""
+
+
+def withdraw_stale_build_questions(connection, project_id: Optional[str] = None, *,
+                                   actor: str = "boss") -> list[str]:
+    """The one-time repair for builds made before the fixes (factory walk D2). Idempotent, so it
+    runs on every boot; after the first it finds nothing.
+
+    1. A direct change's "PRD approval (automatic)" — a gate nobody and no automation answers —
+       on a build that already opened its PR: withdrawn, and its step recorded as having no PRD
+       to approve (what a new direct change records), so the run above it moves on.
+    2. Duplicate merge questions for one PR across a build's attempts: the newest stands."""
+    from . import workflows
+
+    out: list[str] = []
+    sql = _DIRECT_PRD + (" AND d.project_id = :p" if project_id else "")
+    params: dict[str, Any] = {"open": list(UNANSWERED)}
+    if project_id:
+        params["p"] = project_id
+    for row in connection.execute(
+            text(sql).bindparams(bindparam("open", expanding=True)), params).mappings().all():
+        if not _withdraw_with_note(
+                connection, str(row["decision_id"]), str(row["project_id"]),
+                "Withdrawn: a direct change has no PRD to approve; its build already opened "
+                "its PR", actor=actor,
+                why={"workflow_run_id": row["workflow_run_id"],
+                     "code_task_run_id": row["code_task_run_id"]}):
+            continue
+        out.append(str(row["decision_id"]))
+        try:
+            with connection.begin_nested():
+                workflows.force_complete_waiting_step(
+                    connection, project_id=str(row["project_id"]),
+                    step_run_id=str(row["step_run_id"]),
+                    output={"capability": "spec_review", "tool": None,
+                            "status": "not_applicable",
+                            "note": "No PRD to approve — this build was started as a direct "
+                                    "change."})
+        except Exception:  # noqa: BLE001 — the question is closed either way
+            pass
+    newest = connection.execute(
+        text("SELECT DISTINCT ON (COALESCE(finalize_ctx->>'root_run_id', id), "
+             "COALESCE(pull_request_number::text, pull_request_url)) id "
+             "FROM code_task_runs WHERE decision_id IS NOT NULL "
+             "AND (pull_request_number IS NOT NULL OR pull_request_url IS NOT NULL)"
+             + (" AND project_id = :p" if project_id else "")
+             + " ORDER BY COALESCE(finalize_ctx->>'root_run_id', id), "
+               "COALESCE(pull_request_number::text, pull_request_url), created_at DESC"),
+        {"p": project_id} if project_id else {}).scalars().all()
+    for run_id in newest:
+        out.extend(withdraw_superseded_pr_questions(connection, str(run_id), actor=actor))
+    return out

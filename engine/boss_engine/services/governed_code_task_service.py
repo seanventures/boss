@@ -4683,6 +4683,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception as exc:  # never let bookkeeping sink finished work
                 emit_event(c, project_id, "code_task.reservation_renew_failed", "boss",
                            "code_task_run", run_id, {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            # THE STOP WINS WHEN IT CAN (factory walk D1). The PR step is one long transaction
+            # with no phase change inside, so a Stop pressed during it was only seen after the
+            # PR existed. Checked right before the first GitHub write (the push and the PR).
+            _abort_if_cancelled("before opening the PR")
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
                 dedupe_key=f"code:task:{run_id}", title=title,
@@ -4731,6 +4735,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "code_task_run", run_id,
                         {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]},
                     )
+                _abort_if_cancelled("before retrying the PR")
                 try:
                     proposal = sf.propose_pull_request(
                         c, project_id, task_id, reservation_id=reservation_id,
