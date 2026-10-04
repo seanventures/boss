@@ -76,6 +76,11 @@ MODEL: dict[str, dict[str, Any]] = {
     "login_expired": {"label": "Login expired", "tone": "red",
                       "tip": "{provider_fix}",
                       "action": "replace"},
+    # BOSS's own failure, never the provider's: the stored key could not be decrypted (a changed
+    # master key). The provider was not asked, so it is not "Key rejected".
+    "key_unreadable": {"label": "Can't read key", "tone": "red",
+                       "tip": "BOSS could not decrypt the stored key. Save it again.",
+                       "action": "replace"},
     "no_credit": {"label": "No credit", "tone": "red",
                   "tip": "Add credit at the provider, then Test.",
                   "action": "fix_link"},
