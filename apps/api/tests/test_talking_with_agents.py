@@ -651,7 +651,10 @@ def test_an_agent_is_told_what_it_may_use_who_else_is_here_and_who_is_accountabl
     conv = _open(client, "room", ["pm", "qa"])
     _say(client, conv["conversation_id"], "Who checks the release?")
     pm, qa = model.calls[0]["system"], model.calls[1]["system"]
-    granted = re.search(r"You may use: skills ([^;\n]+)", qa)
-    assert granted and "release-checklist" in granted.group(1).rstrip(".").split(", ")
-    assert "Also here: QA Lead (qa)." in pm and "Also here: Product Manager (pm)." in qa
-    assert f"Accountable: {ACTOR}." in qa and f"Accountable: {ACTOR}." in pm
+    # The persona compiler's L5 (agent_persona._l5), the same words a work or panel prompt uses.
+    granted = re.search(r"Granted for this work: ([^\n]+?)\.(?: |$)", qa)
+    assert granted and "release-checklist" in granted.group(1).split(", ")
+    assert "Also on this panel: " in pm and "(qa)" in pm.split("Also on this panel: ")[1]
+    assert "(pm)" in qa.split("Also on this panel: ")[1]
+    assert "(pm)" not in pm.split("Also on this panel: ")[1].split(".")[0]
+    assert f"Accountable human: {ACTOR}." in qa and f"Accountable human: {ACTOR}." in pm

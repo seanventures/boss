@@ -1048,7 +1048,11 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                  "handed_by_kind": "person", "handed_by_id": plan.actor,
                  "how": "seated" if is_room and speaker.how == "seated" else "asked_by_person",
                  "accountable": conv["actor"], "scope": scope,
-                 "seats": [_seat_info(roles[k]) for k in conv["seats"] if k in roles]},
+                 # Who else is in the room, in the shape the persona compiler names a panel
+                 # by (title, callsign); never the speaker itself.
+                 "seats": [{"title": f"{roles[k].get('display_name') or k} ({k})",
+                            "callsign": _seat_info(roles[k]).get("callsign")}
+                           for k in conv["seats"] if k in roles and k != speaker.role_key]},
             memory=memory)
         adapter = make_adapter(c, settings, plan.project_id)
         engine_name = _engine_name(c, settings, plan.project_id)
