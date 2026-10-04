@@ -1176,15 +1176,28 @@ def _output_provider(inputs: dict[str, Any]) -> Optional[str]:
     return "google" if str(inputs.get("output_folder_id") or "").strip() else None
 
 
+def _source_storage(content: Optional[dict[str, Any]]) -> Optional[str]:
+    """Where a media artifact's file is kept: `google` (Drive) or `boss`. Older artifacts
+    predate the `storage` field and were all Drive files."""
+    content = content or {}
+    if content.get("storage"):
+        return str(content["storage"])
+    if content.get("local_path"):
+        return "boss"
+    return "google" if content.get("drive_file_id") else None
+
+
 def _store_media(context: "SkillExecutorContext", inputs: dict[str, Any], path: str,
-                 name: str) -> dict[str, Any]:
+                 name: str, *, source_storage: Optional[str] = None) -> dict[str, Any]:
+    """Keep a result: where the step asked, else beside a Drive source, else in BOSS
+    (media_storage.store makes that decision, with the Google-connected check)."""
     from .media_storage import store
 
     return store(context.connection, context.settings, project_id=context.project_id,
                  local_path=path, name=name, provider_key=_output_provider(inputs),
                  container=str(inputs.get("output_folder_id") or ""),
                  connection_key=str(inputs.get("connection_key") or "").strip() or None,
-                 actor=context.actor)
+                 actor=context.actor, source_storage=source_storage)
 
 
 def _where_stored(artifact_id: str, written: dict[str, Any]) -> dict[str, Any]:
@@ -1242,7 +1255,8 @@ def _edit_in_drive(
         info = verify_playable(edited, expect_audio=bool(inputs.get("expect_audio", True)))
 
         name = str(inputs.get("output_name") or "").strip() or os.path.basename(edited)
-        written = _store_media(context, inputs, edited, name)
+        written = _store_media(context, inputs, edited, name,
+                               source_storage=_source_storage(source))
 
     artifact_id = record_artifact(
         context.connection, project_id=context.project_id, actor=context.actor,
@@ -1765,7 +1779,9 @@ def execute_media_fetch_image(
         still = is_a_still(fetched["path"])
 
         name = str(inputs.get("output_name") or "").strip() or fetched["name"]
-        written = _store_media(context, inputs, fetched["path"], name)
+        # A picture linked from Drive goes back beside it when Google is connected.
+        written = _store_media(context, inputs, fetched["path"], name,
+                               source_storage=link.provider_key)
 
     artifact_id = record_artifact(
         context.connection, project_id=context.project_id, actor=context.actor,
@@ -1983,7 +1999,8 @@ def execute_video_apply_plan(
             result["path"], expect_audio=bool(inputs.get("expect_audio", True)))
 
         name = str(inputs.get("output_name") or "").strip() or os.path.basename(result["path"])
-        written = _store_media(context, inputs, result["path"], name)
+        written = _store_media(context, inputs, result["path"], name,
+                               source_storage=_source_storage(source))
 
     artifact_id = record_artifact(
         context.connection, project_id=context.project_id, actor=context.actor,

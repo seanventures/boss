@@ -397,7 +397,8 @@ skills:
       output_folder_id: string?
       # Where the fetched copy is kept. Blank: BOSS's own artifact storage, no account needed.
       # `google` (or an output_folder_id) keeps it in Drive when Google is connected, and
-      # falls back to BOSS's storage, saying so, when it is not.
+      # falls back to BOSS's storage, saying so, when it is not. (An EDIT of a Drive source
+      # defaults to Drive when Google is connected — media_storage.store.)
       store_provider: string?
     output_schema:
       media_artifact_id: string
