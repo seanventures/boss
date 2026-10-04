@@ -1181,6 +1181,15 @@ class BudgetStatusResponse(BaseModel):
     freeze_provisioning_pct: Optional[float] = None
     freeze_tier2_pct: Optional[float] = None
     tier2_frozen: Optional[bool] = None
+    # Every cap measures its own period (budget.period_spend). The numbers above are the
+    # binding period's — the one nearest its cap — and `periods` carries each ("day", "month").
+    period: Optional[str] = None
+    cap_name: Optional[str] = None
+    period_start: Optional[str] = None
+    resets_at: Optional[str] = None
+    resets_at_label: Optional[str] = None
+    budget_timezone: Optional[str] = None
+    periods: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class BudgetForecastResponse(BaseModel):

@@ -1774,6 +1774,31 @@ export type BudgetStatusResponse = {
     skill_or_model_id: string;
     amount_usd_micros: number;
   }>;
+  /** Every cap measures its own period. The numbers above are the binding period's ("day" or
+   *  "month" — the one nearest its cap); `periods` carries each. */
+  period?: string | null;
+  cap_name?: string | null;
+  period_start?: string | null;
+  resets_at?: string | null;
+  /** "00:00 UTC", "00:00 UTC on 1 November". */
+  resets_at_label?: string | null;
+  budget_timezone?: string | null;
+  periods?: Record<string, BudgetPeriodStatus>;
+};
+
+export type BudgetPeriodStatus = {
+  period: string;
+  cap_usd_micros: number;
+  actual_usd_micros: number;
+  reserved_usd_micros: number;
+  committed_usd_micros: number;
+  available_usd_micros: number;
+  utilization_ratio: number;
+  budget_state: string;
+  period_start: string;
+  resets_at: string;
+  resets_at_label: string;
+  cap_name: string;
 };
 
 export type BudgetReserveRequest = {

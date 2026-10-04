@@ -1,9 +1,10 @@
 "use client";
 
-import type {
-  BudgetStatusCard,
-  CostInsightsFeed,
-  LlmSpendFeed,
+import {
+  periodWords,
+  type BudgetStatusCard,
+  type CostInsightsFeed,
+  type LlmSpendFeed,
 } from "../lib/budget-status";
 
 const SEV_COLOR: Record<string, string> = {
@@ -173,7 +174,8 @@ export function BudgetThresholdsCard({ status }: { status: BudgetStatusCard }) {
       <h3 style={{ margin: 0 }}>Enforcement thresholds</h3>
       <p className="detail">
         Every knob here is enforced by the engine — utilization{" "}
-        {Math.round(status.utilizationRatio * 100)}% of cap.
+        {Math.round(status.utilizationRatio * 100)}% of {periodWords(status.period).whose} cap,
+        which resets at {status.resetsAtLabel}.
       </p>
       <div style={{ display: "grid", gap: 6 }}>
         {rows.map((r) => (

@@ -81,7 +81,7 @@ import {
   BUDGET_AREA_IDS,
   INFRA_AREA_IDS,
 } from "../lib/area-data";
-import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
+import { fetchBudgetStatus, fetchBudgetIntensity, periodWords } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
 import { SettingsKnobs } from "./settings-knobs-ui";
 import { fetchLatestCanary } from "../lib/canaries";
@@ -1510,11 +1510,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <>
                 <div className="grid compact-grid">
                   <article>
-                    <h2>Actual Spend</h2>
+                    <h2>Spent {periodWords(budgetStatus.period).when}</h2>
                     <div className="metric">
                       {formatMicros(budgetStatus.actualUsdMicros)}
                     </div>
-                    <p className="detail">Cost receipts recorded for this project.</p>
+                    <p className="detail" data-testid="budget-period">
+                      Money settled {periodWords(budgetStatus.period).when}. The{" "}
+                      {periodWords(budgetStatus.period).cap} resets at{" "}
+                      {budgetStatus.resetsAtLabel}.
+                    </p>
                   </article>
                   <article>
                     <h2>Reserved</h2>
@@ -1554,10 +1558,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <p className="detail">
                       State {budgetStatus.budgetState}; committed{" "}
                       {formatMicros(budgetStatus.committedUsdMicros)} of{" "}
+                      {periodWords(budgetStatus.period).whose}{" "}
                       {formatMicros(budgetStatus.capUsdMicros)} with{" "}
                       {Math.round(budgetStatus.utilizationRatio * 100)}%
-                      utilization.
+                      utilization. It resets at {budgetStatus.resetsAtLabel}.
                     </p>
+                    {/* Each cap measures its own period; the one that does not bind is shown
+                        too, so a nearly-spent month is not hidden behind a quiet day. */}
+                    {budgetStatus.periods
+                      .filter((p) => p.period !== budgetStatus.period)
+                      .map((p) => (
+                        <p className="detail" key={p.period} data-testid={`budget-period-${p.period}`}>
+                          {periodWords(p.period).whose[0].toUpperCase()}
+                          {periodWords(p.period).whose.slice(1)} budget:{" "}
+                          {formatMicros(p.committedUsdMicros)} of{" "}
+                          {formatMicros(p.capUsdMicros)} (
+                          {Math.round(p.utilizationRatio * 100)}%), resets at {p.resetsAtLabel}.
+                        </p>
+                      ))}
                   </div>
                   <div>
                     <h4>Top cost drivers</h4>

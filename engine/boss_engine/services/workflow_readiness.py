@@ -96,8 +96,9 @@ NEEDS: dict[str, Need] = {
     # three research runs then sat queued under "no worker has picked it up" (2026-10-03).
     "budget": Need(
         "budget", "Budget is red — work will be held",
-        "Raise the cap in Budget. Calls on a subscription cost no money and do not count "
-        "against it; only metered API spend does.", "budget"),
+        "Wait for the cap's period to reset (a daily cap at 00:00 UTC) or raise the cap in "
+        "Budget. Calls on a subscription cost no money and do not count against it; only "
+        "metered API spend does.", "budget"),
     "agent_pool": Need(
         "agent_pool", "An agent that holds at least one skill",
         "Give an agent a skill in Agents. A step that lets BOSS pick the agent can only "
@@ -523,11 +524,10 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
         snapshot = budget_state_of(connection, settings, project_id) or {}
         if snapshot.get("budget_state") != "red":
             return True, f"the budget is {snapshot.get('budget_state') or 'unknown'}"
-        from .model_failures import budget_hold_sentence
+        from .model_failures import budget_hold_sentence, held_headline
 
-        return False, budget_hold_sentence(
-            "red", snapshot.get("utilization_ratio"),
-            snapshot.get("cap_usd_micros")).split(". Raise")[0].rstrip(".")
+        return False, held_headline(budget_hold_sentence(
+            "red", snapshot.get("utilization_ratio"), snapshot.get("cap_usd_micros"), snapshot))
     if key.startswith("channel:"):
         return False, f"{key.split(':', 1)[1]!r} is not a channel BOSS can post to"
     if key.startswith("provider:"):
@@ -602,26 +602,29 @@ def _budget_readiness(connection: Connection, settings: Any, project_id: str,
     snapshot = budget_state_of(connection, settings, project_id)
     if not snapshot:
         return None, []
-    from .model_failures import budget_hold_sentence
+    from .model_failures import budget_hold_sentence, held_headline, resets_sentence
 
     state = str(snapshot.get("budget_state") or "")
     sentence = budget_hold_sentence(state, snapshot.get("utilization_ratio"),
-                                    snapshot.get("cap_usd_micros"))
+                                    snapshot.get("cap_usd_micros"), snapshot)
     if state == "red":
         need = NEEDS["budget"]
         steps = _step_order(spec)
         first = steps[0] if steps else {}
         label = _label(first, {}) if first else "the first step"
-        return ({"key": need.key, "label": need.label, "fix": need.fix, "area": need.area,
+        fix = (f"{resets_sentence(snapshot)} Calls on a subscription cost no money and do "
+               "not count against it; only metered API spend does.")
+        return ({"key": need.key, "label": need.label, "fix": fix, "area": need.area,
                  "needed_by": [{"step_id": str(first.get("id") or ""), "label": label}],
                  "first_step": str(first.get("id") or ""), "first_step_label": label,
                  "after_a_person": False, "ok": False,
-                 "detail": sentence.split(". Raise")[0].rstrip(".")}, [])
+                 "detail": held_headline(sentence)}, [])
     if state in ("orange", "yellow"):
         used = f"{round(float(snapshot.get('utilization_ratio') or 0) * 100):.0f}%"
+        whose = snapshot.get("whose") or "the"
         text_ = (sentence if state == "orange" else
-                 f"The budget is yellow ({used} of the cap used). Work runs; at orange only "
-                 "P0 and P1 work runs, and at red only P0.")
+                 f"The budget is yellow ({used} of {whose} cap used). Work runs; at orange "
+                 f"only P0 and P1 work runs, and at red only P0. {resets_sentence(snapshot)}")
         return None, [{"key": "budget", "level": state, "text": text_, "area": "budget"}]
     return None, []
 

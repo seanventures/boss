@@ -20944,6 +20944,16 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             freeze_provisioning_pct=snapshot.get("freeze_provisioning_pct"),
             freeze_tier2_pct=snapshot.get("freeze_tier2_pct"),
             tier2_frozen=snapshot.get("tier2_frozen"),
+            included_in_subscription_usd_micros=snapshot.get(
+                "included_in_subscription_usd_micros") or 0,
+            included_cost_drivers=snapshot.get("included_cost_drivers") or [],
+            period=snapshot.get("period"),
+            cap_name=snapshot.get("cap_name"),
+            period_start=snapshot.get("period_start"),
+            resets_at=snapshot.get("resets_at"),
+            resets_at_label=snapshot.get("resets_at_label"),
+            budget_timezone=snapshot.get("budget_timezone"),
+            periods=snapshot.get("periods") or {},
         )
 
 
