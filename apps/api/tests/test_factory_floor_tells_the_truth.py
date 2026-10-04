@@ -203,3 +203,21 @@ def test_boss_own_builds_have_a_home_and_their_apps_name(client, engine):
     row = _row(_floor(client).json(), run_id)
     assert row["internal"] is True
     assert row["app"] == "e2e-app"
+
+
+def test_counts_always_equal_what_is_listed(client, engine):
+    """boss-1: the Floor listed two failed steps of a build's run under NEEDS YOU while its
+    counts said {needs_you: 0, stopped: 0} — `stopped` counted the STOPPED section instead.
+    Every surface counts what it lists by one rule (command_center.attention_counts)."""
+    run_id = fx.new_run(engine, status="blocked", phase="awaiting_gate_override",
+                        title="Counted app", fctx={"failing_gates": ["code_review_passed"]})
+    fx.stage(engine, run_id, "review_code")
+    stopped_kinds = {"failed_step", "gate_override", "budget_refused"}
+    for path in ("/v1/factory/floor", "/v1/agents/live-board"):
+        body = client.get(path, params={"project_id": fx.PROJECT}).json()
+        kinds = [a["kind"] for a in body["attention"]]
+        assert body["counts"]["needs_you"] == kinds.count("approval"), path
+        assert body["counts"]["stopped"] == sum(1 for k in kinds if k in stopped_kinds), path
+        assert body["counts"]["stopped"] >= 1, path
+    floor = _floor(client).json()
+    assert floor["counts"]["stopped_builds"] == len(floor["stopped"])

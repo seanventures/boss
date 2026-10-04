@@ -222,9 +222,10 @@ class PreBuild(TypedDict, total=False):
 
 class FloorCounts(TypedDict):
     building: int
-    needs_you: int
+    needs_you: int                 # decisions listed (command_center.attention_counts)
     shipped_7d: int
-    stopped: int
+    stopped: int                   # stopped work listed in NEEDS YOU (same rule)
+    stopped_builds: int            # the STOPPED section's rows
     apps: int
 
 
@@ -488,8 +489,23 @@ def _is_internal(run: Mapping[str, Any]) -> bool:
 
 
 def app_name(run: Mapping[str, Any]) -> str:
-    """What a person calls the app this build makes: the benchmark's name, the name the brief
-    gives itself (naming.project_name), else the directive that asked for it."""
+    """What a person calls the app this build makes — a name, never a sentence: no trailing
+    `.`/`!`/`?`/`:`/`;`/`,` and no wrapping quotes (boss-1 read "Lead Triage Inbox.", the
+    brief's own sentence)."""
+    return _a_name(_app_name(run))
+
+
+_NAME_EDGES = " \t\"'“”‘’`.,;:!?…"
+
+
+def _a_name(name: str) -> str:
+    cleaned = str(name or "").strip().strip(_NAME_EDGES).strip()
+    return cleaned or str(name or "").strip()
+
+
+def _app_name(run: Mapping[str, Any]) -> str:
+    """The benchmark's name, the name the brief gives itself (naming.project_name), else the
+    directive that asked for it."""
     from .naming import project_name
 
     fctx = _j(run.get("finalize_ctx"), {}) or {}
@@ -1470,6 +1486,7 @@ def _etag(material: Any) -> str:
 
 def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None,
           now: Optional[datetime] = None) -> Floor:
+    from . import command_center
     from .code_task_service import (list_code_task_runs, list_internal_code_task_runs,
                                     overlay_stop_requests)
 
@@ -1529,10 +1546,14 @@ def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[s
         "project_id": project_id, "etag": "", "generated_at": now.isoformat(),
         # ONE NUMBER (agents-home D2): decisions, as the pill and Approvals count them. A build
         # stopped at its checks is a card too, counted with stopped work.
+        # The cards' counts by the one rule every surface uses (command_center.attention_counts):
+        # `needs_you` decisions, `stopped` the stopped work NEEDS YOU lists. The STOPPED section
+        # (failed builds with no newer attempt) is `stopped_builds`.
         "counts": {"building": len(builds),
-                   "needs_you": sum(1 for a in attention if a.get("kind") == "approval"),
+                   **{k: v for k, v in command_center.attention_counts(attention).items()
+                      if k in ("needs_you", "stopped")},
                    "shipped_7d": len({o["run_id"] for o in outcomes if o["kind"] != "preview"}),
-                   "stopped": len(stopped), "apps": apps},
+                   "stopped_builds": len(stopped), "apps": apps},
         "attention": attention, "builds": builds, "outcomes": outcomes[:8],
         "stopped": stopped[:20], "pre_build": pre_build,
     }

@@ -975,6 +975,7 @@ def build(connection: Any, settings: Any, project_id: str, *,
           viewer: Optional[str] = None, now: Optional[datetime] = None) -> LiveBoard:
     """The whole Live tab in one read (spec §6.2). Composition only; see the module doc."""
     from . import command_center
+    from . import command_center
 
     now = now or datetime.now(timezone.utc)
     read = command_center.read(connection, settings, project_id, now)
@@ -1008,7 +1009,8 @@ def build(connection: Any, settings: Any, project_id: str, *,
             "needs_you": int(cc["counts"]["needs_you"]),
             "setup": int(cc["counts"]["setup"]),
             "running": sum(1 for m in rows if m["state"] not in ("done", "stopped")),
-            "stopped": sum(1 for m in rows if m["state"] == "stopped"),
+            # What NEEDS YOU lists as stopped work, counted by the one rule (attention_counts).
+            "stopped": command_center.attention_counts(attention)["stopped"],
             "building": len(builds),
         },
         "attention": attention,

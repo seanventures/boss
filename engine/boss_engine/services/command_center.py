@@ -179,6 +179,22 @@ def step_index(steps_done: int, step_count: int, status: Any = None) -> int:
     return max(1, min(int(steps_done or 0) + 1, count))
 
 
+#: Attention items that are work which has STOPPED (a failed step; a build stopped at its checks
+#: or its budget, factory §6.5) — listed first, counted apart from decisions.
+STOPPED_KINDS = frozenset({"failed_step", "gate_override", "budget_refused"})
+
+
+def attention_counts(items: list[Mapping[str, Any]]) -> dict[str, int]:
+    """THE ONE COUNT of a list of attention items, for every surface that lists them (the
+    Command Center, Agents › Live, the Factory Floor): `needs_you` is decisions (agents-home
+    D2), `stopped` the stopped work, `setup` the readiness gaps. A surface counts what it LISTS
+    with this, so its numbers always equal its cards."""
+    kinds = [str(i.get("kind") or "") for i in items]
+    return {"needs_you": sum(1 for k in kinds if k == "approval"),
+            "stopped": sum(1 for k in kinds if k in STOPPED_KINDS),
+            "setup": sum(1 for k in kinds if k == "readiness")}
+
+
 def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
              steps: list[Mapping[str, Any]], decisions: list[Mapping[str, Any]],
              readiness: list[Mapping[str, Any]], names: Mapping[str, str],
@@ -435,11 +451,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             # ONE NUMBER (agents-home D2): DECISIONS waiting on the operator —
             # decision_actions.attention, what Approvals' badge and Needs action count. A failed
             # step and a setup gap are listed, and counted apart (`stopped`, `setup`).
-            "needs_you": sum(1 for n in needs_you if n["kind"] == "approval"),
-            # A build stopped at its checks or its budget is stopped work too (factory §6.5).
-            "stopped": sum(1 for n in needs_you
-                           if n["kind"] in ("failed_step", "gate_override", "budget_refused")),
-            "setup": sum(1 for n in needs_you if n["kind"] == "readiness"),
+            **attention_counts(needs_you),
             "approvals": sum(1 for n in needs_you if n["kind"] == "approval"),
             "expired_answerable": expired_answerable,
             "failed_steps": sum(1 for n in needs_you if n["kind"] == "failed_step"),
