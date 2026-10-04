@@ -6,16 +6,15 @@ import type { AgentStudioFeed } from "../lib/agent-studio";
 import { AgentDetail } from "./agent-detail-ui";
 import { PanelsView, orphanProfiles } from "./agent-profile-ui";
 import { AgentQuickCreate } from "./agent-quick-create";
-import { FocusedAgents } from "./focused-agents-ui";
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
-import { askAgent as talkTo, identityOf, openAgent } from "../lib/agent-world";
+import { identityOf, openAgent } from "../lib/agent-world";
 import { useLivePresence } from "../lib/agents-live";
 import { useIdentityVersion } from "../lib/use-agent-identities";
 import { AgFace } from "./agents/agent-face";
-import { RosterSummary, RosterZones, placeAgents } from "./agents/roster-zones";
+import { RosterSummary } from "./agents/roster-zones";
+import { DirectoryView } from "./agents/directory-view";
 import { TeamSwarm } from "./agents/team-swarm";
-import { openDockAbout } from "../lib/dock-subject";
 import { openRoom } from "../lib/agent-converse";
 
 /**
@@ -34,23 +33,9 @@ function humanise(key: string): string {
     .join(" ");
 }
 
-function volumeOf(a: V2Agent): number {
-  return (a.calls ?? 0) + (a.steps ?? 0);
-}
-
-/** Talk to this agent, 1:1, in its own voice (agents/talk-sheet.tsx). By role_key: the name
- *  is a display string, and two agents can share one. An agent with no registered role has no
- *  voice to talk in yet, so it keeps the dock, addressed by name. */
-function askAgent(agent: Pick<V2Agent, "id" | "name" | "registered">): void {
-  if (agent.registered) talkTo(agent.id, agent.name, { from: "roster" });
-  else openDockAbout({ subject: null, role: agent.name, question: `@${agent.name}: ` });
-}
-
 export type AgentsView = "roster" | "team" | "panels";
 
-/** What "N unregistered" means, and what pressing it does. */
-export const UNREGISTERED_TIP =
-  "Doing work with no registered role, so nothing governs it: no trust score, no limits. Show them to register.";
+export { UNREGISTERED_TIP } from "./agents/directory-view";
 
 /** The view the URL names. `view` is shared with other areas (the workflow editor uses
  *  visual|json), so anything this area does not know is the roster. */
@@ -80,7 +65,6 @@ export function WorkforceArea(
   const [view, setViewState] = useState<AgentsView>("roster");
   // Retired and the search read identities: a load (lifecycle, callsign) re-runs them.
   const identities = useIdentityVersion();
-  const [filter, setFilter] = useState<"all" | "needs_you" | "worked" | "duty" | "retired" | "unregistered">("all");
   const [search, setSearch] = useState("");
   const [teamLayout, setTeamLayout] = useState<"list" | "swarm">("list");
   // WHO IS DOING WHAT, from open work: the same store the top-bar pill reads.
@@ -131,28 +115,6 @@ export function WorkforceArea(
     [workforce.roster, workforce.agents, deleted]);
   const retired = useMemo(() => all.filter((a) => identityOf(a.id, a.name).lifecycle === "retired"), [all, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
   const everyone = useMemo(() => all.filter((a) => !retired.includes(a)), [all, retired]);
-  const needsYou = useMemo(() => new Set(placeAgents(everyone, live)
-    .filter((p) => p.zone === "needs_you").map((p) => p.agent.id)), [everyone, live]);
-  const agents = useMemo(() => {
-    const scoped = filter === "needs_you" ? everyone.filter((a) => needsYou.has(a.id))
-      : filter === "worked" ? everyone.filter((a) => volumeOf(a) > 0)
-      : filter === "retired" ? retired
-      : filter === "unregistered" ? everyone.filter((a) => !a.registered) : everyone;
-    const query = search.trim().toLowerCase();
-    const who = (a: typeof scoped[number]) => {
-      const id = identityOf(a.id, a.name);
-      return `${a.name} ${a.role} ${a.task} ${id.callsign ?? ""} ${id.tagline ?? ""}`.toLowerCase();
-    };
-    return query ? scoped.filter((a) => who(a).includes(query)) : scoped;
-  }, [everyone, retired, needsYou, filter, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
-
-  // COUNTED, NOT ASSUMED: roles idle all window have recorded no work.
-  const workedCount = everyone.filter((a) => volumeOf(a) > 0).length;
-  const unregisteredCount = everyone.filter((agent) => !agent.registered).length;
-  // Once the last one is registered, the "unregistered" view has nothing left to show.
-  useEffect(() => {
-    if (filter === "unregistered" && unregisteredCount === 0) setFilter("all");
-  }, [filter, unregisteredCount]);
   const panels = studio?.panels ?? [];
   const orphans = useMemo(() => studio ? orphanProfiles(studio, everyone.map((a) => a.id)) : [],
                           [studio, everyone]);
@@ -220,49 +182,8 @@ export function WorkforceArea(
       ) : view === "panels" && studio ? (
         <PanelsView feed={studio} actor={actor} />
       ) : (
-        <div className="roster">
-          <div className="roster-filterbar">
-            <span className="roster-filters">
-              {(["all", "duty", "needs_you", "worked", ...(retired.length ? ["retired" as const] : [])] as const).map((f) => (
-                <button key={f} type="button" className="cap-btn" data-active={filter === f}
-                        onClick={() => setFilter(f)} data-testid={`wf-filter-${f}`}
-                        title={f === "duty" ? "Agents that watch and act on their own"
-                          : f === "retired" ? "Kept for their work. Hidden from pickers." : undefined}>
-                  {f === "all" ? `All ${everyone.length}` : f === "needs_you" ? `Needs you ${needsYou.size}`
-                    : f === "worked" ? `Has done work ${workedCount}`
-                    : f === "retired" ? `Retired ${retired.length}` : "On duty"}
-                </button>
-              ))}
-            </span>
-            {/* Governance gap, said once: an agent running work without a registered role has
-                no trust score, no autonomy level and no violation tracking. Pressed, it shows
-                those agents, each with Register. */}
-            {unregisteredCount > 0 ? (
-              <button type="button" className="cap-btn roster-ungoverned" data-testid="roster-ungoverned"
-                      data-active={filter === "unregistered"} title={UNREGISTERED_TIP}
-                      onClick={() => setFilter(filter === "unregistered" ? "all" : "unregistered")}>
-                {unregisteredCount} unregistered
-              </button>
-            ) : null}
-          </div>
-
-          {filter === "duty" ? (
-            <FocusedAgents projectId={workforce.project_id} actor={actor} />
-          ) : agents.length === 0 ? (
-            everyone.length === 0 && filter === "all" && !search.trim() ? (
-              <div className="roster-empty" data-testid="workforce-empty">
-                <span className="detail">No agents yet</span>
-                <button type="button" className="wf-btn" onClick={() => setCreating(true)}>+ New agent</button>
-              </div>
-            ) : <p className="detail">No match</p>
-          ) : (
-            // GROUPED BY WHAT THEY ARE DOING: Needs you, Working, In a panel, Idle (spec §3.2).
-            <RosterZones agents={agents} live={live} onOpen={openAgent}
-                         onAsk={(roleKey, name) => askAgent(
-                           agents.find((a) => a.id === roleKey) ?? { id: roleKey, name, registered: true })}
-                         onRegister={(name) => setCreating(name)} />
-          )}
-        </div>
+        <DirectoryView projectId={workforce.project_id} actor={actor} everyone={everyone}
+                       retired={retired} live={live} search={search} onCreate={setCreating} />
       )}
 
       {/* The detail view, over every view. Rendered here rather than as a route because the
