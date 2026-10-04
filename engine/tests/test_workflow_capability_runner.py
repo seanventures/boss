@@ -1911,6 +1911,30 @@ def test_a_gate_with_no_adopted_decision_behaves_exactly_as_before(eng, project,
     assert steps["g"]["status"] == "waiting"
 
 
+def test_a_direct_change_raises_no_prd_approval_nobody_answers(eng, project, monkeypatch):
+    """Factory test D2: a build started as a direct change has no PRD. Its run's spec_review
+    opened a "PRD approval (automatic)" decision nobody ever answered — one pending decision per
+    build on the pill and in Approvals. It is recorded as not applicable, and nothing is asked."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "directgate", [
+            {"id": "g", "kind": "capability", "binding": {"capability": "spec_review"},
+             "next": []},
+        ], "g")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_direct"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        opened = c.execute(
+            text("SELECT decision_id FROM workflow_step_runs WHERE workflow_run_id=:r"),
+            {"r": run["id"]},
+        ).scalar()
+
+    assert steps["g"]["status"] == "succeeded"
+    assert steps["g"]["output"]["status"] == "not_applicable"
+    assert opened is None, "a PRD approval was raised for a build that has no PRD"
+
+
 def test_the_runs_own_input_fills_optional_step_inputs(eng, project, monkeypatch):
     """A catalogue `build` step binds only title and instructions. A project started from the
     form also carries acceptance criteria and test commands — real instructions that had

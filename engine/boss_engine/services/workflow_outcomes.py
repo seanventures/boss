@@ -109,7 +109,7 @@ def awaited_work(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdic
 
 def answered_gate(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     """An approval reaches the runner only when the run already holds the answer."""
-    if _status(result) == "adopted":
+    if _status(result) in ("adopted", "not_applicable"):
         return Verdict(SUCCEEDED)
     return _refused(result) or Verdict(FAILED, "nobody has answered this approval")
 
