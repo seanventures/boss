@@ -23,7 +23,8 @@ ActHow = Literal["named", "only_holder", "only_candidate", "model_pick", "captai
                  "next_stage", "seated", "asked_by_person", "asked_by_agent", "approved", "started"]
 HandedByKind = Literal["person", "agent", "boss"]
 Lifecycle = Literal["active", "paused", "retired"]
-ChangeKind = Literal["born", "persona", "remit", "grant", "revoke", "model", "lifecycle"]
+ChangeKind = Literal["born", "persona", "remit", "instructions", "grant", "revoke", "model",
+                     "lifecycle"]
 PromptMode = Literal["chat", "work", "panel"]
 PresenceState = Literal["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck",
                         "paused", "retired"]
@@ -143,7 +144,7 @@ class Persona(TypedDict, total=False):
 
 
 class PromptBlock(TypedDict):
-    layer: Literal["L0", "L1", "L2", "L3", "L4", "L5"]
+    layer: Literal["L0", "L1", "L2", "L2i", "L3", "L4", "L5"]
     text: str
 
 

@@ -7721,7 +7721,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ad-bad { color: hsl(0 70% 68%); }
 
 .ad-list { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 5px; font-size: .86rem; }
-.ad-h { margin: 16px 0 4px; font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
 .ad-mission { margin: 0; font-size: .95rem; line-height: 1.6; max-width: 78ch; }
 .ad-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ad-chip {

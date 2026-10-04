@@ -18,7 +18,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
 
-const { AgentMcp, AgentEdit, AgentDelete } = await import("../app/agent-detail-ui");
+const { AgentEdit, AgentDelete } = await import("../app/agent-detail-ui");
+const { LoadoutGrants } = await import("../app/skills/agent-abilities");
 const { AgentQuickCreate } = await import("../app/agent-quick-create");
 const { errorSentence } = await import("../lib/agents");
 
@@ -78,33 +79,33 @@ describe("creating an agent is one screen that grants what it holds", () => {
   });
 });
 
-describe("an agent holds MCP servers", () => {
+describe("an agent holds MCP servers (the Passport's Loadout › MCP row)", () => {
+  const mcpRow = (holds: unknown[], available: unknown[] = []) => render(
+    <LoadoutGrants projectId="p" roleKey="publisher" actor="ceo" canEdit onChanged={() => {}} onFromFile={() => {}}
+                   skills={[]} available={[]} allowed={[]} forbidden={[]}
+                   servers={holds as never} availableServers={available as never} initialAbilities={[]} />);
+
   it("lists what it holds, narrowed or whole, and what holding it costs", () => {
-    const html = render(<AgentMcp projectId="p" roleKey="publisher" actor="ceo" onChanged={() => {}}
-      panel={{ role_key: "publisher", available: [], holds: [
-        { mcp_server_id: "mcp_1", server: "mattermost", tools: ["post"], enabled: true, risk_tier: 2 },
-        { mcp_server_id: "mcp_2", server: "github", tools: [], enabled: false, risk_tier: 1 },
-      ] }} />);
-    expect(html).toContain("2 servers held");
-    expect(html).toContain("only post");
-    expect(html).toContain("every tool it offers");
-    expect(html).toContain("its calls wait for approval (tier 2)");
-    // A disabled server is not offered, and the page says where to turn it on.
-    expect(html).toContain("disabled in this project");
+    const html = mcpRow([
+      { mcp_server_id: "mcp_1", server: "mattermost", tools: ["post"], enabled: true, risk_tier: 2 },
+      { mcp_server_id: "mcp_2", server: "github", tools: [], enabled: false, risk_tier: 1 },
+    ]);
+    expect(html).toContain("mattermost · 1 tool");
+    expect(html).toContain("github · all tools");
+    expect(html.split('data-testid="agent-mcp-mcp_1"')[1].split("</span></span>")[0]).toContain('aria-label="Asks a person"');
+    // A disabled server is not offered, and the chip says so.
+    expect(html).toContain("Off · turned off in Skills &amp; MCP");
   });
 
-  it("holding none says what that means, and where to register one when none exist", () => {
-    const html = render(<AgentMcp projectId="p" roleKey="x" actor="ceo" onChanged={() => {}}
-      panel={{ role_key: "x", holds: [], available: [] }} />);
-    expect(html).toContain("offered no MCP tool");
-    expect(html).toContain("register one on the Skills");
+  it("holding none says what that means", () => {
+    const html = mcpRow([]);
+    expect(html).toContain("No MCP");
+    expect(html).toContain("Its steps are offered no MCP tools");
   });
 
-  it("offers the grant when a server is available", () => {
-    const html = render(<AgentMcp projectId="p" roleKey="x" actor="ceo" onChanged={() => {}}
-      panel={{ role_key: "x", holds: [], available: [
-        { mcp_server_id: "mcp_3", server: "drive", url: "http://d", enabled: true, risk_tier: 1 }] }} />);
-    expect(html).toContain('data-testid="agent-mcp-open"');
+  it("offers the grant, and a way to register a new server", () => {
+    const html = mcpRow([], [{ mcp_server_id: "mcp_3", server: "drive", enabled: true, risk_tier: 1 }]);
+    expect(html).toContain('data-testid="loadout-mcp-add"');
   });
 });
 

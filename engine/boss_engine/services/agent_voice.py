@@ -227,9 +227,11 @@ def voiced_role(role_row: dict[str, Any], persona: Optional[dict[str, Any]]) -> 
     return {**role_row, "spec": spec}
 
 
-def system_prompt(role_row: dict[str, Any]) -> str:
-    """The agent's full composed prompt (L0-L3), exactly what its chat replies are built on."""
-    return render(compose_agent_prompt(role_row, mode="chat"))
+def system_prompt(role_row: dict[str, Any],
+                  instructions: Optional[list[dict[str, Any]]] = None) -> str:
+    """The agent's full composed prompt (L0-L3, with its instructions as L2i), exactly what its
+    chat replies are built on. `instructions`: agent_instructions.for_prompt(…, "chat")."""
+    return render(compose_agent_prompt(role_row, mode="chat", instructions=instructions))
 
 
 def draft_prompt(field: str) -> str:

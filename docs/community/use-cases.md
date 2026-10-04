@@ -3,7 +3,7 @@
 These four scenarios show what a fresh BOSS Community install can do today. Each one follows the same pattern: BOSS prepares the work, records what it did, and stops for your approval before any gated effect.
 
 !!! note "How BOSS runs"
-    BOSS Community is a self-hosted control plane that you install on a machine you administer. The API and console bind to `127.0.0.1`, and the generated `.env` stays on that machine. Goals you submit never run unattended, and installing agent definitions or the five example workflows under `examples/` does not start any work. **Agents** holds definitions you can test; it does not come with a ready-made workforce.
+    BOSS Community is a self-hosted control plane that you install on a machine you administer. The API and console bind to `127.0.0.1`, and the generated `.env` stays on that machine. Goals you submit never run unattended, and installing agent definitions or the five example workflows under `examples/` does not start any work. **Agent Studio** holds definitions you can test; it does not come with a ready-made workforce.
 
 Throughout this page, four record types come up again and again:
 
@@ -76,7 +76,7 @@ The five [example workflows](https://github.com/seanventures/boss/blob/main/exam
 
 ## Agents and their activity
 
-**Agents → Team** shows planned roles and observed handoffs. On a new install the planned layout is empty, and moving a role there does not route tasks. **Agents → Roster** lists every agent and its recent work; agents are not running on their own after install.
+**Agent Studio → Team** shows planned roles and observed handoffs. On a new install the planned layout is empty, and moving a role there does not route tasks. **Agent Studio → Roster** lists every agent and its recent work; agents are not running on their own after install.
 
 ## Report a vulnerability
 

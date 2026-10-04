@@ -51,4 +51,19 @@ describe("the feed cache", () => {
     expect((await (await cached(url)).json()).n).toBe(1);
     expect((await (await cached(url)).json()).n).toBe(2);
   });
+
+  it("a write drops every kept read, so the page's re-read after a press is fresh", async () => {
+    // The Passport gave an agent a skill and read the agent back through /api/agents: the read
+    // came from this cache, 5s old, and the chip it had just given did not appear.
+    let state = "before";
+    const cached = await install((async (_u: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") !== "GET") state = "after";
+      return new Response(JSON.stringify({ state }), { status: 200 });
+    }) as typeof fetch);
+    const read = `${API}/v1/console/v2/agents/qa?project_id=p`;
+    expect((await (await cached(read)).json()).state).toBe("before");
+    expect((await (await cached(read)).json()).state).toBe("before");   // reused within the TTL
+    await cached(`${API}/v1/role-skills`, { method: "POST", body: "{}" });
+    expect((await (await cached(read)).json()).state).toBe("after");
+  });
 });

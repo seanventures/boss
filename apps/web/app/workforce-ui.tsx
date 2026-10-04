@@ -261,7 +261,7 @@ export function WorkforceArea(
   return (
     <div className="wf-agents ag-home" data-testid="agents-area" data-view={view}>
       <header className="wf-lib-head ag-home-head">
-        <div className="wf-tabs ag-home-tabs" role="tablist" aria-label="Agents" onKeyDown={onTabsKey}>
+        <div className="wf-tabs ag-home-tabs" role="tablist" aria-label="Agent Studio" onKeyDown={onTabsKey}>
           {tabs.map((t) => (
             <button key={t.key} type="button" role="tab" className="wf-tab" aria-selected={view === t.key}
                     tabIndex={view === t.key ? 0 : -1} data-testid={t.testid} title={TAB_TIP[t.key]}

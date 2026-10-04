@@ -20,7 +20,7 @@ v2_nav:
   missions: {v1Area: code_tasks}
   hive: {v1Area: agent, label_differs_because: "Hive is the v2 picture of every agent at once; v1's BOSS Agent is one conversation."}
   factory: {v1Area: workforce}
-  org: {v1Area: workforce, label_differs_because: "In v1 Team structure is a view of Agents (?area=workforce&view=team); /v2/org opens it."}
+  org: {v1Area: workforce, label_differs_because: "In v1 Team structure is a view of Agent Studio (?area=workforce&view=team); /v2/org opens it."}
   panels: {v1Area: decisions}
   boss: {v1Area: delivery_workflows}
   timeline: {v1Area: activity, label_differs_because: "v2 shows receipts — the recorded effects — not the whole activity log."}
@@ -41,8 +41,8 @@ delivery_workflows:
   risk: None beyond v1 — building, editing, running and scheduling a workflow all happen in v1's Workflows area.
 workforce:
   to: factory
-  what: The v2 Agents and Team structure screens open v1 Agents (Roster, Team, Panels); Agent Studio and Team structure are views of it.
-  risk: None beyond v1 — creating, editing and testing an agent all happen in v1's Agents area.
+  what: The v2 Agents and Team structure screens open v1 Agent Studio (Roster, Team, Panels); Agent Studio and Team structure are views of it.
+  risk: None beyond v1 — creating, editing and testing an agent all happen in v1's Agent Studio area.
 agent:
   to: hive
   what: Every agent, at once.

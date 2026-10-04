@@ -293,8 +293,8 @@ def mcp_scope_problem(connection: Connection, project_id: str, role: str,
     lacking = [str(s.get("name")) for s in named if str(s["id"]) not in held]
     if lacking:
         return (f"this step names MCP server {', '.join(lacking)}, which {role} does not hold. "
-                f"Give {role} {'that server' if len(lacking) == 1 else 'those servers'} on the "
-                "Agents page, or take it off the step — a step does not grant an agent "
+                f"Give {role} {'that server' if len(lacking) == 1 else 'those servers'} in "
+                "Agent Studio, or take it off the step — a step does not grant an agent "
                 "anything.")
     return None
 
@@ -311,7 +311,7 @@ def scope_problem(role: str, wanted: list[str], held: dict[str, list[str]]) -> O
     cannot_run = [s for s in wanted if s in unrunnable]
     if lacking:
         return (f"this step is scoped to {', '.join(lacking)}, which {role} does not hold. Give "
-                f"{role} those skills on the Agents page, or take them off the step — a step "
+                f"{role} those skills in Agent Studio, or take them off the step — a step "
                 "does not grant an agent anything.")
     if cannot_run:
         return (f"{role} holds {', '.join(cannot_run)}, but an agent step cannot offer "
@@ -327,7 +327,7 @@ def empty_handed_problem(role: str, held: dict[str, list[str]]) -> str:
     if held.get("unrunnable"):
         return (f"{role} holds only {', '.join(held['unrunnable'])}, which an agent step cannot "
                 "offer as tools on this project — not in the skill catalogue, or turned off. "
-                f"Give {role} a skill it can use on the Agents page, or run that skill as a "
+                f"Give {role} a skill it can use in Agent Studio, or run that skill as a "
                 "custom step.")
     return (f"{role} holds no skills and no MCP servers, so it cannot do anything. Open the "
             "agent and give it what this work needs — a step naming an agent that holds nothing "
@@ -395,7 +395,10 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
     # AI disclosure and voice the agent has in chat and on a panel. The rules below stay the
     # authority on what it may do; the outcome it must declare is asked for in the user turn
     # (OUTCOME_ASK). A persona that cannot compile falls back to the plain name line.
-    lines = [_agent_voice(dict(row) if row else {"role_key": role, "spec": spec})
+    from .agent_instructions import for_prompt
+
+    lines = [_agent_voice(dict(row) if row else {"role_key": role, "spec": spec},
+                          for_prompt(connection, project_id, role, "work"))
              or f"You are {name}, an AI agent in BOSS."]
     if spec.get("mission"):
         lines.append(f"\nYOUR MISSION\n  {spec['mission']}")
@@ -427,11 +430,11 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
     return "\n".join(lines)
 
 
-def _agent_voice(role: dict[str, Any]) -> str:
+def _agent_voice(role: dict[str, Any], instructions: Optional[list[dict]] = None) -> str:
     from .agent_persona import identity_and_voice
 
     try:
-        return identity_and_voice(role, mode="work")
+        return identity_and_voice(role, mode="work", instructions=instructions)
     except Exception:  # noqa: BLE001 — a work prompt must still compile
         return ""
 

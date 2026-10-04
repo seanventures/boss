@@ -561,7 +561,7 @@ class AgentStudioService:
             )
 
         if role is not None:
-            # THE GRANT IS THE PERMISSION. The Agents page gives an agent any skill and says
+            # THE GRANT IS THE PERMISSION. Agent Studio gives an agent any skill and says
             # so; this check read only the role spec's `allowed_skills`, so a profile asking for
             # a skill the agent had just been GIVEN failed publish with "exceeds RoleSpec
             # permissions" — two screens, two rules, one decision. What the agent holds in
