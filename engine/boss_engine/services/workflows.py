@@ -3627,6 +3627,11 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             # gate: approving it must release the step, and the buttons the inbox draws are
             # decided by this action (decision_actions). It came first, before the spread.
             "action": "resume_workflow",
+            # WHOSE QUESTION THIS IS. Without it the card was linked to its run only by the step
+            # row, which removing the run deletes — and the card stayed answerable (boss-1,
+            # 2026-10-04). run_decisions withdraws it when the run ends.
+            "workflow_run_id": run["id"],
+            "step_id": row["step_id"],
         }
         where = ""
         if review.get("view_url"):
@@ -4256,6 +4261,12 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
         run_id,
         {"status_counts": by_status},
     )
+    # A run can finish past a question nobody answered (its step skipped, or failed and then
+    # skipped). The question is moot now; see run_decisions.
+    from .run_decisions import withdraw_with_run
+
+    withdraw_with_run(connection, run["project_id"], run_id,
+                      why=f"its run {run_id} finished without it", actor=run["actor"] or "workflow")
 
 
 def _refuse_step(
@@ -5360,6 +5371,13 @@ def delete_run(connection: Connection, project_id: str, run_id: str, actor: str)
             f"that run waiting forever — let it finish, or cancel it, and then this run "
             f"can be removed.")
 
+    # BEFORE THE ROWS GO: a decision step's card is linked to its run only through the step row
+    # this delete cascades away. Removed on boss-1, its gates stayed answerable. See
+    # run_decisions.
+    from .run_decisions import withdraw_with_run
+
+    withdraw_with_run(connection, project_id, run_id,
+                      why=f"its run {run_id} was removed", actor=actor)
     for table, column in POINTS_AT_A_RUN:
         connection.execute(
             text(f"UPDATE {table} SET {column} = NULL WHERE {column} = :run_id"),
@@ -5450,6 +5468,13 @@ def cancel_run(
         run_id,
         {"reason": reason, "compensate": compensate},
     )
+    # ITS QUESTIONS GO WITH IT. A stopped run's gates stayed in Approvals with Approve and
+    # Reject on them (boss-1, 2026-10-04: 21 of them). See run_decisions.
+    from .run_decisions import withdraw_with_run
+
+    withdraw_with_run(connection, project_id, run_id,
+                      why=f"its run {run_id} was cancelled ({reason})", actor=actor)
+    _cancel_child_runs(connection, project_id, run_id, actor, compensate=compensate)
     if compensate:
         compensation_count = connection.execute(
             text(
@@ -5460,6 +5485,34 @@ def cancel_run(
         if compensation_count:
             begin_compensation(connection, project_id, run_id, actor, reason=reason)
     return get_run(connection, project_id, run_id)
+
+
+def _cancel_child_runs(connection: Connection, project_id: str, run_id: str, actor: str, *,
+                       compensate: bool) -> None:
+    """Stop the runs a "Run another workflow" step of this run started.
+
+    A child is this run's work as much as a code task is, and nothing consumes its output once
+    the parent is cancelled — yet it went on, and its own gates went on asking for answers about
+    a parent that had been stopped. Cancelled through `cancel_run`, so each child stops its own
+    work, withdraws its own decisions and stops its own children. A child busy compensating is
+    left to finish undoing itself (cancelling it would race that).
+    """
+    from .workflow_run_actions import CLOSED_RUN_STATES
+
+    children = connection.execute(
+        text("SELECT id, status FROM workflow_runs WHERE parent_run_id = :r AND project_id = :p"),
+        {"r": run_id, "p": project_id},
+    ).mappings().all()
+    for child in children:
+        if child["status"] in CLOSED_RUN_STATES or child["status"] == "compensating":
+            continue
+        try:
+            cancel_run(connection, project_id, str(child["id"]), actor,
+                       reason=f"its parent run {run_id} was cancelled", compensate=compensate)
+        except WorkflowError:
+            # Refused before it wrote anything (the child's own "stop" rule). The parent's
+            # cancel must not fail because a child could not be stopped with it.
+            logger.exception("could not cancel child run %s of %s", child["id"], run_id)
 
 
 #: The long-running thing each async step starts, and the table that records its state. A step
@@ -5791,6 +5844,10 @@ def complete_compensation(
             run["id"],
             {},
         )
+        from .run_decisions import withdraw_with_run
+
+        withdraw_with_run(connection, project_id, run["id"],
+                          why=f"its run {run['id']} was undone", actor=run["actor"] or "workflow")
     return _serialize_compensation(updated)
 
 

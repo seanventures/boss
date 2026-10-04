@@ -132,6 +132,10 @@ class TestItWillNotStrandAParentThatIsStillWaiting:
             def first(self):
                 return self._row
 
+            def all(self):
+                # The run's unanswered decisions (run_decisions.withdraw_with_run): none here.
+                return []
+
         class _Conn:
             def __init__(self):
                 self.sql: list[str] = []
