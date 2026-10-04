@@ -6275,3 +6275,25 @@ CREATE INDEX IF NOT EXISTS idx_stack_deployments_host_dir
 CREATE UNIQUE INDEX IF NOT EXISTS uq_stack_deployments_live_commit
   ON stack_deployments (target_id, commit_sha)
   WHERE status IN ('planned', 'awaiting_approval', 'running');
+
+-- THE PER-MINUTE BURST CAP MEASURES MONEY ACTUALLY SPENT. It sums the cost receipts settled in
+-- the last minute (services/budget.py), not reservation estimates: a subscription or local
+-- model settles at $0 and never fills the window. This index serves that trailing-window sum.
+CREATE INDEX IF NOT EXISTS idx_cost_receipts_project_created
+  ON cost_receipts (project_id, created_at);
+
+-- Requests the burst cap made wait, so the longest-waiting one is served first when the
+-- window has room again (FIFO, no starvation). One row per waiting request, keyed by its
+-- category and reason (stable across the request's retries, even when each retry is a fresh
+-- job), and also matched by its job when it has one. A row is live while its holder is
+-- expected back (retry_at plus a grace); a granted request deletes its row.
+CREATE TABLE IF NOT EXISTS budget_burst_waiters (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  waiter_key TEXT NOT NULL,
+  job_id TEXT,
+  first_refused_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  retry_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_budget_burst_waiters_project
+  ON budget_burst_waiters (project_id, first_refused_at);

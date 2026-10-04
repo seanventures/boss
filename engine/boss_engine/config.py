@@ -737,7 +737,13 @@ class Settings(BaseSettings):
         default=200_000_000, alias="BOSS_MONTHLY_CAP_USD_MICROS"
     )
     burst_cap_usd_micros_per_min: int = Field(
-        default=100_000, alias="BOSS_BURST_CAP_USD_MICROS_PER_MIN"
+        default=100_000, alias="BOSS_BURST_CAP_USD_MICROS_PER_MIN",
+        description=(
+            "Spend-rate anomaly control: the most ACTUAL settled cost (cost receipts) the "
+            "project may accrue in any trailing 60 seconds. Reservation estimates do not count "
+            "toward it (they count against the daily/monthly caps), and $0 calls such as "
+            "subscriptions or local models never fill it. Over it, new reservations wait, "
+            "longest-waiting first."),
     )
     software_factory_pr_budget_usd_micros: int = Field(
         default=500_000, alias="BOSS_SOFTWARE_FACTORY_PR_BUDGET_USD_MICROS"

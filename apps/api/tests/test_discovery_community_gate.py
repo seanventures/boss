@@ -213,37 +213,54 @@ def test_a_hard_budget_refusal_makes_zero_model_calls(engine, governed, budget_p
     assert _events(engine, run_id, "discovery.spend_refused") == 1
 
 
-def test_a_per_minute_cap_smaller_than_a_stage_waits_and_retries_instead_of_failing(
+def test_a_per_minute_cap_smaller_than_a_stage_runs_every_stage_at_its_real_estimate(
     engine, governed, budget_policy,
 ):
-    """boss-1's default policy allows $0.10/min and a stage estimate is larger: the stage used
-    to reserve its full estimate, could never be granted, and the run failed at its first
-    stage. A stage now reserves no more than the cap, and a burst refusal is retried."""
+    """boss-1's default policy allows $0.10/min and a stage estimate is $2. The stage once
+    could never be granted; then it was clamped to the cap and each stage filled the whole
+    minute, so research ran one stage a minute and starved every other call. The cap measures
+    actual settled spend, so each stage reserves its honest estimate and, on a subscription
+    that settles at $0, the run goes straight through."""
+    from boss_engine.services.discovery_spend import STAGE_ESTIMATE_USD_MICROS
+
     budget_policy(burst_cap_usd_micros_per_min=50_000)
     run_id = _start()
-    for _ in range(8):
-        lease = _lease(engine, run_id)
-        result = _execute(run_id, lease)
-        if result["status"] == "completed":
-            break
-        # A wait is not a failed attempt: the job completes and a fresh one is queued.
-        assert result["status"] == "deferred" and result["retry"] is False, result
-        with engine.begin() as connection:  # a minute passes
-            connection.execute(text(
-                "UPDATE budget_reservations SET created_at = created_at - interval '2 minutes' "
-                "WHERE project_id = :p"), {"p": PROJECT})
-    assert result == {"status": "completed", "retry": False}
-    assert governed.calls == STAGES, "each stage called exactly once across the retries"
+    result = _execute(run_id, _lease(engine, run_id))
+    assert result == {"status": "completed", "retry": False}, result
+    assert governed.calls == STAGES, "each stage called exactly once"
     with engine.connect() as connection:
         amounts = [row[0] for row in connection.execute(text(
             "SELECT amount_usd_micros FROM budget_reservations WHERE reason LIKE :r"),
             {"r": f"Discovery {run_id} stage %"})]
+    assert amounts and set(amounts) == {STAGE_ESTIMATE_USD_MICROS}, amounts
+    assert _events(engine, run_id, "discovery.waiting_for_budget") == 0
+
+
+def test_a_stage_waits_while_actual_spend_fills_the_minute_then_resumes(
+    engine, governed, budget_policy,
+):
+    budget_policy(burst_cap_usd_micros_per_min=50_000)
+    with engine.begin() as connection:  # other work actually spent the minute
+        connection.execute(text(
+            "INSERT INTO cost_receipts (id, project_id, category, skill_or_model_id, "
+            "estimated_usd_micros, actual_usd_micros, status) "
+            "VALUES (:id, :p, 'model', 'earlier work', 60000, 60000, 'actual')"),
+            {"id": f"cost_{uuid4().hex[:12]}", "p": PROJECT})
+    run_id = _start()
+    first = _execute(run_id, _lease(engine, run_id))
+    assert first["status"] == "deferred" and first["retry"] is False, first
+    assert governed.calls == []
+    with engine.begin() as connection:  # a minute passes
+        connection.execute(text(
+            "UPDATE cost_receipts SET created_at = created_at - interval '2 minutes' "
+            "WHERE project_id = :p"), {"p": PROJECT})
         decisions = connection.execute(text(
             "SELECT count(*) FROM decisions WHERE question LIKE :q"),
             {"q": f"Budget refused Discovery {run_id}%"}).scalar_one()
-    assert amounts and max(amounts) <= 50_000, amounts
     assert decisions == 0, "a refusal that clears by itself asks nobody to decide anything"
-    assert _events(engine, run_id, "discovery.waiting_for_budget") >= 3
+    result = _execute(run_id, _lease(engine, run_id))
+    assert result == {"status": "completed", "retry": False}, result
+    assert governed.calls == STAGES
 
 
 @pytest.fixture
@@ -409,12 +426,16 @@ def test_a_run_waiting_for_the_per_minute_budget_says_so(engine, governed, budge
     budget_policy(burst_cap_usd_micros_per_min=1_000)
     with engine.begin() as connection:  # the last minute's budget is already spent
         connection.execute(text(
-            "INSERT INTO budget_reservations (id, project_id, category, amount_usd_micros, reason, "
-            "status, expires_at) VALUES (:id, :p, 'model', 1000, 'earlier work', 'active', "
-            "now() + interval '5 minutes')"), {"id": f"res_{uuid4().hex[:12]}", "p": PROJECT})
+            "INSERT INTO cost_receipts (id, project_id, category, skill_or_model_id, "
+            "estimated_usd_micros, actual_usd_micros, status) "
+            "VALUES (:id, :p, 'model', 'earlier work', 1000, 1000, 'actual')"),
+            {"id": f"cost_{uuid4().hex[:12]}", "p": PROJECT})
     run_id = _start()
     assert _execute(run_id, _lease(engine, run_id))["status"] == "deferred"
     attention = _attention(engine, run_id)
+    with engine.begin() as connection:  # this run waits no longer: it leaves the line
+        connection.execute(text("DELETE FROM budget_burst_waiters WHERE project_id = :p"),
+                           {"p": PROJECT})
     assert attention["kind"] == "budget_wait" and attention["state"] == "waiting"
     assert governed.calls == []
 

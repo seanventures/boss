@@ -49,8 +49,9 @@ STAGE_ESTIMATE_USD_MICROS = 2_000_000
 class DiscoverySpendRefused(RuntimeError):
     """Budget or model capacity refused the stage before anything was called.
 
-    `transient` marks a refusal that clears by itself — the per-minute burst cap — so the job
-    retries later instead of ending the run."""
+    `transient` marks a refusal that clears by itself — the per-minute burst cap on actual
+    spend, or headroom held by other work's reservations — so the job retries later instead of
+    ending the run."""
 
     def __init__(self, message: str, *, transient: bool = False) -> None:
         super().__init__(message)
@@ -174,14 +175,11 @@ class DiscoveryStageSpend:
     def _open(self, connection, dedupe: str, stage: str, source_id: Optional[str]) -> dict:
         from .model_gateway import ModelCapacityDeniedError
 
-        # NO LARGER THAN THE PROJECT'S PER-MINUTE CAP. The burst cap sums the last minute's
-        # reservations, so a stage reserving more than the cap could never be granted: the
-        # default policy allows $0.10/min and a stage reserved $2, so every Community discovery
-        # was refused at its first stage. The actual cost is still settled in full, and the
-        # daily and monthly caps still govern every later reservation.
-        burst_cap = int(getattr(self.budget, "_burst_cap", lambda *_: 0)(
-            connection, self.project_id) or 0)
-        amount = min(self.estimate, burst_cap) if burst_cap > 0 else self.estimate
+        # THE STAGE RESERVES ITS HONEST ESTIMATE. The per-minute burst cap measures actual
+        # settled spend, not reservations, so an estimate larger than that cap is still
+        # granted; the daily and monthly caps govern its size. (It used to be clamped to the
+        # burst cap, which made every stage fill the whole minute on its own.)
+        amount = self.estimate
         reserved = self.budget.reserve(
             connection, self.project_id, "model_gateway", amount,
             f"Discovery {self.run_id} stage {stage}",

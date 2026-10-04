@@ -14,6 +14,11 @@ it would have cleared by itself a few seconds later. Three things were wrong, ea
    not — discovery and the connection proof each clamped their own estimate to dodge it, and
    every other caller was simply unservable on a project with a low cap.
 
+And later the same day (boss-1, five bundled examples, Claude Code and Codex subscriptions whose
+real cost is $0): two research runs sat "waiting for the per-minute budget" for 11+ minutes. The
+cap summed the last minute's RESERVATIONS, so a $2 estimate filled a $0.10/min window on its
+own. The cap now measures ACTUAL settled spend, and waiting requests are served in order.
+
 These tests drive the real BudgetGovernor and the real SkillRuntimeService through the real
 runner; only the skill's own effect (a model call) is replaced.
 """
@@ -57,18 +62,19 @@ def _policy(c, project_id: str, *, daily: int, burst: int) -> None:
 
 
 def _spent_this_minute(c, project_id: str, amount: int) -> None:
-    """Another run's reservation, made a few seconds ago."""
+    """Another run's model call, settled a few seconds ago at an ACTUAL cost of `amount`."""
     c.execute(
-        text("INSERT INTO budget_reservations (id, project_id, category, amount_usd_micros, "
-             "reason, status, expires_at) VALUES (:i, :p, 'model', :a, 'another run', 'active', "
-             "now() + interval '10 minutes')"),
-        {"i": f"res_{uuid.uuid4().hex[:12]}", "p": project_id, "a": amount},
+        text("INSERT INTO cost_receipts (id, project_id, category, skill_or_model_id, "
+             "estimated_usd_micros, actual_usd_micros, status) "
+             "VALUES (:i, :p, 'model', 'another run', :a, :a, 'actual')"),
+        {"i": f"cost_{uuid.uuid4().hex[:12]}", "p": project_id, "a": amount},
     )
 
 
 def _a_minute_passes(c, project_id: str, run_id: str | None = None) -> None:
-    c.execute(text("UPDATE budget_reservations SET created_at = created_at - interval '2 minutes' "
-                   "WHERE project_id = :p"), {"p": project_id})
+    for table in ("budget_reservations", "cost_receipts"):
+        c.execute(text(f"UPDATE {table} SET created_at = created_at - interval '2 minutes' "
+                       "WHERE project_id = :p"), {"p": project_id})
     if run_id:
         c.execute(text("UPDATE workflow_step_runs SET run_after = now() "
                        "WHERE workflow_run_id = :r AND status = 'ready'"), {"r": run_id})
@@ -94,7 +100,8 @@ def project(eng):
     with eng.begin() as c:
         for table in ("workflow_step_runs", "workflow_runs", "workflow_custom_steps",
                       "workflow_mappings", "workflow_versions", "workflow_definitions",
-                      "skill_invocations", "budget_reservations", "deadletters",
+                      "skill_invocations", "cost_receipts", "budget_burst_waiters",
+                      "budget_reservations", "deadletters",
                       "project_skills", "decisions", "events", "receipts", "role_skills",
                       "roles", "policy_eval_log"):
             try:
@@ -180,27 +187,99 @@ def _state(c, run_id: str) -> dict[str, Any]:
 
 # ── The governor ────────────────────────────────────────────────────────────────────────────
 
-def test_one_reservation_larger_than_the_per_minute_cap_is_granted_when_the_minute_is_empty(
+def _reserve(c, project_id: str, amount: int, reason: str) -> dict:
+    return BudgetGovernor(Settings()).reserve(
+        c, project_id, category="model", amount_usd_micros=amount, reason=reason,
+        expires_in_minutes=5)
+
+
+def test_reservations_larger_than_the_per_minute_cap_are_granted_it_measures_actual_spend(
         eng, project):
-    """The cap limits a RATE. Refusing one reservation larger than it, with nothing else spent,
-    refused it for ever — waiting never makes an estimate smaller."""
+    """The cap limits the RATE OF MONEY SPENT. An estimate is a ceiling, not spend: summing
+    them, one $2 research stage filled a $0.10/min window and the project got one call a
+    minute. Estimates never fill it, however large and however many."""
     with eng.begin() as c:
-        _policy(c, project, daily=10_000_000, burst=1_000)
-        granted = BudgetGovernor(Settings()).reserve(
-            c, project, category="model", amount_usd_micros=50_000, reason="big step",
-            expires_in_minutes=5)
-        after = BudgetGovernor(Settings()).reserve(
-            c, project, category="model", amount_usd_micros=1, reason="next",
-            expires_in_minutes=5)
+        _policy(c, project, daily=100_000_000, burst=1_000)
+        granted = [_reserve(c, project, 2_000_000, f"stage {i}") for i in range(5)]
+    assert [g["status"] for g in granted] == ["reserved"] * 5, granted
+
+
+def test_many_calls_that_cost_nothing_never_trip_the_per_minute_cap(eng, project):
+    """Subscriptions and local models settle at $0: twenty settled calls inside one minute,
+    each estimated far above the cap, and the twenty-first is still granted."""
+    governor = BudgetGovernor(Settings())
+    with eng.begin() as c:
+        _policy(c, project, daily=100_000_000, burst=1_000)
+        for i in range(20):
+            reserved = _reserve(c, project, 2_000_000, f"subscription call {i}")
+            assert reserved["status"] == "reserved", (i, reserved)
+            governor.settle(c, project, reserved["reservation_id"], None, "model",
+                            "anthropic_claude_code", 2_000_000, 0)
+        last = _reserve(c, project, 2_000_000, "one more")
+        spent = governor.burst_window(c, project, 1_000)["spent_usd_micros"]
+    assert last["status"] == "reserved", last
+    assert spent == 0
+
+
+def test_actual_spend_over_the_cap_makes_the_next_reservation_wait_until_it_ages_out(
+        eng, project):
+    with eng.begin() as c:
+        _policy(c, project, daily=100_000_000, burst=100_000)
+        _spent_this_minute(c, project, 150_000)
+        waiting = _reserve(c, project, 1_000, "next call")
+        _a_minute_passes(c, project)
+        granted = _reserve(c, project, 1_000, "next call")
+    assert waiting["status"] == "denied" and waiting["refusal"] == "burst", waiting
+    assert waiting["transient"] is True and waiting["decision_id"] is None
+    assert 5 <= waiting["retry_after_seconds"] <= 60
     assert granted["status"] == "reserved", granted
-    assert after["status"] == "denied" and after["refusal"] == "burst", (
-        "the cap still governs what comes after the first reservation")
+
+
+def test_the_longest_waiting_request_is_served_first_when_the_window_frees(eng, project):
+    """Busy runs keep coming back; a patient one must not be kept out by them. Once the
+    window has room, a request that has waited less is held until the older one is served."""
+    from boss_engine.services.budget import BURST_QUEUED_MESSAGE
+
+    with eng.begin() as c:
+        _policy(c, project, daily=100_000_000, burst=100_000)
+        _spent_this_minute(c, project, 100_000)
+        older = _reserve(c, project, 1_000, "older run")
+        newer = _reserve(c, project, 1_000, "newer run")
+        assert older["refusal"] == newer["refusal"] == "burst"
+        _a_minute_passes(c, project)
+        newer_again = _reserve(c, project, 1_000, "newer run")    # back first, but younger
+        newcomer = _reserve(c, project, 1_000, "brand new run")   # never waited at all
+        older_again = _reserve(c, project, 1_000, "older run")
+        newer_last = _reserve(c, project, 1_000, "newer run")
+        newcomer_last = _reserve(c, project, 1_000, "brand new run")
+        left = c.execute(text("SELECT count(*) FROM budget_burst_waiters WHERE project_id = :p"),
+                         {"p": project}).scalar_one()
+    assert newer_again["status"] == "denied" and newer_again["transient"] is True, newer_again
+    assert newer_again["message"] == BURST_QUEUED_MESSAGE
+    assert explain(newer_again["message"])["kind"] == "budget_wait"
+    assert newcomer["status"] == "denied", "a newcomer queues behind those already waiting"
+    assert older_again["status"] == "reserved", older_again
+    assert newer_last["status"] == "reserved", newer_last
+    assert newcomer_last["status"] == "reserved", newcomer_last
+    assert left == 0, "a served request leaves the line"
+
+
+def test_a_waiter_that_never_comes_back_does_not_hold_the_line(eng, project):
+    with eng.begin() as c:
+        _policy(c, project, daily=100_000_000, burst=100_000)
+        _spent_this_minute(c, project, 100_000)
+        _reserve(c, project, 1_000, "abandoned run")
+        _a_minute_passes(c, project)
+        c.execute(text("UPDATE budget_burst_waiters SET retry_at = now() - interval '5 minutes' "
+                       "WHERE project_id = :p"), {"p": project})
+        granted = _reserve(c, project, 1_000, "live run")
+    assert granted["status"] == "reserved", granted
 
 
 def test_a_per_minute_refusal_says_it_clears_by_itself_and_when(eng, project):
     with eng.begin() as c:
         _policy(c, project, daily=10_000_000, burst=100_000)
-        _spent_this_minute(c, project, 99_500)
+        _spent_this_minute(c, project, 100_000)   # the minute is spent
         refused = BudgetGovernor(Settings()).reserve(
             c, project, category="model", amount_usd_micros=1_000, reason="sixth run",
             expires_in_minutes=5)
@@ -434,30 +513,37 @@ def test_the_wait_bound_stops_the_step_and_a_retry_starts_the_waits_afresh(
     assert governed_skill == []
 
 
-def test_only_one_reservation_larger_than_the_cap_is_granted_to_concurrent_reservers(
-        eng, project):
-    """Two reservers in separate transactions both see an empty minute. The empty-window
-    allowance is ONE reservation, so the second must wait — not be granted a second of any
-    size, which would let the burst control overshoot by the sum of them."""
+def test_a_waiting_request_never_blocks_a_concurrent_reserver(eng, project):
+    """A tick holds its transaction open across model calls. A second reserver touching the same
+    waiting row must not block behind it (rows are taken SKIP LOCKED)."""
     with eng.begin() as c:
-        _policy(c, project, daily=100_000_000, burst=1_000)
+        _policy(c, project, daily=100_000_000, burst=100_000)
+        _spent_this_minute(c, project, 100_000)
     governor = BudgetGovernor(Settings())
     first_conn = eng.connect()
     first_tx = first_conn.begin()
     try:
+        first_conn.execute(text("SET LOCAL lock_timeout = '2s'"))
         first = governor.reserve(first_conn, project, category="model",
-                                 amount_usd_micros=500_000, reason="racer one",
+                                 amount_usd_micros=1_000, reason="skill:shared",
                                  expires_in_minutes=5)
         with eng.begin() as c:
-            second = governor.reserve(c, project, category="model",
-                                      amount_usd_micros=500_000, reason="racer two",
-                                      expires_in_minutes=5)
+            c.execute(text("SET LOCAL lock_timeout = '2s'"))
+            second = governor.reserve(c, project, category="model", amount_usd_micros=1_000,
+                                      reason="skill:shared", expires_in_minutes=5)
     finally:
         first_tx.rollback()
         first_conn.close()
-    assert first["status"] == "reserved", first
-    assert second["status"] == "denied", second
-    assert second["refusal"] == "burst" and second["transient"] is True
+    assert first["refusal"] == second["refusal"] == "burst"
+
+
+def test_the_period_caps_still_count_every_reservation_in_full(eng, project):
+    """Only the per-minute RATE measures actual spend. The daily cap still counts held
+    estimates: a request over it on its own is refused for a person to decide."""
+    with eng.begin() as c:
+        _policy(c, project, daily=1_000_000, burst=1)
+        refused = _reserve(c, project, 2_000_000, "stage larger than the day")
+    assert refused["refusal"] == "cap_exceeded" and refused["transient"] is False, refused
 
 
 def test_a_typed_decision_refused_by_the_cap_stops_once_with_one_decision(
