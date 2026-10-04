@@ -22,6 +22,7 @@ import { GrantRow } from "./grant-row";
 import { InputSourceRow, type Upstream } from "./input-source";
 import { Popover } from "./popover";
 import { ScopePicker } from "./scope-picker";
+import { StepAbility } from "./step-ability";
 import {
   AGENTED, APPROVABLE, STEP_ID, approvalMode, approvalOf, blockOf, declaredInputs, forcedApproval,
   formFields, instructionsOf, isAgentTask, producesOf, scopedMcp, scopedSkills, sourceOf, usesOf,
@@ -141,18 +142,20 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
       {shows.scope ? (
         <Section label="Skills" tip="Limits what the agent may use here. Never grants." testId="wf-sec-scope">
           <ScopePicker kind="skill" selected={scopedSkills(step)} captain={captain} palette={palette}
-                       onChange={(skills) => patch({ skills })} />
+                       projectId={projectId} onChange={(skills) => patch({ skills })} />
           <FieldError problems={problems} field="skills" />
           <div className="wf-sub-label">MCP</div>
           <ScopePicker kind="mcp" selected={scopedMcp(step)} captain={captain} palette={palette}
-                       onChange={(mcp) => patch({ mcp })} />
+                       projectId={projectId} onChange={(mcp) => patch({ mcp })} />
           <FieldError problems={problems} field="mcp" />
         </Section>
       ) : usesOf(step, palette).length ? (
         <Section label="Uses" tip="Fixed by this step. Use an Agent task to choose." testId="wf-sec-uses">
           <div className="wf-chips">
             {usesOf(step, palette).map((u) => <span key={u} className="wf-chip wf-chip-ro">{u}</span>)}
+            <StepAbility step={step} projectId={projectId} />
           </div>
+          <FieldError problems={problems} field="ability" />
         </Section>
       ) : null}
 
