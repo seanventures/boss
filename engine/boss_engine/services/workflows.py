@@ -3830,16 +3830,9 @@ def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[st
             # its step `waiting` — for ever, and with no record of the answer. The operator
             # pressed Reject, watched the gate go on saying "waiting", and had nothing to
             # tell them their decision had landed. The run was blocked the whole time.
-            _refuse_step(
-                connection, run_id, step_id, iteration,
-                decision_id=str(step["decision_id"]),
-                outcome=str(step["decision_status"]),
-            )
-            _block_run(
-                connection,
-                run_id,
-                f"decision {step['decision_id']} was {step['decision_status']}",
-            )
+            reject_gate(connection, run_id, step_id, iteration,
+                        decision_id=str(step["decision_id"]),
+                        outcome=str(step["decision_status"]))
         else:
             _block_run(
                 connection,
@@ -4059,8 +4052,10 @@ def _stop_run_at(connection: Connection, run_id: str, row: Any) -> None:
     why = str(row["last_error"] or "its work failed").strip().rstrip(".")
     # A refused approval cannot be skipped (see `skip_failed_step`), so the sentence does not
     # offer what the button would refuse.
-    choices = ("Reopen it with Try again, or leave the run as it is."
-               if _is_gate_step(template) else "Try it again, or skip it and carry on.")
+    refused = _is_gate_step(template) or bool(
+        (_json(dict(row).get("output"), {}) or {}).get("rejected_by_approver"))
+    choices = ("Retry asks again; Skip carries on without it." if refused
+               else "Try it again, or skip it and carry on.")
     named = _named_step(connection, run["project_id"], template, str(row["step_id"]))
     sentence = f"Stopped at {named}: {why}. {choices}"
     status = "deadlettered" if row["status"] == "deadlettered" else "failed"
@@ -4297,9 +4292,67 @@ def _refuse_step(
             """
         ),
         {"run_id": run_id, "step_id": step_id, "iteration": iteration,
-         "reason": f"a person {outcome} this step",
-         "out": json.dumps({"decision_id": decision_id, "outcome": outcome})},
+         "reason": ("you rejected it" if outcome == "rejected"
+                    else f"the approval {outcome} before anybody answered"),
+         "out": json.dumps({"decision_id": decision_id, "outcome": outcome,
+                            "rejected_by_approver": outcome == "rejected"})},
     )
+
+
+def _step_display(connection: Connection, run: Any, step_id: str) -> str:
+    """A step's name as the run view shows it, for a short sentence about it."""
+    try:
+        template = _step_map(_run_spec(connection, run["id"])).get(str(step_id)) or {}
+        named = str(_named_step(connection, run["project_id"], template, str(step_id)))
+        if named == str(step_id):
+            from .command_center import step_label
+
+            named = step_label(template, str(step_id))
+        return named
+    except Exception:  # noqa: BLE001 - a name for a toast never fails the action
+        return str(step_id)
+
+
+def reject_gate(
+    connection: Connection, run_id: str, step_id: str, iteration: int,
+    *, decision_id: str, outcome: str,
+) -> None:
+    """A gate somebody answered NO: its step FAILS and the run stops there (agents-home D3).
+
+    THE ONE PATH for a refused approval — a decision step and a capability step held at its
+    manual approval both end here. It used to block the run with the step left `waiting` (or
+    failed and blocked), so the run sat "waiting on a person" who had already answered, with no
+    way forward. Now the run is stopped at a failed step like any other, and offers the run's
+    own two answers: Try again (asks the gate afresh — a new decision) and Skip (carry on
+    without it), each recorded with who chose it.
+    """
+    _refuse_step(connection, run_id, step_id, iteration, decision_id=decision_id,
+                 outcome=outcome)
+    row = connection.execute(
+        text("SELECT * FROM workflow_step_runs WHERE workflow_run_id=:r AND step_id=:s "
+             "AND iteration=:i"),
+        {"r": run_id, "s": step_id, "i": iteration},
+    ).mappings().first()
+    if row is None or row["status"] != "failed":
+        return
+    _stop_run_at(connection, run_id, row)
+
+
+def refuse_gates_of(connection: Connection, decision_id: str, outcome: str = "rejected") -> int:
+    """Fail every step waiting on this decision NOW, as the person answers — not on the next
+    tick, which left the run saying "waiting on a person" for up to 20 seconds after a No."""
+    rows = connection.execute(
+        text("SELECT workflow_run_id, step_id, iteration FROM workflow_step_runs "
+             "WHERE decision_id = :d AND status = 'waiting'"),
+        {"d": decision_id},
+    ).mappings().all()
+    for row in rows:
+        run = _run_row(connection, str(row["workflow_run_id"]), lock=True)
+        if run is None or run["status"] in TERMINAL_RUN_STATES:
+            continue
+        reject_gate(connection, str(row["workflow_run_id"]), str(row["step_id"]),
+                    int(row["iteration"]), decision_id=decision_id, outcome=outcome)
+    return len(rows)
 
 
 def _block_run(connection: Connection, run_id: str, reason: str) -> None:
@@ -4649,11 +4702,19 @@ def retry_failed_step(
     # bounds how often one step waits for the budget (wait_step); kept across a Retry, a step
     # stopped after MAX_STEP_WAITS failed again at its very next wait — the person raised the
     # cap as told, pressed Try again, and got "still not started after 30 tries" at once.
+    # A REFUSED GATE ASKS AGAIN (agents-home D3). Its row kept the rejected decision's id, and
+    # a ready step with a decision on it reads as released — so Retry ran the work the person
+    # had said no to. The answer is cleared (it stays in the step's history as
+    # `refused_decision_id`), and the step opens a fresh decision when it is reached.
+    refused = bool((_json(row["output"], {}) or {}).get("rejected_by_approver"))
     connection.execute(
         text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
              "lease_owner=NULL, lease_expires_at=NULL, run_after=now(), updated_at=now(), "
-             "output = COALESCE(output, '{}'::jsonb) - 'waiting' "
-             "WHERE id=:id"),
+             "output = (COALESCE(output, '{}'::jsonb) - 'waiting'"
+             + (" - 'rejected_by_approver' - 'outcome') || jsonb_build_object("
+                "'refused_decision_id', CAST(decision_id AS text)), decision_id = NULL "
+                if refused else ") ")
+             + "WHERE id=:id"),
         {"id": row["id"]},
     )
     emit_event(connection, project_id, "workflow.step_retried", actor, "workflow_run", run_id,
@@ -4662,8 +4723,12 @@ def retry_failed_step(
     # The run moves again — unless it is paused, or until it reaches another failed step the
     # operator has not decided about. See `_set_moving_again`.
     run_status = _set_moving_again(connection, run_id)
+    named = _step_display(connection, run, step_id)
+    asks_again = bool((_json(row["output"], {}) or {}).get("rejected_by_approver"))
     return {"run_id": run_id, "step_id": step_id, "status": "ready", "was": row["status"],
-            "run_status": run_status}
+            "run_status": run_status,
+            # The words the console shows for it: short, never a server fragment.
+            "message": f"Asking again: {named}" if asks_again else f"Retrying {named}"}
 
 
 def _is_gate_step(template: dict[str, Any]) -> bool:
@@ -4713,7 +4778,7 @@ def skip_failed_step(
     reason = str(reason or "").strip()
     if not reason:
         raise WorkflowValidationError(
-            "say why this step is being skipped — the run's record keeps the reason.")
+            "Say why you are skipping this step. The run keeps the reason with your name.")
     run = _run_row(connection, run_id, lock=True)
     if run is None or run["project_id"] != project_id:
         raise WorkflowNotFoundError("Workflow run not found.")
@@ -4773,7 +4838,8 @@ def skip_failed_step(
     run_status = _set_moving_again(
         connection, run_id, released=(step_id, int(updated["iteration"])))
     return {"run_id": run_id, "step_id": step_id, "status": "skipped",
-            "was": row["status"], "reason": reason[:500], "run_status": run_status}
+            "was": row["status"], "reason": reason[:500], "run_status": run_status,
+            "message": f"Skipped {_step_display(connection, run, step_id)}"}
 
 
 def repoint_waiting_step(

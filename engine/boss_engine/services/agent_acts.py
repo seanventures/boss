@@ -460,8 +460,9 @@ def _run_row(connection: Connection, workflow_run_id: str) -> Optional[dict[str,
         text(
             """
             SELECT r.id, r.project_id, r.actor, r.status, r.parent_run_id, r.created_at,
-                   r.completed_at, r.updated_at, r.workflow_version_id,
-                   d.name AS workflow_name, COALESCE(d.namespace, 'system') AS namespace
+                   r.completed_at, r.updated_at, r.workflow_version_id, r.input,
+                   d.workflow_key, d.name AS workflow_name,
+                   COALESCE(d.namespace, 'system') AS namespace
             FROM workflow_runs r JOIN workflow_definitions d ON d.id = r.workflow_definition_id
             WHERE r.id = :id
             """
@@ -472,7 +473,15 @@ def _run_row(connection: Connection, workflow_run_id: str) -> Optional[dict[str,
 
 
 def _run_label(run: dict[str, Any]) -> str:
-    return f"{run.get('workflow_name') or 'Workflow'} #{str(run['id'])[-4:]}"
+    """The run's name in every act label: command_center.run_name — its subject, else its
+    workflow's name — so Directory, Organization, Activity, Live and Approvals name a run the
+    same way (agents-home D9). Never `<workflow> #<hash>`."""
+    from .command_center import run_name
+
+    data = run.get("input")
+    if isinstance(data, str):
+        data = _json(data, {})
+    return run_name({**run, "input": data if isinstance(data, dict) else {}})
 
 
 def root_for_run(connection: Connection, workflow_run_id: str, *,
@@ -824,6 +833,13 @@ def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
             # Released by its own approval and queued to run, or put back to wait out the
             # budget (workflows.wait_step: not a failure, not an attempt): the same work, still
             # coming.
+            if state is None and row.get("decision_id") and _is_wait_act(latest):
+                # THE PERSON'S WAIT IS OVER (agents-home D4): they answered, and the work the
+                # gate held is the agent's own act, opened when it runs.
+                close_act(connection, latest["act_id"], status="complete")
+                latest.update(status="complete", ended_at=_now())
+                touched.append(latest["act_id"])
+                continue
             if state is None and (row.get("decision_id") or (
                     row.get("resumes_later") and isinstance(output.get("waiting"), dict))):
                 if latest["status"] != "pending":
@@ -860,7 +876,14 @@ def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
             # finished): a new act for this attempt.
             if state == "skipped" and not latest:
                 continue  # never ran: a branch not taken is not work
-            who = _who(row, step, output, run, connection, project_id)
+            if state == "awaiting_input" and row.get("decision_id"):
+                # A WAIT FOR A PERSON IS THE PERSON'S (agents-home D4): a step held at its
+                # approval before it ran is not its agent's work — the agent did nothing yet,
+                # and crediting the wait drew it amber beside the `You` hop.
+                who = _who(row, {**step, "kind": "decision"}, output, run, connection,
+                           project_id)
+            else:
+                who = _who(row, step, output, run, connection, project_id)
             if who is None:
                 continue
             parent = _parent_for(str(row["step_id"]), preds, by_step, root)
@@ -946,8 +969,8 @@ def _stamp_output(connection: Connection, step_run_id: str, act_id: str) -> None
 
 def _record_approval(connection: Connection, run: dict[str, Any], step_act: dict[str, Any],
                      decision_id: str, *, reconstructed: bool = False) -> Optional[str]:
-    """The person's approval, as a child of the step it released. Only an APPROVAL is signed:
-    a rejection ends the step, and the step's act already says so."""
+    """The person's answer, as a child of the step it held: an approval, or a rejection.
+    Labelled with the step and the run (`Publish · Release notes 2.9`); the verb says which."""
     exists = connection.execute(
         text("SELECT act_id FROM agent_acts WHERE kind = 'approval' AND decision_id = :d "
              "AND parent_act_id = :p"),
@@ -960,25 +983,50 @@ def _record_approval(connection: Connection, run: dict[str, Any], step_act: dict
              "FROM decisions WHERE id = :d"),
         {"d": decision_id},
     ).mappings().first()
-    if not decision or str(decision["status"]) not in ("approved", "executed"):
+    if not decision or str(decision["status"]) not in ("approved", "executed", "rejected"):
         return None
+    rejected = str(decision["status"]) == "rejected"
     by = decision["approved_by"] or decision["executed_by"] or run["actor"]
     at = decision["approved_at"] or decision["executed_at"]
+    if rejected:
+        # A NO IS AN ANSWER TOO (agents-home D4): "You rejected …" in Activity. Its status is
+        # `error` — the work it held did not go on — and work_verb says Rejected, never Stuck.
+        at = connection.execute(text("SELECT updated_at FROM decisions WHERE id = :d"),
+                                {"d": decision_id}).scalar() or _now()
     act_id = open_act(
         connection, project_id=run["project_id"], kind="approval", role_key=None,
         how="approved", handed_by_kind="person", handed_by_id=by,
         parent_act_id=step_act["act_id"], accountable=run["actor"], subject_kind="decision",
-        subject_id=decision_id, label=f"Approved · {str(decision['question'] or '')[:80]}",
+        subject_id=decision_id,
+        label=_step_part(step_act.get("label")) + f" · {_run_part(step_act.get('label'))}",
         started_at=at, workflow_run_id=run["id"], step_id=step_act.get("step_id"),
         decision_id=decision_id, reconstructed=reconstructed,
     )
-    close_act(connection, act_id, status="complete", ended_at=at)
+    close_act(connection, act_id, status="error" if rejected else "complete", ended_at=at)
     return act_id
 
 
+def _is_wait_act(act: Optional[dict[str, Any]]) -> bool:
+    """A step act that is a person's wait at a gate (no agent), not an agent's work."""
+    return bool(act and act.get("kind") == "step" and not act.get("role_key")
+                and act.get("decision_id"))
+
+
+def _step_part(label: Any) -> str:
+    return str(label or "").split(" · ")[0].strip() or "Approval"
+
+
+def _run_part(label: Any) -> str:
+    parts = str(label or "").split(" · ", 1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
 def _close_root(connection: Connection, root: str, run: dict[str, Any]) -> None:
-    status = {"completed": "complete", "failed": "error", "deadlettered": "error",
-              "cancelled": "stale", "compensated": "stale"}.get(str(run["status"]))
+    # A STOPPED RUN IS NOT OVER (agents-home D11): it waits on its operator's Retry or Skip, so
+    # its starter stays open — never "You, stuck, Started". Only a run that is really over
+    # closes it.
+    status = {"completed": "complete", "cancelled": "stale",
+              "compensated": "stale"}.get(str(run["status"]))
     if status:
         close_act(connection, root, status=status,
                   ended_at=run.get("completed_at") or run.get("updated_at"))
@@ -1734,18 +1782,20 @@ def work_verb(act: dict[str, Any], *, capability: Optional[str] = None,
     """
     status = str(act.get("status") or "")
     kind = str(act.get("kind") or "")
+    if kind == "approval":
+        # A person's answer: `error` is a rejection (the work it held did not go on).
+        return "Rejected" if status in ("error", "rejected") else "Approved"
     if status == "awaiting_input":
         return "Needs you"
+    if kind == "run":
+        # The starter is never Stuck (agents-home D11): a stopped run waits on its operator.
+        return "Blocked" if str(run_status or "") == "blocked" else "Started"
     if status in ("error", "stale"):
         return "Stuck"
-    if kind == "approval":
-        return "Rejected" if status == "rejected" else "Approved"
     if kind == "seat":
         return "In a panel"
     if kind == "chat":
         return "Talking"
-    if kind == "run" and str(run_status or "") == "blocked":
-        return "Blocked"
     if kind == "stage":
         return STAGE_VERBS.get(str(act.get("step_id") or "").strip().lower(), "Working")
     if kind == "step":

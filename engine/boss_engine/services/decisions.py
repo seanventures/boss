@@ -497,9 +497,12 @@ class DecisionService:
                 connection, refreshed, action="reject", actor=actor, note=note
             )
             self._handle_rejected_follow_on(connection, refreshed, actor=actor)
-            # A gate answered no is over now: its step's act closes, so nothing still says
-            # "needs you" about it (agent_acts.sync_run, REFUSED_DECISIONS).
-            from . import agent_acts
+            # A gate answered no FAILS ITS STEP now (agents-home D3): the run stops there with
+            # Retry and Skip, and its acts say so at once (workflows.refuse_gates_of).
+            from . import agent_acts, workflows as workflow_runtime
+
+            with connection.begin_nested():
+                workflow_runtime.refuse_gates_of(connection, decision_id)
 
             agent_acts.quietly(connection, "close a refused gate", agent_acts.on_decision,
                                decision_id)

@@ -463,8 +463,13 @@ def _verdicts(
             retry = (DISABLED, undoing)
         else:
             retry = (ENABLED, None)
-        out.append(_verdict("retry_step", f"Try {_step_label(step)} again", retry[0], retry[1],
-                            step_id=step_id))
+        # SHORT LABELS, the step named in `title` (agents-home D20): "Try Set up monitoring
+        # again" read as a sentence on a button. The card already names the step.
+        refused_gate = (is_gate(_step_kind(step), step_capability(step))
+                        or is_refused_approval(step))
+        out.append(_verdict("retry_step", "Retry", retry[0], retry[1], step_id=step_id,
+                            title=(f"Ask again: {_step_label(step)}" if refused_gate
+                                   else f"Run {_step_label(step)} again")))
 
         # Skip is narrower: never an approval (a refused gate is somebody's no, and a skip
         # would turn it into a yes), never a cancelled step.
@@ -474,16 +479,15 @@ def _verdicts(
                             "nothing to skip.")
         elif closed:
             skip = (ABSENT, f"this run is {status}, so there is nothing to proceed to.")
-        elif (is_gate(_step_kind(step), step_capability(step))
-              or is_refused_approval(step)):
-            skip = (ABSENT, f"'{step_id}' is an approval. It did not fail — somebody answered "
-                            "no — and skipping it would turn that answer into a yes. Reopen "
-                            "it with Try again instead.")
         elif compensating:
             skip = (DISABLED, undoing)
         else:
             skip = (ENABLED, None)
-        out.append(_verdict("skip_step", "Skip and proceed", skip[0], skip[1], step_id=step_id))
+        # A REFUSED GATE CAN BE SKIPPED (agents-home D3, the operator's decision): the run goes
+        # on WITHOUT what the gate held, and the record keeps who chose that and why — Skip
+        # always asks for a reason. It never records the gate as approved.
+        out.append(_verdict("skip_step", "Skip", skip[0], skip[1], step_id=step_id,
+                            title=f"Carry on without {_step_label(step)}"))
     return out
 
 
@@ -525,8 +529,8 @@ def stopped_for_operator(
             continue
         if _output(step).get("tolerated_by_join"):
             continue
-        if is_gate(_step_kind(step), step_capability(step)):
-            continue
+        # A REFUSED GATE IS STOPPED FOR ITS OPERATOR TOO (agents-home D3): somebody said no,
+        # the step failed, and Retry (ask again) or Skip (carry on without it) is the choice.
         step_id = str(step.get("step_id") or "")
         answers = [_public(v) for v in verdicts
                    if v.get("step_id") == step_id and v["state"] == ENABLED]
