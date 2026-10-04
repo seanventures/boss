@@ -1588,7 +1588,13 @@ echo -e "${GREEN}${BOLD}  ✓ BOSS Community is running.${NC}"
 echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
 echo ""
 if [[ "$WITH_WEB" -eq 1 ]]; then
-  echo -e "  ${BOLD}Console${NC}          http://127.0.0.1:${WEB_PORT}   (Mission Control on this machine)"
+  # THE ADDRESS IS WHERE SETUP FINISHES: Repo and models — paste a GitHub token, connect a
+  # model, open a first pull request. The public origin when there is one.
+  if [[ -n "$CONSOLE_ORIGIN" ]]; then
+    echo -e "  ${BOLD}Finish setup${NC}     ${CONSOLE_ORIGIN%/}/?area=setup"
+  else
+    echo -e "  ${BOLD}Finish setup${NC}     http://127.0.0.1:${WEB_PORT}/?area=setup"
+  fi
   if [[ -n "$B" ]]; then
     echo -e "  ${BOLD}Password${NC}         $B password   (shown in a terminal only)"
   else
@@ -1611,6 +1617,17 @@ if [[ -n "$_model_rows" || "${#MODEL_NOTES[@]}" -gt 0 ]]; then
 else
   echo -e "  ${BOLD}Models${NC}           none yet. Model calls fail closed until one is connected${B:+: $B connect}"
 fi
+# The repository is connected in the console, not here; say which, or that it is still to do.
+_repo_row=""
+if [[ -f "$INSTALL_DIR/scripts/install/setup_state.py" ]]; then
+  _repo_row="$(BOSS_API_URL="$API_URL" BOSS_API_KEY="$(grep -m 1 '^BOSS_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)" \
+    python3 "$INSTALL_DIR/scripts/install/setup_state.py" repository 2>/dev/null </dev/null || true)"
+fi
+if [[ -z "$_repo_row" || "$_repo_row" == "not connected" ]]; then
+  echo -e "  ${BOLD}Repository${NC}       not connected — connect it in the console"
+else
+  echo -e "  ${BOLD}Repository${NC}       ${_repo_row}"
+fi
 echo ""
 echo -e "  ${BOLD}API${NC}              ${API_URL}"
 if [[ "$API_BIND" != "127.0.0.1" ]]; then
@@ -1628,7 +1645,7 @@ echo ""
 if [[ -n "$B" ]]; then
   echo -e "${BOLD}Next${NC}"
   echo ""
-  echo "  $B open        # console address"
+  echo "  $B open        # finish setup in the console"
   echo "  $B doctor      # check the install can do its job"
   echo "  $B status      # release, services, health"
   echo "  $B connect     # connect models and subscriptions found later"

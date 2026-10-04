@@ -50,8 +50,18 @@ export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string
  * transition from the picker had not finished after 55s in a background tab. A hard navigation
  * streams the page and shows loading.tsx immediately.
  */
+/** The console URL for `orgId`, KEEPING WHERE THE LINK WAS GOING. A deep link with no org
+ *  (`/?area=setup&focus=models`, a failure's "Fix", a retired /v2 page) used to land on the
+ *  Command Center after the org was picked: every parameter but the org was dropped. */
+export function orgHref(orgId: string, search: string): string {
+  const next = new URLSearchParams(search);
+  for (const key of ["org", "org_id", "pick"]) next.delete(key);
+  const rest = next.toString();
+  return `/?org=${encodeURIComponent(orgId)}${rest ? `&${rest}` : ""}`;
+}
+
 function openOrg(orgId: string, replace = false) {
-  const url = `/?org=${encodeURIComponent(orgId)}`;
+  const url = orgHref(orgId, window.location.search);
   if (replace) window.location.replace(url);
   else window.location.assign(url);
 }
@@ -67,10 +77,15 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
   // Returning users skip the picker (unless they explicitly chose to switch).
   useEffect(() => {
     if (params.get("pick") === "1") return;
-    const stored = typeof window !== "undefined" ? window.localStorage.getItem(ORG_KEY) : null;
-    if (stored && orgs.some((o) => o.org_id === stored)) {
-      setOpening(stored);
-      openOrg(stored, true);
+    let stored: string | null = null;
+    try { stored = window.localStorage.getItem(ORG_KEY); } catch { stored = null; }
+    // ONE ORGANIZATION IS NOT A CHOICE: a fresh install has exactly one, and its first sign-in
+    // should land on setup, not on a picker with one card.
+    const only = orgs.length === 1 ? orgs[0].org_id : null;
+    const target = stored && orgs.some((o) => o.org_id === stored) ? stored : only;
+    if (target) {
+      setOpening(target);
+      openOrg(target, true);
     }
   }, [orgs, params]);
 

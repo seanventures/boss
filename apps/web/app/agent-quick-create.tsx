@@ -653,7 +653,7 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
     setBusy("draft"); setFailed("");
     const r = await draftPersonaField(projectId, actor, pick, "about_me", persona());
     setBusy("");
-    if (!r.ok) { setFailed(r.status === 409 ? "Needs a model. Set one in Settings." : r.error); return; }
+    if (!r.ok) { setFailed(r.status === 409 ? "Needs a model. Connect one in Repo and models." : r.error); return; }
     setAbout(r.data.slice(0, 280));
   };
   const create = async () => {

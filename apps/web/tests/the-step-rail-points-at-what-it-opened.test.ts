@@ -98,14 +98,15 @@ describe("the run is named, not quoted", () => {
 });
 
 describe("Settings names the page for what is in it", () => {
-  it("calls it Repo and model", () => {
+  it("calls it Repo and models, first in Settings", () => {
     // "Setup" is a stage of the product's life: it reads as something done once, so the page
     // an operator needs when a token expires was filed under a name that says "already done".
     const SHELL = codeOnly("app/ConsoleShell.tsx");
-    const SETUP = codeOnly("app/setup-ui.tsx");
-    expect(SHELL).toContain('label: "Repo and model"');
-    expect(SETUP).toContain("<span className=\"eyebrow\">Repo and model</span>");
-    expect(SETUP).toContain('aria-label="Repo and model"');
+    const BOARD = codeOnly("app/setup/setup-board.tsx");
+    expect(SHELL).toContain('label: "Repo and models"');
+    expect(SHELL.indexOf('{ id: "setup"')).toBeLessThan(SHELL.indexOf('{ id: "skills"'));
+    expect(BOARD).toContain("<h1>Repo and models</h1>");
+    expect(codeOnly("app/page.tsx")).toContain('aria-label="Repo and models"');
   });
 
   it("keeps the area id, which routing and the parity map are keyed on", () => {

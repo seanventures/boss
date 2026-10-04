@@ -14,15 +14,20 @@ The step ends with one row per source (API keys, Codex, Claude Code, Grok Build,
 
 ## Connect from the console
 
-Open **Mission Control → Settings → Repo and model** to attach a model to the seeded project. From there you can assign connected models to implementation, review, and escalation roles.
+Open **Mission Control → Settings → Repo and models**. **+ Add model** offers three kinds: **Subscription** (Claude Code, Codex, Grok Build, Cursor), **API key** (OpenRouter, OpenAI, Anthropic, Gemini, xAI, or any OpenAI-compatible endpoint as **Other**), and **Local** (Ollama, or any local OpenAI-compatible URL). **Connect** stores the credential and asks the model one tiny question — reserved against the budget and receipted, in every edition — so a row only says **Working** after the model has answered. A key the provider refuses is not kept.
+
+**Who does what** on the same page assigns models to jobs: **Build**, **Review**, **Chat**, **Decisions**, and under **More jobs**, **Hard problems** and **Routine work**. Each job defaults to **Auto**, which picks your choice, else a working subscription, else a local model, else a metered key, else a key in the install's settings file.
 
 The same setup is available through the API:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /v1/setup/model-providers` | List the providers you can connect. |
-| `POST /v1/setup/model` | Save a model connection. |
-| `GET /v1/setup/status?project_id=boss-dogfood` | Read setup status for a project. `boss-dogfood` is the local project seeded on your machine. |
+| `GET /v1/setup?project_id=boss-dogfood` | The whole Repo and models view: repository checks, models, who does what, budget. Never calls a provider. `boss-dogfood` is the local project seeded on your machine. |
+| `POST /v1/setup/models` | Connect a model (`kind`: `subscription`, `api_key` or `local`) and prove it with one governed question. |
+| `POST /v1/setup/checks` | Re-check the repository and models now (`target`: `all`, `repository`, `model:<source_id>`). |
+| `PUT /v1/setup/jobs/{job}` | Choose the engine and model for one job, or `null` for Auto. |
+
+The older `/v1/setup/status`, `/v1/setup/model`, `/v1/setup/model-providers` and `/v1/setup/coding-agents*` routes still answer for one release and say so with a `Deprecation` header.
 
 ## Supported providers
 
@@ -71,7 +76,7 @@ Saving a connection and proving it works are separate steps.
 - **Save key without test** stores the key and marks the model **unverified**. It does not send the key to the provider or run a test request. Keys that arrive through `.env` are also unverified.
 - A green setup step is not a model response. The key may still be invalid or lack access to the model you named. A governed model job is what verifies it.
 - API keys and coding subscriptions are distinct. BOSS never treats one as the other.
-- Connecting a Codex, Claude Code, or Grok Build subscription, from the console, the installer, `boss connect`, or `remote.sh subscription`, proves it with one trivial governed turn ("Reply with exactly: BOSS_OK"). A budget reservation and an in-progress receipt are committed before the turn; afterwards the receipt succeeds or fails and the reservation settles at the actual cost or is released. A refused budget makes no call. A failed proof is not connected and says why, and a rejected login shows as broken in Setup.
+- Connecting a Codex, Claude Code, or Grok Build subscription, from the console, the installer, `boss connect`, or `remote.sh subscription`, proves it with one trivial governed turn ("Reply with exactly: BOSS_OK"). A budget reservation and an in-progress receipt are committed before the turn; afterwards the receipt succeeds or fails and the reservation settles at the actual cost or is released. A refused budget makes no call. A failed proof is not connected and says why, and a rejected login shows as **Login expired** in Repo and models.
 
 !!! note "Paused: API key probes"
     Live probes of API keys stay paused in Community until they have a budget reservation and a receipt. **Save key without test** marks the key unverified.
@@ -122,7 +127,7 @@ An existing **Anything OpenAI-compatible** connection to another address is left
 
 When a hosted model is connected later, `boss connect` hands back the roles the fallback set (lanes that still say native with the Ollama model return to their defaults), and `boss connect keys` with a new `OPENAI_API_KEY` moves chat from Ollama to that key. An installer rerun with an exported OpenAI key does the same for chat. Ollama stays connected.
 
-Switching to a different Ollama model later, with `boss connect ollama --local-model NAME`, moves chat and every role BOSS gave the previous local model to the new one. A role you chose yourself in **Mission Control → Settings → Repo and model → Who does what** stays as you set it, and the output counts it: `The 3 role(s) BOSS had given the previous local model now use Ollama NAME; 1 role(s) you chose were left alone`.
+Switching to a different Ollama model later, with `boss connect ollama --local-model NAME`, moves chat and every role BOSS gave the previous local model to the new one. A job you chose yourself in **Mission Control → Settings → Repo and models → Who does what** stays as you set it, and the output counts it: `The 3 role(s) BOSS had given the previous local model now use Ollama NAME; 1 role(s) you chose were left alone`.
 
 BOSS knows which roles it set from `.env.boss-local-roles` in the install directory. The file holds the role names and the model, never a key. An install from before that file existed is read by comparison: a role still set to native with exactly the previously connected Ollama model counts as one BOSS set. When a hosted model is connected and BOSS hands its roles back, the file is removed.
 

@@ -52,6 +52,16 @@ class Need:
     #: The console area that fixes it, when there is one. `None` means the fix is outside the
     #: console (an environment variable, an API call) and the sentence says how.
     area: Optional[str] = None
+    #: Where in that area: `focus=repository` opens the row, `ability=email` the drawer.
+    params: Optional[tuple[tuple[str, str], ...]] = None
+
+    @property
+    def href(self) -> Optional[str]:
+        if not self.area:
+            return None
+        from urllib.parse import urlencode
+
+        return "/?" + urlencode([("area", self.area), *(self.params or ())])
 
 
 #: Every kind of need there is. A requirement derived from a spec that is not in here (other
@@ -60,11 +70,10 @@ class Need:
 NEEDS: dict[str, Need] = {
     "repository": Need(
         "repository", "A GitHub repository BOSS can push to",
-        "Connect GitHub and choose a repository in Repo and model.", "setup"),
+        "Connect in Repo and models.", "setup", (("focus", "repository"),)),
     "model": Need(
         "model", "A connected model",
-        "Connect a model in Repo and model — an API key or a subscription you already pay "
-        "for.", "setup"),
+        "Connect in Repo and models.", "setup", (("focus", "models"),)),
     "deployment_target": Need(
         "deployment_target",
         "Somewhere to deploy: a verified deployment host or a stack target",
@@ -72,14 +81,13 @@ NEEDS: dict[str, Need] = {
         "repository that ships a boss.deploy.yaml (Infra → Deploy a repository). The release "
         "step then puts the app there; until there is one, the deploy step cannot run.",
         "delivery"),
-    # The fix names a console form, not an API call. The review of the first version found the
-    # only instruction was "POST /v1/email/config", which a person without a terminal cannot
-    # follow, and there was no SMTP screen. The form lives in Repo and model and is drawn
-    # inline on the start checklist beside this item.
+    # The fix names a console form, not an API call, and the form is drawn inline on the start
+    # checklist beside this item. Outgoing email lives in Skills and MCP (the Email ability),
+    # not in Repo and models: Repo and models is where BOSS writes code and what it thinks with.
     "email": Need(
         "email", "Outgoing email (SMTP)",
-        "Enter your mail server in Repo and model → Outgoing email — its host, port, the "
-        "address mail comes from, and its password.", "setup"),
+        "Enter your mail server in Skills and MCP → Email — its host, port, the address mail "
+        "comes from, and its password.", "skills", (("ability", "email"),)),
     "mattermost": Need(
         "mattermost", "A Mattermost bot BOSS can post as",
         "Set BOSS_MATTERMOST_BASE_URL and BOSS_MATTERMOST_BOT_TOKEN, and "
@@ -139,7 +147,7 @@ def _provider_need(key: str) -> Need:
     req = requirement_for_need(key)
     if req is None:
         raise KeyError(key)
-    return Need(key, req.label, req.fix, "setup")
+    return Need(key, req.label, req.fix, "setup", (("add", req.secret_provider),))
 
 
 def need_for(key: str) -> Need:
@@ -491,14 +499,15 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
             if basics["github"]:
                 return True, (f"pushes to {basics['repository']}" if basics.get("repository")
                               else "a repository is connected")
-            return False, "no GitHub repository is connected to this project"
+            return False, (basics.get("repository_problem")
+                           or "no GitHub repository is connected to this project")
         # THE ROUTER'S ANSWER, not a count of rows: the same `model_routing.choose` that picks
         # the adapter a step will run on (connected_basics → model_done).
         if basics["model"]:
             from .model_routing import choose
 
             return True, f"a model is connected: {choose(connection, settings, project_id).describe()}"
-        return False, "no model is connected to this project"
+        return False, basics.get("model_problem") or "no model is connected to this project"
     if key == "deployment_target":
         hosts = _scalar(connection, "SELECT count(*) FROM deployment_hosts WHERE project_id=:p "
                                     "AND status IN ('verified','ready','active')", p) or 0
@@ -606,6 +615,7 @@ def preflight(
             need = need_for(item["key"])
             entry = grouped[item["key"]] = {
                 "key": need.key, "label": need.label, "fix": need.fix, "area": need.area,
+                "href": need.href,
                 "needed_by": [], "first_step": item["step_id"],
                 "first_step_label": item["step_label"],
                 # Whether a person gets a chance to fix it before the first step that needs it
@@ -764,7 +774,7 @@ def _missing_record(readiness: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The missing items as they are kept on a record: enough to say what and how to fix it
     without re-running the check, never the whole checklist."""
     return [{"key": m["key"], "label": m["label"], "first_step": m.get("first_step"),
-             "fix": m.get("fix"), "area": m.get("area")}
+             "fix": m.get("fix"), "area": m.get("area"), "href": m.get("href")}
             for m in readiness.get("missing") or []]
 
 

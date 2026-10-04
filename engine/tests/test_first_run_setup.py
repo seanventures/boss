@@ -9,14 +9,18 @@ and the honest answer was: set two environment variables on the API container, r
 call four endpoints in the right order with the right ids. That is where an open-source
 evaluation ends — not because something is missing, but because nothing told you the order.
 """
-import pytest
+import inspect
+import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+from sqlalchemy import create_engine, text
+
 from boss_engine.schemas import GitHubEasyConnectRequest
-from boss_engine.services.setup_service import PROVIDERS, SetupError, verify_model_key
-
-
-PAID_SETTINGS = SimpleNamespace(boss_edition="enterprise_self_hosted")
+from boss_engine.services import setup_actions, setup_checks, setup_view
+from boss_engine.services.setup_checks import HttpAnswer
+from boss_engine.services.setup_service import PROVIDERS, SetupError, model_key_details
 
 
 def test_a_token_can_be_pasted_rather_than_put_in_the_environment():
@@ -57,7 +61,7 @@ def test_the_wizard_picks_a_secret_store_that_works_here(monkeypatch):
         "platform_secret_store", "vault", "local_vault", "database"}
 
 
-def test_the_catalogue_covers_keys_compatibles_and_subscriptions():
+def test_the_catalogue_covers_keys_compatibles_locals_and_subscriptions():
     assert PROVIDERS["openrouter"]["kind"] == "api_key"
     assert PROVIDERS["openai"]["kind"] == "api_key"
     assert PROVIDERS["anthropic"]["kind"] == "api_key"
@@ -65,221 +69,195 @@ def test_the_catalogue_covers_keys_compatibles_and_subscriptions():
     assert PROVIDERS["custom"]["api"] == "openai"
     for name in ("claude_code", "codex", "cursor"):
         assert PROVIDERS[name]["kind"] == "subscription"
+    assert PROVIDERS["ollama"]["kind"] == "local"
+    # Add a model offers three kinds, never the decision service.
+    kinds = {e["provider"]: e["kind"] for e in setup_view.CATALOGUE}
+    assert set(kinds.values()) == {"subscription", "api_key", "local"}
+    assert "typesafe" not in kinds
 
 
 def test_a_custom_provider_must_say_where_it_lives():
     with pytest.raises(SetupError):
-        verify_model_key(
-            settings=PAID_SETTINGS, provider="custom", api_key="k", base_url="", model="m",
-        )
+        model_key_details(provider="custom", base_url="", model="m")
 
 
 def test_and_which_model_to_ask_for():
     with pytest.raises(SetupError):
-        verify_model_key(
-            settings=PAID_SETTINGS, provider="custom", api_key="k", base_url="http://x/v1",
-            model="",
-        )
+        model_key_details(provider="custom", base_url="http://x/v1", model="")
 
 
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "gopher://127.0.0.1", "//localhost/v1"])
 def test_model_key_probe_refuses_non_http_urls(url):
     with pytest.raises(SetupError, match="http or https"):
-        verify_model_key(
-            settings=PAID_SETTINGS, provider="custom", api_key="k", base_url=url, model="m",
-        )
+        model_key_details(provider="custom", base_url=url, model="m")
 
 
 def test_model_key_probe_does_not_follow_redirects():
-    from boss_engine.services.setup_service import _NoRedirect
-
-    handler = _NoRedirect()
-    assert handler.redirect_request(None, None, 302, "Moved", {}, "file:///etc/passwd") is None
+    assert "follow_redirects=False" in inspect.getsource(setup_checks.default_http)
 
 
 def test_a_dead_host_is_reported_not_raised():
     """A wizard step that throws a stack trace at somebody on their first run has told them
     nothing. Port 1 is reserved and never listening."""
-    result = verify_model_key(settings=PAID_SETTINGS, provider="custom", api_key="k",
-                              base_url="http://127.0.0.1:1/v1", model="m", timeout=3)
+    result = setup_checks.complete_once(api="openai", endpoint="http://127.0.0.1:1/v1/chat/completions",
+                                        api_key="k", model="m")
     assert result["ok"] is False
-    assert "could not reach" in result["error"]
+    assert result["state"] == "unreachable"
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", ""])
-def test_direct_model_probe_has_no_network_in_unmetered_editions(monkeypatch, edition):
-    from boss_engine.services import setup_service
+def test_a_key_is_proved_only_through_the_governed_path():
+    """Every edition: one completion, reserved against the budget and receipted. There is no
+    ungoverned probe left to call."""
+    source = inspect.getsource(setup_actions._key_proof)
+    assert "governed_proof(" in source
+    assert "complete_once(" in source
+    import boss_engine.services.setup_service as service
 
-    calls = []
-    monkeypatch.setattr(setup_service.urllib.request, "build_opener",
-                        lambda *args: calls.append(args))
-    with pytest.raises(SetupError, match="paused in Community"):
-        verify_model_key(settings=SimpleNamespace(boss_edition=edition), provider="openai",
-                         api_key="unused", model="test-model")
-    assert calls == []
-
-
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", ""])
-def test_environment_model_status_never_probes_in_unmetered_editions(monkeypatch, edition):
-    from boss_engine.services import setup_service
-
-    calls = []
-    monkeypatch.setattr(setup_service, "_probe", lambda *args, **kwargs: calls.append(args))
-    settings = SimpleNamespace(
-        boss_edition=edition, openai_api_key="test-key-1234",
-        openai_base_url="https://example.invalid/v1", chat_model="test-model",
-    )
-
-    result = setup_service.check_model(settings)
-
-    assert result["configured"] is True
-    assert result["verification_state"] == "unverified"
-    assert result["ok"] is False
-    assert result["key_last4"] == "1234"
-    assert "error" not in result
-    assert calls == []
+    assert not hasattr(service, "verify_model_key")
+    assert not hasattr(service, "live_model_probe_allowed")
 
 
-def test_paid_environment_model_status_retains_models_check(monkeypatch):
-    from boss_engine.services import setup_service
-
-    calls = []
-
-    def fake_probe(url, headers):
-        calls.append((url, headers))
-        return {"ok": True, "body": {"data": [{"id": "test-model"}]}}
-
-    monkeypatch.setattr(setup_service, "_probe", fake_probe)
-    settings = SimpleNamespace(
-        boss_edition="enterprise_self_hosted", openai_api_key="test-key",
-        openai_base_url="https://example.invalid/v1", chat_model="test-model",
-    )
-
-    result = setup_service.check_model(settings)
-
-    assert result["ok"] is True
-    assert result["model_listed"] is True
-    assert calls == [
-        ("https://example.invalid/v1/models", {"Authorization": "Bearer test-key"}),
-    ]
-
-
-def test_the_api_refuses_to_store_a_key_it_could_not_prove():
-    """A source recorded as configured against a key that does not work is worse than no source:
-    the first real evidence arrives an hour later when a build fails."""
-    from pathlib import Path
-
-    api = Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py"
-    source = api.read_text(encoding="utf-8")
-    setup = source[source.index('@app.post("/v1/setup/model"'):]
-    setup = setup[: setup.index("@app.get(\"/v1/entitlements/sources\"")]
-    assert setup.index("verify_model_key(") < setup.index("upload_credential(")
-    assert 'raise HTTPException(status_code=422' in setup
+def test_a_key_that_fails_its_check_is_not_stored():
+    """A source recorded against a key that does not work is worse than no source: the first
+    real evidence arrives an hour later when a build fails."""
+    source = inspect.getsource(setup_actions._connect_key)
+    assert source.index("_key_proof(") < source.index("upload_credential(")
+    assert source.index("raise _failure(") < source.index("upload_credential(")
 
 
 def test_the_api_authorizes_before_probing_the_caller_url():
     from pathlib import Path
 
-    api = Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py"
-    source = api.read_text(encoding="utf-8")
-    setup = source[source.index('@app.post("/v1/setup/model"'):]
-    setup = setup[: setup.index("@app.get(\"/v1/entitlements/sources\"")]
-    assert setup.index("require_project_actor") < setup.index("verify_model_key(")
+    router = (Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "routers"
+              / "setup.py").read_text(encoding="utf-8")
+    models = router[router.index('@router.post("/v1/setup/models"'):]
+    assert models.index("require_actor(") < models.index("connect_model(")
 
 
 def test_a_subscription_is_redirected_rather_than_offered_a_key_box():
     from pathlib import Path
 
     api = Path(__file__).resolve().parents[2] / "apps" / "api" / "app" / "main.py"
-    source = api.read_text(encoding="utf-8")
-    assert 'is a subscription, not an API key' in source
-    assert "/connect" in source
+    assert "is a subscription, not an API key" in api.read_text(encoding="utf-8")
 
 
-def test_an_install_configured_the_old_way_is_not_told_it_is_unconfigured():
+# ── An install configured from its settings file ─────────────────────────────────────────────
+
+@pytest.fixture()
+def conn(entitlement_tables, setup_tables):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as c:
+        entitlement_tables(c)
+        setup_tables(c)
+    with engine.begin() as c:
+        yield c
+
+
+def _env_settings(**extra):
+    return SimpleNamespace(target_github_owner="example-user", target_github_repo="boss-sandbox",
+                           github_token="ghp_" + "x" * 36, openai_api_key="", **extra)
+
+
+def test_an_install_configured_the_old_way_is_not_told_it_is_unconfigured(conn):
     """Measured on the live deployment: no github_connections row, and it has been opening pull
-    requests against example-user/boss-sandbox for weeks. A wizard that says "not connected" to that
-    operator has told them a falsehood about their own system."""
-    import inspect
-
-    from boss_engine.services import setup_service
-
-    source = inspect.getsource(setup_service.setup_status)
-    assert "env_github" in source
-    # REWRITTEN (2026-10-02): the rule moved, it did not change. "Connected" is decided once in
-    # `_connection_counts`, which the wizard and the workflow start preflight both read, so the
-    # tick on this page and Start's refusal cannot disagree about the same repository.
-    shared = inspect.getsource(setup_service._connection_counts)
-    assert 'bool((connections and repos) or env_github)' in shared
-    assert 'basics["github_done"]' in source
-    assert '"from_environment": env_github' in source
+    requests against example-user/boss-sandbox for weeks. Repo and models shows that repository
+    as a row with the chip `From install` — never an empty form."""
+    view = setup_view.build_basics(conn, _env_settings(), "p")
+    [repo] = view["repository"]["repos"]
+    assert repo["full_name"] == "example-user/boss-sandbox"
+    assert view["repository"]["connection"]["source"] == "install"
+    # Not checked yet: it worked yesterday, so it still counts while the background check runs.
+    assert repo["pill"]["state"] == "checking"
+    assert setup_view.basics(view)["github"] is True
 
 
-def test_and_is_told_where_that_configuration_came_from():
-    """Saying nothing about WHERE leaves them hunting for a setting the wizard never wrote."""
-    import inspect
+def test_and_its_last_check_is_what_the_row_says(conn):
+    conn.execute(text(
+        "INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, data,"
+        " created_at) VALUES ('e1', 'p', 'setup.repository_checked', 'ceo', 'repository',"
+        " 'install', :d, :at)"),
+        {"d": json.dumps({"state": "cant_write", "checks": {
+            "read": {"ok": True, "state": "working"},
+            "write": {"ok": False, "state": "cant_write"}}}),
+         "at": datetime.now(timezone.utc)})
+    view = setup_view.build_basics(conn, _env_settings(), "p")
+    [repo] = view["repository"]["repos"]
+    assert repo["pill"]["label"] == "Can't write"
+    assert repo["pill"]["tip"] == "Token needs Contents: Read and write."
+    assert setup_view.basics(view)["github"] is False
 
-    from boss_engine.services import setup_service
 
-    source = inspect.getsource(setup_service.setup_status)
-    assert '"repository": f"{env_owner}/{env_repo}"' in source
+# ── What the install runs on is checked, not assumed ─────────────────────────────────────────
+
+class FakeGitHub:
+    """A fine-grained token's answers, per permission profile (fixtures from GitHub's REST docs:
+    blobs need Contents: write, pulls need Pull requests: write)."""
+
+    def __init__(self, *, contents_write=True, pull_requests=True, status=200):
+        self.contents_write = contents_write
+        self.pull_requests = pull_requests
+        self.status = status
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, method, url, *, headers, json_body=None, timeout=15.0):
+        path = url.split("api.github.com", 1)[1]
+        self.calls.append((method, path))
+        assert "/git/refs" not in path, "a setup check must never create a branch"
+        if self.status != 200:
+            return HttpAnswer(self.status, {}, {"message": "Bad credentials"})
+        if method == "GET" and path == "/repos/o/r":
+            return HttpAnswer(200, {"github-authentication-token-expiration":
+                                    "2099-01-02 10:00:00 UTC"},
+                              {"full_name": "o/r", "default_branch": "main", "private": True,
+                               "permissions": {"push": True}})
+        denied = HttpAnswer(403, {}, {"message": "Resource not accessible by personal access token"})
+        if path.endswith("/git/blobs"):
+            return HttpAnswer(201, {}, {"sha": "abc"}) if self.contents_write else denied
+        if path.endswith("/pulls"):
+            return HttpAnswer(422, {}, {"message": "Validation Failed"}) \
+                if self.pull_requests else denied
+        raise AssertionError(path)
 
 
 def test_what_the_install_already_runs_on_is_checked_not_assumed():
-    """"Connected" that means "an environment variable is not empty" is the status that stays
-    green while the first build dies at push time."""
-    import inspect
-
-    from boss_engine.services import setup_service
-
-    github = inspect.getsource(setup_service.check_github)
-    assert "api.github.com/repos/" in github
-    # The caller's own permissions, so BOSS can say `push: true` rather than `token: present`.
-    assert 'permissions.get("push")' in github
-
-    model = inspect.getsource(setup_service.check_model)
-    assert '/models' in model
+    """`permissions.push` is the account's role, not what a fine-grained token may do — a
+    green "Can push" could still fail at push or PR time. So the check WRITES (a blob nobody
+    sees) and ASKS TO OPEN A PR (with a head that does not exist)."""
+    fake = FakeGitHub()
+    found = setup_checks.probe_repository("t", "o/r", http=fake)
+    assert found["state"] == "working"
+    assert [m for m, _ in fake.calls] == ["GET", "POST", "POST"]
+    assert found["expires_at"].startswith("2099-01-02")
 
 
 def test_a_read_only_token_is_not_reported_as_connected():
     """It looks connected and produces a pull request that never opens."""
-    import inspect
+    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(contents_write=False))
+    assert found["state"] == "cant_write"
+    assert found["checks"]["read"]["ok"] is True and found["checks"]["write"]["ok"] is False
 
-    from boss_engine.services import setup_service
 
-    source = inspect.getsource(setup_service.check_github)
-    assert "cannot push to it" in source
-    assert "Contents needs read and write" in source
+def test_nor_one_that_cannot_open_pull_requests():
+    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(pull_requests=False))
+    assert found["state"] == "cant_open_prs"
+
+
+def test_a_revoked_token_says_so():
+    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(status=401))
+    assert found["state"] == "token_rejected"
 
 
 def test_the_credential_itself_never_leaves():
-    """Last four, so two installs can be told apart; never enough to use."""
-    from boss_engine.services.setup_service import _last4, check_github, check_model
-    import inspect
-
-    assert _last4("ghp_abcdefgh") == "efgh"
-    assert _last4("abc") == ""
-    for fn in (check_github, check_model):
-        source = inspect.getsource(fn)
-        assert '"token": token' not in source
-        assert '"api_key"' not in source
-
-
-def test_the_status_carries_it_so_the_screen_can_show_it():
-    import inspect
-
-    from boss_engine.services import setup_service
-
-    source = inspect.getsource(setup_service.setup_status)
-    # The GitHub half asks the PROJECT now — the registry decides where a build writes, and a
-    # card reporting the environment instead described an install nobody was running.
-    assert '"github": check_github_for_project(connection, settings, project_id)' in source
-    assert '"model": check_model(settings)' in source
+    """No part of a token or key in anything a check returns."""
+    token = "github_pat_" + "Z" * 40
+    fake = FakeGitHub()
+    found = setup_checks.probe_repository(token, "o/r", http=fake)
+    blob = json.dumps(found)
+    for size in range(4, 12):
+        assert token[-size:] not in blob and token[:size] not in blob
 
 
 def test_a_probe_never_raises_at_somebody_on_their_first_run():
-    from boss_engine.services.setup_service import _probe
-
-    result = _probe("http://127.0.0.1:1/nope", {}, timeout=3)
-    assert result["ok"] is False
-    assert result["error"]
+    result = setup_checks.default_http("GET", "http://127.0.0.1:1/nope", headers={}, timeout=3)
+    assert result.status == 0
+    assert result.error

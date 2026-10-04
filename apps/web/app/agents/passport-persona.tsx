@@ -98,7 +98,7 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
     const r = await draftPersonaField(projectId, actor, roleKey, "about_me", compactPersona(p));
     setBusy("");
     if (!r.ok) {
-      toast("error", r.status === 409 ? "Needs a model. Set one in Settings." : r.error);
+      toast("error", r.status === 409 ? "Needs a model. Connect one in Repo and models." : r.error);
       return;
     }
     set("about_me", r.data.slice(0, LIMITS.about_me));

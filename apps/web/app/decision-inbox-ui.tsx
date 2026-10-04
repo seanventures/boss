@@ -670,7 +670,7 @@ function DecisionInboxRow({
   orgId?: string;
 }) {
   // A notice, not a question: BOSS refused to spend and the step has already failed. Its fix
-  // is elsewhere (Govern, Repo and model), and the engine offers only Dismiss.
+  // is elsewhere (Govern, Repo and models), and the engine offers only Dismiss.
   const refusal = decision.kind === "refusal";
   const guidance = decision.guidance ?? null;
   const estimatedCost =
