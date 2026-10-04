@@ -556,7 +556,21 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
         "checked_at": checked.isoformat() if checked else None,
         "source": source, "retry_at": retry_at, "latency_ms": latency_ms,
         "stale": checked is None or now - checked > STALE_AFTER,
+        # Replace asks for the KEY only: the form keeps where it points (never a password that
+        # was written into the URL).
+        "base_url": _without_userinfo(base_url) or None,
     }
+
+
+def _without_userinfo(url: str) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def _label_with_host(provider: str, base_url: str) -> str:

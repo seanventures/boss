@@ -55,6 +55,8 @@ export type ModelEntry = {
   source: "connected" | "install";
   retry_at: string | null;
   stale?: boolean;
+  /** Where a key or local model points (no userinfo): Replace keeps it. */
+  base_url?: string | null;
 };
 
 export type Found = "signed_in" | "needs_token" | "needs_file" | "not_on_server" | "found";

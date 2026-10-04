@@ -137,3 +137,11 @@ def test_a_subscription_limit_carries_the_time_the_cli_named(monkeypatch):
     proof = setup_actions._subscription_proof(None, None, "p", "claude_code", "ceo")
     assert proof["state"] == "rate_limited"
     assert proof["retry_at"].startswith("2026-10-04T16:20:00")
+
+
+def test_a_model_row_carries_where_it_points_but_never_a_password_in_the_url():
+    entry = setup_view._model_entry(
+        source_id="setup-custom", provider="custom", kind="metered", model="m", state="working",
+        checked_at=None, retry_at=None, source="connected", now=setup_checks.now_utc(),
+        host="", latency_ms=None, base_url="https://user:pa55@llm.example:8443/v1")
+    assert entry["base_url"] == "https://llm.example:8443/v1"
