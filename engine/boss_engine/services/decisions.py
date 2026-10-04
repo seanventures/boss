@@ -497,6 +497,12 @@ class DecisionService:
                 connection, refreshed, action="reject", actor=actor, note=note
             )
             self._handle_rejected_follow_on(connection, refreshed, actor=actor)
+            # A gate answered no is over now: its step's act closes, so nothing still says
+            # "needs you" about it (agent_acts.sync_run, REFUSED_DECISIONS).
+            from . import agent_acts
+
+            agent_acts.quietly(connection, "close a refused gate", agent_acts.on_decision,
+                               decision_id)
             return self.get_row(connection, decision_id)
 
         if action == "revise":

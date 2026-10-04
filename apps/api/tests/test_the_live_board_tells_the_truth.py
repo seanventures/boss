@@ -281,3 +281,26 @@ def test_a_finished_run_stays_ten_minutes_then_leaves(client, engine, monkeypatc
     board = finished(11)
     assert _mission(board, run_id) is None
     assert any(o["run_id"] == run_id for o in board["outcomes"])
+
+
+def test_a_rejected_gate_needs_nobody_anywhere(client, monkeypatch):
+    """Rejecting a gate leaves the run blocked and its step row waiting; its act must close,
+    or presence, the teams and Activity go on saying "needs you" with no card to answer."""
+    run_id, herald, view = _gated_run(client, monkeypatch)
+    decision_id = wf.steps_of(view)["publish"]["decision_id"]
+    refused = client.post(f"/v1/decisions/{decision_id}/reject",
+                          json={"actor": "ceo", "note": "not this week"})
+    assert refused.status_code == 200, refused.text
+    wf.tick(client)
+    board = _board(client).json()
+    assert decision_id not in [a["id"] for a in board["attention"]]
+    agent = next(a for a in board["agents"] if a["role_key"] == herald)
+    assert agent["state"] != "needs_you"
+    assert sum(t["needs_you"] for t in board["teams"]) == sum(
+        1 for a in board["agents"] if a["state"] == "needs_you")
+    pill = client.get("/v1/agents/live", params={"project_id": wf.PROJECT}).json()
+    assert pill["attention"]["count"] == board["counts"]["needs_you"]
+    assert all(i["state"] != "needs_you" for i in pill["items"] if i["role_key"] == herald)
+    waiting = client.get("/v1/agents/activity", params={
+        "project_id": wf.PROJECT, "kinds": "needs_you"}).json()["items"]
+    assert not [i for i in waiting if i.get("links", {}).get("workflow_run_id") == run_id]

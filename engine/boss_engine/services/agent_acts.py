@@ -740,6 +740,10 @@ def _parent_for(step_id: str, preds: dict[str, list[str]],
     return str(best["act_id"]) if best else root
 
 
+#: Decision statuses that answer a gate with no: the work it held does not go on.
+REFUSED_DECISIONS = ("rejected", "cancelled")
+
+
 def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
              reconstructed: bool = False, _depth: int = 0) -> list[str]:
     """Bring a run's acts up to date with its rows. Idempotent; returns the acts it touched.
@@ -794,6 +798,15 @@ def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
     rows.sort(key=lambda r: (int(r.get("iteration") or 0), depths.get(str(r["step_id"]), 0),
                              r.get("started_at") or r.get("updated_at") or r.get("created_at")))
 
+    # A GATE SOMEBODY SAID NO TO IS OVER, whatever its row still says. Rejecting a gate leaves
+    # the run blocked and the step row waiting, so its act stayed awaiting_input and presence,
+    # the teams and Activity went on saying "needs you" while no card asked anything.
+    refused = {str(d) for d in connection.execute(
+        text("SELECT id FROM decisions WHERE id = ANY(:ids) AND status = ANY(:no)"),
+        {"ids": [str(r["decision_id"]) for r in rows if r.get("decision_id")],
+         "no": list(REFUSED_DECISIONS)},
+    ).scalars().all()} if any(r.get("decision_id") for r in rows) else set()
+
     for row in rows:
         if row["step_kind"] not in ACTED_STEP_KINDS:
             continue
@@ -801,6 +814,8 @@ def sync_run(connection: Connection, workflow_run_id: str, *, wait: bool = True,
         output = output if isinstance(output, dict) else {}
         step = steps.get(str(row["step_id"])) or {"id": row["step_id"], "kind": row["step_kind"]}
         state = _step_state(row, output)
+        if state == "awaiting_input" and str(row.get("decision_id") or "") in refused:
+            state = "error"
         history = by_subject.get(str(row["id"])) or []
         latest = history[-1] if history else None
         terminal = state is not None and state not in OPEN_STATUSES
