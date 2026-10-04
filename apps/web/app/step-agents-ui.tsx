@@ -13,6 +13,8 @@
  */
 import React from "react";
 
+import { NOT_AN_AGENT } from "../lib/ran-as";
+
 /** WHICH AGENT TO SHOW BESIDE A STEP in the run view, and what the chip should claim.
  *
  *  It fell back to the capability's default captain, so a built-in step that ran as whoever
@@ -22,8 +24,7 @@ import React from "react";
  *  once it has run, the agent that RAN it, or no chip when no agent did (the Ran-as line says
  *  who); else, before it runs, the default captain — labelled as someone to ask, not someone
  *  who ran it. */
-export const NOT_AN_AGENT = ["run_actor", "workflow_runner", "legacy_workflow_runner",
-                             "decision_model"];
+export { NOT_AN_AGENT };
 
 export function stepAgentChip(named: string | null | undefined, output: unknown,
                               defaultCaptain: string | null | undefined):

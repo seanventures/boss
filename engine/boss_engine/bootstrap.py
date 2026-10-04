@@ -64,7 +64,30 @@ def seed_project_defaults(
     """Seed the COMMON per-project defaults every org/project gets: a budget
     policy, default members, the core pack + default agent modules, entitlement
     sources, and the built-in MCP servers. Idempotent. Shared by bootstrap and
-    by onboarding a new organization so every org starts from the same template."""
+    by onboarding a new organization so every org starts from the same template.
+
+    EVERY AGENT IT TOUCHES IS SEALED ONCE, at the end (agent_identity.sealing_once): a role
+    installed and then given eight skills and two MCP servers is v1, not v11.
+    """
+    from .services.agent_identity import sealing_once
+
+    with sealing_once():
+        _seed_project_defaults(
+            connection, settings, project_id, entitlements=entitlements, members=members,
+            specpack=specpack, actor=actor, budget_policy_id=budget_policy_id)
+
+
+def _seed_project_defaults(
+    connection,
+    settings,
+    project_id,
+    *,
+    entitlements,
+    members,
+    specpack,
+    actor="bootstrap",
+    budget_policy_id=None,
+):
     bp_id = budget_policy_id or f"bp_{project_id}"
     connection.execute(
         text(
@@ -177,6 +200,25 @@ def seed_project_defaults(
             # tier, and one they removed stays removed. See ensure_mcp_server.
             respect_operator=True,
         )
+    # AND THE MCP SERVERS THEIR ROLES NAME (permissions.mcp_servers), now that the built-in
+    # servers exist. The seed's half of the MCP grant: additive, and a server an operator took
+    # off an agent stays off (agents.sync_role_mcp asks seed_exclusions).
+    from .services.agents import sync_role_mcp
+
+    try:
+        with connection.begin_nested():
+            sync_role_mcp(connection, project_id=project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — a fresh project must still come up
+        _log.warning("role_mcp_sync_failed", exc_info=True)
+    # EVERY AGENT IS SOMEBODY: an agt_ id, a birth and a version for any role that predates
+    # Agent World (agent_identity.backfill; idempotent, quiet).
+    from .services.agent_identity import backfill as backfill_identity
+
+    try:
+        with connection.begin_nested():
+            backfill_identity(connection, project_id)
+    except Exception:  # noqa: BLE001
+        _log.warning("agent_identity_backfill_failed", exc_info=True)
     seed_default_event_subscriptions(connection, project_id)
     FeatureCatalog(settings).seed_from_traceability(connection, project_id)
     seed_specpack_workflows(

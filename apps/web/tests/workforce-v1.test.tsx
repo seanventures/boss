@@ -37,9 +37,10 @@ describe("v1 Workforce", () => {
   it("shows the current state and recent outcome without turning every role into a scorecard", () => {
     const out = html(wf({ agents: [agent({ ok_calls: 565, success_rate: 0.96, turns: 17474 })] }));
     expect(out).toContain("Software Engineer");
-    expect(out).toContain("Idle");
+    // Grouped by what it is doing (Agent World roster zones): an idle agent is under IDLE.
+    expect(out).toContain("IDLE");
     expect(out).toContain("Last: solo");
-    expect(out).toContain("Details");
+    expect(out).toContain(">Open<");
     expect(out).not.toContain("96%");
     expect(out).not.toContain("17,474");
   });

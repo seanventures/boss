@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { PROJECT_ID } from "../lib/client";
+import { PrMadeBy, useBuildWork, useStageFaces } from "./agents/build-faces";
 
 import { consoleHref } from "./console-href";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
@@ -634,7 +635,9 @@ function fmtUsd(micros?: number): string {
   return `$${(micros / 1e6).toFixed(2)}`;
 }
 
-function Flow({ phase, status }: { phase: string; status: string }) {
+function Flow({ phase, status, faces }: { phase: string; status: string;
+  /** The agent that did each stage, from the build's signed work (Agent World), by phase. */
+  faces?: Record<string, React.ReactNode> }) {
   const activeIdx = PHASES.indexOf(phase);
   return (
     <div className="ct-flow">
@@ -644,6 +647,7 @@ function Flow({ phase, status }: { phase: string; status: string }) {
         return (
           <span key={p} className="ct-flow-step">
             <span className={`ct-flow-dot${reached ? " on" : ""}${current ? " pulse" : ""}`} />
+            {faces?.[p] ? <span className="ag-stage-face" data-testid={`ct-flow-face-${p}`}>{faces[p]}</span> : null}
             <span className="ct-flow-label">{PHASE_LABEL[p]}</span>
             {i < PHASES.length - 1 ? <span className="ct-flow-arrow">→</span> : null}
           </span>
@@ -2433,6 +2437,11 @@ function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: P
   const _fc = (run.finalize_ctx ?? {}) as Record<string, unknown>;
   const phaseTimings = (_fc.phase_timings as { ms: number; phase: string }[] | undefined) ?? [];
   const _phaseStartedAt = _fc.phase_started_at as string | undefined;
+  // WHO BUILT IT, from the build's signed work when a workflow run started it: one face per
+  // stage on the ribbon (the assigned engineer, not a stage→role table) and the PR's credits.
+  const originRunId = String(((_fc.origin ?? {}) as Record<string, unknown>).workflow_run_id ?? "") || null;
+  const buildWork = useBuildWork(PROJECT_ID, originRunId, run.id, live);
+  const stageFaces = useStageFaces(buildWork.stages, PHASE_STAGES);
   const [currentPhaseMs, setCurrentPhaseMs] = useState<number | null>(null);
   useEffect(() => {
     if (!live || !_phaseStartedAt) {
@@ -2495,7 +2504,7 @@ function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: P
         </span>
       </div>
 
-      <Flow phase={run.phase} status={run.status} />
+      <Flow phase={run.phase} status={run.status} faces={stageFaces} />
 
       {live ? (
         <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
@@ -2666,6 +2675,10 @@ function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: P
               View PR #{run.pull_request_number} →
             </a>
           ) : <span className="detail">No PR opened.</span>}
+          {run.pull_request_url ? (
+            <PrMadeBy chain={buildWork.chain} runId={originRunId} projectId={PROJECT_ID}
+                      title={appIdentity(run).name || `PR #${run.pull_request_number}`} />
+          ) : null}
           {run.decision_id ? (
             <span className="ct-gate">🔒 Merge gated by Decision <code>{run.decision_id}</code> — approve in the Decisions inbox.</span>
           ) : null}

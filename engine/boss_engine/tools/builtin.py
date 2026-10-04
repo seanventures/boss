@@ -598,6 +598,29 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         return {"project_id": pid, "deployments": [_json_safe(dict(r)) for r in rows]}
 
 
+def _building_agent(connection, project_id: str, actor: str) -> dict | None:
+    """{role_key, agent_id} when `actor` is an agent on this project (not a person), else None."""
+    from sqlalchemy import text as _text
+
+    key = str(actor or "").strip().lower()
+    if not key or key in ("human", "workflow_runner"):
+        return None
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                _text("SELECT r.role_key, r.agent_id FROM roles r WHERE r.project_id = :p "
+                      "AND r.role_key = :k AND NOT EXISTS (SELECT 1 FROM project_members m "
+                      "WHERE m.project_id = :p AND m.member_id = :k "
+                      "AND m.member_type = 'human')"), {"p": project_id, "k": key},
+            ).mappings().first()
+    except Exception:  # noqa: BLE001 — attribution only: never stop the build over it
+        return None
+    if row is None:
+        return None
+    return {"role_key": str(row["role_key"]),
+            **({"agent_id": str(row["agent_id"])} if row["agent_id"] else {})}
+
+
 # ===========================================================================
 # WRITE TOOLS — create workflow tasks
 # ===========================================================================
@@ -671,6 +694,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         # a whole nine-step pipeline inside a step of the pipeline that created it.
         finalize_ctx: dict = ({"workflow_run_id": str(args["workflow_run_id"])}
                               if args.get("workflow_run_id") else {})
+        # WHO STARTED IT: the workflow step or chat turn calling this tool, and the person
+        # accountable (agent_acts.origin). Its stages are signed under that work.
+        started_by = services_module("agent_acts").current_origin(actor)
+        if started_by:
+            finalize_ctx["origin"] = started_by
         risk_tier = args.get("risk_tier")
         extended_from = None
         rr = services_module("repo_registry")
@@ -691,13 +719,24 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 if branch:
                     base_branch = branch
                     extended_from = root
-                    finalize_ctx = {"root_run_id": root, "web_app_build": True}
+                    finalize_ctx = {"root_run_id": root, "web_app_build": True,
+                                    **({"origin": finalize_ctx["origin"]}
+                                       if finalize_ctx.get("origin") else {})}
                     risk_tier = 0 if risk_tier is None else risk_tier
                     instructions = (
                         "EXTEND the existing app on this branch — do NOT rebuild from scratch. "
                         "Make the smallest change that satisfies the request, preserving all "
                         "current features.\n\n" + instructions
                     )
+            # WHO BUILDS IT. A workflow step that names an agent runs this tool AS that agent
+            # (step_agents.resolve → `actor`), so a build step naming the Frontend Engineer
+            # hands the code task to the Frontend Engineer, recorded where the run's stages
+            # read their context. Only an agent this project has — a person or the workflow
+            # runner starting a task records nothing — and never from `args`, which a model
+            # writes: who a task is for is decided by who was named, not by what was claimed.
+            agent = _building_agent(c, pid, actor)
+            if agent:
+                finalize_ctx = {**finalize_ctx, "agent": agent}
             run_id = cts.start_code_task(
                 c,
                 project_id=pid,
@@ -1648,6 +1687,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 url=(args.get("url") or "").strip(),
                 task_id=args.get("task_id"),
                 title=title,
+                # Who convened it (agent_acts.origin): its seats sit under that work.
+                origin=services_module("agent_acts").current_origin(actor),
             )
         return {"status": "running", "meeting": _json_safe(result), "project_id": pid}
 
@@ -5360,6 +5401,16 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                 {"p": pid}).mappings().all()
 
         from ..services.meeting_service import meeting_title
+        from ..services.agent_acts import resolve_role
+
+        # THE SEAT IT SAT IN, as signed work: each contribution carries its act id so the
+        # agent can cite it as [act:…] and the dock can link it.
+        with ctx.begin() as c:
+            seat_acts = {r["meeting_run_id"]: r["act_id"] for r in c.execute(
+                _text("SELECT DISTINCT ON (meeting_run_id) meeting_run_id, act_id "
+                      "FROM agent_acts WHERE project_id = :p AND kind = 'seat' "
+                      "AND role_key = :r ORDER BY meeting_run_id, started_at DESC"),
+                {"p": pid, "r": resolve_role(wanted)}).mappings()}
 
         seen = []
         for row in rows:
@@ -5380,6 +5431,7 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                         # Enough to be specific, not so much that a dozen of them flood the
                         # context this is meant to inform.
                         "said": said.strip()[:1200],
+                        "act_id": seat_acts.get(row["id"]),
                     })
                     if len(seen) >= limit:
                         break
@@ -5400,6 +5452,35 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
                          "subject — mention it only if the operator asked what this role has "
                          "argued before."
                          if not seen else "these are this role's own past words")}
+
+    @reg.tool(
+        "my_recent_work",
+        "This agent's OWN recent signed work — workflow steps, build stages, panel seats, "
+        "chats — newest first, each with its act id, what it was and how it reached the "
+        "agent. Use it when asked what you have done or worked on, and cite an item as "
+        "[act:<act_id>] so the reader can open it. Never claim work this does not list.",
+        _obj({"role": {"type": "string",
+                       "description": "the agent's role key; defaults to the caller"},
+              "kind": {"type": "string",
+                       "enum": ["step", "stage", "seat", "chat", "approval", "handoff"]},
+              "limit": _LIMIT,
+              "project_id": {"type": "string"}},
+             []),
+        kind="read",
+    )
+    def my_recent_work(ctx, *, project_id, actor, args):
+        from ..services.agent_acts import my_recent_work as recent, resolve_role
+
+        pid = args.get("project_id") or project_id
+        role = resolve_role(str(args.get("role") or actor or ""))
+        if not role:
+            return {"ok": False, "error": "role is required"}
+        with ctx.begin() as c:
+            items = recent(c, pid, role, limit=int(args.get("limit") or 10),
+                           kind=args.get("kind") or None)
+        return {"project_id": pid, "role": role, "items": items, "count": len(items),
+                "note": ("cite an item as [act:<act_id>]" if items else
+                         "no signed work recorded for this agent yet; say so only if asked")}
 
     @reg.tool(
         "describe_role",
@@ -5517,6 +5598,9 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
             "comms_contract": spec.get("comms_contract") or {},
             "skills": permissions.get("allowed_skills") or [],
             "forbidden_skills": permissions.get("forbidden_skills") or [],
+            # Agent World: who it is (callsign, tagline, voice) — how it speaks, never what it
+            # may do (services/agent_persona.py).
+            "persona": spec.get("persona") or {},
             "has_agent_definition": True,
             "definition_source": "spec",
             # Say it in the payload, because the model reads this before it answers and will

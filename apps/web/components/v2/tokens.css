@@ -59,7 +59,10 @@
 /* ── Motion ───────────────────────────────────────────────────────────────
    Exactly two animations exist in the artifact, and both mean something:
    a pulse is work in progress, a blink is work that is stuck. Adding a third
-   for decoration would make the first two stop reading as signals.          */
+   for decoration would make the first two stop reading as signals.
+   Plus avatar state motion (agav-*, app/agents/agent-world.css): each one is
+   an agent's real state on its face, never decoration, with a reduced-motion
+   still. That is the only deliberate exception.                            */
 @keyframes v2-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: .45; transform: scale(.86); }

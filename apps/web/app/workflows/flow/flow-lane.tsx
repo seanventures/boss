@@ -33,10 +33,13 @@ import { caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from ".
 import { chooseDensity, fitScale, overflows, type LaneGeometry } from "./geometry";
 import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
+import type { LaneAgent } from "../../agents/chain-model";
 import { StepNode, type RunPhase } from "./step-node";
 import { useLaneDrag, type DragSource, type DropGap, type LaneTarget } from "./use-lane-drag";
 
-export type LaneRunState = { phase: string; meta: string; tip?: string };
+export type LaneRunState = { phase: string; meta: string; tip?: string;
+  /** Who ran it, once the work is recorded (Agent World: face, live ring, how-glyph). */
+  agent?: LaneAgent };
 export type LaneZoom = "fit" | "full";
 
 const RUN_PHASES = new Set<RunPhase>(["done", "moving", "needs_you", "failed", "future", "skipped"]);
@@ -397,7 +400,8 @@ export function FlowLane(p: {
                             selected={selection === id} problem={problemOf.get(id)}
                             detail={details.get(id)}
                             run={mode === "run" ? { phase, meta: runState?.[id]?.meta ?? "",
-                                                    tip: runState?.[id]?.tip } : undefined}
+                                                    tip: runState?.[id]?.tip,
+                                                    agent: runState?.[id]?.agent } : undefined}
                             onSelect={onSelect ? () => onSelect(id) : undefined} />
                 </div>
               );

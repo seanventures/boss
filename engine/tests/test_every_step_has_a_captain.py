@@ -81,7 +81,9 @@ def test_a_captain_is_a_role_a_project_can_actually_install():
     #: tracking. Listed here so the assertion below still bites for anything NEW, rather than
     #: being deleted because it found something true and inconvenient.
     KNOWN_UNROOTED = {
-        "chief_architect", "engineering_captain", "product_manager", "ux_engineer",
+        # chief_architect and engineering_captain left this list when the Agent World cast
+        # shipped their role YAMLs (core_v1/core_v2).
+        "product_manager", "ux_engineer",
     }
 
     captains = {c.captain for c in CAPABILITIES.values() if c.captain}

@@ -6297,3 +6297,129 @@ CREATE TABLE IF NOT EXISTS budget_burst_waiters (
 );
 CREATE INDEX IF NOT EXISTS idx_budget_burst_waiters_project
   ON budget_burst_waiters (project_id, first_refused_at);
+
+-- ── AGENT WORLD (docs: agent-world spec §4) ──────────────────────────────────────────────────
+-- Phase 0 freezes these shapes so five streams can build against them at once. Nothing writes
+-- to them yet; every statement is additive and safe to re-run.
+--
+-- WHO AN AGENT IS. Identity facts are columns because they are fixed, queryable and the future
+-- subject of tokens and policies. The persona is spec JSON (roles.spec.persona), editable and
+-- shipped in packs. Version history is not a table: seal_identity() emits `agent.sealed` events.
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS agent_id TEXT;           -- 'agt_' + 10 base32 chars, immutable
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS born_by TEXT;            -- human actor | 'agent:<agent_id>' | 'spec-pack'
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS born_from JSONB NOT NULL DEFAULT '{}'::jsonb;
+  -- {kind: pack|template|archetype|blank|clone, module_id?, module_version?, template_key?, archetype?, parent_agent_id?}
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS sponsor TEXT;            -- accountable human; default born_by when human
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS lifecycle TEXT NOT NULL DEFAULT 'active'
+  CHECK (lifecycle IN ('active','paused','retired'));
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS identity_version INT NOT NULL DEFAULT 1;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS fingerprint TEXT;        -- sha256 of RFC 8785 canonical {spec, grants[], model_policy}
+CREATE UNIQUE INDEX IF NOT EXISTS roles_agent_id_uq ON roles(agent_id) WHERE agent_id IS NOT NULL;
+
+-- WHAT AN AGENT DID, AND WHO HANDED IT THE WORK. One row per unit of work (step, build stage,
+-- panel seat, chat turn, approval). Lineage, the Work feed, presence and Credits all read this
+-- one ledger instead of stitching eight tables at read time. Append-only, except status,
+-- ended_at, tokens, cost and artifacts, which are written once on close.
+CREATE TABLE IF NOT EXISTS agent_acts (
+  act_id TEXT PRIMARY KEY,                 -- 'act_' + ulid
+  project_id TEXT NOT NULL,
+  role_key TEXT,                           -- NULL = a human did it ('You' / 'A person')
+  agent_id TEXT,                           -- roles.agent_id at the time
+  fingerprint TEXT, identity_version INT,  -- definition that acted
+  kind TEXT NOT NULL CHECK (kind IN ('run','step','stage','seat','chat','approval','handoff')),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('pending','active','awaiting_input','complete','error','stale','skipped')),
+  parent_act_id TEXT REFERENCES agent_acts(act_id),
+  root_act_id TEXT NOT NULL,
+  handed_by_kind TEXT NOT NULL CHECK (handed_by_kind IN ('person','agent','boss')),
+  handed_by_id TEXT,                       -- actor | role_key | NULL for boss
+  how TEXT NOT NULL CHECK (how IN ('named','only_holder','only_candidate','model_pick','captain',
+       'run_actor','next_stage','seated','asked_by_person','asked_by_agent','approved','started')),
+  why TEXT, considered JSONB NOT NULL DEFAULT '[]'::jsonb,
+  scope JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {skills:[], mcp:[], tools:[]}
+  scope_ok BOOLEAN,                           -- scope ⊆ parent scope (warn now, enforce later)
+  accountable TEXT NOT NULL,                  -- the human at the root
+  subject_kind TEXT, subject_id TEXT,         -- workflow_step_run | code_task_run | meeting_run | agent_thread | decision | conversation
+  workflow_run_id TEXT, step_id TEXT, code_task_run_id TEXT, meeting_run_id TEXT, thread_id TEXT, decision_id TEXT,
+  label TEXT NOT NULL,                        -- 'Build · Ship it #182' (precomputed, for feeds)
+  artifacts JSONB NOT NULL DEFAULT '[]'::jsonb, -- [{kind: pr|commit|minutes|report, ref, url?}]
+  tokens_in INT NOT NULL DEFAULT 0, tokens_out INT NOT NULL DEFAULT 0, cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
+  reconstructed BOOLEAN NOT NULL DEFAULT false,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(), ended_at TIMESTAMPTZ, receipt_id TEXT
+);
+CREATE INDEX IF NOT EXISTS agent_acts_role_time ON agent_acts(project_id, role_key, started_at DESC);
+CREATE INDEX IF NOT EXISTS agent_acts_root ON agent_acts(root_act_id);
+CREATE INDEX IF NOT EXISTS agent_acts_run ON agent_acts(workflow_run_id);
+CREATE INDEX IF NOT EXISTS agent_acts_parent ON agent_acts(parent_act_id);
+CREATE INDEX IF NOT EXISTS agent_acts_live ON agent_acts(project_id, status) WHERE ended_at IS NULL;
+ALTER TABLE llm_calls   ADD COLUMN IF NOT EXISTS act_id TEXT;
+ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS act_id TEXT;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS act_id TEXT;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+-- THE LEDGER'S HOT PATHS, each served by an index rather than a scan of a table kept forever.
+-- close_act rolls up an act's calls on every close (each step settle, each build stage change
+-- inside a model call's commit, each chat turn); _live_cost and the Act card read the same way.
+CREATE INDEX IF NOT EXISTS idx_llm_calls_act ON llm_calls(act_id) WHERE act_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_turns_act ON agent_turns(act_id) WHERE act_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_messages_act ON agent_messages(act_id) WHERE act_id IS NOT NULL;
+-- stage_act runs on every model call a build makes; a panel's seats and its step; a subject's
+-- acts (a build's root, a panel's root, a step's act by its row); an approval by its decision.
+CREATE INDEX IF NOT EXISTS agent_acts_code_task ON agent_acts(code_task_run_id) WHERE code_task_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS agent_acts_meeting ON agent_acts(meeting_run_id) WHERE meeting_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS agent_acts_subject ON agent_acts(subject_kind, subject_id);
+CREATE INDEX IF NOT EXISTS agent_acts_decision ON agent_acts(decision_id) WHERE decision_id IS NOT NULL;
+-- Presence's idle line: each agent's last ended act, one probe per agent, never a sort of the
+-- project's whole history.
+CREATE INDEX IF NOT EXISTS agent_acts_role_ended ON agent_acts(project_id, role_key, ended_at DESC) WHERE ended_at IS NOT NULL;
+
+-- TALKING WITH AGENTS (spec §0.2 A, stream S-converse). A conversation is a 1:1 talk, a "plan it
+-- with <agent>" that ends in a start proposal, or a room of 2-5 SMEs. Its own tables rather than
+-- agent_threads: that table's surface CHECK is ('chat','github') and its thread key is one
+-- agent, and a room is neither. A 1:1 talk may still ride the dock's thread for tools, which is
+-- what agent_thread_id records. Every agent turn is also an act (kind chat or seat,
+-- thread_id = conversation_id, subject_kind 'conversation').
+CREATE TABLE IF NOT EXISTS agent_conversations (
+  conversation_id TEXT PRIMARY KEY,          -- 'cnv_' + ulid
+  project_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('talk','plan','room')),
+  title TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL,                       -- the human who opened it; accountable for every turn
+  seats JSONB NOT NULL DEFAULT '[]'::jsonb,  -- ordered role_keys: talk/plan exactly 1, room 2-5
+  lead_role_key TEXT,                        -- who writes the room summary / the plan proposal (default seats[0])
+  preset TEXT,                               -- room preset key, when one was used
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','summarized','started','closed')),
+  context JSONB NOT NULL DEFAULT '{}'::jsonb, -- {from, act_id?, workflow_run_id?, step_id?}
+  summary JSONB,                             -- room: RoomSummary
+  agent_thread_id TEXT,                      -- talk only: the dock thread that carries tool use, if any
+  root_act_id TEXT,                          -- the first agent turn's act; every later turn shares its root
+  started_run_id TEXT,                       -- set when the operator presses Start on a proposal
+  streaming_claim TEXT,                      -- the stream that holds the floor (one at a time); NULL = free
+  streaming_until TIMESTAMPTZ,               -- when that claim lapses if its stream died unseen; renewed per speaker
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_conversations_recent
+  ON agent_conversations(project_id, actor, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_conversation_turns (
+  turn_id TEXT PRIMARY KEY,                  -- 'trn_' + ulid
+  conversation_id TEXT NOT NULL REFERENCES agent_conversations(conversation_id) ON DELETE CASCADE,
+  seq INT NOT NULL,
+  speaker_kind TEXT NOT NULL CHECK (speaker_kind IN ('person','agent','boss')),
+  role_key TEXT,                             -- the agent speaking; NULL for a person or BOSS
+  actor TEXT,                                -- the person speaking
+  addressed_to JSONB NOT NULL DEFAULT '[]'::jsonb, -- @mentioned role_keys; [] = the whole room
+  reply_to_turn_id TEXT,                     -- the turn this one answers (an SME answering another)
+  kind TEXT NOT NULL DEFAULT 'message'
+    CHECK (kind IN ('message','question','proposal','summary','error')),
+  content TEXT NOT NULL DEFAULT '',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb, -- proposal: StartProposal · summary: RoomSummary · error: model_failures.explain()
+  status TEXT NOT NULL DEFAULT 'complete' CHECK (status IN ('streaming','complete','error')),
+  act_id TEXT, fingerprint TEXT,
+  cited_acts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tokens_in INT NOT NULL DEFAULT 0, tokens_out INT NOT NULL DEFAULT 0,
+  cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0, receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (conversation_id, seq)
+);
+CREATE INDEX IF NOT EXISTS agent_conversation_turns_act ON agent_conversation_turns(act_id);

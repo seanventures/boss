@@ -30,6 +30,14 @@ installs:
     - security_reviewer
     - integration_validator
     - docs_writer
+    # THE AGENT WORLD CAST (agent-world spec §0.1): the roles a build is actually staffed
+    # with, each with a voice, the skills it needs and the MCP servers it holds.
+    - chief_architect
+    - engineering_captain
+    - backend_engineer
+    - frontend_engineer
+    - operations_engineer
+    - sre
     # OWNS THE PUBLIC CHANNELS. Captain for the `social_publish` step, and the role a
     # per-platform publishing agent reports to — a credential that reaches a real audience
     # belongs to somebody whose remit is the audience, not to whichever step needed it.

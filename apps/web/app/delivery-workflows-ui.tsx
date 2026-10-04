@@ -20,6 +20,13 @@ import { RunReportPanel } from "./run-report-ui";
 import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 import { RanAs, stepAgentChip } from "./step-agents-ui";
+// Agent World (S-runs): who did each step, the chain, the Act card and Credits.
+import { approvalOf, laneAgentOf, stepActOf } from "./agents/chain-model";
+import { useRunChain } from "./agents/run-acts";
+import { RunChain } from "./agents/run-chain";
+import { CreditsButton } from "./agents/run-credits";
+import { StepSignedBy } from "./agents/step-signed-by";
+import type { Act } from "../lib/agent-world-types";
 import { browserHref } from "../lib/browser-links";
 import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
 import { DefineStepForm } from "./workflows/define-step-form";
@@ -1786,7 +1793,13 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   const laneSpec = useMemo(() => runLaneSpec(steps, definition.spec), [steps, definition.spec]);
   const lanePalette = useMemo(() => definition.palette ?? runPalette(capabilities, roles),
     [definition.palette, capabilities, roles]);
-  const laneState = useMemo(() => Object.fromEntries(steps.map((s) => [s.step_id, laneStateOf(s)])), [steps]);
+  // WHO DID EACH STEP, from the run's signed work: one read, shared by the lane's faces, the
+  // chain, the drawer and Credits, so they cannot disagree. Polled only while the run is live.
+  const { chain } = useRunChain(projectId, run.id, !terminal);
+  const laneState = useMemo(() => Object.fromEntries(steps.map((s) => {
+    const agent = laneAgentOf(s.output, stepActOf(chain, s.step_id), actor);
+    return [s.step_id, agent ? { ...laneStateOf(s), agent } : laneStateOf(s)];
+  })), [steps, chain, actor]);
 
   // WHO WORKS THIS RUN is a property of the app, not a stage of its delivery — so it is a chip
   // on the run's bar, not a node in the lane the runtime never runs.
@@ -1853,6 +1866,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                 onClick={() => setShowAgents((v) => !v)}>
           Agents
         </button>
+        <CreditsButton chain={chain} runId={run.id} projectId={projectId} viewer={actor}
+                       title={runSubject(run) ?? run.workflow_name} live={!terminal} />
         {onOpenWorkflow ? (
           <button type="button" className="wf-link" data-testid="dw-run-open-workflow"
                   title={`${run.workflow_name} v${run.version}`}
@@ -1861,6 +1876,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           </button>
         ) : null}
       </div>
+      <RunChain chain={chain} viewer={actor} />
       <div className="wf-run-lane" ref={laneRef} data-testid="dw-run-lane">
         <FlowLane spec={laneSpec} palette={lanePalette} mode="run" label="Workflow steps"
                   selection={showAgents ? null : picked} runState={laneState}
@@ -1897,6 +1913,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           onPrepareTarget={onPrepareTarget}
           buildRunId={buildRunId}
           workflowRunId={run.id}
+          act={stepActOf(chain, current.step_id)}
+          approval={approvalOf(chain, stepActOf(chain, current.step_id))}
           onRunPreview={onRunPreview}
           onBound={onBound}
           projectId={projectId}
@@ -2622,7 +2640,7 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
 }
 
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
-                     actions, actor = "",
+                     actions, actor = "", act = null, approval: gateAnswer = null,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      workflowRunId, previewStarting, busy }: {
   projectId: string;
@@ -2630,6 +2648,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   actor?: string;
   /** The workflow run this step belongs to — what "Ask about this step" is about. */
   workflowRunId?: string;
+  /** The signed work for this step, once recorded: who did it and how it reached them. */
+  act?: Act | null;
+  /** The person's answer to this step's gate, when there was one. */
+  approval?: Act | null;
   /** This step's Try again / Skip, from the run's server-decided `actions`. */
   actions: { retry?: RunAction; skip?: RunAction };
   /** Where this step sits in the run, so the card can carry the rail's number. */
@@ -3122,13 +3144,19 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
 
       {/* WHO RAN IT AND WHY. When BOSS picked the agent the console never said which one, or
           on what grounds; every executed step now records `ran_as`. */}
-      <RanAs output={step.output} stepId={step.step_id} />
+      {act ? (
+        <StepSignedBy act={act} approval={gateAnswer} projectId={projectId} viewer={actor}
+                      failure={phase === "failed" ? step.error : null}
+                      question={stepQuestion(step, capability?.label)} />
+      ) : (
+        <RanAs output={step.output} stepId={step.step_id} />
+      )}
 
       {/* ASK ABOUT THIS STEP, WITHOUT LEAVING IT.
           A step that will not ship states its reason and then leaves the operator to act on
           it alone. The dock can read the run, the code, the host and the logs — so the
           question it opens with is this step's own words, not a blank box. */}
-      <div className="dw-step-ask">
+      {act?.roleKey ? null : <div className="dw-step-ask">
         {/* ASK THE PERSON WHOSE STEP THIS IS.
             "Ask BOSS about this step" reached BOSS-in-general: no lens, no remit, no memory of
             anything this kind of work has produced before. The role-addressed path already
@@ -3157,7 +3185,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             ? `Ask the ${roleLabel(stepCaptain(step, capability))}`
             : "Ask BOSS about this step"}
         </button>
-      </div>
+      </div>}
 
       {/* Try again / Skip and proceed — see FailedStepActions for why both sit together. */}
       {/* WHICH OF THE TWO, IF EITHER, IS THE SERVER'S CALL — `actions` is this step's slice of
