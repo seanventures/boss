@@ -637,6 +637,29 @@ def trusted_persona(persona: Any) -> dict[str, Any]:
     return out
 
 
+def persona_of(role: Any) -> dict[str, Any]:
+    """THE persona an agent is named and voiced by, on every surface: its prompt, a talk's
+    header, a room's seats and peers, a conversation's title, the identities the console loads.
+
+    Each surface used to read `spec.persona` on its own, and they disagreed: a shipped role
+    whose row was written before personas travelled with the role (no persona at all) was
+    "QA Lead" in a talk header, while the console's identity resolver filled in "Vera" from
+    its cast. The row's own persona wins whenever it has one — a callsign the operator cleared
+    is stored as absent and stays cleared. Only a shipped role with NO persona reads the
+    shipped one. Linted like any persona a prompt may use (`trusted_persona`).
+    """
+    if not isinstance(role, dict):
+        return {}
+    spec = _spec_of(role)
+    own = spec.get("persona")
+    if isinstance(own, dict) and any(v not in (None, "", [], {}) for v in own.values()):
+        return trusted_persona(own)
+    key = str(role.get("role_key") or spec.get("role_id") or "")
+    shipped = shipped_role(key) if key else None
+    voice = ((shipped or {}).get("spec") or {}).get("persona")
+    return trusted_persona(voice) if isinstance(voice, dict) else {}
+
+
 def compose_agent_prompt(role: dict, *, mode: str, act: Optional[dict] = None,
                          memory: Optional[list[dict]] = None) -> list[PromptBlock]:
     """Ordered L0..L5 blocks for one agent. Empty layers are left out; L0-L3 always appear.
@@ -649,7 +672,7 @@ def compose_agent_prompt(role: dict, *, mode: str, act: Optional[dict] = None,
         raise ValueError(f"mode must be chat, work or panel, not {mode!r}")
     role = role or {}
     spec = _spec_of(role)
-    persona = trusted_persona(spec.get("persona"))
+    persona = persona_of(role)
     blocks: list[PromptBlock] = [
         {"layer": "L0", "text": _l0(mode)},
         {"layer": "L1", "text": f"{_name_line(role, spec, persona)} {AI_DISCLOSURE}"},
@@ -715,8 +738,7 @@ def seat_voices(connection: Any, project_id: str, personas: list[dict]) -> list[
             row = dict(found)
         elif key:
             row = shipped_role(key) or row
-        spec = _spec_of(row) if "spec" in row else {}
-        voice = trusted_persona(spec.get("persona"))
+        voice = persona_of(row) if "spec" in row else {}
         seat.update({"role_key": key, "callsign": voice.get("callsign") or "",
                      "archetype": voice.get("archetype"), "_row": row})
         seats.append(seat)

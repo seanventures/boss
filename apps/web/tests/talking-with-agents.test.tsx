@@ -30,9 +30,17 @@ let startReply: (body: Record<string, unknown>) => Response;
 
 const SEATS = {
   pm: { role_key: "pm", name: "Product Manager", callsign: "Juno", tagline: "What problem, for whom?", lifecycle: "active" },
-  qa: { role_key: "qa", name: "QA Lead", callsign: null, tagline: "Show me the test.", lifecycle: "active" },
-  security_reviewer: { role_key: "security_reviewer", name: "Security Reviewer", callsign: null, tagline: null, lifecycle: "active" },
+  // The server names every seat (agent_persona.persona_of): a shipped role with no stored
+  // persona still arrives as Vera / Sentry, so the console fills nothing in.
+  qa: { role_key: "qa", name: "QA Lead", callsign: "Vera", tagline: "Show me the test.", lifecycle: "active" },
+  security_reviewer: { role_key: "security_reviewer", name: "Security Reviewer", callsign: "Sentry", tagline: null, lifecycle: "active" },
 };
+
+const PRESETS = [
+  { key: "product_eng_security", label: "Product + Eng + Security",
+    seats: ["pm", "engineering_captain", "security_reviewer"], missing: ["engineering_captain"] },
+  { key: "incident", label: "Incident", seats: ["qa", "pm"], missing: [] },
+];
 
 function conversation(id: string, kind: string, seats: string[], over: Record<string, unknown> = {}) {
   return { conversation_id: id, project_id: "p1", kind, title: kind === "room" ? "Login launch" : `Talk with ${seats[0]}`,
@@ -55,7 +63,8 @@ function sseResponse(signal?: AbortSignal | null): Response {
       controller.enqueue(encoder.encode(text.slice(0, cut)));
       controller.enqueue(encoder.encode(text.slice(cut)));
     },
-    end: () => controller.close(),
+    // A reader that stopped at `done` has already let go of the body.
+    end: () => { try { controller.close(); } catch { /* released */ } },
   });
   return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
 }
@@ -72,17 +81,16 @@ beforeEach(() => {
     const path = url.pathname.replace("/api/conversations", "");
     calls.push({ method, path, body });
     if (method === "GET" && path === "/presets") {
-      return Response.json({
-        items: [{ key: "product_eng_security", label: "Product + Eng + Security",
-                  seats: ["pm", "engineering_captain", "security_reviewer"], missing: ["engineering_captain"] },
-                { key: "incident", label: "Incident", seats: ["qa", "pm"], missing: [] }],
-        agents: Object.values(SEATS) });
+      return Response.json({ items: PRESETS, agents: Object.values(SEATS) });
     }
     if (method === "GET" && path === "") return Response.json({ items: [] });
     if (method === "GET") return Response.json(conversations[path.slice(1)] ?? {}, { status: conversations[path.slice(1)] ? 200 : 404 });
     if (path === "") {
       const id = `cnv_${Object.keys(conversations).length + 1}`;
-      conversations[id] = conversation(id, String(body.kind), body.seats as string[]);
+      // Like the engine: a preset seats its agents and names the room with its label.
+      const preset = PRESETS.find((p) => p.key === body.preset);
+      conversations[id] = conversation(id, String(body.kind), preset ? preset.seats : body.seats as string[],
+                                       preset ? { title: preset.label, preset: preset.key } : {});
       return Response.json(conversations[id], { status: 201 });
     }
     if (/\/(turns|summary|propose)$/.test(path)) return sseResponse(init?.signal);
@@ -268,7 +276,7 @@ describe("plan it with an agent", () => {
     expect(card.textContent).toContain("Standard delivery");
     expect(card.textContent).toContain("Build a lead triage page.");
     expect(card.querySelector('[data-testid="ag-step-Review"]')!.textContent).toContain("Auto");
-    expect(card.querySelector('[data-testid="ag-step-Build"]')!.textContent).toContain("QA Lead");
+    expect(card.querySelector('[data-testid="ag-step-Build"]')!.textContent).toContain("Vera");
     expect(card.textContent).toContain("A connected model");
     expect(overBudget(card)).toEqual([]);
   });
@@ -350,7 +358,7 @@ describe("the room", () => {
     expect(seat("security_reviewer").textContent).toContain("Up next");
     // The face says it in words too, never colour alone.
     expect(seat("pm").querySelector(".ag-cv-badge")!.textContent).toContain("Done");
-    expect(seat("qa").querySelector('[role="img"]')!.getAttribute("aria-label")).toBe("QA Lead, AI agent, Thinking");
+    expect(seat("qa").querySelector('[role="img"]')!.getAttribute("aria-label")).toBe("Vera, QA Lead, AI agent, Thinking");
     await act(async () => { streams[0].end(); });
     await settle();
     expect(overBudget(room)).toEqual([]);
@@ -425,7 +433,7 @@ describe("the room", () => {
     // An older card's action already opened says so after a reload.
     expect(older.querySelector("a[href*='decision=dec_0']")).not.toBeNull();
     expect(summary.textContent).toContain("For · Juno");
-    expect(summary.textContent).toContain("Against · Security Reviewer");
+    expect(summary.textContent).toContain("Against · Sentry");
     await act(async () => { summary.querySelector<HTMLButtonElement>('[data-testid="ag-open-decision"]')!.click(); });
     await settle();
     // Each card opens its own action: (its summary turn, index).
@@ -462,5 +470,247 @@ describe("the doors", () => {
   it("the palette offers talk, plan and room", () => {
     expect(converse.CONVERSE_COMMANDS.map((c) => c.label))
       .toEqual(["Talk to an agent", "Plan it with an agent", "Open a room"]);
+  });
+});
+
+// ── Live in the console (the lead's walk, 1549x784) ──────────────────────────────────────────
+
+describe("one name per agent", () => {
+  it("the 1:1 header and each author line say the callsign, with the role beside it", async () => {
+    // The header says what the server's seat says (seat_info), the same name the prompt uses.
+    await mountHost();
+    await act(async () => { converse.openTalk("qa"); });
+    await settle();
+    const sheet = q('[data-testid="ag-talk"]')!;
+    expect(sheet.querySelector('[data-testid="ag-talk-callsign"]')!.textContent).toBe("Vera");
+    expect(sheet.querySelector('[data-testid="ag-talk-role"]')!.textContent).toBe("QA Lead");
+    expect(sheet.getAttribute("aria-label")).toBe("Vera");
+    await push(0, "turn_start", { turn_id: "t1", seq: 1, speaker_kind: "agent", role_key: "qa" });
+    await push(0, "token", { turn_id: "t1", text: "Hello." });
+    const who = sheet.querySelector('[data-testid="ag-turn-agent"] .ag-turn-who')!;
+    expect(who.querySelector("strong")!.textContent).toBe("Vera");
+    expect(who.textContent).toContain("QA Lead");
+    expect(overBudget(sheet.querySelector(".ag-talk-head")!)).toEqual([]);
+  });
+
+  it("a seat's own callsign wins; one the operator cleared stays cleared", async () => {
+    const { seatName } = await import("../app/agents/converse-parts");
+    expect(seatName({ roleKey: "qa", name: "QA Lead", callsign: "Iris", lifecycle: "active" }))
+      .toEqual({ name: "Iris", role: "QA Lead" });
+    expect(seatName({ roleKey: "qa", name: "QA Lead", callsign: "", lifecycle: "active" }))
+      .toEqual({ name: "QA Lead" });
+    expect(seatName({ roleKey: "made_up", name: "Made Up", callsign: null, lifecycle: "active" }))
+      .toEqual({ name: "Made Up" });
+    // Nothing is filled in on this side: a seat the server sent with no callsign has none, even
+    // a shipped role the console's cast knows (the prompt would not say Vera either).
+    expect(seatName({ roleKey: "qa", name: "QA Lead", callsign: null, lifecycle: "active" }))
+      .toEqual({ name: "QA Lead" });
+    // The wire keeps the difference between cleared and never set.
+    expect(converse.mapConversationSummary({ seat_info: [{ role_key: "qa", name: "QA Lead", callsign: "" }] })
+      .seatInfo[0].callsign).toBe("");
+  });
+
+  it("the room names its seats, To chips and members by callsign", async () => {
+    await mountHost();
+    await act(async () => { converse.openRoom({ seats: ["pm", "qa", "security_reviewer"] }); });
+    await settle();
+    const room = q('[data-testid="ag-room"]')!;
+    expect(room.querySelector('[data-testid="ag-seat-qa"] .ag-seat-name')!.textContent).toBe("Vera");
+    expect(room.querySelector('[data-testid="ag-seat-qa"] .ag-seat-role')!.textContent).toBe("QA Lead");
+    expect(room.querySelector('[data-testid="ag-to-security_reviewer"]')!.textContent).toBe("Sentry");
+    expect(room.querySelector('[data-testid="ag-room-members"]')!.getAttribute("title")).toBe("Juno · Vera · Sentry");
+  });
+});
+
+describe("Stop is there only while a reply streams", () => {
+  it("not on an open talk, yes while it answers, gone at done even if the connection lingers", async () => {
+    await mountHost();
+    // A talk opened with a question waits for the operator: nothing runs, so no Stop.
+    await act(async () => { converse.openTalk("qa", { from: "chip" }, { draft: "Is it tested?", fresh: true }); });
+    await settle();
+    expect(q('[data-testid="ag-talk"]')).not.toBeNull();
+    expect(q('[data-testid="ag-stop"]')).toBeNull();
+    expect(q('[data-testid="ag-send"]')).not.toBeNull();
+    await act(async () => { converse.openTalk("qa", { from: "chip" }, { fresh: true }); });
+    await settle();
+    const sheet = q('[data-testid="ag-talk"]')!;
+    // The greeting is asked for: a reply is on its way.
+    expect(sheet.querySelector('[data-testid="ag-stop"]')).not.toBeNull();
+    const i = streams.length - 1;
+    await push(i, "turn_start", { turn_id: "t1", seq: 1, speaker_kind: "agent", role_key: "qa" });
+    await push(i, "token", { turn_id: "t1", text: "Hi." });
+    expect(sheet.querySelector('[data-testid="ag-stop"]')).not.toBeNull();
+    await push(i, "turn_end", { turn_id: "t1", status: "complete", tokens_in: 1, tokens_out: 1, cost_usd: 0, cited_acts: [] });
+    await push(i, "done", { conversation: { conversation_id: "cnv_1", kind: "talk", seats: ["qa"], status: "open", turn_count: 1 } });
+    // The stream is NOT closed here (a proxy holding it open): done is still the end.
+    expect(sheet.querySelector('[data-testid="ag-stop"]')).toBeNull();
+    const sendBtn = sheet.querySelector<HTMLButtonElement>('[data-testid="ag-send"]');
+    expect(sendBtn).not.toBeNull();
+    expect(sheet.querySelector<HTMLTextAreaElement>(".ag-composer textarea")!.disabled).toBe(false);
+  });
+
+  it("a room with no question asked has no Stop", async () => {
+    await mountHost();
+    await act(async () => { converse.openRoom({ seats: ["pm", "qa"] }); });
+    await settle();
+    expect(q('[data-testid="ag-room"] [data-testid="ag-stop"]')).toBeNull();
+  });
+});
+
+describe("the stage is alive", () => {
+  async function askRoom(text: string) {
+    await mountHost();
+    await act(async () => { converse.openRoom({ seats: ["pm", "qa", "security_reviewer"] }); });
+    await settle();
+    const room = q('[data-testid="ag-room"]')!;
+    const box = room.querySelector<HTMLTextAreaElement>(".ag-composer textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { room.querySelector<HTMLButtonElement>('[data-testid="ag-send"]')!.click(); });
+    await settle();
+    return room;
+  }
+
+  it("faces are big; the floor and the speaking motion follow the turn that is streaming", async () => {
+    const room = await askRoom("Ship the login flow this week?");
+    const seat = (k: string) => room.querySelector(`[data-testid="ag-seat-${k}"]`) as HTMLElement;
+    for (const k of ["pm", "qa", "security_reviewer"]) {
+      expect(Number(seat(k).querySelector(".ag-avatar")!.getAttribute("data-size"))).toBeGreaterThanOrEqual(72);
+    }
+    await push(0, "turn_start", { turn_id: "a", seq: 2, speaker_kind: "agent", role_key: "pm" });
+    expect(seat("pm").getAttribute("data-turn")).toBe("1");
+    expect(seat("pm").querySelector(".ag-avatar")!.getAttribute("data-state")).toBe("thinking");
+    expect(seat("qa").getAttribute("data-turn")).toBeNull();
+    await push(0, "token", { turn_id: "a", text: "Behind a flag." });
+    expect(seat("pm").querySelector(".ag-avatar")!.getAttribute("data-state")).toBe("speaking");
+    expect(room.querySelector('[data-testid="ag-table"]')!.getAttribute("data-busy")).toBe("1");
+    await push(0, "turn_end", { turn_id: "a", status: "complete", tokens_in: 1, tokens_out: 1, cost_usd: 0, cited_acts: [] });
+    await push(0, "turn_start", { turn_id: "b", seq: 3, speaker_kind: "agent", role_key: "qa" });
+    expect(seat("pm").getAttribute("data-turn")).toBeNull();
+    expect(seat("qa").getAttribute("data-turn")).toBe("1");
+    await push(0, "token", { turn_id: "b", text: "Show me the test." });
+    expect(seat("qa").querySelector(".ag-avatar")!.getAttribute("data-state")).toBe("speaking");
+    expect(seat("pm").querySelector(".ag-avatar")!.getAttribute("data-state")).toBe("done");
+    await push(0, "turn_end", { turn_id: "b", status: "complete", tokens_in: 1, tokens_out: 1, cost_usd: 0, cited_acts: [] });
+    await push(0, "done", { conversation: { conversation_id: "cnv_1", kind: "room", seats: ["pm", "qa"], status: "open",
+                                            title: "Ship the login flow this week?", turn_count: 3 } });
+    expect(room.querySelectorAll("[data-turn]")).toHaveLength(0);
+    expect(room.querySelector('[data-testid="ag-table"]')!.getAttribute("data-busy")).toBeNull();
+  });
+
+  it("the title is the first question and stays put; the members are faces", async () => {
+    const long = "Should we ship the new login flow this week, given the open session fixation finding and the QA backlog?";
+    const room = await askRoom(long);
+    const title = () => room.querySelector('[data-testid="ag-room-title"]')!;
+    expect(title().textContent!.endsWith("…")).toBe(true);
+    expect(title().textContent!.length).toBeLessThanOrEqual(71);
+    expect(title().getAttribute("title")).toBe(long);
+    await push(0, "turn_start", { turn_id: "a", seq: 2, speaker_kind: "agent", role_key: "pm" });
+    await push(0, "token", { turn_id: "a", text: "Hold." });
+    // The server renames the room after its first question: the title on screen does not move.
+    conversations.cnv_1.title = "Something else";
+    conversations.cnv_1.turns = [{ turn_id: "p", seq: 1, speaker_kind: "person", kind: "question", content: long, status: "complete" },
+      { turn_id: "a", seq: 2, speaker_kind: "agent", role_key: "pm", kind: "message", content: "Hold.", status: "complete" }];
+    await push(0, "done", { conversation: { conversation_id: "cnv_1", kind: "room", seats: ["pm"], status: "open",
+                                            title: "Something else", turn_count: 2 } });
+    expect(title().getAttribute("title")).toBe(long);
+    expect(room.querySelectorAll('[data-testid="ag-room-members"] .ag-cv-face')).toHaveLength(3);
+    expect(overBudget(room.querySelector(".ag-room-head")!)).toEqual([]);
+  });
+});
+
+describe("a room opened from a preset", () => {
+  it("is called by the preset's label until the first question is asked", async () => {
+    await mountHost();
+    await act(async () => { converse.openRoom({ preset: "incident" }); });
+    await settle();
+    const created = calls.find((c) => c.method === "POST" && c.path === "")!;
+    expect(created.body).toMatchObject({ kind: "room", preset: "incident" });
+    const room = q('[data-testid="ag-room"]')!;
+    const title = room.querySelector('[data-testid="ag-room-title"]')!;
+    expect(title.textContent).toBe("Incident");
+    expect(room.getAttribute("aria-label")).toBe("Incident");
+    // The members are named beside it: faces, with their callsigns in the tooltip.
+    expect(room.querySelector('[data-testid="ag-room-members"]')!.getAttribute("title")).toBe("Vera · Juno");
+  });
+
+  it("the first question replaces the opening name once it is asked", async () => {
+    const { roomTitle } = await import("../app/agents/room-view");
+    expect(roomTitle([], undefined, "Incident").text).toBe("Incident");
+    expect(roomTitle([], "Is login down?", "Incident").text).toBe("Is login down?");
+    const asked = converse.mapTurn({ turn_id: "p", seq: 1, speaker_kind: "person", kind: "question",
+                                     content: "Is login down?", status: "complete" });
+    expect(roomTitle([asked], undefined, "Incident").text).toBe("Is login down?");
+    expect(roomTitle([], undefined, "").text).toBe("New room");
+  });
+});
+
+describe("@ in the box opens the seat picker", () => {
+  it("@ lists every seat as a face and a callsign; picking one names it and lights its To chip", async () => {
+    await mountHost();
+    await act(async () => { converse.openRoom({ seats: ["pm", "qa", "security_reviewer"] }); });
+    await settle();
+    const room = q('[data-testid="ag-room"]')!;
+    const box = room.querySelector<HTMLTextAreaElement>(".ag-composer textarea")!;
+    const type = async (text: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+      box.selectionStart = box.selectionEnd = text.length;
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await type("@");
+    const menu = room.querySelector('[data-testid="ag-mention-menu"]')!;
+    expect([...menu.querySelectorAll("strong")].map((s) => s.textContent)).toEqual(["Juno", "Vera", "Sentry"]);
+    expect(menu.querySelectorAll(".ag-avatar")).toHaveLength(3);
+    await type("@ve");
+    expect(room.querySelector('[data-testid="ag-mention-menu"]')!.textContent).toContain("Vera");
+    expect(room.querySelector('[data-testid="ag-mention-menu"]')!.textContent).not.toContain("Juno");
+    await act(async () => {
+      room.querySelector('[data-testid="ag-mention-qa"]')!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    expect(box.value).toBe("@Vera ");
+    expect(room.querySelector('[data-testid="ag-to-qa"]')!.getAttribute("aria-pressed")).toBe("true");
+    expect(room.querySelector('[data-testid="ag-mention-menu"]')).toBeNull();
+    // A callsign typed by hand addresses the seat too.
+    await act(async () => { room.querySelector<HTMLButtonElement>('[data-testid="ag-to-qa"]')!.click(); });
+    await type("@Sentry is fixation covered?");
+    await act(async () => { room.querySelector<HTMLButtonElement>('[data-testid="ag-send"]')!.click(); });
+    await settle();
+    expect(calls.filter((c) => c.path.endsWith("/turns")).at(-1)!.body).toMatchObject({ to: ["security_reviewer"] });
+  });
+});
+
+describe("replies stream", () => {
+  it("words show as they arrive, before the reply is finished", async () => {
+    await mountHost();
+    await act(async () => { converse.openTalk("qa"); });
+    await settle();
+    await push(0, "turn_start", { turn_id: "t1", seq: 1, speaker_kind: "agent", role_key: "qa" });
+    await push(0, "token", { turn_id: "t1", text: "First words" });
+    const turn = q('[data-testid="ag-turn-agent"]')!;
+    expect(turn.textContent).toContain("First words");
+    expect(turn.getAttribute("data-status")).toBe("streaming");
+    await push(0, "token", { turn_id: "t1", text: ", then more." });
+    expect(turn.textContent).toContain("First words, then more.");
+  });
+
+  it("the console's route passes each event through as the API sends it, never buffered", async () => {
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(c) { upstream = c; } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { headers: { "Content-Type": "text/event-stream" } })));
+    const { POST } = await import("../app/api/conversations/[[...path]]/route");
+    const res = await POST(new Request("http://console.test/api/conversations/cnv_1/turns", {
+      method: "POST", body: JSON.stringify({ project_id: "p1", actor: "ceo", message: "hi" }) }),
+      { params: Promise.resolve({ path: ["cnv_1", "turns"] }) });
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    expect(res.headers.get("cache-control")).toContain("no-transform");
+    const reader = res.body!.getReader();
+    upstream.enqueue(new TextEncoder().encode('event: token\ndata: {"turn_id":"t1","text":"Hi"}\n\n'));
+    // The first event arrives while the API's reply is still open.
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain('"text":"Hi"');
+    upstream.close();
+    expect((await reader.read()).done).toBe(true);
   });
 });

@@ -194,6 +194,82 @@ def test_a_talk_greets_in_character_streams_and_signs_every_reply(client, engine
     assert receipts >= 2 and consumed >= 2
 
 
+def test_a_conversation_is_named_by_the_agents_callsign(client, engine, seated):
+    """"Talk with Vera", not "Talk with QA Lead": the default title names the agent the way the
+    console's header does, and seat_info carries the callsign beside the role's name."""
+    with engine.begin() as c:
+        before = c.execute(text("SELECT spec FROM roles WHERE project_id = :p AND role_key = 'qa'"),
+                           {"p": PROJECT}).scalar()
+        c.execute(text("UPDATE roles SET spec = jsonb_set(COALESCE(spec::jsonb, '{}'::jsonb), "
+                       "'{persona}', COALESCE(spec::jsonb->'persona', '{}'::jsonb) || "
+                       "'{\"callsign\": \"Vera\"}'::jsonb) "
+                       "WHERE project_id = :p AND role_key = 'qa'"), {"p": PROJECT})
+    try:
+        talk = _open(client, "talk", ["qa"])
+        assert talk["title"] == "Talk with Vera"
+        assert talk["seat_info"][0]["callsign"] == "Vera"
+        assert talk["seat_info"][0]["name"] != "Vera"
+    finally:
+        with engine.begin() as c:
+            c.execute(text("UPDATE roles SET spec = CAST(:s AS JSONB) "
+                           "WHERE project_id = :p AND role_key = 'qa'"),
+                      {"p": PROJECT, "s": json.dumps(before) if not isinstance(before, str)
+                       else before})
+
+
+def test_a_shipped_agent_with_no_stored_persona_has_one_name_in_every_place(
+        client, engine, model, seated):
+    """A shipped role whose row carries no persona (written before personas travelled with the
+    role) used to be "QA Lead" in the talk's header and title while the console's resolver said
+    "Vera". The header (seat_info), the title, the agent's own prompt, a room peer's prompt and
+    the identities the console loads now read one persona — and a callsign the operator cleared
+    stays cleared."""
+    def set_persona(persona):
+        with engine.begin() as c:
+            c.execute(text(
+                "UPDATE roles SET spec = (COALESCE(spec::jsonb, '{}'::jsonb) - 'persona')"
+                " || CASE WHEN CAST(:v AS JSONB) IS NULL THEN '{}'::jsonb"
+                " ELSE jsonb_build_object('persona', CAST(:v AS JSONB)) END "
+                "WHERE project_id = :p AND role_key = 'qa'"),
+                {"p": PROJECT, "v": None if persona is None else json.dumps(persona)})
+
+    with engine.begin() as c:
+        before = c.execute(text("SELECT spec FROM roles WHERE project_id = :p AND role_key = 'qa'"),
+                           {"p": PROJECT}).scalar()
+    try:
+        set_persona(None)
+        talk = _open(client, "talk", ["qa"])
+        assert talk["title"] == "Talk with Vera"
+        assert talk["seat_info"][0]["callsign"] == "Vera"
+        _say(client, talk["conversation_id"], "")
+        assert "You are Vera, the " in model.calls[-1]["system"]
+
+        room = _open(client, "room", ["pm", "qa"])
+        assert [s.get("callsign") for s in room["seat_info"]][1] == "Vera"
+        _say(client, room["conversation_id"], "Who checks the release?")
+        pm_prompt = next(c["system"] for c in model.calls if "Also on this panel: " in c["system"]
+                         and "(pm)" not in c["system"].split("Also on this panel: ")[1])
+        assert "Vera (" in pm_prompt.split("Also on this panel: ")[1]
+
+        identities = client.get("/v1/agents/identities", params={"project_id": PROJECT})
+        assert identities.status_code == 200, identities.text
+        body = identities.json()
+        items = body["items"] if isinstance(body, dict) else body
+        assert next(i for i in items if i["role_key"] == "qa")["callsign"] == "Vera"
+
+        # Cleared by the operator: the stored persona has no callsign, and none comes back.
+        set_persona({"version": 1, "archetype": None, "tagline": "Show me the test."})
+        cleared = _open(client, "talk", ["qa"])
+        assert cleared["seat_info"][0]["callsign"] is None
+        assert cleared["title"] != "Talk with Vera"
+    finally:
+        with engine.begin() as c:
+            c.execute(text("UPDATE roles SET spec = CAST(:s AS JSONB) "
+                           "WHERE project_id = :p AND role_key = 'qa'"),
+                      {"p": PROJECT, "s": json.dumps(before) if not isinstance(before, str)
+                       else before})
+
+
 def test_a_seat_that_fails_is_explained_and_the_room_moves_on(client, engine, model, seated):
     model.fail_for = {"QA Lead"}
     conv = _open(client, "room", SEATS)
@@ -216,7 +292,9 @@ def test_a_seat_that_fails_is_explained_and_the_room_moves_on(client, engine, mo
 def test_plan_it_with_an_agent_ends_in_a_card_one_press_starts(client, engine, model, seated):
     workflow_key = _workflow(client, "Talked into it")
     conv = _open(client, "plan", ["pm"], context={"from": "palette"})
-    assert conv["title"] == "Plan with " + conv["seat_info"][0]["name"]
+    # Named as the console names the agent: its callsign when it has one.
+    seat = conv["seat_info"][0]
+    assert conv["title"] == "Plan with " + (seat.get("callsign") or seat["name"])
 
     greeting = _say(client, conv["conversation_id"], "")
     assert "ask the ONE question" in model.calls[0]["prompt"]
@@ -658,3 +736,44 @@ def test_an_agent_is_told_what_it_may_use_who_else_is_here_and_who_is_accountabl
     assert "(pm)" in qa.split("Also on this panel: ")[1]
     assert "(pm)" not in pm.split("Also on this panel: ")[1].split(".")[0]
     assert f"Accountable human: {ACTOR}." in qa and f"Accountable human: {ACTOR}." in pm
+
+
+def test_a_reply_streams_while_the_model_is_still_writing_it(client, engine, model, seated,
+                                                             monkeypatch):
+    """The real path, not a replay: the first words a streaming adapter writes reach the
+    stream as a `token` event before the adapter has finished (it is still mid-reply when the
+    event is read), and the turn settles with the adapter's own usage."""
+    from boss_engine.services import agent_converse
+
+    timeline: list[str] = []
+
+    class Streaming(Model):
+        def stream_text_response(self, prompt, system_prompt=None, model=None):
+            self.calls.append({"who": self.who(system_prompt or ""), "system": system_prompt,
+                               "prompt": prompt})
+            timeline.append("model:started")
+            yield "Show me "
+            timeline.append("model:writing")
+            yield "the failing case."
+            timeline.append("model:finished")
+            yield {"model": "stub-1", "prompt_tokens": 10, "completion_tokens": 5,
+                   "total_tokens": 15}
+
+    streaming = Streaming()
+    monkeypatch.setattr(agent_converse, "make_adapter", lambda *_a, **_k: streaming)
+    monkeypatch.setattr(agent_converse, "REVEAL_SECONDS", 30)  # a replay would hang the test
+    conv = _open(client, "talk", ["qa"])
+    events = agent_converse.take_turn(engine, project_id=PROJECT,
+                                      conversation_id=conv["conversation_id"], actor=ACTOR,
+                                      message="What would you test first?")
+    said = []
+    for event in events:
+        if event["type"] == "token":
+            timeline.append(f"token:{event['text']}")
+            said.append(event["text"])
+        elif event["type"] == "turn_end":
+            end = event
+    assert timeline == ["model:started", "token:Show me ", "model:writing",
+                        "token:the failing case.", "model:finished"]
+    assert "".join(said) == "Show me the failing case."
+    assert end["status"] == "complete" and end["tokens_out"] == 5
