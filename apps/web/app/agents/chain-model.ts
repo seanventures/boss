@@ -8,6 +8,7 @@
  * Nothing here writes an edge label. Every hop carries the server's `edgeLabel` from the act it
  * stands for (spec §9: edge_label() is the single source).
  */
+import { usd } from "../../lib/money";
 import type { Act, ActHow, AvatarState, AvatarVariant, Chain } from "../../lib/agent-world-types";
 import { BOSS_RAN_IT, HUMAN, NOT_AN_AGENT } from "../../lib/ran-as";
 
@@ -245,6 +246,11 @@ export function laneAgentOf(output: unknown, act: Act | null, viewer: string): L
     return { roleKey: who.roleKey, variant: who.variant, how: act.how, edgeLabel: act.edgeLabel,
              state: actState(act), considered: act.considered.length };
   }
+  // A GATE NOBODY HAD TO ANSWER. An automatic approval was drawn as "A person" on the lane
+  // (the gate's planned actor) while BOSS approved it; it is BOSS's.
+  if (!ran && (output as { approved_by?: unknown } | null)?.approved_by === "auto_approval") {
+    return { roleKey: null, variant: "boss", how: "", edgeLabel: "", state: "idle", considered: 0 };
+  }
   if (!ran || !ran.agent) return undefined;
   const how = RAN_AS_HOW[ran.how ?? ""] ?? ran.how ?? "";
   const rawHow = ran.how ?? "";
@@ -291,6 +297,7 @@ export function minutesLabel(minutes: number): string {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+/** Money on the run surfaces: lib/money.ts `usd`, the one format. */
 export function costLabel(cost: number): string {
-  return cost >= 10 ? `$${cost.toFixed(0)}` : `$${cost.toFixed(2)}`;
+  return usd(cost);
 }

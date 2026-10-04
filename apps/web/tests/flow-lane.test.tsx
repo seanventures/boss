@@ -23,6 +23,7 @@ const geometry = await import("../app/workflows/flow/geometry");
 const { layoutFlow } = await import("../lib/workflow-graph");
 const { agentMeta } = await import("../app/agent-chip");
 const { isCut } = await import("../app/workflows/flow/tip-layer");
+const { nameOf } = await import("../app/agents/run-face");
 
 /** The lane's width in the console at 1440px: the shell's icon rail (84px), the palette as a
  *  rail (48px), the editor's gutters (2 × 16px), the grid gap (12px) and the lane's border
@@ -412,11 +413,16 @@ describe("every node says who runs it, at every density and in every mode", () =
     for (const [density, width] of [["comfortable", 4000], ["compact", LANE_AT_1512]] as const) {
       it(`${mode}, ${density}: an avatar and the name, and the name leads the tooltip`, () => {
         laneWidth = width;
-        const h = render(<FlowLane spec={MIXED} palette={PALETTE} mode={mode} runState={mode === "run" ? {} : undefined} />);
+        // A run is always drawn roomy; its Compact form is the forced one (a preview strip).
+        const forced = mode === "run" && density === "compact" ? "compact" : undefined;
+        const h = render(<FlowLane spec={MIXED} palette={PALETTE} mode={mode} density={forced}
+                                   runState={mode === "run" ? {} : undefined} />);
         expect(h.querySelector<HTMLElement>('[data-testid="wf-lane"]')!.dataset.density).toBe(density);
         const rows = nodes(h).map((n) => n.querySelector<HTMLElement>('[data-testid="wf-node-agent"]'));
         expect(rows.every(Boolean)).toBe(true);
-        expect(rows.slice(0, 6).map((r) => r!.querySelector(".wf-node-agent-name")!.textContent)).toEqual(expected);
+        // On a run a named agent reads by its callsign, as the chain and the step panel name it.
+        const want = mode === "run" ? expected.map((n, i) => (i === 1 ? nameOf("qa").name : n)) : expected;
+        expect(rows.slice(0, 6).map((r) => r!.querySelector(".wf-node-agent-name")!.textContent)).toEqual(want);
         for (const r of rows) {
           expect(r!.querySelector(".wf-avatar")).not.toBeNull();
           const name = r!.querySelector(".wf-node-agent-name")!.textContent!;

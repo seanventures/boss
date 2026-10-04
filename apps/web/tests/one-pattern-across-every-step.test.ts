@@ -110,32 +110,24 @@ describe("the step chrome stops being prose", () => {
     expect(UI.slice(at - 300, at)).toContain("<Explain");
   });
 
-  it("and a succeeded step's history does too", () => {
-    expect(UI).toContain('label="Why this step recorded no work"');
+  it("and a succeeded step's note is its Output, not a permanent line", () => {
+    expect(UI).toContain('noteShownAbove: step.status !== "succeeded" || phase === "skipped"');
   });
 });
 
 describe("machine fields are evidence, not content", () => {
-  it("they are filed behind a disclosure", () => {
-    expect(UI).toContain('data-testid="dw-step-out-wrap"');
-    expect(UI).toContain("What this step recorded ·");
-  });
-
-  it("the same id is not printed under two headings", () => {
-    // AWAIT and RUN ID held the identical crun_ on every build step.
-    expect(UI).toContain("all.findIndex(([, w]) => w === v) === i");
-  });
-
-  it("and an empty field is not a row", () => {
-    // BINDING ID rendered as "—".
-    expect(UI).toContain('!(v === null || v === undefined || v === "")');
+  // Behaviour now: tests/a-step-panel-leads-with-the-run.test.tsx renders stepOutput — human
+  // outputs on the page, machine fields under Details, each text once, never null or "—".
+  it("the step's Output is the allow-listed human outputs, the rest under Details", () => {
+    expect(UI).toContain('<StepSection title="Output" testId="dw-step-output"');
+    expect(UI).toContain("<StepOutputFacts facts={output.facts} details={output.details} />");
   });
 });
 
 describe("one action has one control", () => {
   it("Ask BOSS is a button, not also a link of the same name", () => {
     expect(UI).not.toContain('label: "Ask BOSS",');
-    expect(UI).toContain('data-testid="dw-ask-boss"');
+    expect(UI).toContain("onAsk={ask}");
   });
 
   it("and the preview link is not both a button and a link", () => {
