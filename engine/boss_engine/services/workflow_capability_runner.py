@@ -2440,6 +2440,21 @@ def _tool_failed_to_start(key: str, output: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _build_waits_on_a_person(connection: Any, run_id: str) -> bool:
+    """A blocked build that is waiting on a person (plan approval, a gate waiver, a budget
+    refusal), not stuck: the Factory's attention kinds for it, factory spec §6.5."""
+    try:
+        row = connection.execute(
+            text("SELECT phase, finalize_ctx->>'reason_code' AS reason FROM code_task_runs "
+                 "WHERE id = :id"), {"id": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        return False
+    if not row:
+        return False
+    return (str(row["phase"] or "") in ("awaiting_plan_approval", "awaiting_gate_override")
+            or str(row["reason"] or "") == "budget_denied")
+
+
 #: How to tell whether awaited work is done, per kind: the table, and which statuses are
 #: terminal. Anything not listed is still in flight.
 _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
@@ -2778,6 +2793,12 @@ def resume_awaited(
         if not row:
             continue
         status = str(row["status"] or "")
+        if kind == "code_task" and status == "blocked" and _build_waits_on_a_person(
+                connection, awaited_id):
+            # A BUILD WAITING ON THE OPERATOR HAS NOT FAILED (factory walk). A plan to approve,
+            # checks to waive or a budget to raise is the build's own card; failing the step
+            # above it added a second card for the same wait ("Build, review and test failed").
+            continue
         if status in ok_states:
             # `completed` IS the inner pipeline's success. A missing pull request is not a
             # refusal — reviewer refusal lands as `blocked` / `failed`, already handled below.

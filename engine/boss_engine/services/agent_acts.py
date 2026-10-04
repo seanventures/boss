@@ -1443,6 +1443,14 @@ def settle_code_task(engine: Any, code_task_run_id: str) -> None:
             close_code_task(c, code_task_run_id)
     except Exception as error:  # noqa: BLE001
         log.warning("agent acts: could not close the stages of %s: %s", code_task_run_id, error)
+    try:
+        from ..db import begin
+        from .code_task_service import supersede_earlier_pr_decisions
+
+        with begin(engine) as c:
+            supersede_earlier_pr_decisions(c, code_task_run_id)
+    except Exception as error:  # noqa: BLE001
+        log.warning("could not supersede earlier PR decisions of %s: %s", code_task_run_id, error)
 
 
 def _agent_name(connection: Connection, project_id: str, role_key: str) -> str:

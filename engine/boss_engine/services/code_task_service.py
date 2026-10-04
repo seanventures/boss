@@ -1175,6 +1175,38 @@ def honour_stop_request(connection, run_id: str) -> Optional[dict]:
                             phase=req.get("phase"))
 
 
+def supersede_earlier_pr_decisions(connection, run_id: str) -> int:
+    """ONE MERGE QUESTION PER PULL REQUEST (factory walk D2). A retry lands on the same branch
+    and reuses the open PR, and asked to merge it again: the earlier attempt's question stayed
+    pending beside the new one, so the Floor, the pill and Approvals each showed `Merge PR #1?`
+    twice. The newest attempt's question stands; earlier attempts' questions about the same PR
+    are closed as superseded, with a note naming the attempt that replaced them."""
+    if hasattr(connection, "get_run"):
+        return 0
+    run = connection.execute(
+        sql("SELECT id, project_id, decision_id, pull_request_number, pull_request_url, "
+            "COALESCE(finalize_ctx->>'root_run_id', id) AS root FROM code_task_runs "
+            "WHERE id = :id"), {"id": run_id}).mappings().first()
+    if not run or not run["decision_id"] or not (run["pull_request_number"]
+                                                 or run["pull_request_url"]):
+        return 0
+    earlier = connection.execute(
+        sql("SELECT decision_id FROM code_task_runs WHERE project_id = :p AND id <> :id "
+            "AND decision_id IS NOT NULL AND decision_id <> :d "
+            "AND COALESCE(finalize_ctx->>'root_run_id', id) = :root "
+            "AND (pull_request_number = :n OR pull_request_url = :u)"),
+        {"p": run["project_id"], "id": run_id, "d": run["decision_id"], "root": run["root"],
+         "n": run["pull_request_number"], "u": run["pull_request_url"]}).scalars().all()
+    if not earlier:
+        return 0
+    closed = connection.execute(
+        sql("UPDATE decisions SET status = 'superseded', updated_at = now(), "
+            "resolution_note = :note WHERE id = ANY(:ids) "
+            "AND status IN ('pending', 'delegated', 'revision_requested')"),
+        {"ids": list(earlier), "note": f"Superseded by {run_id}: the same PR, asked once"})
+    return int(closed.rowcount or 0)
+
+
 def overlay_stop_requests(connection, runs: list[dict]) -> list[dict]:
     """Every reader says `Stopped by <actor>` the moment Stop is pressed, not when the worker
     lets go of the run row: a pending request reads as the cancelled run it is becoming.
