@@ -32,7 +32,8 @@ import type { AvatarState } from "../../lib/agent-world-types";
 import type { BoardAgent } from "../../lib/agents-live-board";
 import {
   arcPath, chainsOf, edgeCurve, edgeWidth, floorCounts, floorKinds, floorLayout, freshFlows, quadAt,
-  recencyOpacity, COMET_CAP, FLOW_HOURS, KIND_SIZE, type FloorKind, type FloorLayout,
+  recencyOpacity, COMET_CAP, KIND_SIZE, FACE_KINDS, fitArcLabel, idleDot, placeNames,
+  type FloorKind, type FloorLayout,
 } from "../../lib/command-center-graphics";
 import { openTalk } from "../../lib/converse-doors";
 import { boardOf, type CommandCenterView, type Flow, type MotionMode } from "../../lib/command-center-view";
@@ -467,9 +468,19 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
   const counts = floorCounts(kinds);
   const label = `Team map: ${counts.working} working, ${counts.onRuns} on runs, `
     + `${view.counts.needsYou} waiting on you, `
-    + `${handoffs} hand-off${handoffs === 1 ? "" : "s"} in the last ${FLOW_HOURS} hours`;
+    + `${handoffs} hand-off${handoffs === 1 ? "" : "s"} in the last hour`;
   const fold = total > 120;
   const { width: W, height: H, radius: R } = layout;
+  // NAMES ONLY ON ACTIVE FACES, and never on top of each other or another face (D9/D16).
+  const RANK: Partial<Record<FloorKind, number>> = { working: 0, waiting: 1, stuck: 2, on_run: 3 };
+  const names = placeNames(layout.nodes.flatMap((n) => {
+    const k = kinds.get(n.roleKey) ?? "never";
+    const a = byKey.get(n.roleKey);
+    return a && FACE_KINDS.has(k)
+      ? [{ key: n.roleKey, x: n.x, y: n.y, angle: n.angle, size: sizeOf(k), text: short(a, a.roleKey), rank: RANK[k] ?? 9 }]
+      : [];
+  }), { width: W, height: H });
+  const dot = idleDot(total);
   const cardAgent = card ? byKey.get(card.key) : undefined;
   const cardNode = card ? at.get(card.key) : undefined;
 
@@ -518,18 +529,12 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
         {layout.arcs.map((arc) => {
           const mid = (arc.start + arc.end) / 2;
           const lr = R + 50;
-          let lx = layout.cx + lr * Math.cos(mid);
-          const ly = layout.cy + lr * Math.sin(mid);
           const anchor = Math.abs(Math.cos(mid)) < 0.3 ? "middle" : Math.cos(mid) > 0 ? "start" : "end";
-          // A label never leaves the stage ("ARCHITECTURE" was cut at the panel's edge).
-          // First it shrinks (to 70%), and only then slides inward — sliding alone pushed it onto
-          // the next team's band, which painted over its first letter.
-          const wide = arc.label.length * 9.6; // caps with letter-spacing: ~9.6px a letter at 11px
-          const room = anchor === "start" ? layout.width - 8 - lx : anchor === "end" ? lx - 8 : wide;
-          const scale = Math.max(0.7, Math.min(1, room / wide));
-          const fit = wide * scale;
-          if (anchor === "start") lx = Math.min(lx, layout.width - 8 - fit);
-          if (anchor === "end") lx = Math.max(lx, 8 + fit);
+          // FITTED AT EVERY SIZE (D16): shrink, slide, and only then shorten — never cut by the
+          // panel's edge ("ARCHITECTURE" lost letters at 1280 and 1024).
+          const fit = fitArcLabel(arc.label, layout.cx + lr * Math.cos(mid), layout.cy + lr * Math.sin(mid),
+                                  anchor, { width: W, height: H });
+          const lx = fit.x, ly = fit.y, scale = fit.scale;
           const hue = teamHue(arc.team);
           const team = view.teams.find((t) => t.key === arc.team);
           const busy = view.agents.filter((a) => a.team === arc.team && kinds.get(a.roleKey) === "working").length;
@@ -538,8 +543,9 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
               <path className="cc-arc-band" d={arcPath(layout.cx, layout.cy, R, arc.start, arc.end)} />
               <path className="cc-arc-line" d={arcPath(layout.cx, layout.cy, R + 26, arc.start, arc.end)} />
               <text className="cc-arc-label" x={q(lx)} y={q(ly)} textAnchor={anchor} dominantBaseline="middle"
+                    data-testid="cc-floor-arc-label" data-fit-width={fit.width}
                     style={scale < 1 ? { fontSize: `${Math.round(scale * 100)}%` } : undefined}>
-                {arc.label}
+                {fit.text}
                 {busy > 0 ? <tspan className="cc-arc-busy">{` · ${busy}`}</tspan> : null}
               </text>
               {fold && arc.idleFolded ? (
@@ -567,7 +573,7 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
                onClick={() => { if (e.flow.runId) navigate(runPatch(e.flow.runId)); }}>
               <title>{tip}</title>
               <path className="cc-edge-hit" d={e.d} />
-              <path className="cc-edge-soft" d={e.d} strokeWidth={edgeWidth(e.flow.n) * 3.2} />
+              <path className="cc-edge-soft" d={e.d} strokeWidth={edgeWidth(e.flow.n) * 2.4} />
               <path className="cc-edge-line" d={e.d} pathLength={1} strokeWidth={edgeWidth(e.flow.n)} />
             </g>
           );
@@ -636,31 +642,38 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
           if (!a) return null;
           const kind = kinds.get(n.roleKey) ?? "never";
           if (fold && (kind === "rested" || kind === "never")) return null;
-          const name = short(a, a.roleKey);
           const age = a.since ? ago(a.since, nowMs) : "";
-          const tip = `${name} · ${kind === "working" && a.line ? a.line : KIND_WORD[kind]}${
+          const tip = `${short(a, a.roleKey)} · ${kind === "working" && a.line ? a.line : KIND_WORD[kind]}${
             kind !== "working" && age ? ` · last work ${age}` : ""}`;
-          const side = Math.cos(n.angle);
-          const px = sizeOf(kind);
-          const named = kind === "working" || kind === "waiting" || kind === "stuck" || kind === "on_run";
+          const face = FACE_KINDS.has(kind);
+          const px = face ? sizeOf(kind) : dot;
+          const hit = face ? px + 6 : Math.max(14, dot + 6);
           return (
-            <button key={n.roleKey} type="button" data-role={n.roleKey} data-testid="cc-floor-face"
-                    className="cc-node" data-kind={kind} data-state={a.state}
+            <button key={n.roleKey} type="button" data-role={n.roleKey}
+                    data-testid={face ? "cc-floor-face" : "cc-floor-dot"}
+                    className={face ? "cc-node" : "cc-node cc-node-dot"} data-kind={kind} data-state={a.state}
                     data-current={current.has(n.roleKey) || undefined}
                     data-still={stillOf.get(n.roleKey) || undefined} data-woke={woke.has(n.roleKey) || undefined}
                     tabIndex={i === active ? 0 : -1} title={tip} aria-label={tip}
                     ref={(el) => { if (el) nodeEls.current.set(n.roleKey, el); else nodeEls.current.delete(n.roleKey); }}
-                    style={{ left: n.x, top: n.y, width: px + 6, height: px + 6, ["--team-hue" as string]: teamHue(n.team) }}
+                    style={{ left: n.x, top: n.y, width: hit, height: hit, ["--team-hue" as string]: teamHue(n.team),
+                             ...(face ? {} : { ["--dot" as string]: `${dot}px` }) }}
                     onMouseEnter={() => show(n.roleKey)} onMouseLeave={() => hide()}
                     onFocus={() => show(n.roleKey)} onBlur={() => hide()}
                     onClick={() => show(n.roleKey, true)}>
-              <AgFace roleKey={n.roleKey} size={px} state={faceOf(a, kind)} decorative />
+              {face ? <AgFace roleKey={n.roleKey} size={px} state={faceOf(a, kind)} decorative aiBadge={false} />
+                : <span className="cc-node-pip" aria-hidden />}
               {kind === "waiting" ? <span className="cc-node-pause" aria-hidden>❙❙</span> : null}
-              {named ? (
-                <span className="cc-node-name" data-side={side > 0.2 ? "right" : side < -0.2 ? "left" : "mid"}>{name}</span>
-              ) : null}
             </button>
           );
+        })}
+        {[...names].map(([key, p]) => {
+          const a = byKey.get(key);
+          return a ? (
+            <span key={`n-${key}`} className="cc-node-name" data-align={p.align} data-testid="cc-floor-name" aria-hidden
+                  style={{ left: p.align === "left" ? p.x : p.align === "right" ? p.x - p.w : p.x - p.w / 2, top: p.y - p.h / 2,
+                           width: p.w, height: p.h }}>{short(a, a.roleKey)}</span>
+          ) : null;
         })}
         {cardAgent && cardNode ? (
           <MiniCard agent={cardAgent} kind={kinds.get(cardAgent.roleKey) ?? "never"} nowMs={nowMs}
