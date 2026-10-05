@@ -568,7 +568,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       ) : (
         <>
           {composeSec}
-          <div className="cc-now">{width < 1280 ? <>{needsSec}{floorSec}</> : <>{floorSec}{needsSec}</>}</div>
+          <div className="cc-now" data-quiet={view && lead.length === 0 && !olderStopped.length ? "true" : undefined}>{width < 1280 ? <>{needsSec}{floorSec}</> : <>{floorSec}{needsSec}</>}</div>
           {todaySec}{workSec}{systemsSec}{weekSec}
         </>
       )}

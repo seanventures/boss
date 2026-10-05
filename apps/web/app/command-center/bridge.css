@@ -172,6 +172,10 @@
 .cc-now > .cc-sec-needs { grid-column: span 5; }
 /* Nothing waiting: the box is its one line, not a column as tall as the Floor (improvement 6). */
 .cc-now > .cc-sec-needs[data-quiet] { align-self: start; }
+/* NOTHING NEEDS YOU: no empty column beside the Floor (re-test 8). Needs you becomes one line
+   across the top of NOW, and the Floor takes the full width under it. */
+.cc-now[data-quiet] > .cc-sec-needs { grid-column: 1 / -1; order: -1; }
+.cc-now[data-quiet] > .cc-sec-floor { grid-column: 1 / -1; }
 .cc[data-layout="split"] .cc-now > .cc-sec-floor,
 .cc[data-layout="split"] .cc-now > .cc-sec-needs { grid-column: span 6; }
 .cc[data-layout="stacked"] .cc-now > * { grid-column: 1 / -1; }
@@ -211,25 +215,27 @@
 .cc-run-chip[data-outcome="other"] .cc-run-glyph { color: var(--faint); background: var(--surface-3); }
 
 .cc-sec-systems { padding-bottom: 14px; }
-.cc-systems { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0; padding: 0; list-style: none; }
-/* ONE ROW of seven from 1024px (Apple's status row): each dot takes an equal share. */
-@media (min-width: 1024px) {
-  /* EVERY DOT INSIDE ITS CARD at every width (independent test D1: a nowrap row pushed Deploys
-     outside the card and scrolled the page sideways at 1280 and 1024). One row of seven when
-     it fits, wrapping into equal cells when it does not. */
-  .cc-systems { display: grid; grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); gap: 8px; }
-  .cc-sys { min-width: 0; }
-  /* The word and its state are never cut ("Not set…" at 1440): a cell is wide enough for the
-     longest pair, and the grid takes a second row before it clips one. */
-  .cc-sys a { padding: 0 10px; white-space: nowrap; width: 100%; box-sizing: border-box; }
+/* SYSTEMS (§4.11; independent test D1, re-test 7). Every dot stays inside its card at every
+   width: seven across from 1280px, an even 4 + 3 below. Each cell is two short lines — the
+   dot and its word, the state under it — so nothing is cut and nothing wraps oddly. */
+.cc-systems {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+  margin: 0; padding: 0; list-style: none;
 }
+.cc-sys { min-width: 0; }
 .cc-sys a {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px;
-  border-radius: 999px; border: 1px solid var(--border); color: var(--ink-soft); text-decoration: none;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "dot word" ". state";
+  column-gap: 8px; row-gap: 1px; align-items: center; padding: 8px 12px; min-height: 52px;
+  width: 100%; box-sizing: border-box; white-space: nowrap;
+  border-radius: var(--r); border: 1px solid var(--border); color: var(--ink-soft); text-decoration: none;
   font-size: 0.86rem; transition: border-color 120ms ease, background-color 120ms ease;
 }
+.cc-sys-dot { grid-area: dot; }
+.cc-sys-word { grid-area: word; overflow: hidden; text-overflow: ellipsis; }
+.cc-sys-state { grid-area: state; overflow: hidden; text-overflow: ellipsis; }
 .cc-sys a:hover, .cc-sys a:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); }
 .cc-sys-dot {
+  flex: none; box-sizing: border-box; /* a hollow dot stays a ring, never a 2px tick (re-test 7) */
   width: 10px; height: 10px; border-radius: 50%; background: var(--green);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
 }
@@ -279,8 +285,7 @@
   .cc-sec-floor { min-height: 0; }
   .cc-floor-empty { height: 120px; }
   .cc-sec-today { min-height: 200px; }
-  .cc-systems { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .cc-sys a { flex-direction: column; gap: 2px; padding: 6px 4px; border-radius: var(--r); justify-content: center; }
+  .cc-sys a { padding: 6px 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -313,3 +318,15 @@
 }
 .cc-waits-word { color: var(--amber); font-weight: 650; }
 .cc-waits-n { color: var(--ink-soft); }
+
+/* A budget card's money sentence is the card ("$6.24 of $5 today. Raise the cap…" was cut at
+   390, re-test 5): it wraps; other cards' detail may still truncate. */
+.cc-cards .ag-att[data-kind="budget_refused"] .ag-att-detail { white-space: normal; overflow: visible; text-overflow: clip; }
+
+/* ≥ 44px targets on a phone for the rest of the page's links (re-test 6): Needs-you card
+   titles' links, Done-lately chips. */
+@media (max-width: 639px) {
+  .cc .cc-cards .ag-att a, .cc .cc-done .ag-out-chip { min-height: 44px; display: inline-flex; align-items: center; }
+}
+
+@media (min-width: 1280px) { .cc-systems { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
