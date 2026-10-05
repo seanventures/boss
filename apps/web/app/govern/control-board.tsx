@@ -99,6 +99,16 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
+/** The board's rows, in order, with the names the server gives them — so a board that can't
+ *  reach BOSS still reads `Daily cap —`, never `daily_cap —` (D8). */
+export const SPEND_ROWS: [string, string][] = [
+  ["daily_cap", "Daily cap"], ["monthly_cap", "Monthly cap"], ["burst", "Burst"], ["pace", "Pace"]];
+export const AGENT_ROWS: [string, string][] = [
+  ["code_agent_max_concurrency", "Review lanes"], ["code_agent_max_turns", "Turn budget"],
+  ["code_review_inrun_max_rounds", "Review rounds"], ["captain_leads_projects", "Captain leads"],
+  ["max_concurrent_jobs", "Jobs at once"], ["max_workers_total", "Workers"]];
+const ROW_NAMES: Record<string, string> = Object.fromEntries([...SPEND_ROWS, ...AGENT_ROWS]);
+
 export function ControlBoard({ view, projectId, actor, unreachable, focus, onSaved }: {
   view: GovernView | null;
   projectId: string;
@@ -144,7 +154,7 @@ export function ControlBoard({ view, projectId, actor, unreachable, focus, onSav
       <section className="gv-sec" aria-labelledby="gv-sec-spend">
         <h3 id="gv-sec-spend" className="gv-sec-head">SPEND CAPS</h3>
         <ul className="gv-rows" role="list">
-          {["daily_cap", "monthly_cap", "burst", "pace"].map(row)}
+          {SPEND_ROWS.map(([key]) => row(key))}
         </ul>
       </section>
       <section className="gv-sec" aria-labelledby="gv-sec-rises">
@@ -161,8 +171,7 @@ export function ControlBoard({ view, projectId, actor, unreachable, focus, onSav
       <section className="gv-sec" aria-labelledby="gv-sec-agents">
         <h3 id="gv-sec-agents" className="gv-sec-head">HOW HARD AGENTS WORK</h3>
         <ul className="gv-rows" role="list">
-          {["code_agent_max_concurrency", "code_agent_max_turns", "code_review_inrun_max_rounds",
-            "captain_leads_projects", "max_concurrent_jobs", "max_workers_total"].map(row)}
+          {AGENT_ROWS.map(([key]) => row(key))}
         </ul>
       </section>
       <TokenGuides view={view} projectId={projectId} actor={actor} disabled={unreachable} onSaved={onSaved} />
@@ -189,7 +198,7 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
   const [failure, setFailure] = useState<Failure | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (!editing) setFailure(null); }, [editing]);
-  const name = c?.name ?? keyName;
+  const name = c?.name ?? ROW_NAMES[keyName] ?? keyName;
   const note = c ? noteText(c) : null;
   const evidence = c?.evidence;
 

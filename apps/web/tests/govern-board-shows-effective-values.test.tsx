@@ -181,6 +181,10 @@ describe("states", () => {
     expect($$("[data-testid^=gv-value-]").every((v) => v.textContent === "—")).toBe(true);
     expect($$("[data-testid^=gv-more-]").every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
     expect($("[data-testid=gv]")!.textContent).not.toContain("No adjustable settings");
+    // D8: rows still read as names, never raw keys.
+    expect($$("[data-testid^=gv-control-] .gv-name").map((n) => n.textContent)).toEqual([
+      "Daily cap", "Monthly cap", "Burst", "Pace", "Review lanes", "Turn budget", "Review rounds",
+      "Captain leads", "Jobs at once", "Workers", "Project default", "Per step"]);
   });
 
   it("frozen: one line above the board, with the way out", async () => {
