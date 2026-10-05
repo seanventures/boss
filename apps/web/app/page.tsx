@@ -7,43 +7,28 @@ import {
   LOADED_AREAS_COOKIE,
 } from "../lib/area-loading";
 import {
-  applyChangeSetAction,
-  approveChangeSetAction,
-  completeEntitlementConnectionSessionAction,
-  createChangeSetAction,
-  createDeploymentTargetAction,
   createReplayBundleAction,
   createBreakGlassGrantAction,
   createComplianceEvidenceBundleAction,
   createDeadletterIncidentAction,
   createDeadletterRemediationAction,
-  createEntitlementConnectionSessionAction,
   createOpsDigestAction,
-  createDeploymentRunAction,
   installAgentModuleAction,
   installPackAction,
   dryRunOutboxMessageAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
-  disconnectEntitlementSourceAction,
   revokeBreakGlassGrantAction,
   rollbackAgentModuleAction,
-  runAutoscalerPlanAction,
-  runDeploymentHealthCheckAction,
-  runResourceJanitorAction,
   submitOutboxDraftAction,
   submitCommandAction,
-  syncProviderResourcesAction,
   uninstallAgentModuleAction,
-  upsertDeploymentEnvironmentPolicyAction,
   upsertEnterpriseIdentityProviderAction,
   upsertEnterpriseIdentityRolloutPolicyAction,
   upsertEnterpriseScimGroupAction,
   upsertEnterpriseScimUserAction,
   upsertCommsChannelPolicyAction,
   upsertOrgMemberAction,
-  upsertWorkerPoolAction,
-  uploadModelCredentialAction,
 } from "./actions";
 import ConsoleShell from "./ConsoleShell";
 import {
@@ -55,7 +40,6 @@ import { BossAgentHome } from "./boss-agent-home";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
-import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
@@ -75,10 +59,8 @@ import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
 import {
   loadAssuranceAreaData,
   loadBudgetAreaData,
-  loadInfraAreaData,
   ASSURANCE_AREA_IDS,
   BUDGET_AREA_IDS,
-  INFRA_AREA_IDS,
 } from "../lib/area-data";
 import { fetchBudgetStatus, fetchBudgetIntensity, periodWords } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
@@ -114,10 +96,8 @@ import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, parseDecisionInboxFilter, type DecisionFeedItem } from "../lib/decisions";
-import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
-import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
 import { fetchMetatronQuery } from "../lib/metatron";
@@ -142,11 +122,9 @@ import { WorkforceArea } from "./workforce-ui";
 import { resolveLegacyArea, searchParamsFrom } from "./legacy-areas";
 import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
 import { ShepherdConsole } from "./shepherd-ui";
-import { DeliveryPipeline } from "./delivery-ui";
-import { HardwareManager } from "./hardware-manager-ui";
-import { MonitoringArea } from "./monitoring-ui";
-import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction, getObservabilityAction,
-         listDeploymentsAction } from "./actions";
+import { getShepherdOverviewAction } from "./actions";
+import { InfraHome } from "./infra/infra-home";
+import { ObsHome } from "./observability/obs-home";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchAiSreCapabilities } from "../lib/ai-sre";
 import { AiSreHome } from "./ai-sre-ui";
@@ -165,7 +143,6 @@ import { SetupBoard } from "./setup/setup-board";
 import { fetchSetupSummary, landingArea } from "../lib/setup-server";
 import { KitHome } from "./skills/kit-home";
 import { MemoryHome } from "./memory-ui";
-import { DeploymentManagerPanel } from "./deployment-manager-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
 import { PipelineView } from "./pipeline-ui";
 import { fetchSandboxFeed } from "../lib/sandboxes";
@@ -177,22 +154,15 @@ import { fetchOrgs } from "../lib/orgs";
 import { OrgGate, OrgReconnect } from "./org-gate";
 import { fetchApprovalRules } from "../lib/approval-rules";
 import { ApprovalRulesView } from "./approval-rules-ui";
-import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
-import { describeSpendHonesty, fetchProviderOpsFeed } from "../lib/providerops";
-import { ProviderConfigurationSuite } from "./provider-configuration-ui";
-import { fetchInfraFabricFeed } from "../lib/infra-fabric";
-import { InfraFabricPanel } from "./infra-fabric-ui";
 import { fetchGitHubOperationsFeed } from "../lib/github-operations";
 import { GitHubOperations } from "./github-operations-ui";
 import { fetchRepoActivity } from "../lib/repo-activity";
 import { RepoActivityPanel } from "./repo-activity-ui";
-import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchDeliveryMetrics } from "../lib/metrics";
 import { fetchRoleFeed } from "../lib/roles";
-import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
 import { ImprovementProgramsPanel } from "./improvement-programs-ui";
 import {
@@ -221,24 +191,14 @@ import {
 } from "../lib/release-planning";
 import { ReleasePlanningPanel } from "./release-planning-ui";
 import {
-  fetchWorkerAutoscalingHistory,
-  fetchWorkerAutoscalingStatus,
-} from "../lib/worker-autoscaling";
-import { WorkerAutoscalingPanel } from "./worker-autoscaling-ui";
-import {
   fetchTokenConsumption,
   fetchTokenPolicies,
   fetchTokenRecommendations,
   fetchTokenScorecard,
 } from "../lib/token-efficiency";
 import { TokenEfficiencyPanel } from "./token-efficiency-ui";
-import { fetchObservabilitySuiteFeed } from "../lib/observability-suite";
-import { ObservabilitySuitePanel } from "./observability-suite-ui";
 import { fetchKnowledgeGraphFeed } from "../lib/knowledge-graph";
 import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
-import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
-import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
-
 import { AskBossHero } from "./ask-boss-hero";
 import { ActionForm } from "./client-forms";
 function formatMicros(amount: unknown): string {
@@ -466,33 +426,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // waiting was not the API's fault: it serves 82 concurrent requests in 1.6s, and Node issues
   // 82 in 0.8s. The page simply asked for them one at a time.
   //
-  // None of these depends on another except observability, which needs a host id from the
-  // delivery pipeline — so it stays behind, and everything else starts at once.
+  // The delivery pipeline, deployment health, secrets, deployments and the observability stack
+  // (an SSH probe to a host) used to be fetched here on EVERY render of EVERY area, ungated.
+  // Infra and Observability fetch their own ETag'd views client-side now (infra-observability
+  // spec §6.6), and one-area-per-fetch.test.ts fails if they come back.
   //
   // .catch(() => null) is preserved per-feed: one dead panel must never take the console with
   // it, and Promise.all would reject the batch if any of them threw.
   const [
     shepherdOverview,
-    deliveryPipeline,
-    deploymentHealth,
-    deliverySecrets,
-    recentDeployments,
     resolvedSearchParams,
   ] = await Promise.all([
     getShepherdOverviewAction().catch(() => null),
-    getDeliveryPipelineAction().catch(() => null),
-    getDeploymentHealthAction().catch(() => null),
-    listSecretsAction().catch(() => null),
-    listDeploymentsAction(10).catch(() => null),
     searchParams ? Promise.resolve(searchParams).then((v) => v) : Promise.resolve(undefined),
   ]);
-  // The host target is whichever active target we can borrow a host+credential from; the stack
-  // is one per host, not one per app. This is the one genuine dependency in the group.
-  const obsHost = (deliveryPipeline?.targets || []).find((t: any) => t.status === "active")?.id;
-  // Started here, awaited later WITH fetchOrgs. observability needs obsHost so it cannot join
-  // the batch above, but nothing makes it block the org lookup either — and a promise created
-  // now is already in flight while the code in between runs.
-  const observabilityPromise = getObservabilityAction(obsHost).catch(() => null);
   // A RETIRED SURFACE NEVER RENDERS. Agent Studio, Team structure and the Workflow area's old
   // tabs are rewritten to where they live now before anything is fetched for them; one table,
   // shared with the shell's link handler (app/legacy-areas.ts).
@@ -570,21 +517,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
   const requestedActorId = getParam(resolvedSearchParams?.actor);
   const traceRunId = getParam(resolvedSearchParams?.trace_run);
-  const routingProviderFilter = getParam(resolvedSearchParams?.route_provider);
-  const routingBudgetFilter = getParam(resolvedSearchParams?.route_budget);
-  const routingBoundaryParam = getParam(resolvedSearchParams?.route_boundary);
-  const routingBoundaryFilter = (
-    ["public", "internal", "confidential", "restricted", "local-only"].includes(
-      routingBoundaryParam ?? "",
-    )
-      ? routingBoundaryParam
-      : undefined
-  ) as DataBoundary | undefined;
-  const routingOutcomeParam = getParam(resolvedSearchParams?.route_outcome);
-  const routingOutcomeFilter =
-    routingOutcomeParam === "selected" || routingOutcomeParam === "denied"
-      ? routingOutcomeParam
-      : undefined;
   // ---- Organization gate ----------------------------------------------------
   // An org must be selected before entering the console; all data is scoped to
   // the selected org's project. No org in the URL → show the org picker.
@@ -597,7 +529,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // and recovering. Treating org_id as an alias makes that class of link harmless.
   const requestedOrgId =
     getParam(resolvedSearchParams?.org) || getParam(resolvedSearchParams?.org_id);
-  const [orgs, observability] = await Promise.all([fetchOrgs(), observabilityPromise]);
+  const orgs = await fetchOrgs();
   const selectedOrg = requestedOrgId
     ? orgs.items.find((o) => o.org_id === requestedOrgId)
     : undefined;
@@ -664,7 +596,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // Skills listed three servers. Data that was simply not requested rendered as a failure.
   // `needs` is the one seam that decides what a render fetches, so the packs ask it too.
   const budgetActive = needs(...BUDGET_AREA_IDS);
-  const infraActive = needs(...INFRA_AREA_IDS);
   const assuranceActive = needs(...ASSURANCE_AREA_IDS);
   // ALWAYS FETCHED, deliberately.
   //
@@ -692,7 +623,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const workforceP = fetchWorkforce(activeProjectId);
   const orgChartP = fetchOrgChart(activeProjectId);
   const budgetP = loadBudgetAreaData({ projectId: activeProjectId, active: budgetActive });
-  const infraP = loadInfraAreaData({ projectId: activeProjectId, active: infraActive });
+  // No Infra pack: Infra › Cloud reads GET /v1/infra/cloud itself (infra-observability spec §6.6),
+  // which replaced the 17-call ProviderOps fan-out this page made for System Configuration.
   const assuranceP = loadAssuranceAreaData({ projectId: activeProjectId, active: assuranceActive });
   const projectsP = fetchProjectFeed(activeProjectId);
   // Behind the 66-feed wave for no reason: these need the project id and nothing that wave
@@ -708,9 +640,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
   const [workforceData, orgChartData] = await Promise.all([workforceP, orgChartP]);
 
-  const [budgetArea, infraArea, assuranceArea] = await Promise.all([
-    budgetP, infraP, assuranceP,
-  ]);
+  const [budgetArea, assuranceArea] = await Promise.all([budgetP, assuranceP]);
   const assuranceFeed = assuranceArea.assuranceFeed;
   // The platform-ops feeds. They need the project id and `assuranceArea`, both of which exist
   // here — so waiting until after the 66-feed wave cost a third round trip for nothing.
@@ -729,16 +659,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fetchReleaseStatus(activeProjectId, needs("portfolio")),
     fetchReleaseBoard(activeProjectId, needs("portfolio")),
     fetchReleases(activeProjectId, needs("portfolio")),
-    fetchWorkerAutoscalingStatus(activeProjectId, needs("infra")),
-    fetchWorkerAutoscalingHistory(activeProjectId, 20, needs("infra")),
     fetchTokenScorecard(activeProjectId, undefined, needs("budget")),
     fetchTokenConsumption(activeProjectId, 24, needs("budget")),
     fetchTokenPolicies(activeProjectId, needs("budget")),
     fetchTokenRecommendations(activeProjectId, undefined, needs("budget")),
-    fetchObservabilitySuiteFeed(activeProjectId, obsHost, needs("monitoring")),
     fetchKnowledgeGraphFeed(activeProjectId, needs("reliability")),
-    fetchCICDCatalog(needs("delivery")),
-    fetchCICDStatus(activeProjectId, needs("delivery")),
     fetchLiveJobsFeed(activeProjectId, 12, needs("work")),
     fetchQaScorecardFeed(activeProjectId, needs("reports")),
   ]);
@@ -759,15 +684,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     packs,
     roles,
     agentModules,
-    entitlements,
-    routingLogs,
     skills,
-    providerOps,
-    infraFabric,
     githubOperations,
     repoActivity,
     receipts,
-    infrastructureResources,
     budgetStatus,
     budgetIntensity,
     canaryRun,
@@ -785,7 +705,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     breakGlassGrants,
     report,
     agentRuns,
-    mcpServers,
     taskOutputs,
     capabilities,
     meetingRooms,
@@ -823,22 +742,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchPackFeed(activeProjectId),
       fetchRoleFeed(activeProjectId),
       fetchAgentModuleFeed(activeProjectId, needs("org")),
-      fetchEntitlementFeed(activeProjectId),
-      fetchRoutingLogFeed(activeProjectId, 8, {
-        provider: routingProviderFilter,
-        budget_state: routingBudgetFilter,
-        data_boundary: routingBoundaryFilter,
-        selected_only: routingOutcomeFilter === "selected" ? true : undefined,
-        denied_only: routingOutcomeFilter === "denied" ? true : undefined,
-      }, needs("infra")),
       fetchSkillFeed(activeProjectId),
-      Promise.resolve(infraArea.providerOps),
-      fetchInfraFabricFeed(activeProjectId, needs("infra")),
       // Twelve and thirty sub-requests respectively, both read only by data-area="github".
       fetchGitHubOperationsFeed(activeProjectId, needs("github")),
       fetchRepoActivity(activeProjectId, 30, needs("github")),
       fetchReceiptFeed(activeProjectId, 100),
-      Promise.resolve(infraArea.infrastructureResources),
       Promise.resolve(budgetArea.budgetStatus),
       Promise.resolve(budgetArea.budgetIntensity),
       fetchLatestCanary(activeProjectId, needs("ops")),
@@ -869,9 +777,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       ),
       fetchAuthSession(),
       fetchBreakGlassGrantFeed(activeProjectId, needs("org")),
-      fetchReportSummary(activeProjectId, needs("infra", "ops", "reports")),
+      fetchReportSummary(activeProjectId, needs("ops", "reports")),
       fetchAgentRuns(activeProjectId, needs("work")),
-      Promise.resolve(infraArea.mcpServers),
       fetchTaskOutputs(activeProjectId, needs("work")),
       fetchCapabilities(activeProjectId),
       fetchMeetingRooms(activeProjectId, needs("code_tasks", "meetings")),
@@ -922,20 +829,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     releaseStatus,
     releaseBoard,
     releasePlans,
-    workerAutoscalingStatus,
-    workerAutoscalingHistory,
     tokenScorecard,
     tokenConsumption,
     tokenPolicies,
     tokenRecommendations,
-    observabilitySuiteFeed,
     knowledgeGraphFeed,
-    cicdCatalog,
-    cicdStatus,
     liveJobs,
     qaScorecard,
   ] = await platformOpsWaveP;
-
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
@@ -1711,1123 +1612,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <code className="mono">
                       {allocation.parentAllocationId ?? allocation.id}
                     </code>
-                  </div>
-                ))}
-              </div>
-            )}
-          </article>
-        </section>
-        ) : null}
-
-        {shows("infra") ? (
-        <section className="panel-stack" data-area="infra" aria-label="MCP servers">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">MCP Servers</span>
-              <h2>Registered tool backends the agent can call — governed by policy, budget, and receipts.</h2>
-            </div>
-          </div>
-          {/* THE SHARED MCP PANEL, in summary: status from the same registry every screen
-              reads, and a link to where servers are managed. This said "Register one via POST
-              /v1/mcp/servers" — an API call, on an operator's screen — and showed the three
-              seeded servers as enabled while none of them answered. */}
-          {/* ONE HOME FOR MCP SERVERS: Skills & MCP › Library. This is a link to it. */}
-          {mcpServers.apiReachable ? (
-            <a className="kit-link" href="?area=skills&tab=library&lib=mcp" data-testid="infra-mcp-link">
-              MCP servers · {(mcpServers.items as Array<{ enabled?: boolean; reachable?: boolean | null;
-                                                         trusted?: boolean }>)
-                .filter((s) => s.enabled !== false && s.reachable === true && s.trusted).length} ready ↗
-            </a>
-          ) : (
-            <p className="detail">{mcpServers.blockedReason ?? "MCP registry unavailable."}</p>
-          )}
-        </section>
-        ) : null}
-
-        {shows("infra") ? (
-        <section className="panel-stack">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow" data-area="infra">ProviderOps</span>
-              <h2>Elastic Resource Plane for real provider assets.</h2>
-            </div>
-            <p className="status-meta">
-              Provider APIs stay behind Resource Plane gates: ChangeSet, policy,
-              budget, approval, receipt, reconciliation.
-            </p>
-          </div>
-
-          <ProviderConfigurationSuite
-            feed={providerOps}
-            projectId={activeProjectId}
-            actor={activeActorId}
-            canManage={
-              activeActor?.status === "active" &&
-              activeActor.permissions.includes("providerops_manage")
-            }
-            events={events.items}
-          />
-
-          <InfraFabricPanel feed={infraFabric} />
-
-          <WorkerAutoscalingPanel
-            feed={workerAutoscalingStatus}
-            history={workerAutoscalingHistory}
-          />
-
-          {providerOps.apiReachable ? (
-            <>
-              <div className="stack-grid">
-                <article className="stack-card" id="provider-resources">
-                  <h3>Resource Explorer</h3>
-                  <div className="button-stack">
-                    <ActionForm action={syncProviderResourcesAction}>
-                      <input type="hidden" name="project_id" value={activeProjectId} />
-                      <input type="hidden" name="actor" value={activeActorId} />
-                      <SubmitButton className="button secondary" type="submit">
-                        Sync all providers
-                      </SubmitButton>
-                    </ActionForm>
-                    <ActionForm action={runResourceJanitorAction} className="composer compact">
-                      <input type="hidden" name="project_id" value={activeProjectId} />
-                      <input type="hidden" name="actor" value={activeActorId} />
-                      <label className="field">
-                        <span>Janitor provider scope</span>
-                        <select className="input" name="provider_account_id">
-                          <option value="">All provider accounts</option>
-                          {providerOps.providerAccounts.map((account) => (
-                            <option key={account.id} value={account.id}>
-                              {account.provider} / {account.accountLabel}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Max cleanup candidates</span>
-                        <input
-                          className="input"
-                          name="max_candidates"
-                          type="number"
-                          min={1}
-                          max={100}
-                          defaultValue={10}
-                        />
-                      </label>
-                      <SubmitButton className="button secondary" type="submit">
-                        Run Resource Janitor
-                      </SubmitButton>
-                      <p className="detail">
-                        Creates a report artifact and approval-required cleanup
-                        ChangeSets. It never deletes production resources or calls
-                        providers directly.
-                      </p>
-                    </ActionForm>
-                  </div>
-                  {providerOps.resources.length === 0 ? (
-                    <p className="detail">
-                      No external resources have been synced for this project.
-                    </p>
-                  ) : (
-                    <div className="feed-list">
-                      {providerOps.resources.slice(0, 8).map((resource) => (
-                        <div className="feed-row" key={resource.id}>
-                          <div>
-                            <h4>{resource.name}</h4>
-                            <p className="detail">
-                              {resource.provider} {resource.resourceType} /{" "}
-                              {resource.state} / {resource.ownership}
-                            </p>
-                            <p className="detail">
-                              {resource.environment} / health{" "}
-                              {resource.healthStatus} / cost{" "}
-                              {resource.costConfidence}
-                            </p>
-                            <p className="detail">
-                              Last seen {formatDateTime(resource.lastSeenAt)}
-                            </p>
-                          </div>
-                          <code className="mono">{resource.externalId}</code>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </article>
-
-                <article className="stack-card" id="provider-scaling">
-                  <h3>Budget-Aware Autoscaler</h3>
-                  <ActionForm action={upsertWorkerPoolAction} className="composer compact">
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Pool key</span>
-                        <input
-                          className="input"
-                          name="pool_key"
-                          placeholder="local-default"
-                          required
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Kind</span>
-                        <select className="input" name="kind" required>
-                          <option value="local">Local</option>
-                          <option value="cloud">Cloud</option>
-                        </select>
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Provider account for cloud pools</span>
-                      <select className="input" name="provider_account_id">
-                        <option value="">No provider account</option>
-                        {providerOps.providerAccounts.map((account) => (
-                          <option key={account.id} value={account.id}>
-                            {account.provider} / {account.accountLabel}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Current workers</span>
-                        <input
-                          className="input"
-                          name="current_workers"
-                          type="number"
-                          min={0}
-                          defaultValue={0}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Desired workers</span>
-                        <input
-                          className="input"
-                          name="desired_workers"
-                          type="number"
-                          min={0}
-                          defaultValue={0}
-                        />
-                      </label>
-                    </div>
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Min workers</span>
-                        <input
-                          className="input"
-                          name="min_workers"
-                          type="number"
-                          min={0}
-                          defaultValue={0}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Max workers</span>
-                        <input
-                          className="input"
-                          name="max_workers"
-                          type="number"
-                          min={0}
-                          defaultValue={2}
-                        />
-                      </label>
-                    </div>
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Queue depth per worker</span>
-                        <input
-                          className="input"
-                          name="max_queue_depth_per_worker"
-                          type="number"
-                          min={1}
-                          defaultValue={5}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Hourly cost micros</span>
-                        <input
-                          className="input"
-                          name="cost_per_worker_hour_usd_micros"
-                          type="number"
-                          min={0}
-                          defaultValue={0}
-                        />
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Capabilities</span>
-                      <textarea
-                        className="textarea"
-                        name="capabilities"
-                        rows={2}
-                        placeholder={"One capability per line\nsoftware_factory.propose_pr"}
-                      />
-                    </label>
-                    <SubmitButton className="button secondary" type="submit">
-                      Register worker pool
-                    </SubmitButton>
-                  </ActionForm>
-
-                  <ActionForm action={runAutoscalerPlanAction} className="composer compact">
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <label className="field">
-                      <span>Worker pool</span>
-                      <select className="input" name="worker_pool_id">
-                        <option value="">Default local pool</option>
-                        {providerOps.workerPools.map((pool) => (
-                          <option key={pool.id} value={pool.id}>
-                            {pool.kind} / {pool.poolKey} / desired{" "}
-                            {pool.desiredWorkers}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field checkbox-field">
-                      <span>Allow cloud spillover proposal</span>
-                      <input
-                        name="cloud_spillover_enabled"
-                        type="checkbox"
-                        value="true"
-                      />
-                    </label>
-                    <SubmitButton className="button secondary" type="submit">
-                      Run autoscaler review
-                    </SubmitButton>
-                    <p className="detail">
-                      Local pool desired capacity may change immediately. Cloud
-                      scale-up is held as a BudgetReservation-backed ChangeSet for
-                      approval.
-                    </p>
-                  </ActionForm>
-
-                  {providerOps.workerPools.length === 0 ? (
-                    <p className="detail">
-                      No worker pools registered yet. Running autoscaler review can
-                      create the default local pool.
-                    </p>
-                  ) : (
-                    <div className="feed-list">
-                      {providerOps.workerPools.slice(0, 4).map((pool) => (
-                        <div className="feed-row" key={pool.id}>
-                          <div>
-                            <h4>{pool.poolKey}</h4>
-                            <p className="detail">
-                              {pool.kind} / current {pool.currentWorkers} /
-                              desired {pool.desiredWorkers} / max{" "}
-                              {pool.maxWorkers}
-                            </p>
-                            <p className="detail">
-                              Queue per worker {pool.maxQueueDepthPerWorker} /
-                              hourly cost{" "}
-                              {formatMicros(pool.costPerWorkerHourUsdMicros)}
-                            </p>
-                          </div>
-                          <code className="mono">{pool.provider ?? pool.status}</code>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {providerOps.scalePlans.length > 0 ? (
-                    <div className="feed-list">
-                      {providerOps.scalePlans.slice(0, 4).map((plan) => (
-                        <div className="feed-row" key={plan.id}>
-                          <div>
-                            <h4>
-                              {plan.status} / {titleCaseToken(plan.triggerReason)}
-                            </h4>
-                            <p className="detail">
-                              Queue {plan.queueDepth} / desired{" "}
-                              {plan.desiredWorkersBefore} to{" "}
-                              {plan.desiredWorkersAfter} / target{" "}
-                              {plan.targetWorkers}
-                            </p>
-                            <p className="detail">
-                              Budget {plan.budgetState} / hourly delta{" "}
-                              {formatMicros(plan.estimatedHourlyDeltaUsdMicros)}
-                            </p>
-                          </div>
-                          <code className="mono">
-                            {plan.changesetId ?? plan.decisionId ?? plan.id}
-                          </code>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-
-                <article className="stack-card">
-                  <h3>ChangeSet Review</h3>
-                  <ActionForm action={createChangeSetAction} className="composer compact">
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <label className="field">
-                      <span>Provider account</span>
-                      <select className="input" name="provider_account_id">
-                        <option value="">No provider account</option>
-                        {providerOps.providerAccounts.map((account) => (
-                          <option key={account.id} value={account.id}>
-                            {account.provider} / {account.accountLabel}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Title</span>
-                      <input
-                        className="input"
-                        name="title"
-                        placeholder="Create staging DNS record"
-                        required
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Summary</span>
-                      <textarea
-                        className="textarea"
-                        name="summary"
-                        rows={2}
-                        placeholder="Explain the provider change and expected impact."
-                        required
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Operations JSON</span>
-                      <textarea
-                        className="textarea"
-                        name="operations_json"
-                        rows={6}
-                        placeholder={'[{"skill_id":"cloudflare.dns.record.upsert","action":"cloudflare.dns.record.upsert","resource_type":"dns_record","risk_tier":2,"production_affecting":false}]'}
-                        required
-                      />
-                    </label>
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Expected cost micros</span>
-                        <input
-                          className="input"
-                          name="expected_cost_usd_micros"
-                          type="number"
-                          min={0}
-                          defaultValue={0}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Risk tier</span>
-                        <input
-                          className="input"
-                          name="risk_tier"
-                          type="number"
-                          min={1}
-                          max={4}
-                          defaultValue={2}
-                        />
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Rollback plan</span>
-                      <textarea
-                        className="textarea"
-                        name="rollback_plan"
-                        rows={3}
-                        placeholder={"One rollback step per line\nDelete DNS record"}
-                        required
-                      />
-                    </label>
-                    <SubmitButton className="button secondary" type="submit">
-                      Create ChangeSet
-                    </SubmitButton>
-                  </ActionForm>
-
-                  {providerOps.changeSets.length === 0 ? (
-                    <p className="detail">No Resource Plane ChangeSets yet.</p>
-                  ) : (
-                    <div className="feed-list">
-                      {providerOps.changeSets.map((changeSet) => (
-                        <div className="feed-row" key={changeSet.id}>
-                          <div>
-                            <h4>{changeSet.title}</h4>
-                            <p className="detail">
-                              {changeSet.status} / risk {changeSet.riskTier} /{" "}
-                              {formatMicros(changeSet.expectedCostUsdMicros)}
-                            </p>
-                            <p className="detail">
-                              {changeSet.operations.length} operation
-                              {changeSet.operations.length === 1 ? "" : "s"} /{" "}
-                              {changeSet.reservationId ?? "no reservation"}
-                            </p>
-                            {changeSet.failureReason ? (
-                              <p className="detail">
-                                Failure: {changeSet.failureReason}
-                              </p>
-                            ) : null}
-                          </div>
-                          <div className="button-stack">
-                            {changeSet.status === "pending_approval" ? (
-                              <ActionForm action={approveChangeSetAction}>
-                                <input
-                                  type="hidden"
-                                  name="changeset_id"
-                                  value={changeSet.id}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="project_id"
-                                  value={activeProjectId}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="actor"
-                                  value={activeActorId}
-                                />
-                                <SubmitButton className="button secondary" type="submit">
-                                  Approve
-                                </SubmitButton>
-                              </ActionForm>
-                            ) : null}
-                            {changeSet.status === "approved" ? (
-                              <ActionForm action={applyChangeSetAction}>
-                                <input
-                                  type="hidden"
-                                  name="changeset_id"
-                                  value={changeSet.id}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="project_id"
-                                  value={activeProjectId}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="actor"
-                                  value={activeActorId}
-                                />
-                                <SubmitButton className="button secondary" type="submit">
-                                  Apply
-                                </SubmitButton>
-                              </ActionForm>
-                            ) : (
-                              <code className="mono">{changeSet.id}</code>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </article>
-
-                <article className="stack-card">
-                  <h3>Deployment Registry</h3>
-                  <ActionForm
-                    action={upsertDeploymentEnvironmentPolicyAction}
-                    className="composer compact"
-                  >
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Environment policy</span>
-                        <select className="input" name="environment" required>
-                          <option value="staging">Staging</option>
-                          <option value="production">Production</option>
-                          <option value="preview">Preview</option>
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Runtime mode</span>
-                        <select className="input" name="runtime_mode" required>
-                          <option value="metadata_only">Metadata only</option>
-                          <option value="preview_allowed">Preview allowed</option>
-                          <option value="staging_allowed">Staging allowed</option>
-                          <option value="production_allowed">
-                            Production allowed
-                          </option>
-                          <option value="disabled">Disabled</option>
-                        </select>
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Allowed target kinds</span>
-                      <textarea
-                        className="textarea"
-                        name="allowed_target_kinds"
-                        rows={2}
-                        placeholder={"One target kind per line\ndigitalocean_app"}
-                      />
-                    </label>
-                    <div className="metric-row">
-                      <label>
-                        <input
-                          type="checkbox"
-                          name="requires_change_set"
-                          defaultChecked
-                        />{" "}
-                        ChangeSet
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          name="requires_budget_reservation"
-                          defaultChecked
-                        />{" "}
-                        BudgetReservation
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          name="requires_approval"
-                          defaultChecked
-                        />{" "}
-                        Approval
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          name="requires_health_check"
-                          defaultChecked
-                        />{" "}
-                        Health check
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          name="requires_rollback_plan"
-                          defaultChecked
-                        />{" "}
-                        Rollback plan
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Rollout notes</span>
-                      <textarea
-                        className="textarea"
-                        name="rollout_notes"
-                        rows={2}
-                        placeholder="Why this environment is allowed to perform provider-backed rollouts."
-                      />
-                    </label>
-                    <SubmitButton className="button secondary" type="submit">
-                      Save environment policy
-                    </SubmitButton>
-                    <p className="detail">
-                      Provider-backed staging and production runs stay blocked
-                      until an active environment policy allows the runtime mode
-                      and required gates.
-                    </p>
-                  </ActionForm>
-
-                  {providerOps.deploymentPolicies.length > 0 ? (
-                    <div className="feed-list">
-                      {providerOps.deploymentPolicies.map((policy) => (
-                        <div className="feed-row" key={policy.id}>
-                          <div>
-                            <h4>
-                              {policy.environment} / {policy.runtimeMode}
-                            </h4>
-                            <p className="detail">
-                              Target kinds:{" "}
-                              {policy.allowedTargetKinds.length > 0
-                                ? policy.allowedTargetKinds.join(", ")
-                                : "all"}
-                            </p>
-                            <p className="detail">
-                              Gates:{" "}
-                              {[
-                                policy.requiresChangeSet ? "ChangeSet" : null,
-                                policy.requiresBudgetReservation
-                                  ? "BudgetReservation"
-                                  : null,
-                                policy.requiresApproval ? "approval" : null,
-                                policy.requiresHealthCheck ? "health" : null,
-                                policy.requiresRollbackPlan ? "rollback" : null,
-                              ]
-                                .filter(Boolean)
-                                .join(", ") || "none"}
-                            </p>
-                          </div>
-                          <code className="mono">{policy.status}</code>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="detail">
-                      No deployment environment policies configured yet.
-                    </p>
-                  )}
-
-                  <ActionForm
-                    action={createDeploymentTargetAction}
-                    className="composer compact"
-                  >
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>App name</span>
-                        <input
-                          className="input"
-                          name="app_name"
-                          placeholder="BOSS"
-                          required
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Repo</span>
-                        <input
-                          className="input"
-                          name="repo"
-                          placeholder="owner/repository"
-                          required
-                        />
-                      </label>
-                    </div>
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Environment</span>
-                        <select className="input" name="environment" required>
-                          <option value="local">Local</option>
-                          <option value="preview">Preview</option>
-                          <option value="staging">Staging</option>
-                          <option value="production">Production</option>
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Provider account</span>
-                        <select className="input" name="provider_account_id">
-                          <option value="">No provider account</option>
-                          {providerOps.providerAccounts.map((account) => (
-                            <option key={account.id} value={account.id}>
-                              {account.provider} / {account.accountLabel}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Target kind</span>
-                        <input
-                          className="input"
-                          name="target_kind"
-                          placeholder="digitalocean_app"
-                          required
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Target ref</span>
-                        <input
-                          className="input"
-                          name="target_ref"
-                          placeholder="app-id-or-service-name"
-                          required
-                        />
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Domains</span>
-                      <textarea
-                        className="textarea"
-                        name="domains"
-                        rows={2}
-                        placeholder={"One domain per line\nstaging.example.com"}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Secret refs</span>
-                      <textarea
-                        className="textarea"
-                        name="secret_refs"
-                        rows={2}
-                        placeholder={"One secret ref per line\nsec_database_url"}
-                      />
-                    </label>
-                    <SubmitButton className="button secondary" type="submit">
-                      Register deployment target
-                    </SubmitButton>
-                  </ActionForm>
-
-                  <ActionForm action={createDeploymentRunAction} className="composer compact">
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <label className="field">
-                      <span>Deployment target</span>
-                      <select className="input" name="deployment_target_id" required>
-                        <option value="">Select target</option>
-                        {providerOps.deploymentTargets.map((target) => (
-                          <option key={target.id} value={target.id}>
-                            {target.appName} / {target.environment} /{" "}
-                            {target.targetKind}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Commit/ref</span>
-                        <input
-                          className="input"
-                          name="commit_ref"
-                          placeholder="git sha or image tag"
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Expected cost micros</span>
-                        <input
-                          className="input"
-                          name="expected_cost_usd_micros"
-                          type="number"
-                          min={0}
-                          defaultValue={0}
-                        />
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Budget reservation id</span>
-                      <input
-                        className="input"
-                        name="reservation_id"
-                        placeholder="Required for spendy deployment runs"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Release packet JSON</span>
-                      <textarea
-                        className="textarea"
-                        name="release_packet_json"
-                        rows={3}
-                        placeholder='{"review_packet_id":"art_...","ci_status":"passed"}'
-                      />
-                    </label>
-                    <SubmitButton className="button secondary" type="submit">
-                      Plan deployment run
-                    </SubmitButton>
-                    <p className="detail">
-                      Provider deployments are modeled as ChangeSets. Health checks
-                      run only after the ChangeSet is applied, or immediately for
-                      local targets with no provider write.
-                    </p>
-                  </ActionForm>
-
-                  {providerOps.deploymentTargets.length === 0 ? (
-                    <p className="detail">No deployment targets registered yet.</p>
-                  ) : (
-                    <div className="feed-list">
-                      {providerOps.deploymentTargets.map((target) => (
-                        <div className="feed-row" key={target.id}>
-                          <div>
-                            <h4>
-                              {target.appName} / {target.environment}
-                            </h4>
-                            <p className="detail">
-                              {target.repo} / {target.targetKind} / {target.status}
-                            </p>
-                            <p className="detail">
-                              Domains:{" "}
-                              {target.domains.length > 0
-                                ? target.domains.join(", ")
-                                : "none"}
-                            </p>
-                          </div>
-                          <code className="mono">{target.targetRef}</code>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {providerOps.deploymentRuns.length > 0 ? (
-                    <div className="feed-list">
-                      {providerOps.deploymentRuns.slice(0, 5).map((run) => (
-                        <div className="feed-row" key={run.id}>
-                          <div>
-                            <h4>
-                              {run.appName} / {run.environment} / {run.status}
-                            </h4>
-                            <p className="detail">
-                              {run.repo} / {run.targetKind} /{" "}
-                              {run.commitRef ?? "no ref"}
-                            </p>
-                            <p className="detail">
-                              ChangeSet {run.changesetId ?? "none"} / health{" "}
-                              {run.healthArtifactId ?? "not checked"}
-                            </p>
-                            {run.failureReason ? (
-                              <p className="detail">
-                                Failure: {run.failureReason}
-                              </p>
-                            ) : null}
-                          </div>
-                          <div className="button-stack">
-                            <ActionForm action={runDeploymentHealthCheckAction}>
-                              <input
-                                type="hidden"
-                                name="deployment_run_id"
-                                value={run.id}
-                              />
-                              <input
-                                type="hidden"
-                                name="project_id"
-                                value={activeProjectId}
-                              />
-                              <input
-                                type="hidden"
-                                name="actor"
-                                value={activeActorId}
-                              />
-                              <SubmitButton className="button secondary" type="submit">
-                                Run health checks
-                              </SubmitButton>
-                            </ActionForm>
-                            <code className="mono">
-                              {run.rollbackArtifactId ?? run.releaseArtifactId ?? run.id}
-                            </code>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="section-heading">
-                    <div>
-                      <h3>Promotion timeline</h3>
-                      <p className="detail">
-                        Pipeline verdict → staging → health gate → production → rollout.
-                      </p>
-                    </div>
-                  </div>
-                  <DeploymentPromotionTimeline
-                    promotions={providerOps.deploymentPromotions}
-                  />
-                </article>
-
-                <article className="stack-card" id="provider-health">
-                  <h3>Health, Drift, and Receipts</h3>
-                  <div className="feed-list">
-                    {providerOps.providerHealth.slice(0, 4).map((health) => (
-                      <div className="feed-row" key={health.id}>
-                        <div>
-                          <h4>{health.provider}</h4>
-                          <p className="detail">
-                            {health.status} / API{" "}
-                            {health.apiAvailable ? "available" : "unavailable"}
-                          </p>
-                          <p className="detail">
-                            Rate limit {health.rateLimitStatus} / cap{" "}
-                            {health.usageCapStatus}
-                          </p>
-                          <p className="detail">
-                            Billing {health.billingStatus ?? "unknown"} /
-                            confidence {health.billingConfidence ?? "unknown"}
-                            {health.billingMessage
-                              ? ` — ${health.billingMessage}`
-                              : ""}
-                          </p>
-                        </div>
-                        <code className="mono">
-                          {formatDateTime(health.lastCheckedAt)}
-                        </code>
-                      </div>
-                    ))}
-                    {providerOps.driftReports.slice(0, 3).map((report) => (
-                      <div className="feed-row" key={report.id}>
-                        <div>
-                          <h4>{titleCaseToken(report.classification)}</h4>
-                          <p className="detail">{report.summary}</p>
-                          <p className="detail">
-                            unmanaged {report.unmanagedCount} / orphaned{" "}
-                            {report.orphanedCount} / security{" "}
-                            {report.securityImpactingCount}
-                          </p>
-                        </div>
-                        <code className="mono">{report.id}</code>
-                      </div>
-                    ))}
-                    {providerOps.resourceReceipts.slice(0, 4).map((receipt) => (
-                      <div className="feed-row" key={receipt.id}>
-                        <div>
-                          <h4>{receipt.action}</h4>
-                          <p className="detail">
-                            {receipt.provider} / {receipt.resourceType} /{" "}
-                            {receipt.status}
-                          </p>
-                          <p className="detail">
-                            {receipt.providerRef ?? receipt.dedupeKey}
-                          </p>
-                        </div>
-                        <code className="mono">
-                          {receipt.changesetId ?? receipt.id}
-                        </code>
-                      </div>
-                    ))}
-                    {providerOps.resourceReceipts.length === 0 ? (
-                      <p className="detail">
-                        No resource receipts yet. Receipts prove provider
-                        actions; they are not invoices and do not imply $0.00
-                        spend.
-                      </p>
-                    ) : null}
-                    {providerOps.providerHealth.length === 0 &&
-                    providerOps.driftReports.length === 0 &&
-                    providerOps.resourceReceipts.length === 0 ? (
-                      <p className="detail">
-                        No ProviderOps health or drift records yet.
-                      </p>
-                    ) : null}
-                  </div>
-                </article>
-
-                <article className="stack-card" id="provider-finops">
-                  <h3>Cost and Reconciliation Ledger</h3>
-                  {(() => {
-                    const honesty = describeSpendHonesty({
-                      costs: providerOps.costs,
-                      health: providerOps.providerHealth,
-                      runs: providerOps.reconciliationRuns,
-                    });
-                    return (
-                      <p className="detail" data-testid="provider-ledger-honesty">
-                        {honesty.label}
-                        {honesty.amountUsdMicros == null
-                          ? " — "
-                          : ` ${formatMicros(honesty.amountUsdMicros)} — `}
-                        {honesty.helper}
-                      </p>
-                    );
-                  })()}
-                  <div className="feed-list">
-                    {providerOps.costAnomalies.slice(0, 4).map((anomaly) => (
-                      <div className="feed-row" key={anomaly.id}>
-                        <div>
-                          <h4>
-                            {anomaly.provider} / {titleCaseToken(anomaly.severity)}{" "}
-                            anomaly
-                          </h4>
-                          <p className="detail">{anomaly.summary}</p>
-                          <p className="detail">
-                            threshold {formatMicros(anomaly.thresholdUsdMicros)} /
-                            observed {formatMicros(anomaly.amountUsdMicros)}
-                            {anomaly.decisionId
-                              ? ` / decision ${anomaly.decisionId}`
-                              : ""}
-                          </p>
-                        </div>
-                        <code className="mono">{anomaly.status}</code>
-                      </div>
-                    ))}
-                    {providerOps.costs.slice(0, 4).map((cost) => (
-                      <div className="feed-row" key={cost.id}>
-                        <div>
-                          <h4>
-                            {cost.provider} / {cost.category}
-                          </h4>
-                          <p className="detail">
-                            {cost.confidence === "unknown"
-                              ? "amount unknown"
-                              : formatMicros(cost.amountUsdMicros)}{" "}
-                            / {cost.costLayer} / {cost.confidence}
-                          </p>
-                          <p className="detail">
-                            {cost.sourceRef ?? formatDateTime(cost.createdAt)}
-                          </p>
-                        </div>
-                        <code className="mono">{cost.id}</code>
-                      </div>
-                    ))}
-                    {providerOps.reconciliationRuns.slice(0, 4).map((run) => (
-                      <div className="feed-row" key={run.id}>
-                        <div>
-                          <h4>
-                            {run.provider ?? "all providers"} / {run.status}
-                          </h4>
-                          <p className="detail">
-                            {run.resourcesSeen} resources seen /{" "}
-                            {run.resourcesChanged} changed / {run.costsSeen} cost
-                            events / billing {run.billingStatus ?? "unknown"}
-                          </p>
-                          <p className="detail">
-                            Started by {run.startedBy} at{" "}
-                            {formatDateTime(run.startedAt)}
-                          </p>
-                          {run.billingMessage ? (
-                            <p className="detail">{run.billingMessage}</p>
-                          ) : null}
-                          {run.inventorySnapshotArtifactId ? (
-                            <p className="detail">
-                              Inventory snapshot: {run.inventorySnapshotArtifactId}
-                            </p>
-                          ) : null}
-                        </div>
-                        <code className="mono">{run.id}</code>
-                      </div>
-                    ))}
-                    {providerOps.costAnomalies.length === 0 &&
-                    providerOps.costs.length === 0 &&
-                    providerOps.reconciliationRuns.length === 0 ? (
-                      <p className="detail">
-                        No provider cost or reconciliation records yet. Empty is
-                        not $0.00.
-                      </p>
-                    ) : null}
-                  </div>
-                </article>
-              </div>
-            </>
-          ) : null}
-        </section>
-        ) : null}
-
-        {shows("infra") ? (
-        <section className="panel-stack">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow" data-area="infra">Infrastructure Resources</span>
-              <h2>Receipt-backed droplets with TTL and janitor visibility.</h2>
-            </div>
-            <p className="status-meta">
-              From BOSS&apos;s resource ledger for project {activeProjectId} — every row has a receipt.
-            </p>
-          </div>
-
-          <article className="stack-card">
-            {!infrastructureResources.apiReachable ? (
-              <p className="detail">
-                {infrastructureResources.blockedReason ??
-                  "Infrastructure resource API is unavailable."}
-              </p>
-            ) : infrastructureResources.items.length === 0 ? (
-              <p className="detail">
-                No provisioned infrastructure resources are currently recorded for
-                this project.
-              </p>
-            ) : (
-              <div className="feed-list">
-                {infrastructureResources.items.map((resource) => (
-                  <div className="feed-row" key={resource.id}>
-                    <div>
-                      <h4>
-                        {resource.resourceName} / {resource.status}
-                      </h4>
-                      <p className="detail">
-                        {resource.provider} {resource.resourceType} in{" "}
-                        {resource.region} on {resource.size} / boundary{" "}
-                        {resource.dataBoundary}
-                      </p>
-                      <p className="detail">
-                        TTL {resource.ttlMinutes}m / expires{" "}
-                        {formatDateTime(resource.expiresAt)}
-                      </p>
-                      <p className="detail">
-                        {resource.providerRef ?? resource.externalResourceId}
-                      </p>
-                      {resource.terminationReason ? (
-                        <p className="detail">
-                          Termination: {resource.terminationReason}
-                          {resource.terminatedAt
-                            ? ` at ${formatDateTime(resource.terminatedAt)}`
-                            : ""}
-                        </p>
-                      ) : null}
-                    </div>
-                    <code className="mono">{resource.id}</code>
                   </div>
                 ))}
               </div>
@@ -4196,461 +2980,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {shows("infra") ? (
-        <section className="panel-stack">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow" data-area="infra">AI Capacity</span>
-              <h2>Entitlements, routing, and skill registry.</h2>
-            </div>
-            <p className="status-meta">
-              BOSS routes only across official or approved sources and logs every broker choice.
-            </p>
-          </div>
-
-          <div className="stack-grid">
-            <article className="stack-card">
-              <h3>Entitlement sources</h3>
-              {!entitlements.apiReachable ? (
-                <p className="detail">
-                  {entitlements.blockedReason ?? "Entitlement API is unavailable."}
-                </p>
-              ) : entitlements.items.length === 0 ? (
-                <p className="detail">No entitlement sources are registered.</p>
-              ) : (
-                <div className="feed-list">
-                  {entitlements.items.map((source) => {
-                    const sourceConnectionSessions =
-                      entitlements.connectionSessions.filter(
-                        (session) => session.sourceId === source.sourceId,
-                      );
-                    const supportedConnectionModes = Array.isArray(
-                      source.connectionMetadata.supported_connection_modes,
-                    )
-                      ? source.connectionMetadata.supported_connection_modes.filter(
-                          (mode): mode is string => typeof mode === "string",
-                        )
-                      : [];
-                    return (
-                    <div className="feed-row" key={source.id}>
-                      <div>
-                        <h4>{source.sourceId}</h4>
-                        <p className="detail">
-                          {source.provider} / {titleCaseToken(source.sourceKind)} /{" "}
-                          {source.effectiveStatus}
-                        </p>
-                        <p className="detail">
-                          Auth {titleCaseToken(source.authMethod)} / connection{" "}
-                          {source.connectionStatus}
-                          {source.oauthScopes.length > 0
-                            ? ` / scopes ${source.oauthScopes.join(", ")}`
-                            : ""}
-                        </p>
-                        <p className="detail">
-                          Capacity {titleCaseToken(source.capacityState)}
-                          {source.capacityResetAt
-                            ? ` / resets ${formatDateTime(source.capacityResetAt)}`
-                            : ""}
-                          {source.observedAt
-                            ? ` / observed ${formatDateTime(source.observedAt)}`
-                            : ""}
-                        </p>
-                        <p className="detail">
-                          {source.supportedModels.length > 0
-                            ? source.supportedModels.join(", ")
-                            : "No runtime-backed models"}
-                        </p>
-                        <p className="detail">{entitlementDetail(source)}</p>
-                        {["api_key", "gateway_token"].includes(
-                          source.authMethod,
-                        ) ? (
-                          <ActionForm
-                            action={uploadModelCredentialAction}
-                            className="composer compact"
-                          >
-                            <input
-                              type="hidden"
-                              name="project_id"
-                              value={activeProjectId}
-                            />
-                            <input type="hidden" name="actor" value={activeActorId} />
-                            <input
-                              type="hidden"
-                              name="source_id"
-                              value={source.sourceId}
-                            />
-                            <label className="field">
-                              <span>
-                                {source.credentialPresent
-                                  ? "Replace configured credential"
-                                  : "API or service credential"}
-                              </span>
-                              <input
-                                className="input"
-                                type="password"
-                                name="credential_value"
-                                autoComplete="new-password"
-                                placeholder="Write-only; never shown again"
-                                required
-                              />
-                            </label>
-                            <label className="field">
-                              <span>Secret backend</span>
-                              <select
-                                className="input"
-                                name="backend"
-                                defaultValue="platform_secret_store"
-                              >
-                                <option value="platform_secret_store">
-                                  Platform secret store
-                                </option>
-                                <option value="vault">Vault</option>
-                                <option value="local_runner">Local runner</option>
-                              </select>
-                            </label>
-                            <p className="detail">
-                              {source.multiTenantAllowed
-                                ? "Governed project capacity; jobs receive leases, never this value."
-                                : "Owner/single-tenant capacity; this value is never pooled."}
-                            </p>
-                            <SubmitButton className="button secondary" type="submit">
-                              {source.credentialPresent
-                                ? "Rotate credential"
-                                : "Store credential"}
-                            </SubmitButton>
-                          </ActionForm>
-                        ) : null}
-                        {source.authMethod.includes("oauth") ? (
-                          source.connectionStatus === "connected" ? (
-                            <ActionForm
-                              action={disconnectEntitlementSourceAction}
-                              className="composer compact"
-                            >
-                              <input
-                                type="hidden"
-                                name="project_id"
-                                value={activeProjectId}
-                              />
-                              <input type="hidden" name="actor" value={activeActorId} />
-                              <input
-                                type="hidden"
-                                name="source_id"
-                                value={source.sourceId}
-                              />
-                              <input
-                                type="hidden"
-                                name="reason"
-                                value="Operator disconnected official session reference from ProviderOps."
-                              />
-                              <SubmitButton className="button secondary" type="submit">
-                                Disconnect session
-                              </SubmitButton>
-                            </ActionForm>
-                          ) : (
-                            <div className="feed-list">
-                              <ActionForm
-                                action={createEntitlementConnectionSessionAction}
-                                className="composer compact"
-                              >
-                                <input
-                                  type="hidden"
-                                  name="project_id"
-                                  value={activeProjectId}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="actor"
-                                  value={activeActorId}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="source_id"
-                                  value={source.sourceId}
-                                />
-                                <label className="field">
-                                  <span>Connection mode</span>
-                                  <select
-                                    className="input"
-                                    name="connection_mode"
-                                    defaultValue={supportedConnectionModes[0] ?? ""}
-                                  >
-                                    {supportedConnectionModes.length === 0 ? (
-                                      <option value="">Official provider login</option>
-                                    ) : (
-                                      supportedConnectionModes.map((mode) => (
-                                        <option key={mode} value={mode}>
-                                          {titleCaseToken(mode)}
-                                        </option>
-                                      ))
-                                    )}
-                                  </select>
-                                </label>
-                                <textarea
-                                  className="input"
-                                  name="requested_scopes"
-                                  aria-label="Requested OAuth scopes"
-                                  defaultValue={source.oauthScopes.join("\n")}
-                                  placeholder="One OAuth scope per line"
-                                />
-                                <SubmitButton className="button secondary" type="submit">
-                                  Start official session
-                                </SubmitButton>
-                              </ActionForm>
-
-                              {sourceConnectionSessions.length === 0 ? (
-                                <p className="detail">
-                                  Start a session to get official login instructions
-                                  before recording a local session reference.
-                                </p>
-                              ) : (
-                                sourceConnectionSessions.map((session) => (
-                                  <div className="feed-row" key={session.id}>
-                                    <div>
-                                      <h4>{session.connectionMode}</h4>
-                                      <p className="detail">
-                                        {titleCaseToken(session.status)} / requested by{" "}
-                                        {session.requestedBy} /{" "}
-                                        {formatDateTime(session.createdAt)}
-                                      </p>
-                                      <p className="detail">
-                                        Login command:{" "}
-                                        <code className="mono">
-                                          {session.loginCommand ?? "official provider login"}
-                                        </code>
-                                      </p>
-                                      {typeof session.instructions.operator_action ===
-                                      "string" ? (
-                                        <p className="detail">
-                                          {session.instructions.operator_action}
-                                        </p>
-                                      ) : null}
-                                      {session.status ===
-                                      "operator_action_required" ? (
-                                        <ActionForm
-                                          action={
-                                            completeEntitlementConnectionSessionAction
-                                          }
-                                          className="composer compact"
-                                        >
-                                          <input
-                                            type="hidden"
-                                            name="project_id"
-                                            value={activeProjectId}
-                                          />
-                                          <input
-                                            type="hidden"
-                                            name="actor"
-                                            value={activeActorId}
-                                          />
-                                          <input
-                                            type="hidden"
-                                            name="session_id"
-                                            value={session.id}
-                                          />
-                                          <input
-                                            className="input"
-                                            name="connection_ref"
-                                            aria-label="Official session connection reference"
-                                            placeholder="SecretRef or local session ref"
-                                            required
-                                          />
-                                          <textarea
-                                            className="input"
-                                            name="oauth_scopes"
-                                            aria-label="OAuth scopes"
-                                            defaultValue={session.requestedScopes.join(
-                                              "\n",
-                                            )}
-                                            placeholder="One OAuth scope per line"
-                                          />
-                                          <textarea
-                                            className="input"
-                                            name="observed_capacity_json"
-                                            aria-label="Observed capacity JSON"
-                                            defaultValue={`{"capacity_state":"available"}`}
-                                            placeholder="Observed capacity JSON"
-                                          />
-                                          <SubmitButton
-                                            className="button secondary"
-                                            type="submit"
-                                          >
-                                            Complete session
-                                          </SubmitButton>
-                                        </ActionForm>
-                                      ) : null}
-                                    </div>
-                                    <code className="mono">{session.id}</code>
-                                  </div>
-                                ))
-                              )}
-                            </div>
-                          )
-                        ) : null}
-                      </div>
-                      <span
-                        className={`pill${
-                          source.effectiveStatus === "active" ? "" : " warn"
-                        }`}
-                      >
-                        {entitlementBadge(source)}
-                      </span>
-                    </div>
-                    );
-                  })}
-                </div>
-              )}
-            </article>
-
-            <article className="stack-card">
-              <h3>Model route decisions</h3>
-              <form className="input-grid" method="get">
-                <input name="project_id" type="hidden" value={activeProjectId} />
-                <label className="field">
-                  <span>Provider</span>
-                  <select
-                    className="input"
-                    defaultValue={routingProviderFilter ?? ""}
-                    name="route_provider"
-                  >
-                    <option value="">All providers</option>
-                    {Array.from(
-                      new Set(entitlements.items.map((source) => source.provider)),
-                    )
-                      .sort()
-                      .map((provider) => (
-                        <option key={provider} value={provider}>
-                          {titleCaseToken(provider)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Budget state</span>
-                  <select
-                    className="input"
-                    defaultValue={routingBudgetFilter ?? ""}
-                    name="route_budget"
-                  >
-                    <option value="">All budget states</option>
-                    {["green", "yellow", "orange", "red", "frozen"].map((state) => (
-                      <option key={state} value={state}>
-                        {titleCaseToken(state)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Data boundary</span>
-                  <select
-                    className="input"
-                    defaultValue={routingBoundaryFilter ?? ""}
-                    name="route_boundary"
-                  >
-                    <option value="">All boundaries</option>
-                    {["public", "internal", "confidential", "restricted", "local-only"].map(
-                      (boundary) => (
-                        <option key={boundary} value={boundary}>
-                          {titleCaseToken(boundary)}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Outcome</span>
-                  <select
-                    className="input"
-                    defaultValue={routingOutcomeFilter ?? ""}
-                    name="route_outcome"
-                  >
-                    <option value="">Selected and denied</option>
-                    <option value="selected">Selected only</option>
-                    <option value="denied">Denied only</option>
-                  </select>
-                </label>
-                <button className="button secondary" type="submit">
-                  Filter decisions
-                </button>
-              </form>
-              {!routingLogs.apiReachable ? (
-                <p className="detail">
-                  {routingLogs.blockedReason ?? "Route decision API is unavailable."}
-                </p>
-              ) : routingLogs.items.length === 0 ? (
-                <p className="detail">No model route decisions match these filters.</p>
-              ) : (
-                <div className="feed-list">
-                  {routingLogs.items.map((route) => (
-                    <div className="feed-row" key={route.id}>
-                      <div>
-                        <h4>{route.skillId ?? route.taskKind}</h4>
-                        <p className="detail">
-                          {route.selectedSourceId
-                            ? `${route.selectedSourceId} -> ${route.selectedModelId ?? "no model id"}`
-                            : `Denied: ${route.denialReason ?? "unknown"}`}
-                        </p>
-                        <p className="detail">
-                          {route.workloadClass} / {route.dataBoundary} /{" "}
-                          {titleCaseToken(route.budgetState)} budget /{" "}
-                          {formatDateTime(route.createdAt)}
-                        </p>
-                        <p className="detail">
-                          {route.selectedSourceId
-                            ? `Auth ${
-                                route.selectedSource &&
-                                typeof route.selectedSource.auth_method === "string"
-                                  ? titleCaseToken(route.selectedSource.auth_method)
-                                  : "Unknown"
-                              } / capacity ${
-                                route.selectedSource &&
-                                typeof route.selectedSource.capacity_state === "string"
-                                  ? titleCaseToken(route.selectedSource.capacity_state)
-                                  : "Unknown"
-                              } / ${titleCaseToken(route.routingMode)}`
-                            : routingRejectionSummary(route.rejectedSources)}
-                        </p>
-                        <p className="detail">
-                          Policy {route.policyAllowed ? "allowed" : "denied"} /{" "}
-                          {route.reservationRequired
-                            ? "BudgetReservation required"
-                            : "No reservation required by skill policy"}
-                        </p>
-                      </div>
-                      <code className="mono">{route.id}</code>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </article>
-
-            <article className="stack-card">
-              <h3>Broker skills</h3>
-              {!skills.apiReachable ? (
-                <p className="detail">
-                  {skills.blockedReason ?? "Skill API is unavailable."}
-                </p>
-              ) : skills.items.length === 0 ? (
-                <p className="detail">No broker or model skills are registered.</p>
-              ) : (
-                <div className="feed-list">
-                  {skills.items.slice(0, 6).map((skill) => (
-                    <div className="feed-row" key={skill.id}>
-                      <div>
-                        <h4>{skill.id}</h4>
-                        <p className="detail">
-                          {titleCaseToken(skill.kind)} / risk {skill.riskTier}
-                        </p>
-                      </div>
-                      <span className="pill">{titleCaseToken(skill.kind)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </article>
-          </div>
-        </section>
-        ) : null}
-
         {shows("reports") ? (
         <section className="panel-stack" data-area="reports" aria-label="Reports">
           <div className="section-head">
@@ -4884,94 +3213,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {shows("delivery") ? (
-        <section className="panel-stack" data-area="delivery" aria-label="Deployment Manager">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Deployment Manager</span>
-              <h2>Ask the agent that owns hosts, releases and rollback readiness.</h2>
-            </div>
-          </div>
-          <DeploymentManagerPanel projectId={activeProjectId} />
+        {/* INFRA AND OBSERVABILITY (infra-observability spec §4). Two screens, two questions:
+            where it runs and how it got there, and whether it is alive. Each fetches its own
+            ETag'd views client-side, scoped to the active project, and never refreshes the
+            console; nothing for them is fetched here. */}
+        {shows("infra") ? (
+        <section className="panel-stack" data-area="infra" aria-label="Infra">
+          <InfraHome projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
         ) : null}
 
-        {shows("delivery") ? (
-        <section className="panel-stack" id="hardware-manager" data-area="delivery" aria-label="Where apps install">
-          <HardwareManager projectId={activeProjectId} actor={activeActorId} />
-        </section>
-        ) : null}
-
-        {shows("delivery") ? (
-        <section className="panel-stack" data-area="delivery" aria-label="Infra">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Infra</span>
-              <h2>
-                {deliveryPipeline && !deliveryPipeline.error && !deliveryPipeline.configured
-                  ? "Nothing deploys yet — add a VM, then deploy a repository to it."
-                  : "VMs, stack targets, and governed deployments from your repositories."}
-              </h2>
-            </div>
-          </div>
-          <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
-                            deployments={recentDeployments} communityEdition
-                            actor={activeActorId} />
-        </section>
-        ) : null}
-
-        {shows("delivery") ? (
-        <section className="panel-stack" data-area="delivery" aria-label="Pipeline generators">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Pipeline generators</span>
-              <h2>Generate and validate CI config for GitHub Actions and peers.</h2>
-            </div>
-            <p className="status-meta">
-              Generated and validated here; nothing is pushed to your repository until you copy it.
-            </p>
-          </div>
-          <CICDPipelinesPanel
-            projectId={activeProjectId}
-            catalog={cicdCatalog}
-            status={cicdStatus}
-            initialRuns={cicdStatus.recent_runs ?? []}
-          />
-        </section>
-        ) : null}
-
-        {/* Monitoring is its own area: "did it ship" and "is it working" are different
-            questions asked at different times, and one page answering both buries whichever
-            you did not come for. */}
-        {shows("monitoring") ? (
-        <section className="panel-stack" data-area="monitoring" aria-label="Observability">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Observability</span>
-              <h2>
-                {(!deploymentHealth?.targets?.length && !observability?.deployed)
-                  ? "Not configured — health and dashboards appear after an app is onboarded in Infra."
-                  : "Health of what BOSS has deployed, and the dashboards behind it."}
-              </h2>
-            </div>
-          </div>
-          <MonitoringArea health={deploymentHealth} observability={observability}
-                          hostTargetId={obsHost} />
-        </section>
-        ) : null}
-
-        {shows("monitoring") ? (
-        <section className="panel-stack" data-area="monitoring" aria-label="Observability suite">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Observability suite</span>
-              <h2>Recommended OSS stack, gaps, and source health checks.</h2>
-            </div>
-            <p className="status-meta">
-              Metrics · logs · traces · visualization — project {activeProjectId}.
-            </p>
-          </div>
-          <ObservabilitySuitePanel feed={observabilitySuiteFeed} />
+        {shows("observability") ? (
+        <section className="panel-stack" data-area="observability" aria-label="Observability">
+          <ObsHome projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
         ) : null}
 

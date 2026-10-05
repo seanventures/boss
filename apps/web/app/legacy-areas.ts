@@ -22,6 +22,14 @@ const OLD_WORKFLOW_TABS: Record<string, Record<string, string>> = {
   steps: { tab: "library", lib: "steps" },
 };
 
+/** System Configuration's old `infra_view=` sub-views, and the Infra › Cloud sub-view each became
+ *  (infra-observability spec §4.1). `mcp` left the area altogether: Skills & MCP owns servers. */
+const OLD_INFRA_VIEWS: Record<string, string> = {
+  connections: "accounts", resources: "resources", scaling: "capacity", finops: "spend",
+};
+/** Parameters only the retired Infra/Observability surfaces read. */
+const INFRA_ONLY = ["infra_view", "provider_account_id"];
+
 /** Setup's old `step=` names, and the board row each one is. */
 const SETUP_STEPS: Record<string, string> = { github: "repository", model: "models" };
 
@@ -87,6 +95,53 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
     return next;
   }
 
+  // INFRA AND OBSERVABILITY (infra-observability spec §4.1). The rail's "Infra" was area
+  // `delivery` and its "Observability" was `monitoring`, while `?area=infra` was System
+  // Configuration. The ids say what the screens are now; every old link lands on its tab.
+  if (area === "delivery") {
+    const next = copyWithout(params, []);
+    next.set("area", "infra");
+    if (!next.get("view")) next.set("view", "fleet");
+    return next;
+  }
+
+  if (area === "monitoring") {
+    // `watch=<app>|<env>` (the workflow "Set up monitoring" step) is kept: Observability › Apps
+    // resolves it to that app's drawer once its rows are in hand, or to a Find for the app.
+    const next = copyWithout(params, []);
+    next.set("area", "observability");
+    if (!next.get("view")) next.set("view", "apps");
+    return next;
+  }
+
+  if (area === "infra" && params.get("infra_view") === "mcp") {
+    const next = copyWithout(params, INFRA_ONLY);
+    next.set("area", "skills");
+    next.set("tab", "library");
+    next.set("lib", "mcp");
+    return next;
+  }
+
+  if (area === "infra" && (params.get("infra_view") !== null || params.get("provider_account_id") !== null)) {
+    const next = copyWithout(params, INFRA_ONLY);
+    next.set("view", "cloud");
+    const sub = OLD_INFRA_VIEWS[params.get("infra_view") ?? ""];
+    if (sub) next.set("cloud", sub);
+    const account = params.get("provider_account_id");
+    if (account) {
+      next.set("account", account);
+      if (!next.get("cloud")) next.set("cloud", "accounts");
+    }
+    return next;
+  }
+
+  // Govern links to `?area=observability&tab=models` (activity-govern spec): `view=` is ours.
+  if (area === "observability" && params.get("tab") !== null && params.get("view") === null) {
+    const next = copyWithout(params, ["tab"]);
+    next.set("view", params.get("tab") ?? "apps");
+    return next;
+  }
+
   if (area === "delivery_workflows") {
     const tab = params.get("tab") ?? "";
     const becomes = OLD_WORKFLOW_TABS[tab];
@@ -110,6 +165,8 @@ const V2_ROUTES: Record<string, Record<string, string>> = {
   "/v2/boss": { area: "delivery_workflows", tab: "library" },
   "/v2/factory": { area: "workforce" },
   "/v2/org": { area: "workforce", view: "team" },
+  // v2 "Infra & Models" (Hosts, Apps, Models this month, Integrations) is Infra now.
+  "/v2/infra": { area: "infra" },
 };
 
 /** Who you are travels with you: the console gates on these. */
