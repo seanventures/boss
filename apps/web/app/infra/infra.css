@@ -283,3 +283,6 @@ button.inf-slot:hover { border-color: var(--accent-line); color: var(--accent-te
   .inf a[href].inf-link, .inf button.inf-link { display: inline-flex; align-items: center; }
   .inf-needs-cards { grid-template-columns: 1fr; }
 }
+
+/* Live is what is running; a newer attempt that failed is said beside it (decision 2026-10-04). */
+.inf-failed-after, .inf .inf-link.inf-failed-after { color: var(--red); font-size: 0.74rem; white-space: nowrap; }

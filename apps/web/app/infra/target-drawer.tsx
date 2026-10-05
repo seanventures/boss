@@ -256,6 +256,12 @@ function DeploySection({ t, projectId, actor, canWrite, now, refresh, onDeploy }
                onClick={(e) => { e.preventDefault(); onDeploy(last.ref); }}>{last.sha7 ?? "—"} ↗</a>
             <StateWord w={{ word: last.word, tone: last.tone }} />
             {last.finishedAt && now !== null ? <span className="inf-faint">{ago(last.finishedAt, now)}</span> : null}
+            {last.failedAfter ? (
+              <a className="inf-link inf-failed-after" href={deployHref(last.failedAfter.ref)} data-testid="inf-target-failed-after"
+                 onClick={(e) => { e.preventDefault(); onDeploy(last.failedAfter!.ref); }}>
+                Last attempt failed{now !== null ? ` · ${ago(last.failedAfter.at, now)} ago` : ""}
+              </a>
+            ) : null}
             {last.runId ? <a className="inf-link" href={buildHref(last.runId)} title="Open the build that made this"
                              onClick={(e) => { e.preventDefault(); navigate({ area: "code_tasks", build: last.runId, view: null }); }}>Build ↗</a> : null}
           </>
