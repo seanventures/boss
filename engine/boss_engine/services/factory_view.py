@@ -2624,8 +2624,9 @@ def _pr_state(run: Optional[Mapping[str, Any]], facts: Facts) -> Optional[str]:
     status = str(decision.get("status") or "")
     if status in ("approved", "merged", "executed"):
         return "merged"
-    if status in ("rejected", "cancelled", "withdrawn", "superseded"):
+    if status in ("rejected", "cancelled"):
         return "closed"
+    # `withdrawn`: a newer attempt asks about the same PR (run_decisions) — the PR is still open.
     return "open"
 
 
