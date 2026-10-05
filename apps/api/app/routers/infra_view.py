@@ -225,6 +225,9 @@ def build_infra_router(
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    #: What pressing Roll back did: planned it; a person approves it next.
+    ROLLBACK_PLANNED = "Rollback planned · Approve"
+
     def _rollback(pid: str, ref: str, claimed: Optional[str]) -> dict:
         try:
             kind, ident = infra_view._parse_ref(ref)
@@ -245,8 +248,9 @@ def build_infra_router(
                                                    actor=actor)
             except StackDeployError as exc:
                 raise _stack_error(exc)
-            return {"ref": f"stack:{deployment['id']}", "kind": "stack",
-                    "deployment": deployment}
+            new_ref = f"stack:{deployment['id']}"
+            return {"ref": new_ref, "kind": "stack", "deployment": deployment,
+                    "open": infra_view.deploy_href(new_ref), "result": ROLLBACK_PLANNED}
         if kind == "registry":
             raise HTTPException(status_code=409, detail=(
                 "A registry run rolls back through its rollout, in the deploy drawer."))
@@ -282,8 +286,11 @@ def build_infra_router(
             with begin(engine) as connection:
                 connection.execute(text("UPDATE deployment_runs SET trigger = 'rollback' "
                                         "WHERE id = :i"), {"i": new_id})
-        return {"ref": f"delivery:{new_id}", "kind": "delivery", "rollback_of": ref,
-                "redeploy_of": source, **result}
+        # A rollback is a NEW plan that waits on a person: say so, and open it where it waits.
+        new_ref = f"delivery:{new_id}"
+        return {**result, "ref": new_ref, "kind": "delivery", "rollback_of": ref,
+                "redeploy_of": source, "open": infra_view.deploy_href(new_ref),
+                "result": ROLLBACK_PLANNED}
 
     @router.post("/v1/infra/deploys/{ref}/rollback")
     def infra_deploy_rollback(ref: str, body: InfraBody):

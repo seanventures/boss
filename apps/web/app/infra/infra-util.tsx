@@ -74,7 +74,27 @@ export function Menu({ label, testId, items, tip, primary }: {
 }
 
 /** An inline error line with the API's sentence; a long one keeps its words in the tooltip. */
+/**
+ * AN ERROR IN WORDS. The API's refusals are written for whoever calls it, so they carry the
+ * ids and source files a developer needs ("ChangeSet chg_49e7… is a host deployment: approve
+ * its decision dec_… (services/governed_host_deploy.py)"). A person reads none of that: ids,
+ * paths and exception class names go, the sentence stays.
+ */
+export function inWords(error: string): string {
+  return error
+    .replace(/\s*\((?:[\w.-]+\/)+[\w.-]+\.(?:py|ts|tsx|js)\)/g, "")
+    .replace(/(?:[\w.-]+\/)+[\w.-]+\.(?:py|ts|tsx|js)\b/g, "")
+    .replace(/^(?:[A-Z]\w*(?:Error|Exception)):\s*/, "")
+    .replace(/\bChangeSet\s+[a-z]+_[0-9a-f]{6,}\b/gi, "This change")
+    .replace(/\b(?:decision|run|deployment|job|target|host)\s+[a-z]+_[0-9a-f]{6,}\b/gi, (m) => m.split(/\s+/)[0])
+    .replace(/\s*\b[a-z]{2,8}_[0-9a-f]{8,}\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,:;])/g, "$1")
+    .trim();
+}
+
 export function ErrorLine({ error, testId }: { error: string | null; testId?: string }) {
   if (!error) return null;
-  return <span className="inf-error" role="alert" data-testid={testId} title={error} data-copy="data">{error}</span>;
+  const said = inWords(error);
+  return <span className="inf-error" role="alert" data-testid={testId} title={said} data-copy="data">{said}</span>;
 }

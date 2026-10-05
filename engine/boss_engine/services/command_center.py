@@ -22,6 +22,8 @@ reading.
 """
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional
 
@@ -142,6 +144,32 @@ def step_agent(spec_step: Mapping[str, Any], step: Mapping[str, Any],
     if cap is not None and cap.captain:
         return who(cap.captain, "default")
     return {"role_key": None, "name": None, "how": "none"}
+
+
+_CODE = re.compile(r"[A-Za-z0-9_.:/-]+")
+
+
+def words_only(value: Any) -> str:
+    """A reason a person can read, or nothing: a bare code (`host_deploy_requires_approval`)
+    is for the machine that wrote it, never a card's detail line."""
+    line = _first_line(value)
+    return "" if not line or _CODE.fullmatch(line) else line
+
+
+def _rec_detail(decision: Mapping[str, Any]) -> str:
+    """What a deploy decision is about, from its recommendation: ref → host · environment."""
+    rec = decision.get("recommendation")
+    if isinstance(rec, str):
+        try:
+            import json as _j
+            rec = _j.loads(rec)
+        except ValueError:
+            rec = {}
+    if not isinstance(rec, dict) or not rec.get("host"):
+        return ""
+    ref = str(rec.get("commit_ref") or rec.get("ref") or "")
+    where = " · ".join(x for x in (str(rec.get("host")), str(rec.get("environment") or "")) if x)
+    return f"{ref[:12]} to {where}" if ref else f"To {where}"
 
 
 def _rec_reason(decision: Mapping[str, Any]) -> str:
@@ -358,8 +386,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "title": title,
             # WHY IT ASKS, in the server's words (agents-home D6) — never the approve button's
             # effect, which the card already shows on the button.
-            "detail": (hint.get("what_happened") or _first_line(decision.get("reason"))
-                       or _first_line(_rec_reason(decision)) or ""),
+            "detail": (hint.get("what_happened") or words_only(decision.get("reason"))
+                       or words_only(_rec_reason(decision)) or _rec_detail(decision) or ""),
             "what_to_do": hint.get("what_to_do"),
             "fix_area": hint.get("area"),
             "fix_label": hint.get("link_label"),

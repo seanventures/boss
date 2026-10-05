@@ -5884,6 +5884,12 @@ CREATE TABLE IF NOT EXISTS deployment_hosts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, name)
 );
+-- The host's PINNED key (services/host_key_pin.py): recorded by Verify (or, for a host verified
+-- before pinning, by its first governed deploy) and enforced with StrictHostKeyChecking=yes.
+ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS host_key_known_hosts TEXT;
+ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS host_key_fingerprint TEXT;
+ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS host_key_pinned_at TIMESTAMPTZ;
+ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS host_key_pinned_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_deployment_hosts_project
   ON deployment_hosts(project_id, status, created_at DESC);
 

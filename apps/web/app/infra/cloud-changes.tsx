@@ -14,7 +14,7 @@ import { showToast } from "../client-forms";
 import type { CloudViewProps } from "./cloud";
 import { applyChange, approveChange, createChange } from "./cloud-actions";
 import { accountOptions, dollarsToMicros, parseChange, parseOperations, type CloudChange } from "./cloud-rows";
-import { afterWrite } from "./infra-actions";
+import { afterWrite, decideDeploy } from "./infra-actions";
 import { ago, ErrorLine, localTime, useNow } from "./infra-util";
 import { Drawer, DrawerSection, Empty, Sheet, StateWord, ZoneHead } from "./kit";
 
@@ -87,12 +87,16 @@ function ChangeDrawer({ change: c, actor, poll, canWrite, onClose }: CloudViewPr
   const [json, setJson] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const act = async (kind: "approve" | "apply") => {
+  const act = async (kind: "approve" | "apply" | "approve_deploy" | "reject_deploy") => {
     setBusy(kind); setError(null);
-    const r = kind === "approve" ? await approveChange(actor, c.id) : await applyChange(actor, c.id);
+    // A deploy's change has ONE door: its decision, the same press as the deploy drawer's.
+    const r = kind === "approve" ? await approveChange(actor, c.id)
+      : kind === "apply" ? await applyChange(actor, c.id)
+      : await decideDeploy(c.decisionId as string, actor, kind === "approve_deploy" ? "approve" : "reject");
     setBusy(null);
     if (!r.ok) { setError(r.error); return; }
-    showToast("success", kind === "approve" ? "Change approved" : "Change applied");
+    showToast("success", kind === "approve" ? "Change approved" : kind === "apply" ? "Change applied"
+      : kind === "approve_deploy" ? "Deploy approved" : "Deploy rejected");
     afterWrite(poll.refresh);
   };
   return (
@@ -100,6 +104,15 @@ function ChangeDrawer({ change: c, actor, poll, canWrite, onClose }: CloudViewPr
             head={<><strong className="inf-trunc" data-copy="data" title={c.title}>{c.title}</strong><StateWord w={c.state} /></>}>
       <span className="inf-muted"><span data-copy="data">{c.account?.name ?? "No account"}</span> · Tier {c.risk} · {c.cost}</span>
       {c.summary ? <span className="inf-muted inf-trunc" data-copy="data" title={c.summary}>{c.summary}</span> : null}
+      {canWrite && c.can.approve_deploy && c.decisionId ? (
+        <div className="inf-actions">
+          <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-approve-deploy"
+                  title="Deploys it, checks its health, and rolls back if the check fails" onClick={() => void act("approve_deploy")}>
+            {busy === "approve_deploy" ? "Approving…" : "Approve deploy"}</button>
+          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-change-reject-deploy"
+                  onClick={() => void act("reject_deploy")}>{busy === "reject_deploy" ? "Rejecting…" : "Reject"}</button>
+        </div>
+      ) : null}
       {canWrite && (c.can.approve || c.can.apply) ? (
         <div className="inf-actions">
           {c.can.approve ? <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-approve"

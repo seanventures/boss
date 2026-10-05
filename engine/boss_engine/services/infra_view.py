@@ -476,6 +476,8 @@ LOG_TAIL_BYTES = 64 * 1024
 #: Deploy rail kinds, and the raw states each chip means.
 SUCCESS_STATES = ("healthy", "succeeded", "deployed", "completed")
 FAILED_STATES = ("failed", "blocked")
+#: Deploys that ended or wait without ever running: no duration, no steps to time.
+NEVER_RAN_STATES = ("rejected", "awaiting_approval", "approved", "planned", "created", "pending")
 WAITING_STATES = ("awaiting_approval", "planned", "created", "pending")
 ACTIVE_STATES = ("planned", "awaiting_approval", "approved", "running", "applying", "deploying",
                  "building", "created", "pending")
@@ -1062,8 +1064,10 @@ def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[s
     items = _guard(connection, partial, "attention",
                    lambda: attention(connection, settings, project_id), [])
     mine = [i for i in items if i.get("area") == "infra"]
-    hosts = [h for h in parts["hosts"] if h.get("status") != "retired"]
-    words = [host_word(h)["word"] for h in hosts]
+    # COUNTED FROM THE RACKS THE PAGE DRAWS — "This computer" is a rack too. Counting hosts
+    # said "2 ready" above three Ready racks.
+    words = [str((r.get("state") or {}).get("word") or "") for r in parts["racks"]
+             if str((r.get("state") or {}).get("word") or "") != "Retired"]
     body: dict[str, Any] = {
         "counts": {
             "ready": sum(1 for w in words if w == "Ready"),
@@ -1071,7 +1075,9 @@ def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[s
             "unreachable": sum(1 for w in words if w == "Unreachable"),
             "apps": len(parts["targets"]),
             "previews_live": len(parts["previews"]),
-            "needs_you": len(mine),
+            # THE ONE NEEDS-YOU RULE (command_center.attention_counts): decisions only. A
+            # failed deploy or an unreachable host is listed, and is not counted as needing you.
+            "needs_you": _needs_you_count(mine),
         },
         "preconditions": preconditions(settings, can_write=can_write),
         "attention": mine,
@@ -1082,6 +1088,12 @@ def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[s
         "partial": partial,
     }
     return _finish(body)  # type: ignore[return-value]
+
+
+def _host_key_words(host: dict[str, Any]) -> dict[str, Any]:
+    from .host_key_pin import describe
+
+    return describe(host)
 
 
 def host_detail(connection: Any, settings: Any, project_id: str, host_id: str) -> HostDetail:
@@ -1139,6 +1151,8 @@ def host_detail(connection: Any, settings: Any, project_id: str, host_id: str) -
         "findings": _findings(host.get("last_preflight") or {}),
         "checked_at": _iso(host.get("last_preflight_at")),
         "residents": (rack or {}).get("residents") or [],
+        # WHICH MACHINE BOSS WILL TALK TO: the host's own key, pinned at Verify (host_key_pin).
+        "host_key": (None if is_this else _host_key_words(host)),
         "can": {
             "adopt_key": not retired,
             "generate_key": not retired,
@@ -1172,7 +1186,8 @@ _UNION = """
   UNION ALL
   SELECT CASE WHEN d.trigger IS NULL THEN 'registry' ELSE 'delivery' END, d.id,
          d.deployment_target_id, NULL::text, d.status, d.commit_ref, d.commit_ref, d.decision_id,
-         d.release_packet->>'redeploy_of', NULL::text, d.release_packet->>'code_task_run_id',
+         CASE WHEN d.trigger = 'rollback' THEN d.release_packet->>'redeploy_of' END,
+         NULL::text, d.release_packet->>'code_task_run_id',
          d.trigger, d.steps, COALESCE(d.started_at, d.created_at), d.finished_at, d.created_at,
          CAST(COALESCE(d.duration_ms, CASE WHEN d.finished_at IS NOT NULL
               AND d.started_at IS NOT NULL
@@ -1403,7 +1418,9 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
             "approver": _approver(r.get("approved_by") if decided else None, viewer, types),
             "state": state, "word": w["word"], "tone": w["tone"], "steps": steps,
             "started_at": _iso(r.get("started_at")), "finished_at": _iso(r.get("finished_at")),
-            "duration_ms": int(r["duration_ms"]) if r.get("duration_ms") is not None else None,
+            # A deploy that never ran has no duration: rejected, refused or still waiting.
+            "duration_ms": (int(r["duration_ms"]) if r.get("duration_ms") is not None
+                            and state not in NEVER_RAN_STATES else None),
             "can": can,
             "rollback_to_sha7": rollback_to,
             "failed_after": (newer_failed.get(r["target_id"]) if r["ref"] in live_refs else None),
@@ -1655,7 +1672,7 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
             "waiting_on": full["waiting_on"] if raw["status"] == "running" else None,
             "failure": ({"line": deploy_failure_line({**dict(full), "status": raw["status"],
                                                       "steps": steps_raw}),
-                         "error": str(err_text or "")}
+                         "error": error_in_words(err_text)}
                         if raw["status"] in FAILED_STATES else None),
             "plan": plan,
             "preflight": _preflight_findings(full["preflight"]),
@@ -1685,7 +1702,7 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
             "waiting_on": None,
             "failure": ({"line": deploy_failure_line({**dict(full), "status": raw["status"],
                                                       "steps": steps_raw}),
-                         "error": str(full["failure_reason"] or "")}
+                         "error": error_in_words(full["failure_reason"])}
                         if raw["status"] in FAILED_STATES
                         or (governed and raw["status"] == "rolled_back") else None),
             "plan": ({"steps": [*(review.get("steps") or []),
@@ -1754,15 +1771,25 @@ _FAILURE_PATTERNS = (
 )
 
 
+_EXC_PREFIX = re.compile(r"^\s*(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Failed|Exit)\s*:\s*")
+
+
+def error_in_words(value: Any) -> str:
+    """A failure as a person reads it: the exception's sentence without its class name
+    (`RuntimeError: transfer failed: …` → `Transfer failed: …`)."""
+    text_ = _EXC_PREFIX.sub("", str(value or "")).strip()
+    return text_[:1].upper() + text_[1:] if text_ else ""
+
+
 def deploy_failure_line(row: dict[str, Any]) -> str:
     """≤ 6 words: why a deploy failed, from its error/failure_reason/failed step."""
     error = _json(row.get("error"))
     headline = error.get("headline") if isinstance(error, dict) else (error or None)
-    reason = str(headline or row.get("failure_reason") or "").strip()
+    reason = error_in_words(headline or row.get("failure_reason") or "")
     failed = next((s for s in (_json(row.get("steps")) or [])
                    if isinstance(s, dict) and step_state(s.get("status")) == "failed"), None)
     if failed and not reason:
-        reason = str(failed.get("error") or "")
+        reason = error_in_words(failed.get("error"))
     first = re.split(r"(?<=[.!?])\s|\n", reason, maxsplit=1)[0].strip().rstrip(".")
     if first and len(first.split()) <= 6:
         return first
@@ -2407,9 +2434,14 @@ def _cloud_spend(connection: Any, project_id: str, since: datetime) -> dict[str,
 
 
 def _cloud_changes(connection: Any, project_id: str, *, can_write: bool) -> dict[str, Any]:
+    from . import decision_actions
+
     rows = _rows(connection,
-                 "SELECT c.*, a.account_label FROM changesets c "
+                 "SELECT c.*, a.account_label, x.status AS decision_status, "
+                 "       x.recommendation->>'action' AS decision_action "
+                 "FROM changesets c "
                  "LEFT JOIN provider_accounts a ON a.id = c.provider_account_id "
+                 "LEFT JOIN decisions x ON x.id = c.approval_decision_id "
                  "WHERE c.project_id = :p ORDER BY c.created_at DESC LIMIT 50", {"p": project_id})
     ids = [r["id"] for r in rows]
     receipts: dict[str, list] = {}
@@ -2433,6 +2465,9 @@ def _cloud_changes(connection: Any, project_id: str, *, can_write: bool) -> dict
         ops = [o for o in (_json(r["operations"]) or []) if isinstance(o, dict)]
         raw_json = json.dumps(ops)
         status = str(r["status"] or "")
+        via = (r["approval_decision_id"]
+               if r["decision_action"] in decision_actions.CARRIED_OUT_ON_APPROVAL
+               and r["decision_action"] != "approve_changeset" else None)
         out.append({
             "id": r["id"], "title": r["title"], "summary": str(r["summary"] or "")[:200],
             "account": ({"id": r["provider_account_id"], "name": r["account_label"]}
@@ -2448,8 +2483,14 @@ def _cloud_changes(connection: Any, project_id: str, *, can_write: bool) -> dict
             "receipts": (receipts.get(r["id"]) or [])[:4],
             "drift": (drift.get(r["provider_account_id"]) or [])[:3]
             if r["provider_account_id"] else [],
-            "can": {"approve": can_write and status == "pending_approval",
-                    "apply": can_write and status == "approved"},
+            "can": {"approve": can_write and status == "pending_approval" and not via,
+                    "apply": can_write and status == "approved" and not via,
+                    # ONE DOOR. A deploy's ChangeSet is approved through its decision — the
+                    # one the deploy drawer and Approvals answer — and applied by BOSS's
+                    # worker; the raw ChangeSet routes refuse it.
+                    "approve_deploy": bool(via) and can_write and status == "pending_approval"
+                    and r["decision_status"] == "pending"},
+            "decision_id": r["approval_decision_id"] if via else None,
         })
     return {"rows": out, "filters": {},
             "header": {"accounts": _accounts_list(connection, project_id)}}
@@ -2510,17 +2551,36 @@ def deploy_href(ref: str) -> str:
     return f"?area=infra&view=deploys&deploy={ref}"
 
 
+def _needs_you_count(items: list[dict[str, Any]]) -> int:
+    from .command_center import attention_counts
+
+    return attention_counts(items)["needs_you"]
+
+
 def _approvals(connection: Any, project_id: str, now: datetime) -> list[dict[str, Any]]:
     from . import agents_live_board, decision_actions
 
+    # EVERY DEPLOY WAITING ON A PERSON: a stack deployment's decision and a governed host
+    # deployment's (governed_host_deploy.py). Listing only the first left a host deploy out of
+    # Needs you and its count while Approvals and the badge showed it.
     rows = _rows(connection,
-                 "SELECT s.id AS deployment_id, s.commit_sha, s.ref, t.app_name, t.environment, "
+                 "SELECT 'stack' AS kind, s.id AS deployment_id, s.commit_sha, s.ref, "
+                 "       t.app_name, t.environment, "
                  "       d.id, d.task_id, d.question, d.status, d.risk_tier, d.default_action, "
                  "       d.recommendation, d.deadline_at, d.created_at, d.delegated_to "
                  "FROM stack_deployments s JOIN decisions d ON d.id = s.decision_id "
                  "JOIN deployment_targets t ON t.id = s.target_id "
                  "WHERE s.project_id = :p AND s.status = 'awaiting_approval' "
-                 "  AND d.status = 'pending' ORDER BY d.created_at DESC", {"p": project_id})
+                 "  AND d.status = 'pending' "
+                 "UNION ALL "
+                 "SELECT 'delivery', r.id, r.commit_ref, r.commit_ref, t.app_name, t.environment, "
+                 "       d.id, d.task_id, d.question, d.status, d.risk_tier, d.default_action, "
+                 "       d.recommendation, d.deadline_at, d.created_at, d.delegated_to "
+                 "FROM deployment_runs r JOIN decisions d ON d.id = r.decision_id "
+                 "JOIN deployment_targets t ON t.id = r.deployment_target_id "
+                 "WHERE r.project_id = :p AND r.status = 'awaiting_approval' "
+                 "  AND d.status = 'pending' "
+                 "ORDER BY created_at DESC", {"p": project_id})
     needs, decisions, extra = [], [], {}
     for r in rows:
         decision = {k: r.get(k) for k in ("id", "task_id", "question", "status", "risk_tier",
@@ -2532,15 +2592,16 @@ def _approvals(connection: Any, project_id: str, now: datetime) -> list[dict[str
             continue
         decisions.append(decision)
         short = sha7(r["commit_sha"])
+        named = r["ref"] if r["ref"] and r["ref"] != r["commit_sha"] or not short else None
         needs.append({
             "id": str(r["id"]), "kind": "approval", "decision_kind": described["kind"],
             "title": f"Deploy {r['app_name']} to {r['environment']}?",
-            "detail": " · ".join(x for x in (short, f"from {r['ref']}" if r["ref"] else None) if x),
+            "detail": " · ".join(x for x in (short, f"from {named}" if named else None) if x),
             "what_to_do": None, "decision_id": r["id"],
             "allowed_actions": [dict(a) for a in described["allowed_actions"]],
             "risk_tier": r["risk_tier"], "at": _iso(r["created_at"]),
         })
-        extra[str(r["id"])] = f"stack:{r['deployment_id']}"
+        extra[str(r["id"])] = f"{r['kind']}:{r['deployment_id']}"
     items = agents_live_board.attention_items(connection, project_id, needs, decisions)
     for item in items:
         item["area"] = "infra"  # type: ignore[typeddict-unknown-key]

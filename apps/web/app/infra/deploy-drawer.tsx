@@ -21,6 +21,7 @@ export { DeployRail, DeployRowView } from "./deploy-row";
 
 const STEP_GLYPH: Record<StepState, string> = { done: "✓", running: "◐", failed: "✗", pending: "○", skipped: "–" };
 const LOG_LINES = 200;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** A console href followed in place (keeps the org). */
 function ConsoleLink({ href, children, testId, tip }: { href: string; children: React.ReactNode; testId?: string; tip?: string }) {
@@ -91,6 +92,8 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
   const rollback = async () => {
     const data = await run("rollback", () => rollbackDeploy(projectId, row.ref, actor),
       (x) => {
+        // A rollback is planned, then approved: the server says which (its `result`).
+        if (typeof x.result === "string" && x.result) return x.result;
         const sha = typeof x.sha7 === "string" ? x.sha7 : row.rollbackToSha7;
         return sha ? `Rolling back to ${sha}` : "Rolling back";
       });
@@ -102,7 +105,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
   const redeploy = async () => {
     const data = await run("redeploy", () => (row.kind === "delivery"
       ? redeployDelivery(kindId, actor)
-      : deployTarget(projectId, row.targetId ?? "", actor, row.sha7 ?? row.refName)), () => "Redeploy planned");
+      : deployTarget(projectId, row.targetId ?? "", actor, row.sha7 ?? row.refName)), () => "Redeploy planned · Approve");
     if (data && typeof data.ref === "string") onOpen?.(data.ref);
   };
   const healthCheck = async () => {
@@ -167,7 +170,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
       {d.plan ? (
         <DrawerSection label="Plan" testId="inf-deploy-plan">
           <details className="inf-dd-plan">
-            <summary>{d.plan.steps.length} steps{d.plan.envKeys.length ? ` · ${d.plan.envKeys.length} env keys` : ""}</summary>
+            <summary>{plural(d.plan.steps.length, "step")}{d.plan.envKeys.length ? ` · ${plural(d.plan.envKeys.length, "env key")}` : ""}</summary>
             <ol className="inf-dd-plan-steps" data-testid="inf-deploy-plan-steps">
               {d.plan.steps.map((s, i) => <li key={i} className="inf-mono" data-copy="data">{s}</li>)}
             </ol>

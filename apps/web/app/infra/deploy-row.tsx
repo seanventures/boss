@@ -14,7 +14,7 @@ import { showToast } from "../client-forms";
 import type { DeployRow, StepState } from "../../lib/infra-view";
 import { RunFace } from "../agents/run-face";
 import { afterWrite, decideDeploy, rollbackDeploy } from "./infra-actions";
-import { ago, dur, localTime, useNow } from "./infra-util";
+import { ago, dur, inWords, localTime, useNow } from "./infra-util";
 import { StateWord } from "./kit";
 import { LOCAL, useLocalTime, type LocalTime } from "../../lib/local-time";
 
@@ -131,7 +131,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
             {busy === "rollback" ? "Rolling back…" : "Roll back"}
           </button>
         ) : null}
-        {error ? <span className="inf-error inf-trunc" role="alert" title={error} data-copy="data">Couldn&apos;t do that</span> : null}
+        {error ? <span className="inf-error inf-trunc" role="alert" title={inWords(error)} data-copy="data">Couldn&apos;t do that</span> : null}
       </span>
       <button type="button" className="inf-link inf-dep-go" aria-label={`Open ${row.app} ${row.env} deploy`}
               data-testid="inf-deploy-row-open" onClick={() => onOpen(row.ref)}>↗</button>

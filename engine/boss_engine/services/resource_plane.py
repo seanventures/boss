@@ -2453,27 +2453,13 @@ class ResourcePlaneService:
                 return {**run, "reused": True}
             problem = governed_host.plan_problem(connection, target)
             if problem:
-                return self._record_blocked_deployment_run(
-                    connection,
-                    project_id=project_id,
-                    target=target,
-                    commit_ref=commit_ref,
-                    release_packet=release_packet or {},
-                    rollback_plan=rollback_plan,
-                    actor=actor,
-                    title=f"Host deployment cannot be planned: {problem['headline']}",
-                    recommendation={
-                        "action": "implement_governed_host_deployment",
-                        "deployment_target_id": deployment_target_id,
-                        "next": problem["action"],
-                    },
-                    evidence={"target_kind": target["target_kind"],
-                              "environment": target["environment"],
-                              "reason": problem["reason"]},
-                    reason_code="host_deployment_not_plannable",
-                    failure_reason=f"{problem['headline']} {problem['action']}",
-                    event_reason=problem["reason"],
-                )
+                # A plan BOSS will not make is an answer, not a record: no decision to
+                # resolve, no failed run on the rail, no failure card — the caller answers
+                # 409 with the next step, and the refusal is one plain event.
+                return governed_host.refuse_plan(
+                    connection, project_id=project_id, target=target, actor=actor,
+                    headline=problem["headline"], action=problem["action"],
+                    reason=problem["reason"])
         rollout_policy = self._deployment_rollout_policy_for_target(
             connection,
             project_id,
@@ -2487,6 +2473,13 @@ class ResourcePlaneService:
                 # A host deployment always reserves its own (zero) budget below.
                 reservation_id or ("governed_host_reservation" if host_target else None),
             )
+            if policy_block_reason and host_target:
+                return governed_host.refuse_plan(
+                    connection, project_id=project_id, target=target, actor=actor,
+                    headline=("The environment's rollout policy does not allow this "
+                              f"deployment ({policy_block_reason.replace('_', ' ')})."),
+                    action="Change the environment's rules in Infra › Deploys › Rules.",
+                    reason=policy_block_reason)
             if policy_block_reason:
                 return self._record_blocked_deployment_run(
                     connection,
@@ -2559,6 +2552,13 @@ class ResourcePlaneService:
             # fix above would only protect targets that had not already been wedged.
             stale_after=timedelta(seconds=_SURFACE_LEASE_SECONDS),
         )
+        if not ownership_result["allowed"] and host_target:
+            return governed_host.refuse_plan(
+                connection, project_id=project_id, target=target, actor=actor,
+                headline=(f"{ownership_result['ownership']['owner_ref']} is deploying "
+                          f"{target['app_name']} right now."),
+                action="Wait for that deployment to finish, then plan again.",
+                reason="surface_ownership_conflict")
         if not ownership_result["allowed"]:
             return self._record_blocked_deployment_run(
                 connection,
@@ -2636,26 +2636,11 @@ class ResourcePlaneService:
                     actor=actor,
                 )
             except governed_host.GovernedHostDeployError as refused:
-                return self._record_blocked_deployment_run(
-                    connection,
-                    project_id=project_id,
-                    target=target,
-                    commit_ref=commit_ref,
-                    release_packet=release_packet or {},
-                    rollback_plan=rollback_plan,
-                    actor=actor,
-                    title=f"Host deployment cannot be planned: {refused.headline}",
-                    recommendation={
-                        "action": "implement_governed_host_deployment",
-                        "deployment_target_id": deployment_target_id,
-                        "next": refused.action,
-                    },
-                    evidence={"target_kind": target["target_kind"],
-                              "environment": target["environment"]},
-                    reason_code="host_deployment_not_plannable",
-                    failure_reason=f"{refused.headline} {refused.action}",
-                    event_reason="governed_host_plan_refused",
-                )
+                governed_host.release_guard(connection, ownership_guard)
+                return governed_host.refuse_plan(
+                    connection, project_id=project_id, target=target, actor=actor,
+                    headline=refused.headline, action=refused.action,
+                    reason="governed_host_plan_refused")
 
         changeset = None
         operation = self._deployment_operation_for_target(

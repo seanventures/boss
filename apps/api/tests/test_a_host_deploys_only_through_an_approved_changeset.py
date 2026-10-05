@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,22 +31,55 @@ HOME = "boss-dogfood"
 KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETKEYMATERIAL-9f8e7d\n-----END OPENSSH PRIVATE KEY-----"
 
 
+HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyForGovernedDeployTests0001"
+OTHER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnImpostorAtTheSameAddressTests00002"
+
+
 class FakeHost:
-    """Every ssh command BOSS sends, and canned answers. `healthy` drives the health gates."""
+    """The `ssh` process itself, faked: it reads the host-key options BOSS passes, plays a host
+    that shows `key`, and answers the commands. Only deploy_service's process runner is replaced,
+    so deploy_service._ssh and the transfer pipeline build their real command lines."""
 
     def __init__(self):
         self.commands: list[str] = []
+        self.argvs: list[list[str]] = []
         self.transfers = 0
         self.healthy = True
         self.observed_healthy = True
+        self.key = HOST_KEY
 
-    def ssh(self, key_path, host, user, port, command, timeout=180):
+    def _host_key_ok(self, opts: dict[str, str]) -> bool:
+        mode = opts.get("StrictHostKeyChecking", "ask")
+        path = opts.get("UserKnownHostsFile")
+        if mode == "no" or not path:
+            return True
+        known = Path(path).read_text() if Path(path).exists() else ""
+        if self.key.split()[1] in known:
+            return True
+        if mode == "accept-new" and not known.strip():
+            with open(path, "a") as handle:
+                handle.write(f"[203.0.113.40]:22 {self.key}\n")
+            return True
+        return False
+
+    def run(self, argv, *args, **kwargs):
+        line = argv if isinstance(argv, str) else " ".join(argv)
+        opts = dict(o.split("=", 1) for o in re.findall(r"(?<=-o )(\S+=\S+)", line))
+        self.argvs.append([argv] if isinstance(argv, str) else list(argv))
+        if not self._host_key_ok(opts):
+            return subprocess.CompletedProcess(argv, 255, "", "Host key verification failed.\n")
+        if isinstance(argv, str):  # the tar | ssh transfer pipeline
+            self.transfers += 1
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        command = argv[-1]
         self.commands.append(command)
         if "BASE_OK" in command:
-            return subprocess.CompletedProcess([], 0, "BASE_OK\nAPP_OK\nDOCKER_OK\n", "")
+            return subprocess.CompletedProcess(argv, 0, "BASE_OK\nAPP_OK\nDOCKER_OK\n", "")
+        if "BOSS_SSH_OK" in command:  # Verify's own session
+            return subprocess.CompletedProcess(argv, 0, "BOSS_SSH_OK\nDOCKER_OK\nx86_64\n", "")
         if "docker version" in command:
-            return subprocess.CompletedProcess([], 0, "27.0\n", "")
-        return subprocess.CompletedProcess([], 0, "", "")
+            return subprocess.CompletedProcess(argv, 0, "27.0\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
 
     def writes(self):
         return [c for c in self.commands
@@ -55,7 +90,9 @@ class FakeHost:
 def hosted(client, engine, monkeypatch, tmp_path):
     host = FakeHost()
     monkeypatch.setattr(api_main.settings, "boss_edition", "community")
-    monkeypatch.setattr(deploy_service, "_ssh", host.ssh)
+    # NARROW: only deploy_service's process runner. Patching owned_process.run itself would
+    # fake every subprocess in the API (git, docker, the preview runner) for this test.
+    monkeypatch.setattr(deploy_service, "owned_process", SimpleNamespace(run=host.run))
     monkeypatch.setattr(deploy_service, "github_token_for", lambda *a, **k: "")
 
     def build(settings, owner, repo, branch, **kwargs):
@@ -64,12 +101,6 @@ def hosted(client, engine, monkeypatch, tmp_path):
         return work, "static", "", "c0ffee" * 6 + "abcd"
 
     monkeypatch.setattr(deploy_service, "_build_dist", build)
-
-    def transfer(*args, **kwargs):
-        host.transfers += 1
-        return subprocess.CompletedProcess([], 0, "", "")
-
-    monkeypatch.setattr(deploy_service.owned_process, "run", transfer)
     monkeypatch.setattr(deploy_service, "_await_healthy",
                         lambda *a, **k: ("200" if host.healthy else "500", 1))
     monkeypatch.setattr(
@@ -372,6 +403,184 @@ def test_a_target_off_a_verified_host_is_refused_with_the_next_step(client, engi
     assert response.status_code == 409, response.text
     assert "not verified" in response.json()["detail"]
     assert "Verify" in response.json()["detail"]
+    # A refusal is an answer, not a record: no decision, no failed run, one plain event.
+    with engine.begin() as connection:
+        runs = connection.execute(text("SELECT COUNT(*) FROM deployment_runs "
+                                       "WHERE deployment_target_id = :t"),
+                                  {"t": hosted["target_id"]}).scalar_one()
+        decisions = connection.execute(
+            text("SELECT COUNT(*) FROM decisions WHERE project_id = :p AND status = 'pending' "
+                 "AND (recommendation->>'deployment_target_id' = :t "
+                 "     OR recommendation->>'target_id' = :t)"),
+            {"p": HOME, "t": hosted["target_id"]}).scalar_one()
+        events = connection.execute(
+            text("SELECT data FROM events WHERE event_type = 'deployment.plan_refused' "
+                 "AND entity_id = :t"), {"t": hosted["target_id"]}).scalars().all()
+    assert runs == 0 and decisions == 0
+    assert len(events) == 1 and events[0]["reason"] == "host_not_verified"
+    fleet = client.get("/v1/infra/fleet", params={"project_id": HOME}).json()
+    assert not [i for i in fleet["attention"] if hosted["target_id"] in str(i.get("id"))]
+
+
+def test_boot_repair_clears_what_earlier_refusals_left(client, engine, hosted):
+    """Refusals once raised a pending decision and a failed run; the repair removes both."""
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO decisions (id, project_id, question, status, risk_tier, recommendation) "
+            "VALUES ('dec_old_refusal', :p, 'Community host deployment requires a governed "
+            "ChangeSet', 'pending', 2, CAST(:r AS JSONB))"),
+            {"p": HOME, "r": json.dumps({"action": "implement_governed_host_deployment"})})
+        connection.execute(text(
+            "INSERT INTO deployment_runs (id, project_id, deployment_target_id, decision_id, "
+            "app_name, environment, repo, target_kind, target_ref, status, created_by) VALUES "
+            "('dr_old_refusal', :p, :t, 'dec_old_refusal', 'x', 'staging', 'r', 'ssh', 'x', "
+            "'failed', 'ceo')"), {"p": HOME, "t": hosted["target_id"]})
+        first = governed_host_deploy.repair_refusal_records(connection)
+        again = governed_host_deploy.repair_refusal_records(connection)
+        status = connection.execute(text("SELECT status FROM decisions WHERE id = "
+                                         "'dec_old_refusal'")).scalar_one()
+        run = connection.execute(text("SELECT 1 FROM deployment_runs WHERE id = "
+                                      "'dr_old_refusal'")).first()
+    assert first == {"decisions_withdrawn": 1, "runs_removed": 1}
+    assert again == {"decisions_withdrawn": 0, "runs_removed": 0}
+    assert status == "withdrawn" and run is None
+
+
+def test_a_host_deploy_waiting_on_you_is_one_count_everywhere(client, engine, hosted):
+    plan = _plan(client, hosted)
+    fleet = client.get("/v1/infra/fleet", params={"project_id": HOME}).json()
+    deploys = client.get("/v1/infra/deploys", params={"project_id": HOME}).json()
+    approvals = [i for i in fleet["attention"] if i.get("kind") == "approval"]
+    assert [i["decision_id"] for i in approvals] == [plan["decision_id"]]
+    assert approvals[0]["open"].endswith(f"deploy=delivery:{plan['deployment_run_id']}")
+    assert fleet["counts"]["needs_you"] == deploys["counts"]["needs_you"] == 1
+    center = client.get("/v1/command-center/view", params={"project_id": HOME})
+    assert center.status_code == 200, center.text
+    assert plan["decision_id"] in center.text
+    assert "host_deploy_requires_approval" not in center.text, "a raw code reached the page"
+    dots = {d["key"]: d for d in center.json().get("systems") or []}
+    if "deploys" in dots:
+        assert dots["deploys"]["state"] == "Needs you"
+    # Approving makes it nobody's question any more, everywhere.
+    _approve_and_apply(client, engine, plan)
+    fleet = client.get("/v1/infra/fleet", params={"project_id": HOME}).json()
+    assert fleet["counts"]["needs_you"] == 0
+
+
+def test_cloud_changes_approve_a_deploy_through_its_decision(client, engine, hosted):
+    plan = _plan(client, hosted)
+    rows = client.get("/v1/infra/cloud", params={"project_id": HOME, "view": "changes",
+                                                 "viewer": "ceo"}).json()["rows"]
+    row = next(r for r in rows if r["id"] == plan["changeset_id"])
+    assert row["can"]["approve"] is False and row["can"]["apply"] is False
+    assert row["decision_id"] == plan["decision_id"]
+    assert row["can"]["approve_deploy"] in (True, False)  # a viewer who can write sees True
+
+
+def test_a_rollback_from_its_card_is_a_plan_opened_where_it_waits(client, engine, hosted):
+    plan = _plan(client, hosted)
+    _approve_and_apply(client, engine, plan)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO deployment_runs (id, project_id, deployment_target_id, app_name, "
+            "environment, repo, target_kind, target_ref, commit_ref, status, trigger, "
+            "created_by, created_at, finished_at) SELECT 'dr_broke', project_id, "
+            "deployment_target_id, app_name, environment, repo, target_kind, target_ref, "
+            "'bad', 'failed', 'manual', 'ceo', now(), now() FROM deployment_runs WHERE id = :i"),
+            {"i": plan["deployment_run_id"]})
+    fleet = client.get("/v1/infra/fleet", params={"project_id": HOME}).json()
+    card = next(i for i in fleet["attention"] if i.get("infra_kind") == "deploy_failed")
+    assert "rollback" in [a["key"] for a in card["answers"]]
+    r = client.post("/v1/infra/attention/act", json={
+        "project_id": HOME, "actor": "ceo", "id": card["id"], "option": "rollback"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["result"] == "Rollback planned · Approve"
+    assert body["open"] == f"?area=infra&view=deploys&deploy={body['ref']}"
+    detail = client.get(f"/v1/infra/deploys/{body['ref']}", params={"project_id": HOME}).json()
+    assert detail["row"]["word"] == "Needs you" and detail["row"]["can"]["approve"] is True
+
+
+def test_the_apply_route_refuses_a_forged_lease_and_an_unknown_run(client, engine, hosted):
+    plan = _plan(client, hosted)
+    client.post(f"/v1/decisions/{plan['decision_id']}/approve", json={"actor": "ceo"})
+    forged = client.post(f"/v1/delivery/deployments/{plan['deployment_run_id']}/apply", json={
+        "job_id": "job_nope", "worker_id": "w1", "lease_token": "forged"})
+    assert forged.status_code == 409, forged.text
+    body = _job_for(engine, plan["deployment_run_id"])
+    unknown = client.post("/v1/delivery/deployments/deprun_nope/apply", json=body)
+    assert unknown.status_code == 404, unknown.text
+    assert hosted["host"].transfers == 0
+
+
+def test_the_host_key_is_pinned_and_a_different_key_is_refused(client, engine, hosted):
+    # hetzner-ci-01's case: verified before pinning, so the first governed connect records it.
+    first = _plan(client, hosted)
+    result, _ = _approve_and_apply(client, engine, first)
+    assert result["status"] == "succeeded", result
+    with engine.begin() as connection:
+        pin = dict(connection.execute(text(
+            "SELECT host_key_fingerprint, host_key_pinned_by FROM deployment_hosts "
+            "WHERE id = :i"), {"i": hosted["host_row"]["id"]}).mappings().one())
+    assert pin["host_key_fingerprint"].startswith("SHA256:")
+    assert pin["host_key_pinned_by"] == "first_deploy"
+    governed = [a for a in hosted["host"].argvs if "BASE_OK" in " ".join(a)]
+    assert governed and "StrictHostKeyChecking=accept-new" in " ".join(governed[0])
+    detail = client.get(f"/v1/infra/hosts/{hosted['host_row']['id']}",
+                        params={"project_id": HOME}).json()
+    assert detail["host_key"]["pinned"] is True and "first deploy" in detail["host_key"]["words"]
+
+    # Another machine answers at the address: refused before anything is written to it.
+    hosted["host"].key = OTHER_KEY
+    writes_before = len(hosted["host"].writes())
+    second = client.post(f"/v1/delivery/deployments/{first['deployment_run_id']}/redeploy",
+                         json={"actor": "ceo"}).json()
+    result, _ = _approve_and_apply(client, engine, second)
+    assert result["status"] == "failed", result
+    with engine.begin() as connection:
+        reason = connection.execute(text("SELECT failure_reason FROM deployment_runs "
+                                         "WHERE id = :i"),
+                                    {"i": second["deployment_run_id"]}).scalar_one()
+    assert reason == "Host key changed — re-verify the host in Infra."
+    assert len(hosted["host"].writes()) == writes_before
+    assert "StrictHostKeyChecking=yes" in " ".join(hosted["host"].argvs[-1])
+
+    # The operator re-verifies: that is accepting the new machine, and deploys work again.
+    from boss_engine.services.deployment_fleet import verify_host
+
+    with engine.begin() as connection:
+        verdict = verify_host(connection, api_main.settings, host_id=hosted["host_row"]["id"])
+    assert verdict["status"] == "verified", verdict
+    with engine.begin() as connection:
+        pin = dict(connection.execute(text(
+            "SELECT host_key_known_hosts, host_key_pinned_by FROM deployment_hosts "
+            "WHERE id = :i"), {"i": hosted["host_row"]["id"]}).mappings().one())
+    assert OTHER_KEY.split()[1] in pin["host_key_known_hosts"]
+    assert pin["host_key_pinned_by"] == "verify"
+    third = client.post(f"/v1/delivery/deployments/{first['deployment_run_id']}/redeploy",
+                        json={"actor": "ceo"}).json()
+    result, _ = _approve_and_apply(client, engine, third)
+    assert result["status"] == "succeeded", result
+
+
+def test_agents_are_never_people_and_the_console_operator_is(engine):
+    from boss_engine.services.agent_identity import is_person
+
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO roles (id, project_id, role_key, display_name) VALUES "
+            "('role_gd_agent', :p, 'gd_role_agent', 'x') ON CONFLICT DO NOTHING"), {"p": HOME})
+        connection.execute(text(
+            "INSERT INTO project_members (id, project_id, member_id, display_name, member_type, "
+            "role_keys, permissions, status, created_by) VALUES ('pm_gd_agent', :p, "
+            "'gd_role_agent', 'x', 'human', '[]'::jsonb, '[]'::jsonb, 'active', 'test') "
+            "ON CONFLICT DO NOTHING"), {"p": HOME})
+        verdicts = {a: is_person(a, connection, HOME)
+                    for a in ("executive_console", "ceo", "coo", "metatron", "gd_role_agent",
+                              "agent:deploy-lead", "system", "nobody-here")}
+    assert verdicts == {"executive_console": True, "ceo": True, "coo": False,
+                        "metatron": False, "gd_role_agent": False, "agent:deploy-lead": False,
+                        "system": False, "nobody-here": False}
 
 
 def test_no_secret_reaches_a_response_a_record_or_a_log(client, engine, hosted, caplog):
@@ -403,3 +612,41 @@ def test_no_secret_reaches_a_response_a_record_or_a_log(client, engine, hosted, 
                                      "WHERE project_id = :p"), {"p": HOME}).scalars(),
         ]
     assert stored and not [s for s in stored if needle in s]
+
+
+def test_plan_approve_and_redeploy_record_the_one_signed_in_operator(
+        client, engine, hosted, monkeypatch):
+    """The console reaches the API with one key (principal `ceo`) and names the operator
+    signed in to it (`executive_console`). Every step of one deploy records that operator."""
+    key = f"gd-console-key-{uuid4().hex[:8]}"
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_main.settings, "api_keys", key)
+    monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:ceo")
+    auth = {"Authorization": f"Bearer {key}"}
+    planned = client.post("/v1/delivery/deploy", headers=auth, json={
+        "target_id": hosted["target_id"], "actor": "executive_console", "ref": "main"})
+    assert planned.status_code == 200, planned.text
+    plan = planned.json()
+    approved = client.post(f"/v1/decisions/{plan['decision_id']}/approve", headers=auth,
+                           json={"actor": "executive_console"})
+    assert approved.status_code == 200, approved.text
+    body = _job_for(engine, plan["deployment_run_id"])
+    monkeypatch.setattr(api_main.settings, "require_api_auth", False)
+    client.post(f"/v1/delivery/deployments/{plan['deployment_run_id']}/apply", json=body)
+    monkeypatch.setattr(api_main.settings, "require_api_auth", True)
+    again = client.post(f"/v1/delivery/deployments/{plan['deployment_run_id']}/redeploy",
+                        headers=auth, json={"actor": "executive_console"})
+    assert again.status_code == 200, again.text
+    with engine.begin() as connection:
+        run = connection.execute(text("SELECT created_by FROM deployment_runs WHERE id = :i"),
+                                 {"i": plan["deployment_run_id"]}).scalar_one()
+        decision = connection.execute(text("SELECT approved_by FROM decisions WHERE id = :d"),
+                                      {"d": plan["decision_id"]}).scalar_one()
+        second = connection.execute(text("SELECT created_by FROM deployment_runs WHERE id = :i"),
+                                    {"i": again.json()["deployment_run_id"]}).scalar_one()
+    assert (run, decision, second) == ("executive_console",) * 3
+    # A key cannot name somebody it may not act as: that falls back to its own principal.
+    other = client.post(f"/v1/decisions/{again.json()['decision_id']}/reject", headers=auth,
+                        json={"actor": "metatron"})
+    assert other.status_code == 200, other.text
+    assert other.json().get("status") == "rejected"
