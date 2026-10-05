@@ -11,6 +11,7 @@ import { governWrite, money, readGovern, readNumber, rightsFor, type Allocation,
 import { usePolledRead } from "../../lib/log-stream";
 import { showToast } from "../client-forms";
 import { consoleHref } from "../url-intent";
+import { plural } from "../../lib/factory-floor";
 
 const HONESTY: Record<string, { word: string; tip: string }> = {
   not_loaded: { word: "Not loaded · not $0", tip: "Cloud spend is not loaded. This is not $0.00." },
@@ -84,7 +85,7 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
     setBusy("");
     if (r.ok) {
       const n = Number((r.data as { reconciled?: number }).reconciled ?? 0);
-      showToast("success", `Reconciled · ${n} commitments`);
+      showToast("success", `Reconciled · ${plural(n, "commitment")}`);
       read.reload();
     } else showToast("error", r.status === 403 ? "You can't change this" : r.error);
   };

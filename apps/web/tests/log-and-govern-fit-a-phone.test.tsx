@@ -36,6 +36,9 @@ describe("the Log on a phone", () => {
   it("a narrow list's row height is the one the windowed list adds up", () => {
     const narrow = block(LOG_CSS, `@container lx-list (max-width: ${NARROW_PX - 1}px)`);
     expect(narrow).toContain(`height: ${ROW_H_NARROW}px`);
+    // The time sizes to itself with a real gap before the level ("01:10:09ⓘ Info" touched).
+    expect(narrow).toMatch(/grid-template-columns: auto auto/);
+    expect(Number(narrow.match(/column-gap: (\d+)px/)![1])).toBeGreaterThanOrEqual(8);
     const items = rows(3).flatMap(mapActivityLogItem);
     const flat = flatten(items, { byRun: false, open: new Set(), labels: {}, rowH: ROW_H_NARROW })
       .filter((r) => r.kind === "line");

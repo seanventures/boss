@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleLive } from "../lib/console-live";
 import { fakeGovernApi, newGovern } from "./_helpers/govern-fixtures";
 import { FACETS, fakeLogApi, newLog, rows } from "./_helpers/log-fixtures";
-import { $, mount, unmount } from "./_helpers/live-render";
+import { $, click, mount, unmount } from "./_helpers/live-render";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const { LogExplorer } = await import("../app/activity/log-explorer");
@@ -33,12 +33,16 @@ ${css}<style>html,body{height:auto!important;overflow:auto!important} body{margi
 
 describe("the pages the browser hit-test taps", () => {
   it("render the Log's and Govern's controls", async () => {
-    vi.stubGlobal("fetch", fakeLogApi(newLog({ page: { items: rows(6) }, facets: FACETS })));
+    vi.stubGlobal("fetch", fakeLogApi(newLog({ page: { items: rows(6, (i) => (i < 3
+      ? { workflow_run_id: "wfr_1", level: i === 0 ? "error" : "info" } : i === 3 ? { run_id: "crun_9" } : {})),
+      labels: { wfr_1: "Lead Triage Inbox", crun_9: "Ship it #182" } }, facets: FACETS })));
     setConsoleLive(true);
     window.history.replaceState({}, "", "/?area=activity");
     await mount(<LogExplorer projectId="p1" actor="ceo" />);
     expect($("[data-testid=lx-by-run]")).not.toBeNull();
     const log = document.querySelector(".lx")!.outerHTML;
+    await click($("[data-testid=lx-by-run]"));
+    const byRun = document.querySelector(".lx")!.outerHTML;
     unmount();
     vi.stubGlobal("fetch", fakeGovernApi(newGovern()));
     window.history.replaceState({}, "", "/?area=budget");
@@ -49,6 +53,7 @@ describe("the pages the browser hit-test taps", () => {
     if (!out) return;
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, "log.html"), page(log, true)); // the Log fills a fixed-height pane
+    writeFileSync(join(out, "log-by-run.html"), page(byRun, true));
     writeFileSync(join(out, "govern.html"), page(govern));
   });
 });

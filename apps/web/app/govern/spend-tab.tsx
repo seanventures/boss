@@ -17,6 +17,7 @@ import { usePolledRead } from "../../lib/log-stream";
 import { consoleHref } from "../url-intent";
 import { DailyBars } from "./cap-preview";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { plural } from "../../lib/factory-floor";
 
 
 const WINDOWS = ["24h", "7d", "30d"] as const;
@@ -138,7 +139,7 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
                 {(card.by_stage as Record<string, unknown>[]).slice(0, 8).map((st) => (
                   <li key={String(st.stage)}>
                     <span data-user-text>{String(st.stage).replace(/_/g, " ")}</span>
-                    <span>{Number(st.calls ?? 0)} calls</span>
+                    <span>{plural(Number(st.calls ?? 0), "call")}</span>
                     <span>{money(Number(st.cost_usd_micros ?? 0))}</span>
                     <span title="Cache reads">{pctText(st.cache_ratio)}</span>
                   </li>

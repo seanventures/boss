@@ -22,6 +22,7 @@ import {
   type DisplayRow,
 } from "./log-model";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { plural } from "../../lib/factory-floor";
 
 const LEVEL_GLYPH: Record<string, React.ComponentType<{ size?: number; weight?: "bold" | "fill" | "regular" }>> = {
   error: XCircle, warn: Warning, info: Info,
@@ -163,7 +164,7 @@ export function LogRows({ items, labels, byRun, selectedId, arrived, onOpen, onH
               <div key={row.key} className="lx-runhead" style={{ transform: `translateY(${row.top}px)` }}
                    title="Counted on loaded lines">
                 <span data-user-text>{row.label}</span>
-                <span className="lx-runhead-n">{row.lines} lines{row.errors ? ` · ${row.errors} errors` : ""}</span>
+                <span className="lx-runhead-n">{plural(row.lines, "line")}{row.errors ? ` · ${plural(row.errors, "error")}` : ""}</span>
               </div>
             );
           }

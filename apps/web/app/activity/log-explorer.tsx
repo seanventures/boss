@@ -32,6 +32,7 @@ import { LogDrawer } from "./log-drawer";
 import { LogRows, lineOrder } from "./log-rows";
 import { PulseStrip } from "./pulse-strip";
 import { QueryBar } from "./query-bar";
+import { plural } from "../../lib/factory-floor";
 
 export const LOG_POLL_MS = 5000;
 const PAGE = 100;
@@ -286,7 +287,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
       <header className="lx-head">
         <h2 className="lx-title-main">Activity log</h2>
         <span className="lx-head-count" data-testid="lx-count" title={exact ? undefined : "At least this many. Counting stopped early."}>
-          {total === null ? "" : `${exact ? "" : "≥"}${total.toLocaleString()} lines in ${rangeWords(state)}`}
+          {total === null ? "" : `${exact ? "" : "≥"}${plural(total, "line").replace(/^\d+/, total.toLocaleString())} in ${rangeWords(state)}`}
         </span>
         <span className="lx-tail" data-state={tail} data-testid="lx-tail"
               title={tail === "paused" ? "Console is paused. Nothing updates."

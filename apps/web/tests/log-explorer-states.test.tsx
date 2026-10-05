@@ -36,6 +36,17 @@ describe("the Log says what it has, exactly", () => {
     expect(skeleton.textContent).toBe("");
   });
 
+  it("one line is a line, and a big count keeps its separators", async () => {
+    log.page.items = rows(1);
+    log.histogram = { ...histogramOf([1]), total: 1 };
+    await mount(<LogExplorer projectId="p1" actor="ceo" />);
+    expect(text("[data-testid=lx-count]")).toBe("1 line in 24h");
+    unmount();
+    log.histogram = { ...histogramOf([1]), total: 48_712 };
+    await mount(<LogExplorer projectId="p1" actor="ceo" />);
+    expect(text("[data-testid=lx-count]")).toBe("48,712 lines in 24h");
+  });
+
   it("loaded rows, with the header count from the pulse", async () => {
     log.page.items = rows(3);
     log.histogram = histogramOf([10, 20, 30]);
