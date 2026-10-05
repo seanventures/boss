@@ -84,7 +84,8 @@
 .inf [role="tabpanel"], .obs-zone { min-width: 0; max-width: 100%; }
 /* No table ever widens the page (§5.3): a table scrolls inside its own box, and a long cell
    (a URL, a sha) truncates with its tooltip. */
-.inf-table { table-layout: auto; }
+.inf-table { table-layout: auto; position: relative; }
+.inf-table-wrap { position: relative; }
 .inf-table td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 639px) {
   .inf-table { display: block; max-width: 100%; overflow-x: auto; }
