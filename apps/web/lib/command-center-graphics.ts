@@ -5,8 +5,8 @@
  * NOTHING HERE ESTIMATES. A line stops at now; a node's place depends only on its team and its
  * role_key, never on what it is doing, so the map never jitters between polls.
  */
-import { TEAM_LABELS, TEAM_ORDER, type BoardAgent, type TeamSummary } from "./agents-live-board";
-import type { Flow, HourBucket } from "./command-center-view";
+import { TEAM_LABELS, TEAM_ORDER, type BoardAgent, type Mission, type TeamSummary } from "./agents-live-board";
+import type { CommandCenterView, DayRow, Flow, HourBucket } from "./command-center-view";
 
 /** Where a node sits on the Floor: centre (x, y) in the stage's own px, plus its angle. */
 export type FloorNode = { roleKey: string; team: string; x: number; y: number; angle: number };
@@ -39,8 +39,9 @@ export function floorLayout(teams: TeamSummary[], agents: BoardAgent[],
   const height = Math.max(1, size.height);
   const cx = width / 2;
   const cy = height / 2;
-  // 180px on the 720×440 stage; smaller stages keep room for the arc labels outside the ring.
-  const radius = Math.max(60, Math.min(180, height / 2 - 44, width / 2 - 70));
+  // THE RING FILLS THE PANEL: as large as the stage allows, leaving room outside it for the
+  // largest face (44px) and the team labels.
+  const radius = Math.max(60, Math.min(height / 2 - 58, width / 2 - 104));
   // Membership is the roster's: each agent sits in its own team (agents[].team). A team named
   // only in teams[] with nobody in it draws no arc.
   const byTeam = new Map<string, string[]>();
@@ -106,18 +107,20 @@ export function quadAt(a: { x: number; y: number }, c: { x: number; y: number },
   return { x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y };
 }
 
-/** An edge's opacity by how recent it is (§4.7): 0.9 under 5 min, falling to 0.25 at 60 min.
- *  Computed on the poll, never tweened. */
+/** An edge's opacity by how recent it is (§4.7, widened to the six hours the Floor draws): 0.9
+ *  under 10 min, falling to 0.18 at 6 h. Computed on the poll, never tweened. */
+export const FLOW_HOURS = 6;
 export function recencyOpacity(lastAtMs: number, nowMs: number): number {
   const min = Math.max(0, (nowMs - lastAtMs) / 60_000);
-  if (min <= 5) return 0.9;
-  if (min >= 60) return 0.25;
-  return round(0.9 - ((min - 5) / 55) * 0.65);
+  const end = FLOW_HOURS * 60;
+  if (min <= 10) return 0.9;
+  if (min >= end) return 0.18;
+  return round(0.9 - ((min - 10) / (end - 10)) * 0.72);
 }
 
-/** An edge's stroke width: 1 + log2(n), at most 4. */
+/** An edge's stroke width by volume: 1.25 + log2(n), at most 5. */
 export function edgeWidth(n: number): number {
-  return Math.min(4, 1 + Math.log2(Math.max(1, n)));
+  return Math.min(5, 1.25 + Math.log2(Math.max(1, n)));
 }
 
 /** Cumulative series for Today (§4.9): `today` stops at now (hour index + fraction), `yesterday`
@@ -189,4 +192,110 @@ export function freshFlows(prev: Flow[] | null, next: Flow[]): Flow[] {
 /** `$4.12`: money in micros, two decimals. */
 export function money(micros: number): string {
   return `$${(Math.max(0, micros) / 1_000_000).toFixed(2)}`;
+}
+
+
+// ── What each agent is doing, from the board's own facts (§4.7, design pass) ─────────────────
+
+/** How the Floor draws an agent, from real data only:
+ *  working  presence says it is working (or in a panel);
+ *  waiting  a run waits on you at its hop, or a decision it raised waits (attention.roleKey);
+ *  stuck    a failed step is attributed to it;
+ *  on_run   it is on the hop chain of a run still in flight, between steps;
+ *  recent   its last work ended within FLOW_HOURS;
+ *  rested   it has worked before, longer ago;
+ *  never    it has never worked (`No work yet`, no `since`). */
+export type FloorKind = "working" | "waiting" | "stuck" | "on_run" | "recent" | "rested" | "never";
+export const KIND_SIZE: Record<FloorKind, number> = {
+  working: 44, waiting: 44, stuck: 40, on_run: 38, recent: 32, rested: 26, never: 20,
+};
+const WORKING = new Set(["working", "in_panel", "thinking", "speaking"]);
+const STOPPED_KINDS = new Set(["failed_step", "gate_override", "budget_refused"]);
+
+/** The runs still in flight: not done, with at least one agent on their chain. */
+export function liveMissions(missions: Mission[]): Mission[] {
+  return missions.filter((m) => m.state !== "done");
+}
+
+/** Each agent's kind (see FloorKind). Same input, same output; tested without a browser. */
+export function floorKinds(view: Pick<CommandCenterView, "agents" | "missions" | "attention">, nowMs: number):
+    Map<string, FloorKind> {
+  const waiting = new Set<string>();
+  const onRun = new Set<string>();
+  for (const m of liveMissions(view.missions)) {
+    const hops = m.hops.filter((h): h is Extract<typeof h, { kind: "hop" }> => h.kind === "hop" && !!h.roleKey);
+    for (const h of hops) onRun.add(h.roleKey as string);
+    if (m.state === "waiting_you" && hops.length) waiting.add(hops[hops.length - 1].roleKey as string);
+  }
+  for (const a of view.attention) if (a.kind === "approval" && a.roleKey) waiting.add(a.roleKey);
+  const stuck = new Set(view.attention.filter((a) => STOPPED_KINDS.has(a.kind) && a.roleKey).map((a) => a.roleKey as string));
+  const out = new Map<string, FloorKind>();
+  for (const a of view.agents) {
+    const since = Date.parse(a.since ?? "");
+    let k: FloorKind;
+    if (WORKING.has(a.state)) k = "working";
+    else if (a.state === "needs_you" || waiting.has(a.roleKey)) k = "waiting";
+    else if (a.state === "stuck" || stuck.has(a.roleKey)) k = "stuck";
+    else if (onRun.has(a.roleKey)) k = "on_run";
+    else if (Number.isFinite(since) && nowMs - since <= FLOW_HOURS * 3_600_000) k = "recent";
+    else if (Number.isFinite(since) || (a.line && a.line !== "No work yet" && a.line !== "Idle")) k = "rested";
+    else k = "never";
+    out.set(a.roleKey, k);
+  }
+  return out;
+}
+
+/** The footer's counts: working, on a run (waiting or between steps — not working), at rest. */
+export function floorCounts(kinds: Map<string, FloorKind>): { working: number; onRuns: number; idle: number } {
+  let working = 0, onRuns = 0, idle = 0;
+  for (const k of kinds.values()) {
+    if (k === "working") working += 1;
+    else if (k === "waiting" || k === "on_run" || k === "stuck") onRuns += 1;
+    else idle += 1;
+  }
+  return { working, onRuns, idle };
+}
+
+/** A run's chain on the ring: its hop agents in order (repeats collapsed), whether it ends at
+ *  You (waiting on you), and its words for the tooltip. */
+export type Chain = { runId: string; keys: string[]; toYou: boolean; tone: "accent" | "amber" | "red"; tip: string };
+export function chainsOf(missions: Mission[], known: Set<string>): Chain[] {
+  const out: Chain[] = [];
+  for (const m of liveMissions(missions)) {
+    const keys: string[] = [];
+    for (const h of m.hops) {
+      if (h.kind !== "hop" || !h.roleKey || !known.has(h.roleKey)) continue;
+      if (keys[keys.length - 1] !== h.roleKey) keys.push(h.roleKey);
+    }
+    if (!keys.length) continue;
+    const toYou = m.state === "waiting_you";
+    const tone = toYou ? "amber" : m.state === "stopped" || m.state === "blocked" ? "red" : "accent";
+    const step = m.stepCount ? ` · step ${m.stepIndex} of ${m.stepCount}` : "";
+    out.push({ runId: m.runId, keys, toYou, tone, tip: `${m.subject || m.workflowName}${step} · ${m.verb}` });
+  }
+  return out;
+}
+
+// ── The day strip's window (design pass) ──────────────────────────────────────────────────
+
+/** The strip's time window: `fit` zooms to the runs on it (the earliest start in the full
+ *  window, less 10% padding, at least an hour, snapped to a nice tick), `full` is the whole
+ *  `hours`. Returns [since, now] in ms and 3-6 ticks. */
+export function stripWindow(rows: Pick<DayRow, "startedAt">[], nowMs: number, hours: number,
+                            mode: "fit" | "full"): { since: number; ticks: number[] } {
+  const full = nowMs - hours * 3_600_000;
+  let since = full;
+  if (mode === "fit") {
+    const starts = rows.map((r) => Date.parse(r.startedAt)).filter(Number.isFinite).map((t) => Math.max(t, full));
+    const first = starts.length ? Math.min(...starts) : full;
+    const span = Math.max(3_600_000, (nowMs - first) * 1.1);
+    since = Math.max(full, nowMs - span);
+  }
+  const span = nowMs - since;
+  const steps = [5, 10, 15, 30, 60, 120, 180, 240, 360].map((m) => m * 60_000);
+  const step = steps.find((s) => span / s <= 6) ?? 360 * 60_000;
+  const snapped = mode === "fit" ? Math.max(full, Math.floor(since / step) * step) : since;
+  const ticks: number[] = [];
+  for (let t = Math.ceil(snapped / step) * step; t <= nowMs; t += step) ticks.push(t);
+  return { since: snapped, ticks: ticks.slice(-6) };
 }

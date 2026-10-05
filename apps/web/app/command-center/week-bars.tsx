@@ -15,7 +15,7 @@ import type { Week } from "../../lib/command-center-view";
 
 export type WeekBarsProps = { week: Week; tz: string };
 
-const BAR_H = 40;
+const BAR_H = 84;
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -47,21 +47,29 @@ export function WeekBars({ week }: WeekBarsProps) {
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   return (
     <div className="cc-week-body" data-testid="cc-week-bars">
-      <div className="cc-week-bars" aria-hidden>
-        {week.days.map((d) => {
-          const g = (d.completed / max) * BAR_H;
-          const r = (d.failed / max) * BAR_H;
-          const tip = `${dayWords(d.date)} · ${d.completed} finished · ${d.failed} failed`;
-          return (
-            <span key={d.date} className="cc-week-bar" title={tip} data-testid="cc-week-bar">
-              <span className="cc-week-stack">
-                {r > 0 ? <i className="cc-week-failed" style={{ height: `${r}px` }} /> : null}
-                {g > 0 ? <i className="cc-week-done" style={{ height: `${g}px` }} /> : null}
+      <div className="cc-week-chart" aria-hidden>
+        <div className="cc-week-bars">
+          {week.days.map((d) => {
+            const g = (d.completed / max) * BAR_H;
+            const r = (d.failed / max) * BAR_H;
+            const n = d.completed + d.failed;
+            const tip = `${dayWords(d.date)} · ${d.completed} finished · ${d.failed} failed`;
+            return (
+              <span key={d.date} className="cc-week-bar" title={tip} data-testid="cc-week-bar">
+                <span className="cc-week-n" data-zero={n === 0 || undefined}>{n}</span>
+                <span className="cc-week-stack" style={{ height: BAR_H }}>
+                  {r > 0 ? <i className="cc-week-failed" style={{ height: `${r}px` }} /> : null}
+                  {g > 0 ? <i className="cc-week-done" style={{ height: `${g}px` }} /> : null}
+                </span>
+                <span className="cc-week-dow">{dayWords(d.date).slice(0, 3)}</span>
               </span>
-              <span className="cc-week-dow">{dayWords(d.date).slice(0, 1)}</span>
-            </span>
-          );
-        })}
+            );
+          })}
+        </div>
+        <span className="cc-week-legend">
+          <span><i className="cc-week-key" data-k="done" />passed</span>
+          <span><i className="cc-week-key" data-k="failed" />failed</span>
+        </span>
       </div>
       {week.runs === 0 ? (
         <span className="cc-week-line" data-testid="cc-week-line">No runs this week</span>
