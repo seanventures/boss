@@ -9,19 +9,47 @@ import type { DiscoveryListItem, DiscoveryRun, Meeting, MeetingTurnGist } from "
 import { consoleHref } from "../app/url-intent";
 
 export type Tone = "good" | "warn" | "bad" | "neutral" | "live";
-export type StageState = "done" | "now" | "todo" | "stopped";
+export type StageState = "done" | "now" | "todo" | "stopped" | "skipped";
 export type Stage = { key: string; label: string; state: StageState };
 
 // ── Titles ──────────────────────────────────────────────────────────────────────────────────
 
+/** A scaffold header BOSS writes into a panel's prompt: "--- RESEARCH ALREADY DONE FOR THIS ---". */
+const SCAFFOLD = /^[ \t]*-{2,}[ \t]*([A-Z][A-Z0-9 '’/&,-]{3,}?)[ \t]*-{2,}[ \t]*$/m;
+const PROMOTE_LEAD = "Produce a PRD for this evidence-backed opportunity";
+
+/**
+ * What the person asked, never the prompt BOSS built around it — the ONE reader of a brief for
+ * every hero, card, title and drawer. The API's `brief` (engine meeting_brief.split_brief) when
+ * it sent one; else the same cut made here, so an older API cannot leak "--- RESEARCH ALREADY
+ * DONE FOR THIS --- … ## What was researched {" onto a screen (shared-server: 4 of 22 panels).
+ */
+export function humanBrief(raw: string | null | undefined, apiBrief?: string | null): string {
+  const tidy = (t: string) => t.replace(/[ \t]*\[boss:[^\]]*\]/gi, "").replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n").trim();
+  if (apiBrief && apiBrief.trim()) return tidy(apiBrief);
+  let text = String(raw ?? "").replace(/\r\n/g, "\n");
+  if (text.trimStart().startsWith(PROMOTE_LEAD)) {
+    const field = (k: string) => new RegExp(`^${k}:\\s*(.*)$`, "m").exec(text)?.[1]?.trim() ?? "";
+    const pilot = field("TARGET PILOT");
+    return tidy(field("OUTCOME TO BUILD") + (pilot && pilot !== "(n/a)" ? `\nWho it is for: ${pilot}` : ""));
+  }
+  const ask = /^[ \t]*-{2,}[ \t]*WHAT YOU ARE BEING ASKED ABOUT[ \t]*-{2,}[ \t]*$/m.exec(text);
+  if (ask) text = text.slice(ask.index + ask[0].length);
+  else if (/^\s*-{2,}\s*WHAT THIS PANEL IS FOR/.test(text)) return "";
+  const next = SCAFFOLD.exec(text);
+  if (next) text = text.slice(0, next.index);
+  return tidy(text);
+}
+
 /** What a card or a hero can carry: the first sentence of a brief, without "Build a" and
- *  without the "Who it is for" block a workflow brief continues with. */
+ *  without the "Who it is for" block a workflow brief continues with. A question keeps its "?". */
 export function shortTitle(raw: string | null | undefined, max = 80): string {
-  let t = String(raw ?? "").replace(/^PRD meeting:\s*/i, "").replace(/\s+/g, " ").trim();
+  let t = humanBrief(String(raw ?? "").replace(/^PRD meeting:\s*/i, "")).replace(/\s+/g, " ").trim();
   t = t.replace(/^(?:build|make|create)\s+(?:a|an|the)\s+/i, "");
-  t = t.split(/\s(?:Who it is for|What it does|Who it's for)\b/i)[0];
-  const stop = t.search(/[.?!](?:\s|$)/);
-  if (stop > 0) t = t.slice(0, stop);
+  t = t.split(/\s(?:Who it is for|What it does|What it must do|Who it's for)\b/i)[0];
+  const sentence = /^(.*?[.!?])(?:\s|$)/.exec(t);
+  if (sentence && sentence[1].length > 3) t = sentence[1].endsWith("?") ? sentence[1] : sentence[1].slice(0, -1);
   t = t.replace(/[.:;,\s]+$/, "").trim();
   if (!t) return "Untitled";
   if (t.length > max) {
@@ -33,8 +61,8 @@ export function shortTitle(raw: string | null | undefined, max = 80): string {
 
 /** A dossier's or a panel's own words for the hero line: "For <who>. <what it does>" from a
  *  workflow brief, else the rest of the brief after its first sentence. */
-export function briefLine(raw: string | null | undefined, max = 220): string {
-  const text = String(raw ?? "").replace(/\r\n/g, "\n");
+export function briefLine(raw: string | null | undefined, max = 220, apiBrief?: string | null): string {
+  const text = humanBrief(raw, apiBrief);
   const who = /Who it(?: is|'s) for:\s*([^\n]+)/i.exec(text)?.[1]?.trim();
   const what = /What it does:\s*([^\n]+)/i.exec(text)?.[1]?.trim();
   let line = "";
@@ -183,48 +211,168 @@ export function outcomeBrief(title: string, o: { outcome?: string; target_pilot?
 
 // ── Panels ─────────────────────────────────────────────────────────────────────────────────
 
-export const PANEL_STAGES: Array<{ key: string; label: string; phases: string[]; doing: string }> = [
-  { key: "views", label: "Opening views", phases: ["research", "round1"], doing: "Each seat is framing it" },
-  { key: "debate", label: "Debate", phases: ["round2"], doing: "The seats are debating" },
-  { key: "synthesis", label: "Synthesis", phases: ["synthesis"], doing: "The facilitator is reconciling" },
-  { key: "prd", label: "PRD", phases: ["draft", "finalize"], doing: "Drafting the PRD" },
-  { key: "build", label: "Build", phases: [], doing: "" },
-];
+export type MeetingKind = "prd_panel" | "go_no_go" | "standup";
+
+export function kindOf(m: Pick<Meeting, "meeting_type">): MeetingKind {
+  const t = String(m.meeting_type ?? "prd_panel");
+  return t === "go_no_go" || t === "standup" ? t : "prd_panel";
+}
+
+/** Each kind's stages, and which engine phases each stage covers. */
+const STAGES: Record<MeetingKind, Array<{ key: string; label: string; phases: string[]; doing: string }>> = {
+  prd_panel: [
+    { key: "views", label: "Opening views", phases: ["research", "round1"], doing: "Each seat is framing it" },
+    { key: "debate", label: "Debate", phases: ["round2"], doing: "The seats are debating" },
+    { key: "synthesis", label: "Synthesis", phases: ["synthesis"], doing: "The facilitator is reconciling" },
+    { key: "prd", label: "PRD", phases: ["draft", "finalize"], doing: "Drafting the PRD" },
+    { key: "build", label: "Build", phases: [], doing: "" },
+  ],
+  go_no_go: [
+    { key: "views", label: "Evidence", phases: ["research", "round1"], doing: "Each seat is weighing the evidence" },
+    { key: "debate", label: "Debate", phases: ["round2"], doing: "The seats are arguing it out" },
+    { key: "verdict", label: "Verdict", phases: ["synthesis", "draft", "finalize"], doing: "The facilitator is calling it" },
+  ],
+  standup: [
+    { key: "views", label: "Check-ins", phases: ["research", "round1"], doing: "Each seat is checking in" },
+    { key: "debate", label: "Blockers", phases: ["round2"], doing: "Calling out blockers" },
+    { key: "recap", label: "Recap", phases: ["synthesis", "draft", "finalize"], doing: "The facilitator is recapping" },
+  ],
+};
+export const PANEL_STAGES = STAGES.prd_panel;
+
+/** What the rounds are called for this kind of meeting. */
+export function roundNames(m: Pick<Meeting, "meeting_type">): [string, string, string, string] {
+  const k = kindOf(m);
+  if (k === "standup") return ["Check-ins", "Where each seat stands", "Blockers", "What is in the way"];
+  if (k === "go_no_go") return ["Evidence", "Each seat weighs the case", "Debate", "For, against and the risk"];
+  return ["Opening views", "Each seat frames it through its own lens", "Debate",
+          "They answer each other — agreements, gaps, risks"];
+}
 
 export function meetingLive(m: Pick<Meeting, "status">): boolean {
   return m.status === "running" || m.status === "queued";
 }
 
-export function panelStages(m: Pick<Meeting, "status" | "phase" | "pull_request_url" | "prd_markdown">): Stage[] {
+/** The Build stage from the build the PRD fed (or the workflow's build step, when one is given). */
+function buildStage(m: Pick<Meeting, "build" | "pull_request_url" | "prd_state">,
+                    override?: StageState | "skipped"): StageState | "skipped" {
+  if (override) return override;
+  const b = m.build?.status;
+  if (b === "running" || b === "queued") return "now";
+  if (b === "completed" || b === "succeeded") return "done";
+  if (b === "failed" || b === "blocked") return "stopped";
+  return m.pull_request_url || m.prd_state === "approved" || m.prd_state === "published" ? "now" : "todo";
+}
+
+export function panelStages(m: Pick<Meeting, "status" | "phase" | "pull_request_url" | "prd_markdown"
+  | "meeting_type" | "build" | "prd_state">, build?: StageState | "skipped"): Stage[] {
+  const stages = STAGES[kindOf(m)];
   const live = meetingLive(m);
-  const at = PANEL_STAGES.findIndex((s) => s.phases.includes(m.phase ?? ""));
+  const at = stages.findIndex((s) => s.phases.includes(m.phase ?? ""));
   const done = m.status === "completed" || m.status === "simulated" || m.phase === "done";
-  return PANEL_STAGES.map((s, i) => {
-    let state: StageState = "todo";
-    if (done) state = s.key === "build" ? "now" : "done";
+  return stages.map((s, i) => {
+    let state: StageState | "skipped" = "todo";
+    if (s.key === "build" && done) state = buildStage(m, build);
+    else if (done) state = "done";
     else if (m.status === "failed") state = at < 0 ? (i === 0 ? "stopped" : "todo") : i < at ? "done" : i === at ? "stopped" : "todo";
     else if (live) state = at < 0 ? (i === 0 ? "now" : "todo") : i < at ? "done" : i === at ? "now" : "todo";
-    return { key: s.key, label: s.label, state };
+    return { key: s.key, label: s.label, state: state as StageState };
   });
 }
 
-export function panelDoing(m: Pick<Meeting, "phase" | "url">): string {
+export function panelDoing(m: Pick<Meeting, "phase" | "url" | "meeting_type">): string {
   if (m.phase === "research") return m.url ? `Studying ${domainOf(m.url)}` : "Gathering the brief";
-  return PANEL_STAGES.find((s) => s.phases.includes(m.phase ?? ""))?.doing ?? "In session";
+  return STAGES[kindOf(m)].find((s) => s.phases.includes(m.phase ?? ""))?.doing ?? "In session";
 }
 
-/** Where a panel ended up, as its card pill and its hero's outcome card say it. */
+export type Outcome = {
+  pill: string; tone: Tone; headline: string;
+  /** Where the PRD stands past the panel: what the outcome card offers next. */
+  stage: "live" | "failed" | "verdict" | "recorded" | "simulated" | "building" | "built" | "published"
+    | "approved" | "awaiting" | "declined" | "minutes";
+};
+
+/** Where a panel ended up, from the PRD's real decision and build — the card pill, the hero's
+ *  outcome card and the step panel all read it. A fixture says so before anything else. */
 export function meetingOutcome(m: Pick<Meeting, "status" | "pull_request_url" | "pull_request_number"
-  | "prd_label" | "prd_state" | "prd_markdown">): { pill: string; tone: Tone; headline: string } {
-  if (meetingLive(m)) return { pill: "In session", tone: "live", headline: "The panel is in session" };
-  if (m.status === "failed") return { pill: "Failed", tone: "bad", headline: "The panel stopped" };
-  if (m.status === "simulated") return { pill: "Simulated", tone: "neutral", headline: "No-spend fixture" };
-  if (m.pull_request_url) {
-    return { pill: "Agreed", tone: "good",
-      headline: `PRD in pull request #${m.pull_request_number ?? m.pull_request_url.split("/").pop()}` };
+  | "prd_label" | "prd_state" | "prd_markdown" | "meeting_type" | "verdict" | "build"
+  | "action_items">): Outcome {
+  const k = kindOf(m);
+  if (meetingLive(m)) return { pill: "In session", tone: "live", headline: "The panel is in session", stage: "live" };
+  if (m.status === "failed") return { pill: "Stopped", tone: "bad", headline: "The panel stopped", stage: "failed" };
+  if (k === "go_no_go") {
+    const v = m.verdict;
+    return { pill: v === "go" ? "GO" : v === "no_go" ? "NO-GO" : "No verdict", tone: v === "go" ? "good" : v === "no_go" ? "bad" : "neutral",
+             headline: v === "go" ? "Go" : v === "no_go" ? "No-go" : "No verdict recorded", stage: "verdict" };
   }
-  if (m.prd_markdown) return { pill: "Agreed", tone: "good", headline: m.prd_label ? capital(m.prd_label) : "PRD drafted" };
-  return { pill: "Minutes", tone: "neutral", headline: m.prd_label ? capital(m.prd_label) : "Minutes recorded" };
+  if (k === "standup") {
+    const n = m.action_items?.length ?? 0;
+    return { pill: "Recorded", tone: "neutral", headline: n ? `${n} action${n === 1 ? "" : "s"} recorded` : "Stand-up recorded",
+             stage: "recorded" };
+  }
+  if (m.status === "simulated") return { pill: "Simulated", tone: "neutral", headline: "No-spend fixture", stage: "simulated" };
+  const b = m.build?.status;
+  if (b === "running" || b === "queued") return { pill: "Building", tone: "live", headline: "Being built from the PRD", stage: "building" };
+  if (b === "completed") return { pill: "Built", tone: "good", headline: "Built from the PRD", stage: "built" };
+  if (m.pull_request_url) {
+    return { pill: "Agreed · PRD ready", tone: "good",
+      headline: `PRD in pull request #${m.pull_request_number ?? m.pull_request_url.split("/").pop()}`, stage: "published" };
+  }
+  const st = m.prd_state ?? "";
+  if (st === "approved" || st === "published") return { pill: "Agreed · PRD approved", tone: "good", headline: "PRD approved", stage: "approved" };
+  if (st === "awaiting_approval") return { pill: "Agreed · PRD drafted", tone: "warn", headline: "PRD awaiting your approval", stage: "awaiting" };
+  if (st === "rejected" || st === "revision_requested" || st === "expired") {
+    return { pill: capital(m.prd_label ?? st.replace(/_/g, " ")), tone: "warn", headline: capital(m.prd_label ?? "PRD not approved"), stage: "declined" };
+  }
+  if (m.prd_markdown) return { pill: "Agreed · PRD drafted", tone: "good", headline: "PRD drafted", stage: "awaiting" };
+  return { pill: "Minutes", tone: "neutral", headline: "Minutes recorded", stage: "minutes" };
+}
+
+/** Approvals, open on the decision this PRD waits on. */
+export function decisionHref(search: string, decisionId?: string | null): string {
+  return consoleHref(search, { area: "decisions", ...(decisionId ? { decision: decisionId } : {}) });
+}
+
+/**
+ * The brief "Build it" hands the composer from a panel: the AGREED PRD — its title, summary,
+ * goals and requirements, and a link to read all of it — never the raw directive.
+ */
+export function prdDigest(md: string | null | undefined, title: string, prUrl?: string | null): string {
+  const sections = new Map<string, string[]>();
+  let current = "";
+  for (const raw of String(md ?? "").split("\n")) {
+    const h = /^#{2,3}\s+(.*)$/.exec(raw);
+    if (h) { current = h[1].replace(/[*_`#]/g, "").replace(/^\d+[.)]\s*/, "").trim().toLowerCase(); continue; }
+    if (!current) continue;
+    const line = raw.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/[*_`>]/g, "").replace(/\s+/g, " ").trim();
+    if (!line || line.startsWith("|") || /^-{3,}$/.test(line)) continue;
+    sections.set(current, [...(sections.get(current) ?? []), line]);
+  }
+  const pick = (re: RegExp, n: number) => {
+    for (const [k, v] of sections) if (re.test(k)) return v.slice(0, n);
+    return [];
+  };
+  const summary = pick(/summary|overview|tl;?dr/, 2).join(" ");
+  const goals = pick(/goal/, 4);
+  const reqs = pick(/requirement|must|scope|mvp|solution/, 6);
+  return [
+    title,
+    summary,
+    goals.length ? `Goals:\n${goals.map((g) => `- ${g}`).join("\n")}` : "",
+    reqs.length ? `What it must do:\n${reqs.map((r) => `- ${r}`).join("\n")}` : "",
+    prUrl ? `Read the full PRD: ${prUrl}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+/** A recorded vote, as a sentence: "Approved · 3 for, 1 against, 1 abstain · quorum met". */
+export function voteSentence(d: Record<string, unknown> | null | undefined): string {
+  if (!d) return "";
+  const n = (k: string) => Number(d[k] ?? 0) || 0;
+  const outcome = String(d.outcome ?? (d.consensus_reached ? "approved" : "recorded")).replace(/_/g, " ");
+  const label = outcome === "no quorum" ? "No quorum" : capital(outcome);
+  const quorum = d.quorum_met === false
+    ? `quorum not met (${n("votes_cast")} of ${n("quorum")} needed)` : "quorum met";
+  return `${label} · ${n("approve")} for, ${n("reject")} against, ${n("abstain")} abstain · ${quorum}`;
 }
 
 export function repoOf(prUrl: string | null | undefined): string {
@@ -318,4 +466,11 @@ export function readComposerPrefill(search: string): { title?: string; directive
   const brief = q.get("brief");
   if (!brief) return null;
   return { title: q.get("title") ?? undefined, directive: brief };
+}
+
+/** The dossier a URL names: `discovery=`, or `run=` when it holds a research run (drun_). A
+ *  meeting run (mrun_) or a code task (crun_) in `run=` belongs to another area. */
+export function researchRunParam(discovery?: string | null, run?: string | null): string | undefined {
+  if (discovery) return discovery;
+  return run && !/^(mrun|mtg|crun|wfr)_/.test(run) ? run : undefined;
 }

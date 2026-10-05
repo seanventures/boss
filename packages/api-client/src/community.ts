@@ -1641,6 +1641,23 @@ export type Meeting = {
   prd_state?: string | null;
   /** The same, in the operator's words. Rendered as given; the console does not re-derive it. */
   prd_label?: string | null;
+  /** What the person asked, apart from the prompt scaffolding (engine meeting_brief). */
+  brief?: string | null;
+  /** What BOSS added to the prompt (the workflow's purpose, the research), as markdown. */
+  context?: string | null;
+  meeting_type?: "prd_panel" | "go_no_go" | "standup" | string | null;
+  /** Why a failed panel stopped. */
+  error?: string | null;
+  /** The decision that gates publishing the PRD. */
+  decision_id?: string | null;
+  /** Whether minutes exist to record a vote against. */
+  can_vote?: boolean;
+  /** The build the PRD fed, once one started. */
+  build?: { id: string; status: string; phase?: string | null; pull_request_url?: string | null } | null;
+  /** go/no-go: the verdict; typed meetings: the dissent and actions they recorded. */
+  verdict?: "go" | "no_go" | null;
+  dissent?: Array<{ role?: string | null; position?: string | null; reason?: string | null }>;
+  action_items?: Array<{ title: string; description?: string | null }>;
 };
 
 /** A panel turn in brief: plain text, never markdown. */

@@ -40,6 +40,8 @@ _BOLD_LINE = re.compile(r"^\s*(\*\*|__)(.+?)(\*\*|__)\s*:?\s*$")
 _BULLET = re.compile(r"^\s*(?:[-*+•▪◦]|\d+[.)]|[0-9]️?⃣)\s+")
 _KEYCAP = re.compile(r"[0-9#*]️?⃣")
 _MARKS = re.compile(r"[*_`>#~]")
+#: A fixture's "[standup]" / "[go/no-go]" / "[simulated]" lead tag, and BOSS's [boss:…] markers.
+_TAG = re.compile(r"^\s*\[[a-z][a-z/ _-]{1,20}\]\s*|\[boss:[^\]]*\]", re.I)
 _ONLY_PUNCT = re.compile(r"^[\s\-—–:|=.·•]*$")
 
 
@@ -58,6 +60,7 @@ def _plain(line: str) -> str:
     line = _BULLET.sub("", line)
     line = _KEYCAP.sub("", line)
     line = _MARKS.sub("", line)
+    line = _TAG.sub("", line)
     line = line.replace(" ", " ").replace(" ", " ")
     return re.sub(r"\s+", " ", line).strip(" \t-–—:•")
 
@@ -116,7 +119,7 @@ def split_reply_gist(reply: Optional[str]) -> tuple[str, Optional[dict]]:
     return "\n".join(body).rstrip(), gist
 
 
-def extract_gist(markdown: Optional[str], points: int = MAX_POINTS) -> dict:
+def extract_gist(markdown: Optional[str], points: int = MAX_POINTS, prefer_body: bool = False) -> dict:
     """The deterministic gist: first heading (else first meaningful line) as the headline, then
     the next meaningful lines as points. Code blocks, tables and rules are skipped."""
     text = _FENCE.sub("\n", markdown or "")
@@ -135,6 +138,9 @@ def extract_gist(markdown: Optional[str], points: int = MAX_POINTS) -> dict:
     # A heading buried deep in the reply is not its headline; the opening line is.
     if head_at > 2:
         head_at = 0
+    if prefer_body:
+        # What was AGREED, not the section label above it ("Converged Output (PRD Panel)").
+        head_at = next((i for i, (t, h) in enumerate(lines) if not h and len(t) >= 20), head_at)
     headline = _clip(lines[head_at][0], HEADLINE_MAX)
     # Points are what the seat SAID, so body lines come first; its sub-headings ("Core
     # priorities", "Where I disagree") only fill in when the body runs short.
@@ -181,5 +187,5 @@ def room_gists(round1: Optional[dict], round2: Optional[dict], synthesis: Option
     return {
         "round1_gists": gists_for(round1, stored1),
         "round2_gists": gists_for(round2, stored2),
-        "synthesis_gist": extract_gist(synthesis, points=5) if synthesis else None,
+        "synthesis_gist": extract_gist(synthesis, points=5, prefer_body=True) if synthesis else None,
     }

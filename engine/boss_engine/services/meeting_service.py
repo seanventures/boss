@@ -841,7 +841,7 @@ def convene_prd_meeting_core(
     project_id: str, directive: str, url: str = "",
     constraints: Optional[dict] = None, role_keys: Optional[list] = None,
     task_id: Optional[str] = None, title: Optional[str] = None,
-    origin: Optional[dict] = None,
+    origin: Optional[dict] = None, brief: Optional[str] = None,
 ) -> dict:
     """Shared core for convening a durable multi-agent PRD meeting: create the
     task (if needed), reserve budget, start the run, enqueue the first step.
@@ -854,6 +854,13 @@ def convene_prd_meeting_core(
     constraints = dict(constraints or {})
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
+    # WHAT THE PERSON ASKED, kept apart from the prompt BOSS built around it (meeting_brief):
+    # the console shows this, never the scaffolding.
+    if str(brief or "").strip():
+        constraints["brief"] = str(brief).strip()
+    else:
+        from .meeting_brief import split_brief
+        constraints.setdefault("brief", split_brief(directive)["brief"])
     # WHAT THE MEETING IS CALLED is not its prompt. A caller that wrapped the directive in
     # framing passes the bare ask as `title`; anyone else gets the directive's subject.
     title = meeting_subject(title or directive)

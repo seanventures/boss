@@ -48,7 +48,8 @@ def test_stored_gists_are_served_and_old_turns_get_one_cut(client, engine):
     assert new["round1_gists"]["Product Manager"] == {"headline": "Score it", "points": ["one", "two"]}
     assert new["round2_gists"]["Product Manager"] == {
         "headline": "PM – the real problem", "points": ["Small teams drown in inbound noise."]}
-    assert new["synthesis_gist"] == {"headline": "Agreed", "points": ["Ship the narrow slice first."]}
+    # What was AGREED leads, not the section label above it.
+    assert new["synthesis_gist"] == {"headline": "Ship the narrow slice first.", "points": []}
     assert old["round1_gists"]["Product Manager"]["headline"] == "PM – the real problem"
     assert old["synthesis_gist"] is None
 

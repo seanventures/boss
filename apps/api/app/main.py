@@ -6200,13 +6200,19 @@ def delete_meeting_role_endpoint(role_key: str, project_id: str, actor: str = "c
 
 
 @app.get("/v1/meeting-rooms")
-def list_meeting_rooms(project_id: str, limit: int = 25):
+def list_meeting_rooms(project_id: str, limit: int = 25, offset: int = 0,
+                       task_id: Optional[str] = None):
     """Full meeting records for the Meeting Room: participants, each round's
     contributions, the debate, the synthesis, the drafted PRD, and the PR it
-    landed in."""
+    landed in. `offset` pages past the newest `limit`; `task_id` finds the panel held for a
+    task (a dossier's "Convene a panel" links by task)."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    return {"project_id": project_id, "items": _meeting_room_items(project_id, limit)}
+    from .services.meeting_rooms import meeting_room_items
+    with begin(engine) as connection:
+        items = meeting_room_items(connection, project_id, limit=limit, offset=offset,
+                                   task_id=task_id)
+    return {"project_id": project_id, "items": items}
 
 
 @app.get("/v1/meeting-rooms/{meeting_id}")
@@ -6216,194 +6222,12 @@ def get_meeting_room(meeting_id: str, project_id: str):
     newest 25). Accepts a run id (mrun_) or a legacy meeting id (mtg_)."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    items = _meeting_room_items(project_id, 1, only_id=meeting_id)
+    from .services.meeting_rooms import meeting_room_items
+    with begin(engine) as connection:
+        items = meeting_room_items(connection, project_id, limit=1, only_id=meeting_id)
     if not items:
         raise HTTPException(status_code=404, detail="meeting not found")
     return items[0]
-
-
-def _meeting_room_items(project_id: str, limit: int, only_id: str | None = None) -> list[dict]:
-    """The meeting-room records for a project, newest first — or the one named `only_id`."""
-
-    def _iso(v):
-        return v.isoformat() if hasattr(v, "isoformat") else v
-
-    from .services.meeting_service import (
-        resolve_roles, load_role_map, FACILITATOR_TITLE, meeting_subject, display_title,
-        prd_state_of,
-    )
-    from .services.meeting_gist import room_gists
-
-    def _pr_for_task(connection, tid):
-        if not tid:
-            return None, None
-        pub = connection.execute(
-            text("SELECT content FROM artifacts WHERE task_id = :t AND artifact_type = 'published_document' "
-                 "ORDER BY created_at DESC LIMIT 1"),
-            {"t": tid},
-        ).mappings().first()
-        if not pub:
-            return None, None
-        pc = pub["content"] or {}
-        if isinstance(pc, str):
-            try:
-                pc = json.loads(pc)
-            except Exception:
-                pc = {}
-        return pc.get("pull_request_url"), pc.get("pull_request_number")
-
-    def _task_info(connection, tid):
-        if not tid:
-            return None, None
-        tr = connection.execute(text("SELECT title, status FROM tasks WHERE id = :t"), {"t": tid}).mappings().first()
-        return (tr["title"], tr["status"]) if tr else (None, None)
-
-    with begin(engine) as connection:
-        items = []
-        covered_tasks: set = set()
-        # 1) Durable meeting_runs — live phase/status + per-round state.
-        runs = connection.execute(
-            text("""SELECT id, task_id, status, phase, directive, url, role_keys, state, usage, created_at, updated_at,
-                           title, decision_id
-                    FROM meeting_runs WHERE project_id = :p AND (CAST(:only AS text) IS NULL OR id = :only)
-                    ORDER BY updated_at DESC LIMIT :limit"""),
-            {"p": project_id, "limit": max(1, min(limit, 100)), "only": only_id},
-        ).mappings().all()
-        for r in runs:
-
-            def _j(v):
-                if isinstance(v, str):
-                    try:
-                        return json.loads(v)
-                    except Exception:
-                        return {}
-                return v
-            state = _j(r["state"]) or {}
-            usage = _j(r["usage"]) or {}
-            personas = resolve_roles(_j(r["role_keys"]) or [], load_role_map(connection, project_id))
-            if r["task_id"]:
-                covered_tasks.add(r["task_id"])
-            pr_url, pr_num = _pr_for_task(connection, r["task_id"])
-            t_title, t_status = _task_info(connection, r["task_id"])
-            research = state.get("research") or {}
-            items.append({
-                "id": r["id"], "task_id": r["task_id"], "task_title": t_title, "task_status": t_status,
-                "role_keys": [p["key"] for p in personas],
-                # THE SUBJECT, NOT THE PROMPT: workflow framing made every card on boss-1 read
-                # "PRD meeting:" followed by the workflow framing.
-                "title": f"PRD meeting: {r['title'] or meeting_subject(r['directive'])}",
-                "purpose": "Cross-functional PRD review and drafting",
-                "status": r["status"], "phase": r["phase"],
-                **prd_state_of(connection, run_status=r["status"], decision_id=r["decision_id"],
-                               task_id=r["task_id"], pull_request_url=pr_url),
-                "participants": [p["title"] for p in personas] + [FACILITATOR_TITLE],
-                "created_at": _iso(r["created_at"]), "completed_at": _iso(r["updated_at"]) if r["status"] == "completed" else None,
-                "directive": r["directive"], "url": r["url"],
-                "model": usage.get("model"), "cost_usd_micros": usage.get("cost_usd_micros"),
-                "research_summary": {"sitemap": research.get("sitemap", []), "pages_studied": len(research.get("pages", []))},
-                "round1": state.get("round1") or {}, "round2": state.get("round2") or {},
-                # Each turn's headline and key points: the seat's own when it wrote one, else
-                # cut deterministically from the reply (meeting_gist).
-                **room_gists(state.get("round1"), state.get("round2"), state.get("synthesis"),
-                             state.get("round1_gists"), state.get("round2_gists")),
-                "synthesis": state.get("synthesis"), "prd_markdown": state.get("prd_markdown"),
-                "pull_request_url": pr_url, "pull_request_number": pr_num,
-            })
-        if only_id and items:
-            return items
-
-        # 2) Legacy meetings table (pre-durable) — only those not covered by a run.
-        rows = connection.execute(
-            text(
-                """
-                SELECT id, title, purpose, status, participants, minutes_artifact_id,
-                       completed_at, created_at
-                FROM meetings WHERE project_id = :p AND (CAST(:only AS text) IS NULL OR id = :only)
-                ORDER BY created_at DESC LIMIT :limit
-                """
-            ),
-            {"p": project_id, "limit": max(1, min(limit, 100)), "only": only_id},
-        ).mappings().all()
-
-        for m in rows:
-            content: dict = {}
-            task_id = None
-            if m["minutes_artifact_id"]:
-                art = connection.execute(
-                    text("SELECT task_id, content FROM artifacts WHERE id = :a"),
-                    {"a": m["minutes_artifact_id"]},
-                ).mappings().first()
-                if art:
-                    task_id = art["task_id"]
-                    content = art["content"] or {}
-                    if isinstance(content, str):
-                        try:
-                            content = json.loads(content)
-                        except Exception:
-                            content = {}
-            if task_id and task_id in covered_tasks and not only_id:
-                continue  # a durable run already represents this meeting
-            pr_url = None
-            pr_num = None
-            task_title = None
-            task_status = None
-            if task_id:
-                tr = connection.execute(
-                    text("SELECT title, status FROM tasks WHERE id = :t"),
-                    {"t": task_id},
-                ).mappings().first()
-                if tr:
-                    task_title = tr["title"]
-                    task_status = tr["status"]
-                pub = connection.execute(
-                    text(
-                        "SELECT content FROM artifacts WHERE task_id = :t AND artifact_type = 'published_document' "
-                        "ORDER BY created_at DESC LIMIT 1"
-                    ),
-                    {"t": task_id},
-                ).mappings().first()
-                if pub:
-                    pc = pub["content"] or {}
-                    if isinstance(pc, str):
-                        try:
-                            pc = json.loads(pc)
-                        except Exception:
-                            pc = {}
-                    pr_url = pc.get("pull_request_url")
-                    pr_num = pc.get("pull_request_number")
-            items.append(
-                {
-                    "id": m["id"],
-                    "task_id": task_id,
-                    "task_title": task_title,
-                    "task_status": task_status,
-                    "role_keys": content.get("role_keys") or [],
-                    "title": display_title(m["title"]),
-                    "purpose": m["purpose"],
-                    "status": m["status"],
-                    **prd_state_of(connection, run_status=m["status"], decision_id=None,
-                                   task_id=task_id, pull_request_url=pr_url),
-                    "phase": "done",
-                    "participants": m["participants"] or [],
-                    "created_at": _iso(m["created_at"]),
-                    "completed_at": _iso(m["completed_at"]),
-                    "directive": content.get("directive"),
-                    "url": content.get("url"),
-                    "model": content.get("model"),
-                    "cost_usd_micros": content.get("cost_usd_micros"),
-                    "research_summary": content.get("research_summary") or {},
-                    "round1": content.get("round1_perspectives") or {},
-                    "round2": content.get("round2_debate") or {},
-                    **room_gists(content.get("round1_perspectives"), content.get("round2_debate"),
-                                 content.get("synthesis"), content.get("round1_gists"),
-                                 content.get("round2_gists")),
-                    "synthesis": content.get("synthesis"),
-                    "prd_markdown": content.get("prd_markdown"),
-                    "pull_request_url": pr_url,
-                    "pull_request_number": pr_num,
-                }
-            )
-        return items
 
 
 @app.post("/v1/meetings/step")
@@ -11359,13 +11183,14 @@ def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecut
 
 
 @app.get("/v1/discoveries")
-def list_discoveries_endpoint(project_id: str, limit: int = 50):
-    """List discovery runs for a project (newest first) for the Discovery view."""
+def list_discoveries_endpoint(project_id: str, limit: int = 50, offset: int = 0):
+    """List discovery runs for a project (newest first) for the Discovery view. `offset` pages
+    past the first `limit` (Research's "Show more")."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.discovery_service import list_discovery_runs
     with begin(engine) as c:
-        return {"discoveries": list_discovery_runs(c, project_id, limit)}
+        return {"discoveries": list_discovery_runs(c, project_id, max(1, min(limit, 100)), offset)}
 
 
 @app.get("/v1/discoveries/{run_id}")
@@ -11433,16 +11258,19 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.Discove
         reservation_id = reservation["reservation_id"]
         task = intake.create_task(
             connection, project_id=project_id,
-            title=title, description=directive,
+            title=f"PRD meeting: {title}", description=directive,
             dedupe_key=stable_dedupe_key("discovery-promote", run_id, idx),
             priority="p1", risk_tier=2,
             inputs={"directive": directive, "discovery_run_id": run_id, "outcome_index": idx},
             required_artifacts=["meeting_minutes"], data_boundary="internal",
         )
         task_id = task["task_id"]
+        o = outcomes[idx] or {}
+        brief = (str(o.get("outcome") or "").strip()
+                 + (f"\nWho it is for: {o['target_pilot']}" if o.get("target_pilot") else ""))
         meeting_run_id = start_meeting_run(
             connection, project_id=project_id, task_id=task_id, directive=directive, url=None,
-            constraints={}, role_keys=None,
+            constraints={"brief": brief}, role_keys=None, title=title,
             finalize_ctx={"reservation_id": reservation_id, "origin": {"actor": actor}},
         )
         jobs.create_job(connection, project_id=project_id, task_id=task_id,

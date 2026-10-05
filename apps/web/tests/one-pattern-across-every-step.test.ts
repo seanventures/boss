@@ -130,8 +130,12 @@ describe("one action has one control", () => {
     expect(UI).toContain("onAsk={ask}");
   });
 
-  it("and the preview link is not both a button and a link", () => {
-    expect(UI).toContain('const visibleLinks = links.filter((l) => l.label !== "open the preview")');
+  it("and the preview link is not both a button and a link", async () => {
+    // Behaviour, not a line: the link list a step shows never repeats the preview button.
+    const { visibleStepLinks } = await import("../app/delivery-workflows-ui");
+    const links = [{ label: "open the preview" }, { label: "open the project" }];
+    expect(visibleStepLinks(links, null).map((l) => l.label)).toEqual(["open the project"]);
+    expect(UI).toContain("visibleStepLinks(links, work)");
     expect(UI).toContain('data-testid="dw-preview-open"');
   });
 });

@@ -22,10 +22,12 @@ import type {
 import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 import { consoleHref } from "./url-intent";
-import { Ring, Verdict, Stepper, How, useSearch, pushParams, clip } from "./research/bits";
+import { Ago, Ring, Verdict, Stepper, How, useSearch, pushParams, clip } from "./research/bits";
 
 import { callAction } from "../lib/call-action";
 import { fetchDiscoveryDetail } from "../lib/discovery-detail";
+import { sayLoadError } from "../lib/meeting-room-detail";
+import { AreaLink } from "./area-link";
 import {
   ago, briefLine, buildable, checkLabel, composerHref, domainOf, dossierTitle, dossierVerdict,
   outcomeBrief, pct, researchDoing, researchStages, usd, type VerdictFilter,
@@ -43,11 +45,13 @@ function useLiveRefresh(active: boolean, intervalMs = 4000) {
   }, [active, intervalMs, refresh]);
 }
 
-/** One dossier, fetched by id and re-read every 4s while it is still researching. */
+/** One dossier, fetched by id; re-read every 4s ONLY while it is still researching. A dossier
+ *  that is not there is said once and not asked for again. */
 function useDossier(id: string, stamp = ""): { run: DiscoveryRun | null; error: string | null } {
   const [run, setRun] = useState<DiscoveryRun | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const live = !run || run.status === "running" || run.status === "queued";
+  const mine = run && run.id === id ? run : null;
+  const live = mine ? mine.status === "running" || mine.status === "queued" : false;
   useEffect(() => {
     let cancelled = false;
     const load = () => fetchDiscoveryDetail(id).then((res) => {
@@ -59,7 +63,7 @@ function useDossier(id: string, stamp = ""): { run: DiscoveryRun | null; error: 
     const t = setInterval(() => { void load(); }, 4000);
     return () => { cancelled = true; clearInterval(t); };
   }, [id, stamp, live]);
-  return { run: run && run.id === id ? run : null, error };
+  return { run: mine, error: mine ? null : error };
 }
 
 const isLive = (status: string) => status === "running" || status === "queued";
@@ -216,7 +220,7 @@ function DossierCard({ d, onOpen }: { d: DiscoveryListItem; onOpen: () => void }
             data-status={d.status} title={(d.seed ?? d.title ?? "").slice(0, 400)}>
       <span className="rp-dtop">
         <Verdict tone={v.tone}>{v.label}</Verdict>
-        <span className="rp-when">{ago(d.created_at)}</span>
+        <span className="rp-when"><Ago iso={d.created_at} /></span>
       </span>
       <b className="rp-dtitle">{dossierTitle(d)}</b>
       {d.status === "failed" ? (
@@ -289,22 +293,43 @@ export function DiscoveriesHome({
   const anyLive = discoveries.some((d) => isLive(d.status));
   useLiveRefresh(anyLive);
 
+  // Dossiers past the first page ("Show more"): the list API pages by offset.
+  const [more, setMore] = useState<DiscoveryListItem[]>([]);
+  const [moreState, setMoreState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const all = useMemo(() => {
+    const seen = new Set(discoveries.map((d) => d.id));
+    return [...discoveries, ...more.filter((d) => !seen.has(d.id))];
+  }, [discoveries, more]);
+  const loadMore = React.useCallback(async () => {
+    setMoreState("loading");
+    try {
+      const r = await fetch(`/v1/discoveries?project_id=${encodeURIComponent(projectId)}&limit=50&offset=${discoveries.length + more.length}`,
+                            { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      // The list API sends summaries (discovery_service.list_discovery_runs), not dossiers.
+      const page = ((await r.json()) as { discoveries?: DiscoveryListItem[] }).discoveries ?? [];
+      setMore((cur) => [...cur, ...page]);
+      setMoreState(page.length < 50 ? "done" : "idle");
+    } catch {
+      setMoreState("error");
+    }
+  }, [projectId, discoveries.length, more.length]);
   const [filter, setFilter] = useState<VerdictFilter>("all");
   const [query, setQuery] = useState("");
   const counts = useMemo(() => {
-    const c: Record<VerdictFilter, number> = { all: discoveries.length, promising: 0, needs_more: 0, not_worth: 0 };
-    for (const d of discoveries) { const f = dossierVerdict(d).filter; if (f) c[f] += 1; }
+    const c: Record<VerdictFilter, number> = { all: all.length, promising: 0, needs_more: 0, not_worth: 0 };
+    for (const d of all) { const f = dossierVerdict(d).filter; if (f) c[f] += 1; }
     return c;
-  }, [discoveries]);
+  }, [all]);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return discoveries.filter((d) => (filter === "all" || dossierVerdict(d).filter === filter)
+    return all.filter((d) => (filter === "all" || dossierVerdict(d).filter === filter)
       && (!q || `${d.title ?? ""} ${d.seed ?? ""}`.toLowerCase().includes(q)));
-  }, [discoveries, filter, query]);
+  }, [all, filter, query]);
 
   if (selected) {
     return (
-      <DiscoveryDetail id={selected} row={discoveries.find((d) => d.id === selected) ?? null}
+      <DiscoveryDetail id={selected} row={all.find((d) => d.id === selected) ?? null}
                        projectId={projectId} orgId={orgId} researchAvailable={researchAvailable}
                        onBack={() => open(null)} />
     );
@@ -312,7 +337,7 @@ export function DiscoveriesHome({
 
   return (
     <div className="rp" data-testid="research-home">
-      <ResearchHero projectId={projectId} researchAvailable={researchAvailable} discoveries={discoveries}
+      <ResearchHero projectId={projectId} researchAvailable={researchAvailable} discoveries={all}
                     onStarted={open} />
       <section aria-label="Dossiers">
         <div className="rp-sec-h">
@@ -335,14 +360,25 @@ export function DiscoveriesHome({
         ) : discoveries.length === 0 ? (
           <div className="rp-empty" data-testid="research-empty"><b>No dossiers yet.</b>
             {researchAvailable ? "Ask a question above — or run a workflow, whose first step researches it."
-              : "Saved dossiers appear here."}</div>
+              : "Saved dossiers appear here."}
+            <AreaLink area="delivery_workflows" className="rp-link">Start a workflow →</AreaLink></div>
         ) : shown.length === 0 ? (
           <div className="rp-empty"><b>Nothing matches.</b>
             <button type="button" className="rp-link" onClick={() => { setFilter("all"); setQuery(""); }}>Show all</button></div>
         ) : (
-          <div className="rp-grid">
-            {shown.map((d) => <DossierCard key={d.id} d={d} onOpen={() => open(d.id)} />)}
-          </div>
+          <>
+            <div className="rp-grid">
+              {shown.map((d) => <DossierCard key={d.id} d={d} onOpen={() => open(d.id)} />)}
+            </div>
+            {discoveries.length >= 50 && moreState !== "done" ? (
+              <div className="rp-more-row">
+                <button type="button" className="rp-btn" onClick={() => void loadMore()} disabled={moreState === "loading"}
+                        data-testid="dossiers-show-more">
+                  {moreState === "loading" ? "Loading…" : moreState === "error" ? "Try again" : "Show more"}
+                </button>
+              </div>
+            ) : null}
+          </>
         )}
       </section>
     </div>
@@ -389,6 +425,7 @@ function VerdictCard({ run, projectId, researchAvailable }: {
       <Ring value={gate?.confidence ?? 0} size={92} big color="var(--rp-mint)" />
       <div className="rp-vsub">
         confidence{gate?.thesis_confidence != null ? ` · thesis ${pct(gate.thesis_confidence)}%` : ""}
+        {gate?.best_outcome_confidence != null ? ` · best outcome ${pct(gate.best_outcome_confidence)}%` : ""}
         {gate?.cited_sources != null ? ` · ${gate.cited_sources} sources` : ""}
       </div>
       {gate?.checks && Object.keys(gate.checks).length ? (
@@ -603,8 +640,8 @@ function DiscoveryDetail({ id, row, projectId, researchAvailable, onBack }: {
       <div className="rp" data-testid="dossier">
         <button type="button" className="rp-back" onClick={onBack}>← All dossiers</button>
         <div className="rp-empty" data-testid={error ? "discovery-not-in-feed" : "discovery-dossier-loading"} role="status">
-          {error ? <><b>That dossier did not open.</b>{error === "discovery run not found"
-            ? `Research run ${id} is not in this project.` : error}</> : <b>Loading the dossier…</b>}
+          {error ? <><b>This dossier isn&apos;t here any more.</b>{sayLoadError(error, "dossier")}</>
+            : <b>Loading the dossier…</b>}
         </div>
       </div>
     );
@@ -624,7 +661,7 @@ function DiscoveryDetail({ id, row, projectId, researchAvailable, onBack }: {
         <div className="rp-dh-l">
           <div className="rp-eyebrow">
             <span className="rp-dot" data-tone={live ? undefined : run.status === "failed" ? "bad" : "idle"} aria-hidden />
-            Dossier{run.created_at ? ` · ${ago(run.created_at)}` : ""}
+            Dossier<Ago iso={run.created_at} prefix=" · " />
             {run.usage?.cost_usd_micros != null ? ` · ${usd(run.usage.cost_usd_micros)}` : ""}
             {deep ? " · Deep" : ""}
           </div>
@@ -643,7 +680,7 @@ function DiscoveryDetail({ id, row, projectId, researchAvailable, onBack }: {
 
       {!loaded ? (
         <p className="rp-sub" data-testid="discovery-dossier-loading">
-          {error ? `The dossier did not load: ${error}` : "Loading the dossier…"}
+          {error ? sayLoadError(error, "dossier") : "Loading the dossier…"}
         </p>
       ) : null}
 
@@ -706,7 +743,7 @@ export function DossierCompact({ discoveryId, researchAvailable = true }: {
         <div className="rp-cmp">
           <Ring value={0} live={!error} size={48} />
           <div className="rp-cmp-body">
-            <span className={error ? "rp-err" : "rp-sub"}>{error ? `The dossier did not load: ${error}` : "Opening the dossier…"}</span>
+            <span className={error ? "rp-err" : "rp-sub"}>{error ? `This dossier isn't here any more. ${sayLoadError(error, "dossier")}` : "Opening the dossier…"}</span>
           </div>
           <div className="rp-cmp-foot"><a className="rp-btn sm" href={full}>Open full view ↗</a></div>
         </div>

@@ -119,6 +119,7 @@ import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
+import { researchRunParam } from "../lib/research-panels";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchOpsQueueFeed } from "../lib/ops";
 import { fetchLiveJobsFeed } from "../lib/live-jobs";
@@ -561,8 +562,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // discovery id, but the page kept the open dossier in local state alone, so every link
   // landed on the list and the operator had to go and find the run they had just clicked.
   // `run` as well as `discovery`, because that is the name the workflow step already sends.
-  const requestedDiscovery =
-    getParam(resolvedSearchParams?.discovery) ?? getParam(resolvedSearchParams?.run);
+  // ONLY A DOSSIER'S ID. `run=` is shared: Panels reads a meeting run there (mrun_) and the
+  // Factory a code task (crun_), and taking those as a dossier sent Research looking for a
+  // dossier called mrun_… — a not-found it then kept asking about.
+  const requestedDiscovery = researchRunParam(
+    getParam(resolvedSearchParams?.discovery), getParam(resolvedSearchParams?.run));
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
