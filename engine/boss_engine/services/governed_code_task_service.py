@@ -57,6 +57,7 @@ from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 
 logger = logging.getLogger(__name__)
 from .pipeline_profile_service import resolve_for_run
+from .project_settings import effective_review_lanes, effective_review_rounds
 from .factory_quality_loop import (
     bind_test_outcomes,
     bind_verify_log_to_jtbd,
@@ -3686,7 +3687,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as _sc:
                 _lanes = _effective_setting(
                     _sc, project_id, settings, "code_agent_max_concurrency")
-            max_workers = min(len(checks), max(int(_lanes or 3), 6))
+            # Floor of 6, capped by the panel: project_settings.effective_review_lanes.
+            max_workers = effective_review_lanes(_lanes, panel_size=len(checks))
             panel_parallel = max_workers > 1
             # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
             # auto-passing: security 'not_run' still BLOCKS (security_clean requires 'clean');
@@ -4147,7 +4149,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # so the context is cache reads), the frozen tests re-verify, and ONLY the
             # failed judges re-review the delta. Ships when every gate turns green;
             # falls back to the legacy paths below if it can't converge.
-            inrun_max = max(0, int(getattr(settings, "code_review_inrun_max_rounds", 2) or 2))
+            inrun_max = effective_review_rounds(getattr(settings, "code_review_inrun_max_rounds", 2))
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.

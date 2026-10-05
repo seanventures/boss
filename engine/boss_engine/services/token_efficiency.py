@@ -9,6 +9,7 @@ Surfaced at ``/v1/token-efficiency/*``.
 """
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Any, Iterable, Iterator, Mapping, Optional
 
@@ -21,6 +22,8 @@ from .pipeline_profiles import DEFAULT_PROFILE, PROFILES, model_for_step, resolv
 
 # Heuristic used across BOSS for packing (toolchain_registry, knowledge pack).
 # chars/4 ≈ token count without tiktoken; intentional and documented.
+logger = logging.getLogger(__name__)
+
 _CHARS_PER_TOKEN = 4
 
 # Recovery DDL — IF NOT EXISTS, no invented rows. Matches db/schema.sql.
@@ -489,13 +492,62 @@ def list_policies(connection: Connection, project_id: str) -> dict[str, Any]:
     }
 
 
+_POLICY_FIELDS = {
+    "max_prompt_tokens": "mpt", "max_completion_tokens": "mct",
+    "max_total_tokens_per_call": "mtt", "max_tokens_per_day": "mtd",
+    "max_cost_usd_micros_per_day": "mcd", "alert_at_pct": "alert",
+    "preferred_model_class": "pmc", "enabled": "en",
+}
+
+
+def _record_policy_change(connection: Connection, project_id: str, stage: str,
+                          before: Mapping[str, Any], values: Mapping[str, Any],
+                          actor: str) -> None:
+    """`token_policy.changed`, in a savepoint: a failed record never fails the save."""
+    fields = {name: {"from": before.get(name), "to": values[key]}
+              for name, key in _POLICY_FIELDS.items() if before.get(name) != values[key]}
+    if not fields:
+        return
+    try:
+        from .core import emit_event
+
+        with connection.begin_nested():
+            emit_event(connection, project_id, "token_policy.changed", actor or "operator",
+                       "token_policy", stage, {"stage": stage, "fields": fields})
+    except Exception:  # noqa: BLE001 — the record of a change is not the change
+        logger.exception("could not record token_policy.changed for %s", stage)
+
+
+def version_of(connection: Connection, project_id: str,
+               stage: str) -> tuple[str, Optional[str]]:
+    """(version, None) for one stage's policy — its last write time, or 'unset' — the If-Match
+    a Govern edit sends. Policies do not record who wrote them."""
+    try:
+        with _savepoint(connection):
+            stamp = connection.execute(
+                text("SELECT updated_at FROM token_budget_policies "
+                     "WHERE project_id = :p AND stage = :s"),
+                {"p": project_id, "s": stage}).scalar()
+    except Exception as exc:
+        if is_missing_relation(exc):
+            return "unset", None
+        raise
+    if stamp is None:
+        return "unset", None
+    return (stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)), None
+
+
 def upsert_policies(
     connection: Connection,
     *,
     project_id: str,
     policies: Iterable[Mapping[str, Any]],
+    actor: str = "operator",
 ) -> dict[str, Any]:
-    """Upsert one or more stage policies for a project. Returns effective set."""
+    """Upsert one or more stage policies for a project. Returns effective set.
+
+    Each changed stage is recorded as `token_policy.changed` (field: from → to), so Govern's
+    changes read in the Log and Govern keeps no change list of its own."""
     if not (project_id or "").strip():
         raise ValueError("project_id is required.")
     pid = project_id.strip()
@@ -581,6 +633,7 @@ def upsert_policies(
             "now": now,
         }
 
+        _record_policy_change(connection, pid, stage, base, values, actor)
         if existing:
             connection.execute(
                 text(

@@ -21182,8 +21182,10 @@ def get_project_settings(project_id: str) -> dict:
 
 
 @app.put("/v1/settings/{key}")
-def put_project_setting(key: str, payload: ProjectSettingBody) -> dict:
-    """Set one knob, or hand it back to the deployment default by sending no value."""
+def put_project_setting(key: str, payload: ProjectSettingBody, request: Request) -> dict:
+    """Set one knob, or hand it back to the deployment default by sending no value.
+    An `If-Match` (the knob's version from GET /v1/govern) refuses a stale edit with 412."""
+    from .govern_guard import require_fresh
     payload = payload.payload()
     from boss_engine.services import project_settings as ps
     project_id = str(payload.get("project_id") or "").strip()
@@ -21195,11 +21197,12 @@ def put_project_setting(key: str, payload: ProjectSettingBody) -> dict:
         raise HTTPException(status_code=404, detail=f"'{key}' is not a setting BOSS knows about.")
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "providerops_manage")
+        require_fresh(request, *ps.version_of(connection, project_id, key))
         if payload.get("value") in (None, ""):
-            ps.clear_one(connection, project_id, key)
+            ps.clear_one(connection, project_id, key, actor=actor)
             paired = ps.MODEL_FOR_ENGINE.get(key)
             if paired:
-                ps.clear_one(connection, project_id, paired)
+                ps.clear_one(connection, project_id, paired, actor=actor)
             effective = ps.applied(connection, project_id, settings)
             value = getattr(effective, spec["attr"], None)
             source = ("deployment default" if value == getattr(settings, spec["attr"], None)
@@ -21228,19 +21231,25 @@ def put_project_setting(key: str, payload: ProjectSettingBody) -> dict:
         cleared = None
         paired = ps.MODEL_FOR_ENGINE.get(key)
         if paired and before != value and ps.get_all(connection, project_id).get(paired):
-            ps.clear_one(connection, project_id, paired)
+            ps.clear_one(connection, project_id, paired, actor=actor)
             cleared = paired
     return {"key": key, "value": value, "source": "project",
             **({"cleared": cleared} if cleared else {})}
 
 
 @app.post("/v1/budget/set_intensity")
-def budget_set_intensity(payload: BudgetSetIntensityRequest) -> dict:
-    """CEO Operational Intensity slider (0-100) → spend envelope + scaling limits."""
+def budget_set_intensity(payload: BudgetSetIntensityRequest, request: Request) -> dict:
+    """Pace (operational intensity, 0-100) → spend caps and scaling limits.
+    An `If-Match` (the budget policy's version from GET /v1/govern) refuses a stale edit."""
+    from boss_engine.services.budget import policy_version
+
+    from .govern_guard import require_fresh
+
     if payload.scope_type != "project":
         raise HTTPException(status_code=400, detail="Only project scope is supported.")
     with begin(engine) as connection:
         require_project_actor(connection, payload.scope_id, payload.actor, "budget_manage")
+        require_fresh(request, *policy_version(connection, payload.scope_id))
         result = budget.set_intensity(
             connection, payload.scope_type, payload.scope_id, payload.intensity, payload.actor
         )
