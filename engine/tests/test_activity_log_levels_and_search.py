@@ -15,14 +15,12 @@ from __future__ import annotations
 
 import pytest
 
+from boss_engine.services import activity_sql
 from boss_engine.services.activity_log import (
     INFRA_SOURCES,
     LEVELS,
     SOURCES,
     _level_for,
-    _load_agent_turns,
-    _load_events,
-    _load_llm_calls,
 )
 
 
@@ -62,72 +60,32 @@ def test_level_follows_the_severity_the_classifier_already_produced(severity, st
     assert _level_for(severity, status) == expected
 
 
-def test_every_loader_takes_the_same_arguments():
-    """The dispatch loop passes `q` to all of them blindly. A loader with a different signature
-    is a TypeError at request time, on a page that is supposed to be the debugging tool."""
-    import inspect
-
-    from boss_engine.services.activity_log import _LOADERS_BY_SOURCE
-
-    for name, loader in _LOADERS_BY_SOURCE.items():
-        params = inspect.signature(loader).parameters
-        for required in ("since", "until", "cap", "q"):
-            assert required in params, f"{name} cannot be called by the dispatcher: no {required}"
-
-
-def test_source_filter_reaches_every_source_by_name():
-    from boss_engine.services.activity_log import _LOADERS_BY_SOURCE
-
-    assert set(_LOADERS_BY_SOURCE) == set(SOURCES)
+def test_every_source_is_one_sql_projection():
+    """A stream is reachable by `source=` only if it has a projection — and every projection
+    names the fields a filter or a facet reads, so no stream is silently unfilterable."""
+    assert set(activity_sql.SOURCES) == set(SOURCES)
+    for name, spec in activity_sql.SOURCES.items():
+        for field in ("table", "ts", "level", "status", "kind", "actor", "raw"):
+            assert getattr(spec, field), f"{name} has no {field}"
 
 
 # ── Search ─────────────────────────────────────────────────────────────────────
 
-def _sql_of(loader) -> str:
-    """The SQL a loader would run with a search term, captured without a database."""
-    captured: dict[str, str] = {}
-
-    class _Conn:
-        def execute(self, statement, params=None):
-            captured["sql"] = str(statement)
-            raise _Stop()
-
-    class _Stop(Exception):
-        pass
-
-    try:
-        loader(_Conn(), "p", since=None, until=None, cap=10, q="needle")
-    except Exception:
-        pass
-    return captured.get("sql", "")
-
-
-@pytest.mark.parametrize("loader", [_load_events, _load_agent_turns])
-def test_search_is_pushed_into_sql_where_an_index_exists(loader):
-    """Not a Python filter over rows already loaded.
-
-    The old path loaded up to 5,000 rows per source and filtered them in memory, so a search
-    could report "nothing" for a project that had matches at row 5,001.
-    """
-    sql = _sql_of(loader)
+@pytest.mark.parametrize("source", ["event", "agent_turn"])
+def test_search_is_pushed_into_sql_where_an_index_exists(source):
+    """Not a Python filter over rows already loaded: full-text, on the index."""
+    sql = activity_sql.SOURCES[source].fts or ""
     assert "plainto_tsquery" in sql, "search is not reaching the database"
     assert "to_tsvector" in sql
 
 
-@pytest.mark.parametrize("loader", [_load_events, _load_agent_turns])
-def test_the_query_splits_identifiers_exactly_as_the_index_does(loader):
+@pytest.mark.parametrize("source", ["event", "agent_turn"])
+def test_the_query_splits_identifiers_exactly_as_the_index_does(source):
     """`shepherd.proposed` is ONE token under the english config, so a search for "shepherd"
-    matched nothing and the log reported no results for an event it was holding.
-
-    `translate` splits it. It must appear in the query and the index identically — an
-    expression index is only used for the expression it was built on, so a mismatch here is
-    silently a sequential scan.
-    """
-    sql = _sql_of(loader)
+    matched nothing. `translate` splits it, in the query and the index identically (an
+    expression index is only used for the expression it was built on), on BOTH sides."""
+    sql = activity_sql.SOURCES[source].fts or ""
     assert "translate(" in sql
-    # BOTH SIDES. Splitting only the indexed document left the query asking for the compound
-    # token "zzq-activity-unique-abc123", which by construction is not in an index that stores
-    # its parts — so searching for the exact text of a row returned nothing.
     assert "translate(:q" in sql, "the search term is not split the way the index is"
 
 
@@ -144,11 +102,10 @@ def test_the_index_definition_matches_the_query():
         assert "'._-'" in block
 
 
-def test_the_call_loader_does_not_pretend_to_search():
-    """`llm_calls` has no free text worth indexing — a row is a model name and a duration. It
-    accepts `q` for signature compatibility and ignores it, and the Python filter still applies,
-    so nothing silently escapes the search."""
-    assert "plainto_tsquery" not in _sql_of(_load_llm_calls)
+def test_the_call_source_does_not_pretend_to_search():
+    """`llm_calls` has no free text worth indexing — a row is a model name and a duration. Its
+    search is a plain-text match, confirmed against the row afterwards."""
+    assert activity_sql.SOURCES["llm_call"].fts is None
 
 
 # ── Retention ──────────────────────────────────────────────────────────────────

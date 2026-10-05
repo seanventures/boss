@@ -11,6 +11,7 @@
  * New rows append at the bottom; a reader who scrolled up gets `n new ↓`, and the list does
  * not move under them.
  */
+import { logHref } from "../../lib/log-url";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -88,7 +89,7 @@ function ToolsFold({ projectId, runId, act }: { projectId: string; runId: string
               {t.latencyMs !== null ? <span> · {t.latencyMs}ms</span> : null}
             </span>
           )) : failed ? <span className="fx-muted">Not available</span> : <span className="fx-muted">Loading</span>}
-          <a className="ag-link" href={areaHref({ area: "activity", run: runId })} data-testid="fx-tools-log">
+          <a className="ag-link" href={logHref({ run: runId })} data-testid="fx-tools-log">
             Open in Activity log ↗
           </a>
         </span>

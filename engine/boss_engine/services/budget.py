@@ -147,6 +147,94 @@ def burst_waiter_key(category: str, reason: str) -> str:
     return f"{category}:{reason}"[:500]
 
 
+def intensity_envelope(intensity: Any) -> dict[str, Any]:
+    """What Pace (operational intensity, 0-100) writes: the ONE mapping, shared by
+    `set_intensity` and Govern's preview, so the preview is what will be written (the web used
+    to re-implement it with `Math.round` and previewed $253 / 16 workers for $252 / 15).
+
+    `allowed_model_tiers` is written and read by nothing (Govern does not claim it)."""
+    intensity = max(0, min(100, int(intensity)))
+    f = intensity / 100.0
+    daily = int(round(5 + f * 495) * 1_000_000)          # $5 → $500 / day
+    if intensity < 34:
+        tiers = ["gpt-4o-mini"]                           # low-cost only
+    elif intensity < 67:
+        tiers = ["gpt-4o-mini", "gpt-4o"]
+    else:
+        tiers = ["gpt-4o-mini", "gpt-4o", "gpt-5.2-codex"]
+    return {
+        "operational_intensity": intensity,
+        "daily_cap_usd_micros": daily,
+        "monthly_cap_usd_micros": daily * 20,
+        "burst_cap_usd_micros_per_min": int(round((0.5 + f * 9.5) * 1_000_000)),  # $0.50 → $10
+        "max_concurrent_jobs": 1 + round(f * 19),                                # 1 → 20
+        "max_workers_total": 1 + round(f * 29),                                  # 1 → 30
+        "allowed_model_tiers": tiers,
+    }
+
+
+#: Transient refusals (burst, headroom) are retried every few seconds; one `budget.refused`
+#: record per waiting request per this window is evidence enough, not one per retry.
+REFUSAL_RECORD_WINDOW_MINUTES = 10
+
+
+def _write_refusal_record(connection: Connection, project_id: str, refusal: dict[str, Any],
+                          data: dict[str, Any]) -> None:
+    emit_event(connection, project_id, "budget.refused", "budget_governor",
+               "decision" if refusal.get("decision_id") else "budget_policy",
+               str(refusal.get("decision_id") or project_id), data)
+
+
+def record_refusal(connection: Connection, project_id: str, refusal: dict[str, Any], *,
+                   category: str, reason: str, amount_usd_micros: int,
+                   snapshot: Optional[dict] = None, period: Optional[dict] = None) -> None:
+    """`budget.refused`: what a limit stopped, so Govern can say `Stopped 2× · 7d` from a
+    record and the Log's `Refusals` view can list it. Written NEXT TO the refusal and never
+    instead of it: in a savepoint, with any failure swallowed, so the refusal returned to the
+    caller is identical whether or not its record could be written."""
+    kind = {"cap_exceeded": "cap"}.get(str(refusal.get("refusal")), str(refusal.get("refusal")))
+    try:
+        with connection.begin_nested():
+            if refusal.get("transient"):
+                recent = connection.execute(
+                    text("SELECT 1 FROM events WHERE project_id = :p "
+                         "AND event_type = 'budget.refused' "
+                         "AND created_at > now() - make_interval(mins => :w) "
+                         "AND data->>'kind' = :k AND data->>'waiter' = :who LIMIT 1"),
+                    {"p": project_id, "w": REFUSAL_RECORD_WINDOW_MINUTES, "k": kind,
+                     "who": burst_waiter_key(category, reason)}).first()
+                if recent:
+                    return
+            where = period or snapshot or {}
+            _write_refusal_record(connection, project_id, refusal, {
+                "kind": kind,
+                "period": (period or {}).get("period") or refusal.get("period"),
+                "committed_usd_micros": where.get("committed_usd_micros"),
+                "cap_usd_micros": where.get("cap_usd_micros"),
+                "resets_at": where.get("resets_at"),
+                "requested_usd_micros": int(amount_usd_micros),
+                "decision_id": refusal.get("decision_id"),
+                "category": category,
+                "waiter": burst_waiter_key(category, reason),
+            })
+    except Exception:  # noqa: BLE001 — the record of a refusal is not the refusal
+        import logging
+
+        logging.getLogger(__name__).exception("could not record budget.refused")
+
+
+def policy_version(connection: Connection, project_id: str) -> tuple[str, Optional[str]]:
+    """(version, who changed the budget last) — the If-Match a Govern spend edit sends."""
+    version = connection.execute(
+        text("SELECT version FROM budget_policies WHERE scope_type = 'project' "
+             "AND scope_id = :p ORDER BY created_at DESC LIMIT 1"), {"p": project_id}).scalar()
+    actor = connection.execute(
+        text("SELECT actor FROM events WHERE project_id = :p AND event_type IN "
+             "('budget.intensity_set', 'budget.monthly_cap_set') "
+             "ORDER BY created_at DESC LIMIT 1"), {"p": project_id}).scalar()
+    return (str(version) if version is not None else "none"), actor
+
+
 class BudgetGovernor:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -431,19 +519,14 @@ class BudgetGovernor:
         """CEO Operational Intensity slider (0-100) → spend envelope + scaling limits.
         Maps one knob to daily/monthly/burst caps, max concurrency/workers, and allowed model
         tiers, then upserts the budget policy for the scope. Returns the derived envelope."""
-        intensity = max(0, min(100, int(intensity)))
-        f = intensity / 100.0
-        daily = int(round(5 + f * 495) * 1_000_000)          # $5 → $500 / day
-        monthly = daily * 20
-        burst = int(round((0.5 + f * 9.5) * 1_000_000))      # $0.50 → $10 / min
-        max_concurrent = 1 + round(f * 19)                   # 1 → 20
-        max_workers = 1 + round(f * 29)                       # 1 → 30
-        if intensity < 34:
-            tiers = ["gpt-4o-mini"]                           # low-cost only
-        elif intensity < 67:
-            tiers = ["gpt-4o-mini", "gpt-4o"]
-        else:
-            tiers = ["gpt-4o-mini", "gpt-4o", "gpt-5.2-codex"]
+        envelope = intensity_envelope(intensity)
+        intensity = envelope["operational_intensity"]
+        daily = envelope["daily_cap_usd_micros"]
+        monthly = envelope["monthly_cap_usd_micros"]
+        burst = envelope["burst_cap_usd_micros_per_min"]
+        max_concurrent = envelope["max_concurrent_jobs"]
+        max_workers = envelope["max_workers_total"]
+        tiers = envelope["allowed_model_tiers"]
         params = {
             "st": scope_type, "sid": scope_id, "daily": daily, "monthly": monthly,
             "burst": burst, "mc": max_concurrent, "mw": max_workers,
@@ -811,7 +894,7 @@ class BudgetGovernor:
                 reason="tier2 frozen (utilization past freeze_tier2_pct)",
                 detail={"risk_tier": risk_tier, "decision_id": decision_id,
                         "utilization_ratio": snapshot.get("utilization_ratio")})
-            return {
+            refused = {
                 "status": "denied",
                 "refusal": "tier2_frozen",
                 "transient": False,
@@ -821,6 +904,9 @@ class BudgetGovernor:
                             f"({cap_used_sentence(snapshot)}). {resets_sentence(snapshot)} "
                             "Decision created."),
             }
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, snapshot=snapshot)
+            return refused
         refusal = self.cap_refusal(snapshot, amount_usd_micros)
         if refusal is not None:
             # Every cap is checked against ITS period (period_spend): today's money against the
@@ -846,7 +932,7 @@ class BudgetGovernor:
                     reason="budget headroom held by active reservations",
                     detail={"requested_usd_micros": amount_usd_micros, **period_detail,
                             "retry_after_seconds": HEADROOM_RETRY_AFTER_SECONDS})
-                return {
+                refused = {
                     "status": "denied",
                     "refusal": "headroom",
                     "transient": True,
@@ -855,6 +941,10 @@ class BudgetGovernor:
                     "budget_state": snapshot["budget_state"],
                     "message": HEADROOM_MESSAGE,
                 }
+                record_refusal(connection, project_id, refused, category=category,
+                               reason=reason, amount_usd_micros=amount_usd_micros,
+                               period=refusal)
+                return refused
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
@@ -883,7 +973,7 @@ class BudgetGovernor:
                 action=category, reason="budget cap exceeded",
                 detail={"requested_usd_micros": amount_usd_micros, **period_detail,
                         "budget_state": snapshot["budget_state"], "decision_id": decision_id})
-            return {
+            refused = {
                 "status": "denied",
                 "refusal": "cap_exceeded",
                 "transient": False,
@@ -896,6 +986,9 @@ class BudgetGovernor:
                 "message": (f"Budget cap exceeded: {cap_used_sentence(refusal)}. "
                             f"{resets_sentence(refusal)} Decision created."),
             }
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, period=refusal)
+            return refused
 
         # Burst cap: limit $/min to absorb sudden spikes (spec §22.4 cost-anomaly controls).
         #
@@ -922,6 +1015,9 @@ class BudgetGovernor:
                 burst_waiter_key(category, reason), job_id)
             if refused is not None:
                 refused["budget_state"] = snapshot["budget_state"]
+                record_refusal(connection, project_id, refused, category=category,
+                               reason=reason, amount_usd_micros=amount_usd_micros,
+                               period={"cap_usd_micros": burst_cap, "period": "minute"})
                 return refused
 
         if allocation_id:
@@ -958,7 +1054,7 @@ class BudgetGovernor:
                         "reason": reason,
                     },
                 )
-                return {
+                refused = {
                     "status": "denied",
                     "refusal": "allocation_exceeded",
                     "transient": False,
@@ -966,6 +1062,9 @@ class BudgetGovernor:
                     "budget_state": snapshot["budget_state"],
                     "message": "Budget allocation exceeded. Decision created.",
                 }
+                record_refusal(connection, project_id, refused, category=category,
+                               reason=reason, amount_usd_micros=amount_usd_micros)
+                return refused
 
         reservation_id = make_id("res")
         connection.execute(

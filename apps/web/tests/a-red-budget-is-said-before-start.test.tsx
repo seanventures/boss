@@ -1,6 +1,6 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ReadinessPanel, type Readiness } from "../app/workflow-readiness-ui";
 
@@ -59,31 +59,5 @@ describe("readiness at Start reads the budget", () => {
   });
 });
 
-vi.mock("../lib/client", () => ({
-  PROJECT_ID: "boss-dogfood",
-  resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
-  client: { getBudgetStatus: vi.fn() },
-}));
-
-describe("the budget card keeps a subscription's value apart from money", async () => {
-  const { client } = await import("../lib/client");
-  const { fetchBudgetStatus } = await import("../lib/budget-status");
-
-  it("maps what subscriptions did at list price as included, not spent", async () => {
-    vi.mocked(client.getBudgetStatus).mockResolvedValueOnce({
-      scope_type: "project", scope_id: "boss-dogfood", budget_state: "green",
-      cap_usd_micros: 10_000_000, reserved_usd_micros: 0, actual_usd_micros: 0,
-      available_usd_micros: 10_000_000, committed_usd_micros: 0, burn_approx_usd_micros: 0,
-      burn_window_hours: 24, burn_rate_usd_micros_per_hour: 0, forecasted_24h_usd_micros: 0,
-      time_to_cap_seconds: null, utilization_ratio: 0, active_reservations_count: 0,
-      top_cost_drivers: [],
-      included_in_subscription_usd_micros: 9_080_000,
-      included_cost_drivers: [{ skill_or_model_id: "anthropic:claude-sonnet",
-                                amount_usd_micros: 9_080_000 }],
-    });
-    const card = await fetchBudgetStatus();
-    expect(card.actualUsdMicros).toBe(0);
-    expect(card.includedInSubscriptionUsdMicros).toBe(9_080_000);
-    expect(card.includedCostDrivers[0].skillOrModelId).toBe("anthropic:claude-sonnet");
-  });
-});
+// The budget card's "included in plan, not money" truth is Govern's meter now: see
+// tests/govern-meter.test.tsx ("included in plan is beside the bar, never in it").
