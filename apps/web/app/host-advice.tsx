@@ -35,9 +35,13 @@ export type HostAdvice = {
   cause?: string;
 };
 
-export function useHostAdvice(projectId: string, pollMs = 60_000): HostAdvice {
+/** `initial`: a caller that already reads the host's advice (the Command Center's view carries
+ *  `host`) passes it, and this hook then does not poll on its own (command-center spec §6.3). */
+export function useHostAdvice(projectId: string, pollMs = 60_000, initial?: HostAdvice): HostAdvice {
   const [advice, setAdvice] = useState<HostAdvice>({ show: false });
+  const given = initial !== undefined;
   useEffect(() => {
+    if (given) return undefined;
     let alive = true;
     const read = async () => {
       try {
@@ -55,8 +59,8 @@ export function useHostAdvice(projectId: string, pollMs = 60_000): HostAdvice {
     read();
     const timer = setInterval(read, pollMs);
     return () => { alive = false; clearInterval(timer); };
-  }, [projectId, pollMs]);
-  return advice;
+  }, [projectId, pollMs, given]);
+  return given ? (initial ?? { show: false }) : advice;
 }
 
 export function HostAdviceBanner(
