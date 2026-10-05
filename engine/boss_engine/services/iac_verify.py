@@ -35,6 +35,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Union
+from . import owned_process
 
 _IAC_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".hcl")
 
@@ -204,7 +205,7 @@ def _exec(argv: list[str], cwd: Path, env: dict[str, str]) -> tuple[int, str, in
     Never raises: a timeout or spawn failure is a failed step, not a crashed lane."""
     started = time.monotonic()
     try:
-        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        proc = owned_process.run(  # noqa: S603 — fixed argv, no shell
             argv, cwd=str(cwd), env=env, capture_output=True, text=True,
             timeout=_STEP_TIMEOUT_SECONDS,
         )

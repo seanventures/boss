@@ -402,12 +402,9 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         "roster": roster,
         "counts": _counts(agents),
         "unregistered": sorted(a["id"] for a in agents if not a["registered"]),
-        # Stated in the payload so a screen cannot quietly render a zero in its place.
-        "spend_attributed": False,
-        "spend_note": (
-            "BOSS does not record which agent an LLM call belongs to, so per-agent cost cannot "
-            "be shown. Each project's spend is on its card in Factory, and the total is in Govern."
-        ),
+        # Every call is attributed (llm_telemetry.attribute_llm_calls): `spend_usd` is each
+        # agent's metered money; subscription calls are counted as calls, never as dollars.
+        "spend_attributed": True,
     }
 
 
@@ -704,62 +701,46 @@ SCORE_WINDOW_HOURS = 720   # 30 days
 
 
 def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
-    """What each agent actually did, from the model calls attributed to its stages.
+    """What each agent actually did, from the model calls attributed to it.
 
-    Grouped by stage and then folded into roles through STAGE_ROLES, so a role that owns four
-    stages shows one total rather than four rows the reader has to add up.
+    ONE ATTRIBUTION (org-view spec §6.2): llm_telemetry.attribute_llm_calls decides who each
+    call belongs to — its act, else its recorded role, else its stage's owner — the same
+    helper Agents › Organization reads, so the Directory and Organization cannot disagree on an
+    agent's money. `spend_usd` is METERED money only: a call on a subscription is counted as a
+    call and never as dollars (the operator's decision, 2026-10-04: consistent everywhere).
 
     `hours` is the SCORING window, not the status window. Status still comes from how recently
     the agent last ran -- an agent that worked all month and stopped an hour ago is idle now,
     and its card should say both things.
     """
-    from .llm_telemetry import STAGE_ROLES, canonical_role
-
-    rows = [dict(r) for r in connection.execute(
-        sql(
-            """
-            SELECT stage, model,
-                   count(*)                        AS calls,
-                   COALESCE(sum(turns), 0)         AS turns,
-                   COALESCE(sum(total_tokens), 0)  AS tokens,
-                   COALESCE(sum(cost_usd_micros),0) AS micros,
-                   COALESCE(sum(retries), 0)       AS retries,
-                   count(*) FILTER (WHERE ok)      AS ok_calls,
-                   max(created_at)                 AS last_at
-            FROM llm_calls
-            WHERE project_id = :p
-              AND created_at > now() - make_interval(hours => :h)
-            GROUP BY stage, model
-            """
-        ),
-        {"p": project_id, "h": int(hours)},
-    ).mappings().all()]
+    from .llm_telemetry import attribute_llm_calls
 
     out: dict[str, dict] = {}
-    for row in rows:
-        stage = str(row.get("stage") or "").strip().lower()
-        role = canonical_role(STAGE_ROLES.get(stage))
+    for row in attribute_llm_calls(connection, project_id, hours):
+        role = row["role"]
+        stage = row["stage"] or ""
         if not role:
-            # A stage nobody owns. Counted nowhere rather than folded into a neighbour: an
-            # agent credited with work it did not do is worse than a gap.
+            # Nobody's call. Counted nowhere rather than folded into a neighbour: an agent
+            # credited with work it did not do is worse than a gap.
             continue
         agg = out.setdefault(role, {
             "calls": 0, "turns": 0, "tokens": 0, "micros": 0, "retries": 0, "ok_calls": 0,
             "last_at": None, "last_stage": None, "stages": {}, "_models": {},
         })
-        agg["calls"] += int(row["calls"] or 0)
-        agg["turns"] += int(row["turns"] or 0)
-        agg["tokens"] += int(row["tokens"] or 0)
-        agg["micros"] += int(row["micros"] or 0)
-        agg["retries"] += int(row["retries"] or 0)
-        agg["ok_calls"] += int(row["ok_calls"] or 0)
-        agg["stages"][stage] = agg["stages"].get(stage, 0) + int(row["calls"] or 0)
+        agg["calls"] += row["calls"]
+        agg["turns"] += row["turns"]
+        agg["tokens"] += row["tokens"]
+        agg["micros"] += row["metered_micros"]
+        agg["retries"] += row["retries"]
+        agg["ok_calls"] += row["ok_calls"]
+        if stage:
+            agg["stages"][stage] = agg["stages"].get(stage, 0) + row["calls"]
         if row.get("model"):
-            agg["_models"][row["model"]] = agg["_models"].get(row["model"], 0) + int(row["calls"] or 0)
+            agg["_models"][row["model"]] = agg["_models"].get(row["model"], 0) + row["calls"]
         last = row.get("last_at")
         if last and (agg["last_at"] is None or last > agg["last_at"]):
             agg["last_at"] = last
-            agg["last_stage"] = stage
+            agg["last_stage"] = stage or agg["last_stage"]
 
     for role, agg in out.items():
         agg["spend_usd"] = round(agg["micros"] / 1_000_000, 4)

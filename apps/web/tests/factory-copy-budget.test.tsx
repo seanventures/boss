@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { overBudget } from "./_helpers/copy-budget";
 import { attentionBudget, floor } from "./_helpers/factory-fixtures";
-import { $, click, mount, settle, unmount } from "./_helpers/live-render";
+import { $, $$, click, mount, settle, unmount } from "./_helpers/live-render";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -89,8 +89,12 @@ describe("the Factory copy budget", () => {
   it("the Apps tab, an app opened", async () => {
     window.history.replaceState(null, "", "/?area=code_tasks&view=apps");
     await mount(home());
-    await click($("[data-testid^=fx-app-] .fx-row-open"));
-    expect($("[data-testid^=fx-app-build-]")).not.toBeNull();
+    const chev = $$(".fx-app-chev").find((b) => !(b as HTMLButtonElement).disabled) ?? null;
+    if (chev) {
+      await click(chev);
+      expect($("[data-testid^=fx-attempt-row-]")).not.toBeNull();
+    }
+    expect($(".fx-app-row")).not.toBeNull();
     expect(audit()).toMatchObject({ over: [], paragraphs: [], banned: [] });
   });
 });

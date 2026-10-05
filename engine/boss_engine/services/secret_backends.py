@@ -30,6 +30,7 @@ import urllib.request
 from typing import Any, Optional, Protocol
 
 from ..config import Settings
+from . import owned_process
 from ..ports import sql
 
 
@@ -1114,7 +1115,7 @@ def fingerprint_ssh_public_key(material: str) -> Optional[str]:
             with os.fdopen(fd, "w") as handle:
                 handle.write(material if material.endswith("\n") else material + "\n")
             os.chmod(path, 0o600)
-            out = subprocess.run(["ssh-keygen", "-lf", path], capture_output=True,
+            out = owned_process.run(["ssh-keygen", "-lf", path], capture_output=True,
                                  text=True, timeout=15)
             if out.returncode != 0:
                 return None

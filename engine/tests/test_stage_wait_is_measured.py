@@ -124,7 +124,9 @@ def test_package_and_browser_downloads_are_cached_between_sandboxes(tmp_path, mo
         return FinishedProcess()
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://control-plane-secret")
-    monkeypatch.setattr(sandbox.subprocess, "Popen", start_process)
+    monkeypatch.setattr(sandbox.owned_process, "popen", start_process)
+    monkeypatch.setattr(sandbox.owned_process, "communicate",
+                        lambda proc, input=None, timeout=None: proc.communicate(timeout=timeout))
     sandbox_instance = sandbox.EphemeralSandbox(Settings(), task_id="cache_env_test")
     sandbox_instance.path = tmp_path
     assert sandbox_instance.run("python3 -c 'print(1)'").ok

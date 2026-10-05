@@ -197,7 +197,7 @@ def test_no_unit_test_spends_the_operators_subscription() -> None:
 
     src = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
     refusal = src.index("has no read-only mode")
-    launch = src.index("subprocess.run")
+    launch = src.index("owned_process.run")
     assert refusal < launch, "the read-only refusal must come before the process launch"
 
 

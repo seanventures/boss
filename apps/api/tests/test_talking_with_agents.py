@@ -808,3 +808,81 @@ def test_a_reply_streams_while_the_model_is_still_writing_it(client, engine, mod
                         "token:the failing case.", "model:finished"]
     assert "".join(said) == "Show me the failing case."
     assert end["status"] == "complete" and end["tokens_out"] == 5
+
+
+# ── Asking again reopens what was said ───────────────────────────────────────────────────────
+
+
+def _a_run(engine) -> str:
+    """A workflow run to ask about (only its row: the talk's context names it)."""
+    import uuid
+
+    tag = uuid.uuid4().hex[:10]
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO workflow_definitions (id, project_id, workflow_key, name, "
+                       "created_by) VALUES (:d, :p, :k, 'Ask about me', 'ceo')"),
+                  {"d": f"wfd_{tag}", "p": PROJECT, "k": f"ask_{tag}"})
+        c.execute(text("INSERT INTO workflow_versions (id, project_id, workflow_definition_id, "
+                       "version, status, spec, content_hash, created_by) VALUES (:v, :p, :d, 1, "
+                       "'published', CAST('{}' AS JSONB), :v, 'ceo')"),
+                  {"v": f"wfv_{tag}", "p": PROJECT, "d": f"wfd_{tag}"})
+        c.execute(text("INSERT INTO workflow_runs (id, project_id, workflow_definition_id, "
+                       "workflow_version_id, actor, status) VALUES (:r, :p, :d, :v, 'ceo', "
+                       "'running')"),
+                  {"r": f"wfr_{tag}", "p": PROJECT, "d": f"wfd_{tag}", "v": f"wfv_{tag}"})
+    return f"wfr_{tag}"
+
+
+def _agent(client) -> str:
+    """An agent of this test's own, so no other test's talks are open with it."""
+    import uuid
+
+    key = f"historian_{uuid.uuid4().hex[:8]}"
+    made = client.post("/v1/roles", json={"project_id": PROJECT, "role_key": key,
+                                          "display_name": "Historian"})
+    assert made.status_code == 201, made.text
+    return key
+
+
+def test_asking_a_step_again_reopens_that_talk_with_everything_said(client, engine, model,
+                                                                     seated):
+    """The operator asked a step's agent, closed the sheet, pressed Ask again — and got an empty
+    talk: every Ask made a new conversation. Asking again reopens the talk about that step;
+    another step gets its own; a plain "Talk" reopens the latest; only New talk starts over."""
+    agent = _agent(client)
+    run = _a_run(engine)
+    step = {"from": "run_step", "workflow_run_id": run, "step_id": "brief"}
+    first = _open(client, "talk", [agent], context=step, resume=True)
+    assert first["resumed"] is False and first["turns"] == []
+    _say(client, first["conversation_id"], "What did this step make?")
+
+    again = _open(client, "talk", [agent], context=step, resume=True)
+    assert again["conversation_id"] == first["conversation_id"] and again["resumed"] is True
+    assert [(t["speaker_kind"], t["status"]) for t in again["turns"]] == [
+        ("person", "complete"), ("agent", "complete")]
+    assert again["turns"][0]["content"] == "What did this step make?"
+    assert "speaking: considered view" in again["turns"][1]["content"]
+
+    # Another step of the same run is another subject: its own talk.
+    other = _open(client, "talk", [agent], resume=True,
+                  context={**step, "step_id": "publish"})
+    assert other["conversation_id"] != first["conversation_id"] and other["turns"] == []
+
+    # A door that is not about a step (the Passport's Talk) reopens the talk that has
+    # something in it — an empty one opened since never hides it.
+    plain = _open(client, "talk", [agent], context={"from": "passport"}, resume=True)
+    assert plain["conversation_id"] == first["conversation_id"]
+    assert len(plain["turns"]) == 2
+
+    # New talk is the one door that starts over; without `resume` the API makes a new one too.
+    fresh = _open(client, "talk", [agent], context=step)
+    assert fresh["conversation_id"] != first["conversation_id"] and fresh["resumed"] is False
+
+    # A closed talk is not reopened.
+    client.post(f"/v1/conversations/{first['conversation_id']}/close",
+                json={"project_id": PROJECT, "actor": ACTOR})
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_conversations SET status = 'closed' "
+                       "WHERE conversation_id = :c"), {"c": fresh["conversation_id"]})
+    after = _open(client, "talk", [agent], context=step, resume=True)
+    assert after["conversation_id"] not in {first["conversation_id"], fresh["conversation_id"]}

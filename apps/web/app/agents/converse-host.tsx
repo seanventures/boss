@@ -5,8 +5,11 @@
  * Talk, a roster card, a run step, the palette, the presence pill — calls `openTalk`, `openPlan`
  * or `openRoom` (lib/agent-converse.ts), which this hears.
  *
- * A talk resumes the operator's last open talk with that agent (a day at most) unless the door
- * asks for a fresh one; a plan is always fresh; a room without seats asks who to seat first.
+ * A talk reopens the operator's open talk with that agent unless the door asks for a fresh one
+ * (New talk): one about a run step reopens the talk about that step, any other door the latest
+ * talk with the agent. The server picks it (agent_converse._resumable_talk), so every door
+ * agrees and closing the sheet never loses what was said. A plan is always fresh; a room
+ * without seats asks who to seat first.
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -26,8 +29,6 @@ type View =
   | { kind: "talk" | "plan"; conversationId: string; greet: boolean; draft?: string }
   | { kind: "room"; conversationId: string; question?: string }
   | { kind: "pick"; mode: "talk" | "plan" | "room" };
-
-const RESUME_WITHIN_MS = 24 * 3600 * 1000;
 
 function toast(message: string): void {
   try { window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: { type: "error", message } })); }
@@ -60,9 +61,10 @@ export function ConverseHost({ projectId, actor }: { projectId: string; actor: s
   const book = useMemo(() => new Map(agents.map((a) => [a.roleKey, a])), [agents]);
 
   const create = useCallback(async (kind: "talk" | "plan" | "room", seats: string[],
-                                    o: { preset?: string; context?: ConversationContext } = {}) => {
+                                    o: { preset?: string; context?: ConversationContext; resume?: boolean } = {}) => {
     const made = await api.createConversation(projectId, {
-      kind, seats, preset: o.preset, context: o.context ?? { from: kind === "room" ? "room" : "chip" } });
+      kind, seats, preset: o.preset, resume: o.resume,
+      context: o.context ?? { from: kind === "room" ? "room" : "chip" } });
     return (made as unknown as ConversationView).conversationId;
   }, [api, projectId]);
 
@@ -83,15 +85,11 @@ export function ConverseHost({ projectId, actor }: { projectId: string; actor: s
         return;
       }
       const roleKey = o.roleKey ?? "pm";
-      if (o.kind === "talk" && !o.fresh && !o.context?.workflowRunId) {
-        const recent = await api.listConversations(projectId, { kind: "talk", limit: 20 });
-        const same = recent.find((c) => c.seats[0] === roleKey && c.status === "open"
-          && Date.now() - Date.parse(c.updatedAt || "0") < RESUME_WITHIN_MS);
-        if (same) { setView({ kind: "talk", conversationId: same.conversationId, greet: false, draft: o.draft }); return; }
-      }
-      const id = await create(o.kind, [roleKey], { context: o.context });
+      const id = await create(o.kind, [roleKey], { context: o.context,
+                                                   resume: o.kind === "talk" && !o.fresh });
       // A talk opened with a question to ask (an Act card's "Ask about this") waits for it; one
-      // opened empty lets the agent say hello first.
+      // opened empty lets the agent say hello first. A reopened talk with turns never greets
+      // again (TalkSheet greets only an empty one).
       setView({ kind: o.kind, conversationId: id, greet: !o.draft, draft: o.draft });
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e));

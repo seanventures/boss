@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import Settings
+from . import owned_process
 from ..db import begin
 from .code_task_service import load_code_task_run
 from .core import emit_event
@@ -232,7 +233,7 @@ def _kill_process_group(argv: list[str]) -> None:
 
     try:
         target = " ".join(argv[:6])
-        for line in subprocess.run(["ps", "-Ao", "pid=,pgid=,command="],
+        for line in owned_process.run(["ps", "-Ao", "pid=,pgid=,command="],
                                    capture_output=True, text=True, timeout=10).stdout.splitlines():
             parts = line.strip().split(None, 2)
             if len(parts) < 3 or not parts[0].isdigit():
@@ -271,7 +272,7 @@ def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: 
     try:
         # start_new_session puts ssh in its OWN process group, so the timeout path can kill the
         # whole tree rather than just the process Python is holding.
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+        return owned_process.run(argv, capture_output=True, text=True, timeout=timeout,
                               start_new_session=True)
     except FileNotFoundError:
         # No ssh binary at all. Returned as a RESULT because every caller here checks
@@ -328,7 +329,7 @@ def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_
 def _head_sha(work: Path) -> Optional[str]:
     """The commit actually checked out in the build tree, short form."""
     try:
-        out = subprocess.run(["git", "-C", str(work), "rev-parse", "--short", "HEAD"],
+        out = owned_process.run(["git", "-C", str(work), "rev-parse", "--short", "HEAD"],
                              capture_output=True, text=True, timeout=30)
         return (out.stdout or "").strip() or None
     except Exception:  # noqa: BLE001 — an unknown SHA must not fail a deploy
@@ -528,9 +529,9 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
         #
         # init+fetch rather than clone --branch because a ref may be a SHA, which
         # `clone --branch` cannot take.
-        subprocess.run(["git", "init", "-q", str(work)], capture_output=True, text=True,
+        owned_process.run(["git", "init", "-q", str(work)], capture_output=True, text=True,
                        timeout=60, check=True)
-        subprocess.run(["git", "-C", str(work), "remote", "add", "origin", url],
+        owned_process.run(["git", "-C", str(work), "remote", "add", "origin", url],
                        capture_output=True, text=True, timeout=60, check=True)
 
         # Fetching the ref directly is the cheap path and works for a branch, a tag or a FULL
@@ -538,15 +539,15 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
         # commit_ref is routinely stored short (`f07021e`), so this failed on the first real
         # use. Falling back to a shallow history of the default branch lets git resolve the
         # short sha LOCALLY, where abbreviations are meaningful.
-        direct = subprocess.run(["git", "-C", str(work), "fetch", "--depth", "1", "origin", ref],
+        direct = owned_process.run(["git", "-C", str(work), "fetch", "--depth", "1", "origin", ref],
                                 capture_output=True, text=True, timeout=180)
         if direct.returncode == 0:
-            subprocess.run(["git", "-C", str(work), "checkout", "-q", "FETCH_HEAD"],
+            owned_process.run(["git", "-C", str(work), "checkout", "-q", "FETCH_HEAD"],
                            capture_output=True, text=True, timeout=60, check=True)
         else:
-            subprocess.run(["git", "-C", str(work), "fetch", "--depth", "200", "origin"],
+            owned_process.run(["git", "-C", str(work), "fetch", "--depth", "200", "origin"],
                            capture_output=True, text=True, timeout=300, check=True)
-            checked = subprocess.run(["git", "-C", str(work), "checkout", "-q", ref],
+            checked = owned_process.run(["git", "-C", str(work), "checkout", "-q", ref],
                                      capture_output=True, text=True, timeout=60)
             if checked.returncode != 0:
                 raise RuntimeError(
@@ -554,7 +555,7 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
                     f"last 200 commits of {owner}/{repo}. "
                     f"{(checked.stderr or direct.stderr or '').strip()[:200]}")
     else:
-        subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
+        owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
                        capture_output=True, text=True, timeout=180, check=True)
     # Read here, where the clone definitely still has its .git directory. Every return path
     # below carries this value out, so no caller has to know which ones discard the clone.
@@ -596,7 +597,7 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     if has_build:
         env = {**os.environ, "HOME": str(work), "npm_config_cache": str(work / ".npm"),
                "npm_config_fund": "false", "npm_config_audit": "false"}
-        subprocess.run(["sh", "-lc", "npm ci --no-audit --no-fund && npm run build"],
+        owned_process.run(["sh", "-lc", "npm ci --no-audit --no-fund && npm run build"],
                        cwd=str(work), env=env, capture_output=True, text=True,
                        timeout=900, check=True)
         if not (work / "dist").is_dir():
@@ -679,10 +680,10 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
         # a build step, so `npm start` finds `dist/` where the server expects it.
         app_root = work if value in (".", "") else work / value
         if (app_root / "package.json").is_file():
-            subprocess.run(["sh", "-lc",
+            owned_process.run(["sh", "-lc",
                             "npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund"],
                            cwd=app_root, check=False, timeout=900)
-            subprocess.run(["sh", "-lc", "npm run build --if-present"],
+            owned_process.run(["sh", "-lc", "npm run build --if-present"],
                            cwd=app_root, check=False, timeout=900)
         payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
         shutil.copytree(app_root, payload / "dist",
@@ -829,7 +830,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
              f"([ -d {shlex.quote(remote)}/dist ] && {_rm_rf_cmd(remote + '/dist.prev')} && "
              f"cp -a {shlex.quote(remote)}/dist {shlex.quote(remote)}/dist.prev || true)")
         needs_rollback = True  # host may have dist wiped / container replaced from here on
-        tar = subprocess.run(                                                   # 4 transfer (tar|ssh)
+        tar = owned_process.run(                                                   # 4 transfer (tar|ssh)
             _transfer_shell_cmd(work=work, key_path=key_path, host=host, user=user,
                                 ssh_port=ssh_port, remote=remote),
             shell=True, capture_output=True, text=True, timeout=600)

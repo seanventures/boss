@@ -74,9 +74,11 @@ const KNOWN_AGENT_WRITERS = [
   // Agent World's one resolver: it only READS /v1/agents/identities (no actor, no write), but
   // it names the agent resource, so it is listed and held to the same rule.
   "lib/agent-identity.ts",
-  // Agents home: Organization › Zones' `Move to…` sets an agent's team through lib/agents with
-  // the signed-in actor it is handed; the Activity client only READS /v1/agents/activity.
-  "app/agents/team-zones.tsx",
+  // Agents › Organization (org-view spec §4.6): `Move to…`, `Give` and `Give recommended` go
+  // through lib/agents and the Kit with the signed-in actor they are handed; the org board
+  // client only READS /v1/agents/org-board. The Activity client only READS /v1/agents/activity.
+  "app/agents/org-actions.ts",
+  "lib/agents-org-board.ts",
   "lib/agents-activity.ts",
 ];
 

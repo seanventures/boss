@@ -268,7 +268,24 @@ def get_engine(settings: Optional[Settings] = None, *,
     an API request must never hold row locks for hours because something between two
     statements hung."""
     resolved = settings or get_settings()
-    engine = create_engine(resolved.database_url, future=True, pool_pre_ping=True)
+    url = str(resolved.database_url)
+    # ONE POOL PER PROCESS (stability spec §4a.10). This built a fresh engine — a fresh pool —
+    # on every call, and it is called at 127 sites, `begin(None)` among them: each call left a
+    # pool holding a connection until the garbage collector found it. Postgres-backed engines
+    # are cached per (url, idle-transaction limit); an in-memory SQLite URL is not, because
+    # each of those IS a separate database and tests rely on that.
+    key = (url, int(idle_in_transaction_seconds or 0))
+    cacheable = url.startswith("postgres")
+    if cacheable:
+        with _ENGINES_LOCK:
+            cached = _ENGINES.get(key)
+        if cached is not None:
+            return cached
+    kwargs = {"future": True, "pool_pre_ping": True}
+    if cacheable:
+        kwargs["pool_size"] = _env_int("BOSS_DB_POOL_SIZE", 5)
+        kwargs["max_overflow"] = _env_int("BOSS_DB_MAX_OVERFLOW", 10)
+    engine = create_engine(url, **kwargs)
     if idle_in_transaction_seconds:
         from sqlalchemy import event
 
@@ -283,7 +300,23 @@ def get_engine(settings: Optional[Settings] = None, *,
                 cursor.close()
             dbapi_connection.commit()
 
+    if cacheable:
+        with _ENGINES_LOCK:
+            engine = _ENGINES.setdefault(key, engine)
     return engine
+
+
+_ENGINES: dict = {}
+_ENGINES_LOCK = __import__("threading").Lock()
+
+
+def _env_int(name: str, default: int) -> int:
+    import os
+
+    try:
+        return max(0, int(os.environ.get(name) or default))
+    except ValueError:
+        return default
 
 
 def database_is_reachable(engine: Engine) -> bool:

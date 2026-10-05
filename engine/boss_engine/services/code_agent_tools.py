@@ -39,6 +39,8 @@ import subprocess
 import time
 from typing import Callable, Optional
 
+from . import owned_process
+
 _MAX_READ_BYTES = 60_000
 _MAX_GREP_RESULTS = 120
 _MAX_LIST_ENTRIES = 300
@@ -392,7 +394,7 @@ class SandboxToolset:
             # tests/test_builds_yield_to_the_control_plane.py.
             from .agent_env import agent_environment
 
-            proc = subprocess.run(
+            proc = owned_process.run(
                 low_priority(argv), cwd=str(self.root), capture_output=True, text=True,
                 timeout=timeout, start_new_session=True,
                 env=agent_environment(os.environ, {"CI": "1"}),

@@ -37,7 +37,12 @@ export type RunningRun = {
 };
 
 export type NeedsYouItem = {
-  kind: "approval" | "failed_step" | "readiness";
+  kind: "approval" | "failed_step" | "readiness" | "system_health";
+  /** The server's id for the item (`system:<finding>` for the machine). */
+  id?: string;
+  /** system_health: the system doctor's finding, and how bad it is (stability spec §4d). */
+  finding_id?: string | null;
+  severity?: "info" | "warn" | "critical" | null;
   decision_kind?: string;
   title: string;
   detail: string;
@@ -214,7 +219,7 @@ export function outcomeTone(outcome: string): "green" | "red" | "muted" {
  *  send: no attributed agent unless it says so (the card then shows the BOSS glyph or You), no
  *  inline decide unless it says so (the card then says `Review ↗`, into Approvals). */
 export function attentionFromNeedsYou(item: NeedsYouItem): AttentionItem {
-  const id = item.decision_id
+  const id = item.kind === "system_health" && item.id ? item.id : item.decision_id
     ?? (item.run_id ? `run:${item.run_id}:${item.step_id ?? ""}` : `ready:${item.title}`);
   return {
     id, kind: item.kind,
@@ -225,13 +230,16 @@ export function attentionFromNeedsYou(item: NeedsYouItem): AttentionItem {
     run: item.run_id ? { id: item.run_id, subject: item.workflow_name ?? "", stepId: item.step_id ?? undefined } : undefined,
     actions: [],
     answers: (item.answers ?? []).map((a) => ({ key: a.key, label: a.label, enabled: a.enabled,
-                                               reason: a.reason ?? undefined, stepId: a.step_id })),
+                                               reason: a.reason ?? undefined, stepId: a.step_id,
+                                               ...((a as { confirm?: boolean }).confirm ? { confirm: true } : {}) })),
     decideInline: false,
     contentHash: item.content_hash ?? undefined,
     riskTier: typeof item.risk_tier === "number" ? item.risk_tier : undefined,
     fix: item.fix_area ? { area: item.fix_area, label: item.fix_label ?? "Fix in Repo and models",
                            ...(item.fix_focus ? { focus: item.fix_focus } : {}) } : undefined,
     at: item.at ?? undefined,
+    ...(item.finding_id ? { findingId: item.finding_id } : {}),
+    ...(item.severity ? { severity: item.severity } : {}),
   };
 }
 

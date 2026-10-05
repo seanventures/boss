@@ -1,9 +1,11 @@
 "use client";
 
 /**
- * Factory › Apps (factory spec §4.6): one row per app — who built it, its last state, its
- * preview, where it is deployed, how many builds. Pressing a row lists its builds, newest first;
- * `↗` opens the newest build's cockpit.
+ * Factory › Apps (factory spec §4.6): an aligned table, one row per app — App · Crew · State ·
+ * PR · Deploy · Spend · Builds · Updated. The chevron column is always there (disabled for one
+ * build) so every name starts at the same x; names wrap, never cut mid-word. The whole row opens
+ * the app's newest WORKING build; the chevron lists its builds, numbered by their place in the
+ * app (Build 1 = the first), each with only the stations it really ran.
  *
  * The rows come from `GET /v1/factory/apps` (the server groups runs into apps). Until a server
  * answers that, they are grouped here from the build list with the same rule
@@ -14,26 +16,36 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
 import { arr, num, obj, opt, parseBuildRow, str, type BuildRow as BuildRowData } from "../../lib/factory-floor";
-import { BuildRow } from "./build-row";
+import { StationLine } from "./station-line";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
-import { AgFaceStack } from "../agents/agent-face";
-import { ago, useNow } from "../agents/live-util";
+import { AgFace } from "../agents/agent-face";
+import { nameOf } from "../agents/run-face";
+import { ago, localTime, useNow } from "../agents/live-util";
 import { groupRunsIntoApps } from "../app-grouping";
 import { appIdentity } from "../app-identity";
 import { previewWebHref } from "../../lib/browser-links";
-import { money } from "./cockpit-util";
+import { costWord } from "./cockpit-util";
 
 /** One build of an app. `row` is the full Floor row when the server sends one (walk D21): then
  *  the attempt is drawn as a compact BuildRow with its stations, else as a line of words. */
-export type AppBuild = { runId: string; attempt: number; word: string; at?: string; row?: BuildRowData };
+export type PrState = "open" | "merged" | "closed";
+export type AppBuild = {
+  runId: string; attempt: number; word: string; at?: string; row?: BuildRowData;
+  /** Its place among the app's builds, 1 = the first (the server's `order`). Separate builds of
+   *  one app each have `attempt` 1 in their own lineage, so `attempt` is never the number shown. */
+  order?: number;
+  prNumber?: number; prUrl?: string; prState?: PrState; costUsd?: number;
+};
 export type AppRow = {
   key: string; app: string; builders: string[]; word: string;
   preview: { status: string; url?: string } | null;
   deploys: { env: string; ok: boolean; word?: string }[];
   builds: AppBuild[];
   rank: number;
-  /** The app's PR (its newest attempt that opened one), its metered spend, its repo. */
-  prNumber?: number; prUrl?: string; costUsd?: number; repo?: string;
+  /** The app's PR (its newest attempt that opened one) and that PR's state, its metered spend,
+   *  whether it ran on a subscription only, its repo, its brief and when it last moved. */
+  prNumber?: number; prUrl?: string; prState?: PrState; costUsd?: number; included?: boolean;
+  repo?: string; brief?: string; at?: string;
 };
 
 const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
@@ -79,11 +91,25 @@ export function appsFromRuns(runs: CodeTaskRun[], previews: PreviewRec[]): AppRo
   }).sort((a, b) => a.rank - b.rank);
 }
 
+const PR_STATES = new Set(["open", "merged", "closed"]);
+const prStateOf = (v: unknown): PrState | undefined => (PR_STATES.has(String(v)) ? String(v) as PrState : undefined);
+const numOrU = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
 export function parseApps(w: unknown): AppRow[] {
   return arr(obj(w).apps).map((x) => {
     const o = obj(x);
     const p = o.preview ? obj(o.preview) : null;
     const word = str(o.word);
+    const builds: AppBuild[] = arr(o.attempts).map((b) => {
+      const y = obj(b);
+      const full = Array.isArray(y.stations) && y.stations.length > 0;
+      return { runId: str(y.run_id), attempt: num(y.attempt, 1), word: str(y.word), at: opt(y.at),
+               order: numOrU(y.order), prNumber: numOrU(y.pr_number), prUrl: opt(y.pr_url),
+               prState: prStateOf(y.pr_state), costUsd: numOrU(y.cost_usd),
+               ...(full ? { row: parseBuildRow(y) } : {}) };
+    });
+    // A server without `order` (older API): number the builds by their place, oldest = 1.
+    builds.forEach((b, i) => { if (b.order === undefined) b.order = builds.length - i; });
     return {
       key: str(o.run_id ?? o.key ?? o.app), app: str(o.app), builders: arr(o.builders).map(String), word,
       preview: p && opt(p.status) ? { status: str(p.status), url: opt(p.url) } : null,
@@ -91,15 +117,11 @@ export function parseApps(w: unknown): AppRow[] {
         const y = obj(d);
         return { env: str(y.env), ok: y.ok === true, word: opt(y.word) };
       }),
-      builds: arr(o.attempts).map((b) => {
-        const y = obj(b);
-        const full = Array.isArray(y.stations) && y.stations.length > 0;
-        return { runId: str(y.run_id), attempt: num(y.attempt, 1), word: str(y.word), at: opt(y.at),
-                 ...(full ? { row: parseBuildRow(y) } : {}) };
-      }),
+      builds,
       rank: rankOf(word),
-      prNumber: typeof o.pr_number === "number" ? o.pr_number : undefined, prUrl: opt(o.pr_url),
-      costUsd: num(o.cost_usd), repo: opt(o.repo),
+      prNumber: numOrU(o.pr_number), prUrl: opt(o.pr_url), prState: prStateOf(o.pr_state),
+      costUsd: num(o.cost_usd), included: o.included === true, repo: opt(o.repo), brief: opt(o.brief),
+      at: opt(o.at),
     };
   });
 }
@@ -125,6 +147,80 @@ function useServerApps(projectId: string): AppRow[] | null {
   return apps;
 }
 
+// ── The table ───────────────────────────────────────────────────────────────────────────────
+
+export type AppSort = "updated" | "spend" | "name";
+const SORT_LABEL: Record<AppSort, string> = { updated: "Updated", spend: "Spend", name: "App" };
+
+/** Updated (newest first, the default), Spend (most first), Name (A–Z). Stable inside. */
+export function sortApps(apps: AppRow[], by: AppSort): AppRow[] {
+  const t = (a: AppRow) => (a.at ? Date.parse(a.at) : 0) || 0;
+  return apps.map((a, i) => ({ a, i })).sort((x, y) => {
+    const d = by === "name" ? x.a.app.localeCompare(y.a.app)
+      : by === "spend" ? (y.a.costUsd ?? 0) - (x.a.costUsd ?? 0)
+      : t(y.a) - t(x.a);
+    return d || x.i - y.i;
+  }).map(({ a }) => a);
+}
+
+const CREW_MAX = 5;
+
+/** The agents who built it, side by side — never overlapped into a smudge — each named. */
+function Crew({ roleKeys }: { roleKeys: string[] }) {
+  const shown = roleKeys.slice(0, CREW_MAX);
+  const rest = roleKeys.slice(CREW_MAX);
+  if (!shown.length) return <span className="fx-muted" title="No agent has signed work on it yet">—</span>;
+  return (
+    <span className="fx-crew" role="list" aria-label={roleKeys.map((k) => nameOf(k).name).join(", ")}>
+      {shown.map((k) => (
+        <span key={k} className="fx-crew-face" role="listitem" title={nameOf(k).name}>
+          <AgFace roleKey={k} size={20} decorative />
+        </span>
+      ))}
+      {rest.length ? <span className="fx-crew-more" title={rest.map((k) => nameOf(k).name).join(", ")}>+{rest.length}</span> : null}
+    </span>
+  );
+}
+
+function PrCell({ number, url, state, repo, testId }: { number?: number; url?: string; state?: PrState; repo?: string; testId?: string }) {
+  if (!number) return <span className="fx-muted">—</span>;
+  const tip = `PR #${number} is ${state ?? "open"}${repo ? ` · ${repo}` : ""}`;
+  return (
+    <span className="fx-pr" data-state={state ?? "open"}>
+      <a className="ag-link" href={url} target="_blank" rel="noreferrer" title={tip} data-testid={testId}
+         onClick={(e) => e.stopPropagation()}>#{number}</a>
+      <span className="fx-pr-state">{state ?? "open"}</span>
+    </span>
+  );
+}
+
+function spendOf(a: { costUsd?: number; included?: boolean }): { text: string; tip?: string } {
+  const word = costWord(a.costUsd ?? 0);
+  if (word) return { text: word, tip: "Metered model spend over every build" };
+  if (a.included) return { text: "Included", tip: "Ran on a subscription. No metered spend." };
+  return { text: "—" };
+}
+
+/** A build's date, pinned to one locale (the console renders on the server too). */
+function dayOf(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) : "";
+}
+
+/** The stations a build actually reached: never a ring for a station it never ran. */
+export function stationsThatRan(row: BuildRowData): BuildRowData["stations"] {
+  return row.stations.filter((s) => s.status !== "pending" && s.status !== "skipped");
+}
+
+/** Builds still on the line say which station they are at; a shipped or stopped one does not. */
+const ON_THE_LINE = new Set(["building", "queued", "quiet", "budget_wait", "blocked", "needs_plan", "needs_waiver", "budget_refused"]);
+
+function stateCell(b: { word: string; row?: BuildRowData }): { word: string; where: string } {
+  const st = b.row && ON_THE_LINE.has(b.row.state) ? b.row.stations.find((s) => s.key === b.row?.station) : undefined;
+  return { word: b.word, where: st && !b.word.split(" · ").includes(st.label) ? st.label : "" };
+}
+
 export type AppsTabProps = {
   projectId: string;
   runs: CodeTaskRun[];
@@ -139,7 +235,10 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   const now = useNow(30_000);
   const served = useServerApps(projectId);
   const fallback = useMemo(() => appsFromRuns(runs, previews), [runs, previews]);
-  const apps = (served ?? fallback).filter((a) => !query.trim() || a.app.toLowerCase().includes(query.trim().toLowerCase()));
+  const [sort, setSort] = useState<AppSort>("updated");
+  const q = query.trim().toLowerCase();
+  const apps = sortApps((served ?? fallback).filter((a) => !q || a.app.toLowerCase().includes(q)
+    || (a.brief ?? "").toLowerCase().includes(q)), sort);
   const [open, setOpen] = useState<string | null>(null);
 
   if (!apps.length) {
@@ -152,70 +251,110 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
       </div>
     );
   }
+  const sortButton = (key: AppSort, cls: string) => (
+    <span className={`fx-apps-th ${cls}`} role="columnheader" aria-sort={sort === key ? (key === "name" ? "ascending" : "descending") : "none"}>
+      <button type="button" className="fx-apps-sort" data-active={sort === key || undefined} data-testid={`fx-apps-sort-${key}`}
+              title={key === "updated" ? "Newest first" : key === "spend" ? "Most spent first" : "A to Z"}
+              onClick={() => setSort(key)}>{SORT_LABEL[key]}</button>
+    </span>
+  );
   return (
-    <div className="fx-apps" data-testid="fx-apps">
-      <ul className="fx-rows" aria-label="Apps">
+    <div className="fx-apps" data-testid="fx-apps" role="table" aria-label="Apps">
+      <div className="fx-apps-head fx-app-grid" role="row">
+        <span className="fx-apps-th fx-c-chev" role="columnheader" aria-label="Builds of the app" />
+        {sortButton("name", "fx-c-app")}
+        <span className="fx-apps-th fx-c-crew" role="columnheader">Crew</span>
+        <span className="fx-apps-th fx-c-state" role="columnheader">State</span>
+        <span className="fx-apps-th fx-c-pr" role="columnheader">PR</span>
+        <span className="fx-apps-th fx-c-deploy" role="columnheader">Deploy</span>
+        {sortButton("spend", "fx-c-spend")}
+        <span className="fx-apps-th fx-c-builds" role="columnheader">Builds</span>
+        {sortButton("updated", "fx-c-updated")}
+      </div>
+      <ul className="fx-apps-list" role="rowgroup">
         {apps.map((a) => {
           const expanded = open === a.key;
           const built = builtBuild(a.builds);
-          const newest = built?.runId ?? a.key;
+          const opens = built?.runId ?? a.key;
           const lastFailed = a.builds[0] && built && a.builds[0] !== built
             && (a.builds[0].row?.state === "failed" || a.builds[0].word.startsWith("Failed"));
           // Shipped AND building (the old card's "shipped · building"): a newer build is on the line.
           const alsoBuilding = a.builds[0] && built && a.builds[0] !== built
             && ["building", "queued", "quiet", "budget_wait"].includes(a.builds[0].row?.state ?? "");
+          const shown = built ?? a.builds[0];
+          const state = stateCell({ word: built && built !== a.builds[0] ? built.word : a.word, row: shown?.row });
+          const spend = spendOf(a);
+          const many = a.builds.length > 1;
+          const deploy = a.deploys[0];
+          const openRow = (e: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>) => {
+            const t = e.target as HTMLElement;
+            if (t.closest("a, .fx-app-chev")) return;
+            onOpen(opens, (e.currentTarget as HTMLElement).closest("li"));
+          };
           return (
-            <li key={a.key} className="fx-app" data-testid={`fx-app-${a.key}`}>
-              <div className="fx-row fx-app-row">
-                <span className="fx-row-name">
-                  <button type="button" className="fx-row-open ag-trunc" aria-expanded={expanded}
-                          onClick={() => setOpen(expanded ? null : a.key)}>
-                    {expanded ? <CaretDown size={10} weight="bold" aria-hidden /> : <CaretRight size={10} weight="bold" aria-hidden />}
-                    <span data-user-text>{a.app}</span>
+            <li key={a.key} className="fx-app" data-testid={`fx-app-${a.key}`} role="presentation">
+              <div className="fx-app-row fx-app-grid" role="row" tabIndex={0} data-testid={`fx-app-open-${a.key}`}
+                   aria-label={`${a.app}: open its ${many ? "newest working " : ""}build`}
+                   onClick={openRow} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); openRow(e); } }}>
+                <span className="fx-c-chev" role="cell">
+                  <button type="button" className="fx-app-chev ag-icon-btn" aria-expanded={many ? expanded : undefined}
+                          disabled={!many} aria-label={many ? `${expanded ? "Hide" : "Show"} the builds of ${a.app}` : "One build"}
+                          title={many ? undefined : "One build"} data-testid={`fx-app-chev-${a.key}`}
+                          onClick={(e) => { e.stopPropagation(); if (many) setOpen(expanded ? null : a.key); }}>
+                    {expanded ? <CaretDown size={12} weight="bold" aria-hidden /> : <CaretRight size={12} weight="bold" aria-hidden />}
                   </button>
                 </span>
-                <span className="fx-app-faces">
-                  {a.builders.length ? <AgFaceStack roleKeys={a.builders} size={20} max={4} /> : null}
-                </span>
-                <span className="fx-row-now">
-                  <span className="fx-word">{built && built !== a.builds[0] ? built.word : a.word}</span>
+                <span className="fx-c-app fx-app-name" role="cell" title={a.brief || a.app} data-user-text>{a.app}</span>
+                <span className="fx-c-crew" role="cell"><Crew roleKeys={a.builders} /></span>
+                <span className="fx-c-state fx-row-now" role="cell">
+                  <span className="fx-word">{state.word}</span>
+                  {state.where ? <span className="fx-state-where" title="The station it is at">{` · ${state.where}`}</span> : null}
                   {lastFailed ? <span className="fx-muted" title="The newest build of this app failed; the one that works opens">{" · last failed"}</span> : null}
                   {alsoBuilding ? <span className="fx-muted" title="A newer build of this app is on the line">{" · building"}</span> : null}
                 </span>
-                <span className="fx-app-preview">
-                  {a.preview?.url && a.preview.status === "running" ? (
-                    <a className="ag-link" href={a.preview.url} target="_blank" rel="noreferrer">Preview ↗</a>
-                  ) : a.preview?.status === "starting" ? <span>Starting…</span> : null}
+                <span className="fx-c-pr fx-app-pr" role="cell">
+                  <PrCell number={a.prNumber} url={a.prUrl} state={a.prState} repo={a.repo} testId={`fx-app-pr-${a.key}`} />
                 </span>
-                <span className="fx-app-deploys">
-                  {a.deploys.map((d) => <span key={d.env} title={d.ok ? "Deployed" : "Not deployed"}>{d.word ?? `${d.env} ${d.ok ? "✓" : "—"}`}</span>)}
+                <span className="fx-c-deploy fx-app-deploys" role="cell"
+                      title={a.deploys.map((d) => d.word ?? d.env).join(" · ") || "Not deployed"}>
+                  {deploy ? <span data-ok={deploy.ok || undefined}>{deploy.word ?? `${deploy.env} ${deploy.ok ? "✓" : "—"}`}</span> : <span className="fx-muted">—</span>}
+                  {a.deploys.length > 1 ? <span className="fx-muted"> +{a.deploys.length - 1}</span> : null}
                 </span>
-                <span className="fx-app-pr">
-                  {a.prNumber ? (
-                    <a className="ag-link" href={a.prUrl} target="_blank" rel="noreferrer" title={a.repo ?? undefined}
-                       data-testid={`fx-app-pr-${a.key}`}>PR #{a.prNumber}</a>
-                  ) : null}
-                  {a.costUsd ? <span className="fx-muted" title="Metered spend over every build of this app"> · {money(a.costUsd)}</span> : null}
-                </span>
-                <span className="fx-app-count" title="Builds of this app">{a.builds.length} build{a.builds.length === 1 ? "" : "s"}</span>
-                <button type="button" className="ag-icon-btn fx-row-go" aria-label={`Open ${a.app}`} title="Open its newest working build"
-                        onClick={(e) => onOpen(newest, e.currentTarget.closest("li"))}>↗</button>
+                <span className="fx-c-spend fx-app-spend" role="cell" title={spend.tip}>{spend.text}</span>
+                <span className="fx-c-builds fx-app-count" role="cell" title="Builds of this app">{a.builds.length}</span>
+                <span className="fx-c-updated" role="cell" title={a.at ? localTime(a.at) : undefined}>{a.at ? ago(a.at, now) : "—"}</span>
               </div>
               {expanded ? (
-                <ul className="fx-app-builds" aria-label={`Builds of ${a.app}`}>
-                  {a.builds.map((b) => b.row ? (
-                    <BuildRow key={b.runId} build={b.row} density="compact" now={now} onOpen={onOpen} />
-                  ) : (
-                    <li key={b.runId}>
-                      <button type="button" className="fx-app-build" data-testid={`fx-app-build-${b.runId}`}
-                              onClick={(e) => onOpen(b.runId, e.currentTarget)}>
-                        <span>Attempt {b.attempt}</span>
-                        <span aria-hidden> · </span><span className="fx-word">{b.word}</span>
-                        {b.at ? <><span aria-hidden> · </span><span>{ago(b.at, now)}</span></> : null}
-                        <span aria-hidden> ↗</span>
-                      </button>
-                    </li>
-                  ))}
+                <ul className="fx-app-builds" aria-label={`Builds of ${a.app}`} role="rowgroup">
+                  {a.builds.map((b, i) => {
+                    const st = stateCell(b);
+                    const cost = costWord(b.costUsd ?? b.row?.costUsd ?? 0);
+                    const ran = b.row ? stationsThatRan(b.row) : [];
+                    return (
+                      <li key={b.runId} className="fx-app-build fx-app-grid" role="row" tabIndex={0}
+                          data-testid={`fx-attempt-row-${b.runId}`} data-latest={i === 0 || undefined}
+                          onClick={(e) => { if (!(e.target as HTMLElement).closest("a")) onOpen(b.runId, e.currentTarget); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onOpen(b.runId, e.currentTarget); } }}>
+                        <span className="fx-c-chev" role="cell" />
+                        <span className="fx-c-app fx-build-n" role="cell">
+                          <span data-testid={`fx-build-n-${b.runId}`}>Build {b.order ?? a.builds.length - i}</span>
+                          {b.at ? <span className="fx-muted" title={localTime(b.at)}> · {dayOf(b.at)}</span> : null}
+                          {i === 0 ? <span className="fx-latest" title="The newest build of this app">latest</span> : null}
+                        </span>
+                        <span className="fx-c-crew" role="cell">
+                          {ran.length ? <StationLine stations={ran} density="row" still label="Stations it ran" /> : null}
+                        </span>
+                        <span className="fx-c-state" role="cell"><span className="fx-word">{st.word}</span></span>
+                        <span className="fx-c-pr" role="cell">
+                          <PrCell number={b.prNumber} url={b.prUrl} state={b.prState} repo={a.repo} />
+                        </span>
+                        <span className="fx-c-deploy" role="cell" />
+                        <span className="fx-c-spend" role="cell" title={cost ? "Metered model spend" : undefined}>{cost || "—"}</span>
+                        <span className="fx-c-builds" role="cell" />
+                        <span className="fx-c-updated" role="cell" title={b.at ? localTime(b.at) : undefined}>{b.at ? ago(b.at, now) : ""}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </li>

@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 from typing import Any, Optional
+from . import owned_process
 
 #: Where a watermark may go. A fixed set, not free text: these become filter expressions, and
 #: "top-right" is the whole vocabulary anybody needs.
@@ -97,7 +98,7 @@ def drawtext_available() -> bool:
     the filter rather than the missing package.
     """
     try:
-        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+        out = owned_process.run(["ffmpeg", "-hide_banner", "-filters"],
                              capture_output=True, text=True, timeout=30).stdout
     except Exception:  # noqa: BLE001 — absent ffmpeg is _require_ffmpeg's answer to give
         return False
@@ -119,7 +120,7 @@ def _run(argv: list[str], *, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> str:
     and not a second command.
     """
     try:
-        completed = subprocess.run(  # noqa: S603 — argv list, shell=False, fixed executable
+        completed = owned_process.run(  # noqa: S603 — argv list, shell=False, fixed executable
             argv, capture_output=True, text=True, timeout=timeout, shell=False,
         )
     except subprocess.TimeoutExpired as error:

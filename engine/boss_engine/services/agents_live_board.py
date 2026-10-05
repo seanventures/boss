@@ -26,7 +26,8 @@ from sqlalchemy import text
 
 MissionState = Literal["running", "waiting_you", "waiting_person", "waiting", "stopped",
                        "blocked", "done"]
-AttentionKind = Literal["approval", "failed_step", "readiness", "gate_override", "budget_refused"]
+AttentionKind = Literal["approval", "failed_step", "readiness", "gate_override", "budget_refused",
+                        "system_health"]
 
 
 class AttentionAction(TypedDict):
@@ -338,6 +339,17 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
                 {"key": a.get("key"), "label": a.get("label"),
                  "enabled": a.get("state", "enabled") == "enabled",
                  **({"reason": a["reason"]} if a.get("reason") else {})}
+                for a in n.get("answers") or []]
+        elif kind == "system_health":
+            # The machine (stability spec §4d): Shepherd's card, BOSS's face. Each option is
+            # the server's — its label, its tooltip, whether it asks to confirm.
+            item["role_key"] = None
+            item["finding_id"] = n.get("finding_id")  # type: ignore[typeddict-unknown-key]
+            item["severity"] = n.get("severity")  # type: ignore[typeddict-unknown-key]
+            item["answers"] = [
+                {"key": a.get("key"), "label": a.get("label"), "enabled": True,
+                 **({"reason": a["reason"]} if a.get("reason") else {}),
+                 **({"confirm": True} if a.get("confirm") else {})}
                 for a in n.get("answers") or []]
         elif kind == "failed_step":
             item["role_key"] = step_owner.get((str(n.get("run_id")), str(n.get("step_id"))))

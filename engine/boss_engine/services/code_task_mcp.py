@@ -50,6 +50,8 @@ class HarnessMcp:
     def cleanup(self) -> None:
         if self.path:
             shutil.rmtree(os.path.dirname(self.path), ignore_errors=True)
+            from .resource_ledger import release_dir
+            release_dir(os.path.dirname(self.path), "cleanup")
 
 
 def _cli_name(server_name: str) -> str:
@@ -99,6 +101,8 @@ def prepare(connection: Connection, settings: Any, project_id: str,
     if not planned["servers"]:
         return HarnessMcp(path="", servers=[])
     directory = tempfile.mkdtemp(prefix="boss-mcp-")
+    from .resource_ledger import claim_dir
+    claim_dir(directory)
     os.chmod(directory, 0o700)
     path = os.path.join(directory, "mcp.json")
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

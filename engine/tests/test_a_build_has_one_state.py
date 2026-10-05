@@ -184,3 +184,17 @@ def test_a_builds_app_name_drops_the_briefs_period():
     name = fv.app_name({"id": "crun_x", "title": "Build a lead triage inbox. Lead Triage Inbox.",
                         "finalize_ctx": {}, "spec": {}})
     assert not name.endswith((".", "!", "?", ",", ";", ":")), name
+
+
+@pytest.mark.parametrize("title", [
+    "Re‐build of *Path Verification* (paramg/boss-sandbox) — make the checks pass",
+    "Go/no-go on a US-equity rule-based screener for weekly rebalancing",
+])
+def test_an_app_name_never_ends_mid_word(title):
+    """Apps on goldeneye: "Re‐build of *Path Verification* (paramg/bo", "Go/no-go on a US-equity
+    ru" — cut mid-word at 42 characters, with the brief's markdown in it."""
+    name = fv.app_name({"id": "crun_x", "title": title, "finalize_ctx": {}, "spec": {}})
+    assert "*" not in name and not name.endswith(("(", "/", "-"))
+    words = title.replace("*", "").split()
+    assert all(w in words or w.rstrip(",:;") in [x.rstrip(",:;") for x in words]
+               for w in name.split()), name

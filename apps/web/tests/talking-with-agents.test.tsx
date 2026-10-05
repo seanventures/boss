@@ -18,6 +18,7 @@ import { overBudget } from "./_helpers/copy-budget";
 
 const converse = await import("../lib/agent-converse");
 const { ConverseHost } = await import("../app/agents/converse-host");
+const { askAboutAct } = await import("../app/agents/act-card");
 
 // ── A fake API ───────────────────────────────────────────────────────────────────────────────
 
@@ -86,11 +87,27 @@ beforeEach(() => {
     if (method === "GET" && path === "") return Response.json({ items: [] });
     if (method === "GET") return Response.json(conversations[path.slice(1)] ?? {}, { status: conversations[path.slice(1)] ? 200 : 404 });
     if (path === "") {
+      // Like the engine (agent_converse._resumable_talk): `resume` reopens this operator's open
+      // talk with the agent about the same step (any talk with it, for a door not about one),
+      // one with turns before an empty one.
+      const ctx = (body.context ?? {}) as Record<string, unknown>;
+      const seat = (body.seats as string[] | undefined)?.[0];
+      const reopen = body.resume && body.kind === "talk" ? Object.values(conversations)
+        .filter((c) => c.kind === "talk" && c.status === "open" && (c.seats as string[])[0] === seat)
+        .filter((c) => {
+          const was = (c.context ?? {}) as Record<string, unknown>;
+          return !ctx.workflow_run_id
+            || (was.workflow_run_id === ctx.workflow_run_id && (was.step_id ?? "") === (ctx.step_id ?? ""));
+        })
+        .sort((a, b) => Number((b.turns as unknown[]).length > 0) - Number((a.turns as unknown[]).length > 0))[0]
+        : undefined;
+      if (reopen) return Response.json({ ...reopen, resumed: true }, { status: 201 });
       const id = `cnv_${Object.keys(conversations).length + 1}`;
       // Like the engine: a preset seats its agents and names the room with its label.
       const preset = PRESETS.find((p) => p.key === body.preset);
       conversations[id] = conversation(id, String(body.kind), preset ? preset.seats : body.seats as string[],
-                                       preset ? { title: preset.label, preset: preset.key } : {});
+                                       { ...(preset ? { title: preset.label, preset: preset.key } : {}),
+                                         ...(body.context ? { context: body.context } : {}) });
       return Response.json(conversations[id], { status: 201 });
     }
     if (/\/(turns|summary|propose)$/.test(path)) return sseResponse(init?.signal);
@@ -246,6 +263,75 @@ describe("talking to one agent", () => {
     expect(problem.getAttribute("data-code")).toBe("needs_model");
     expect(problem.textContent).toContain("Needs a model");
     expect(problem.querySelector("a")!.getAttribute("href")).toBe("/?area=setup&focus=models");
+  });
+});
+
+describe("asking again reopens what was said", () => {
+  const stepAct = (stepId: string) => ({
+    actId: `act_${stepId}`, roleKey: "qa", links: { workflow_run_id: "wfr_1", step_id: stepId },
+  }) as unknown as Parameters<typeof askAboutAct>[0];
+  const closeSheet = async () => {
+    await act(async () => { q<HTMLButtonElement>('[data-testid="ag-talk"] [aria-label="Close"]')!.click(); });
+    await settle();
+    expect(q('[data-testid="ag-talk"]')).toBeNull();
+  };
+
+  it("a step's Ask, closed and pressed again, shows the question and the answer; so does Talk", async () => {
+    await mountHost();
+    await act(async () => { askAboutAct(stepAct("brief"), "What did this step make?"); });
+    await settle();
+    let sheet = q('[data-testid="ag-talk"]')!;
+    expect(sheet.querySelector("textarea")!.value).toBe("What did this step make?");
+    await act(async () => { sheet.querySelector<HTMLButtonElement>('[data-testid="ag-send"]')!.click(); });
+    await settle();
+    // What the server saved before the stream ended.
+    conversations.cnv_1.turns = [
+      { turn_id: "t1", seq: 1, speaker_kind: "person", actor: "ceo", kind: "question",
+        content: "What did this step make?", status: "complete", cited_acts: [] },
+      { turn_id: "t2", seq: 2, speaker_kind: "agent", role_key: "qa", kind: "message",
+        content: "It wrote the brief.", status: "complete", cited_acts: [] }];
+    await push(0, "turn_start", { turn_id: "t2", seq: 2, speaker_kind: "agent", role_key: "qa" });
+    await push(0, "token", { turn_id: "t2", text: "It wrote the brief." });
+    await push(0, "turn_end", { turn_id: "t2", status: "complete", tokens_in: 1, tokens_out: 1, cost_usd: 0, cited_acts: [] });
+    await push(0, "done", { conversation: { conversation_id: "cnv_1", kind: "talk", seats: ["qa"], status: "open", turn_count: 2 } });
+    await act(async () => { streams[0].end(); });
+    await settle();
+    await closeSheet();
+
+    // The same Ask again: the same talk, with what was said.
+    await act(async () => { askAboutAct(stepAct("brief"), "What did this step make?"); });
+    await settle();
+    sheet = q('[data-testid="ag-talk"]')!;
+    expect(sheet.querySelectorAll('[data-testid="ag-turn-person"]').length).toBe(1);
+    expect(sheet.querySelector('[data-testid="ag-turn-agent"]')!.textContent).toContain("It wrote the brief.");
+    await closeSheet();
+
+    // Another door to the same agent — its Passport's Talk — reopens it too, and never greets.
+    await act(async () => { converse.openTalk("qa", { from: "passport" }); });
+    await settle();
+    sheet = q('[data-testid="ag-talk"]')!;
+    expect(sheet.querySelector('[data-testid="ag-turn-agent"]')!.textContent).toContain("It wrote the brief.");
+    expect(Object.keys(conversations)).toEqual(["cnv_1"]);
+    expect(calls.filter((c) => c.path.endsWith("/turns"))).toHaveLength(1);
+    // Every opening asked to resume; none of them created a second talk.
+    expect(calls.filter((c) => c.method === "POST" && c.path === "").every((c) => c.body.resume === true)).toBe(true);
+  });
+
+  it("another step asks in its own talk; New talk starts over", async () => {
+    await mountHost();
+    await act(async () => { askAboutAct(stepAct("brief")); });
+    await settle();
+    conversations.cnv_1.turns = [{ turn_id: "t1", seq: 1, speaker_kind: "person", actor: "ceo",
+      kind: "question", content: "Why?", status: "complete", cited_acts: [] }];
+    await closeSheet();
+    await act(async () => { askAboutAct(stepAct("publish")); });
+    await settle();
+    expect(Object.keys(conversations)).toEqual(["cnv_1", "cnv_2"]);
+    expect(q('[data-testid="ag-turn-person"]')).toBeNull();
+    await act(async () => { q<HTMLButtonElement>('[data-testid="ag-talk"] [title="New talk"]')!.click(); });
+    await settle();
+    expect(Object.keys(conversations)).toEqual(["cnv_1", "cnv_2", "cnv_3"]);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "").at(-1)!.body.resume).toBeUndefined();
   });
 });
 

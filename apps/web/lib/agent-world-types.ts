@@ -55,7 +55,7 @@ export type Passport = {
   agentId: string; roleKey: string; displayName: string; persona: Persona;
   born: { at: string; by: string; from: Record<string, unknown> };
   sponsor?: string; lifecycle: Lifecycle; version: number; fingerprint: string; reportsTo?: string;
-  vitals: { trust: number; runs: number; cleanRate: number; cost7d: number; panels: number; apps: number };
+  vitals: { trust: number; runs: number; cleanRate: number; cost7d: number; planCalls7d: number; panels: number; apps: number };
   presence: Presence; identity: { mode: "local"; tokens: false };
 };
 export type Chain = {
@@ -75,7 +75,7 @@ export type ConversationKind = "talk" | "plan" | "room";
 export type ConversationStatus = "open" | "summarized" | "started" | "closed";
 /** Where it was opened from, so the first turn can be about something. */
 export type ConversationContext = {
-  from: "passport" | "chip" | "run_step" | "palette" | "presence" | "roster" | "room";
+  from: "passport" | "chip" | "run_step" | "palette" | "presence" | "roster" | "room" | "org";
   actId?: string; workflowRunId?: string; stepId?: string;
 };
 export type TurnKind = "message" | "question" | "proposal" | "summary" | "error";
@@ -181,7 +181,9 @@ export type ConverseApi = {
   roomPresets(): Promise<RoomPreset[]>;
   listConversations(projectId: string, o?: { kind?: ConversationKind; limit?: number }): Promise<ConversationSummary[]>;
   createConversation(projectId: string, body: { kind: ConversationKind; seats: string[]; leadRoleKey?: string;
-    preset?: string; title?: string; context?: ConversationContext }): Promise<Conversation>;
+    preset?: string; title?: string; context?: ConversationContext;
+    /** A talk: reopen the operator's open talk with that agent about the same thing. */
+    resume?: boolean }): Promise<Conversation>;
   getConversation(projectId: string, conversationId: string): Promise<Conversation>;
   sendTurn(projectId: string, conversationId: string, body: { message: string; to?: string[]; rounds?: 1 | 2 },
     signal?: AbortSignal): AsyncIterable<ConverseEvent>;
