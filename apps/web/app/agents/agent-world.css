@@ -1128,6 +1128,11 @@
 .ag-mission-next .ag-avatar { filter: grayscale(1); }
 .ag-mission-kn { flex: none; margin-left: 8px; font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ag-mission-now { font-size: 0.8rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* THE STATE WORD NEVER TRUNCATES ("Waiti…" at 1024, independent test D7): the row's state is
+   its first part and keeps its width; only the step and the time after it may ellipse. */
+.ag-mission-now { display: flex; align-items: baseline; min-width: 0; }
+.ag-mission-now > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ag-mission-now > span:first-child { flex: none; overflow: visible; }
 .ag-mission-you { color: var(--amber); font-weight: 650; }
 .ag-mission-failed { color: var(--red); font-weight: 650; }
 .ag-mission-blocked { color: var(--amber); }
@@ -1418,6 +1423,8 @@
   .kit-pop.ld-pop, .kit-pop.ld-pop[data-align="left"] { position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 270; width: auto; max-width: none; max-height: 70vh; border-radius: var(--r-xl) var(--r-xl) 0 0; }
 }
 
+/* The console is Paused: the pill holds still (its faces keep their state, the motion stops). */
+.ag-pill-wrap[data-paused] *, .ag-pill-wrap[data-paused] *::before, .ag-pill-wrap[data-paused] *::after { animation-play-state: paused !important; }
 /* ── [org] Agents › Organization: Teams · Flow · Lines (org-view spec §4) ──────────────────
    Cards use the same team hue tokens as Live's Agent force (6% tint, 12% line). State is a word
    and a glyph, never colour alone. Nothing here animates except an edge fading in on a real

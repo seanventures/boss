@@ -241,10 +241,16 @@ export type Polled<T> = {
  * the console (`onChanged`) asks now. The Floor and the cockpit both poll through this.
  */
 export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
-                             everyMs: (data: T | null) => number): Polled<T> {
-  const [data, setData] = useState<T | null>(null);
+                             everyMs: (data: T | null) => number,
+                             seed?: { initial?: T | null; etag?: string | null }): Polled<T> {
+  // OPTIONAL SEED (command-center spec §6.3): the server-rendered answer shows before the first
+  // poll, so `data` never flashes to null; with its ETag the first poll is a cheap 304 and waits
+  // one cadence instead of re-reading what the server just sent.
+  const seeded = useRef(seed?.initial ?? null);
+  const seededEtag = useRef(seed?.etag ?? null);
+  const [data, setData] = useState<T | null>(seeded.current);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(seeded.current === null);
   const etag = useRef<string | null>(null);
   const kick = useRef<() => void>(() => {});
   const latest = useRef<T | null>(null);
@@ -254,11 +260,14 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
   cadence.current = everyMs;
 
   useEffect(() => {
-    etag.current = null;
-    latest.current = null;
-    setData(null);
+    // The seed belongs to the first url only: a later url starts empty, as it always did.
+    const initial = seeded.current;
+    seeded.current = null;
+    etag.current = initial !== null ? seededEtag.current : null;
+    latest.current = initial;
+    setData(initial);
     setError(null);
-    setLoading(true);
+    setLoading(initial === null);
     if (!url) return undefined;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -311,7 +320,8 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
     if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVis);
     const offChanged = onChanged(() => restart());
     const offPause = subscribeConsoleLive((on) => { if (on) restart(); });
-    void tick(gen);
+    if (initial !== null && etag.current) timer = setTimeout(() => void tick(gen), cadence.current(initial));
+    else void tick(gen);
     return () => {
       stopped = true;
       if (timer) clearTimeout(timer);
