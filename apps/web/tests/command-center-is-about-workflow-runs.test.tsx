@@ -51,14 +51,14 @@ const render = (v = DATA) => renderToStaticMarkup(
 const html = render();
 
 describe("what is running", () => {
-  it("shows the run, its current step, the agent on it and how long it has been there", () => {
+  it("shows the run, what its agent is doing, the step it is on and how long it has been there", () => {
     expect(html).toContain("Ship it #182");
-    expect(html).toContain("Build");
+    expect(html).toContain("Coding");
     expect(html).toContain("12m");
-    // The shared run row (agents-home §3.3): steps done, never a percent.
-    expect(html).toContain("step 4 of 7");
+    // Steps done, never a percent.
+    expect(html).toContain("step 4/7");
     // In what the page SAYS, not its markup: an SVG gradient's `offset="50%"` is geometry.
-    const said = html.replace(/<[^>]*>/g, " ");
+    const said = html.replace(/<style[\s\S]*?<\/style>/g, "").replace(/<[^>]*>/g, " ");
     expect(said).not.toMatch(/\d+%/);
   });
 
@@ -68,43 +68,22 @@ describe("what is running", () => {
 });
 
 describe("what needs you", () => {
-  it("a gate the server keeps for Approvals links to its decision", () => {
-    expect(html).toContain(decisionHref("dec_gate", "org_1").replace(/&/g, "&amp;"));
-    expect(html).toContain("Review ↗");
-    expect(html).toContain("Publish");
+  // Each item is a sentence with a Review button that opens the shared AttentionCard in place
+  // (the server's buttons: approve/reject inline when it allows, Review ↗ into Approvals, the
+  // run's own Retry) — pressed and checked in tests/command-center-v2.test.tsx.
+  it("every item is listed as a sentence, with Review", () => {
+    expect(html).toContain("“Build” failed on Ship it #180");
+    expect(html).toContain("“Publish” is waiting for you on Weekly video");
+    expect(html).toContain("Model capacity refused");
+    expect(html).toContain('data-testid="cc-need-review"');
   });
 
-  it("a gate the server allows in place is decided in place (truth bug 4)", () => {
-    const inline = render(parseCommandCenterView(view({ attention: [gate({ decide_inline: true })] })));
-    expect(inline).toContain('data-testid="ag-att-approve"');
-    expect(inline).toContain("Publish it");
-  });
-
-  it("a failed step says why and offers Retry", () => {
+  it("a failed step says why, in a line", () => {
     expect(html).toContain("The sandbox ran out of disk.");
-    // The run's own answer, with its own label.
-    expect(html).toContain('data-testid="ag-att-answer-retry_step"');
-    expect(html).toContain("Try build again");
   });
 
-  it("offers Retry only when the run itself offers it", () => {
-    const without = render(parseCommandCenterView(view({ attention: [failed({ answers: [
-      { key: "retry_step", label: "Try build again", enabled: false,
-        reason: "a newer attempt is running", step_id: "build" }] })] })));
-    expect(without).toContain("The sandbox ran out of disk.");
-    // Drawn, but not pressable, and it says why.
-    expect(without).toMatch(/data-testid="ag-att-answer-retry_step"[^>]*disabled/);
-    expect(without).toContain('title="a newer attempt is running"');
-  });
-
-  it("a refusal is reviewed in Approvals, never approved from here; setup links to its row", () => {
-    expect(html).toContain("No model had credit.");
-    expect(html).toContain(decisionHref("dec_9", "org_1").replace(/&/g, "&amp;"));
-    expect(html).not.toMatch(/data-att-id="dec_9"[\s\S]*?data-testid="ag-att-approve"[\s\S]*?data-att-id/);
-    expect(html).toContain('data-testid="cc2-setup"');
-    expect(html).toContain("Fix in Repo and models");
-    expect(html).toContain("focus=repository");
-    expect(html).toContain("area=setup");
+  it("nothing is approved from the page's first paint: a decision is one Review press away", () => {
+    expect(html).not.toContain('data-testid="ag-att-approve"');
   });
 
   it("a setup gap is listed, and lands on its row in Repo and models", () => {
@@ -123,6 +102,7 @@ it("an empty factory says so, and how to start", () => {
   expect(empty).toContain('data-testid="cc2-needs-you-empty"');
   expect(empty).toContain('data-testid="cc2-running-empty"');
   expect(empty).toContain("area=delivery_workflows");
+  expect(empty).toContain("Nothing running right now");
 });
 
 it("an unreachable API is said, not shown as an empty factory", () => {

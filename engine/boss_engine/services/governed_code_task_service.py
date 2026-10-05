@@ -1718,6 +1718,11 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
             {"phase": "plan", "risk_tier": risk_tier},
             why,
             risk_tier=risk_tier)
+        # A PLAN GATE HOLDS ITS BUILD; IT DOES NOT TIME OUT. Every blocking decision gets a 24h
+        # hold deadline, and an expired plan question dropped out of "Needs you" while the build
+        # sat at "Needs you · plan" for weeks (shared-server, 2026-10). No deadline: it waits for
+        # the person, and every surface counts it (decisions.expire_overdue keeps it so).
+        c.execute(sql("UPDATE decisions SET deadline_at = NULL WHERE id = :d"), {"d": dec_id})
         c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
                        "decision_id=:d, updated_at=now() WHERE id=:id"),
                   {"d": dec_id, "id": run_id})

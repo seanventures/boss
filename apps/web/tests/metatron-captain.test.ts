@@ -98,7 +98,9 @@ describe("Metatron Captain island", () => {
     // put in it. The wording moved when Build became the primary action — a placeholder
     // leading with "Ask" beside a Build button describes the previous design — and pinning the
     // old string failed a change that kept the box exactly where it was.
-    expect(hero).toMatch(/placeholder="[^"]*build/i);
+    // The bar's placeholder and the hero's (cc v2) both say what to build.
+    expect(hero).toMatch(/"Describe what to build…"/);
+    expect(hero).toMatch(/"Describe an app or a change/);
     // ONE ENTRY IN THE RAIL, NOT TWO. The captain's own nav item is gone; what it claimed to
     // be — a captain with the whole factory in view — is what the agent area now does.
     expect(shellSource).not.toContain('label: "Metatron"');

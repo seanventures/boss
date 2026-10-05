@@ -36,7 +36,7 @@ export const GROUP_AT = 20;
 export const OUTCOMES_SHOWN = 8;
 
 const MISSION_RANK: Record<string, number> = {
-  waiting_you: 0, stopped: 1, blocked: 2, running: 3, waiting: 3, waiting_person: 3, done: 4,
+  waiting_you: 0, stopped: 1, blocked: 2, running: 3, waiting: 3, waiting_person: 3, stalled: 4, done: 5,
 };
 
 /** What NEEDS YOU draws (walk D2, D12). The number is DECISIONS — the same one the pill, the

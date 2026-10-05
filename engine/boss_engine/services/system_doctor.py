@@ -836,6 +836,71 @@ def act(engine: Any, settings: Any, finding_id: str, option: str, *, actor: str)
     return {"ok": True, **result}
 
 
+
+#: Shepherd questions older than this are history: Clean up clears them (command_center_view
+#: groups exactly these into one row).
+OLD_QUESTION = timedelta(days=7)
+_ENDED_BUILD = frozenset({"completed", "failed", "cancelled", "simulated"})
+
+
+def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
+                 older_than: timedelta = OLD_QUESTION) -> dict[str, Any]:
+    """CLEAN UP, the Command Center's one button for old stuck builds.
+
+    Each of the project's open Shepherd questions older than `older_than` ("stuck in `coding`
+    … Let it continue, or cancel it?") is about a build. If that build has already ended (or
+    no longer exists) the question is closed as answered — nothing else changes. If it is still
+    live with no state change for as long, nobody is going to continue it: it is cancelled the
+    way a person's Stop cancels it (code_task_service.cancel_run, the console's own path) and
+    the question is answered "cancel". Recent questions and findings are never touched. Every
+    choice is recorded (system_doctor_actions), as a person's choice on a card is."""
+    from . import code_task_service
+
+    cutoff = datetime.now(timezone.utc) - older_than
+    closed = cancelled = 0
+    with engine.begin() as c:
+        rows = c.execute(text(
+            "SELECT e.id, e.task_ref, r.status, r.updated_at FROM shepherd_escalations e "
+            "LEFT JOIN code_task_runs r ON r.id = e.task_ref "
+            "WHERE e.project_id = :p AND e.status = 'open' AND e.created_at < :cut "
+            "ORDER BY e.created_at"), {"p": project_id, "cut": cutoff}).mappings().all()
+    for row in rows:
+        esc, ref = str(row["id"]), str(row["task_ref"] or "")
+        status = str(row["status"] or "")
+        updated = row["updated_at"]
+        if updated is not None and updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        live = bool(status) and status not in _ENDED_BUILD
+        answer = "cleared: the build already ended"
+        with engine.begin() as c:
+            if live and (updated is None or updated < cutoff):
+                try:
+                    code_task_service.cancel_run(
+                        c, ref, project_id, actor=actor,
+                        reason="Cleared by Clean up: no progress for over 7 days")
+                    cancelled += 1
+                    answer = "cancel"
+                except (code_task_service.CancelRefused, LookupError):
+                    pass
+            elif live:
+                continue  # it moved since the question: not history, leave the card
+            n = c.execute(text(
+                "UPDATE shepherd_escalations SET status='answered', answer=:a, answered_by=:by, "
+                "answered_at=now() WHERE id=:id AND status='open'"),
+                {"a": answer, "by": actor, "id": esc}).rowcount
+            if not n:
+                continue
+            closed += 1
+            record_action(c, finding_id=f"shepherd:{esc}", kind="shepherd_escalation",
+                          action="clean_up_old", target=ref or esc, actor=actor,
+                          automatic=False, before={"build_status": status or None},
+                          outcome=answer, project_id=project_id)
+    words = f"Cleared {closed} old {'question' if closed == 1 else 'questions'}"
+    if cancelled:
+        words += f" · stopped {cancelled} stuck {'build' if cancelled == 1 else 'builds'}"
+    return {"ok": True, "closed": closed, "cancelled": cancelled, "result": words}
+
+
 def _snooze(minutes: float, message: str) -> Callable[..., dict[str, Any]]:
     def _h(engine, settings, row, evidence, actor):
         return {"result": message, "status": "snoozed",

@@ -86,6 +86,8 @@ export type AttentionItem = {
   at?: string;
   /** The build this is about, when its subject is a code task (factory spec §4.2.1, §6.5). */
   build?: AttentionBuild;
+  /** Who raised it, in a word or two (`Spend guard`, `Factory`, the workflow's name). */
+  source?: string;
   /** system_health: the finding the options act on, and how bad it is. */
   findingId?: string;
   severity?: "info" | "warn" | "critical";
@@ -114,7 +116,8 @@ export type AttentionSummary = {
 
 // ── Missions (Live work rows) ───────────────────────────────────────────────────────────────
 
-export type MissionState = "running" | "waiting_you" | "waiting_person" | "waiting" | "stopped" | "blocked" | "done";
+/** `stalled`: live, but no step has moved for over 7 days (the server decides; never "running"). */
+export type MissionState = "running" | "waiting_you" | "waiting_person" | "waiting" | "stopped" | "blocked" | "stalled" | "done";
 
 export type MissionHop =
   | { kind: "hop"; actId: string; roleKey: string | null; person?: string; state: AvatarState;
@@ -131,6 +134,8 @@ export type Mission = {
   waitingOn?: string | null; waitingOnRole?: string | null; blockedReason?: string | null; error?: string | null;
   attentionId?: string | null;
   startedAt?: string; stepSince?: string; elapsedSeconds?: number; stepElapsedSeconds?: number;
+  /** When a step last moved (the server's `last_progress_at`). */
+  lastProgressAt?: string;
   /** Metered model spend so far; 0 when unmetered (and then never shown). */
   costUsd: number;
   hops: MissionHop[];
@@ -238,6 +243,7 @@ export function parseAttention(w: unknown): AttentionItem {
     fix: fix ? { area: str(fix.area), label: str(fix.label), ...(opt(fix.focus) ? { focus: opt(fix.focus) } : {}) } : undefined,
     at: opt(o.at),
     build: o.build ? parseAttentionBuild(o.build) : undefined,
+    ...(opt(o.source) ? { source: opt(o.source) } : {}),
     ...(opt(o.finding_id) ? { findingId: opt(o.finding_id) } : {}),
     ...(opt(o.severity) ? { severity: opt(o.severity) as AttentionItem["severity"] } : {}),
   };
@@ -293,7 +299,7 @@ export function parseMission(w: unknown): Mission {
     waitingOn: opt(o.waiting_on) ?? null, waitingOnRole: opt(o.waiting_on_role) ?? null,
     blockedReason: opt(o.blocked_reason) ?? null, error: opt(o.error) ?? null,
     attentionId: opt(o.attention_id) ?? null,
-    startedAt: opt(o.started_at), stepSince: opt(o.step_since),
+    startedAt: opt(o.started_at), stepSince: opt(o.step_since), lastProgressAt: opt(o.last_progress_at),
     elapsedSeconds: optNum(o.elapsed_seconds), stepElapsedSeconds: optNum(o.step_elapsed_seconds),
     costUsd: num(o.cost_usd),
     // A gate's own act comes as a hop flagged `gate` (it is real work: the wait). The lane draws

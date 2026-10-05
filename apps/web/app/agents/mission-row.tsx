@@ -126,6 +126,7 @@ export function nowParts(m: Mission, stepSeconds: number | null): { text: string
     case "waiting": return parts({ text: m.waitingOn ? `Waiting · ${m.waitingOn}` : "Waiting" }, step, time);
     case "stopped": return parts({ text: `Failed · step ${m.stepIndex}`, tip: clipWords(m.error), cls: "ag-mission-failed" });
     case "blocked": return parts({ text: "Blocked", tip: clipWords(m.blockedReason), cls: "ag-mission-blocked" }, step);
+    case "stalled": return parts({ text: "Stalled", tip: "No progress for over 7 days. Resume or close it.", cls: "ag-mission-blocked" }, step);
     case "done": return parts({ text: `Finished · ${m.stepCount} steps${m.elapsedSeconds ? ` · ${span(m.elapsedSeconds)}` : ""}` });
     default: return parts({ text: m.verb || "Working" }, step, time);
   }
