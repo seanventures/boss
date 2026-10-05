@@ -2,7 +2,8 @@
 /**
  * Motion only on a real state change, and a still for every motion (agents-home spec §5.2, §7)
  * — for Organization, Agent force and Activity:
- *   - reduced motion: a focused run's path lights ALL at once, with no timers and no animate();
+ *   - reduced motion: Flow lights a focused run's path ALL at once, with no animateMotion and no
+ *     animate(); with motion it draws in hop by hop; a poll never moves a node;
  *   - idle faces in the compact view are drawn still;
  *   - at most 8 faces move at once, however many agents are working;
  *   - the river's faces never move.
@@ -11,13 +12,23 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SHIP_IT_MISSION, TEAM_WIRE, board, stubMatchMedia } from "./_helpers/agents-home-fixtures";
+import { TEAM_WIRE, board, stubMatchMedia } from "./_helpers/agents-home-fixtures";
+import { orgWire } from "./_helpers/org-board-fixtures";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { TeamZones } = await import("../app/agents/team-zones");
 const { ActivityRiver } = await import("../app/agents/activity-river");
+const { OrgView } = await import("../app/agents/org-view");
+
+const CHAIN = { acts: [
+  { act_id: "a0", role_key: null, kind: "run", status: "active", label: "Ship it #182", started_at: "2026-10-04T10:00:00Z" },
+  { act_id: "a1", role_key: "pm", kind: "step", status: "complete", parent_act_id: "a0", label: "PRD", started_at: "2026-10-04T10:00:01Z" },
+  { act_id: "a2", role_key: "chief_architect", kind: "step", status: "complete", parent_act_id: "a1", label: "Design", started_at: "2026-10-04T10:00:02Z" },
+  { act_id: "a3", role_key: "software_engineer", kind: "step", status: "active", parent_act_id: "a2", label: "Build", started_at: "2026-10-04T10:00:03Z" },
+] };
+let boardWire = orgWire();
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -26,6 +37,8 @@ beforeEach(() => {
   (Element.prototype as unknown as { animate: unknown }).animate = animate;
   animate.mockClear();
   vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+    if (String(input).includes("/v1/workflow-runs/wfr_1/chain")) return Response.json(CHAIN);
+    if (String(input).startsWith("/v1/agents/org-board")) return Response.json(boardWire);
     if (String(input).includes("/v1/agents/activity")) {
       return Response.json({ items: [{ act_id: "a1", role_key: "qa", kind: "step", status: "active", how: "named",
                                        edge_label: "", label: "Test · Ship it", verb: "Testing",
@@ -54,19 +67,36 @@ const $$ = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
 describe("stills", () => {
   it("under reduced motion a focused run lights every hop at once, with no animation", async () => {
     stubMatchMedia(["prefers-reduced-motion"]);
-    await render(<TeamZones projectId="p1" board={board({}, { missions: [SHIP_IT_MISSION] })} density="full" focusRunId="wfr_1" />);
-    expect($$(".ag-zones-agent[data-lit]")).toHaveLength(3);
-    expect($$(".ag-zones-edge")).toHaveLength(2);
+    window.history.replaceState(null, "", "/?area=workforce&view=org&run=wfr_1");
+    await render(<OrgView projectId="p1" live={new Map()} focusRunId="wfr_1" lines={() => <div />} />);
+    expect($$(".ag-flow-agent[data-lit]")).toHaveLength(3);
+    expect($$('path.ag-flow-edge[data-level="agent"]')).toHaveLength(2);
+    expect(document.querySelector("animateMotion")).toBeNull();
     expect(animate).not.toHaveBeenCalled();
   });
 
   it("with motion, the path lights one hop at a time", async () => {
     stubMatchMedia([]);
-    await render(<TeamZones projectId="p1" board={board({}, { missions: [SHIP_IT_MISSION] })} density="full" focusRunId="wfr_1" />);
-    expect($$(".ag-zones-agent[data-lit]").length).toBeLessThan(3);
+    window.history.replaceState(null, "", "/?area=workforce&view=org&run=wfr_1");
+    await render(<OrgView projectId="p1" live={new Map()} focusRunId="wfr_1" lines={() => <div />} />);
+    expect($$(".ag-flow-agent[data-lit]").length).toBeLessThan(3);
     await act(async () => { await new Promise((r) => setTimeout(r, 900)); });
-    expect($$(".ag-zones-agent[data-lit]")).toHaveLength(3);
-    expect($$(".ag-zones-edge[data-new]")).toHaveLength(2);
+    expect($$(".ag-flow-agent[data-lit]")).toHaveLength(3);
+    expect($$('path.ag-flow-edge[data-lit]')).toHaveLength(2);
+  });
+
+  it("a poll never moves a node: columns come from the window, not the traffic", async () => {
+    stubMatchMedia([]);
+    window.history.replaceState(null, "", "/?area=workforce&view=org&layout=flow");
+    await render(<OrgView projectId="p1" live={new Map()} lines={() => <div />} />);
+    const cols = () => $$(".ag-flow-col").map((c) => [...c.querySelectorAll<HTMLElement>(".ag-flow-node")].map((n) => n.dataset.team));
+    const before = cols();
+    boardWire = orgWire({ team_edges: [{ from: "media", to: "leadership", handoffs: 900, failed: 0, waiting: 0, stale: 0, last_at: null }] });
+    const { notifyChanged } = await import("../app/changed");
+    notifyChanged("poll");
+    for (let i = 0; i < 8; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(cols()).toEqual(before);
+    boardWire = orgWire();
   });
 
   it("idle faces in the compact view are still; at most 8 faces move with 12 working", async () => {

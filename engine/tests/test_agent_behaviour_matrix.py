@@ -540,17 +540,18 @@ def test_the_chat_does_not_revalidate_the_whole_console():
             f"{name} still references the action that revalidates the world")
 
 
-def test_ask_boss_uses_the_consoles_standard_header():
-    """"This looks a little different from other formats on the page." It was a bespoke card
-    with its own radius, gradient and type scale; it now uses the same eyebrow/title/meta
-    header as the Meeting room. Status is shown only while work is running, so this header
-    does not need the Meeting room's permanent status badge or duration metadata."""
+def test_ask_boss_is_one_line_with_its_words_kept_where_they_are_read():
+    """"This looks a little different from other formats on the page." It was a bespoke card,
+    then the Meeting room's eyebrow/title/meta header. The Command Center bridge (spec §4.6)
+    lays the composer out as ONE line until used: the title is the textarea's accessible name,
+    "Gated actions require your approval." is the ✦ glyph's tooltip, and the Working /
+    Still working status shows only while work runs. Nothing it said is lost; it moved."""
     src = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
-    for cls in ("mr-header", "mr-header-main", "mr-header-meta", "mr-title",
-                "eyebrow", "mr-avatar tone-"):
-        assert cls in src, f"not using the shared primitive: {cls}"
-    assert '<header className="mr-header askboss-head">' in src
-    assert '<div className="mr-header-meta" role="status">' in src
+    assert 'aria-label="What do you want to do?"' in src
+    assert 'title="Gated actions require your approval."' in src
+    assert 'className="askboss-busy" role="status"' in src
+    assert "Still working" in src
+    assert "mr-avatar tone-" in src          # the openers keep the shared avatar primitive
 
 
 # --------------------------------------------------------------------------- #

@@ -201,7 +201,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
              now: datetime,
              stopped: Optional[Mapping[str, list]] = None,
              notes: Optional[Mapping[str, str]] = None,
-             builds: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+             builds: Optional[Mapping[str, Any]] = None,
+             system: Optional[list[Mapping[str, Any]]] = None) -> dict[str, Any]:
     """Shape the read rows into the three answers. Pure: no I/O, `now` is passed in.
 
     `stopped` is `{run_id: workflow_run_actions.stopped_for_operator(run, steps)}` from
@@ -420,6 +421,12 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "at": None,
         })
 
+    # THE MACHINE ITSELF (stability spec §4d): a system-doctor finding that needs a person's
+    # choice, or a Shepherd question — the same card, its options as the answers. Automatic
+    # fixes never become a card.
+    for item in system or []:
+        needs_you.append(dict(item))
+
     # WHAT STOPS WORK FIRST. A gate holds a run that is otherwise ready; a failed step has
     # already stopped one; setup gaps stop the next one; a refusal is a notice.
     # A STOPPED RUN FIRST (agents-home D12): it has already stopped, and its card was hidden
@@ -427,6 +434,9 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
     def rank(item: Mapping[str, Any]) -> tuple[int, int, str]:
         if item["kind"] in ("failed_step", "gate_override", "budget_refused"):
             # A build stopped at its checks or its budget has stopped too (factory spec §6.5).
+            first = 0
+        elif item["kind"] == "system_health" and item.get("severity") == "critical":
+            # A machine about to stop every build outranks any one of them.
             first = 0
         elif item["kind"] == "approval" and item.get("decision_kind") != "refusal":
             first = 1
@@ -465,7 +475,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
 
 
 def read(connection, settings, project_id: str,
-         now: Optional[datetime] = None) -> dict[str, Any]:
+         now: Optional[datetime] = None, *,
+         setup_out: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Read what `assemble` needs. Two run queries and one decision query, whatever the size.
 
     Returned as `assemble`'s keyword arguments, so another view of the same factory (Agents ›
@@ -541,7 +552,7 @@ def read(connection, settings, project_id: str,
     readiness: list[dict[str, Any]] = []
     try:
         with connection.begin_nested():
-            readiness = setup_gaps(connection, settings, project_id)
+            readiness = setup_gaps(connection, settings, project_id, out=setup_out)
     except Exception:  # noqa: BLE001 - a setup read must never blank the landing page
         readiness = []
     from .workflow_run_actions import load_runs, stopped_for_operator
@@ -566,9 +577,16 @@ def read(connection, settings, project_id: str,
         text("SELECT id, resolution_note FROM decisions WHERE id = ANY(:ids)"),
         {"ids": refused_ids},
     ).mappings()} if refused_ids else {}
+    system: list[dict[str, Any]] = []
+    try:
+        with connection.begin_nested():
+            from .system_doctor import card_items
+            system = card_items(connection, project_id)
+    except Exception:  # noqa: BLE001 - a host probe must never blank the landing page
+        system = []
     return {"project_id": project_id, "runs": runs, "steps": steps, "decisions": decisions,
             "readiness": readiness, "names": names, "now": now, "stopped": stopped,
-            "notes": notes, "builds": builds}
+            "notes": notes, "builds": builds, "system": system}
 
 
 def _output_of(step: Mapping[str, Any]) -> dict[str, Any]:
@@ -603,13 +621,20 @@ def needs_you_count(connection, settings, project_id: str,
     return int(build(connection, settings, project_id, now)["counts"]["needs_you"])
 
 
-def setup_gaps(connection: Any, settings: Any, project_id: str) -> list[dict[str, Any]]:
+def setup_gaps(connection: Any, settings: Any, project_id: str, *,
+               out: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     """What Repo and models says still stops work: unfinished rows, failing rows, and a token
     that stops working within three days. Read from the same view the page renders, so the
-    Command Center and the page cannot disagree (and nothing here calls GitHub)."""
+    Command Center and the page cannot disagree (and nothing here calls GitHub).
+
+    `out`, when given, receives the basics view (`out["basics"]`) so a caller that also draws
+    the model and repository states (the Command Center's Systems dots) reuses this read
+    instead of making it twice (command-center spec §6.1)."""
     from . import setup_view
 
     view = setup_view.build_basics(connection, settings, project_id)
+    if out is not None:
+        out["basics"] = view
     found = setup_view.basics(view)
     gaps: list[dict[str, Any]] = []
     if not found["github"]:

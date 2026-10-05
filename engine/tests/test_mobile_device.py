@@ -98,7 +98,7 @@ def fake_tools(monkeypatch, *, ios: bool = False):
         return subprocess.CompletedProcess(argv, 0, data, b"")
 
     monkeypatch.setattr(mobile_device.shutil, "which", lambda name: f"/tool/{name}")
-    monkeypatch.setattr(mobile_device.subprocess, "run", run)
+    monkeypatch.setattr(mobile_device.owned_process, "run", run)
     monkeypatch.setattr(mobile_device.platform, "system", lambda: "Darwin" if ios else "Linux")
     return calls
 
@@ -115,7 +115,7 @@ def test_local_device_tools_yield_to_the_control_plane_in_both_output_modes(
             kwargs["stdout"].write(b"device output")
         return subprocess.CompletedProcess(argv, 0, b"device output", b"")
 
-    monkeypatch.setattr(mobile_device.subprocess, "run", run)
+    monkeypatch.setattr(mobile_device.owned_process, "run", run)
     monkeypatch.setattr(mobile_device.shutil, "which", lambda _name: None)
     ctx, _ = context(tmp_path)
     adapter = mobile_device.LocalMobileDeviceAdapter(ctx)
@@ -195,14 +195,14 @@ def test_typed_text_is_not_persisted_in_receipt_or_result(monkeypatch, tmp_path)
 
 def test_tool_stderr_cannot_leak_typed_text(monkeypatch, tmp_path):
     fake_tools(monkeypatch)
-    original = mobile_device.subprocess.run
+    original = mobile_device.owned_process.run
 
     def run(argv, **kwargs):
         if "input" in argv:
             return subprocess.CompletedProcess(argv, 1, b"", b"private passphrase 927")
         return original(argv, **kwargs)
 
-    monkeypatch.setattr(mobile_device.subprocess, "run", run)
+    monkeypatch.setattr(mobile_device.owned_process, "run", run)
     ctx, receipts = context(tmp_path)
     with pytest.raises(MobileDeviceError, match="exited 1") as error:
         execute_mobile_device(
@@ -250,7 +250,7 @@ def test_screenshot_records_bounded_private_artifact(monkeypatch, tmp_path):
 def test_android_instrumentation_runs_and_records_test_evidence(monkeypatch, tmp_path):
     calls = fake_tools(monkeypatch)
     monkeypatch.setattr(mobile_device, "emit_event", lambda *args, **kwargs: None)
-    original = mobile_device.subprocess.run
+    original = mobile_device.owned_process.run
 
     def run(argv, **kwargs):
         if "instrument" in argv:
@@ -260,7 +260,7 @@ def test_android_instrumentation_runs_and_records_test_evidence(monkeypatch, tmp
             return subprocess.CompletedProcess(argv, 0, b"", b"")
         return original(argv, **kwargs)
 
-    monkeypatch.setattr(mobile_device.subprocess, "run", run)
+    monkeypatch.setattr(mobile_device.owned_process, "run", run)
     ctx, receipts = context(tmp_path)
     result = execute_mobile_device(
         ctx, {"target": "android_emulator", "device_id": "emulator-5554",

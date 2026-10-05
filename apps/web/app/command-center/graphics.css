@@ -1,0 +1,391 @@
+/* The Command Center graphics (command-center spec §4.7-§4.12, §5.2, §7): the Floor, Today,
+   the day strip and the week bars. cc- classes.
+
+   MOTION CARRIES STATE. Every animation here is opacity or transform (plus a one-shot
+   stroke-dashoffset when a new hand-off edge first appears), each starts only from a data
+   attribute the component sets when a polled field CHANGED, and none loops. Nothing breathes,
+   rotates or drifts. `data-motion="none"` and prefers-reduced-motion stop all of it. */
+
+/* ── The Floor ──────────────────────────────────────────────────────────────────────────── */
+.cc-floor-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; container-type: inline-size; }
+.cc-floor-stage {
+  position: relative; height: 500px; width: 100%; overflow: hidden; border-radius: var(--r-xl);
+  background:
+    radial-gradient(70% 60% at 50% 50%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 70%),
+    radial-gradient(120% 100% at 50% 120%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, var(--accent) 12%) 0%, var(--surface) 100%);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--ink) 6%, transparent);
+}
+@media (max-width: 1279px) { .cc-floor-stage { height: 440px; } }
+.cc-floor-svg { position: absolute; inset: 0; display: block; overflow: visible; }
+.cc-grid-dot { fill: var(--border-strong); opacity: 0.55; }
+.cc-grid { opacity: 0.5; }
+.cc-orbit { fill: none; stroke: var(--border-strong); stroke-width: 1; opacity: 0.4; stroke-dasharray: 2 7; }
+.cc-orbit-outer { opacity: 0.25; stroke-dasharray: none; }
+.cc-spoke { stroke: var(--border-strong); stroke-width: 1; opacity: 0.22; }
+
+.cc-arc-band { fill: none; stroke: var(--team-hue); stroke-opacity: 0.13; stroke-width: 52; stroke-linecap: butt; }
+.cc-arc-line { fill: none; stroke: var(--team-hue); stroke-opacity: 0.7; stroke-width: 2.5; stroke-linecap: round; }
+.cc-arc-label {
+  font: 700 11.5px/1 var(--sans); letter-spacing: 0.06em; text-transform: uppercase;
+  fill: color-mix(in srgb, var(--team-hue) 60%, var(--ink-soft));
+}
+.cc-arc-busy { fill: var(--accent-text); }
+.cc-arc-fold { font: 600 10px/1 var(--sans); fill: var(--faint); }
+
+.cc-node-glow { opacity: 0.7; pointer-events: none; }
+
+.cc-edge { cursor: pointer; }
+.cc-edge-hit { fill: none; stroke: transparent; stroke-width: 12; }
+.cc-edge-soft { fill: none; stroke: var(--accent-text); stroke-opacity: 0.12; stroke-linecap: round; }
+.cc-edge-line { fill: none; stroke: var(--accent-text); stroke-opacity: 0.85; stroke-linecap: round; }
+.cc-edge:hover .cc-edge-line, .cc-edge[data-lit] .cc-edge-line { stroke: var(--ink); stroke-opacity: 1; }
+.cc-edge[data-new] .cc-edge-line { stroke-dasharray: 1; animation: cc-draw 400ms ease-out both; }
+@keyframes cc-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+/* A run in flight: its chain of faces. Accent while it moves, amber into You while it waits. */
+.cc-chain { cursor: pointer; }
+.cc-chain-hit { fill: none; stroke: transparent; stroke-width: 14; }
+.cc-chain-glow { fill: none; stroke: var(--accent-text); stroke-opacity: 0.16; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; }
+.cc-chain-line { fill: none; stroke: var(--accent-text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+.cc-chain-dot { fill: var(--accent-text); }
+.cc-chain[data-tone="amber"] .cc-chain-glow { stroke: var(--amber); }
+.cc-chain[data-tone="amber"] .cc-chain-line { stroke: var(--amber); }
+.cc-chain[data-tone="amber"] .cc-chain-dot { fill: var(--amber); }
+.cc-chain[data-tone="red"] .cc-chain-glow { stroke: var(--red); }
+.cc-chain[data-tone="red"] .cc-chain-line { stroke: var(--red); stroke-dasharray: 5 4; }
+.cc-chain[data-tone="red"] .cc-chain-dot { fill: var(--red); }
+.cc-chain:hover .cc-chain-line { opacity: 1; stroke-width: 2.75; }
+
+.cc-thread { cursor: pointer; }
+.cc-thread-hit { stroke: transparent; stroke-width: 12; }
+.cc-thread-line { stroke-width: 1.75; }
+.cc-thread[data-tone="amber"] .cc-thread-line { stroke: var(--amber); stroke-dasharray: 4 6; }
+.cc-thread[data-tone="red"] .cc-thread-line { stroke: var(--red); stroke-width: 2; }
+.cc-thread[data-new] { animation: cc-fade 200ms ease-out both; }
+.cc-thread-badge circle { fill: var(--surface); stroke: currentColor; stroke-width: 1.5; }
+.cc-thread[data-tone="amber"] .cc-thread-badge { color: var(--amber); }
+.cc-thread[data-tone="red"] .cc-thread-badge { color: var(--red); }
+.cc-thread-badge text { font: 800 10px/1 var(--sans); fill: currentColor; }
+@keyframes cc-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.cc-comet-head { fill: var(--ink); }
+.cc-comet-glow { fill: url(#cc-floor-glow); }
+.cc-boss path { fill: var(--surface); stroke: var(--accent-text); stroke-width: 1.75; }
+
+.cc-floor-nodes { position: absolute; inset: 0; pointer-events: none; }
+.cc-floor-nodes > * { pointer-events: auto; }
+.cc-you {
+  position: absolute; width: 76px; height: 76px; transform: translate(-50%, -50%); border-radius: 50%;
+  border: 2px solid var(--border-strong); background: transparent; padding: 0; cursor: pointer;
+  display: grid; place-items: center;
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 12%, transparent), 0 0 0 18px color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.cc-you[data-tone="amber"] { border-color: var(--amber); box-shadow: 0 0 0 8px var(--amber-soft), 0 0 0 18px color-mix(in srgb, var(--amber) 6%, transparent); }
+.cc-you[data-tone="red"] { border-color: var(--red); box-shadow: 0 0 0 8px var(--red-soft), 0 0 0 18px color-mix(in srgb, var(--red) 6%, transparent); }
+.cc-you-disc { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); }
+.cc-you-word { position: relative; font: 800 15px/1 var(--display); color: var(--accent-ink); letter-spacing: 0.02em; }
+.cc-you-count {
+  position: absolute; top: -4px; right: -4px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px;
+  display: grid; place-items: center; font: 800 12px/1 var(--sans); color: var(--bg); background: var(--amber);
+  border: 2px solid var(--surface);
+}
+.cc-you[data-tone="red"] .cc-you-count { background: var(--red); }
+.cc-you:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+
+.cc-node {
+  position: absolute; transform: translate(-50%, -50%); background: none; border: 0; padding: 0; margin: 0;
+  cursor: pointer; display: grid; place-items: center; border-radius: 50%; transition: opacity 120ms linear;
+}
+.cc-node > .ag-avatar { position: relative; z-index: 1; }
+/* IDLE IS A DOT (spec §4.7, fix pass D9): a quiet ring of stars, brighter for work this
+   afternoon, faintest for never used. Faces are only for agents doing something. */
+.cc-node-dot { z-index: 0; }
+.cc-node-pip {
+  width: var(--dot, 10px); height: var(--dot, 10px); border-radius: 50%;
+  background: color-mix(in srgb, var(--team-hue) 70%, var(--ink) 30%);
+}
+.cc-node[data-kind="never"] { opacity: 0.28; }
+.cc-node[data-kind="rested"] { opacity: 0.45; }
+.cc-node[data-kind="recent"] { opacity: 0.85; }
+.cc-node[data-kind="recent"] .cc-node-pip { box-shadow: 0 0 0 2px color-mix(in srgb, var(--team-hue) 30%, transparent); }
+.cc-node-dot:hover, .cc-node-dot:focus-visible { opacity: 1; }
+.cc-node[data-kind="on_run"]::before {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%; pointer-events: none;
+  border: 1.5px solid color-mix(in srgb, var(--team-hue) 65%, transparent);
+}
+.cc-node[data-kind="on_run"]::before { border-color: var(--accent-text); }
+.cc-node[data-current]::before {
+  content: ""; position: absolute; inset: -5px; border-radius: 50%; pointer-events: none;
+  border: 2px solid var(--accent-text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.cc-node[data-kind="waiting"][data-current]::before { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+.cc-node[data-woke] > .ag-avatar { animation: cc-wake 240ms ease-out both; }
+@keyframes cc-wake { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+/* A comet landed: the face's ring brightens once (an opacity sprite, never a filter). */
+.cc-node::after {
+  content: ""; position: absolute; inset: -12px; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent-text) 60%, transparent) 0%, transparent 70%);
+}
+.cc-node[data-arrive]::after { animation: cc-arrive 400ms ease-out both; }
+@keyframes cc-arrive { 0% { opacity: 0; } 35% { opacity: 1; } 100% { opacity: 0; } }
+.cc-node:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+.cc-node-pause {
+  position: absolute; right: -3px; bottom: -3px; z-index: 2; font: 800 7px/1 var(--sans); color: var(--bg);
+  background: var(--amber); border-radius: 6px; padding: 2px 3px; letter-spacing: -0.05em;
+}
+/* Names: placed by placeNames (outside the face, never overlapping), only on active faces. */
+.cc-node-name {
+  position: absolute; z-index: 3; display: block; white-space: nowrap; overflow: hidden;
+  font: 700 10.5px/13px var(--sans); color: var(--ink-soft); pointer-events: none;
+  text-shadow: 0 1px 2px var(--surface), 0 0 6px var(--surface);
+}
+.cc-node-name[data-align="right"] { text-align: right; }
+.cc-node-name[data-align="center"] { text-align: center; }
+
+/* The mini card: who, what now (or last), Talk and Passport. */
+.cc-mini {
+  position: absolute; z-index: 5; display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border-radius: var(--r-lg); background: var(--surface-2); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+}
+.cc-mini-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cc-mini-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cc-mini-who b { font: 800 14px/1.2 var(--display); color: var(--ink); }
+.cc-mini-role { font: 500 12px/1.2 var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-mini-line { display: flex; flex-direction: column; gap: 2px; font: 500 12.5px/1.35 var(--sans); color: var(--ink-soft); }
+.cc-mini-now { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cc-mini-line[data-kind="waiting"] .cc-mini-now { color: var(--amber); }
+.cc-mini-age { font-size: 11.5px; color: var(--faint); }
+.cc-mini-acts { display: flex; align-items: center; gap: 12px; }
+
+.cc-floor-foot { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--muted); min-height: 24px; }
+.cc-floor-count { font-weight: 600; color: var(--ink-soft); }
+.cc-floor-count .cc-sep { color: var(--faint); }
+.cc-floor-toggle {
+  background: transparent; border: 1px solid var(--border-strong); color: var(--muted); border-radius: 999px;
+  font: 600 11px/1 var(--sans); padding: 5px 10px; cursor: pointer; min-height: 24px;
+}
+.cc-floor-toggle[aria-pressed="true"] { color: var(--ink); border-color: var(--accent-line); background: var(--accent-soft); }
+.cc-floor-list { list-style: none; margin: 0; padding: 8px 0; display: flex; flex-direction: column; gap: 4px; min-height: 200px; }
+.cc-floor-li {
+  display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; color: var(--ink-soft);
+  font: 500 13px/1.3 var(--sans); padding: 6px 4px; cursor: pointer; text-align: left; min-height: 32px;
+}
+.cc-floor-li-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+.cc-floor-li[data-tone="red"] .cc-floor-li-dot { background: var(--red); }
+.cc-floor-li-k { color: var(--faint); font-size: 12px; }
+.cc-floor-li-none { color: var(--faint); font-size: 13px; }
+.cc-floor-none { display: flex; gap: 12px; align-items: center; padding: 24px 0; color: var(--muted); }
+.cc-floor-compact { min-height: 120px; }
+.cc-floor-compact .ag-avatar { transform: none; }
+/* Phone: each team row is a 44px target (re-test 6), its faces wrap rather than crowd. */
+@media (max-width: 639px) {
+  .cc-floor-compact .ag-team-pill { min-height: 44px; }
+  .cc-floor-compact .ag-team-zone { min-width: 0; }
+}
+
+/* ── Today ──────────────────────────────────────────────────────────────────────────────── */
+.cc-today-chart { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.cc-today-tabs {
+  display: inline-flex; align-self: flex-end; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px;
+}
+.cc-seg {
+  background: transparent; border: 0; color: var(--muted); font: 600 12px/1 var(--sans);
+  padding: 6px 12px; border-radius: 999px; cursor: pointer; min-height: 24px; transition: color 120ms linear;
+}
+.cc-seg[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); }
+.cc-today-fig { position: relative; margin: 0; width: 100%; min-width: 0; }
+.cc-today-svg { display: block; overflow: visible; outline: none; }
+.cc-today-svg:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }
+.cc-axis { stroke: var(--border-strong); stroke-width: 1; }
+.cc-tick { font: 500 10px/1 var(--sans); fill: var(--faint); }
+.cc-now { stroke: var(--border-strong); stroke-width: 1; }
+.cc-yesterday path { fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 2 4; stroke-linecap: round; }
+.cc-included path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 1 4; stroke-linecap: round; }
+.cc-included text { font: 600 11px/1 var(--sans); fill: var(--muted); }
+.cc-today-stroke { fill: none; stroke: var(--accent-text); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.cc-today-clip { transform-box: view-box; }
+.cc-today-chart[data-extending] .cc-today-clip,
+.cc-today-chart[data-extending] .cc-today-dot { transition: transform 300ms ease-out; }
+.cc-today-dot circle { fill: var(--accent-text); stroke: var(--surface); stroke-width: 2; }
+.cc-today-now { font: 700 12px/1 var(--display); fill: var(--ink); }
+.cc-yday-label { font: 500 11px/1 var(--sans); fill: var(--faint); }
+.cc-cap line { stroke: var(--red); stroke-width: 1; }
+.cc-cap text { font: 600 11px/1 var(--sans); fill: var(--red); }
+.cc-cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.cc-today-empty {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); color: var(--faint); font-size: 13px;
+}
+.cc-today-tip {
+  position: absolute; top: 0; background: var(--bg-tint); border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 4px 8px; font: 600 11px/1.3 var(--sans); color: var(--ink-soft); white-space: nowrap; pointer-events: none;
+}
+.cc-today-chart[data-motion="none"] .cc-today-clip, .cc-today-chart[data-motion="none"] .cc-today-dot,
+.cc-today-chart[data-motion="reduced"] .cc-today-clip, .cc-today-chart[data-motion="reduced"] .cc-today-dot { transition: none; }
+.cc-meter { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.cc-meter-bar { width: 120px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.cc-meter-bar i { display: block; height: 100%; background: var(--green); transform-origin: left; }
+.cc-meter[data-tone="amber"] .cc-meter-bar i { background: var(--amber); }
+.cc-meter[data-tone="red"] .cc-meter-bar i { background: var(--red); }
+.cc-meter[data-tone="red"] { color: var(--red); font-weight: 700; }
+.cc-meter[data-tone="muted"] .cc-meter-bar i { background: var(--faint); }
+
+/* ── LAST 24H ───────────────────────────────────────────────────────────────────────────── */
+.cc-day { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.cc-day-zoom { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px; }
+.cc-day-grid { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cc-day-axis, .cc-day-row { display: grid; grid-template-columns: minmax(120px, 210px) minmax(0, 1fr); gap: 14px; align-items: center; }
+.cc-day-axis-track { position: relative; height: 16px; margin-right: 34px; align-self: end; }
+.cc-day-zoom .cc-seg { padding: 4px 10px; }
+.cc-day-axis-tick, .cc-day-axis-now {
+  position: absolute; top: 0; transform: translateX(-50%); font: 600 10.5px/1 var(--sans); color: var(--faint);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.cc-day-axis-now { color: var(--accent-text); transform: translateX(-50%); }
+.cc-day-row { height: 28px; border-radius: 8px; }
+.cc-day-row[data-hover] { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.cc-day-label {
+  display: flex; align-items: center; gap: 8px; min-width: 0; text-decoration: none; color: var(--ink-soft);
+  font: 600 12.5px/1.2 var(--sans); padding-left: 4px;
+}
+.cc-day-label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-day-label-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-text); }
+.cc-day-label-dot[data-cap="done"] { background: var(--green); }
+.cc-day-label-dot[data-cap="failed"] { background: var(--red); border-radius: 2px; }
+.cc-day-label-dot[data-cap="cancelled"] { background: transparent; border: 1.5px solid var(--faint); }
+.cc-day-track { position: relative; height: 100%; margin-right: 34px; }
+.cc-day-grid-line { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--border); opacity: 0.7; }
+.cc-day-track::after {
+  content: ""; position: absolute; right: 0; top: -3px; bottom: -3px; width: 1px;
+  background: var(--accent-text); opacity: 0.55;
+}
+.cc-day-bar {
+  position: absolute; top: 5px; height: 18px; min-width: 6px; border-radius: 6px; display: block;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 42%, transparent), color-mix(in srgb, var(--accent) 26%, transparent));
+  border: 1px solid color-mix(in srgb, var(--accent-text) 50%, transparent); text-decoration: none;
+}
+.cc-day-bar[data-cap="failed"] { background: color-mix(in srgb, var(--red) 18%, transparent); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
+.cc-day-bar[data-cap="done"] { background: color-mix(in srgb, var(--green) 16%, transparent); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.cc-day-bar[data-cap="cancelled"] { background: color-mix(in srgb, var(--faint) 12%, transparent); border-color: var(--border-strong); }
+.cc-day-bar[data-state="waiting_you"] { border-color: color-mix(in srgb, var(--amber) 60%, transparent); }
+.cc-day-bar:hover, .cc-day-bar[data-hover], .cc-day-bar:focus-visible { filter: brightness(1.25); }
+.cc-day-bar:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.cc-day-tick { position: absolute; top: 3px; bottom: 3px; width: 1.5px; background: color-mix(in srgb, var(--ink) 55%, transparent); }
+.cc-day-tick[data-new] { animation: cc-fade 200ms ease-out both; }
+.cc-day-gate { position: absolute; top: -1px; bottom: -1px; background: color-mix(in srgb, var(--amber) 55%, transparent); border-radius: 3px; }
+.cc-day-clip { position: absolute; left: 3px; top: 50%; transform: translateY(-50%); font: 700 11px/1 var(--sans); color: var(--ink-soft); pointer-events: none; }
+/* Every cap sits INSIDE its bar's right end: nothing is drawn past now (re-test 1). */
+.cc-day-cap { position: absolute; right: 1px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; display: grid; place-items: center; }
+.cc-day-cap[data-cap="done"] { border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2px var(--surface); }
+.cc-day-cap[data-cap="failed"] { border-radius: 2px; background: var(--red); box-shadow: 0 0 0 2px var(--surface); }
+.cc-day-cap[data-cap="cancelled"] { border-radius: 50%; border: 1.5px solid var(--faint); background: var(--surface); }
+.cc-day-cap[data-cap="live"] { right: 1px; width: auto; height: auto; color: var(--accent-text); font: 800 9px/1 var(--sans); }
+.cc-day-cap[data-new] { animation: cc-cap 300ms ease-out both; }
+@keyframes cc-cap { 0% { transform: translateY(-50%) scale(1); } 50% { transform: translateY(-50%) scale(1.3); } 100% { transform: translateY(-50%) scale(1); } }
+.cc-day-empty { display: flex; gap: 12px; align-items: center; color: var(--faint); font-size: 13px; min-height: 40px; }
+.cc-day-more { font-size: 12px; align-self: flex-start; }
+.cc-day[data-motion="none"] *, .cc-day[data-motion="reduced"] * { animation: none !important; }
+
+/* ── This week ──────────────────────────────────────────────────────────────────────────── */
+.cc-week-body { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; min-width: 0; padding-top: 18px; }
+.cc-week-chart { display: flex; flex-direction: column; gap: 8px; }
+.cc-week-bars {
+  display: flex; align-items: flex-end; gap: 14px; padding: 0 4px;
+  border-bottom: 1px solid var(--border-strong);
+}
+.cc-week-bar { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 30px; padding-bottom: 6px; }
+.cc-week-n { font: 700 11.5px/1 var(--sans); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.cc-week-n[data-zero] { color: var(--faint); }
+.cc-week-stack { display: flex; flex-direction: column; justify-content: flex-end; width: 26px; }
+.cc-week-stack i { display: block; width: 100%; }
+.cc-week-done { background: linear-gradient(180deg, color-mix(in srgb, var(--green) 82%, var(--ink) 18%), var(--green)); border-radius: 4px 4px 0 0; }
+.cc-week-failed { background: var(--red); border-radius: 4px 4px 0 0; }
+.cc-week-failed + .cc-week-done { border-radius: 0; }
+.cc-week-dow { position: absolute; bottom: -18px; font: 600 10.5px/1 var(--sans); color: var(--muted); }
+.cc-week-legend { display: flex; gap: 14px; margin-top: 14px; font: 600 11px/1 var(--sans); color: var(--muted); }
+.cc-week-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.cc-week-key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--green); }
+.cc-week-key[data-k="failed"] { background: var(--red); }
+.cc-week-line { display: inline-flex; gap: 8px; align-items: baseline; font: 700 15px/1.3 var(--sans); color: var(--ink); padding-bottom: 30px; }
+.cc-sep { color: var(--faint); }
+.cc-floor-toggle {
+  background: transparent; border: 1px solid var(--border-strong); color: var(--muted); border-radius: 999px;
+  font: 600 11px/1 var(--sans); padding: 5px 10px; cursor: pointer; min-height: 24px;
+}
+.cc-floor-toggle[aria-pressed="true"] { color: var(--ink); border-color: var(--accent-line); background: var(--accent-soft); }
+.cc-floor-list { list-style: none; margin: 0; padding: 8px 0; display: flex; flex-direction: column; gap: 4px; min-height: 200px; }
+.cc-floor-li {
+  display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; color: var(--ink-soft);
+  font: 500 13px/1.3 var(--sans); padding: 6px 4px; cursor: pointer; text-align: left; min-height: 32px;
+}
+.cc-floor-li-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+.cc-floor-li[data-tone="red"] .cc-floor-li-dot { background: var(--red); }
+.cc-floor-li-k { color: var(--faint); font-size: 12px; }
+.cc-floor-li-none { color: var(--faint); font-size: 13px; }
+.cc-floor-none { display: flex; gap: 12px; align-items: center; padding: 24px 0; color: var(--muted); }
+.cc-floor-compact { min-height: 120px; }
+.cc-floor-compact .ag-avatar { transform: none; }
+
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-edge[data-new] .cc-edge-line, .cc-thread[data-new], .cc-node[data-woke] > .ag-avatar,
+  .cc-node[data-arrive]::after, .cc-day-tick[data-new], .cc-day-cap[data-new] { animation: none !important; }
+  .cc-today-clip, .cc-today-dot { transition: none !important; }
+  .cc-floor-stage .ag-av, .cc-floor-stage .ag-av * { animation: none !important; }
+}
+.cc-floor-stage[data-motion="none"] *, .cc-floor-stage[data-motion="none"]::after { animation: none !important; transition: none !important; }
+
+
+/* ── Fix pass (independent test) ───────────────────────────────────────────────────────── */
+/* LAST 24H: the lanes' height is reserved for rowsMax rows (D14), so a poll never moves the
+   page; a wait on you is always visible (min 6px) and an open one is striped to now (imp. 4);
+   a wide bar says its state and time inside itself. */
+.cc-day { --row-h: 28px; }
+.cc-day-grid { min-height: calc(20px + var(--rows, 8) * (var(--row-h) + 6px)); justify-content: flex-start; }
+.cc-day-row { height: var(--row-h); }
+.cc-day-gate {
+  min-width: 6px; top: -2px; bottom: -2px; z-index: 1;
+  background: color-mix(in srgb, var(--amber) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 80%, transparent);
+}
+.cc-day-gate[data-open] {
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--amber) 75%, transparent) 0 4px,
+                                        color-mix(in srgb, var(--amber) 35%, transparent) 4px 8px);
+}
+.cc-day-in {
+  position: absolute; left: 8px; right: 14px; top: 50%; transform: translateY(-50%); z-index: 2;
+  font: 600 11px/1 var(--sans); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none; text-shadow: 0 1px 2px var(--surface);
+}
+/* Phone: every lane is a 44px target (label and bar), and so are the toggles (D8). */
+@media (max-width: 639px) {
+  .cc-day { --row-h: 44px; }
+  .cc-day-axis, .cc-day-row { grid-template-columns: minmax(90px, 36%) minmax(0, 1fr); gap: 10px; }
+  .cc-day-label { min-height: 44px; }
+  .cc-day-bar { top: 8px; height: 28px; }
+  /* A short bar is still a 44px target (independent test D8): its hit area is centred on it
+     and never narrower than a fingertip. */
+  .cc-day-bar { z-index: 1; }
+  /* The 44px target extends LEFTWARD from the bar's end, so a bar flush with now keeps it
+     inside the track instead of half of it hanging past the now line. */
+  .cc-day-bar::before { content: ""; position: absolute; right: 0; width: max(100%, 44px); top: -8px; bottom: -8px; }
+  .cc-day-more { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; padding: 0 6px; }
+  .cc-day-zoom .cc-seg, .cc-today-tabs .cc-seg { min-height: 44px; min-width: 44px; padding: 0 14px; }
+}
+
+/* THIS WEEK fills its card (imp. 6): seven columns spread across the width, 110px tall, the
+   counts above, the days below, the totals under the chart. */
+.cc-week-body { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding-top: 18px; }
+.cc-week-chart { width: 100%; }
+.cc-week-bars { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: clamp(8px, 2vw, 28px); align-items: end; height: 140px; padding: 0 4px; }
+.cc-week-bar { width: auto; height: 100%; justify-content: flex-end; padding-bottom: 6px; }
+.cc-week-stack { width: min(64px, 70%); }
+.cc-week-line { padding-bottom: 0; padding-top: 18px; }
+.cc-week-legend { margin-top: 22px; }
+
+/* While a graphic's chunk loads: the same size, nothing drawn (D10, D14). */
+.cc-today-hold { height: 222px; }
+.cc-day-hold { min-height: calc(20px + 10 * 34px); }
+.cc-week-hold { height: 210px; }
+@media (max-width: 639px) { .cc-today-hold { height: 182px; } .cc-day-hold { min-height: calc(20px + 8 * 50px); } }

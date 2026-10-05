@@ -106,7 +106,8 @@ def _build_cmd() -> list[str]:
         stdout = json.dumps({"result": "{}"})
         stderr = ""
 
-    import subprocess
+    # The adapter spawns through owned_process (the one spawn helper), so that is the seam.
+    from boss_engine.services import owned_process as subprocess
 
     real = subprocess.run
 

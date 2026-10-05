@@ -501,7 +501,9 @@ _NAME_EDGES = " \t\"'“”‘’`.,;:!?…"
 
 
 def _a_name(name: str) -> str:
-    cleaned = str(name or "").strip().strip(_NAME_EDGES).strip()
+    # Markdown emphasis is not part of a name ("Re-build of *Path Verification*").
+    text_ = re.sub(r"[*_`]+", "", str(name or ""))
+    cleaned = text_.strip().strip(_NAME_EDGES).strip()
     return cleaned or str(name or "").strip()
 
 
@@ -2573,9 +2575,15 @@ class AppRow(TypedDict, total=False):
     run_ids: list[str]             # every build, newest first (the row expands to these)
     pr_number: Optional[int]       # the newest attempt's PR that opened one
     pr_url: Optional[str]
+    pr_state: Optional[str]        # open | merged | closed — from that PR's merge question
     cost_usd: float                # metered spend over every build of the app
+    included: bool                 # it ran, all on a subscription: no metered spend ("Included")
     repo: Optional[str]
-    attempts: list[dict[str, Any]]  # [{run_id, attempt, state, word, at}] newest first
+    brief: Optional[str]           # the newest build's brief (the App column's tooltip)
+    # Every build as the Floor's row, newest first, each with `order` (1 = the app's first
+    # build), `at`, `pr_number`, `pr_state`: the numbering is the build's place, not
+    # finalize_ctx.attempt (that counts retries of ONE build, and was "Attempt 1" on every row).
+    attempts: list[dict[str, Any]]
     at: Optional[str]
 
 
@@ -2602,7 +2610,24 @@ def _attempt_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
     """One attempt of an app as the Floor's row (stations, state, k of n …) plus `at`."""
     row: dict[str, Any] = dict(build_row(run, facts, now=now, viewer=viewer))
     row["at"] = _iso(run.get("created_at"))
+    row["pr_number"] = _pr_number(run)
+    row["pr_url"] = run.get("pull_request_url")
+    row["pr_state"] = _pr_state(run, facts)
     return row
+
+
+def _pr_state(run: Optional[Mapping[str, Any]], facts: Facts) -> Optional[str]:
+    """open | merged | closed, from the PR's merge question; None without a PR."""
+    if not run or not _pr_number(run):
+        return None
+    decision = facts.decisions.get(str(run.get("decision_id") or "")) or {}
+    status = str(decision.get("status") or "")
+    if status in ("approved", "merged", "executed"):
+        return "merged"
+    if status in ("rejected", "cancelled"):
+        return "closed"
+    # `withdrawn`: a newer attempt asks about the same PR (run_decisions) — the PR is still open.
+    return "open"
 
 
 def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
@@ -2662,17 +2687,23 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
         spend = sum(float((facts.cost.get(str(r["id"])) or {}).get("metered_usd") or 0)
                     for r in group)
         spec = _j(head.get("spec"), {}) or {}
+        calls = sum(int((facts.cost.get(str(r["id"])) or {}).get("calls") or 0) for r in group)
+        attempts = [_attempt_row(r, facts, now=now, viewer=viewer) for r in group]
+        for order, a in enumerate(reversed(attempts), start=1):
+            a["order"] = order
         rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
                      "pr_number": _pr_number(with_pr) if with_pr else None,
                      "pr_url": (with_pr or {}).get("pull_request_url"),
+                     "pr_state": _pr_state(with_pr, facts),
                      "cost_usd": round(spend, 4) if spend > 0 else 0,
+                     "included": spend <= 0 and calls > 0,
+                     "brief": _trim(head.get("title"), 200),
                      "repo": f"{spec.get('owner')}/{spec.get('repo')}"
                      if spec.get("owner") and spec.get("repo") and spec.get("owner") != "_fixture"
                      else None,
                      "state": state, "word": word, "preview": flag, "deploys": deploys,
                      "builds": len(group), "run_ids": [str(r["id"]) for r in group],
-                     "attempts": [_attempt_row(r, facts, now=now, viewer=viewer)
-                                  for r in group],
+                     "attempts": attempts,
                      "at": _iso(head.get("updated_at") or head.get("created_at"))})
     rank = {"needs_plan": 0, "needs_waiver": 0, "budget_refused": 0, "pr_open": 0}
     rows.sort(key=lambda r: (rank.get(r["state"], 1 if section_of(r["state"]) == "building"

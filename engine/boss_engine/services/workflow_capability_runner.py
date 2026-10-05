@@ -3298,6 +3298,17 @@ def _refresh_waiting_previews(
     return refreshed
 
 
+def _step_word(spec_step: dict[str, Any], fallback: str) -> str:
+    """The STEP's own name for a gate's sentence — "Approve before 'Go live' runs" — not the
+    capability's: every Notify step in a workflow said "Approve before 'Notify' runs", so an
+    operator with three gates open could not tell them apart (Command Center re-test, 3)."""
+    for key in ("label", "name", "title"):
+        value = spec_step.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
+
+
 def _gate_subject(
     connection: Connection,
     project_id: str,
@@ -3362,7 +3373,7 @@ def _gate_subject(
             "key": custom_key,
             "label": definition["label"],
             "summary": (
-                f"Approve before '{definition['label']}' runs. It calls "
+                f"Approve before '{_step_word(spec_step, definition['label'])}' runs. It calls "
                 f"{definition['risk_source']} at risk tier {definition['risk_tier']}."
                 + (f" {definition['requires_person']}"
                    if definition.get("requires_person") else "")
@@ -3426,7 +3437,7 @@ def _gate_subject(
         # advisory — a tier-3 capability marked "requires a person" ran unattended.
         return {
             "key": key, "label": capability.label,
-            "summary": f"Approve before '{capability.label}' runs.",
+            "summary": f"Approve before '{_step_word(spec_step, capability.label)}' runs.",
             "risk_tier": capability.risk_tier, "completes_step": False,
         }
     return None

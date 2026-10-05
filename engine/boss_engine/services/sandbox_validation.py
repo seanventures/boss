@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from ..config import Settings
+from . import owned_process
 from .agent_env import agent_environment
 from .scheduling import low_priority
 
@@ -157,7 +158,7 @@ class SandboxValidationAdapter:
         require_clean_stdout: bool = False,
     ) -> str:
         try:
-            completed = subprocess.run(
+            completed = owned_process.run(
                 ["git", "-C", str(repo_path), *args],
                 capture_output=True,
                 text=True,
@@ -192,7 +193,7 @@ class SandboxValidationAdapter:
         try:
             # Validation runs the app's build/test commands in-container. See
             # services/scheduling.py.
-            completed = subprocess.run(
+            completed = owned_process.run(
                 low_priority(argv),
                 cwd=repo_path,
                 # THIS RUNS THE PROJECT'S OWN TEST COMMAND. It used to run it with the control

@@ -175,6 +175,11 @@ def test_turn_budget_reaches_the_agent(client, engine, knobs, monkeypatch, tmp_p
         raise _Stop()
 
     monkeypatch.setattr(code_agent_module.subprocess, "Popen", fake_popen)
+    # The CLI may be started through owned_process.popen (a Popen subclass bound at import),
+    # which a patched subprocess.Popen never sees; capture that seam too where it exists.
+    owned = getattr(code_agent_module, "owned_process", None)
+    if owned is not None:
+        monkeypatch.setattr(owned, "popen", fake_popen)
 
     def max_turns_used() -> int:
         seen.clear()

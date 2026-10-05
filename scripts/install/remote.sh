@@ -62,6 +62,7 @@ commands:
   install      stream this commit to the host and run the installer there
   update       ship a newer commit to an EXISTING install and rebuild it in place
   uninstall    stop/remove the host stack; keep data and credentials by default
+  prune        free disk BOSS used on the host (old images, stopped previews, build cache)
   check        run BOSS's own health check on the host
   smoke        prove the install works: API, database, console, model wiring
   status       containers, ports and disk on the host
@@ -122,7 +123,7 @@ USAGE
 CMD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|update|uninstall|check|smoke|status|tunnel|logs|model|env|subscription) CMD="$1"; shift ;;
+    install|update|uninstall|check|smoke|status|tunnel|logs|model|env|subscription|prune) CMD="$1"; shift ;;
     --token|--token=*|--api-key|--api-key=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Use the hidden prompt or pipe one line on stdin." ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
@@ -201,6 +202,15 @@ report_capacity() {
   swap="$(rshq "free -m | awk '/Swap:/{print \$2}'")"
   disk="$(rshq "df -BG --output=avail / | tail -1 | tr -dc '0-9'")"
   say "host: ${mem}MB RAM, ${swap}MB swap, ${disk}GB free disk"
+  # WHAT THIS MACHINE CAN RUN AT ONCE, measured the way admission measures it (admission.py):
+  # (RAM - max(1 GB, 15%) for the control plane) / 1.2 GB per build, clamped to [1, cores/2].
+  local cores slots reserve
+  cores="$(rshq "nproc" || echo 2)"
+  reserve=$(( mem * 15 / 100 )); [[ "$reserve" -lt 1024 ]] && reserve=1024
+  slots=$(( (mem - reserve) / 1200 ))
+  [[ "$slots" -gt $(( cores / 2 )) ]] && slots=$(( cores / 2 ))
+  [[ "$slots" -lt 1 ]] && slots=1
+  say "Builds at once: ${slots} (auto) — more are queued, not run into swap"
   [[ "${disk:-0}" -lt 15 ]] && warn "under 15GB free — the images alone are ~13GB"
   # NO SWAP IS THE RISK, not the RAM figure on its own. The console build is the peak, and on a
   # box with nothing to page out to the kernel kills it rather than slowing down — which reads
@@ -282,6 +292,7 @@ cmd_install() {
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
     || die "the installer failed on $HOST; previous source remains at $DIR.prev and private backup was printed above"
   rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this install"
+  prune_remote
   ok "installer finished"
 
   # The tunnel makes the VM's loopback ports available on the operator laptop;
@@ -317,6 +328,47 @@ backup_remote() {
   backup="$(rsh "cd '$DIR' && bash scripts/install/backup.sh --dir '$DIR'")" ||
     die "remote backup failed; source and containers were not changed"
   say "private recovery backup on host: $backup"
+}
+
+# A HOST THIS SCRIPT INSTALLS RUNS ONLY BOSS, so its Docker build cache is BOSS's: every
+# deploy adds ~1.3 GB and nothing removed it (boss-1: 80% disk, 46.5 GB of cache). Best effort
+# after every install and update; never volumes, never another project's containers.
+prune_remote() {
+  rshq "[ -f '$DIR/scripts/install/prune.sh' ]" || return 0
+  local out
+  out="$(rsh "cd '$DIR' && bash scripts/install/prune.sh --dedicated" 2>&1)" \
+    || { warn "disk prune skipped: ${out##*$'\n'}"; return 0; }
+  say "disk: $(printf '%s\n' "$out" | grep -E '^disk (before|after)' | tr '\n' ' ')"
+}
+
+# UPDATES RESTARTED BUILDS (stability spec C6): every recreate killed the API mid-turn and the
+# build redid clone and install, four times in an hour on boss-1. The API now drains on SIGTERM
+# (builds resume after), and when the operator chose "Hold updates while builds run" on the
+# system-health card this waits for running builds first — up to BOSS_DEPLOY_WAIT_MINUTES
+# (default 30), then updates anyway. The key is read on the host, never shipped.
+wait_for_builds() {
+  local limit="${BOSS_DEPLOY_WAIT_MINUTES:-30}" waited=0 state
+  while :; do
+    state="$(rshq "k=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+      [ -n \"\$k\" ] && curl -s -m 10 -H \"Authorization: Bearer \$k\" 'http://127.0.0.1:$API_PORT/v1/system/deploy-readiness'" || true)"
+    case "$state" in
+      *'"safe_to_deploy":false'*|*'"safe_to_deploy": false'*) ;;
+      *) return 0 ;;
+    esac
+    if [[ "$waited" -ge "$limit" ]]; then
+      warn "builds still running after ${limit} min; updating anyway (they resume afterwards)"
+      return 0
+    fi
+    [[ "$waited" -eq 0 ]] && say "builds are running and updates are held until they finish — waiting (up to ${limit} min)"
+    sleep 60
+    waited=$((waited + 1))
+  done
+}
+
+cmd_prune() {
+  head_ "Free BOSS's disk on $HOST"
+  preflight
+  prune_remote
 }
 
 cmd_update() {
@@ -375,6 +427,8 @@ cmd_update() {
   rsh "cd '$DIR' && mv '$next_env' .env && chmod 600 .env" \
     || die "could not promote the worker credentials on $HOST; old containers still run and previous source remains at $DIR.prev"
 
+  wait_for_builds
+
   # BUILD FIRST, THEN SWAP. A failed build above leaves the running install untouched, which is
   # the whole reason these are two steps rather than `up -d --build`.
   say "recreating: ${services:-all}"
@@ -392,6 +446,7 @@ cmd_update() {
   fi
   rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this update"
 
+  prune_remote
   ok "updated $was → $(rshq "cat '$DIR/.boss-shipped-commit'")"
   say ""
   say "now run:  ${D}scripts/install/$(again) smoke${N}"
@@ -720,6 +775,7 @@ cmd_logs() {
 case "$CMD" in
   install)   cmd_install ;;
   update)    cmd_update ;;
+  prune)     cmd_prune ;;
   uninstall) cmd_uninstall ;;
   check)     cmd_check ;;
   smoke)     cmd_smoke ;;

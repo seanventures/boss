@@ -25,6 +25,7 @@ import time
 from typing import Optional
 
 from ..config import Settings
+from . import owned_process
 from ..schemas import FileChange
 from .agent_env import agent_environment
 from .scheduling import low_priority
@@ -279,6 +280,9 @@ class EphemeralSandbox:
         # mkdtemp gives us a unique, private directory we fully own.
         self.path = Path(tempfile.mkdtemp(prefix=f"{self.task_id}-", dir=root))
         self._owns_dir = True
+        # Claimed while in use: the reaper sweeps unclaimed sandboxes a crash left behind.
+        from .resource_ledger import claim_dir
+        claim_dir(self.path)
         self.base_branch = base_branch
 
         # BOSS-267: the host's authenticated clone-URL form lives in ONE place now.
@@ -397,6 +401,9 @@ class EphemeralSandbox:
     def teardown(self) -> None:
         if self.path and self._owns_dir and self.path.exists():
             shutil.rmtree(self.path, ignore_errors=True)
+        if self.path and self._owns_dir:
+            from .resource_ledger import release_dir
+            release_dir(self.path, "teardown")
         self.path = None
 
     # -- commands -----------------------------------------------------------
@@ -460,7 +467,7 @@ class EphemeralSandbox:
             # group, so the kill reaches the whole tree rather than just the process we
             # spawned; and the post-kill drain is BOUNDED, so even a pipe held open by
             # something we failed to kill costs ten seconds instead of the rest of the run.
-            proc = subprocess.Popen(  # noqa: S603 — argv is allowlisted above
+            proc = owned_process.popen(  # noqa: S603 — argv is allowlisted above
                 low_priority(argv),
                 cwd=workdir,
                 env=env,
@@ -469,17 +476,16 @@ class EphemeralSandbox:
                 text=True,
                 start_new_session=True,
             )
+            # THE COMMAND ENDING ENDS THE READ (owned_process.communicate). A command that
+            # left `npm run dev &` behind finished; waiting for EOF on a pipe the dev server
+            # holds turned that into a timeout. Its exit now ends the tree, and a timeout kills
+            # the tree with a bounded drain.
             try:
-                _out, _err = proc.communicate(timeout=limit)
-            except subprocess.TimeoutExpired:
+                _out, _err = owned_process.communicate(proc, timeout=limit)
+            except subprocess.TimeoutExpired as _exc:
                 _kill_process_group(proc)
-                try:
-                    _out, _err = proc.communicate(timeout=_DRAIN_SECONDS)
-                except subprocess.TimeoutExpired:
-                    # Something still holds the pipe. Report the timeout and move on: a
-                    # truncated stdout is a far smaller harm than a stage that never ends.
-                    _out, _err = "", ""
-                raise subprocess.TimeoutExpired(argv, limit, output=_out, stderr=_err)
+                raise subprocess.TimeoutExpired(argv, limit, output=_exc.output or "",
+                                                stderr=_exc.stderr or "")
             completed = subprocess.CompletedProcess(argv, proc.returncode, _out, _err)
             _ms = int((time.monotonic() - started) * 1000)
             # WHICH COMMAND ATE THE FIVE MINUTES.
@@ -587,7 +593,7 @@ class EphemeralSandbox:
     ) -> str:
         assert self.path is not None
         try:
-            completed = subprocess.run(
+            completed = owned_process.run(
                 ["git", "-C", str(self.path), *args],
                 capture_output=True,
                 text=True,

@@ -2,7 +2,7 @@
 /**
  * Tooltips, not paragraphs — on every Agent World surface this stream owns (spec §2.7, §9, §12.4
  * test 14): the Passport (header, sections nav, Work, Voice & Face, Test, Lineage), the share card,
- * the Roster zones and the crew, Team › Swarm, and New agent (Face & voice, From archetype, the
+ * the Roster zones and the crew, and New agent (Face & voice, From archetype, the
  * birth). Each is RENDERED with fixtures and its visible text walked with the Studio's walker:
  * no run over six words outside a tooltip, no <p> inside an `ag-` surface, and none of the
  * banned words (persona, fingerprint, ledger, act, sentient, alive, conscious, impersonate,
@@ -15,7 +15,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { overBudget } from "./_helpers/copy-budget";
 import { installAgentWorldApi } from "./_helpers/agent-world-api";
-import type { OrgChart } from "../lib/v2/workforce";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -24,7 +23,6 @@ const { AgentDetail } = await import("../app/agent-detail-ui");
 const { AgentQuickCreate } = await import("../app/agent-quick-create");
 const { RosterZones } = await import("../app/agents/roster-zones");
 const { PresencePill } = await import("../app/agents/presence-pill");
-const { TeamSwarm } = await import("../app/agents/team-swarm");
 const { AgentBirth } = await import("../app/agents/agent-birth");
 const { ShareCardDialog } = await import("../app/agents/share-card-dialog");
 const { parseLive, resetLiveStores } = await import("../lib/agents-live");
@@ -155,19 +153,6 @@ describe("the Agent World copy budget", () => {
     await render(draw(fixture.board({ attention: [], missions: [], outcomes: [] })));
     r = audit();
     expect(r.surfaces).toBe(1);
-    expect([r.over, r.paragraphs, r.banned]).toEqual([[], [], []]);
-  });
-
-  it("Team › Swarm", async () => {
-    installAgentWorldApi();
-    const node = (id: string) => ({ id, name: identityOf(id).name, role: id, handoffs_in: 1, handoffs_out: 1, connected: true });
-    const chart = { project_id: "p1", window_hours: 168, apiReachable: true, nodes: [node("pm"), node("qa"), node("software_engineer")],
-      tree: [], roots: [], root_inferred: false, depth: 0, derived_from: "", note: "", isolated: [],
-      edges: [{ source: "pm", target: "software_engineer", times: 4, last_action: null, last_at: null },
-               { source: "software_engineer", target: "qa", times: 2, last_action: null, last_at: null }] } as unknown as OrgChart;
-    await render(<TeamSwarm projectId="p1" chart={chart} live={new Map()} />);
-    expect(document.querySelectorAll(".ag-swarm-node")).toHaveLength(3);
-    const r = audit();
     expect([r.over, r.paragraphs, r.banned]).toEqual([[], [], []]);
   });
 

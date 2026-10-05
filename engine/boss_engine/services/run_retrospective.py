@@ -174,7 +174,7 @@ def assemble(connection: Connection, project_id: str, run_id: str) -> dict[str, 
     # Host stalls that OVERLAPPED this run — the question is what this run lost, not whether
     # the machine has ever been slow.
     stalls = connection.execute(
-        text("SELECT data FROM events WHERE event_type = 'host.stalled' "
+        text("SELECT data FROM events WHERE event_type = 'host.stalled' AND (data->>'source') IS NOT NULL "
              "   AND created_at BETWEEN :a AND :b"),
         {"a": started, "b": ended},
     ).mappings().all()
@@ -284,7 +284,7 @@ def preflight(connection: Connection, project_id: str) -> dict[str, Any]:
     # exist even when no run has finished since.
     recent = connection.execute(
         text("SELECT COALESCE(SUM((data->>'stalled_seconds')::numeric), 0) "
-             "  FROM events WHERE event_type = 'host.stalled' "
+             "  FROM events WHERE event_type = 'host.stalled' AND (data->>'source') IS NOT NULL "
              "   AND created_at > now() - interval '1 hour'"),
     ).scalar()
     stalled_recently = float(recent or 0)
@@ -326,7 +326,7 @@ def host_advice(connection: Connection, project_id: str) -> dict[str, Any]:
     gauges = pressure_now()
 
     rows = connection.execute(
-        text("SELECT data FROM events WHERE event_type = 'host.stalled' "
+        text("SELECT data FROM events WHERE event_type = 'host.stalled' AND (data->>'source') IS NOT NULL "
              "   AND created_at > now() - interval '1 hour'"),
     ).mappings().all()
     seconds = [float(_as_dict(r["data"]).get("stalled_seconds") or 0) for r in rows]
@@ -433,7 +433,7 @@ def _stalls_between(connection: Connection, started, ended) -> dict[str, Any]:
     if not started or not ended:
         return {"stalled_seconds": 0.0, "stall_events": 0, "longest_stall_seconds": 0.0}
     rows = connection.execute(
-        text("SELECT data FROM events WHERE event_type = 'host.stalled' "
+        text("SELECT data FROM events WHERE event_type = 'host.stalled' AND (data->>'source') IS NOT NULL "
              "   AND created_at BETWEEN :a AND :b"),
         {"a": started, "b": ended},
     ).mappings().all()

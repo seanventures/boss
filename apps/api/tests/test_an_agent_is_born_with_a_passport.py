@@ -62,7 +62,7 @@ def test_an_agent_made_from_an_archetype_is_born_with_a_passport(client, engine)
     assert passport["sponsor"] == "ceo"
     assert passport["version"] == 1 and len(passport["fingerprint"]) == 64
     assert passport["identity"] == {"mode": "local", "tokens": False}
-    assert set(passport["vitals"]) == {"trust", "runs", "clean_rate", "cost_7d", "panels", "apps"}
+    assert set(passport["vitals"]) == {"trust", "runs", "clean_rate", "cost_7d", "plan_calls_7d", "panels", "apps"}
     assert passport["presence"]["state"] == "idle"
     # Its own face: seeded by its own id, not the shipped Nova's.
     assert passport["avatar"] == {"kit": "boss-v1", "seed": body["agent_id"]}

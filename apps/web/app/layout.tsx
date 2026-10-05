@@ -3,6 +3,9 @@ import "./design-system.css";
 // Command Center, area loading, approval guidance and action results — kept out of globals.css
 // so these screens do not churn the stylesheet every console change touches.
 import "./command-center.css";
+// The Command Center bridge (page layout) and its graphics (Floor, Today, day strip, week).
+import "./command-center/bridge.css";
+import "./command-center/graphics.css";
 // Workflow Studio (library, editor, lane, inspector), one file per surface.
 import "./workflows/flow.css";
 import "./workflows/editor.css";
