@@ -341,6 +341,10 @@ class DeployRow(TypedDict, total=False):
     finished_at: Optional[str]
     duration_ms: Optional[int]
     can: dict[str, bool]              # approve, reject, rollback, redeploy
+    # ADDED by stream S3 (additive, optional): the commit `Roll back` would redeploy — the last
+    # one that went live on this target before this deploy — so the drawer can say
+    # `Roll back to <sha7>` (§5.1). None when can.rollback is false.
+    rollback_to_sha7: Optional[str]
     decision_id: Optional[str]
     run_id: Optional[str]             # the build that made it → Build ↗
 
@@ -1261,25 +1265,39 @@ def delivery_rollback_source(row_id: str, history: list[dict[str, Any]]) -> Opti
 def _deploy_can(r: dict[str, Any], *, can_write: bool, is_community: bool,
                 stack_hist: dict[str, list[dict[str, Any]]],
                 run_hist: dict[str, list[dict[str, Any]]]) -> dict[str, bool]:
+    return _deploy_can_to(r, can_write=can_write, is_community=is_community,
+                          stack_hist=stack_hist, run_hist=run_hist)[0]
+
+
+def _deploy_can_to(r: dict[str, Any], *, can_write: bool, is_community: bool,
+                   stack_hist: dict[str, list[dict[str, Any]]],
+                   run_hist: dict[str, list[dict[str, Any]]]
+                   ) -> tuple[dict[str, bool], Optional[str]]:
+    """`can` and, when Roll back is offered, the sha7 it would go back to."""
     from .stack_deploy import rollback_option
 
     waiting = bool(r.get("decision_id")) and r.get("decision_status") == "pending" \
         and r["status"] in WAITING_STATES
     can = {"approve": waiting and can_write, "reject": waiting and can_write,
            "rollback": False, "redeploy": False}
+    to: Optional[str] = None
     if not can_write:
-        return can
+        return can, None
     if r["kind"] == "stack":
         option = rollback_option(
             {"id": r["id"], "status": r["status"], "commit_sha": r["sha"],
              "apply_started_at": r.get("apply_started_at"), "created_at": r["created_at"]},
             stack_hist.get(r["target_id"]) or [])
         can["rollback"] = bool(option["rollback_available"])
+        to = sha7(option.get("rollback_commit")) if can["rollback"] else None
     elif r["kind"] == "delivery" and not is_community:
-        can["rollback"] = delivery_rollback_source(r["id"], run_hist.get(r["target_id"]) or []) \
-            is not None
+        hist = run_hist.get(r["target_id"]) or []
+        source = delivery_rollback_source(r["id"], hist)
+        can["rollback"] = source is not None
+        if source is not None:
+            to = sha7(next((h["commit_ref"] for h in hist if h["id"] == source), None))
         can["redeploy"] = r["status"] in TERMINAL_RUN_STATES
-    return can
+    return can, to
 
 
 def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[str, Any]], *,
@@ -1315,6 +1333,9 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
         steps = [{"s": step_state(s.get("status")), "t": _step_title(s)[:40]}
                  for s in (_json(r.get("steps")) or [])[:MAX_STEPS] if isinstance(s, dict)]
         decided = r.get("decision_status") in ("approved", "rejected", "executed")
+        can, rollback_to = _deploy_can_to({**r, "status": state}, can_write=can_write,
+                                          is_community=is_community, stack_hist=stack_hist,
+                                          run_hist=run_hist)
         row: DeployRow = {
             "ref": r["ref"], "kind": r["kind"], "target_id": r.get("target_id"),
             "app": r.get("app_name") or "", "env": r.get("environment") or "",
@@ -1328,9 +1349,8 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
             "state": state, "word": w["word"], "tone": w["tone"], "steps": steps,
             "started_at": _iso(r.get("started_at")), "finished_at": _iso(r.get("finished_at")),
             "duration_ms": int(r["duration_ms"]) if r.get("duration_ms") is not None else None,
-            "can": _deploy_can({**r, "status": state}, can_write=can_write,
-                               is_community=is_community, stack_hist=stack_hist,
-                               run_hist=run_hist),
+            "can": can,
+            "rollback_to_sha7": rollback_to,
             "decision_id": r.get("decision_id"), "run_id": r.get("run_id"),
         }
         out.append(_fit(row))  # type: ignore[arg-type]
@@ -1842,44 +1862,229 @@ def preview_rows(connection: Any, settings: Any, project_id: str) -> PreviewList
 
 
 # ── Cloud (§4.8): one composition per sub-view ────────────────────────────────────────────────
+# Row keys are the contract app/infra/cloud-rows.ts reads (apps/web/tests/_helpers/
+# infra-cloud-fixtures.ts, stream S3). Money: `*_usd_micros` AND a ready `*_usd` string.
 
 CLOUD_VIEWS = ("accounts", "resources", "capacity", "spend", "changes")
-BYOK_TIP = "Community connects your own provider keys; BOSS never holds a shared account"
+BYOK_TIP = "Community connects your own provider keys"
 READ_ONLY_TIP = "You lack providerops_manage"
+
+#: The resource plane's own states, in the one state language.
+CLOUD_WORDS: dict[str, dict[str, Word]] = {
+    "account": {"active": {"word": "Active", "tone": "green"},
+                "disabled": {"word": "Disabled", "tone": "grey"},
+                "revoked": {"word": "Revoked", "tone": "grey"},
+                "error": {"word": "Failed", "tone": "red"},
+                "pending": {"word": "Setting up", "tone": "accent"}},
+    "test": {"ok": {"word": "Fresh", "tone": "green"}, "passed": {"word": "Fresh", "tone": "green"},
+             "succeeded": {"word": "Fresh", "tone": "green"},
+             "success": {"word": "Fresh", "tone": "green"},
+             "healthy": {"word": "Fresh", "tone": "green"},
+             "failed": {"word": "Failed", "tone": "red"}, "error": {"word": "Failed", "tone": "red"},
+             "": {"word": "Untested", "tone": "hollow"}},
+    "resource": {"healthy": {"word": "Up", "tone": "green"}, "up": {"word": "Up", "tone": "green"},
+                 "ok": {"word": "Up", "tone": "green"}, "active": {"word": "Up", "tone": "green"},
+                 "running": {"word": "Up", "tone": "green"},
+                 "degraded": {"word": "Slow", "tone": "amber"},
+                 "down": {"word": "Down", "tone": "red"}, "unhealthy": {"word": "Down", "tone": "red"},
+                 "failed": {"word": "Down", "tone": "red"},
+                 "unknown": {"word": "No signal", "tone": "hollow"},
+                 "terminated": {"word": "Stopped", "tone": "grey"},
+                 "expired": {"word": "Expired", "tone": "grey"}},
+    "provider": {"ok": {"word": "OK", "tone": "green"}, "healthy": {"word": "OK", "tone": "green"},
+                 "available": {"word": "OK", "tone": "green"},
+                 "degraded": {"word": "High", "tone": "amber"},
+                 "rate_limited": {"word": "High", "tone": "amber"},
+                 "down": {"word": "Critical", "tone": "red"},
+                 "unavailable": {"word": "Critical", "tone": "red"},
+                 "error": {"word": "Critical", "tone": "red"},
+                 "unknown": {"word": "No signal", "tone": "hollow"}},
+    "recon": {"completed": {"word": "Done", "tone": "green"}, "succeeded": {"word": "Done", "tone": "green"},
+              "running": {"word": "Running", "tone": "accent"},
+              "failed": {"word": "Failed", "tone": "red"}},
+    "severity": {"critical": {"word": "Critical", "tone": "red"},
+                 "high": {"word": "High", "tone": "amber"},
+                 "medium": {"word": "Medium", "tone": "amber"},
+                 "low": {"word": "Low", "tone": "grey"}},
+    "change": {"draft": {"word": "Draft", "tone": "hollow"},
+               "policy_checked": {"word": "Planned", "tone": "hollow"},
+               "budget_reserved": {"word": "Planned", "tone": "hollow"},
+               "pending_approval": {"word": "Needs you", "tone": "amber"},
+               "approved": {"word": "Approved", "tone": "accent"},
+               "applying": {"word": "Applying", "tone": "accent"},
+               "applied": {"word": "Applied", "tone": "green"},
+               "failed": {"word": "Failed", "tone": "red"},
+               "rejected": {"word": "Rejected", "tone": "grey"},
+               "cancelled": {"word": "Cancelled", "tone": "grey"},
+               "deadlettered": {"word": "Failed", "tone": "red"},
+               "rolled_back": {"word": "Rolled back", "tone": "grey"}},
+}
+WORDS.update(CLOUD_WORDS)
+
+
+def _w(kind: str, raw: Any) -> Word:
+    if kind == "test" and not raw:
+        return dict(CLOUD_WORDS["test"][""])  # type: ignore[return-value]
+    return word(kind, raw)
 
 
 def _money(prefix: str, micros: Any) -> dict[str, Any]:
     m = int(micros or 0)
-    return {f"{prefix}_micros": m, f"{prefix}_usd": usd(m)}
+    return {f"{prefix}_usd_micros": m, f"{prefix}_usd": usd(m)}
 
 
-def _cloud_accounts(connection: Any, project_id: str, since: datetime) -> dict[str, Any]:
+def _accounts_list(connection: Any, project_id: str) -> list[dict[str, str]]:
+    return [{"id": r["id"], "name": r["account_label"]} for r in _rows(
+        connection, "SELECT id, account_label FROM provider_accounts WHERE project_id = :p "
+                    "ORDER BY provider, account_label", {"p": project_id})]
+
+
+def _cloud_counts(connection: Any, project_id: str) -> dict[str, int]:
+    r = connection.execute(text(
+        "SELECT (SELECT count(*) FROM provider_accounts WHERE project_id = :p) AS accounts, "
+        " (SELECT count(*) FROM external_resources WHERE project_id = :p) "
+        " + (SELECT count(*) FROM infra_resources WHERE project_id = :p "
+        "    AND status <> 'terminated') AS resources, "
+        " (SELECT count(*) FROM worker_pools WHERE project_id = :p) AS pools, "
+        " (SELECT count(DISTINCT provider) FROM cost_events WHERE project_id = :p "
+        "    AND created_at >= now() - interval '30 days') AS providers, "
+        " (SELECT count(*) FROM changesets WHERE project_id = :p) AS changes, "
+        " (SELECT count(*) FROM cost_anomalies WHERE project_id = :p AND status = 'open') "
+        "   AS anomalies"), {"p": project_id}).mappings().one()
+    return {k: int(r[k] or 0) for k in ("accounts", "resources", "pools", "providers", "changes",
+                                        "anomalies")}
+
+
+def _catalog(profiles: Optional[dict[str, Any]], supported: Optional[dict[str, Any]]
+             ) -> list[dict[str, Any]]:
+    """Provider catalog for `+ Account`: the connection profiles (auth methods, slots) joined to
+    the multi-cloud catalog (categories, skills). Static data; no secret."""
+    from .multi_cloud_catalog import MULTI_CLOUD_PROVIDERS
+
+    multi = {p["provider_key"]: p for p in MULTI_CLOUD_PROVIDERS}
+    keys = sorted(set(profiles or {}) | set(multi))
+    out = []
+    for key in keys:
+        prof = (profiles or {}).get(key) or {}
+        mc = multi.get(key) or {}
+        skills = list(mc.get("infra_skills") or []) + list(mc.get("model_skills") or [])
+        if not skills:
+            skills = list(((supported or {}).get(key) or {}).get("capabilities") or [])
+        methods = []
+        for mkey, method in (prof.get("auth_methods") or {}).items():
+            methods.append({"key": mkey, "available": method.get("runtime_status") == "available",
+                            "slots": [{"key": s["key"], "required": bool(s.get("required"))}
+                                      for s in method.get("credential_slots") or []]})
+        out.append({
+            "provider": key,
+            "name": prof.get("display_name") or mc.get("display_name") or key,
+            "category": prof.get("category") or ((mc.get("categories") or ["infrastructure"])[0]),
+            "adapter": str(mc.get("adapter") or prof.get("adapter") or key),
+            "adapter_status": ("available" if (prof.get("adapter_status")
+                                               or mc.get("adapter_status")) == "available"
+                               else "planned"),
+            "categories": list(mc.get("categories") or [prof.get("category") or "infrastructure"]),
+            "skills": skills[:5], "skill_count": len(skills),
+            "pasteable": any(m["slots"] for m in methods),
+            "base_url": any(s["key"] in ("base_url", "endpoint") for m in methods
+                            for s in m["slots"]),
+            "auth_methods": methods,
+        })
+    return out
+
+
+def _cloud_accounts(connection: Any, project_id: str, since: datetime, *, can_write: bool,
+                    profiles: Optional[dict[str, Any]]) -> dict[str, Any]:
     rows = _rows(connection,
-                 "SELECT a.id, a.account_label, a.provider, a.status, a.auth_method, "
-                 "       a.credential_version, a.credential_rotated_at, a.last_test_status, "
-                 "       a.last_tested_at, a.read_only, a.deploy_capable, a.billing_readable, "
-                 "       a.destructive_actions_disabled, "
-                 "       (SELECT count(*) FROM external_resources r "
-                 "        WHERE r.provider_account_id = a.id) AS resources, "
-                 "       (SELECT COALESCE(sum(c.amount_usd_micros), 0) FROM cost_events c "
-                 "        WHERE c.provider_account_id = a.id AND c.created_at >= :s) AS spend "
+                 "SELECT a.*, "
+                 "  (SELECT count(*) FROM external_resources r "
+                 "   WHERE r.provider_account_id = a.id) AS n_resources, "
+                 "  (SELECT COALESCE(sum(c.amount_usd_micros), 0) FROM cost_events c "
+                 "   WHERE c.provider_account_id = a.id AND c.created_at >= :s) AS spend, "
+                 "  (SELECT count(*) FROM changesets cs WHERE cs.provider_account_id = a.id "
+                 "   AND cs.status IN ('draft', 'policy_checked', 'budget_reserved', "
+                 "   'pending_approval', 'approved', 'applying')) AS open_changes, "
+                 "  (SELECT count(*) FROM resource_receipts rr "
+                 "   WHERE rr.provider_account_id = a.id) AS n_receipts "
                  "FROM provider_accounts a WHERE a.project_id = :p "
                  "ORDER BY a.provider, a.account_label", {"p": project_id, "s": since})
+    ids = [r["id"] for r in rows]
+    events: dict[str, list] = {i: [] for i in ids}
+    receipts: dict[str, list] = {i: [] for i in ids}
+    if ids:
+        for e in _rows(connection,
+                       "SELECT * FROM (SELECT id, entity_id, event_type, actor, created_at, "
+                       "  row_number() OVER (PARTITION BY entity_id ORDER BY created_at DESC) n "
+                       "  FROM events WHERE project_id = :p AND entity_id = ANY(:i)) x "
+                       "WHERE n <= 4 ORDER BY created_at DESC", {"p": project_id, "i": ids}):
+            events[e["entity_id"]].append({"id": e["id"], "kind": e["event_type"],
+                                           "actor": e["actor"], "at": _iso(e["created_at"])})
+        for r in _rows(connection,
+                       "SELECT * FROM (SELECT id, provider_account_id, action, status, created_at, "
+                       "  row_number() OVER (PARTITION BY provider_account_id "
+                       "                     ORDER BY created_at DESC) n "
+                       "  FROM resource_receipts WHERE provider_account_id = ANY(:i)) x "
+                       "WHERE n <= 4 ORDER BY created_at DESC", {"i": ids}):
+            receipts[r["provider_account_id"]].append({"id": r["id"], "action": r["action"],
+                                                       "status": r["status"],
+                                                       "at": _iso(r["created_at"])})
+    catalog = {c["provider"]: c for c in _catalog(profiles, None)}
     out = []
     for r in rows:
-        authority = [k for k, on in (("read", True), ("deploy", r["deploy_capable"]),
-                                     ("billing", r["billing_readable"]))
-                     if on and not (k != "read" and r["read_only"])]
-        out.append({"id": r["id"], "name": r["account_label"], "provider": r["provider"],
-                    "state": r["status"], "credential": r["auth_method"],
-                    "credential_version": r["credential_version"],
-                    "rotated_at": _iso(r["credential_rotated_at"]),
-                    "last_test": r["last_test_status"], "last_tested_at": _iso(r["last_tested_at"]),
-                    "read_only": bool(r["read_only"]), "authority": authority,
-                    "destructive_disabled": bool(r["destructive_actions_disabled"]),
-                    "resources": int(r["resources"] or 0), **_money("spend_30d", r["spend"])})
-    return {"rows": out, "counts": {"accounts": len(out)},
-            "filters": {"provider": sorted({r["provider"] for r in out})}}
+        status = str(r["status"] or "")
+        live = status == "active"
+        refs = _json(r["credential_refs"]) or {}
+        prof = catalog.get(r["provider"]) or {}
+        method = next((m for m in prof.get("auth_methods") or []
+                       if m["key"] == r["auth_method"]), None)
+        err = _json(r["last_error"])
+        if isinstance(err, dict):
+            err = err.get("message") or err.get("error") or err.get("detail")
+        authority = ("Read only" if r["read_only"] else
+                     "Deploy capable" if r["deploy_capable"] else "Custom")
+        out.append({
+            "id": r["id"], "provider": r["provider"],
+            "provider_name": prof.get("name") or r["provider"], "label": r["account_label"],
+            "state": _w("account", status),
+            "credential": {"slots": sorted(refs) if isinstance(refs, dict) else [],
+                           "version": r["credential_version"]},
+            "last_test": {**_w("test", r["last_test_status"]), "at": _iso(r["last_tested_at"])},
+            "authority": authority,
+            "destructive_blocked": bool(r["destructive_actions_disabled"]),
+            "resources": int(r["n_resources"] or 0), **_money("spend_30d", r["spend"]),
+            "owner": r["owner_actor"], "scopes": list(_json(r["scopes"]) or [])[:12],
+            "flags": {"read_only": bool(r["read_only"]),
+                      "billing_readable": bool(r["billing_readable"]),
+                      "deploy_capable": bool(r["deploy_capable"]),
+                      "destructive_actions_disabled": bool(r["destructive_actions_disabled"])},
+            "impact": {"resources": int(r["n_resources"] or 0), **_money("spend", r["spend"]),
+                       "open_changes": int(r["open_changes"] or 0),
+                       "receipts": int(r["n_receipts"] or 0)},
+            "last_error": (str(err)[:200] if err else None),
+            "rotation_slots": (method or {}).get("slots") or [
+                {"key": k, "required": True} for k in (sorted(refs) if isinstance(refs, dict)
+                                                       else [])],
+            "events": events.get(r["id"], []), "receipts": receipts.get(r["id"], []),
+            "can": {"manage": can_write, "test": can_write and live,
+                    "sync": can_write and live, "enable": can_write and status == "disabled",
+                    "disable": can_write and live,
+                    "rotate": can_write and status != "revoked",
+                    "revoke": can_write and status != "revoked"},
+        })
+    return {"rows": out, "filters": {},
+            "header": {"accounts": [{"id": r["id"], "name": r["account_label"]} for r in rows],
+                       "catalog": list(catalog.values())}}
+
+
+def _ttl(minutes: Any) -> Optional[str]:
+    if not minutes:
+        return None
+    m = int(minutes)
+    if m % 1440 == 0:
+        return f"{m // 1440}d"
+    if m % 60 == 0:
+        return f"{m // 60}h"
+    return f"{m}m"
 
 
 def _cloud_resources(connection: Any, project_id: str, filters: dict[str, str]) -> dict[str, Any]:
@@ -1891,27 +2096,31 @@ def _cloud_resources(connection: Any, project_id: str, filters: dict[str, str]) 
             where.append(f"{col} = :{key}")
             params[key] = filters[key]
     ext = _rows(connection,
-                "SELECT r.id, r.name, r.resource_type, r.provider, r.provider_account_id, "
-                "       a.account_label, r.environment, r.metadata->>'region' AS region, "
-                "       r.owner_role, r.ownership, r.health_status, r.state, "
-                "       COALESCE(r.actual_monthly_usd_micros, r.estimated_monthly_usd_micros) AS cost, "
-                "       r.actual_monthly_usd_micros IS NULL AS estimated, r.last_seen_at, "
-                "       r.external_id, r.task_id, r.deployment_target_id, r.receipt_id, "
-                "       r.budget_allocation_id "
-                "FROM external_resources r LEFT JOIN provider_accounts a "
-                "  ON a.id = r.provider_account_id "
+                "SELECT r.*, a.account_label FROM external_resources r "
+                "LEFT JOIN provider_accounts a ON a.id = r.provider_account_id "
                 f"WHERE {' AND '.join(where)} ORDER BY r.last_seen_at DESC LIMIT 200", params)
-    rows = [{"id": r["id"], "name": r["name"], "kind": r["resource_type"],
-             "provider": r["provider"], "account": r["account_label"],
-             "account_id": r["provider_account_id"], "env": r["environment"],
-             "location": r["region"] or r["environment"], "owner": r["owner_role"] or r["ownership"],
-             "health": r["health_status"], "state": r["state"],
-             **_money("cost_month", r["cost"]), "cost_estimated": bool(r["estimated"]),
-             "last_seen_at": _iso(r["last_seen_at"]), "external_id": r["external_id"],
-             "links": {k: r[k] for k in ("task_id", "deployment_target_id", "receipt_id",
-                                         "budget_allocation_id") if r[k]},
-             "ttl_minutes": None, "expires_at": None} for r in ext]
-    if not any(filters.get(k) for k in ("account", "env", "service")):
+    rows = []
+    for r in ext:
+        meta = _json(r["metadata"]) or {}
+        rows.append({
+            "id": r["id"], "kind": "Resource", "name": r["name"], "provider": r["provider"],
+            "account": ({"id": r["provider_account_id"], "name": r["account_label"]}
+                        if r["provider_account_id"] else None),
+            "region": meta.get("region"), "service": r["resource_type"],
+            "env": r["environment"], "owner": r["owner_role"],
+            "health": _w("resource", r["health_status"]),
+            **_money("cost_month", r["actual_monthly_usd_micros"]
+                     if r["actual_monthly_usd_micros"] is not None
+                     else r["estimated_monthly_usd_micros"]),
+            "last_seen_at": _iso(r["last_seen_at"]), "ttl": None, "expires_at": None,
+            "external_id": r["external_id"],
+            "links": {"build": meta.get("run_id") or meta.get("code_task_run_id"),
+                      "deploy": meta.get("deploy_ref"),
+                      "budget": r["budget_allocation_id"], "receipt": r["receipt_id"]},
+            "droplet": None,
+        })
+    if not any(filters.get(k) for k in ("account", "env", "service")) \
+            or filters.get("service") == "droplets":
         dwhere, dparams = ["project_id = :p", "status <> 'terminated'"], {"p": project_id}
         if filters.get("provider"):
             dwhere.append("provider = :provider")
@@ -1919,59 +2128,92 @@ def _cloud_resources(connection: Any, project_id: str, filters: dict[str, str]) 
         if filters.get("region"):
             dwhere.append("region = :region")
             dparams["region"] = filters["region"]
-        for d in _rows(connection,
-                       "SELECT id, resource_name, provider, region, status, ttl_minutes, "
-                       "       expires_at, external_resource_id, task_id, provision_receipt_id, "
-                       "       updated_at FROM infra_resources "
-                       f"WHERE {' AND '.join(dwhere)} ORDER BY created_at DESC LIMIT 100",
-                       dparams):
-            rows.append({"id": d["id"], "name": d["resource_name"], "kind": "Droplet",
-                         "provider": d["provider"], "account": None, "account_id": None,
-                         "env": None, "location": d["region"], "owner": None,
-                         "health": d["status"], "state": d["status"],
-                         **_money("cost_month", 0), "cost_estimated": False,
-                         "last_seen_at": _iso(d["updated_at"]),
-                         "external_id": d["external_resource_id"],
-                         "links": {k: v for k, v in (("task_id", d["task_id"]),
-                                                     ("receipt_id", d["provision_receipt_id"]))
-                                   if v},
-                         "ttl_minutes": d["ttl_minutes"], "expires_at": _iso(d["expires_at"])})
+        for d in _rows(connection, "SELECT * FROM infra_resources "
+                                   f"WHERE {' AND '.join(dwhere)} ORDER BY created_at DESC "
+                                   "LIMIT 100", dparams):
+            meta = _json(d["metadata"]) or {}
+            rows.append({
+                "id": d["id"], "kind": "Droplet", "name": d["resource_name"],
+                "provider": d["provider"], "account": None, "region": d["region"],
+                "service": "droplets", "env": meta.get("environment"), "owner": None,
+                "health": _w("resource", d["status"]),
+                **_money("cost_month", meta.get("monthly_usd_micros") or 0),
+                "last_seen_at": _iso(d["updated_at"]), "ttl": _ttl(d["ttl_minutes"]),
+                "expires_at": _iso(d["expires_at"]), "external_id": d["external_resource_id"],
+                "links": {"build": meta.get("run_id"), "deploy": None, "budget": None,
+                          "receipt": d["provision_receipt_id"]},
+                "droplet": {"status": d["status"], "size": d["size"],
+                            "boundary": d["data_boundary"],
+                            "provider_ref": f"{d['provider']}:{d['external_resource_id']}",
+                            "termination": (d["termination_reason"] or
+                                            ("on expiry" if d["expires_at"] else None))},
+            })
     facets = _rows(connection,
                    "SELECT DISTINCT r.provider, r.provider_account_id, r.environment, "
                    "       r.resource_type, r.metadata->>'region' AS region "
-                   "FROM external_resources r WHERE r.project_id = :p", {"p": project_id})
-    return {"rows": rows, "counts": {"resources": len(rows)},
+                   "FROM external_resources r WHERE r.project_id = :p "
+                   "UNION SELECT DISTINCT provider, NULL, NULL, 'droplets', region "
+                   "FROM infra_resources WHERE project_id = :p AND status <> 'terminated'",
+                   {"p": project_id})
+    return {"rows": rows,
             "filters": {"provider": sorted({f["provider"] for f in facets if f["provider"]}),
                         "account": sorted({f["provider_account_id"] for f in facets
                                            if f["provider_account_id"]}),
                         "env": sorted({f["environment"] for f in facets if f["environment"]}),
                         "region": sorted({f["region"] for f in facets if f["region"]}),
                         "service": sorted({f["resource_type"] for f in facets
-                                           if f["resource_type"]})}}
+                                           if f["resource_type"]})},
+            "header": {"accounts": _accounts_list(connection, project_id)}}
+
+
+def _plan_word(p: dict[str, Any]) -> Word:
+    a, b = int(p.get("desired_workers_before") or 0), int(p.get("desired_workers_after") or 0)
+    if b > a:
+        return {"word": "Scale up", "tone": "amber"}
+    if b < a:
+        return {"word": "Scale down", "tone": "accent"}
+    return {"word": "Hold", "tone": "grey"}
 
 
 def _cloud_capacity(connection: Any, settings: Any, project_id: str, partial: list[str]
                     ) -> dict[str, Any]:
     plans = _rows(connection,
-                  "SELECT id, worker_pool_id, status, trigger_reason, queue_depth, "
-                  "       desired_workers_before, desired_workers_after, budget_state, "
-                  "       estimated_hourly_delta_usd_micros, changeset_id, decision_id, "
-                  "       created_at FROM scale_plans WHERE project_id = :p "
-                  "ORDER BY created_at DESC LIMIT 25", {"p": project_id})
-    latest_plan: dict[str, dict[str, Any]] = {}
+                  "SELECT * FROM scale_plans WHERE project_id = :p "
+                  "ORDER BY created_at DESC LIMIT 100", {"p": project_id})
+    by_pool: dict[str, list] = {}
     for p in plans:
-        latest_plan.setdefault(str(p["worker_pool_id"]), p)
-    pools = _rows(connection,
-                  "SELECT id, pool_key, kind, provider, status, current_workers, desired_workers, "
-                  "       min_workers, max_workers, max_queue_depth_per_worker, "
-                  "       cost_per_worker_hour_usd_micros FROM worker_pools "
-                  "WHERE project_id = :p ORDER BY pool_key", {"p": project_id})
-    rows = [{"id": p["id"], "pool": p["pool_key"], "kind": p["kind"], "provider": p["provider"],
-             "state": p["status"], "desired": p["desired_workers"], "actual": p["current_workers"],
-             "min": p["min_workers"], "max": p["max_workers"],
-             "queue_per_worker": p["max_queue_depth_per_worker"],
-             **_money("hour", p["cost_per_worker_hour_usd_micros"]),
-             "plan": (latest_plan.get(p["id"]) or {}).get("status")} for p in pools]
+        by_pool.setdefault(str(p["worker_pool_id"]), []).append(p)
+    pools = _rows(connection, "SELECT * FROM worker_pools WHERE project_id = :p "
+                              "ORDER BY pool_key", {"p": project_id})
+    history = _guard(connection, partial, "autoscaling history", lambda: _rows(
+        connection,
+        "SELECT pool_key, previous_desired, desired_workers, reason, action, created_at "
+        "FROM worker_autoscaling_history WHERE project_id = :p "
+        "ORDER BY created_at DESC LIMIT 200", {"p": project_id}), [])
+    hist: dict[str, list] = {}
+    for h in history:
+        hist.setdefault(h["pool_key"], []).append(h)
+    rows = []
+    for p in pools:
+        mine = by_pool.get(p["id"]) or []
+        latest = mine[0] if mine else None
+        rows.append({
+            "id": p["id"], "pool_key": p["pool_key"], "kind": p["kind"],
+            "desired": p["desired_workers"], "actual": p["current_workers"],
+            "min": p["min_workers"], "max": p["max_workers"],
+            "queue_per_worker": p["max_queue_depth_per_worker"],
+            **_money("cost_hour", p["cost_per_worker_hour_usd_micros"]),
+            "plan": ({**_plan_word(latest), "summary": str(latest["trigger_reason"] or "")[:120],
+                      "at": _iso(latest["created_at"])} if latest else None),
+            "history": [{"at": _iso(h["created_at"]), "from": h["previous_desired"],
+                         "to": h["desired_workers"],
+                         "reason": str(h["reason"] or h["action"] or "")[:120]}
+                        for h in (hist.get(p["pool_key"]) or [])[:8]],
+            "plans": [{"id": x["id"], "at": _iso(x["created_at"]),
+                       "action": (_plan_word(x)["word"].lower().replace(" ", "_")),
+                       "desired": x["desired_workers_after"],
+                       "reason": str(x["trigger_reason"] or "")[:120]} for x in mine[:4]],
+        })
     queue = _guard(connection, partial, "queue", lambda: dict(connection.execute(text(
         "SELECT count(*) FILTER (WHERE status IN ('queued', 'failed_retryable') "
         "                        AND run_after <= now()) AS depth, "
@@ -1981,131 +2223,172 @@ def _cloud_capacity(connection: Any, settings: Any, project_id: str, partial: li
         {"depth": 0, "leased": 0, "running": 0})
     health = _guard(connection, partial, "provider health", lambda: _rows(
         connection,
-        "SELECT DISTINCT ON (provider, provider_account_id) id, provider, provider_account_id, "
-        "       status, api_available, rate_limit_status, usage_cap_status, last_checked_at "
-        "FROM provider_health WHERE project_id = :p "
-        "ORDER BY provider, provider_account_id, last_checked_at DESC", {"p": project_id}), [])
-    history = _guard(connection, partial, "autoscaling history", lambda: _rows(
+        "SELECT DISTINCT ON (provider) provider, status, api_available, rate_limit_status, "
+        "       usage_cap_status, last_checked_at FROM provider_health WHERE project_id = :p "
+        "ORDER BY provider, last_checked_at DESC", {"p": project_id}), [])
+    fabric = _guard(connection, partial, "fabric", lambda: _rows(
         connection,
-        "SELECT id, pool_key, action, status, queue_depth, desired_workers, actual_workers, "
-        "       previous_desired, reason, actor, created_at FROM worker_autoscaling_history "
-        "WHERE project_id = :p ORDER BY created_at DESC LIMIT 25", {"p": project_id}), [])
+        "SELECT kind, status, last_heartbeat_at, "
+        "       COALESCE((metadata->>'simulated')::boolean, false) AS simulated "
+        "FROM worker_instances WHERE project_id = :p", {"p": project_id}), [])
+    active = [i for i in fabric if i["status"] not in ("terminated", "failed")]
+    by_kind: dict[str, int] = {}
+    for i in active:
+        by_kind[i["kind"]] = by_kind.get(i["kind"], 0) + 1
     return {
-        "rows": rows,
-        "counts": {"pools": len(rows), "workers": sum(int(r["actual"] or 0) for r in rows),
-                   "providers": len(health)},
-        "filters": {},
+        "rows": rows, "filters": {},
         "header": {
+            "accounts": _accounts_list(connection, project_id),
             "queue": {"depth": int(queue["depth"] or 0), "leased": int(queue["leased"] or 0),
                       "running": int(queue["running"] or 0),
                       "real_provision": bool(getattr(settings, "infra_real_provision_allowed",
                                                      False))},
-            "api_health": [{"id": h["id"], "provider": h["provider"],
-                            "account_id": h["provider_account_id"], "status": h["status"],
-                            "api": bool(h["api_available"]), "rate_limit": h["rate_limit_status"],
+            "api_health": [{"provider": h["provider"], "state": _w("provider", h["status"]),
+                            "api": "available" if h["api_available"] else "unavailable",
+                            "rate_limit": h["rate_limit_status"],
                             "usage_cap": h["usage_cap_status"],
                             "checked_at": _iso(h["last_checked_at"])} for h in health],
-            "plans": [{"id": p["id"], "pool_id": p["worker_pool_id"], "status": p["status"],
-                       "reason": p["trigger_reason"], "queue": p["queue_depth"],
-                       "from": p["desired_workers_before"], "to": p["desired_workers_after"],
-                       "budget": p["budget_state"],
-                       **_money("hour_delta", p["estimated_hourly_delta_usd_micros"]),
-                       "changeset_id": p["changeset_id"], "decision_id": p["decision_id"],
-                       "at": _iso(p["created_at"])} for p in plans],
-            "history": [{**{k: h[k] for k in ("id", "pool_key", "action", "status", "queue_depth",
-                                             "desired_workers", "actual_workers",
-                                             "previous_desired", "reason", "actor")},
-                         "at": _iso(h["created_at"])} for h in history],
+            "fabric": {"pools": len(pools), "instances": len(active),
+                       "real_host_effects": sum(1 for i in active
+                                                if i["status"] == "running" and not i["simulated"]
+                                                and i["last_heartbeat_at"]),
+                       "by_kind": by_kind},
         },
     }
 
 
+_ESTIMATED = ("estimated", "estimate", "forecast", "projected")
+
+
 def _cloud_spend(connection: Any, project_id: str, since: datetime) -> dict[str, Any]:
     per = _rows(connection,
-                "SELECT provider, COALESCE(sum(amount_usd_micros), 0) AS spend, count(*) AS events "
+                "SELECT provider, COALESCE(sum(amount_usd_micros), 0) AS spend, count(*) AS events, "
+                "  bool_or(confidence ILIKE ANY(:est)) AS estimated, "
+                "  count(*) FILTER (WHERE receipt_id IS NOT NULL) AS ledger "
                 "FROM cost_events WHERE project_id = :p AND created_at >= :s "
-                "GROUP BY provider ORDER BY 2 DESC", {"p": project_id, "s": since})
+                "GROUP BY provider ORDER BY 2 DESC, 1",
+                {"p": project_id, "s": since, "est": [f"%{e}%" for e in _ESTIMATED]})
+    cats = _rows(connection,
+                 "SELECT provider, category, COALESCE(sum(amount_usd_micros), 0) AS spend "
+                 "FROM cost_events WHERE project_id = :p AND created_at >= :s "
+                 "GROUP BY 1, 2 ORDER BY 3 DESC", {"p": project_id, "s": since})
+    recent = _rows(connection,
+                   "SELECT * FROM (SELECT id, provider, category, amount_usd_micros, confidence, "
+                   "  created_at, row_number() OVER (PARTITION BY provider "
+                   "                                 ORDER BY created_at DESC) n "
+                   "  FROM cost_events WHERE project_id = :p AND created_at >= :s) x "
+                   "WHERE n <= 5", {"p": project_id, "s": since})
     anomalies = _rows(connection,
-                      "SELECT id, provider, anomaly_type, severity, status, amount_usd_micros, "
-                      "       threshold_usd_micros, summary, decision_id, created_at "
-                      "FROM cost_anomalies WHERE project_id = :p "
-                      "ORDER BY (status = 'open') DESC, created_at DESC LIMIT 25",
-                      {"p": project_id})
+                      "SELECT id, provider, severity, status, summary FROM cost_anomalies "
+                      "WHERE project_id = :p ORDER BY (status = 'open') DESC, created_at DESC "
+                      "LIMIT 25", {"p": project_id})
     recon = _rows(connection,
-                  "SELECT id, provider, provider_account_id, status, resources_seen, "
-                  "       resources_changed, costs_seen, started_at, finished_at "
-                  "FROM reconciliation_runs WHERE project_id = :p "
-                  "ORDER BY started_at DESC LIMIT 10", {"p": project_id})
+                  "SELECT * FROM (SELECT id, provider, status, started_at, resources_seen, "
+                  "  costs_seen, row_number() OVER (PARTITION BY provider "
+                  "                                 ORDER BY started_at DESC) n "
+                  "  FROM reconciliation_runs WHERE project_id = :p) x WHERE n <= 3",
+                  {"p": project_id})
     total = sum(int(r["spend"] or 0) for r in per)
     open_by: dict[str, int] = {}
     for a in anomalies:
         if a["status"] == "open":
             open_by[a["provider"]] = open_by.get(a["provider"], 0) + 1
-    rows = [{"id": r["provider"], "provider": r["provider"], **_money("spend_30d", r["spend"]),
-             "share": (round(int(r["spend"] or 0) / total, 4) if total else 0.0),
-             "events": int(r["events"]), "anomalies": open_by.get(r["provider"], 0)}
-            for r in per]
-    return {"rows": rows,
-            "counts": {"providers": len(rows), "anomalies": sum(open_by.values()),
-                       "events": sum(r["events"] for r in rows)},
-            "filters": {},
+    rows = []
+    for r in per:
+        prov = r["provider"]
+        spend = int(r["spend"] or 0)
+        rows.append({
+            "id": prov, "provider": prov, **_money("spend_30d", spend),
+            "share": (round(spend / total, 4) if total else 0.0),
+            "events": int(r["events"]), "anomalies": open_by.get(prov, 0),
+            "estimated": bool(r["estimated"]),
+            # Spend that ran entirely on a plan: events recorded, nothing metered.
+            "included": int(r["events"]) > 0 and spend == 0,
+            "categories": [{"name": c["category"], "usd_micros": int(c["spend"] or 0),
+                            "usd": usd(c["spend"])} for c in cats if c["provider"] == prov][:8],
+            "cost_events": [{"id": e["id"], "category": e["category"],
+                             "usd_micros": int(e["amount_usd_micros"] or 0),
+                             "usd": usd(e["amount_usd_micros"]), "confidence": e["confidence"],
+                             "at": _iso(e["created_at"])}
+                            for e in recent if e["provider"] == prov],
+            "reconciliation": [{"id": x["id"], "state": _w("recon", x["status"]),
+                                "at": _iso(x["started_at"]),
+                                "resources_seen": x["resources_seen"],
+                                "costs_seen": x["costs_seen"]}
+                               for x in recon if x["provider"] == prov],
+            "usage": {"events": int(r["events"]), "ledger": int(r["ledger"] or 0),
+                      "billing_mirror": None},
+        })
+    return {"rows": rows, "filters": {},
             "header": {**_money("total_30d", total),
                        "anomalies": [{"id": a["id"], "provider": a["provider"],
-                                      "kind": a["anomaly_type"], "severity": a["severity"],
-                                      "status": a["status"], **_money("amount", a["amount_usd_micros"]),
-                                      **_money("threshold", a["threshold_usd_micros"]),
-                                      "summary": a["summary"], "decision_id": a["decision_id"],
-                                      "at": _iso(a["created_at"])} for a in anomalies],
-                       "reconciliation": [{**{k: r[k] for k in (
-                           "id", "provider", "provider_account_id", "status", "resources_seen",
-                           "resources_changed", "costs_seen")},
-                           "started_at": _iso(r["started_at"]),
-                           "finished_at": _iso(r["finished_at"])} for r in recon]}}
+                                      "severity": _w("severity", a["severity"]),
+                                      "summary": a["summary"], "status": a["status"]}
+                                     for a in anomalies]}}
 
 
-def _cloud_changes(connection: Any, project_id: str) -> dict[str, Any]:
+def _cloud_changes(connection: Any, project_id: str, *, can_write: bool) -> dict[str, Any]:
     rows = _rows(connection,
-                 "SELECT c.id, c.title, c.status, c.risk_tier, c.expected_cost_usd_micros, "
-                 "       c.provider_account_id, a.account_label, c.approval_decision_id, "
-                 "       c.created_by, c.created_at, c.applied_at, c.failure_reason, "
-                 "       jsonb_array_length(COALESCE(c.operations, '[]'::jsonb)) AS ops, "
-                 "       (SELECT count(*) FROM resource_receipts r WHERE r.changeset_id = c.id) "
-                 "         AS receipts "
-                 "FROM changesets c LEFT JOIN provider_accounts a ON a.id = c.provider_account_id "
+                 "SELECT c.*, a.account_label FROM changesets c "
+                 "LEFT JOIN provider_accounts a ON a.id = c.provider_account_id "
                  "WHERE c.project_id = :p ORDER BY c.created_at DESC LIMIT 50", {"p": project_id})
-    drift = _rows(connection,
-                  "SELECT id, provider_account_id, classification, summary, unmanaged_count, "
-                  "       orphaned_count, security_impacting_count, production_impacting_count, "
-                  "       created_at FROM drift_reports WHERE project_id = :p "
-                  "ORDER BY created_at DESC LIMIT 25", {"p": project_id})
-    return {"rows": [{"id": r["id"], "title": r["title"], "account": r["account_label"],
-                      "account_id": r["provider_account_id"], "risk": r["risk_tier"],
-                      **_money("cost", r["expected_cost_usd_micros"]), "state": r["status"],
-                      "operations": int(r["ops"] or 0), "receipts": int(r["receipts"] or 0),
-                      "decision_id": r["approval_decision_id"], "created_by": r["created_by"],
-                      "created_at": _iso(r["created_at"]), "applied_at": _iso(r["applied_at"]),
-                      "failure": (str(r["failure_reason"])[:200] if r["failure_reason"] else None)}
-                     for r in rows],
-            "counts": {"changes": len(rows),
-                       "pending": sum(1 for r in rows if r["status"] in ("pending_approval",
-                                                                         "draft", "approved")),
-                       "drift": len(drift)},
-            "filters": {"state": sorted({r["status"] for r in rows})},
-            "header": {"drift": [{**{k: d[k] for k in (
-                "id", "provider_account_id", "classification", "summary", "unmanaged_count",
-                "orphaned_count", "security_impacting_count", "production_impacting_count")},
-                "at": _iso(d["created_at"])} for d in drift]}}
+    ids = [r["id"] for r in rows]
+    receipts: dict[str, list] = {}
+    if ids:
+        for x in _rows(connection,
+                       "SELECT id, changeset_id, action, status FROM resource_receipts "
+                       "WHERE changeset_id = ANY(:i) ORDER BY created_at DESC", {"i": ids}):
+            receipts.setdefault(x["changeset_id"], []).append(
+                {"id": x["id"], "action": x["action"], "status": x["status"]})
+    drift: dict[Any, list] = {}
+    for d in _rows(connection,
+                   "SELECT id, provider_account_id, classification, summary, unmanaged_count, "
+                   "  orphaned_count, security_impacting_count FROM drift_reports "
+                   "WHERE project_id = :p ORDER BY created_at DESC LIMIT 50", {"p": project_id}):
+        drift.setdefault(d["provider_account_id"], []).append(
+            {"id": d["id"], "classification": d["classification"],
+             "summary": str(d["summary"] or "")[:120], "unmanaged": d["unmanaged_count"],
+             "orphaned": d["orphaned_count"], "security": d["security_impacting_count"]})
+    out = []
+    for r in rows:
+        ops = [o for o in (_json(r["operations"]) or []) if isinstance(o, dict)]
+        raw_json = json.dumps(ops)
+        status = str(r["status"] or "")
+        out.append({
+            "id": r["id"], "title": r["title"], "summary": str(r["summary"] or "")[:200],
+            "account": ({"id": r["provider_account_id"], "name": r["account_label"]}
+                        if r["provider_account_id"] else None),
+            "risk": r["risk_tier"], **_money("cost", r["expected_cost_usd_micros"]),
+            "state": _w("change", status), "created_at": _iso(r["created_at"]),
+            "operations": [{"action": o.get("action"), "resource_type": o.get("resource_type"),
+                            "resource_ref": o.get("resource_ref") or o.get("resource_id"),
+                            "destructive": bool(o.get("destructive"))} for o in ops[:8]],
+            # Show JSON: whole when it fits the row budget, else cut and marked.
+            "operations_json": raw_json if len(raw_json) <= 600 else raw_json[:599] + "…",
+            "rollback_plan": [str(x)[:120] for x in (_json(r["rollback_plan"]) or [])][:5],
+            "receipts": (receipts.get(r["id"]) or [])[:4],
+            "drift": (drift.get(r["provider_account_id"]) or [])[:3]
+            if r["provider_account_id"] else [],
+            "can": {"approve": can_write and status == "pending_approval",
+                    "apply": can_write and status == "approved"},
+        })
+    return {"rows": out, "filters": {},
+            "header": {"accounts": _accounts_list(connection, project_id)}}
 
 
 def cloud(connection: Any, settings: Any, project_id: str, view: str, *,
-          viewer: Optional[str] = None, filters: Optional[dict[str, str]] = None) -> CloudBody:
+          viewer: Optional[str] = None, filters: Optional[dict[str, str]] = None,
+          profiles: Optional[dict[str, Any]] = None) -> CloudBody:
+    """`profiles` (additive): the resource plane's provider connection profiles, passed by the
+    API (this module must not import resource_plane, which loads the SSH adapter)."""
     view = view if view in CLOUD_VIEWS else "accounts"
     partial: list[str] = []
     since = _now() - timedelta(days=30)
-    empty: dict[str, Any] = {"rows": [], "counts": {}, "filters": {}, "header": {}}
+    can_write = viewer_can_write(connection, settings, project_id, viewer)
+    empty: dict[str, Any] = {"rows": [], "filters": {}, "header": {}}
     if view == "accounts":
-        part = _guard(connection, partial, "accounts",
-                      lambda: _cloud_accounts(connection, project_id, since), empty)
+        part = _guard(connection, partial, "accounts", lambda: _cloud_accounts(
+            connection, project_id, since, can_write=can_write, profiles=profiles), empty)
     elif view == "resources":
         part = _guard(connection, partial, "resources",
                       lambda: _cloud_resources(connection, project_id, filters or {}), empty)
@@ -2117,14 +2400,17 @@ def cloud(connection: Any, settings: Any, project_id: str, view: str, *,
                       lambda: _cloud_spend(connection, project_id, since), empty)
     else:
         part = _guard(connection, partial, "changes",
-                      lambda: _cloud_changes(connection, project_id), empty)
+                      lambda: _cloud_changes(connection, project_id, can_write=can_write), empty)
+    counts = _guard(connection, partial, "counts", lambda: _cloud_counts(connection, project_id),
+                    {k: 0 for k in ("accounts", "resources", "pools", "providers", "changes",
+                                    "anomalies")})
     notices = []
-    if not viewer_can_write(connection, settings, project_id, viewer):
+    if not can_write:
         notices.append({"key": "read_only", "tip": READ_ONLY_TIP})
     if community(settings):
         notices.append({"key": "byok", "tip": BYOK_TIP})
-    body: dict[str, Any] = {"view": view, "counts": part.get("counts") or {},
-                            "rows": part.get("rows") or [], "filters": part.get("filters") or {},
+    body: dict[str, Any] = {"view": view, "counts": counts, "rows": part.get("rows") or [],
+                            "filters": part.get("filters") or {},
                             "header": part.get("header") or {}, "notices": notices,
                             "partial": partial}
     return _finish(body)  # type: ignore[return-value]
