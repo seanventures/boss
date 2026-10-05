@@ -138,10 +138,11 @@
   font-size: 0.78rem; font-weight: 650; cursor: help; }
 .inf-chip { display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border);
   background: var(--surface-2); color: var(--muted); font-size: 0.78rem; white-space: nowrap; cursor: help; }
-.inf-racks { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.inf-racks { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; align-items: start; }
 @media (min-width: 1280px) { .inf-racks { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .inf-rack {
   display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px 14px; content-visibility: auto; contain-intrinsic-size: auto 180px;
+  container-type: inline-size;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .inf-rack[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
@@ -163,7 +164,14 @@
 .inf-stages { display: flex; align-items: center; gap: 0; margin: 0; padding: 0; list-style: none; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .inf-stages[data-dir="col"] { flex-direction: column; align-items: flex-start; gap: 6px; }
 .inf-stage { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 0.78rem; color: var(--faint); white-space: nowrap; }
-.inf-stages[data-dir="row"] .inf-stage + .inf-stage { padding-left: 34px; }
+.inf-stages[data-dir="row"] .inf-stage + .inf-stage { padding-left: 30px; }
+/* A rack too narrow for five labelled stations keeps the marks (each with its tooltip) and
+   names only the stations already passed and the current one. */
+@container (max-width: 600px) {
+  .inf-stages[data-dir="row"] .inf-stage[data-state="todo"] .inf-stage-label { display: none; }
+  .inf-stages[data-dir="row"] .inf-stage + .inf-stage { padding-left: 24px; }
+  .inf-stages[data-dir="row"] .inf-stage + .inf-stage::before { width: 14px; }
+}
 .inf-stages[data-dir="row"] .inf-stage + .inf-stage::before {
   content: ""; position: absolute; left: 6px; top: 50%; width: 22px; border-top: 1px solid var(--border-strong); transform-origin: left; }
 .inf-stage[data-state="done"] { color: var(--muted); }
@@ -178,8 +186,9 @@
 
 .inf-slots { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .inf-tile {
-  display: flex; flex-direction: column; justify-content: space-between; gap: 2px; width: 168px; height: 64px; padding: 6px 9px; min-width: 0;
-  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); cursor: pointer; font-size: 0.78rem;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 1px; width: 168px; height: 64px; padding: 5px 9px; min-width: 0;
+  overflow: hidden; line-height: 1.2;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); cursor: pointer; font-size: 0.74rem;
 }
 .inf-tile:hover { border-color: var(--accent-line); }
 .inf-tile[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 50%, var(--border)); }
@@ -187,7 +196,8 @@
 .inf-tile-name { display: flex; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-weight: 650;
   font-size: 0.8rem; text-align: left; cursor: pointer; }
 .inf-tile-l2 { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.inf-tile-l2 .inf-state { font-size: 0.76rem; }
+.inf-tile-l2 .inf-state { font-size: 0.74rem; }
+.inf-tile-l3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .inf-tile-strip { flex: 1; min-width: 0; }
 .inf-tile-l3 { color: var(--muted); font-size: 0.74rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .inf-tile-l3 .inf-mono { font-size: 0.72rem; }
@@ -256,5 +266,10 @@ button.inf-slot:hover { border-color: var(--accent-line); color: var(--accent-te
   .inf-drawer { width: 100%; border-left: 0; }
   .inf-drawer[data-width="520"], .inf-drawer[data-width="560"] { width: 100%; }
   .inf-tab, .inf-seg-btn, .inf-menu button, .inf .ag-btn { min-height: 44px; }
+  /* Every control a thumb can reach is 44 px tall (§5.3): links and row buttons too. */
+  .inf button, .inf a[href], .inf select, .inf input, .inf-drawer button, .inf-drawer a[href],
+  .inf-sheet button, .inf-sheet a[href], .inf-sheet select, .inf-sheet input {
+    min-height: 44px; }
+  .inf a[href].inf-link, .inf button.inf-link { display: inline-flex; align-items: center; }
   .inf-needs-cards { grid-template-columns: 1fr; }
 }
