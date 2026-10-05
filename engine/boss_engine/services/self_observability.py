@@ -451,6 +451,11 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
     runs_failed = scalar(
         f"SELECT count(*) FROM code_task_runs "
         f"WHERE project_id = :p AND status IN ('failed','error') AND {since}")
+    # Finished and passed — not "total minus failed", which would count a running build as a
+    # pass. The Command Center's week tooltip says `9 builds (7 passed)` from this.
+    runs_succeeded = scalar(
+        f"SELECT count(*) FROM code_task_runs "
+        f"WHERE project_id = :p AND status IN ('completed','succeeded','passed') AND {since}")
     jobs_ran = scalar(f"SELECT count(*) FROM jobs WHERE project_id = :p AND {since}")
     # WHAT IS HAPPENING RIGHT NOW, from the work itself.
     #
@@ -484,6 +489,7 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
         ),
         "runs_total": int(runs_total),
         "runs_failed": int(runs_failed),
+        "runs_succeeded": int(runs_succeeded),
         "run_success_rate": (
             round(100.0 * (runs_total - runs_failed) / runs_total, 1) if runs_total else None
         ),

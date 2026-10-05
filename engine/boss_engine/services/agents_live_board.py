@@ -973,18 +973,20 @@ def etag_of(board: Mapping[str, Any]) -> str:
 
 def compose(connection: Any, settings: Any, project_id: str, *,
             viewer: Optional[str] = None, now: Optional[datetime] = None,
-            with_builds: bool = True) -> tuple[LiveBoard, dict[str, Any], dict[str, Any]]:
+            with_builds: bool = True, setup_out: Optional[dict[str, Any]] = None,
+            ) -> tuple[LiveBoard, dict[str, Any], dict[str, Any]]:
     """The board, and the Command Center's own `assemble` output and read it was built from.
 
     Extracted from `build` with no change of behaviour (command-center spec §6.1): the Command
     Center view composes this board rather than restating it, and needs `cc` (recent runs, the
     expired-answerable count) and `read` (the run rows) without assembling them twice. The
     Command Center draws no builds, so it passes `with_builds=False` and skips
-    factory_view.building_rows; `counts.building` is then 0 and `builds` empty."""
+    factory_view.building_rows; `counts.building` is then 0 and `builds` empty. `setup_out`
+    receives the Repo-and-models basics view the setup read already built."""
     from . import command_center
 
     now = now or datetime.now(timezone.utc)
-    read = command_center.read(connection, settings, project_id, now)
+    read = command_center.read(connection, settings, project_id, now, setup_out=setup_out)
     cc = command_center.assemble(**read)
     attention = attention_items(connection, project_id, cc["needs_you"], read["decisions"])
     rows = missions(connection, project_id, read, attention, now=now, viewer=viewer)
