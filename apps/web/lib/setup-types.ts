@@ -158,4 +158,4 @@ export type TokenFound = {
 };
 
 /** Rows on the board. */
-export type RowKey = "repository" | "models" | "jobs" | "budget" | "try";
+export type RowKey = "repository" | "models" | "capacity" | "jobs" | "budget" | "try";
