@@ -10,6 +10,10 @@ import { nameOf } from "../agents/run-face";
 import { consoleHref } from "../url-intent";
 
 export const ROW_H = 32;
+/** A phone's line is two lines tall: time, level and face, then the title (D11). */
+export const ROW_H_NARROW = 52;
+/** Below this width the list draws two-line rows (the CSS breakpoint is the same). */
+export const NARROW_PX = 720;
 export const HEAD_H = 28;
 
 /** The ten streams' names, as the rail and the drawer say them, with the hint as tooltip. */
@@ -134,7 +138,8 @@ export type DisplayRow =
  * with its offset, so the list renders only what is on screen.
  */
 export function flatten(items: ActivityLogItem[], opts: { byRun: boolean; open: ReadonlySet<string>;
-                                                        labels: Record<string, string>; now?: Date }): DisplayRow[] {
+                                                        labels: Record<string, string>; now?: Date; rowH?: number }): DisplayRow[] {
+  const lineH = opts.rowH ?? ROW_H;
   const rows: DisplayRow[] = [];
   let top = 0;
   let day = "";
@@ -170,11 +175,11 @@ export function flatten(items: ActivityLogItem[], opts: { byRun: boolean; open: 
     }
     const expanded = opts.open.has(group.key);
     push({ kind: "line", key: head.id, item: head, folded: group.items.length, foldKey: group.key,
-           inFold: false, top, height: ROW_H, index: index++ });
+           inFold: false, top, height: lineH, index: index++ });
     if (expanded) {
       for (const inner of group.items.slice(1)) {
         push({ kind: "line", key: inner.id, item: inner, folded: 1, foldKey: group.key, inFold: true, top,
-               height: ROW_H, index: index++ });
+               height: lineH, index: index++ });
       }
     }
   }

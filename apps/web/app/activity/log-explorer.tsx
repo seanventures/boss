@@ -15,7 +15,7 @@
  * 304 when nothing happened. Paused (the console's chip) stops every poll and every motion.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DownloadSimple, Funnel } from "@phosphor-icons/react";
+import { DotsThree, DownloadSimple, Funnel } from "@phosphor-icons/react";
 
 import type { ActivityLogItem } from "../../lib/activity-log";
 import { useConsoleLive } from "../../lib/console-live";
@@ -120,6 +120,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
   // ── the list ──
   const [queryError, setQueryError] = useState("");
   const [toTop, setToTop] = useState(0);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const holding = holdingScroll || !!state.row;
   const stream = useLogStream<ActivityLogItem>({
     key: `${projectId}|${queryKey}`,
@@ -197,7 +198,9 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
     return () => window.removeEventListener("keydown", on);
   }, [step, state.row, openRow]);
 
-  const setRange = (range: LogRange) => { prevRange.current = null; apply({ ...state, range, from: null, to: null }); };
+  const setRange = (range: LogRange) => {
+    prevRange.current = null; setToolsOpen(false); apply({ ...state, range, from: null, to: null });
+  };
   const zoom = (from: string, to: string) => {
     if (!prevRange.current) prevRange.current = state;
     apply({ ...state, from, to, range: null });
@@ -291,6 +294,11 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
                 onClick={() => setRailOpen((o) => !o)}>
           <Funnel size={13} aria-hidden /> Filters{state.tokens.length ? ` (${state.tokens.length})` : ""}
         </button>
+        <button type="button" className="ag-btn lx-more-btn" data-testid="lx-more" aria-expanded={toolsOpen}
+                aria-label="Range and export" title="Range and export" onClick={() => setToolsOpen((o) => !o)}>
+          <DotsThree size={16} weight="bold" aria-hidden />
+        </button>
+        <span className="lx-head-tools" data-open={toolsOpen || undefined} data-testid="lx-head-tools">
         <span className="ag-seg lx-range" role="group" aria-label="Range" title="Times are local. Hover any time for UTC.">
           {RANGES.map((r) => (
             <button key={r} type="button" aria-pressed={!state.from && state.range === r} data-testid={`lx-range-${r}`}
@@ -313,6 +321,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
               <button type="button" role="menuitem" data-testid="lx-export-ndjson" onClick={() => void download("ndjson")}>NDJSON</button>
             </span>
           ) : null}
+        </span>
         </span>
       </header>
       {custom ? (
