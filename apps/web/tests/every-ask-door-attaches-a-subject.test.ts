@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { stepQuestion } from "../app/delivery-workflows-ui";
 import { itemSubject } from "../app/boss-agent-home";
+import { monitoringAsks } from "../app/observability/obs-util";
 import {
   SUBJECT_KINDS, dockParams, parseSubjectRef, subjectRef, type DockSubject,
 } from "../lib/dock-subject";
@@ -78,10 +79,28 @@ describe("the doors that are about a record pass that record", () => {
     ["app/delivery-workflows-ui.tsx",
      '{ kind: "workflow_step", id: workflowRunId, step: step.step_id }'],
     ["app/boss-agent-home.tsx", "subject: itemSubject(item)"],
-    ["app/monitoring-ui.tsx", '{ kind: "deployment", id: t.target_id }'],
+    // The old Monitoring screen's starters moved with it into Observability: a single sick app
+    // is asked about AS its deployment (obs-util.ts), and Pulse's menu passes that subject on.
+    ["app/observability/obs-util.ts", '{ kind: "deployment", id: t.target_id }'],
+    ["app/observability/pulse.tsx", "openDockAbout({ subject: a.subject, question: a.question"],
+    // An app's drawer asks about that app's deployment.
+    ["app/observability/app-drawer.tsx", '{ kind: "deployment", id: targetId }'],
+    // Infra's Ask BOSS (the retired Deployment Manager card's door) is about the fleet.
+    ["app/infra/fleet.tsx", '{ kind: "fleet", id: projectId }'],
   ];
   it.each(DOORS)("%s", (file, subject) => {
     expect(codeOnly(file)).toContain(subject);
+  });
+
+  it("Observability's starter about one sick app carries that app's deployment", () => {
+    const asks = monitoringAsks([
+      { target_id: "tgt_1", app_name: "lead-triage", environment: "prod", status: "down" },
+      { target_id: "tgt_2", app_name: "billing", environment: "prod", status: "up" },
+    ]);
+    expect(asks[0].subject).toEqual({ kind: "deployment", id: "tgt_1" });
+    expect(asks[0].question).toBe("Why is lead-triage (prod) down, and what is the fix?");
+    // A question about several apps, or about none, is about no single record.
+    expect(asks.slice(1).every((a) => a.subject === null)).toBe(true);
   });
 
   it("the briefing's stopped step names its workflow run and step", () => {

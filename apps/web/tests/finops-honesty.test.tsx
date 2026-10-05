@@ -2,17 +2,17 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { FinOpsView } from "../app/provider-configuration-ui";
+import { CloudSpend } from "../app/infra/cloud-spend";
+import { money } from "../app/infra/cloud-rows";
 import { describeFinopsSpendHonesty } from "../lib/finops";
 import {
   describeResourceMonthlyCost,
   describeSpendHonesty,
-  emptyProviderOpsFeed,
   type CostEventFeedItem,
   type ProviderHealthFeedItem,
-  type ProviderOpsFeed,
   type ReconciliationRunFeedItem,
 } from "../lib/providerops";
+import { readInfraUrl, type CloudBody } from "../lib/infra-view";
 
 function cost(
   overrides: Partial<CostEventFeedItem> &
@@ -58,13 +58,16 @@ function run(
   };
 }
 
-function feed(overrides: Partial<ProviderOpsFeed> = {}): ProviderOpsFeed {
-  return {
-    ...emptyProviderOpsFeed("test"),
-    apiReachable: true,
-    blockedReason: undefined,
-    ...overrides,
+/** Infra › Cloud › Spend, rendered with the rows the server sent (the old FinOpsView's home). */
+function spend(rows: CloudBody["rows"]): string {
+  const body: CloudBody = {
+    view: "spend", counts: { providers: rows.length }, rows, filters: {},
+    header: { anomalies: [] }, notices: [], partial: [],
   };
+  return renderToStaticMarkup(
+    <CloudSpend projectId="p1" actor="ceo" orgId={null} url={readInfraUrl("?area=infra&view=cloud&cloud=spend")}
+                go={() => {}} query="" body={body} poll={{} as never} canWrite />,
+  );
 }
 
 describe("FinOps / receipt spend honesty", () => {
@@ -173,42 +176,25 @@ describe("FinOps / receipt spend honesty", () => {
     });
   });
 
-  it("renders Cloud FinOps empty/unavailable without a fake $0.00 total", () => {
-    const unavailable = renderToStaticMarkup(
-      <FinOpsView
-        feed={feed({
-          providerHealth: [
-            health({
-              billingStatus: "unavailable",
-              billingConfidence: "unknown",
-              billingMessage:
-                "Exact billing sync is not available for cloudflare",
-            }),
-          ],
-          reconciliationRuns: [
-            run({
-              billingStatus: "unavailable",
-              billingMessage:
-                "Exact billing sync is not available for cloudflare",
-            }),
-          ],
-        })}
-      />,
-    );
+  // The Cloud FinOps view (provider-configuration-ui.tsx FinOpsView) retired into Infra › Cloud ›
+  // Spend; the same promise — no spend is never drawn as $0.00 — is held by rendering that.
+  it("renders Cloud spend empty / included / unbilled without a fake $0.00", () => {
+    const empty = spend([]);
+    expect(empty).toContain("No cloud spend");
+    expect(empty).not.toContain("$0.00");
 
-    expect(unavailable).toContain("Billing unavailable");
-    expect(unavailable).toContain("Exact billing sync is not available");
-    expect(unavailable).toContain("billing unavailable");
-    expect(unavailable).toContain('data-testid="provider-spend-amount">—</strong>');
-    expect(unavailable).not.toMatch(
-      /data-testid="provider-spend-amount">\$0\.00/,
-    );
-    expect(unavailable).toContain("Resource receipts prove actions");
-
-    const empty = renderToStaticMarkup(<FinOpsView feed={feed()} />);
-    expect(empty).toContain("No cost events");
-    expect(empty).toContain("not $0.00");
-    expect(empty).toContain('data-testid="provider-spend-amount">—</strong>');
-    expect(empty).not.toMatch(/data-testid="provider-spend-amount">\$0\.00/);
+    const html = spend([
+      { id: "openai", provider: "openai", spend_30d_usd: "$0.00", share: 0, events: 0 },
+      { id: "claude", provider: "claude", included: true, share: 0, events: 4 },
+      { id: "aws", provider: "aws", spend_30d_usd: "$12.40", estimated: true, share: 1, events: 9 },
+    ]);
+    expect(html).not.toMatch(/\$0(\.0+)?\b/);
+    expect(html).toContain("Included in plan");
+    expect(html).toContain("$12.40");
+    expect(html).toContain(" est.");
+    // The money cell itself: a zero, or nothing, is a dash.
+    expect(money("$0.00")).toBe("—");
+    expect(money("$0")).toBe("—");
+    expect(money(undefined)).toBe("—");
   });
 });

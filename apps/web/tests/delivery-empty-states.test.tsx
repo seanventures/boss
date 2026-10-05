@@ -1,6 +1,4 @@
 // @vitest-environment happy-dom
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fleetFixture } from "./_helpers/infra-fixtures";
@@ -20,61 +18,6 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => "/",
 }));
-
-vi.mock("../app/actions", () => ({
-  getDeliveryPipelineAction: vi.fn(async () => null),
-  getDeliveryDefaultsAction: vi.fn(async () => ({ owner: "example-org", repo: "boss-sandbox" })),
-  listReposAction: vi.fn(async () => ({ repos: [] })),
-  listRepoAppsAction: vi.fn(async () => ({ apps: [] })),
-  listRefsAction: vi.fn(async () => ({ branches: [] })),
-  deployTargetAction: vi.fn(async () => ({})),
-  deployObservabilityAction: vi.fn(async () => ({})),
-  getDeploymentAction: vi.fn(async () => ({})),
-  redeployAction: vi.fn(async () => ({})),
-  putSecretAction: vi.fn(async () => ({})),
-  generateKeypairAction: vi.fn(async () => ({})),
-  verifySecretAction: vi.fn(async () => ({})),
-  bindSecretAction: vi.fn(async () => ({})),
-  createTargetAction: vi.fn(async () => ({})),
-  bootstrapTargetAction: vi.fn(async () => ({})),
-  preflightTargetAction: vi.fn(async () => ({})),
-  setAutoDeployAction: vi.fn(async () => ({})),
-  updateTargetAction: vi.fn(async () => ({})),
-  purgeTargetAction: vi.fn(async () => ({})),
-  reactivateTargetAction: vi.fn(async () => ({})),
-  teardownTargetAction: vi.fn(async () => ({})),
-}));
-
-const {
-  isObservabilityUnconfigured,
-  MonitoringPanel,
-} = await import("../app/delivery-manage");
-const { MonitoringArea } = await import("../app/monitoring-ui");
-
-const emptyHealth = {
-  project_id: "boss-dogfood",
-  targets: [] as never[],
-  summary: {
-    up: 0,
-    degraded: 0,
-    down: 0,
-    unknown: 0,
-    not_deployed: 0,
-    overall: "not_deployed",
-    total: 0,
-  },
-};
-
-const emptyObservability = {
-  deployed: false,
-  grafana_url: "",
-  apps: [] as never[],
-  status: { running: null as boolean | null },
-};
-
-function html(node: React.ReactElement) {
-  return renderToStaticMarkup(node);
-}
 
 /**
  * Infra's half, rewritten for the Fleet (infra-observability spec §4.14, §9.2): the old Infra
@@ -131,96 +74,14 @@ describe("Infra empty-state honesty (BOSS-344)", () => {
   });
 });
 
-describe("Monitoring empty-state honesty (BOSS-344)", () => {
-  it("isObservabilityUnconfigured is true when stack is not deployed and apps empty", () => {
-    expect(isObservabilityUnconfigured(emptyObservability)).toBe(true);
-    expect(isObservabilityUnconfigured({
-      ...emptyObservability,
-      deployed: true,
-      grafana_url: "http://10.0.0.1:3000",
-    })).toBe(false);
-    expect(isObservabilityUnconfigured({
-      ...emptyObservability,
-      apps: [{
-        app: "demo",
-        environment: "staging",
-        port: 8080,
-        dashboard_url: null,
-        scrape_url: "http://10.0.0.1:8080",
-      }],
-    })).toBe(false);
-  });
-
-  it("MonitoringPanel empty state has no stack-running chrome or deploy machinery", () => {
-    const markup = html(
-      <MonitoringPanel initial={emptyObservability} hostTargetId={undefined} />,
-    );
-    expect(markup).toContain('data-empty-state="stack-not-deployed"');
-    expect(markup).toContain("observability stack is not deployed");
-    expect(markup).toContain("No active deployment target");
-    expect(markup).not.toContain("stack running");
-    expect(markup).not.toContain("stack not running");
-    expect(markup).not.toContain("Deploy monitoring stack");
-    expect(markup).not.toContain("Open Grafana");
-  });
-
-  it("MonitoringArea collapses dual empties into one setup card", () => {
-    const markup = html(
-      <MonitoringArea
-        health={emptyHealth}
-        observability={emptyObservability}
-        hostTargetId={undefined}
-      />,
-    );
-    expect(markup).toContain('data-empty-state="monitoring-unconfigured"');
-    expect(markup).toContain("Monitoring is not set up yet");
-    // The area is called Infra now; "Start in the CI/CD area" named a screen that no longer
-    // exists by that name (console walk, 2026-10-02).
-    expect(markup).toContain("Start in Infra");
-    expect(markup).not.toContain("CI/CD");
-    // Nested fleet chrome must not leak through the combined empty.
-    expect(markup).not.toContain("● not_deployed");
-    expect(markup).not.toContain("Deploy monitoring stack");
-    expect(markup).not.toContain("Open Grafana");
-  });
-
-  it("MonitoringArea keeps separate panels when only one side is empty", () => {
-    const markup = html(
-      <MonitoringArea
-        health={{
-          ...emptyHealth,
-          targets: [{
-            target_id: "dt_1",
-            app_name: "demo",
-            environment: "staging",
-            url: "demo.example",
-            status: "up",
-            status_since: "2026-08-11T00:00:00Z",
-            uptime_24h: 100,
-            uptime_7d: 100,
-            avg_ms: 12,
-            p95_ms: 20,
-            last_checked: "2026-08-11T01:00:00Z",
-            last_latency_ms: 11,
-            last_error: null,
-            sample_count: 4,
-            series: [],
-            incidents: [],
-            deployed_commit: "abc123",
-            deployed_at: "2026-08-11T00:30:00Z",
-            deployment_run_id: "deprun_1",
-          }],
-          summary: {
-            up: 1, degraded: 0, down: 0, unknown: 0, not_deployed: 0,
-            overall: "up", total: 1,
-          },
-        }}
-        observability={emptyObservability}
-        hostTargetId="dt_1"
-      />,
-    );
-    expect(markup).toContain('data-empty-state="monitoring-active"');
-    expect(markup).toContain("demo");
-    expect(markup).toContain("not deployed");
-  });
-});
+/**
+ * Monitoring's half. The MonitoringPanel / MonitoringArea empties (delivery-manage.tsx,
+ * monitoring-ui.tsx) retired into Observability, and the same first-paint promises are held there:
+ *   - nothing deployed is ONE line with the way to Infra, no fleet chrome —
+ *     observability-apps-is-one-pulse "nothing deployed: one line and the way to Infra"
+ *   - a stack that is not deployed and has no machine offers no deploy machinery —
+ *     sources-tab-deploys-checks-and-recommends "no machine: Needs a machine, Add host, and
+ *     nothing to deploy"
+ *   - one side empty, the other not: an app scraped but not health-checked is still named —
+ *     observability-apps-is-one-pulse "an app scraped but not health-checked is named, not dropped"
+ */

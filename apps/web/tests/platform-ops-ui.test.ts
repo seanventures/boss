@@ -10,11 +10,13 @@ import { IdentityProvidersCatalogView } from "../app/identity-providers-ui";
 import { OncallSreHome } from "../app/oncall-sre-ui";
 import { SecurityScanCard } from "../app/security-scan-ui";
 import { ReleasePlanningPanel } from "../app/release-planning-ui";
-import { WorkerAutoscalingPanel } from "../app/worker-autoscaling-ui";
+// Worker autoscaling, the observability suite and CI/CD retired into Infra and Observability:
+// Cloud › Capacity, Observability › Sources, and Deploys › CI config.
+import { CloudCapacity } from "../app/infra/cloud-capacity";
 import { TokenEfficiencyPanel } from "../app/token-efficiency-ui";
-import { ObservabilitySuitePanel } from "../app/observability-suite-ui";
+import { SourcesTab } from "../app/observability/sources";
 import { KnowledgeGraphPanel } from "../app/knowledge-graph-ui";
-import { CICDPipelinesPanel } from "../app/cicd-pipelines-ui";
+import { CiSheet } from "../app/infra/ci-sheet";
 import { AiSreHome } from "../app/ai-sre-ui";
 
 /** Area nesting map — platform panels ride existing ConsoleShell AreaIds. */
@@ -23,10 +25,10 @@ export const PLATFORM_OPS_AREA_NESTING = {
   oncall: "reliability",
   security: "assurance",
   releases: "portfolio",
-  cicd: "delivery",
+  cicd: "infra",
   scaling: "infra",
   tokenEfficiency: "budget",
-  observability: "monitoring",
+  observability: "observability",
   knowledgeGraph: "reliability",
 } as const;
 
@@ -54,6 +56,7 @@ const EXISTING_AREA_IDS = new Set([
   "comms",
   "github",
   "infra",
+  "observability",
   "capabilities",
   "studio",
   "sandboxes",
@@ -74,10 +77,10 @@ describe("platform-ops UI nesting", () => {
     expect(PLATFORM_OPS_AREA_NESTING.oncall).toBe("reliability");
     expect(PLATFORM_OPS_AREA_NESTING.security).toBe("assurance");
     expect(PLATFORM_OPS_AREA_NESTING.releases).toBe("portfolio");
-    expect(PLATFORM_OPS_AREA_NESTING.cicd).toBe("delivery");
+    expect(PLATFORM_OPS_AREA_NESTING.cicd).toBe("infra");
     expect(PLATFORM_OPS_AREA_NESTING.scaling).toBe("infra");
     expect(PLATFORM_OPS_AREA_NESTING.tokenEfficiency).toBe("budget");
-    expect(PLATFORM_OPS_AREA_NESTING.observability).toBe("monitoring");
+    expect(PLATFORM_OPS_AREA_NESTING.observability).toBe("observability");
     expect(PLATFORM_OPS_AREA_NESTING.knowledgeGraph).toBe("reliability");
   });
 
@@ -94,11 +97,11 @@ describe("platform-ops UI smoke imports", () => {
     expect(typeof OncallSreHome).toBe("function");
     expect(typeof SecurityScanCard).toBe("function");
     expect(typeof ReleasePlanningPanel).toBe("function");
-    expect(typeof WorkerAutoscalingPanel).toBe("function");
+    expect(typeof CloudCapacity).toBe("function");
     expect(typeof TokenEfficiencyPanel).toBe("function");
-    expect(typeof ObservabilitySuitePanel).toBe("function");
+    expect(typeof SourcesTab).toBe("function");
     expect(typeof KnowledgeGraphPanel).toBe("function");
-    expect(typeof CICDPipelinesPanel).toBe("function");
+    expect(typeof CiSheet).toBe("function");
     expect(typeof AiSreHome).toBe("function");
   });
 });

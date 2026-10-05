@@ -21,7 +21,6 @@ import {
   deployTargetAction, getDeploymentAction, redeployAction,
 } from "../app/actions";
 import { DeployWizard, LiveDeployment, RecentDeployments } from "../app/deploy-ui";
-import { TargetControls } from "../app/delivery-manage";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -137,31 +136,9 @@ describe("deployment ChangeSet review flow", () => {
     expect(onFinished).not.toHaveBeenCalled();
   });
 
-  it("shows the target-card ChangeSet instead of an immediate deploy", async () => {
-    vi.mocked(deployTargetAction).mockResolvedValue(plan);
-    await act(async () => root.render(
-      <TargetControls target={target} communityEdition={false} />,
-    ));
-    await act(async () => button("Plan deployment").click());
-
-    expect(host.textContent).toContain("Deployment plan created");
-    expect(host.textContent).toContain("chg_new");
-    expect(host.textContent).not.toContain("Deploying");
-    expect(button("Plan deployment").hasAttribute("disabled")).toBe(true);
-    expect(getDeploymentAction).not.toHaveBeenCalled();
-  });
-
-  it("shows a target-card 409 reason", async () => {
-    vi.mocked(deployTargetAction).mockResolvedValue({
-      error: "Direct host deployment is disabled until a policy-guarded ChangeSet exists.",
-    });
-    await act(async () => root.render(
-      <TargetControls target={target} communityEdition={false} />,
-    ));
-    await act(async () => button("Plan deployment").click());
-
-    expect(host.querySelector('[role="alert"]')?.textContent)
-      .toContain("Direct host deployment is disabled");
-    expect(host.textContent).not.toContain("Deployment plan created");
-  });
+  // The target card (delivery-manage.tsx TargetControls) retired into Infra › Deploys. Its two
+  // cases — a plan is shown as planned and awaiting approval, never as deploying; a refusal is
+  // shown in words — are held by infra-deploys-a-repository-to-a-vm-through-an-approval.test.tsx
+  // ("plans the chosen ref onto the chosen target through the routed deploy, then opens its
+  // plan" and "shows the API's refusal of a plan in words").
 });

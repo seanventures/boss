@@ -24,6 +24,8 @@ function nullRoleDoors(): string[] {
     ...readdirSync(APP).filter((x) => x.endsWith(".tsx") || x.endsWith(".ts")),
     // Repo and models' Ask BOSS lives with the board it belongs to.
     ...readdirSync(join(APP, "setup")).filter((x) => x.endsWith(".tsx")).map((x) => `setup/${x}`),
+    // The Observability starters (the retired Monitoring screen's) live in Observability now.
+    ...readdirSync(join(APP, "observability")).filter((x) => x.endsWith(".tsx")).map((x) => `observability/${x}`),
   ];
   for (const f of files) {
     const src = readFileSync(join(APP, f), "utf8");
@@ -37,7 +39,7 @@ function nullRoleDoors(): string[] {
 describe("no role means BOSS in general", () => {
   it("finds the null-role doors the incident named", () => {
     const doors = nullRoleDoors();
-    for (const f of ["setup/parts.tsx", "monitoring-ui.tsx", "boss-agent-home.tsx"]) {
+    for (const f of ["setup/parts.tsx", "observability/pulse.tsx", "boss-agent-home.tsx"]) {
       expect(doors, f).toContain(f);
     }
   });
