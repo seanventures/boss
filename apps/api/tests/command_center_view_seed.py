@@ -21,11 +21,12 @@ def uid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-def workflow(c, *, name: str = "Ship it", steps: int = 3, namespace: str = "product") -> tuple[str, str]:
+def workflow(c, *, name: str = "Ship it", steps: int = 3, namespace: str = "product",
+             labels: Optional[list[str]] = None) -> tuple[str, str]:
     """A published product workflow with `steps` agent steps: (definition id, version id)."""
     did, vid = uid("wfd"), uid("wfv")
     key = uid("wf").replace("_", "-")
-    spec = {"entry_step": "s1", "steps": [{"id": f"s{i + 1}", "kind": "agent", "label": f"Step {i + 1}"}
+    spec = {"entry_step": "s1", "steps": [{"id": f"s{i + 1}", "kind": "agent", "label": (labels or [])[i] if i < len(labels or []) else f"Step {i + 1}"}
                                           for i in range(steps)]}
     c.execute(text("INSERT INTO workflow_definitions (id, project_id, workflow_key, name, created_by, namespace) "
                    "VALUES (:i, :p, :k, :n, 'test', :ns)"),

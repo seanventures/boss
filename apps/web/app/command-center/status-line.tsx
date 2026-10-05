@@ -19,6 +19,20 @@ export function money(micros: number): string {
   return `$${(Math.max(0, micros) / 1_000_000).toFixed(2)}`;
 }
 
+/** Keys whose sentence is a SEVERITY: shown as a chip beside a calm summary, never as a red
+ *  headline (an alarm in the page's biggest type reads as the whole factory being down). */
+const SEVERITY = new Set(["stopped", "budget_stopped", "host_critical", "host_slow", "budget_high", "setup"]);
+
+/** The calm headline: what is moving and what waits on you, from the same counts as the
+ *  numbers beside it. Empty when nothing is. */
+export function summaryOf(counts: ViewCounts | null): string {
+  if (!counts) return "";
+  const parts: string[] = [];
+  if (counts.running) parts.push(`${counts.running} running`);
+  if (counts.needsYou) parts.push(`${counts.needsYou} ${counts.needsYou === 1 ? "needs" : "need"} you`);
+  return parts.join(" · ");
+}
+
 export type StatusLineProps = {
   status: ViewStatus & { paused: boolean };
   /** Null when no view has ever been read: the numbers say `—`, never a confident zero. */
@@ -60,6 +74,14 @@ export function StatusLine({ status, counts, today, onSpend, help, helpOpen, onH
   }, [helpOpen, onHelp]);
 
   const unreachable = status.key === "unreachable";
+  // THE SERVER'S RANKING STILL DECIDES (§4.5): the dot's tone and the chip are its first match.
+  // The headline is calm — the summary of counts — unless the state IS the news (all quiet,
+  // ready for a first build, can't reach BOSS) or nothing is moving to summarise.
+  const summary = unreachable ? "" : summaryOf(counts);
+  const severe = SEVERITY.has(status.key);
+  const headline = summary && (severe || status.key === "needs_you" || status.key === "running")
+    ? summary : status.text;
+  const chip = severe && headline !== status.text ? status.text : null;
   const dash = "—";
   const spent = today ? today.moneyMicros : 0;
   const included = today ? today.includedMicros : 0;
@@ -74,8 +96,12 @@ export function StatusLine({ status, counts, today, onSpend, help, helpOpen, onH
         <span className="cc-dot" data-tone={status.tone} aria-hidden />
         <p className="cc-status-text" title={status.tip}
             {...(unreachable ? { "data-testid": "cc2-load-error" } : {})}>
-          {status.text}
+          {headline}
         </p>
+        {chip ? (
+          <span className="cc-chip cc-sev" data-tone={status.tone} data-testid="cc-status-chip"
+                title={status.tip}>{chip}</span>
+        ) : null}
         {status.paused ? (
           <span className="cc-chip" data-testid="cc-paused"
                 title="Live updates are paused. Press Live in the top bar.">Paused</span>
