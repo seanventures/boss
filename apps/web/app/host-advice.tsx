@@ -3,7 +3,8 @@
 import React, { useEffect, useState } from "react";
 // The icon set both callers already use. A hand-drawn triangle would have been one more
 // warning glyph to keep in step with the rest of the console for no gain.
-import { Check, Copy, Warning } from "@phosphor-icons/react";
+import { Warning } from "@phosphor-icons/react";
+import { Check, Copy } from "@phosphor-icons/react";
 
 /**
  * "This computer is out of memory" — said to the person who can fix it, and ONLY when it is.
