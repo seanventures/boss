@@ -16,7 +16,7 @@ import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/wor
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { RunReportPanel } from "./run-report-ui";
-import { plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
+import { changeReviewHref, plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 import { stepAgentChip } from "./step-agents-ui";
 // Agent World (S-runs): who did each step, the chain, the Act card and Credits.
@@ -2271,8 +2271,8 @@ function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
       {plan ? (
         <span className="detail dw-ship-msg" data-testid="dw-ship-plan" role="status">
           Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready.
-          Next, open <a href={consoleHref(
-            typeof window !== "undefined" ? window.location.search : "", { area: "infra" },
+          Next, open <a href={changeReviewHref(
+            plan.changeset_id, typeof window !== "undefined" ? window.location.search : "",
           )}>ProviderOps ChangeSet Review</a>, approve it, then apply it.
         </span>
       ) : null}
