@@ -723,14 +723,11 @@ def strips(connection: Any, target_ids: list[str], *, now: Optional[datetime] = 
 
 
 def deployed_targets(connection: Any, target_ids: list[str]) -> set[str]:
-    """Targets with something running: a succeeded run or a healthy stack deployment."""
-    if not target_ids:
-        return set()
-    return {r[0] for r in connection.execute(text(
-        "SELECT deployment_target_id FROM deployment_runs "
-        "WHERE deployment_target_id = ANY(:ids) AND status IN ('succeeded', 'deployed') "
-        "UNION SELECT target_id FROM stack_deployments "
-        "WHERE target_id = ANY(:ids) AND status = 'healthy'"), {"ids": list(target_ids)})}
+    """Targets with something running — deployment_health's one DEPLOYED rule (a succeeded or
+    applied run, or a healthy stack deployment), shared with Observability and the sweep."""
+    from .deployment_health import newest_deploys
+
+    return set(newest_deploys(connection, list(target_ids)))
 
 
 def health_states(connection: Any, target_ids: list[str], *,

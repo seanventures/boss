@@ -58,7 +58,7 @@ DEGRADED_LATENCY_MS = 2000
 # the sweep and the scrape config all read this one rule and `newest_deploys()`.
 DEPLOYED_PREDICATE = (
     "(EXISTS (SELECT 1 FROM deployment_runs d "
-    "         WHERE d.deployment_target_id = {alias}.id AND d.status = 'succeeded')"
+    "         WHERE d.deployment_target_id = {alias}.id AND d.status IN ('succeeded', 'deployed'))"
     " OR EXISTS (SELECT 1 FROM stack_deployments sd "
     "            WHERE sd.target_id = {alias}.id AND sd.status = 'healthy'))")
 
@@ -66,7 +66,8 @@ DEPLOYED_PREDICATE = (
 _NEWEST_DEPLOYS_SQL = (
     "SELECT DISTINCT ON (t) t, id, commit_ref, finished_at, kind FROM ("
     "  SELECT deployment_target_id AS t, id, commit_ref, finished_at, 'registry' AS kind "
-    "  FROM deployment_runs WHERE deployment_target_id = ANY(:ids) AND status = 'succeeded' "
+    "  FROM deployment_runs WHERE deployment_target_id = ANY(:ids) "
+    "  AND status IN ('succeeded', 'deployed') "
     "  UNION ALL "
     "  SELECT target_id AS t, id, commit_sha AS commit_ref, "
     "         COALESCE(finished_at, updated_at, created_at) AS finished_at, 'stack' AS kind "
