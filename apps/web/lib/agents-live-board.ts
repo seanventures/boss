@@ -47,15 +47,20 @@ export function teamOfAgent(roleKey: string): { key: string; label: string; tip?
 
 // ── Attention (the cards, the pill) ─────────────────────────────────────────────────────────
 
-/** `gate_override` / `budget_refused` are a build stopped for you (factory spec §6.5). */
-export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_override" | "budget_refused";
+/** `gate_override` / `budget_refused` are a build stopped for you (factory spec §6.5).
+ *  `system_health` is the machine: a system-doctor finding (or a Shepherd question) that needs
+ *  a person's choice (stability spec §4d). */
+export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_override" | "budget_refused"
+  | "system_health";
 export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general";
 
 export type AttentionAction = {
   action: "approve" | "reject" | "revise" | "delegate" | "execute";
   label: string; tone: string; effect: string; needs: string[];
 };
-export type AttentionAnswer = { key: string; label: string; enabled: boolean; reason?: string; stepId?: string };
+export type AttentionAnswer = { key: string; label: string; enabled: boolean; reason?: string; stepId?: string;
+  /** system_health: the press stops or cancels something a person started; ask first. */
+  confirm?: boolean };
 
 export type AttentionItem = {
   /** decision id | `run:<run>:<step>` (failed step) | `ready:<key>` (readiness). */
@@ -81,6 +86,9 @@ export type AttentionItem = {
   at?: string;
   /** The build this is about, when its subject is a code task (factory spec §4.2.1, §6.5). */
   build?: AttentionBuild;
+  /** system_health: the finding the options act on, and how bad it is. */
+  findingId?: string;
+  severity?: "info" | "warn" | "critical";
 };
 
 /** A failing quality gate, as a waiver sheet lists it. `waivable: false` → disabled + reason. */
@@ -222,7 +230,7 @@ export function parseAttention(w: unknown): AttentionItem {
     answers: arr(o.answers).map((a) => {
       const x = obj(a);
       return { key: str(x.key), label: str(x.label), enabled: x.enabled !== false, reason: opt(x.reason),
-               stepId: opt(x.step_id) };
+               stepId: opt(x.step_id), ...(x.confirm === true ? { confirm: true } : {}) };
     }),
     decideInline: o.decide_inline === true,
     contentHash: opt(o.content_hash), preview: opt(o.preview),
@@ -230,6 +238,8 @@ export function parseAttention(w: unknown): AttentionItem {
     fix: fix ? { area: str(fix.area), label: str(fix.label), ...(opt(fix.focus) ? { focus: opt(fix.focus) } : {}) } : undefined,
     at: opt(o.at),
     build: o.build ? parseAttentionBuild(o.build) : undefined,
+    ...(opt(o.finding_id) ? { findingId: opt(o.finding_id) } : {}),
+    ...(opt(o.severity) ? { severity: opt(o.severity) as AttentionItem["severity"] } : {}),
   };
 }
 

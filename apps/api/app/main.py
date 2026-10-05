@@ -1458,6 +1458,12 @@ async def lifespan(_: FastAPI):
         start_local_supervisor()
     except Exception as exc:  # noqa: BLE001 — never block startup on supervision
         print(f"[lifespan] local supervisor not started: {exc}")
+    try:
+        # Ownership ledger, Stop-kills watch, reaper and system doctor (stability spec §4).
+        from boss_engine.services.system_threads import start_all as _start_system_threads
+        print(f"[lifespan] system threads: {_start_system_threads(engine, settings)}")
+    except Exception as exc:  # noqa: BLE001 — never block startup on host care
+        print(f"[lifespan] system threads not started: {exc}")
     _warm_read_paths()
     yield
 
@@ -7623,8 +7629,8 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     hosting Docker was thrashing 21.4 GB of 22.5 GB swap. Every memory and disk reading BOSS
     already had said "healthy" — they see the Docker VM, and the VM was fine.
 
-    So the worker times its own poll loop, and a cycle that comes round minutes late is
-    reported here. Stored as an event so any run overlapping it can be asked the only question
+    So the worker times its own idle wait — never the time it spends running a job — and a
+    wait that comes round minutes late is reported here. Stored as an event so any run overlapping it can be asked the only question
     that matters: how much of this was the machine, and how much was us.
     """
     payload = payload.payload()
@@ -7632,8 +7638,12 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     if stalled <= 0:
         return {"recorded": False, "reason": "not a stall"}
     with begin(engine) as connection:
+        # `source` marks a stall measured over the worker's IDLE WAIT only. Rows without one
+        # were written by the old poll clock, which counted every job's duration as a host
+        # stall (stability spec C5); readers ignore them.
         emit_event(connection, settings.default_project_id, "host.stalled", "boss",
-                   "host", "self", {"stalled_seconds": round(stalled, 2)})
+                   "host", "self", {"stalled_seconds": round(stalled, 2),
+                                    "source": "worker.idle_wait"})
     return {"recorded": True, "stalled_seconds": round(stalled, 2)}
 
 

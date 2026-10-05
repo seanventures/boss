@@ -42,6 +42,8 @@ import subprocess
 import time
 from typing import Optional
 
+from . import owned_process
+
 _log = logging.getLogger(__name__)
 
 #: Long enough to be a real build step, short enough that a hung container is noticed.
@@ -75,7 +77,7 @@ def docker_available(binary: str = "docker") -> tuple[bool, str]:
     if not exe:
         return False, f"{binary!r} is not on PATH"
     try:
-        proc = subprocess.run([exe, "info", "--format", "{{.ServerVersion}}"],
+        proc = owned_process.run([exe, "info", "--format", "{{.ServerVersion}}"],
                               capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired:
         return False, "`docker info` timed out — is the daemon running?"
@@ -127,8 +129,16 @@ class ContainerCommandRunner:
         # build launch in this module is in `run()` below, and it IS niced. Excluding this
         # file from that guard would weaken a rule that exists because an unniced build took
         # /v1/code-tasks from 0.37s to 47.1s.
+        from .workload_profiles import workload_oom_score_adj
         create_argv = [
             self.binary, "run", "--detach", "--rm",
+            # An init reaps what the build orphans; the labels let the reaper find this
+            # container if the control plane dies before `stop()` (stability spec §4a).
+            "--init",
+            "--label", "boss.owner=sandbox", "--label", f"boss.task_id={self.task_id}",
+            *(["--label", f"boss.install_id={os.environ['BOSS_INSTALL_ID']}"]
+              if os.environ.get("BOSS_INSTALL_ID") else []),
+            "--oom-score-adj", str(workload_oom_score_adj()),
             "--name", f"boss-sbx-{self.task_id}-{int(time.time())}",
             # NO NETWORK. The agent's model calls happen in the control plane; a build that
             # needs to fetch dependencies is an explicit opt-in, not a default.
@@ -147,7 +157,7 @@ class ContainerCommandRunner:
             self.image, "sleep", "infinity",
         ]
         try:
-            proc = subprocess.run(create_argv, capture_output=True, text=True,
+            proc = owned_process.run(create_argv, capture_output=True, text=True,
                                   timeout=_DOCKER_START_TIMEOUT)
         except subprocess.TimeoutExpired as exc:
             raise ContainerUnavailable(
@@ -168,7 +178,7 @@ class ContainerCommandRunner:
         if not cid:
             return
         try:
-            subprocess.run([self.binary, "rm", "-f", cid],
+            owned_process.run([self.binary, "rm", "-f", cid],
                            capture_output=True, text=True, timeout=30)
         except Exception as exc:  # noqa: BLE001 — teardown must never mask the real failure
             _log.warning("could not remove sandbox container %s: %s", cid[:12], exc)
@@ -198,7 +208,7 @@ class ContainerCommandRunner:
         ]
         started = time.monotonic()
         try:
-            proc = subprocess.run(exec_argv, capture_output=True, text=True, timeout=limit)
+            proc = owned_process.run(exec_argv, capture_output=True, text=True, timeout=limit)
         except subprocess.TimeoutExpired:
             return CommandOutcome(command, 124, "", f"timed out after {limit}s",
                                   int((time.monotonic() - started) * 1000), timed_out=True)

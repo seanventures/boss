@@ -62,7 +62,7 @@ def test_the_claude_catalog_is_killed_at_its_deadline(monkeypatch):
         def wait(self, timeout=None):
             return 0
 
-    monkeypatch.setattr(cli_harness.subprocess, "Popen", Silent)
+    monkeypatch.setattr(cli_harness.owned_process, "popen", Silent)
     monkeypatch.setattr(cli_harness, "CATALOG_TIMEOUT_SECONDS", 0.3)
     monkeypatch.setattr(cli_harness.GenericCliCodeAgent, "_env", lambda self: {})
     spec = cli_harness.BUILTIN_CLI_HARNESSES["claude_code"]

@@ -51,8 +51,13 @@ def test_the_loop_actually_checks_the_flag():
 
 
 def test_an_idle_worker_does_not_hold_the_deploy_open_for_a_poll_interval():
-    src = inspect.getsource(worker_main.main)
-    assert "for _ in range(max(1, int(settings.poll_interval_seconds)))" in src, (
+    # The idle wait is one-second steps that stop when asked (worker_main.idle_wait, which
+    # the loop calls through observe_idle_wait so the stall clock times only the wait).
+    assert "observe_idle_wait(" in inspect.getsource(worker_main.main)
+    slept: list[float] = []
+    planned, _ = worker_main.idle_wait(20.0, stopping=lambda: len(slept) >= 2,
+                                       sleep=slept.append, clock=lambda: 0.0)
+    assert slept == [1, 1] and planned == 2.0, (
         "a single long sleep cannot be interrupted, so the deploy waits it out")
 
 

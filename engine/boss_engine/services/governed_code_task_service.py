@@ -19,6 +19,7 @@ is the guidance, the model impersonates the role. See docs/product/GOVERNED_CODI
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import time
@@ -295,7 +296,6 @@ def _kill_stray_review_processes(*roots) -> int:
     path to appear as a real path component — never a loose substring.
     """
     import signal
-    import subprocess as _sp
 
     from .code_agent import is_protected as _is_protected_seat
 
@@ -306,7 +306,8 @@ def _kill_stray_review_processes(*roots) -> int:
     mine = {os.getpid(), os.getppid()}
     killed = 0
     try:
-        out = _sp.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
+        from . import owned_process as _owned
+        out = _owned.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
                       timeout=10).stdout
     except Exception:  # noqa: BLE001 — best effort; never sink the run
         return 0
@@ -1741,12 +1742,20 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         role = str(((run or {}).get("spec") or {}).get("role_key") or "").strip()
         if run is not None and role:
             mcp = prepare(c, settings, run["project_id"], role)
+    from . import owned_process
     try:
-        return _run_governed_code_task(engine, settings, jobs, run_id,
-                                       fencing_token=fencing_token, mcp=mcp)
+        # EVERYTHING THIS BUILD STARTS IS ITS OWN (stability spec §4a): agents, review seats,
+        # commands, the serve proof — so Stop ends all of it, and nothing it started outlives it.
+        with owned_process.owner_scope("code_run", run_id,
+                                       project_id=(run or {}).get("project_id"), fresh=True):
+            return _run_governed_code_task(engine, settings, jobs, run_id,
+                                           fencing_token=fencing_token, mcp=mcp)
     finally:
         if mcp is not None:
             mcp.cleanup()
+        # Whatever is still running under this build's name ends with it (a background child
+        # an exception unwound past, a seat the panel deadline gave up on).
+        owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
 
 
 def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
@@ -2559,6 +2568,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if use_microvm and mv and success:
             for sid in guest_vm_ids:
                 mv.hold(sid, ttl_seconds=7200, reason="governed build available for preview")
+
+    def _honour_cancel(exc):
+        # Operator intent, not a failure: stop, keep the work on the branch, release budget.
+        _finish_vms(success=False)
+        try:
+            _checkpoint("cancelled")
+        except Exception:  # noqa: BLE001
+            pass
+        with _transaction(engine) as c:
+            _release(budget, c, project_id, reservation_id, "cancelled by operator", run_id=run_id)
+            emit_event(c, project_id, "code_task.cancel_honoured", "boss", "code_task_run",
+                       run_id, {"detail": str(exc)[:200]})
+        try:
+            # The stop that was only a request becomes the run's status, now that nothing of
+            # this executor holds the row.
+            from .code_task_service import honour_stop_request
+            with _transaction(engine) as c:
+                honour_stop_request(c, run_id)
+        except Exception:  # noqa: BLE001 — the executor has stopped either way
+            pass
+        return {"status": "cancelled", "done": True, "reason": str(exc)}
 
     sandbox = None
     review_sandbox = None
@@ -3687,6 +3717,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _lanes = _effective_setting(
                     _sc, project_id, settings, "code_agent_max_concurrency")
             max_workers = min(len(checks), max(int(_lanes or 3), 6))
+            # UNDER MEMORY PRESSURE THE PANEL SITS ONE SEAT AT A TIME (stability spec §4b.3,
+            # L1+): each seat is a ~300 MB CLI, and six at once is what tips a small machine
+            # into swap. Slower, and it finishes.
+            try:
+                from .admission import current_level, L1 as _L1
+                with _transaction(engine) as _lc:
+                    if current_level(_lc) >= _L1:
+                        max_workers = 1
+            except Exception:  # noqa: BLE001 — an unread level never changes the panel
+                pass
             panel_parallel = max_workers > 1
             # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
             # auto-passing: security 'not_run' still BLOCKS (security_clean requires 'clean');
@@ -3699,10 +3739,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             def _guarded(fn, label):
                 def _run():
                     try:
-                        fn()
+                        # A SEAT OWNS ITS PROCESSES, inside the build that owns it: the
+                        # deadline below ends exactly this seat's tree, and a cancel of the
+                        # build ends every seat's (owned_process.terminate_owner).
+                        from . import owned_process as _op
+                        with _op.owner_scope("review_seat", f"{run_id}:{label}"):
+                            fn()
                     except Exception as exc:  # noqa: BLE001 — a failed review must not crash the run
                         with lock:
                             review_errors.append(f"{label}: {exc.__class__.__name__}: {exc}"[:200])
+                _run.seat_label = label  # type: ignore[attr-defined]
                 return _run
 
             guarded = (
@@ -3718,7 +3764,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             review_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 420) or 420)
             pool = ThreadPoolExecutor(max_workers=max_workers)
             try:
-                futs = [pool.submit(g) for g in guarded]
+                # A thread starts with an EMPTY context: copied here, each seat runs inside the
+                # build's owner scope (and its LLM context) instead of belonging to nobody.
+                futs = [pool.submit(contextvars.copy_context().run, g) for g in guarded]
+                seat_of_future = {f: g.seat_label for f, g in zip(futs, guarded)}
                 _done, not_done = _futures_wait(futs, timeout=review_deadline + 60)
                 if not_done:
                     with lock:
@@ -3729,9 +3778,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # renewing its lease, and the run stalled for over two hours before a reclaim.
                     # A review seat is a `claude -p` SUBPROCESS: to actually stop it we must kill
                     # the process, not cancel the future.
+                    from . import owned_process as _op
+                    owned_killed = 0
                     for f in not_done:
                         f.cancel()
-                    killed = _kill_stray_review_processes(root, review_root)
+                        owned_killed += _op.terminate_owner(
+                            f"{run_id}:{seat_of_future.get(f)}", reason="deadline")["ended"]
+                    killed = owned_killed + _kill_stray_review_processes(root, review_root)
                     with lock:
                         review_errors.append(
                             f"terminated {killed} stuck review process(es) past the deadline"
@@ -4913,26 +4966,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             pass
         return {"status": "superseded", "done": True, "reason": str(exc)}
     except CodeTaskCancelled as exc:
-        # Operator intent, not a failure: stop, keep the work on the branch, release budget.
-        _finish_vms(success=False)
-        try:
-            _checkpoint("cancelled")
-        except Exception:  # noqa: BLE001
-            pass
-        with _transaction(engine) as c:
-            _release(budget, c, project_id, reservation_id, "cancelled by operator", run_id=run_id)
-            emit_event(c, project_id, "code_task.cancel_honoured", "boss", "code_task_run",
-                       run_id, {"detail": str(exc)[:200]})
-        try:
-            # The stop that was only a request becomes the run's status, now that nothing of
-            # this executor holds the row.
-            from .code_task_service import honour_stop_request
-            with _transaction(engine) as c:
-                honour_stop_request(c, run_id)
-        except Exception:  # noqa: BLE001 — the executor has stopped either way
-            pass
-        return {"status": "cancelled", "done": True, "reason": str(exc)}
+        return _honour_cancel(exc)
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
+        # A STAGE THAT DIED OF A STOP IS A STOP. Cancel now ends the build's processes at once
+        # (owned_process.terminate_owner, from the API's stop watch), so the stage in flight
+        # fails with "agent exited -15" — which must read as the cancel it is, not a failure.
+        from . import owned_process as _owned
+        if _owned.draining() and not _owned.was_cancelled(run_id):
+            # A DEPLOY IS NOT A FAILURE (stability spec §4a.5). The API is draining: its
+            # processes were ended on purpose. The job goes back to the queue without spending
+            # an attempt and the run is marked interrupted_by_deploy, so the next API resumes
+            # it instead of the operator finding a failed build they did not cause.
+            from .drain import hand_back_interrupted
+            handed = hand_back_interrupted(engine, jobs, run_id, project_id, fencing_token)
+            if handed is not None:
+                return handed
+        if _owned.was_cancelled(run_id) or isinstance(exc, _owned.OwnerCancelled):
+            return _honour_cancel(CodeTaskCancelled(f"stopped while running: {exc}"[:300]))
         _finish_vms(success=False)  # retain stage VMs for root-causing via the console
         # A blank reason makes every retry blind — always record at least the exception type
         # and the substrate the run was on (that's the first question when root-causing).
