@@ -1521,7 +1521,7 @@
 .ag-flow { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .ag-flow-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ag-flow-chips { display: inline-flex; align-items: center; gap: 8px; }
-.ag-flow-stage { position: relative; overflow-x: auto; padding: 4px 0 40px; min-height: 340px; }
+.ag-flow-stage { position: relative; overflow-x: auto; padding: 4px 0 40px; min-height: 300px; }
 .ag-flow-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 1; }
 /* Edges read at a glance (walk D5): a contrasting stroke whose width and opacity follow volume
    (set inline), an arrowhead, and the count in words on every edge. */
@@ -1555,8 +1555,11 @@
 .ag-flow-stuck { border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .ag-flow-stuck-title { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .ag-flow-stuck-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 6px 24px; font-size: 13px; }
-.ag-flow-cols { position: relative; z-index: 2; display: flex; gap: 88px; align-items: flex-start; min-width: min-content; }
-.ag-flow-col { display: flex; flex-direction: column; gap: 18px; min-width: 170px; }
+/* Columns share the panel's width (fluid), so the map fits at 1440 without scrolling sideways. */
+.ag-flow-cols { position: relative; z-index: 2; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(112px, 1fr);
+  gap: 18px 76px; align-items: start; }
+.ag-flow-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.ag-flow-idle { font-size: 12px; color: var(--faint); }
 .ag-flow-col[data-muted] { opacity: 0.6; }
 .ag-flow-colhead { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); min-height: 14px; }
 .ag-flow-node {
