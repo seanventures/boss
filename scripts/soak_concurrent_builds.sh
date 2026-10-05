@@ -16,6 +16,6 @@ exec docker run --rm --init --name "boss-soak-$$" --label boss.soak=1 \
   --add-host host.docker.internal:host-gateway \
   -e BOSS_SOAK=1 -e BOSS_TEST_DATABASE_URL="$db" -e PYTHONPATH=/src/engine \
   -e BOSS_ENGINE_DIR=/src/engine -e BOSS_DB_POOL_SIZE=5 \
-  -v "$here/engine:/src/engine:ro" -v "$here/tests/soak:/src/tests/soak:ro" \
+  -v "$here/engine:/src/engine:ro" -v "$here/db:/src/db:ro" -v "$here/tests/soak:/src/tests/soak:ro" \
   -w /src --entrypoint python "$image" \
   -m pytest -p no:cacheprovider -q -s tests/soak/test_concurrent_builds_leave_nothing.py

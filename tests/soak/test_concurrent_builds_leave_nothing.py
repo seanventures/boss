@@ -385,7 +385,9 @@ def test_six_builds_in_three_gigabytes_leave_nothing():
                 outcome = doomed_api(rid, apps[name], kinds[name])
             else:
                 if rid == cancel_run:
-                    threading.Timer(15.0, lambda: press_stop(rid)).start()
+                    # Stop while it is surely mid-build: a warm-cache Vite build finished
+                    # before a 15 s timer (first soak run, 2026-10-05).
+                    threading.Timer(3.0, lambda: press_stop(rid)).start()
                 outcome = run_build(engine, rid, apps[name], kinds[name])
             with engine.begin() as c:
                 c.execute(text("UPDATE code_task_runs SET status=:s WHERE id=:i AND status NOT IN "
