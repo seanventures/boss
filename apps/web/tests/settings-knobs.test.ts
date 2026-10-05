@@ -302,7 +302,8 @@ describe("choosing a model per job", () => {
   it("leaves Govern the numbers and nothing else", () => {
     // Rendered in both places, a change made in one would look absent in the other: Govern's
     // board holds the four numbers, and no model picker.
-    expect(BOARD).toContain('"code_agent_max_concurrency", "code_agent_max_turns", "code_review_inrun_max_rounds"');
+    // The board's agent rows are one table of [key, name] (AGENT_ROWS), in this order.
+    expect(BOARD).toMatch(/\["code_agent_max_concurrency", "Review lanes"\], \["code_agent_max_turns", "Turn budget"\],\s*\["code_review_inrun_max_rounds", "Review rounds"\]/);
     expect(BOARD).not.toContain("RoleTable");
     expect(BOARD).not.toContain("code_agent_engine");
   });
