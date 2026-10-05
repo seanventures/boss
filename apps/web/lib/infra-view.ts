@@ -176,6 +176,8 @@ export type HostDetail = {
   routeOptions: { key: string; label: string; command: string }[];
   findings: HostFinding[]; checkedAt: string | null; residents: Resident[];
   can: Record<string, boolean>;
+  /** The machine's own SSH key, pinned at Verify; every governed connection insists on it. */
+  hostKey: { pinned: boolean; fingerprint: string | null; words: string } | null;
 };
 export function parseHostDetail(w: unknown): HostDetail {
   const o = obj(w);
@@ -186,6 +188,10 @@ export function parseHostDetail(w: unknown): HostDetail {
     routeOptions: arr(o.route_options).map((r) => { const x = obj(r); return { key: str(x.key), label: str(x.label), command: str(x.command) }; }),
     findings: arr(o.findings).map(parseFinding), checkedAt: optStr(o.checked_at),
     residents: arr(o.residents).map(parseResident), can: bools(o.can),
+    hostKey: o.host_key && typeof o.host_key === "object"
+      ? { pinned: obj(o.host_key).pinned === true, fingerprint: optStr(obj(o.host_key).fingerprint),
+          words: str(obj(o.host_key).words) }
+      : null,
   };
 }
 

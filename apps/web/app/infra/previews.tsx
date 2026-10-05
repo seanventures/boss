@@ -15,7 +15,7 @@ import { buildHref, usePreviews, type PreviewRow } from "../../lib/infra-view";
 import { goConsole } from "./deploy-actions";
 import type { InfraTabProps } from "./infra-home";
 import { afterWrite, restartPreview, stopPreview } from "./infra-actions";
-import { ago, localTime, useNow } from "./infra-util";
+import { ago, inWords, localTime, useNow } from "./infra-util";
 import { Empty, Skeleton, StateWord, ZoneHead } from "./kit";
 import { PreviewLogDrawer } from "./preview-log";
 import "./deploys.css";
@@ -105,7 +105,7 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
              onClick={(e) => { if (!(e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0)) { e.preventDefault(); goConsole(buildHref(row.runId as string)); } }}>
             Build ↗</a>
         ) : null}
-        {error ? <span className="inf-error inf-trunc" role="alert" title={error} data-copy="data">Couldn&apos;t do that</span> : null}
+        {error ? <span className="inf-error inf-trunc" role="alert" title={inWords(error)} data-copy="data">Couldn&apos;t do that</span> : null}
       </span>
     </li>
   );
