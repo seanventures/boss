@@ -433,7 +433,8 @@ export const useHostDetail = (projectId: string, id: string | null): Polled<Host
             (d) => (d && d.stage.stage !== "ready" ? HOST_SETUP_POLL_MS : FLEET_POLL_MS));
 export const useTargetDetail = (projectId: string, id: string | null): Polled<TargetDetail> =>
   usePolled(projectId && id ? targetUrl(projectId, id) : null, parseTargetDetail, () => TARGET_POLL_MS);
-const LIVE_STATES = new Set(["planned", "awaiting_approval", "running", "applying", "created", "pending"]);
+// `approved`: a governed host deploy queued for its worker — it turns Deploying in seconds.
+const LIVE_STATES = new Set(["planned", "awaiting_approval", "approved", "running", "applying", "created", "pending"]);
 export const useDeploys = (projectId: string, f: { state?: string | null; app?: string | null; env?: string | null; viewer?: string } = {}): Polled<DeployList> =>
   usePolled(projectId ? deploysUrl(projectId, f) : null, parseDeployList,
             (d) => (d && d.rows.some((r) => LIVE_STATES.has(r.state)) ? DEPLOYS_LIVE_POLL_MS : DEPLOYS_IDLE_POLL_MS));

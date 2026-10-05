@@ -1620,6 +1620,15 @@ def _promotion(connection: Any, run_id: str) -> Optional[dict[str, Any]]:
             "phases": [{"key": k, "label": label, "state": states[k]} for k, label in _PHASES]}
 
 
+def _app_url(value: Any) -> Optional[str]:
+    """A link the browser opens as the app: a bare `host:port` domain would be read as a path
+    under the console, so it gets its scheme."""
+    text_ = str(value or "").strip()
+    if not text_:
+        return None
+    return text_ if "://" in text_ else f"http://{text_}/"
+
+
 def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> DeployDetail:
     raw, row = _one_row(connection, settings, project_id, ref)
     kind, ident = _parse_ref(ref)
@@ -1693,7 +1702,7 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
             "promotion": _promotion(connection, ident) if kind == "registry" else None,
             # A governed host deploy links its app only once the health check passed.
             "open_url": (None if governed and raw["status"] not in SUCCESS_STATES else
-                         full["public_url"] or ((_json(full["domains"]) or [None])[0])),
+                         _app_url(full["public_url"] or ((_json(full["domains"]) or [None])[0]))),
             "changeset_id": full["changeset_id"],
         }
     body["live"] = row["state"] in ACTIVE_STATES
