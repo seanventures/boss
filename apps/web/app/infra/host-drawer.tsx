@@ -377,6 +377,16 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
                   <span className="inf-mono inf-trunc" data-copy="data" title={fact(h.facts.key_fingerprint)}>{fact(h.facts.key_fingerprint)}</span>
                   {h.facts.key_fingerprint ? <CopyButton text={String(h.facts.key_fingerprint)} label="Copy" testId="inf-host-copy-key" /> : null}
                 </dd>
+                {h.hostKey ? (
+                  <>
+                    <dt>Host key</dt>
+                    <dd data-testid="inf-host-hostkey" title={h.hostKey.words}>
+                      <span className={h.hostKey.pinned ? "inf-mono inf-trunc" : "inf-muted"} data-copy="data">
+                        {h.hostKey.pinned ? h.hostKey.fingerprint : "Not pinned yet"}</span>
+                      <span className="inf-muted"> — {h.hostKey.words}</span>
+                    </dd>
+                  </>
+                ) : null}
               </dl>
             )}
             {canWrite && h.thisComputer ? <CorrectRecord host={h} projectId={projectId} actor={actor} refresh={detail.refresh} /> : null}

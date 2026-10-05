@@ -2611,7 +2611,8 @@ def _approvals(connection: Any, project_id: str, now: datetime) -> list[dict[str
     from . import agents_live_board, decision_actions
 
     # EVERY DEPLOY WAITING ON A PERSON: a stack deployment's decision and a governed host
-    # deployment's (governed_host_deploy.py). Listing only the first left a host deploy out of
+    # deployment's (governed_host_deploy.py). Whether its decision is open is decided below by
+    # decision_actions (the inbox's rule), never by a status list here. Listing only the first left a host deploy out of
     # Needs you and its count while Approvals and the badge showed it.
     rows = _rows(connection,
                  "SELECT 'stack' AS kind, s.id AS deployment_id, s.commit_sha, s.ref, "
@@ -2621,7 +2622,6 @@ def _approvals(connection: Any, project_id: str, now: datetime) -> list[dict[str
                  "FROM stack_deployments s JOIN decisions d ON d.id = s.decision_id "
                  "JOIN deployment_targets t ON t.id = s.target_id "
                  "WHERE s.project_id = :p AND s.status = 'awaiting_approval' "
-                 "  AND d.status = 'pending' "
                  "UNION ALL "
                  "SELECT 'delivery', r.id, r.commit_ref, r.commit_ref, t.app_name, t.environment, "
                  "       d.id, d.task_id, d.question, d.status, d.risk_tier, d.default_action, "
@@ -2629,7 +2629,6 @@ def _approvals(connection: Any, project_id: str, now: datetime) -> list[dict[str
                  "FROM deployment_runs r JOIN decisions d ON d.id = r.decision_id "
                  "JOIN deployment_targets t ON t.id = r.deployment_target_id "
                  "WHERE r.project_id = :p AND r.status = 'awaiting_approval' "
-                 "  AND d.status = 'pending' "
                  "ORDER BY created_at DESC", {"p": project_id})
     needs, decisions, extra = [], [], {}
     for r in rows:
