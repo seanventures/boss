@@ -1485,7 +1485,7 @@
 /* Menus and drawers. */
 .org-menu-wrap { position: relative; display: inline-flex; }
 .org-menu {
-  position: absolute; top: 100%; right: 0; z-index: 30; display: flex; flex-direction: column; min-width: 180px; padding: 6px;
+  position: absolute; top: 100%; right: 0; z-index: 80; max-width: min(360px, calc(100vw - 16px)); display: flex; flex-direction: column; min-width: 180px; padding: 6px;
   background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 .org-menu-head { font-size: 11px; color: var(--faint); padding: 4px 8px; }
@@ -1638,3 +1638,33 @@
   .ag-flow-edge, .ag-flow-node, .ag-orgteam-agent { transition: none !important; }
   .ag-flow .ag-av *, .ag-orgteams .ag-av * { animation: none !important; }
 }
+
+/* ── [org] Nothing leaves its box (boss-1, 2026-10-04: a long run name ran out of the Leadership
+   card and was drawn over the Architecture card). Every grid track and flex cell may shrink to
+   nothing, names and labels cut with an ellipsis (whole in their tooltip), and a card clips what
+   is left — its menus open in <body> (MenuPop), so clipping hides nothing. Pinned by
+   tests/e2e/selftest/test_org_boxes_never_overflow.py at 1440, 1280 and 390. */
+.ag-orgteam, .ag-flow-node, .ag-flow-stuck, .ag-zones-lrow, .org-drawer { overflow: hidden; contain: inline-size paint; }
+.org-drawer { overflow-y: auto; }
+.ag-orgteam-head, .ag-orgteam-rows, .ag-orgteam-row, .ag-orgteam-row > dd, .ag-orgteam-row > dd > *,
+.ag-flow-node-btn > *, .ag-org-list > li > *, .ag-org-agent-row > dd > *, .ag-zones-lhead > *,
+.ag-flow-stuck-cols > *, .org-drift-list > li > * { min-width: 0; max-width: 100%; }
+.ag-orgteam-head .ag-team-label, .ag-flow-node-btn .ag-team-label, .ag-zones-lhead .ag-team-label,
+.ag-orgteam-row > dd > span, .ag-orgteam-row > dd > button, .ag-orgteam-chip, .ag-flow-waits,
+.ag-org-agent-name, .ag-org-agent-who > *, .ag-org-partners li > span, .ag-flow-idle, .ag-zones-lstats > span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ag-orgteam-row > dd > button { display: inline-block; text-align: left; }
+.ag-orgteam-waits { width: 100%; }
+.ag-zones-lstats { display: flex; flex-wrap: wrap; min-width: 0; }
+/* A stuck item: who · age · state · action on line 1 (the action never shrinks), what on line 2. */
+.org-wait { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; max-width: 100%; }
+.org-wait-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.org-wait-who { font-weight: 600; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-wait-age, .org-wait-state { flex: none; white-space: nowrap; }
+.org-wait-state { color: var(--muted); }
+.org-wait-state[data-state="awaiting_input"] { color: var(--amber); }
+.org-wait-state[data-state="failed"] { color: var(--red); }
+.org-wait-act { flex: none; margin-left: auto; padding-left: 8px; white-space: nowrap; }
+.org-wait-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.ag-flow-stuck .ag-org-list > li { align-items: flex-start; }

@@ -5,7 +5,7 @@
  * traps focus and returns it, and the small menus. One place each, so Teams, Flow and the two
  * panels say a thing the same way.
  */
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
 
@@ -13,7 +13,7 @@ import type { AvatarState } from "../../lib/agent-world-types";
 import { identityOf } from "../../lib/agent-world";
 import type { LiveMap } from "../../lib/agents-live";
 import { TEAM_LABELS } from "../../lib/agents-live-board";
-import type { OrgBoard, OrgOpenItem } from "../../lib/agents-org-board";
+import { ageWords, openStatusWord, type OrgBoard, type OrgOpenItem } from "../../lib/agents-org-board";
 
 /** An agent's short name: its callsign, else its name; an unregistered key, humanised. */
 export function nameOf(roleKey: string): string {
@@ -136,11 +136,64 @@ export function Drawer({ label, testid, onClose, children }: {
   return typeof document === "undefined" ? drawer : createPortal(drawer, document.body);
 }
 
-/** A small menu under a button. Esc closes it before anything else (it stops the key here). */
+/**
+ * One stuck item, as two lines (walk on boss-1, 2026-10-04: a long run name ran out of its card
+ * and over the next one). Line 1 is who, how long, the state and the one action — the action
+ * never shrinks and never sits on text; line 2 is what (`step · run`), cut with an ellipsis and
+ * whole in its tooltip. Every part may shrink to nothing but the action.
+ */
+export function StuckItem({ roleKey, age, ageTip, state, word, label, action, testid }: {
+  roleKey: string | null; age: string; ageTip?: string; state: string; word: string; label: string;
+  action: React.ReactNode; testid?: string;
+}) {
+  return (
+    <span className="org-wait" data-testid={testid}>
+      <span className="org-wait-head">
+        {roleKey ? <span className="org-wait-who" data-user-text title={nameOf(roleKey)}>{nameOf(roleKey)}</span> : null}
+        <span className="org-wait-age" title={ageTip}>{age}</span>
+        <span className="org-wait-state" data-state={state}>{word}</span>
+        <span className="org-wait-act">{action}</span>
+      </span>
+      <span className="org-wait-what" title={label} data-user-text>{label}</span>
+    </span>
+  );
+}
+
+/** An open item (a wait) as a StuckItem: Review ↗ or Open run ↗. */
+export function WaitItem({ item, who = true, testid }: { item: OrgOpenItem; who?: boolean; testid?: string }) {
+  return (
+    <StuckItem roleKey={who ? item.roleKey : null} age={ageWords(item.since)}
+               ageTip={`Open since ${item.since ? new Date(item.since).toLocaleString() : "unknown"}`}
+               state={item.status} word={openStatusWord(item.status)} label={item.label}
+               action={<OpenItemLink item={item} />} testid={testid} />
+  );
+}
+
+/** A small menu under a button. Esc closes it before anything else (it stops the key here).
+ *
+ *  PORTALLED, FIXED UNDER ITS BUTTON: cards clip what overflows them (so a long name can never
+ *  spill into the next card), and a menu inside a card would be clipped with it. The menu opens
+ *  in <body> at its button's place, on the side with room, and follows it on scroll. */
 export function MenuPop({ label, onClose, children, testid }: {
   label: string; onClose: () => void; children: React.ReactNode; testid?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<React.CSSProperties | null>(null);
+  const place = () => {
+    const wrap = anchor.current?.parentElement;
+    if (!wrap || typeof window === "undefined") return;
+    const r = wrap.getBoundingClientRect();
+    setPos(r.left > window.innerWidth / 2
+      ? { position: "fixed", top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) }
+      : { position: "fixed", top: r.bottom + 4, left: Math.max(8, r.left) });
+  };
+  useLayoutEffect(() => {
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once per open
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>("[role='menuitem']:not(:disabled)")?.focus();
     const onKey = (e: KeyboardEvent) => {
@@ -150,9 +203,15 @@ export function MenuPop({ label, onClose, children, testid }: {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
-  return (
-    <div className="org-menu" role="menu" aria-label={label} ref={ref} data-testid={testid}>
+  const menu = (
+    <div className="org-menu" role="menu" aria-label={label} ref={ref} data-testid={testid} style={pos ?? undefined}>
       {children}
     </div>
+  );
+  return (
+    <>
+      <span ref={anchor} hidden />
+      {typeof document === "undefined" ? menu : createPortal(menu, document.body)}
+    </>
   );
 }
