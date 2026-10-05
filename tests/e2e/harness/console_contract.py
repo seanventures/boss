@@ -67,9 +67,18 @@ def _tid(name: str) -> str:
 
 PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
     "overview": (
-        Press("askboss-examples", "app/ask-boss-hero.tsx", opens=True,
+        # `Ideas` is a button now (command-center spec §4.6), not a <details>: pressed, not opened.
+        Press("askboss-examples", "app/ask-boss-hero.tsx",
               expect=_tid("askboss-default-workflow"),
               why="the ask box's worked examples; asking itself starts real work"),
+        # The bridge's own presses (command-center spec §10.3).
+        Press("cc-today-tab-spend", "app/command-center/today-chart.tsx", expect=_tid("cc-today"),
+              expect_source="app/command-center-ui.tsx",
+              why="Today switches from work to money spent, by hour"),
+        Press("cc-floor-list-toggle", "app/command-center/floor.tsx", expect=_tid("cc-floor-list"),
+              why="the Floor as a list, for anyone who prefers it to the map"),
+        Press("cc-dot-budget", "app/command-center/systems-row.tsx",
+              why="a Systems dot opens the area that fixes it (Budget)"),
     ),
     "code_tasks": (
         Press("fx-new-build", "app/code-tasks-ui.tsx", expect=_tid("fx-new-menu"),
