@@ -55,7 +55,7 @@
 .obs-prows > [role="listitem"] + [role="listitem"] { border-top: 1px solid var(--border); }
 .obs-prow {
   display: grid; align-items: center; column-gap: 12px; min-height: 46px; padding: 4px 0;
-  grid-template-columns: 112px minmax(110px, 1.1fr) 84px minmax(220px, 4.4fr) 60px 96px 104px;
+  grid-template-columns: 108px minmax(150px, 1.5fr) 96px minmax(220px, 4.2fr) 56px 92px 52px;
   grid-template-areas: "state name host strip uptime p95 go" "table table table table table table table";
 }
 .obs-prow-head { min-height: 32px; border-bottom: 1px solid var(--border); grid-template-areas: "label label label ticks . . ."; }
@@ -67,6 +67,9 @@
   color: var(--ink); font: inherit; font-size: 0.86rem; font-weight: 650; text-align: left; cursor: pointer;
 }
 .obs-prow-name:hover .inf-trunc { color: var(--accent-text); }
+/* The app name keeps its letters before the environment does: "shop · prod…", never "s. · production". */
+.obs-prow-name > .inf-trunc { flex: 0 1 auto; min-width: 3.5em; }
+.obs-prow-name > .inf-muted { flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .obs-prow-name:focus-visible, .obs-go:focus-visible, .obs-sort:focus-visible, .obs-grow:focus-visible, .obs-legend-item:focus-visible,
 .obs-chart-svg:focus-visible, .obs-stream-svg:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .obs-prow-host { grid-area: host; min-width: 0; font-size: 0.8rem; display: flex; }
@@ -77,6 +80,10 @@
 .obs-prow-go .inf-link { font-size: 0.72rem; color: var(--faint); }
 .obs-prow-go .inf-link:hover { color: var(--accent-text); }
 .obs-go { font-size: 0.9rem; min-width: 20px; justify-content: center; }
+.obs-tbl { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
+  background: none; color: var(--faint); font: inherit; font-size: 0.9rem; cursor: pointer; }
+.obs-tbl:hover, .obs-tbl[aria-pressed="true"] { color: var(--accent-text); background: var(--surface-2); }
+.obs-tbl:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 .obs-prow-table { grid-area: table; max-height: 240px; overflow: auto; margin: 6px 0; }
 .obs-prow[data-state="not_deployed"] { color: var(--muted); }
 .obs-nostrip { width: 100%; padding: 2px 0; border-top: 1px dashed var(--border-strong); font-size: 0.74rem; color: var(--faint); }
