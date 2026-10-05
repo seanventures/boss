@@ -114,3 +114,18 @@ describe("Apps is an aligned table", () => {
     expect(runs.filter((r) => /\b(project|code task|pipeline|ETA|estimated)\b|%/i.test(r))).toEqual([]);
   });
 });
+
+describe("the State column", () => {
+  it("says the station only while the build is on the line", async () => {
+    const { buildRow } = await import("./_helpers/factory-fixtures");
+    const live = { ...buildRow({ run_id: "r_live", state: "building", word: "Reviewing", station: "review" }), at: "2026-10-04T09:00:00Z" };
+    const done = { ...buildRow({ run_id: "r_done", state: "pr_open", word: "PR open", station: "build" }), at: "2026-10-04T09:00:00Z" };
+    await render({ apps: [
+      { app: "On line", run_id: "r_live", state: "building", word: "Reviewing", builders: [], deploys: [], attempts: [live] },
+      { app: "Shipped", run_id: "r_done", state: "pr_open", word: "PR open", builders: [], deploys: [], attempts: [done] },
+    ] });
+    const states = Object.fromEntries($$(".fx-app-row").map((r) => [r.querySelector(".fx-app-name")?.textContent,
+      (r.querySelector(".fx-c-state")?.textContent ?? "").trim()]));
+    expect(states).toEqual({ "On line": "Reviewing · Review", Shipped: "PR open" });
+  });
+});
