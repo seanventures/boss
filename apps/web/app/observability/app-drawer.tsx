@@ -24,7 +24,7 @@ import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
 import { LatencyChart } from "./latency-chart";
 import { obsWrite } from "./obs-write";
-import { dur, goInfra, obsAsks } from "./obs-util";
+import { dur, leaveTo, obsAsks } from "./obs-util";
 import { Drawer, DrawerSection, Skeleton, StateWord } from "../infra/kit";
 
 function Fact({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
@@ -105,7 +105,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
             ) : null}
             {d.facts.host ? (
               <a className="inf-link" href={hostHref(d.facts.host.id)} title={`${d.facts.host.name} in Infra`} data-testid="obs-app-host"
-                 onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(hostHref(d.facts.host!.id)); } }}>Host ↗</a>
+                 onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(hostHref(d.facts.host!.id)); } }}>Host ↗</a>
             ) : null}
           </div>
 
@@ -133,7 +133,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
                         {inc.deployBefore ? (
                           <a className="inf-link" href={deployHref(inc.deployBefore.ref)} data-testid="obs-incident-deploy"
                              title={`Deploy ${inc.deployBefore.sha7 ?? ""} finished shortly before`}
-                             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(deployHref(inc.deployBefore!.ref)); } }}>deploy before it ↗</a>
+                             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(deployHref(inc.deployBefore!.ref)); } }}>deploy before it ↗</a>
                         ) : null}
                       </span>
                       {shown.has(i) && inc.firstError ? <pre className="obs-errfull" data-copy="data">{inc.firstError}</pre> : null}
@@ -154,7 +154,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
               <a className="inf-link" href={d.facts.dashboardUrl} target="_blank" rel="noreferrer noopener" data-testid="obs-app-dashboard">Dashboard ↗</a>
             ) : <span className="inf-faint" data-testid="obs-app-dashboard" title="Deploy the monitoring stack in Sources">No dashboard</span>}
             <a className="inf-link" href={logsHref("deployment", targetId)} data-testid="obs-app-logs"
-               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(logsHref("deployment", targetId)); } }}>Logs ↗</a>
+               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("deployment", targetId)); } }}>Logs ↗</a>
             <span className="ag-spacer" />
             <button type="button" className="ag-btn" data-testid="obs-app-ask" onClick={ask}>Ask BOSS</button>
           </div>

@@ -19,7 +19,7 @@ import { openDockAbout } from "../../lib/dock-subject";
 import { deployHref, hostHref } from "../../lib/infra-view";
 import { ms, pct, type PulseRow, type Pulse } from "../../lib/obs-view";
 import { plainClick } from "../agents/live-util";
-import { HEAD, SPAN, dur, goInfra, obsAsks, timeTicks } from "./obs-util";
+import { HEAD, SPAN, dur, leaveTo, obsAsks, timeTicks } from "./obs-util";
 import type { ObsTabProps } from "./obs-home";
 import { AppDrawer } from "./app-drawer";
 import { PulseStrip, StripTable } from "./pulse-strip";
@@ -52,7 +52,7 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
       <span className="obs-prow-host">
         {row.host ? (
           <a className="inf-link inf-trunc" href={hostHref(row.host.id)} title={`${row.host.name} in Infra`} data-copy="data"
-             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(hostHref(row.host!.id)); } }}>{row.host.name}</a>
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(hostHref(row.host!.id)); } }}>{row.host.name}</a>
         ) : <span className="inf-faint">—</span>}
       </span>
       <span className="obs-prow-strip">
@@ -62,7 +62,7 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
           <PulseStrip cells={row.strip} fromIso={pulse.window.from} cellS={pulse.window.cellS} label={`${row.app} ${row.env}`}
                       span={SPAN[pulse.window.win] ?? pulse.window.win} testId="obs-pulse-strip"
                       pins={row.pins.map((p) => ({ ...p, href: p.ref ? deployHref(p.ref) : null }))}
-                      onPin={(p) => { if (p.href) goInfra(p.href); }} />
+                      onPin={(p) => { if (p.href) leaveTo(p.href); }} />
         )}
       </span>
       <span className="obs-prow-uptime inf-num" data-testid="obs-pulse-uptime"
@@ -113,7 +113,6 @@ export function AppsTab(props: ObsTabProps) {
       if (changed.has(r.targetId)) say(`${r.app} ${r.env} is ${r.word.toLowerCase()}`);
       last.current.set(r.targetId, r.word);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, changed]);
 
   // The legacy monitoring link: `watch=<app>|<env>` → that app's drawer, else Find with its name.
@@ -151,7 +150,7 @@ export function AppsTab(props: ObsTabProps) {
           <Empty testId="obs-apps-empty">
             Nothing deployed yet{" "}
             <a className="inf-link" href="?area=infra" data-testid="obs-apps-infra"
-               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra("?area=infra"); } }}>Infra ↗</a>
+               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo("?area=infra"); } }}>Infra ↗</a>
           </Empty>
         ) : rows.length === 0 ? (
           <Empty testId="obs-apps-nomatch">Nothing matches</Empty>

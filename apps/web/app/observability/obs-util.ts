@@ -34,9 +34,9 @@ export function timeTicks(fromIso: string | null, toIso: string | null, win: str
   });
 }
 
-/** The drawer and pins go to Infra; Observability's own params are dropped on the way. */
+/** Leave for another area (Infra, Activity, a build): Observability's own params are dropped on the way. */
 const LEAVE = { app: null, model: null, group: null, metric: null, win: null, q: null, watch: null };
-export function goInfra(href: string) {
+export function leaveTo(href: string) {
   const p = new URLSearchParams(href.replace(/^\?/, ""));
   const patch: Record<string, string | null> = { ...LEAVE, view: null };
   p.forEach((v, k) => { patch[k] = v; });

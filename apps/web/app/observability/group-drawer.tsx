@@ -14,7 +14,7 @@ import { compact, llmCallsUrl, ms, parseLlmCall, pct, usd, type Group, type LlmC
 import { RunFace, nameOf } from "../agents/run-face";
 import { plainClick } from "../agents/live-util";
 import { Drawer, DrawerSection, Skeleton } from "../infra/kit";
-import { goInfra } from "./obs-util";
+import { leaveTo } from "./obs-util";
 import { obsRead } from "./obs-write";
 
 export const PAGE = 20;
@@ -86,7 +86,7 @@ export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: 
       ) : null}
       <DrawerSection label="RECENT CALLS" testId="obs-recent-calls" actions={
         <a className="inf-link" href={logsHref("llm_call", null, since)} data-testid="obs-group-logs"
-           onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(logsHref("llm_call", null, since)); } }}>Logs ↗</a>
+           onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("llm_call", null, since)); } }}>Logs ↗</a>
       }>
         {calls === null ? <Skeleton testId="obs-recent-loading" /> : calls.length === 0 ? <span className="inf-empty">No calls in this window</span> : (
           <ul className="obs-list obs-calls">
@@ -104,7 +104,7 @@ export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: 
                 <span className="inf-num inf-faint" title="Retries">{c.retries ? `↻${c.retries}` : ""}</span>
                 {c.runId ? (
                   <a className="inf-link" href={buildHref(c.runId)} title="Open the build that made this"
-                     onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(buildHref(c.runId!)); } }}>Build ↗</a>
+                     onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(buildHref(c.runId!)); } }}>Build ↗</a>
                 ) : <span />}
               </li>
             ))}
