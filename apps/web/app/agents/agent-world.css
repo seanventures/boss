@@ -1465,3 +1465,6 @@
   /* A popover is a bottom sheet on a phone. */
   .kit-pop.ld-pop, .kit-pop.ld-pop[data-align="left"] { position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 270; width: auto; max-width: none; max-height: 70vh; border-radius: var(--r-xl) var(--r-xl) 0 0; }
 }
+
+/* The console is Paused: the pill holds still (its faces keep their state, the motion stops). */
+.ag-pill-wrap[data-paused] *, .ag-pill-wrap[data-paused] *::before, .ag-pill-wrap[data-paused] *::after { animation-play-state: paused !important; }

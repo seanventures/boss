@@ -17,7 +17,7 @@ PURE COMPOSITION PLUS FIVE BOUNDED READS. Nothing here restates a rule another m
     self_observability.delivery_metrics, memoised 60s (eleven scalars that change slowly).
 
 The five reads (each bounded, each served by an index in db/schema.sql):
-  1. flows    — acts STARTED in the last 60 min with a known hander (the Floor's edges);
+  1. flows    — acts STARTED in the last 6 hours with a known hander (the Floor's edges);
   2. work     — agent work finished by hour, yesterday and today, in the viewer's zone;
   3. money    — MONEY_SQL / INCLUDED_SQL by hour over the week, in the viewer's zone;
   4. runs     — the week's finished runs counted in SQL over EVERY row (never the first sixty:
@@ -45,7 +45,9 @@ from sqlalchemy import text
 from .included_spend import INCLUDED_SQL, MONEY_SQL
 
 #: Hand-offs the Floor draws: acts started this recently.
-FLOW_WINDOW = timedelta(minutes=60)
+#: The Floor draws the day's working pattern, not one hour of it: hand-offs started in the
+#: last six hours, weighted by volume and faded by age; comets fly only on new ones (web).
+FLOW_WINDOW = timedelta(hours=6)
 FLOWS_MAX = 60
 #: Rows on the LAST 24H strip; the rest are counted (`day.more`).
 STRIP_ROWS = 10
@@ -195,7 +197,7 @@ def delivery(connection: Any, project_id: str) -> dict[str, Any]:
 
 
 def flows(connection: Any, project_id: str, roster: set[str], now: datetime) -> list[dict[str, Any]]:
-    """Who handed work to whom in the last hour, one edge per (hander, taker). A hand-over from a
+    """Who handed work to whom in the last six hours, one edge per (hander, taker). A hand-over from a
     role that is not on the roster is DROPPED — never drawn to a guessed node; a person is `you`,
     BOSS is `boss`. Chat acts are conversation, not hand-offs."""
     rows = connection.execute(

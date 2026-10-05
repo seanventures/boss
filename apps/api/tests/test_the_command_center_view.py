@@ -156,12 +156,12 @@ def test_flows_draw_only_known_hands(engine):
         seed.act(c, role_key=b, started=NOW - timedelta(minutes=3), handed_by_kind="agent", handed_by_id=a)
         seed.act(c, role_key=a, started=NOW - timedelta(minutes=2), handed_by_kind="person", handed_by_id="ceo")
         seed.act(c, role_key=a, started=NOW - timedelta(minutes=1), handed_by_kind="boss")
-        # Never drawn: a hander nobody knows, a chat, and an act an hour and a minute old.
+        # Never drawn: a hander nobody knows, a chat, and an act six hours and a minute old.
         seed.act(c, role_key=b, started=NOW - timedelta(minutes=5), handed_by_kind="agent",
                  handed_by_id="nobody_we_know")
         seed.act(c, role_key=b, started=NOW - timedelta(minutes=5), kind="chat", handed_by_kind="agent",
                  handed_by_id=a)
-        seed.act(c, role_key=b, started=NOW - timedelta(minutes=61), handed_by_kind="agent", handed_by_id=a)
+        seed.act(c, role_key=b, started=NOW - timedelta(hours=6, minutes=1), handed_by_kind="agent", handed_by_id=a)
     flows = _build(engine, now=NOW)["flows"]
     edges = {(f["from_kind"], f["from"], f["to"]): f["n"] for f in flows}
     assert edges == {("agent", a, b): 2, ("person", "you", a): 1, ("boss", "boss", a): 1}
