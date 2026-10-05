@@ -2707,8 +2707,9 @@ def observed_edges(connection: Connection, project_id: str, *,
     The defaults are the Team chart's reader, unchanged. Organization (agents_org_board) asks
     for more (org-view spec §6.1): `with_outcomes` adds, per pair, how many of the handed acts
     ended in `error`, are open and `awaiting_input`, or went `stale`, plus the raw `how`;
-    `include_people` adds person→agent rows (`source: "person"`) for work a person handed an
-    agent directly — a run they started, a chat they opened — whose act has no agent parent."""
+    `include_people` adds person→agent rows (`source: "person"`): an agent's act whose parent is
+    no agent and that a person handed — directly (a chat they opened), or as the first work of a
+    run they started (the step is handed by BOSS; the RUN act it hangs from is the person's)."""
     outcomes = (
         ", count(*) FILTER (WHERE c.status = 'error') AS failed,"
         " count(*) FILTER (WHERE c.status = 'awaiting_input' AND c.ended_at IS NULL) AS waiting,"
@@ -2736,8 +2737,8 @@ def observed_edges(connection: Connection, project_id: str, *,
                    max(c.started_at) AS last_at, mode() WITHIN GROUP (ORDER BY c.how) AS how
                    {outcomes}
             FROM agent_acts c LEFT JOIN agent_acts p ON p.act_id = c.parent_act_id
-            WHERE c.project_id = :p AND c.role_key IS NOT NULL
-              AND c.handed_by_kind = 'person' AND p.role_key IS NULL
+            WHERE c.project_id = :p AND c.role_key IS NOT NULL AND p.role_key IS NULL
+              AND (c.handed_by_kind = 'person' OR p.handed_by_kind = 'person')
               AND c.started_at > now() - make_interval(hours => :h)
             GROUP BY 2
             """

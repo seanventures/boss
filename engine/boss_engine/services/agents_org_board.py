@@ -193,12 +193,42 @@ def open_items(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def recent_failures(connection: Connection, project_id: str, hours: int,
+                    limit: int = 10) -> list[dict[str, Any]]:
+    """The newest work that ended in an error in the window (Flow's `Stuck now`), newest first.
+    A stage failing inside its own agent's failed step is that step's failure, not a second."""
+    rows = connection.execute(
+        text(
+            """
+            SELECT a.act_id, a.role_key, a.label, a.ended_at, a.workflow_run_id
+            FROM agent_acts a LEFT JOIN agent_acts p ON p.act_id = a.parent_act_id
+            WHERE a.project_id = :p AND a.role_key IS NOT NULL AND a.status = 'error'
+              AND a.kind = ANY(:kinds) AND a.ended_at > now() - make_interval(hours => :h)
+              AND NOT (p.role_key IS NOT DISTINCT FROM a.role_key AND p.status = 'error')
+            ORDER BY a.ended_at DESC, a.act_id DESC LIMIT :n
+            """
+        ),
+        {"p": project_id, "kinds": list(WORK_KINDS), "h": int(hours), "n": limit},
+    ).mappings().all()
+    return [{"role_key": str(r["role_key"]), "act_id": str(r["act_id"]), "label": str(r["label"] or ""),
+             "at": _iso(r["ended_at"]), "run_id": r["workflow_run_id"]} for r in rows]
+
+
 def flow_columns(connection: Connection, project_id: str, hours: int,
-                 team_of_role: Mapping[str, str], team_order: list[str]) -> dict[str, int]:
-    """{team: column}: where each team usually joins a run. For the newest runs (≤500) started
-    in the window, the acts in order give each team the index at which it first appears; a
-    team's column is the dense rank of the median of those indices. Recomputed per window, so
-    the map does not move with polling. A team with no runs has no column."""
+                 team_of_role: Mapping[str, str], team_order: list[str],
+                 edges: Iterable[tuple[str, str]] = ()) -> dict[str, int]:
+    """{team: column}: a layered layout (Sugiyama's first step) in which NO EDGE HAS BOTH ENDS
+    IN ONE COLUMN, so an edge is never drawn under the nodes it joins.
+
+    1. Where each team usually joins a run: for the newest runs (≤500) started in the window,
+       the acts in order give each team the index at which it first appears; its key is the
+       median of those indices.
+    2. Every team edge is pointed along that order (median, then TEAM_ORDER, then key — a total
+       order, so the pointed graph has no cycle). Work that flows the other way is a reverse
+       edge: drawn right to left, never inside a column.
+    3. A team's column is the longest path to it over the pointed edges.
+
+    Recomputed per window, so polling never moves a node. A team with no runs has no column."""
     rows = connection.execute(
         text(
             """
@@ -225,10 +255,26 @@ def flow_columns(connection: Connection, project_id: str, hours: int,
         if team not in order:
             order.append(team)
             joins.setdefault(team, []).append(len(order) - 1)
-    medians = {t: statistics.median(v) for t, v in joins.items()}
-    distinct = sorted(set(medians.values()))
-    rank = {m: i for i, m in enumerate(distinct)}
-    return {t: rank[m] for t, m in medians.items()}
+    rank_of = {k: i for i, k in enumerate(team_order)}
+    key = {t: (statistics.median(v), rank_of.get(t, len(team_order)), t) for t, v in joins.items()}
+    return layer(key, edges)
+
+
+def layer(key: Mapping[str, tuple], edges: Iterable[tuple[str, str]]) -> dict[str, int]:
+    """Longest-path layering over edges pointed along `key` (a total order): every edge between
+    two placed teams spans at least one column. Pure, so it is tested on its own."""
+    placed = sorted(key, key=lambda t: key[t])
+    succ: dict[str, set[str]] = {t: set() for t in placed}
+    for a, b in edges:
+        if a == b or a not in key or b not in key:
+            continue
+        lo, hi = (a, b) if key[a] < key[b] else (b, a)
+        succ[lo].add(hi)
+    col = {t: 0 for t in placed}
+    for t in placed:  # topological: the total order
+        for n in succ[t]:
+            col[n] = max(col[n], col[t] + 1)
+    return col
 
 
 # ── gaps (the Kit) ───────────────────────────────────────────────────────────────────────────
@@ -252,8 +298,18 @@ def kit_gaps(connection: Connection, settings: Any, project_id: str) -> dict[str
     """{roles: {role: {abilities: [...], step_gaps: [...]}}, labels: {ability: label}}.
 
     MISSING means one of two recorded things, never a guess from text: an ability the role's
-    spec recommends (or grants) that it does not hold, or an ability a workflow step uses
-    whose named agent does not hold it."""
+    spec recommends (or grants) that it does not hold, or an ability a workflow step scopes
+    its agent to (its skills, its servers, a custom step's) that the named agent does not hold.
+
+    A BUILT-IN CAPABILITY STEP IS NOT A GAP (walk D15). `build` maps to Open pull requests, but
+    the PR is opened by BOSS's own pipeline: the named agent is credited with the build stages
+    (agent_acts.stage_role) and no grant is checked (step_agents.is_default_captain: "whose tool
+    is BOSS's own and needs no grant"). Such a step needs the ability SET UP, which the Kit
+    shows, not HELD — so counting it said "6 steps can't use Open pull requests" on a fresh
+    install where every one of them runs.
+
+    Each gap says whether the ability must be set up first (`needs_setup`): giving it would be
+    refused (kit.set_holders), so the console links to the Kit instead of offering Give."""
     from . import kit
     from .step_agents import named_agent
 
@@ -264,6 +320,13 @@ def kit_gaps(connection: Connection, settings: Any, project_id: str) -> dict[str
     recs = kit.recommended(kit._roles(connection, project_id))
     uses = kit.used_in(connection, settings, project_id, abilities)
     steps = _active_steps(connection, project_id)
+    setup: dict[str, bool] = {}
+
+    def needs_setup(a: dict[str, Any]) -> bool:
+        if a["key"] not in setup:
+            setup[a["key"]] = kit._status_of(connection, settings, project_id, a) in ("setup", "needs_repo")
+        return setup[a["key"]]
+
     out: dict[str, dict[str, list]] = {}
 
     def slot(role: str) -> dict[str, list]:
@@ -274,9 +337,12 @@ def kit_gaps(connection: Connection, settings: Any, project_id: str) -> dict[str
         holders = set(held.get(key) or [])
         for role in recs.get(key) or []:
             if role not in holders:
-                slot(role)["abilities"].append({"ability": key, "label": labels[key]})
+                slot(role)["abilities"].append({"ability": key, "label": labels[key],
+                                                "needs_setup": needs_setup(a)})
         seen: set[tuple[str, str]] = set()
         for use in uses.get(key) or []:
+            if str(use.get("via") or "").startswith("capability:"):
+                continue
             where = (use["workflow_key"], use["step_id"])
             if where in seen:
                 continue
@@ -286,7 +352,8 @@ def kit_gaps(connection: Connection, settings: Any, project_id: str) -> dict[str
                 slot(named)["step_gaps"].append({
                     "workflow_key": use["workflow_key"], "workflow_name": use["workflow_name"],
                     "step_id": use["step_id"], "step_title": use["step_title"],
-                    "role_key": named, "ability": key, "label": labels[key]})
+                    "role_key": named, "ability": key, "label": labels[key],
+                    "needs_setup": needs_setup(a)})
     return {"roles": out, "labels": labels}
 
 
@@ -425,7 +492,7 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         # `needs_you`: the team's agents' OWN open asks, counted as items (force's rule — a
         # gate holding an agent's work is the operator's wait, never the team's).
         teams[t["key"]] = {"key": t["key"], "label": t["label"], "tip": t.get("tip"),
-                           "members": list(t["members"]), "needs_you": int(t.get("needs_you") or 0)}
+                           "members": list(t["members"])}
     members = {m for t in teams.values() for m in t["members"]}
 
     counts = work_counts(connection, project_id, hours)
@@ -449,8 +516,7 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         if role in registered:
             continue
         if "yours" not in teams:
-            teams["yours"] = {"key": "yours", "label": "Yours", "tip": None, "members": [],
-                              "needs_you": 0}
+            teams["yours"] = {"key": "yours", "label": "Yours", "tip": None, "members": []}
         teams["yours"]["members"].append(role)
         members.add(role)
 
@@ -507,7 +573,8 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         if e["last_at"] and (t["last_at"] is None or e["last_at"] > t["last_at"]):
             t["last_at"] = e["last_at"]
     cols = flow_columns(connection, project_id, hours, {r: team_for(r) for r in team_of_role},
-                        team_order)
+                        team_order, edges=[(e["from"], e["to"]) for e in team_edges.values()
+                                           if e["from"] != "person"])
 
     # agents
     by_role_open: dict[str, list[dict[str, Any]]] = {}
@@ -520,7 +587,8 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
             g = kit_roles.get(role, {})
             agent_rows.append({
                 "role_key": role, "team": t["key"], "registered": role in registered,
-                "work": counts.get(role, {"done": 0, "failed": 0, "open": 0}),
+                "work": {**counts.get(role, {"done": 0, "failed": 0, "open": 0}),
+                         "open": len(by_role_open.get(role, []))},
                 "busy_seconds": busy.get(role, 0),
                 "spend": {"metered_usd": _usd(s.get("micros", 0)),
                           "plan_calls": s.get("plan_calls", 0)},
@@ -541,10 +609,13 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         # every role whose numbers count to this team: its members, plus retired agents of it
         counted = [r for r in set(team_of_role) | set(by_role_spend) | set(counts) | set(busy)
                    if team_for(r) == t["key"]]
-        work = {k: sum(counts.get(r, {}).get(k, 0) for r in counted)
-                for k in ("done", "failed", "open")}
         waiting = sorted((w for w in waits if team_for(w["role_key"]) == t["key"]),
                          key=lambda w: (w["since"] or "", w["act_id"]))
+        # ONE COUNT OF WHAT WAITS (walk D13): Open is the team's open items — the same list the
+        # Waiting row shows, gates holding its work included, nested work counted once — and
+        # "needs you" is how many of them wait on a person.
+        work = {k: sum(counts.get(r, {}).get(k, 0) for r in counted) for k in ("done", "failed")}
+        work["open"] = len(waiting)
         micros = sum(by_role_spend.get(r, {}).get("micros", 0) for r in counted)
         plan_calls = sum(by_role_spend.get(r, {}).get("plan_calls", 0) for r in counted)
         models: dict[str, int] = {}
@@ -561,7 +632,8 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         configured = sorted({c for c in (_configured_model(specs.get(r)) for r in ms) if c})
         team_rows.append({
             "key": t["key"], "label": t["label"], "tip": t.get("tip"), "members": ms,
-            "needs_you": t.get("needs_you", 0),
+            "needs_you": sum(1 for w in waiting if w["status"] == "awaiting_input"),
+            "waiting_you": sum(1 for w in waiting if w["attention_id"]),
             "flow_col": cols.get(t["key"]), "self_handoffs": self_handoffs.get(t["key"], 0),
             "work": work,
             "waiting": waiting[:WAITING_MAX], "waiting_total": len(waiting),
@@ -576,6 +648,7 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
                      "roles_ok": missing_reason is None},
         })
 
+    failures = recent_failures(connection, project_id, hours)
     drift = plan_vs_work(connection, project_id, {r: team_for(r) for r in team_of_role})
     board: dict[str, Any] = {
         "project_id": project_id, "days": days,
@@ -585,6 +658,7 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
                              key=lambda e: (-e["handoffs"], e["from"], e["to"])),
         "agent_edges": agent_edges[:AGENT_EDGES_MAX],
         "truncated": len(agent_edges) > AGENT_EDGES_MAX,
+        "failures": [{**f, "team": team_for(f["role_key"])} for f in failures],
         "missing_roles": [{**m, "team": m["team"] if m["team"] in teams else "yours"}
                           for m in missing or []],
         "declared_vs_observed": drift,
@@ -615,7 +689,8 @@ def handoffs(connection: Connection, project_id: str, *, days: int,
             WHERE c.project_id = :p AND c.role_key = ANY(:dst)
               AND c.started_at > now() - make_interval(hours => :h)
               AND ((p.role_key = ANY(:src) AND p.role_key <> c.role_key)
-                   OR (:people AND c.handed_by_kind = 'person' AND p.role_key IS NULL))
+                   OR (:people AND p.role_key IS NULL
+                       AND (c.handed_by_kind = 'person' OR p.handed_by_kind = 'person')))
             ORDER BY c.started_at DESC, c.act_id DESC
             LIMIT :n
             """

@@ -25,7 +25,7 @@ def test_a_recommended_ability_not_held_is_a_gap_until_given(client, engine):
     label = kit.ability_def(get_settings(), ABILITY)["label"]
     assert gaps["abilities"][0]["label"] == label
     assert ob.agent_row(body, forge)["gaps"]["abilities"] == [
-        {"ability": ABILITY, "label": label}]
+        {"ability": ABILITY, "label": label, "needs_setup": False}]
 
     with begin(engine) as c:
         holders = kit.holders(c, get_settings(), ob.PROJECT,
@@ -61,3 +61,22 @@ def test_a_kit_that_cannot_be_read_says_so_and_the_rest_stands(client, engine, m
     gaps = ob.team_row(body, eng)["gaps"]
     assert gaps["kit_ok"] is False and "kit file unreadable" in gaps["kit_reason"]
     assert ob.team_row(body, eng)["work"]["done"] == 1
+
+
+def test_a_built_in_capability_step_is_never_a_holding_gap(client, engine):
+    """Walk D15: `build` maps to Open pull requests, but BOSS's pipeline opens the PR — the
+    named agent is credited with the build and no grant is checked. Not a gap to give."""
+    eng = ob.team("eng")
+    helm = ob.role(engine, ob.uid("helm"), eng)
+    ob.workflow(engine, [{"id": "build", "kind": "capability", "title": "Build", "captain": helm,
+                          "next": [], "binding": {"capability": "build", "inputs": {}}}])
+    body = ob.board(client).json()
+    assert ob.team_row(body, eng)["gaps"]["step_gaps"] == []
+
+
+def test_a_gap_says_when_its_ability_needs_setting_up_first(client, engine):
+    eng = ob.team("eng")
+    ob.role(engine, ob.uid("forge"), eng, permissions={"recommended_abilities": ["tests_ci", ABILITY]})
+    gaps = {a["ability"]: a for a in ob.team_row(ob.board(client).json(), eng)["gaps"]["abilities"]}
+    assert gaps["tests_ci"]["needs_setup"] is True   # depends on GitHub, not connected here
+    assert gaps[ABILITY]["needs_setup"] is False
