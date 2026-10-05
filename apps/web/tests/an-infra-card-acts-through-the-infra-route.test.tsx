@@ -2,7 +2,7 @@
 /**
  * Infra's attention cards (infra-observability spec §2.2): `<app> deploy failed` and `<host>
  * unreachable` reach Command Center and Infra's NEEDS YOU through the same AttentionCard. The
- * card is called Infra, draws exactly the server's answers, presses them through
+ * card is named for what it is about (Deploy, Health, Machine), draws exactly the server's answers, presses them through
  * POST /v1/infra/attention/act {id, option, actor, project_id} (the server action), says what
  * the press did in place, and `Open` follows the item's own `open` href — never a press.
  */
@@ -26,10 +26,15 @@ const down = parseAttention(attentionHostDown());
 afterEach(() => { unmount(); act.mockClear(); });
 
 describe("an Infra card", () => {
-  it("is called Infra and draws the server's answers, Open as a link", async () => {
+  it("is named for what it is about and draws the server's answers, Open as a link", async () => {
     await mount(<AttentionCard item={failed} projectId="p1" actor="ceo" />);
-    expect(kindWord(failed)).toBe("Infra");
-    expect($(".ag-att-context")?.textContent).toBe("Infra");
+    // A failed deploy is a Deploy card, a down app a Health card, an unreachable host a Machine
+    // card — what it is about, not which screen raised it.
+    expect(kindWord(failed)).toBe("Deploy");
+    expect(kindWord(down)).toBe("Machine");
+    expect(kindWord({ kind: "infra", infraKind: "app_down" })).toBe("Health");
+    expect(kindWord({ kind: "infra" })).toBe("Infra");
+    expect($(".ag-att-context")?.textContent).toBe("Deploy");
     expect($$('[data-testid^="ag-att-infra-"]').map((b) => b.textContent)).toEqual(["Roll back", "Open"]);
     const open = $('[data-testid="ag-att-infra-open"]') as HTMLAnchorElement;
     expect(open.tagName).toBe("A");

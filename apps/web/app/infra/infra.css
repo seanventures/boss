@@ -80,7 +80,16 @@
 .inf-table th { padding: 6px 8px; text-align: left; font-size: 0.7rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); border-bottom: 1px solid var(--border); }
 .inf-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); color: var(--ink); vertical-align: middle; }
 .inf-table tr[data-open="1"] td { background: var(--surface-2); }
-.inf-table-wrap { width: 100%; overflow-x: auto; }
+.inf-table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
+.inf [role="tabpanel"], .obs-zone { min-width: 0; max-width: 100%; }
+/* No table ever widens the page (§5.3): a table scrolls inside its own box, and a long cell
+   (a URL, a sha) truncates with its tooltip. */
+.inf-table { table-layout: auto; }
+.inf-table td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 639px) {
+  .inf-table { display: block; max-width: 100%; overflow-x: auto; }
+  .inf-table td { max-width: 180px; }
+}
 
 /* Drawer (right; full screen under 640 px). */
 .inf-drawer-back { position: fixed; inset: 0; z-index: 70; display: flex; justify-content: flex-end; background: color-mix(in srgb, var(--ink) 18%, transparent); }
