@@ -20,6 +20,8 @@ import {
   parseDecisionInboxFilter,
 } from "../lib/decisions";
 import { commandCenterFrom, decisionsHref } from "../lib/command-center";
+import { parseCommandCenterView } from "../lib/command-center-view";
+import { view } from "./_helpers/command-center-view-fixture";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -110,21 +112,38 @@ describe("the inbox groups by the engine's attention", () => {
 });
 
 describe("the Command Center points at the expired ones without listing them", () => {
+  const counts = (over: Record<string, number>) => ({
+    agents: 7, working: 0, needs_you: 0, stopped: 0, setup: 0, running: 0, expired_answerable: 0, ...over,
+  });
+
   it("says how many and links to the Expired view", () => {
     const html = renderToStaticMarkup(
       <CommandCenter projectId="p" orgId="org_1" actor="ceo"
-        initial={commandCenterFrom({ counts: { expired_answerable: 127 } })} />,
+        initial={parseCommandCenterView(view({ counts: counts({ expired_answerable: 127 }) }))} />,
     );
     expect(html).toContain('data-testid="cc2-expired-answerable"');
-    expect(html).toContain("127 decisions expired without an answer");
+    expect(html).toContain("127 expired · still answerable ↗");
+    expect(html).toContain("Nothing was applied. You can still answer them.");
     expect(html).toContain(decisionsHref("expired", "org_1").replace(/&/g, "&amp;"));
   });
 
   it("says nothing when there are none", () => {
     const html = renderToStaticMarkup(
       <CommandCenter projectId="p" orgId="org_1" actor="ceo"
-        initial={commandCenterFrom({})} />,
+        initial={parseCommandCenterView(view({ counts: counts({}) }))} />,
     );
     expect(html).not.toContain("cc2-expired-answerable");
+  });
+
+  it("NEED YOU is the inbox's Needs action count, the one number (§4.5)", () => {
+    // The engine computes both with decision_actions.attention; the API test
+    // apps/api/tests/test_command_center_and_inbox_agree.py checks the view against real rows.
+    const needs = filterDecisionInbox(ITEMS, "needs_action").length;
+    const html = renderToStaticMarkup(
+      <CommandCenter projectId="p" orgId="org_1" actor="ceo"
+        initial={parseCommandCenterView(view({ counts: counts({ needs_you: needs }) }))} />,
+    );
+    const kpi = /data-testid="cc2-kpi-needs-you"[\s\S]*?<span class="cc-num-n">(\d+)<\/span>/.exec(html);
+    expect(Number(kpi?.[1])).toBe(needs);
   });
 });

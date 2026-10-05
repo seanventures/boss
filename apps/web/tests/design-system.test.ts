@@ -160,12 +160,18 @@ describe("BOSS mission-control design system", () => {
     // tasks.owner_role_id, <CoordinationPanel>). A run started by Build creates no task, so
     // those never showed it; the Command Center now reads workflow runs. What is protected is
     // the same: live data on first paint, and a screen that keeps itself current.
-    expect(page).toContain("fetchCommandCenter(activeProjectId");
+    // PORTED to the bridge (command-center spec §6.2-§6.3): one ETag'd read, seeded by the
+    // server's first paint and kept current by the shared poll (usePolled: 10s, Paused- and
+    // hidden-aware, onChanged asks now).
+    expect(page).toContain("fetchCommandCenterView(activeProjectId");
     expect(page).toContain("<CommandCenter");
     const cc = readFileSync(resolve(__dirname, "../app/command-center-ui.tsx"), "utf8");
-    expect(cc).toContain("/v1/console/command-center?project_id=");
-    expect(cc).toContain("POLL_MS");
-    expect(cc).toContain("onChanged(");
+    expect(cc).toContain("useCommandCenterView(");
+    const lib = readFileSync(resolve(__dirname, "../lib/command-center-view.ts"), "utf8");
+    expect(lib).toContain("/v1/command-center/view?project_id=");
+    expect(lib).toContain("VIEW_POLL_MS");
+    const poll = readFileSync(resolve(__dirname, "../lib/factory-floor.ts"), "utf8");
+    expect(poll).toContain("onChanged(");
   });
 
   it("keeps approvals decision-backed and exposes their complete evidence", () => {
