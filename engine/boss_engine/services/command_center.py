@@ -465,7 +465,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
 
 
 def read(connection, settings, project_id: str,
-         now: Optional[datetime] = None) -> dict[str, Any]:
+         now: Optional[datetime] = None, *,
+         setup_out: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Read what `assemble` needs. Two run queries and one decision query, whatever the size.
 
     Returned as `assemble`'s keyword arguments, so another view of the same factory (Agents ›
@@ -541,7 +542,7 @@ def read(connection, settings, project_id: str,
     readiness: list[dict[str, Any]] = []
     try:
         with connection.begin_nested():
-            readiness = setup_gaps(connection, settings, project_id)
+            readiness = setup_gaps(connection, settings, project_id, out=setup_out)
     except Exception:  # noqa: BLE001 - a setup read must never blank the landing page
         readiness = []
     from .workflow_run_actions import load_runs, stopped_for_operator
@@ -603,13 +604,20 @@ def needs_you_count(connection, settings, project_id: str,
     return int(build(connection, settings, project_id, now)["counts"]["needs_you"])
 
 
-def setup_gaps(connection: Any, settings: Any, project_id: str) -> list[dict[str, Any]]:
+def setup_gaps(connection: Any, settings: Any, project_id: str, *,
+               out: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     """What Repo and models says still stops work: unfinished rows, failing rows, and a token
     that stops working within three days. Read from the same view the page renders, so the
-    Command Center and the page cannot disagree (and nothing here calls GitHub)."""
+    Command Center and the page cannot disagree (and nothing here calls GitHub).
+
+    `out`, when given, receives the basics view (`out["basics"]`) so a caller that also draws
+    the model and repository states (the Command Center's Systems dots) reuses this read
+    instead of making it twice (command-center spec §6.1)."""
     from . import setup_view
 
     view = setup_view.build_basics(connection, settings, project_id)
+    if out is not None:
+        out["basics"] = view
     found = setup_view.basics(view)
     gaps: list[dict[str, Any]] = []
     if not found["github"]:
