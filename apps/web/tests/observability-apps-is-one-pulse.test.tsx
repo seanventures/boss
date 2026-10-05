@@ -90,8 +90,9 @@ describe("Ask BOSS is reachable from Observability", () => {
     await click($("[data-testid='obs-ask']"));
     const starters = $$("[data-testid='obs-ask-starter']");
     expect(starters.length).toBeGreaterThanOrEqual(2);
-    expect(starters[0].getAttribute("title")).toContain("api, team-inbox are not healthy");
-    expect(starters.some((s) => (s.getAttribute("title") ?? "").includes("I want to change what we monitor"))).toBe(true);
+    // The starter IS the question the dock is prefilled with: shown whole, not as a tooltip.
+    expect(starters[0].textContent).toContain("api, team-inbox are not healthy");
+    expect(starters.some((s) => (s.textContent ?? "").includes("I want to change what we monitor"))).toBe(true);
     await click(starters[0]);
     expect(params().get("dock_ask")).toContain("api, team-inbox");
   });

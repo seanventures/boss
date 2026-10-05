@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AUTHORISE_LINE, hostFixture, PUBLIC_KEY, type Route } from "./_helpers/infra-fixtures";
 import { byTestId, click, mountFleet, submit, type, unmountInfra } from "./_helpers/infra-render";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search), useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 
 afterEach(() => unmountInfra());
 
