@@ -3722,11 +3722,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # UNDER MEMORY PRESSURE THE PANEL SITS ONE SEAT AT A TIME (stability spec §4b.3,
             # L1+): each seat is a ~300 MB CLI, and six at once is what tips a small machine
             # into swap. Slower, and it finishes.
+            # project_settings.memory_limited_seats: the same reading Govern shows on the board.
             try:
-                from .admission import current_level, L1 as _L1
+                from .project_settings import memory_limited_seats
                 with _transaction(engine) as _lc:
-                    if current_level(_lc) >= _L1:
-                        max_workers = 1
+                    _seats_now = memory_limited_seats(_lc)
+                if _seats_now is not None:
+                    max_workers = min(max_workers, _seats_now)
             except Exception:  # noqa: BLE001 — an unread level never changes the panel
                 pass
             panel_parallel = max_workers > 1

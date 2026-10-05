@@ -68,7 +68,7 @@ describe("Govern reads its own data", () => {
     await click($("[data-testid=gv-tab-spend]"));
     const models = $("[data-testid=gv-models-link] a")!;
     const q = new URLSearchParams(models.getAttribute("href")!.split("?")[1]);
-    expect([q.get("area"), q.get("tab")]).toEqual(["observability", "models"]);
+    expect([q.get("area"), q.get("view"), q.get("win"), q.get("tab")]).toEqual(["observability", "models", "30d", null]);
     expect($("[data-testid=gv-spend-total]")!.textContent).toBe("$3.00 spent · Included $7.00");
     expect($("[data-testid=gv-cache] .gv-low")!.getAttribute("title")).toBe("Under 30% of input came from cache");
   });

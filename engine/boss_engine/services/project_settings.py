@@ -357,6 +357,20 @@ REVIEW_LANES_FALLBACK = 3
 REVIEW_ROUNDS_FALLBACK = 2
 
 
+def memory_limited_seats(connection) -> Optional[int]:
+    """How many review seats the panel may run RIGHT NOW because of memory, or None for no
+    limit. Under memory pressure (admission level L1+) the panel sits one seat at a time
+    (stability spec §4b.3). The pipeline and Govern both read this, so the board says what the
+    panel does. An unreadable level never limits the panel."""
+    try:
+        from .admission import L1, current_level
+        with connection.begin_nested():  # a failed read must not abort the caller's transaction
+            level = current_level(connection)
+        return 1 if level >= L1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def effective_review_lanes(stored: Any, panel_size: Optional[int] = None) -> int:
     """How many reviewers work at once on a build, from the `Agents at once` value.
 

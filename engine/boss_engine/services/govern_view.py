@@ -124,6 +124,13 @@ def _money_source(value: int, *, pace_value: Optional[int], seed_value: int) -> 
     return "set"
 
 
+def _seats_now(connection: Connection, effective: Optional[int]) -> Optional[dict[str, Any]]:
+    seats = ps.memory_limited_seats(connection)
+    if seats is None or effective is None or seats >= effective:
+        return None
+    return {"value": seats, "reason": "memory"}
+
+
 def _knob_control(connection: Connection, settings: Any, project_id: str, key: str,
                   chosen: dict[str, Any], counts: dict[str, int]) -> dict[str, Any]:
     spec = ps.KNOBS[key]
@@ -166,6 +173,10 @@ def _knob_control(connection: Connection, settings: Any, project_id: str, key: s
         "evidence": _evidence_entry(key, counts),
         "advisory": False,
         "note": note,
+        # What the panel runs RIGHT NOW when memory limits it (the pipeline's own reading):
+        # "Review lanes 6 · running 1 now (memory)". None when nothing limits it.
+        "running_now": (_seats_now(connection, effective)
+                        if key == "code_agent_max_concurrency" else None),
         # How a stored value becomes the effective one, so an edit's preview ("BOSS will use 6")
         # is the engine's arithmetic with the engine's constants, not a copy of them.
         "rule": ({"kind": "floor", "floor": ps.REVIEW_LANES_FLOOR,

@@ -171,6 +171,17 @@ describe("every write outcome says what happened", () => {
     expect(t("[data-testid=gv-control-code_agent_max_turns] .gv-value")).toBe("90(default)");
   });
 
+  it("under memory pressure the lanes say what the panel runs now", async () => {
+    g.view = governView();
+    const lanes = (g.view.controls as Record<string, unknown>[]).find((c) => c.key === "code_agent_max_concurrency")!;
+    lanes.running_now = { value: 1, reason: "memory" };
+    await mount(<GovernHome projectId="p1" actor="ceo" />);
+    const now = $("[data-testid=gv-running-now-code_agent_max_concurrency]")!;
+    expect(t("[data-testid=gv-control-code_agent_max_concurrency] .gv-value")).toContain("6");
+    expect(now.textContent).toBe("· running 1 now (memory)");
+    expect(now.getAttribute("title")!.split(/\s+/).length).toBeLessThanOrEqual(14);
+  });
+
   it("Use default: a toast that says it is back", async () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     await click($("[data-testid=gv-reset-code_review_inrun_max_rounds]"));

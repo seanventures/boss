@@ -223,6 +223,12 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
       <span className="gv-value" data-pulsed={pulsed || undefined}>
         <span className="gv-value-main" data-testid={`gv-value-${keyName}`}>{c ? valueText(c) : "—"}</span>
         {note ? <span className="gv-value-note" data-testid={`gv-note-${keyName}`} title={note.tip}>{note.text}</span> : null}
+        {c?.running_now ? (
+          <span className="gv-value-note gv-running-now" data-testid={`gv-running-now-${keyName}`}
+                title="Memory is low, so the review panel runs one seat at a time.">
+            · running {c.running_now.value} now (memory)
+          </span>
+        ) : null}
       </span>
       <span className="gv-source">
         {c ? <span title={c.source === "pace" ? "Written by Pace" : undefined}>{SOURCE_WORD[c.source] ?? c.source}</span> : null}
