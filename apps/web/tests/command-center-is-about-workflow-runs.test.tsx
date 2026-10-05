@@ -57,7 +57,9 @@ describe("what is running", () => {
     expect(html).toContain("12m");
     // The shared run row (agents-home §3.3): steps done, never a percent.
     expect(html).toContain("step 4 of 7");
-    expect(html).not.toMatch(/\d+%/);
+    // In what the page SAYS, not its markup: an SVG gradient's `offset="50%"` is geometry.
+    const said = html.replace(/<[^>]*>/g, " ");
+    expect(said).not.toMatch(/\d+%/);
   });
 
   it("links straight into the run", () => {
