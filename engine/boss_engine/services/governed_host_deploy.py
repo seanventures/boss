@@ -124,6 +124,26 @@ def target_for_apply(connection: Connection, target: dict) -> dict:
     return {**target, "secret_refs": bindings}
 
 
+def release_surface(connection: Connection, row: Any) -> None:
+    """A finished host deploy lets go of its target's deployment surface.
+
+    The plan leases the surface for twenty minutes so two deployers cannot write one target at
+    once. Held past the end of the deploy, that lease refused the next person's Redeploy or
+    Roll back with "owned by another deployer" for a deploy that was already over. Only the
+    lease THIS run took is ended (same owner and version), so a newer claim is never touched.
+    """
+    packet = row.get("release_packet") if hasattr(row, "get") else None
+    guard = (packet or {}).get("surface_ownership") if isinstance(packet, dict) else None
+    if not isinstance(guard, dict) or not guard.get("ownership_id"):
+        return
+    connection.execute(
+        text("UPDATE surface_ownerships SET expires_at = now(), updated_at = now() "
+             "WHERE id = :i AND owner_ref = :o AND version = :v AND status = 'active' "
+             "AND (expires_at IS NULL OR expires_at > now())"),
+        {"i": guard["ownership_id"], "o": guard.get("owner_ref"),
+         "v": int(guard.get("version") or 0)})
+
+
 def _redact(value: str, hidden: list[str]) -> str:
     from .stack_deploy import redact
 
@@ -377,6 +397,7 @@ def on_decision_not_approved(connection: Connection, settings: Settings, decisio
     if row["reservation_id"]:
         BudgetGovernor(settings).release(connection, row["project_id"], row["reservation_id"],
                                          "Host deployment was not approved.")
+    release_surface(connection, row)
     emit_event(connection, row["project_id"], "deployment_run.rejected", actor,
                "deployment_run", run_id, {"outcome": outcome})
 
@@ -431,6 +452,7 @@ def _fail(connection: Connection, row: Any, *, reason: str, actor: str) -> None:
         text("UPDATE deployment_runs SET status = 'failed', finished_at = now(), "
              "failure_reason = :r, updated_at = now() WHERE id = :i"),
         {"i": row["id"], "r": reason[:400]})
+    release_surface(connection, row)
     emit_event(connection, row["project_id"], "delivery.failed", actor, "deployment_run",
                row["id"], {"error": reason[:300], "governed": True})
 
@@ -673,6 +695,7 @@ def _finalize(connection: Connection, settings: Settings, *, row: dict, token: s
          "h": json.dumps(health, default=str),
          "sha": applied.get("deployed_sha") if status == "succeeded" else None,
          "rr": json.dumps([receipt_id] if receipt_id else []), "i": row["id"], "tok": token})
+    release_surface(connection, row)
     emit_event(connection, row["project_id"], f"delivery.{status}", actor, "deployment_run",
                row["id"], {"changeset_id": row["changeset_id"], "resource_receipt_id": receipt_id,
                            "governed": True, "url": outcome.get("url")})

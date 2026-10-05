@@ -267,6 +267,14 @@ def test_approval_applies_through_the_connector_and_writes_the_receipt(
     assert again.json()["status"] == "succeeded"
     assert len(hosted["host"].commands) == count
 
+    # The deploy is over, so its surface lease is too: the next person may plan.
+    with engine.begin() as connection:
+        held = connection.execute(
+            text("SELECT COUNT(*) FROM surface_ownerships WHERE surface_key = :s "
+                 "AND status = 'active' AND (expires_at IS NULL OR expires_at > now())"),
+            {"s": f"deployment_target:{hosted['target_id']}"}).scalar_one()
+    assert held == 0, "a finished deploy still holds its target's surface"
+
     # A redeploy plans a NEW run whose rollback is the run that just succeeded.
     redeploy = client.post(f"/v1/delivery/deployments/{plan['deployment_run_id']}/redeploy",
                            json={"actor": "ceo"})
@@ -317,6 +325,12 @@ def test_rejecting_leaves_the_host_untouched_and_releases_the_reservation(
     assert changeset["status"] == "rejected"
     assert reservation["status"] == "released"
     assert receipts == []
+    with engine.begin() as connection:
+        held = connection.execute(
+            text("SELECT COUNT(*) FROM surface_ownerships WHERE surface_key = :s "
+                 "AND status = 'active' AND (expires_at IS NULL OR expires_at > now())"),
+            {"s": f"deployment_target:{hosted['target_id']}"}).scalar_one()
+    assert held == 0, "a rejected deploy still holds its target's surface"
     with engine.begin() as connection:
         jobs = connection.execute(
             text("SELECT COUNT(*) FROM jobs WHERE kind = 'deployment.host_apply' "

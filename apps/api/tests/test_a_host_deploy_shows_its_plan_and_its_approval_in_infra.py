@@ -73,7 +73,7 @@ def test_a_healthy_host_deploy_links_its_app_and_a_rolled_back_one_says_why(
                        "WHERE id = 'dr_host'"))
         c.execute(text("UPDATE decisions SET status = 'approved' WHERE id = 'dec_host'"))
     d = _detail(client)
-    assert d["open_url"] == "203.0.113.10:8001"
+    assert d["open_url"] == "http://203.0.113.10:8001/"
     with engine.begin() as c:
         c.execute(text("UPDATE deployment_runs SET status = 'rolled_back', failure_reason = "
                        "'The health check failed after release; BOSS rolled the host back.' "
