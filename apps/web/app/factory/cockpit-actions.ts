@@ -102,3 +102,27 @@ export async function fetchBuildLog(projectId: string, runId: string): Promise<L
     return null;
   }
 }
+
+export type ModelCall = {
+  stage: string; role: string | null; engine: string; model: string; turns: number; usd: number | null;
+  latencyMs: number; retries: number; ok: boolean; error: string | null;
+};
+
+/** Every model call this build made (the old page's Steps table): stage, agent, model, turns,
+ *  spend and the error when one failed. A call that ran on a subscription has no price. */
+export async function fetchCalls(projectId: string, runId: string): Promise<ModelCall[] | null> {
+  try {
+    const r = await fetch(`${run(runId)}/activity?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const body = (await r.json()) as { calls?: Record<string, unknown>[] };
+    return (Array.isArray(body.calls) ? body.calls : []).map((c) => ({
+      stage: String(c.stage ?? ""), role: typeof c.role === "string" && c.role ? c.role : null,
+      engine: String(c.engine ?? ""), model: String(c.model ?? ""), turns: Number(c.turns ?? 0) || 0,
+      usd: c.included_in_subscription === true ? null : (Number(c.cost_usd_micros ?? 0) || 0) / 1e6,
+      latencyMs: Number(c.latency_ms ?? 0) || 0, retries: Number(c.retries ?? 0) || 0,
+      ok: c.ok !== false, error: typeof c.error === "string" && c.error ? c.error : null,
+    }));
+  } catch {
+    return null;
+  }
+}

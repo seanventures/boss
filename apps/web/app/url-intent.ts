@@ -59,6 +59,9 @@ export function searchForProject(search: string, runId: string | null): string {
   params.set("area", "code_tasks");
   if (runId) params.set("run", runId);
   else params.delete("run");
+  // A stale `build=` from an earlier visit would win over the `run=` just asked for (the
+  // Factory reads build= first): the place named here is the only one.
+  params.delete("build");
   for (const key of ONE_SHOT_PARAMS) params.delete(key);
   const rest = params.toString();
   return rest ? `?${rest}` : "";
