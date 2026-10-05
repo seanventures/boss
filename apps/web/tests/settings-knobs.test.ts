@@ -7,10 +7,10 @@ import { codeOnly } from "./_helpers/source";
  * ops action and a container restart. In practice nobody changed them and the defaults became
  * the product.
  */
-const KNOBS = codeOnly("app/settings-knobs-ui.tsx");
+// The knobs' Govern rows are app/govern/control-board.tsx now (activity-govern spec §4.4.3).
+const BOARD = codeOnly("app/govern/control-board.tsx");
 const SHELL = codeOnly("app/ConsoleShell.tsx");
 const STORE = codeOnly("../../engine/boss_engine/services/project_settings.py");
-const CSS = codeOnly("app/globals.css");
 
 describe("the area is called Govern", () => {
   it("is labelled for what it governs, not just spend", () => {
@@ -30,12 +30,12 @@ describe("a knob says where its value came from", () => {
   it("shows the source beside every knob", () => {
     // "runs three agents" and "nobody chose, so it runs the deployment default" are different
     // facts, and only one tells you whether turning this dial does anything.
-    expect(KNOBS).toContain('data-source={k.source}');
-    expect(CSS).toContain('.settings-source[data-source="project"]');
+    expect(BOARD).toContain('const SOURCE_WORD: Record<string, string> = { default: "Default", set: "Set here", pace: "From pace" };');
+    expect(BOARD).toContain('<span className="gv-source">');
   });
 
   it("offers a way back to the default", () => {
-    expect(KNOBS).toContain("Use the default");
+    expect(BOARD).toContain(">Use default</button>");
   });
 
   it("hands the knob back rather than storing the current default", () => {
@@ -65,6 +65,8 @@ describe("the knob is read by the thing it governs", () => {
     const GOV = codeOnly("../../engine/boss_engine/services/governed_code_task_service.py");
     expect(GOV).toContain('_effective_setting(');
     expect(GOV).toContain('"code_agent_max_concurrency"');
+    // ...through the one helper the Govern board also shows, so the two cannot disagree.
+    expect(GOV).toContain("effective_review_lanes(_lanes, panel_size=len(checks))");
   });
 
   it("falls back to the environment when the project has said nothing", () => {
@@ -298,9 +300,10 @@ describe("choosing a model per job", () => {
   });
 
   it("leaves Govern the numbers and nothing else", () => {
-    // Rendered in both places, a change made in one would look absent in the other.
-    const PAGE = codeOnly("app/page.tsx");
-    expect(PAGE).toContain('only="number"');
-    expect(codeOnly("app/settings-knobs-ui.tsx")).not.toContain("RoleTable");
+    // Rendered in both places, a change made in one would look absent in the other: Govern's
+    // board holds the four numbers, and no model picker.
+    expect(BOARD).toContain('"code_agent_max_concurrency", "code_agent_max_turns", "code_review_inrun_max_rounds"');
+    expect(BOARD).not.toContain("RoleTable");
+    expect(BOARD).not.toContain("code_agent_engine");
   });
 });
