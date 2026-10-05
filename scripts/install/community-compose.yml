@@ -81,6 +81,11 @@ services:
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
     image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     restart: unless-stopped
+    # AN INIT AS PID 1 (stability spec §4a.4). Agents, builds and previews are this
+    # container's children; without an init, uvicorn is PID 1 and never reaps the orphans they
+    # leave, so each one becomes a zombie holding a pid until the container restarts. `init`
+    # runs Docker's tini, which reaps them and forwards SIGTERM.
+    init: true
     depends_on:
       db:
         condition: service_healthy
@@ -215,6 +220,11 @@ services:
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
     image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     restart: unless-stopped
+    # AN INIT AS PID 1 (stability spec §4a.4). Agents, builds and previews are this
+    # container's children; without an init, uvicorn is PID 1 and never reaps the orphans they
+    # leave, so each one becomes a zombie holding a pid until the container restarts. `init`
+    # runs Docker's tini, which reaps them and forwards SIGTERM.
+    init: true
     depends_on:
       api:
         condition: service_healthy
@@ -324,6 +334,11 @@ services:
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
     image: boss-community-mcp-tools:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     restart: unless-stopped
+    # AN INIT AS PID 1 (stability spec §4a.4). Agents, builds and previews are this
+    # container's children; without an init, uvicorn is PID 1 and never reaps the orphans they
+    # leave, so each one becomes a zombie holding a pid until the container restarts. `init`
+    # runs Docker's tini, which reaps them and forwards SIGTERM.
+    init: true
     environment:
       BOSS_EDITION: community
       BOSS_DOC_RENDER_DIR: /var/lib/boss/artifacts/rendered

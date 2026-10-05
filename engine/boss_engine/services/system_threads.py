@@ -1,0 +1,36 @@
+"""The threads that keep the host healthy, started once by the API (stability spec §4).
+
+They run in the API because that is where builds run: the worker's loop blocks for the whole of
+a job and is blind while one runs, which is exactly when the host needs watching.
+
+* the ownership ledger (owned_process → owned_resources rows);
+* the stop watch: Stop ends the build's processes within seconds (stop_watch).
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+_log = logging.getLogger("boss.system_threads")
+
+
+def start_all(engine: Any, settings: Any) -> dict[str, bool]:
+    started: dict[str, bool] = {}
+    try:
+        from . import owned_process
+        from .resource_ledger import DbLedger
+
+        owned_process.set_ledger(DbLedger(engine))
+        started["ledger"] = True
+    except Exception:  # noqa: BLE001 — a backstop must never stop the API booting
+        _log.warning("ownership ledger not enabled", exc_info=True)
+        started["ledger"] = False
+    try:
+        from . import stop_watch
+
+        stop_watch.start(engine)
+        started["stop_watch"] = True
+    except Exception:  # noqa: BLE001
+        _log.warning("stop watch not started", exc_info=True)
+        started["stop_watch"] = False
+    return started

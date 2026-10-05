@@ -185,7 +185,7 @@ class TestEverySpawnPointGoesThroughIt:
             captured["env"] = kwargs["env"]
             return CompletedProcess(cmd, 0, stdout="ok", stderr="")
 
-        monkeypatch.setattr("boss_engine.services.cli_harness.subprocess.run", run)
+        monkeypatch.setattr("boss_engine.services.cli_harness.owned_process.run", run)
         assert _run_probe("codex", ("--version",))[0] == 0
         assert "DATABASE_URL" not in captured["env"]
         assert "OPENAI_API_KEY" not in captured["env"]

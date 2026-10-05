@@ -1458,6 +1458,12 @@ async def lifespan(_: FastAPI):
         start_local_supervisor()
     except Exception as exc:  # noqa: BLE001 — never block startup on supervision
         print(f"[lifespan] local supervisor not started: {exc}")
+    try:
+        # Ownership ledger, Stop-kills watch, reaper and system doctor (stability spec §4).
+        from boss_engine.services.system_threads import start_all as _start_system_threads
+        print(f"[lifespan] system threads: {_start_system_threads(engine, settings)}")
+    except Exception as exc:  # noqa: BLE001 — never block startup on host care
+        print(f"[lifespan] system threads not started: {exc}")
     _warm_read_paths()
     yield
 
