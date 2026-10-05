@@ -9724,7 +9724,9 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
                             or "Deployment policy blocked this run.")
     if not result.get("changeset_id"):
         raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
-    return {**result, **_planned_next_action(result)}
+    # `ref` opens the new plan in Infra's deploy drawer.
+    return {**result, **_planned_next_action(result),
+            "ref": f"delivery:{result.get('deployment_run_id')}"}
 
 
 @app.post("/v1/deployments/{deployment_run_id}/promote")

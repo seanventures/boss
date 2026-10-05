@@ -180,9 +180,11 @@ def build_infra_router(
                 raise _stack_error(exc)
             return {"ref": f"stack:{deployment['id']}", "kind": "stack",
                     "deployment": deployment}
-        # The per-app container deploy and the registry run stay paused in Community, as the
-        # console has always said (`Paused in Community`); now the server says it too.
-        _refuse_in_community()
+        # A registry run stays paused in Community, as the console has always said (`Paused in
+        # Community`). A deploy to an SSH host does not: it is planned as a governed ChangeSet
+        # and runs only once a person approves it (governed_host_deploy.py).
+        if not infra_view.governed_host(target):
+            _refuse_in_community()
         cost = _micros(body.expected_cost_usd)
         if route == "registry":
             from boss_engine.services.resource_plane import (
@@ -252,8 +254,9 @@ def build_infra_router(
 
         with begin(engine) as connection:
             run = connection.execute(
-                text("SELECT id, deployment_target_id FROM deployment_runs "
-                     "WHERE id = :i AND project_id = :p AND trigger IS NOT NULL"),
+                text("SELECT d.id, d.deployment_target_id, t.target_kind FROM deployment_runs d "
+                     "LEFT JOIN deployment_targets t ON t.id = d.deployment_target_id "
+                     "WHERE d.id = :i AND d.project_id = :p AND d.trigger IS NOT NULL"),
                 {"i": ident, "p": pid}).mappings().first()
             if not run:
                 raise HTTPException(status_code=404, detail="No such deploy in this project.")
@@ -265,7 +268,9 @@ def build_infra_router(
             raise HTTPException(status_code=409, detail=(
                 "Roll back is offered only on a target's newest deploy when it failed and an "
                 "earlier deploy succeeded."))
-        _refuse_in_community()
+        # A host rollback is a new governed plan of the earlier good run: approve, then apply.
+        if not infra_view.governed_host(dict(run)):
+            _refuse_in_community()
         result = redeploy(engine, settings(), source, actor=actor, execute=False)
         if result.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="No such deploy in this project.")

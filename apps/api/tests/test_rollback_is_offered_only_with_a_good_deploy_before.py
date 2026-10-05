@@ -4,9 +4,8 @@
   stack     the target's latest APPLIED deployment, finished healthy or failed, with an earlier
             healthy commit different from its own (stack_deploy.rollback_option, unchanged);
   delivery  the target's newest delivery run when it failed, with an earlier succeeded run
-            (rolled back by redeploying that run). Offered in every edition (operator decision
-            2026-10-04: it will go through the governed deploy path); in Community the route's
-            own guard still refuses the ungoverned redeploy, and says so;
+            (rolled back by redeploying that run, which for an SSH host is a new governed plan
+            a person approves — so Community offers it too);
   registry  never here (a registry run rolls back through its rollout).
 """
 from __future__ import annotations
@@ -57,13 +56,18 @@ def test_only_a_failed_newest_with_a_good_one_before(client, engine, world, monk
     assert to["stack:sd_ok"] is None and to["delivery:dr_live"] is None
 
 
-def test_community_offers_rollback_and_the_route_guard_refuses_it(client, world, monkeypatch):
+def test_community_rolls_a_host_back_through_a_governed_plan(client, world, monkeypatch):
     monkeypatch.setattr(api_main.settings, "boss_edition", "community")
     can = _can(client)
-    assert can["delivery:dr_down_fail"] is True, "not hidden by edition"
+    assert can["delivery:dr_down_fail"] is True
+    assert can["delivery:dr_live"] is False, "a success has nothing to roll back"
     assert can["stack:sd_failed"] is True
-    r = client.post("/v1/infra/deploys/delivery:dr_down_fail/rollback", json={"project_id": HOME, "actor": "ceo"})
-    assert r.status_code == 409 and "Community" in r.text
+    # The press plans a governed rollback; here its host (edge-2) is unreachable, so the plan is
+    # refused for THAT reason — never "Paused in Community".
+    r = client.post("/v1/infra/deploys/delivery:dr_down_fail/rollback",
+                    json={"project_id": HOME, "actor": "ceo"})
+    assert r.status_code == 409 and "not verified" in r.text, r.text
+    assert "Paused in Community" not in r.text
 
 
 def test_the_route_refuses_what_can_does_not_offer(client, world, monkeypatch):
@@ -102,18 +106,23 @@ def test_a_rollback_goes_to_the_engine_of_its_kind(client, engine, world, monkey
 
 
 def test_the_failed_deploy_card_rolls_back_through_the_same_rule(client, world, monkeypatch):
-    from boss_engine.services import stack_deploy
+    from boss_engine.services import delivery_pipeline, stack_deploy
 
     monkeypatch.setattr(api_main.settings, "boss_edition", "community")
     monkeypatch.setattr(stack_deploy, "rollback_stack_deploy",
                         lambda e, s, *, deployment_id, actor: {"id": "sd_card"})
+    planned = []
+    monkeypatch.setattr(
+        delivery_pipeline, "redeploy",
+        lambda e, s, run_id, **kw: planned.append((run_id, kw.get("execute"))) or {
+            "deployment_run_id": "dr_card", "status": "planned", "changeset_id": "cs_card"})
     fleet = client.get("/v1/infra/fleet", params={"project_id": HOME}).json()
     cards = {i["id"]: i for i in fleet["attention"]}
     stack_card = cards["infra:deploy_failed:t_stack"]
     assert [a["key"] for a in stack_card["answers"]] == ["rollback", "open"]
-    # The delivery card offers Roll back too (not hidden by edition); in Community the press is
-    # refused by the route's guard, below.
-    assert [a["key"] for a in cards["infra:deploy_failed:t_down"]["answers"]] == ["rollback", "open"]
+    # Community: a host's card rolls back too, as a governed plan to approve.
+    assert [a["key"] for a in cards["infra:deploy_failed:t_down"]["answers"]] == [
+        "rollback", "open"]
     r = client.post("/v1/infra/attention/act", json={
         "project_id": HOME, "actor": "ceo", "id": "infra:deploy_failed:t_stack",
         "option": "rollback"})
@@ -122,7 +131,9 @@ def test_the_failed_deploy_card_rolls_back_through_the_same_rule(client, world, 
     r = client.post("/v1/infra/attention/act", json={
         "project_id": HOME, "actor": "ceo", "id": "infra:deploy_failed:t_down",
         "option": "rollback"})
-    assert r.status_code == 409
+    assert r.status_code == 200, r.text
+    assert r.json()["ref"] == "delivery:dr_card"
+    assert planned == [("dr_down_ok", False)], "a rollback is planned, never executed directly"
     r = client.post("/v1/infra/attention/act", json={
         "project_id": HOME, "actor": "ceo", "id": "infra:deploy_failed:t_down", "option": "open"})
     assert r.json() == {"open": "?area=infra&view=deploys&deploy=delivery:dr_down_fail"}

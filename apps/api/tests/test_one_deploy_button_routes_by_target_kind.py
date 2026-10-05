@@ -1,7 +1,8 @@
 """One Deploy button, routed by target kind (spec §4.5, §6.5): a stack target plans a stack
 deployment, an app target a delivery deploy, a cloud-account target a registry run, each through
-its existing engine. Community refuses the per-app and registry deploys (`Paused in Community`,
-as the console has always said) and still deploys stacks. Dollars become micros server-side."""
+its existing engine. Community refuses the registry deploy (`Paused in Community`) and plans a
+stack or a per-app deploy to an SSH host, each through its governed approval
+(governed_host_deploy.py). Dollars become micros server-side."""
 from __future__ import annotations
 
 import pytest
@@ -66,19 +67,22 @@ def test_three_kinds_hit_three_engines(client, engines, monkeypatch):
     ]
 
 
-def test_community_refuses_app_and_registry_but_deploys_a_stack(client, engines, monkeypatch):
+def test_community_refuses_registry_but_plans_a_stack_and_a_host_deploy(
+        client, engines, monkeypatch):
     monkeypatch.setattr(api_main.settings, "boss_edition", "community")
-    for target in ("t_live", "t_cloud"):
-        r = _deploy(client, target)
-        assert r.status_code == 409, r.text
-        assert r.json()["detail"] == "Paused in Community"
+    r = _deploy(client, "t_cloud")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == "Paused in Community"
     r = _deploy(client, "t_stack")
     assert r.status_code == 200, r.text
-    assert engines == [("stack", "t_stack", "main", "ceo")]
+    # An SSH-host app plans a governed deploy: a ChangeSet and a decision, nothing runs yet.
+    r = _deploy(client, "t_live")
+    assert r.status_code == 200, r.text
+    assert r.json()["ref"] == "delivery:dr_app"
+    assert engines == [("stack", "t_stack", "main", "ceo"), ("delivery", "t_live", None, "ceo")]
     detail = client.get("/v1/infra/targets/t_live", params={"project_id": HOME}).json()
-    assert detail["disabled"] == {"deploy": "Paused in Community",
-                                  "auto_deploy": "Paused in Community"}
-    assert detail["can"]["deploy"] is False
+    assert detail["disabled"] == {"auto_deploy": "Paused in Community"}
+    assert detail["can"]["deploy"] is True
     stack = client.get("/v1/infra/targets/t_stack", params={"project_id": HOME}).json()
     assert stack["can"]["deploy"] is True and "deploy" not in stack["disabled"]
 

@@ -55,6 +55,8 @@ WORDS: dict[str, dict[str, Word]] = {
         "created": {"word": "Planned", "tone": "hollow"},
         "pending": {"word": "Planned", "tone": "hollow"},
         "awaiting_approval": {"word": "Needs you", "tone": "amber"},
+        # A governed host deploy approved and queued for its worker (governed_host_deploy.py).
+        "approved": {"word": "Starting", "tone": "accent"},
         "running": {"word": "Deploying", "tone": "accent"},
         "applying": {"word": "Deploying", "tone": "accent"},
         "deploying": {"word": "Deploying", "tone": "accent"},
@@ -475,8 +477,8 @@ LOG_TAIL_BYTES = 64 * 1024
 SUCCESS_STATES = ("healthy", "succeeded", "deployed", "completed")
 FAILED_STATES = ("failed", "blocked")
 WAITING_STATES = ("awaiting_approval", "planned", "created", "pending")
-ACTIVE_STATES = ("planned", "awaiting_approval", "running", "applying", "deploying", "building",
-                 "created", "pending")
+ACTIVE_STATES = ("planned", "awaiting_approval", "approved", "running", "applying", "deploying",
+                 "building", "created", "pending")
 TERMINAL_RUN_STATES = ("succeeded", "failed", "rolled_back", "deployed", "blocked")
 #: Target kinds that deploy through the per-app delivery connectors rather than a cloud account.
 LOCAL_KINDS = frozenset({"local", "local_process", "local_runner", "ssh", "container"})
@@ -1300,6 +1302,14 @@ def delivery_rollback_source(row_id: str, history: list[dict[str, Any]]) -> Opti
     return None
 
 
+def governed_host(r: dict[str, Any]) -> bool:
+    """A delivery deploy to an SSH host: it runs only through the governed plan → approve →
+    apply path (governed_host_deploy.py), so Community may redeploy and roll it back."""
+    from .governed_host_deploy import is_host_kind
+
+    return is_host_kind(r.get("target_kind"))
+
+
 def _deploy_can(r: dict[str, Any], *, can_write: bool, is_community: bool,
                 stack_hist: dict[str, list[dict[str, Any]]],
                 run_hist: dict[str, list[dict[str, Any]]]) -> dict[str, bool]:
@@ -1418,7 +1428,7 @@ def _union_query(where: str, tail: str) -> str:
         "         WHERE status = ANY(:success) "
         "         ORDER BY target_id, COALESCE(finished_at, started_at, created_at) DESC) "
         "SELECT u.*, COALESCE(u.finished_at, u.started_at, u.created_at) AS ts, "
-        "       u.kind || ':' || u.id AS ref, t.app_name, t.environment, "
+        "       u.kind || ':' || u.id AS ref, t.app_name, t.environment, t.target_kind, "
         "       COALESCE(u.host_id, t.host_id) AS hid, h.name AS host_name, "
         "       pa.account_label, dd.status AS decision_status, dd.approved_by "
         "FROM u LEFT JOIN deployment_targets t ON t.id = u.target_id "
@@ -1649,9 +1659,13 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
     else:
         full = connection.execute(text(
             "SELECT d.steps, d.failure_reason, d.health_check_results, d.changeset_id, "
-            "       t.public_url, t.domains FROM deployment_runs d "
+            "       d.release_packet, t.public_url, t.domains FROM deployment_runs d "
             "LEFT JOIN deployment_targets t ON t.id = d.deployment_target_id WHERE d.id = :i"),
             {"i": ident}).mappings().one()
+        # A governed host deploy carries the plan its approver saw (governed_host_deploy.py):
+        # what will happen, the secrets by NAME, the rollback and the cost.
+        review = (_json(full["release_packet"]) or {}).get("plan_review") or None
+        governed = isinstance(review, dict)
         steps_raw = _json(full["steps"]) or []
         logs = "\n".join(f"[{_step_title(s)}]\n{s.get('log')}" for s in steps_raw
                          if isinstance(s, dict) and s.get("log"))
@@ -1663,14 +1677,23 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
             "failure": ({"line": deploy_failure_line({**dict(full), "status": raw["status"],
                                                       "steps": steps_raw}),
                          "error": str(full["failure_reason"] or "")}
-                        if raw["status"] in FAILED_STATES else None),
-            "plan": None,
+                        if raw["status"] in FAILED_STATES
+                        or (governed and raw["status"] == "rolled_back") else None),
+            "plan": ({"steps": [*(review.get("steps") or []),
+                                *[f"Rollback: {x}" for x in (review.get("rollback") or [])[:1]],
+                                f"Cost: {usd((review.get('cost') or {}).get('expected_cost_usd_micros') or 0)}"
+                                " (your own host)"],
+                      "env_keys": [str(s.get("name")) for s in review.get("secret_refs") or []
+                                   if isinstance(s, dict) and s.get("name")],
+                      "health": None} if governed else None),
             "preflight": [],
             "log_tail": _tail(logs) if logs else None,
             "health_check_results": [h for h in (_json(full["health_check_results"]) or [])
                                      if isinstance(h, dict)],
             "promotion": _promotion(connection, ident) if kind == "registry" else None,
-            "open_url": full["public_url"] or ((_json(full["domains"]) or [None])[0]),
+            # A governed host deploy links its app only once the health check passed.
+            "open_url": (None if governed and raw["status"] not in SUCCESS_STATES else
+                         full["public_url"] or ((_json(full["domains"]) or [None])[0])),
             "changeset_id": full["changeset_id"],
         }
     body["live"] = row["state"] in ACTIVE_STATES
@@ -1807,7 +1830,8 @@ def target_detail(connection: Any, settings: Any, project_id: str, target_id: st
     is_community = community(settings)
     domains = _json(t.get("domains")) or []
     disabled: dict[str, str] = {}
-    if is_community and route != "stack":
+    # A host target deploys in Community too: through a plan a person approves.
+    if is_community and route != "stack" and not governed_host(dict(t)):
         disabled["deploy"] = PAUSED_IN_COMMUNITY
     if is_community:
         disabled["auto_deploy"] = PAUSED_IN_COMMUNITY
@@ -2522,7 +2546,7 @@ def _failed_deploys(connection: Any, settings: Any, project_id: str) -> list[dic
                    "WITH u AS (" + _UNION + ") "
                    "SELECT DISTINCT ON (u.target_id) u.*, u.kind || ':' || u.id AS ref, "
                    "       COALESCE(u.finished_at, u.started_at, u.created_at) AS ts, "
-                   "       t.app_name, t.environment "
+                   "       t.app_name, t.environment, t.target_kind "
                    "FROM u JOIN deployment_targets t ON t.id = u.target_id "
                    "WHERE t.status <> 'retired' "
                    "ORDER BY u.target_id, COALESCE(u.finished_at, u.started_at, u.created_at) DESC",
