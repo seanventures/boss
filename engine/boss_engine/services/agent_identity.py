@@ -319,9 +319,34 @@ def quietly(connection: Connection, fn: Any, *args: Any, **kwargs: Any) -> Any:
 # ── Birth ────────────────────────────────────────────────────────────────────────────────────
 
 
-def is_person(actor: Optional[str]) -> bool:
+#: The operator console's identity: the signed-in operator, a person by definition.
+CONSOLE_OPERATOR = "executive_console"
+
+
+def is_person(actor: Optional[str], connection: Optional[Connection] = None,
+              project_id: Optional[str] = None) -> bool:
+    """Is `actor` a person? Without a connection, only the name can be judged (not a system
+    actor, not `agent:…`). WITH one, the project decides: the console operator is a person; a
+    member is a person only when it is a human member AND no agent holds that role. `coo`,
+    `metatron`, `cto` or any role agent is never a person, whatever its member row says — an
+    agent's key acting under its role name must not count as somebody approving."""
     value = str(actor or "").strip()
-    return bool(value) and value not in _SYSTEM_ACTORS and not value.startswith("agent:")
+    if not value or value in _SYSTEM_ACTORS or value.startswith("agent:"):
+        return False
+    if connection is None or not project_id:
+        return True
+    if value == CONSOLE_OPERATOR:
+        return True
+    member = connection.execute(
+        text("SELECT member_type FROM project_members WHERE project_id = :p AND member_id = :m "
+             "AND COALESCE(status, 'active') = 'active'"),
+        {"p": project_id, "m": value}).mappings().first()
+    if not member or str(member["member_type"] or "") != "human":
+        return False
+    role_agent = connection.execute(
+        text("SELECT 1 FROM roles WHERE project_id = :p AND role_key = :r LIMIT 1"),
+        {"p": project_id, "r": value}).first()
+    return role_agent is None
 
 
 def _assign_identity(connection: Connection, project_id: str, row: dict[str, Any], *,

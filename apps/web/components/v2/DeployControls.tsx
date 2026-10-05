@@ -5,7 +5,9 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import { consoleHref } from "../../app/console-href";
-import { plannedDeploymentFrom, type PlannedDeployment } from "../../app/deploy-ui";
+import {
+  approvalsHref, plannedDeploymentFrom, type PlannedDeployment,
+} from "../../app/deploy-ui";
 import { forgetRunDeployment, loadRunDeployment } from "../../lib/run-deployments";
 import {
   controlsState,
@@ -241,7 +243,14 @@ export function DeployControls({
         </p>
       ) : null}
 
-      {plan ? (
+      {plan && plan.next_action === "approve_decision" ? (
+        <p className="v2-controls-note" data-testid="v2-controls-plan" role="status">
+          Plan ready: {plan.review?.app_name || appName} to {plan.review?.host || "its host"}
+          {plan.review?.environment ? ` · ${plan.review.environment}` : ""}. Nothing has
+          deployed. <a href={approvalsHref()}>Approve it in Approvals</a>; it then deploys,
+          and rolls back if the health check fails.
+        </p>
+      ) : plan ? (
         <p className="v2-controls-note" data-testid="v2-controls-plan" role="status">
           Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready.
           Next, open <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>,

@@ -93,7 +93,8 @@ class DeploymentConnector(Protocol):
         return {**target, "required_resources": resources}
 
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
-              plan: dict, ref: Optional[str] = None) -> dict: ...
+              plan: dict, ref: Optional[str] = None, *,
+              governance: Optional[dict] = None) -> dict: ...
 def _check_kind(check: dict) -> str:
     """What kind of probe this check describes.
 
@@ -156,7 +157,7 @@ def tcp_probe(host: str, port: int, *, timeout: float = 8.0) -> dict:
 
     def observe(self, target: dict, settings: Settings) -> dict: ...
     def rollback(self, engine, settings: Settings, target: dict,
-                 to: dict) -> dict: ...
+                 to: dict, *, governance: Optional[dict] = None) -> dict: ...
 
 
 def _app_port(target: dict, default: int = 8080) -> int:
@@ -771,28 +772,33 @@ class SSHContainerConnector:
         return {**target, "required_resources": resources}
 
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
-              plan: dict, ref: Optional[str] = None) -> dict:
+              plan: dict, ref: Optional[str] = None, *,
+              governance: Optional[dict] = None) -> dict:
         """Place the artifact. Refuses if validate() is unhappy — a plan built on a broken
         target is not worth executing, and finding out mid-transfer is worse.
 
         `ref` is the commit the DEPLOYMENT asked for and outranks the code task's branch. The
         two disagree as soon as the PR merges, and deploying the branch while recording the ref
         made the console report a build that was not the one running.
+
+        `governance` is the proof that this call IS the apply of an approved Resource Plane
+        ChangeSet (services/governed_host_deploy.py): its run, ChangeSet, receipt dedupe key and
+        the run's apply token. It is checked against the database before credentials or SSH
+        are touched. Without it, Community refuses: an ungoverned host write has no approval,
+        no reservation and no ResourceReceipt.
         """
-        # SSH/container deployments bypass Resource Plane ChangeSets: the planner returns
-        # no operation for these kinds, so there can be no policy approval or expected
-        # ResourceReceipt for the host write. Keep Community read/plan paths available, but
-        # stop every execution entrypoint here before credentials or SSH are touched.
-        if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
-            # The governed route EXISTS now — a stack target deployed from the app's own
-            # boss.deploy.yaml (services/stack_deploy.py) carries a ChangeSet, a reservation
-            # and a receipt. This ungoverned one-container path stays closed in Community.
+        from .governed_host_deploy import check_governed, ungoverned_refusal
+
+        community = str(getattr(settings, "boss_edition", "community")).strip().lower() \
+            in {"community", "oss", "local"}
+        if governance is not None:
+            try:
+                check_governed(engine, governance)
+            except PermissionError as refused:
+                return {"status": "blocked", "problems": [str(refused)]}
+        elif community:
             return {"status": "blocked", "problems": [
-                "Community SSH deployment is disabled until it uses an approved "
-                "Resource Plane ChangeSet, budget reservation, and ResourceReceipt. "
-                "Deploy through a stack target instead: add boss.deploy.yaml to the "
-                "repository and plan it with POST /v1/deployments/stack/plan."
-            ]}
+                ungoverned_refusal("Community SSH deployment")]}
         from ..db import begin
 
         with begin(engine) as c:
@@ -829,7 +835,8 @@ class SSHContainerConnector:
         result = deploy_ssh(engine, settings, run_id, host=host, user=user, ssh_port=port,
                             app_entry=_app_entry(target),
                             app_port=_app_port(target), name=target.get("app_name"), ref=ref,
-                            key_material=key_material, source=source)
+                            key_material=key_material, source=source,
+                            governance=governance)
         result["connector"] = self.kind
         return result
 
@@ -997,13 +1004,27 @@ class SSHContainerConnector:
         return {"healthy": healthy, "checks": results}
 
     # -- rollback ---------------------------------------------------------------
-    def rollback(self, engine, settings: Settings, target: dict, to: dict) -> dict:
+    def rollback(self, engine, settings: Settings, target: dict, to: dict, *,
+                 governance: Optional[dict] = None) -> dict:
         """Return to a point recorded BEFORE apply.
 
         Rollback points are never derived after the fact: when the change is what broke the
         system, anything computed from the current state is guesswork.
+
+        A rollback writes the host too, so it runs only inside the governed apply whose
+        release it is undoing (the same `governance` proof as apply()).
         """
         from ..db import begin
+        from .governed_host_deploy import check_governed, ungoverned_refusal
+
+        if governance is not None:
+            try:
+                check_governed(engine, governance)
+            except PermissionError as refused:
+                return {"status": "failed", "error": str(refused)}
+        elif str(getattr(settings, "boss_edition", "community")).strip().lower() \
+                in {"community", "oss", "local"}:
+            return {"status": "failed", "error": ungoverned_refusal("Community SSH rollback")}
         from .deploy_service import (
             _app_name, _discard_key_file, _materialise_key, _rollback_remote, _ssh_key_file,
         )

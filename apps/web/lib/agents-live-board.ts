@@ -51,7 +51,7 @@ export function teamOfAgent(roleKey: string): { key: string; label: string; tip?
  *  `system_health` is the machine: a system-doctor finding (or a Shepherd question) that needs
  *  a person's choice (stability spec §4d). */
 export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_override" | "budget_refused"
-  | "system_health";
+  | "system_health" | "infra";
 export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general";
 
 export type AttentionAction = {
@@ -91,6 +91,12 @@ export type AttentionItem = {
   /** system_health: the finding the options act on, and how bad it is. */
   findingId?: string;
   severity?: "info" | "warn" | "critical";
+  /** infra (infra-observability spec §2.2): `deploy_failed` | `app_down` | `host_unreachable`;
+   *  its answers are pressed through POST /v1/infra/attention/act. `open` is the console href of
+   *  its home (`?area=infra&view=deploys&deploy=…`); `area` says which screen it belongs to. */
+  infraKind?: string;
+  open?: string;
+  area?: string;
 };
 
 /** A failing quality gate, as a waiver sheet lists it. `waivable: false` → disabled + reason. */
@@ -246,6 +252,9 @@ export function parseAttention(w: unknown): AttentionItem {
     ...(opt(o.source) ? { source: opt(o.source) } : {}),
     ...(opt(o.finding_id) ? { findingId: opt(o.finding_id) } : {}),
     ...(opt(o.severity) ? { severity: opt(o.severity) as AttentionItem["severity"] } : {}),
+    ...(opt(o.infra_kind) ? { infraKind: opt(o.infra_kind) } : {}),
+    ...(opt(o.open) ? { open: opt(o.open) } : {}),
+    ...(opt(o.area) ? { area: opt(o.area) } : {}),
   };
 }
 

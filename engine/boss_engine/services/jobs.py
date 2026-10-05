@@ -1305,6 +1305,11 @@ class JobLeaseService:
             from .stack_deploy import fail_for_deadlettered_job
 
             fail_for_deadlettered_job(connection, dict(row), error, self.settings)
+        if row.get("kind") == "deployment.host_apply":
+            # Same for a governed host deployment: fail the run in words, close its ChangeSet.
+            from .governed_host_deploy import fail_for_deadlettered_job as fail_host_run
+
+            fail_host_run(connection, dict(row), error, self.settings)
         return {
             "job_id": job_id,
             "status": "deadlettered",

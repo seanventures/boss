@@ -50,9 +50,38 @@ DEGRADED_LATENCY_MS = 2000
 # Defined once and imported by everything that needs it — the sweep, the health view and the
 # observability scrape config all have to agree, and three copies of this predicate would be
 # three chances to disagree.
+#
+# TWO WAYS TO SHIP, ONE ANSWER. A registry/connector deploy is a `deployment_runs` row that
+# succeeded; a stack deploy (a VM, a manifest, an approval) is a `stack_deployments` row that
+# came up `healthy`. Counting only the first read every stack-deployed app as "Not deployed" in
+# Observability while Infra showed it live (operator decision 2026-10-04): Infra, Observability,
+# the sweep and the scrape config all read this one rule and `newest_deploys()`.
 DEPLOYED_PREDICATE = (
-    "EXISTS (SELECT 1 FROM deployment_runs d "
-    "        WHERE d.deployment_target_id = {alias}.id AND d.status = 'succeeded')")
+    "(EXISTS (SELECT 1 FROM deployment_runs d "
+    "         WHERE d.deployment_target_id = {alias}.id AND d.status IN ('succeeded', 'deployed'))"
+    " OR EXISTS (SELECT 1 FROM stack_deployments sd "
+    "            WHERE sd.target_id = {alias}.id AND sd.status = 'healthy'))")
+
+#: The newest thing that went live on each target, whichever way it shipped.
+_NEWEST_DEPLOYS_SQL = (
+    "SELECT DISTINCT ON (t) t, id, commit_ref, finished_at, kind FROM ("
+    "  SELECT deployment_target_id AS t, id, commit_ref, finished_at, 'registry' AS kind "
+    "  FROM deployment_runs WHERE deployment_target_id = ANY(:ids) "
+    "  AND status IN ('succeeded', 'deployed') "
+    "  UNION ALL "
+    "  SELECT target_id AS t, id, commit_sha AS commit_ref, "
+    "         COALESCE(finished_at, updated_at, created_at) AS finished_at, 'stack' AS kind "
+    "  FROM stack_deployments WHERE target_id = ANY(:ids) AND status = 'healthy'"
+    ") live ORDER BY t, finished_at DESC NULLS LAST")
+
+
+def newest_deploys(connection, target_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """target → {id, commit_ref, finished_at, kind} of its newest live deploy (registry run or
+    healthy stack deploy). A target missing from the answer has never been deployed."""
+    if not target_ids:
+        return {}
+    rows = connection.execute(sql(_NEWEST_DEPLOYS_SQL), {"ids": list(target_ids)}).mappings().all()
+    return {r["t"]: dict(r) for r in rows}
 
 
 # --------------------------------------------------------------------------- #
@@ -163,11 +192,52 @@ def incidents(samples_newest_first: list[dict]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # Probe: ask the destination, through the connector the deploy gate already uses.
 # --------------------------------------------------------------------------- #
+class StackHealthProbe:
+    """Health for a stack target: an HTTP GET of the address it serves on.
+
+    A stack target has no deployment connector — it is deployed by stack_deploy over SSH with
+    an approval — but once it is up it is just a web app at its public URL (or the URL its
+    newest healthy deploy opened). The probe never SSHes: it asks the app, from outside, the
+    way a visitor would. Kept out of the connector table on purpose, so deploy routing for
+    stack targets is unchanged.
+    """
+
+    kind = "stack"
+
+    def observe(self, target: dict, settings: Settings) -> dict:
+        import urllib.error
+        import urllib.request
+
+        url = str(target.get("public_url") or target.get("stack_open_url")
+                  or (target.get("domains") or [""])[0] or "").strip()
+        if not url:
+            return {"healthy": None, "reason": "no public URL declared"}
+        if not url.startswith(("http://", "https://")):
+            url = f"http://{url}"
+        check = {"kind": "http", "url": url, "expected": "2xx-3xx"}
+        try:
+            req = urllib.request.Request(url, method="GET", headers={"User-Agent": "boss-health"})
+            with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310 — the operator's URL
+                status = int(r.status)
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+        except Exception as exc:  # noqa: BLE001 — unreachable IS the measurement
+            return {"healthy": False, "checks": [{**check, "status": None, "error": str(exc)[:160]}]}
+        return {"healthy": 200 <= status < 400, "checks": [{**check, "status": status}]}
+
+
+#: A stack target's newest healthy deploy URL, for StackHealthProbe when no public_url is set.
+STACK_OPEN_URL_COLUMN = (
+    "(SELECT sd.open_url FROM stack_deployments sd WHERE sd.target_id = {alias}.id "
+    " AND sd.status = 'healthy' ORDER BY sd.created_at DESC LIMIT 1) AS stack_open_url")
+
+
 def probe(target: dict, settings: Settings) -> dict[str, Any]:
     """One health sample for one target. Never raises — unreachable IS the measurement."""
     from .deployment_connectors import connector_for
 
-    conn = connector_for(target)
+    conn = StackHealthProbe() if str(target.get("target_kind") or "").lower() == "stack" \
+        else connector_for(target)
     if conn is None:
         return {"ok": False, "status_code": None, "latency_ms": None,
                 "error": f"no connector for target_kind {target.get('target_kind')!r}"}
@@ -218,7 +288,8 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     probed, skipped, failed = 0, 0, 0
     try:
         with begin(engine) as c:
-            q = ("SELECT * FROM deployment_targets t WHERE t.status = 'active'"
+            q = ("SELECT t.*, " + STACK_OPEN_URL_COLUMN.format(alias="t")
+                 + " FROM deployment_targets t WHERE t.status = 'active'"
                  " AND " + DEPLOYED_PREDICATE.format(alias="t")
                  + (" AND t.project_id = :p" if project_id else ""))
             targets = [dict(r) for r in c.execute(
@@ -280,11 +351,7 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
         began = status_since(samples)
         latest = samples[0] if samples else None
         # Last deployment of this target — the "which build, deployed when" half of the answer.
-        dep = connection.execute(
-            sql("SELECT id, commit_ref, status, finished_at FROM deployment_runs "
-                "WHERE deployment_target_id = :t AND status = 'succeeded' "
-                "ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
-            {"t": t["id"]}).mappings().first()
+        dep = newest_deploys(connection, [t["id"]]).get(t["id"])
 
         # A target with no successful deployment is a DESTINATION, not a service. Reporting it
         # as "unknown" alongside running apps invites the reasonable question "why is this being

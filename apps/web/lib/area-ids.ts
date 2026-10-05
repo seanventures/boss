@@ -25,6 +25,7 @@ export const AREA_IDS = [
   "shepherd",
   "delivery",
   "monitoring",
+  "observability",
   "reliability",
   "ai-sre",
   "reports",

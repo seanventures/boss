@@ -29,7 +29,7 @@ const ORDER: RowKey[] = ["repository", "models", "try"];
 export function rowMode(view: SetupView, row: RowKey): RowMode {
   const step = nextStep(view);
   if (step === null) return "open";
-  if (row === "jobs" || row === "budget") return "collapsed";
+  if (row === "jobs" || row === "budget" || row === "capacity") return "collapsed";
   const at = ORDER.indexOf(step);
   const me = ORDER.indexOf(row);
   if (me === at) return "current";
@@ -45,7 +45,7 @@ export function stepNumber(view: SetupView, row: RowKey): number | null {
 
 export type SetupParams = { focus: RowKey | null; add: string | null; source: string | null };
 
-const ROWS: RowKey[] = ["repository", "models", "jobs", "budget", "try"];
+const ROWS: RowKey[] = ["repository", "models", "capacity", "jobs", "budget", "try"];
 
 /** `?area=setup[&focus=…][&add=<provider>][&source=<id>]`, plus the legacy `step=` names. */
 export function readParams(search: string): SetupParams {

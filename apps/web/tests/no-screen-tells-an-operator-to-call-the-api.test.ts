@@ -80,15 +80,26 @@ describe("operator copy names actions and screens, not endpoints", () => {
 });
 
 describe("the Observability screen", () => {
-  const SUITE = codeOnly("app/observability-suite-ui.tsx");
+  // The suite panel (observability-suite-ui.tsx) retired into Observability › Sources and its
+  // Add tools sheet; the two promises the console walk extracted from it hold there.
+  const SOURCES = codeOnly("app/observability/sources.tsx");
+  const TOOLS = codeOnly("app/observability/add-tools-sheet.tsx");
 
   it("shows no GitHub-star counts as if they were measurements", () => {
     // "~55k GitHub stars (CNCF graduated)" sat under each component on an operations screen.
-    expect(SUITE).not.toContain("c.stars_note");
+    for (const src of [SOURCES, TOOLS]) {
+      expect(src).not.toContain("stars_note");
+      expect(src).not.toMatch(/GitHub stars/i);
+    }
   });
 
   it("says 'nothing is deployed' once", () => {
     // Three near-identical "not deployed" lines stacked on one screen (console walk, 2026-10-02).
-    expect(SUITE).toContain('gap.id === "empty_observability"');
+    // Now the stack's state word says it, the gaps say what is missing, and an empty zone says
+    // only that it is empty — none of them repeats an instruction to deploy the stack.
+    const empties = [...SOURCES.matchAll(/<Empty>([^<]*)<\/Empty>/g)].map((m) => m[1]);
+    expect(empties.length).toBeGreaterThanOrEqual(3);
+    for (const e of empties) expect(e, e).not.toMatch(/deploy|stack/i);
+    expect(SOURCES).not.toContain("No telemetry sources registered yet");
   });
 });

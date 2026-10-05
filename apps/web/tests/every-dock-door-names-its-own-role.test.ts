@@ -60,9 +60,21 @@ export function doorCallsIn(src: string): string[] {
   return out;
 }
 
+/** Every .ts/.tsx under app/, as a path relative to it. RECURSIVE: this read app/'s top level
+ *  only, so when the doors moved into app/infra and app/observability (the Infra and
+ *  Observability redesign) they would have left the rule's sight while it kept passing. */
+function appFiles(dir = APP, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) out.push(...appFiles(join(dir, e.name), `${prefix}${e.name}/`));
+    else if (e.name.endsWith(".tsx") || e.name.endsWith(".ts")) out.push(`${prefix}${e.name}`);
+  }
+  return out;
+}
+
 function doorCalls(): Array<[string, string]> {
   const out: Array<[string, string]> = [];
-  for (const f of readdirSync(APP).filter((x) => x.endsWith(".tsx") || x.endsWith(".ts"))) {
+  for (const f of appFiles()) {
     const src = readFileSync(join(APP, f), "utf8");
     // Calls only — not the import line.
     for (const call of doorCallsIn(src)) if (call.startsWith("openDockAbout({")) out.push([f, call]);
@@ -79,6 +91,9 @@ describe("every door into the dock names its own role", () => {
   it("reads a door that closes with })}> — the one that hung the scan", () => {
     const files = doorCalls().map(([f]) => f);
     expect(files).toContain("boss-agent-home.tsx");
+    // And the doors that live in sub-folders are read too.
+    expect(files).toContain("infra/fleet.tsx");
+    expect(files).toContain("observability/pulse.tsx");
     const [call] = doorCallsIn(
       'x <b onClick={() => openDockAbout({ subject: s, question: "why (it) failed?", role: null })}>');
     expect(call.endsWith('role: null })')).toBe(true);
@@ -104,8 +119,10 @@ describe("every door into the dock names its own role", () => {
 
   it("the Deployment Manager addresses the Deployment Manager", () => {
     // The instance that was reported. Named explicitly so the fix cannot be quietly undone
-    // by a refactor that still satisfies the counting rule above.
-    const src = readFileSync(join(APP, "deployment-manager-ui.tsx"), "utf8");
-    expect(src).toContain('role: "Deployment Manager"');
+    // by a refactor that still satisfies the counting rule above. The card retired into Infra;
+    // its door is Infra's Ask BOSS (app/infra/fleet.tsx InfraAskBoss), about the machines.
+    const doors = doorCalls().filter(([f]) => f === "infra/fleet.tsx").map(([, call]) => call);
+    expect(doors.length).toBeGreaterThanOrEqual(1);
+    for (const call of doors) expect(call).toContain('role: "Deployment Manager"');
   });
 });

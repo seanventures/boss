@@ -12,6 +12,13 @@ from . import owned_process
 from .github_adapter import IntegrationConfigurationError
 
 
+def _host_key_options() -> list[str]:
+    """The host's pinned key under a governed deploy (host_key_pin); accept-new otherwise."""
+    from .host_key_pin import _PIN, ssh_options
+
+    return ssh_options() if _PIN.get() is not None else ["-o", "StrictHostKeyChecking=accept-new"]
+
+
 @dataclass
 class WorkloadDeployResult:
     host: str
@@ -120,8 +127,7 @@ class SSHHostAdapter:
                 str(port),
                 "-o",
                 "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
+                *_host_key_options(),
                 "-o",
                 "ConnectTimeout=15",
                 f"{user}@{host}",
@@ -366,7 +372,7 @@ class SSHHostAdapter:
             argv = [
                 "ssh", "-i", key_path, "-p", str(int(port)),
                 "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=accept-new",
+                *_host_key_options(),
                 "-o", "ConnectTimeout=15",
                 "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
                 f"{user}@{host}", command,

@@ -40,27 +40,13 @@ def get_system_health() -> dict[str, Any]:
     degradation level, and admission ("Builds at once: 2 (auto) · 1 queued, waiting for
     0.6 GB"). The worker reads `admission.builds_at_once.value` to size its lease slots."""
     from boss_engine.services import admission
+    from boss_engine.services.obs_view import health_body
 
     cap = admission.sample()
     with begin(get_engine()) as connection:
         state = admission.snapshot(connection, cap=cap)
-    scope_words = {"machine": "This server", "docker_vm": "Docker Desktop VM, not your Mac",
-                   "container": "This BOSS container's memory cap"}
-    level = int(state.get("level") or 0)
-    return {
-        "scope": cap.scope, "scope_label": scope_words.get(cap.scope, cap.scope),
-        "level": level, "level_label": admission.LEVEL_WORDS.get(level, str(level)),
-        "gauges": {
-            "memory_total_mb": round(cap.total_mb), "memory_available_mb": round(cap.available_mb),
-            "memory_reserved_for_boss_mb": round(cap.reserve_mb),
-            "memory_pressure_full_avg10": cap.psi_full_avg10,
-            "memory_pressure_full_avg60": cap.psi_full_avg60,
-            "swap_used_mb": round(cap.swap_used_mb), "disk_free_gb": cap.disk_free_gb,
-            "disk_used_pct": cap.disk_used_pct, "load_per_core": cap.load_per_core,
-            "cores": cap.cores,
-        },
-        "admission": state,
-    }
+    # One derivation: Observability › System shows this same body (obs_view.system).
+    return health_body(cap, state)
 
 
 @router.put("/v1/projects/{project_id}/settings/builds_at_once")

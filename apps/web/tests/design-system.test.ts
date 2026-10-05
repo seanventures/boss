@@ -13,10 +13,11 @@ describe("BOSS mission-control design system", () => {
     resolve(__dirname, "../app/mission-operations-ui.tsx"),
     "utf8",
   );
-  const providerConfiguration = readFileSync(
-    resolve(__dirname, "../app/provider-configuration-ui.tsx"),
-    "utf8",
-  );
+  // The cloud-account workspace (provider-configuration-ui.tsx) retired into Infra › Cloud.
+  const cloud = readFileSync(resolve(__dirname, "../app/infra/cloud.tsx"), "utf8");
+  const cloudSpend = readFileSync(resolve(__dirname, "../app/infra/cloud-spend.tsx"), "utf8");
+  const cloudCss = readFileSync(resolve(__dirname, "../app/infra/cloud.css"), "utf8");
+  const infraCss = readFileSync(resolve(__dirname, "../app/infra/infra.css"), "utf8");
 
   it("defines the approved foundations", () => {
     expect(css).toContain("--void: #090d17");
@@ -146,12 +147,14 @@ describe("BOSS mission-control design system", () => {
     expect(css).toContain(".ar-head");
     expect(css).toContain(".dq-row");
     expect(css).toContain(".mission-task-footer");
-    expect(providerConfiguration).toContain('className="provider-subnav"');
-    expect(providerConfiguration).toContain('className="provider-table"');
-    expect(providerConfiguration).toContain('className="provider-drawer"');
-    expect(providerConfiguration).toContain('className="provider-cost-chart"');
-    expect(css).toContain(".provider-suite-summary");
-    expect(css).toContain(".provider-drawer");
+    // The cloud workspace's four views — sub-navigation, table, drawer, cost chart — are now
+    // Infra › Cloud's, drawn from the Infra kit and its own stylesheet (provider-* retired).
+    expect(cloud).toContain('aria-label="Cloud views"');
+    expect(cloudSpend).toContain('className="inf-table"');
+    expect(cloudSpend).toContain("<Drawer");
+    expect(cloudSpend).toContain('className="cloud-bar"');
+    expect(infraCss).toContain(".inf-table");
+    expect(cloudCss).toContain(".cloud-bar");
   });
 
   it("keeps the Command Center bound to live workflow runs, not a static showcase", () => {

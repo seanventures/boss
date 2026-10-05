@@ -1,6 +1,8 @@
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { fleetFixture } from "./_helpers/infra-fixtures";
+import { byTestId, mountFleet, unmountInfra } from "./_helpers/infra-render";
 
 /**
  * BOSS-344 — CI/CD + Monitoring empty-state honesty.
@@ -17,291 +19,69 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
-vi.mock("../app/actions", () => ({
-  getDeliveryPipelineAction: vi.fn(async () => null),
-  getDeliveryDefaultsAction: vi.fn(async () => ({ owner: "example-org", repo: "boss-sandbox" })),
-  listReposAction: vi.fn(async () => ({ repos: [] })),
-  listRepoAppsAction: vi.fn(async () => ({ apps: [] })),
-  listRefsAction: vi.fn(async () => ({ branches: [] })),
-  deployTargetAction: vi.fn(async () => ({})),
-  deployObservabilityAction: vi.fn(async () => ({})),
-  getDeploymentAction: vi.fn(async () => ({})),
-  redeployAction: vi.fn(async () => ({})),
-  putSecretAction: vi.fn(async () => ({})),
-  generateKeypairAction: vi.fn(async () => ({})),
-  verifySecretAction: vi.fn(async () => ({})),
-  bindSecretAction: vi.fn(async () => ({})),
-  createTargetAction: vi.fn(async () => ({})),
-  bootstrapTargetAction: vi.fn(async () => ({})),
-  preflightTargetAction: vi.fn(async () => ({})),
-  setAutoDeployAction: vi.fn(async () => ({})),
-  updateTargetAction: vi.fn(async () => ({})),
-  purgeTargetAction: vi.fn(async () => ({})),
-  reactivateTargetAction: vi.fn(async () => ({})),
-  teardownTargetAction: vi.fn(async () => ({})),
-}));
+/**
+ * Infra's half, rewritten for the Fleet (infra-observability spec §4.14, §9.2): the old Infra
+ * h2 sentences and the DeliveryPipeline / DeploymentHealth empties are gone; what an operator
+ * sees on first paint is now the Fleet's own empty states, rendered from the view.
+ */
+const emptyFleet = (): Record<string, unknown> => ({
+  ...fleetFixture(), counts: { ready: 0, setting_up: 0, unreachable: 0, apps: 0, previews_live: 0, needs_you: 0 },
+  attention: [], racks: [], unplaced: [], retired_count: 0,
+});
 
-const {
-  DeliveryPipeline,
-  DeploymentHealth,
-  isHealthUnconfigured,
-  SandboxDeployFlagNotice,
-} = await import("../app/delivery-ui");
-const {
-  isObservabilityUnconfigured,
-  MonitoringPanel,
-} = await import("../app/delivery-manage");
-const { MonitoringArea } = await import("../app/monitoring-ui");
+describe("Infra empty-state honesty (BOSS-344)", () => {
+  afterEach(() => unmountInfra());
 
-const emptyPipeline = {
-  project_id: "boss-dogfood",
-  stages: [],
-  targets: [],
-  configured: false,
-  sandbox_deploy_enabled: false,
-  sandbox_merge_enabled: false,
-};
-
-const emptyHealth = {
-  project_id: "boss-dogfood",
-  targets: [] as never[],
-  summary: {
-    up: 0,
-    degraded: 0,
-    down: 0,
-    unknown: 0,
-    not_deployed: 0,
-    overall: "not_deployed",
-    total: 0,
-  },
-};
-
-const emptyObservability = {
-  deployed: false,
-  grafana_url: "",
-  apps: [] as never[],
-  status: { running: null as boolean | null },
-};
-
-function html(node: React.ReactElement) {
-  return renderToStaticMarkup(node);
-}
-
-describe("CI/CD empty-state honesty (BOSS-344)", () => {
-  it("isHealthUnconfigured is true for zero targets / total 0", () => {
-    expect(isHealthUnconfigured(emptyHealth)).toBe(true);
-    expect(isHealthUnconfigured({
-      ...emptyHealth,
-      targets: [{
-        target_id: "dt_1",
-        app_name: "demo",
-        environment: "staging",
-        url: null,
-        status: "not_deployed",
-        status_since: null,
-        uptime_24h: null,
-        uptime_7d: null,
-        avg_ms: null,
-        p95_ms: null,
-        last_checked: null,
-        last_latency_ms: null,
-        last_error: null,
-        sample_count: 0,
-        series: [],
-        incidents: [],
-        deployed_commit: null,
-        deployed_at: null,
-        deployment_run_id: null,
-      }],
-      summary: { ...emptyHealth.summary, total: 1, not_deployed: 1 },
-    })).toBe(false);
+  it("no machine and no hardware place: one line and Add host, no fleet chrome", async () => {
+    await mountFleet("view=fleet", { routes: [{ match: /^\/v1\/infra\/fleet$/, etag: true, reply: emptyFleet }] });
+    expect(byTestId("infra-fleet-empty")?.textContent).toContain("No machines yet");
+    expect(byTestId("inf-empty-add-host")?.textContent).toBe("Add host");
+    expect(document.querySelector('[data-testid="inf-rack"], [data-testid="inf-rack-this"], [data-testid="inf-unplaced"]')).toBeNull();
+    // P-I-08: the old h2 sentences are gone.
+    expect(document.body.textContent).not.toContain("Nothing deploys yet");
+    expect(document.body.textContent).not.toContain("governed deployments");
   });
 
-  it("renders a setup empty state when no targets — no Deploy wizard chrome", () => {
-    const markup = html(
-      <DeliveryPipeline
-        initial={emptyPipeline}
-        secrets={{ project_id: "boss-dogfood", secrets: [] }}
-        deployments={{ deployments: [] }}
-      />,
-    );
-    expect(markup).toContain('data-empty-state="no-targets"');
-    // Renamed from "No deployment targets": the empty state now leads with the FLEET, because
-    // a target names the host it deploys to — so the honest first step is registering a
-    // machine, not registering an app.
-    expect(markup).toContain("Nothing deploys yet");
-    expect(markup).toContain("Register deployment target");
-    // The per-app container path is still paused in Community; the governed stack path is the
-    // way in, and the empty state names it rather than saying deployment is impossible.
-    expect(markup).toContain("stays paused in Community");
-    expect(markup).toContain("boss.deploy.yaml");
-    // THE DEADLOCK THIS GUARDS: the Hosts wizard was added only to the configured branch, so
-    // it appeared once a deployment target already existed — unreachable on a fresh install,
-    // which is exactly when it is needed. An empty state must contain the thing that ends it.
-    expect(markup).toContain('data-testid="fleet-panel"');
-    expect(markup).toContain("Add a VM");
-    // Deploy wizard is a live-fleet control; must not appear when nothing is registered.
-    expect(markup).not.toContain("Plan a deployment");
-    expect(markup).not.toContain("Deployment plans and history");
-    // Fail-closed sandbox flag is surfaced honestly.
-    expect(markup).toContain("BOSS_ENABLE_SANDBOX_DEPLOY=false");
-    expect(markup).toContain('data-testid="sandbox-deploy-disabled"');
+  it("a target never deployed says so, and its strip is gaps, never green", async () => {
+    await mountFleet("view=fleet");
+    const tile = document.querySelector<HTMLElement>('[data-testid="inf-unplaced"] [data-testid="inf-tile"]')!;
+    expect(tile.textContent).toContain("Never deployed");
+    expect(tile.querySelector('[data-testid="inf-tile-state"]')?.textContent).toBe("Not deployed");
+    expect(tile.querySelectorAll('.obs-cell[data-k="gap"]').length).toBe(32);
+    expect(tile.querySelector('.obs-cell[data-k="ok"]')).toBeNull();
   });
 
-  it("keeps Community host execution gated when a target is configured", () => {
-    const configured = {
-          project_id: "boss-dogfood",
-          stages: [],
-          targets: [{
-            id: "dt_1",
-            app_name: "demo",
-            environment: "staging",
-            repo: "example-org/boss-sandbox",
-            target_kind: "ssh",
-            target_ref: "ubuntu@10.0.0.1",
-            status: "active",
-          }],
-          configured: true,
-          sandbox_deploy_enabled: true,
-    };
-    const markup = html(
-      <DeliveryPipeline
-        initial={configured}
-        secrets={{ project_id: "boss-dogfood", secrets: [] }}
-        deployments={{ deployments: [] }}
-      />,
-    );
-    expect(markup).toContain('data-empty-state="configured"');
-    expect(markup).not.toContain("Deploy an app");
-    expect(markup).toContain("Community host deployment is paused");
-    expect(markup).toContain('title="Community host deployment awaits approval');
-    // Renamed from "Deployment targets": the section answers "which app runs where", and a
-    // host is now a first-class thing an app is pointed AT. The assertion still guards the
-    // same property — the deploy machinery appears once a target exists.
-    expect(markup).toContain("Apps and where they deploy");
-    expect(markup).toContain("demo");
-    expect(markup).not.toContain('data-testid="sandbox-deploy-disabled"');
-
-    const enterpriseMarkup = html(
-      <DeliveryPipeline
-        initial={configured}
-        secrets={{ project_id: "boss-dogfood", secrets: [] }}
-        deployments={{ deployments: [] }}
-        communityEdition={false}
-      />,
-    );
-    expect(enterpriseMarkup).toContain("Plan a deployment");
+  it("Community keeps deploy-on-merge and the registry deploy paused, with the reason", async () => {
+    await mountFleet("view=fleet&target=t_cloud", { variant: "community" });
+    const deploy = byTestId("inf-target-deploy") as HTMLButtonElement;
+    expect(deploy.disabled).toBe(true);
+    expect(deploy.getAttribute("title")).toBe("Paused in Community");
+    const auto = byTestId("inf-target-auto") as HTMLInputElement;
+    expect(auto.disabled).toBe(true);
+    expect(auto.closest("label")?.getAttribute("title")).toBe("Paused in Community");
   });
 
-  it("SandboxDeployFlagNotice only renders when the flag is known false", () => {
-    expect(html(<SandboxDeployFlagNotice enabled={false} />)).toContain(
-      "BOSS_ENABLE_SANDBOX_DEPLOY=false",
-    );
-    expect(html(<SandboxDeployFlagNotice enabled={true} />)).toBe("");
-    expect(html(<SandboxDeployFlagNotice />)).toBe("");
-  });
-
-  it("DeploymentHealth empty state has no fake fleet status chrome", () => {
-    const markup = html(<DeploymentHealth health={emptyHealth} />);
-    expect(markup).toContain('data-empty-state="no-health-targets"');
-    expect(markup).toContain("Nothing is registered to monitor");
-    // Must not paint "● not_deployed" / "0 up · 0 degraded · 0 down" as if a fleet exists.
-    expect(markup).not.toContain("● not_deployed");
-    expect(markup).not.toContain("0 up");
-    expect(markup).not.toContain("uptime 24h");
+  it("Sandbox deploys off is drawn only when the flag is known off", async () => {
+    await mountFleet("view=fleet");
+    expect(byTestId("inf-sandbox-off")).not.toBeNull();
+    unmountInfra();
+    await mountFleet("view=fleet", { routes: [{ match: /^\/v1\/infra\/fleet$/, etag: true, reply: () => {
+      const f = fleetFixture();
+      return { ...f, preconditions: { ...(f.preconditions as Record<string, unknown>), sandbox_deploys_enabled: true } };
+    } }] });
+    expect(byTestId("infra-fleet")).not.toBeNull();
+    expect(byTestId("inf-sandbox-off")).toBeNull();
   });
 });
 
-describe("Monitoring empty-state honesty (BOSS-344)", () => {
-  it("isObservabilityUnconfigured is true when stack is not deployed and apps empty", () => {
-    expect(isObservabilityUnconfigured(emptyObservability)).toBe(true);
-    expect(isObservabilityUnconfigured({
-      ...emptyObservability,
-      deployed: true,
-      grafana_url: "http://10.0.0.1:3000",
-    })).toBe(false);
-    expect(isObservabilityUnconfigured({
-      ...emptyObservability,
-      apps: [{
-        app: "demo",
-        environment: "staging",
-        port: 8080,
-        dashboard_url: null,
-        scrape_url: "http://10.0.0.1:8080",
-      }],
-    })).toBe(false);
-  });
-
-  it("MonitoringPanel empty state has no stack-running chrome or deploy machinery", () => {
-    const markup = html(
-      <MonitoringPanel initial={emptyObservability} hostTargetId={undefined} />,
-    );
-    expect(markup).toContain('data-empty-state="stack-not-deployed"');
-    expect(markup).toContain("observability stack is not deployed");
-    expect(markup).toContain("No active deployment target");
-    expect(markup).not.toContain("stack running");
-    expect(markup).not.toContain("stack not running");
-    expect(markup).not.toContain("Deploy monitoring stack");
-    expect(markup).not.toContain("Open Grafana");
-  });
-
-  it("MonitoringArea collapses dual empties into one setup card", () => {
-    const markup = html(
-      <MonitoringArea
-        health={emptyHealth}
-        observability={emptyObservability}
-        hostTargetId={undefined}
-      />,
-    );
-    expect(markup).toContain('data-empty-state="monitoring-unconfigured"');
-    expect(markup).toContain("Monitoring is not set up yet");
-    // The area is called Infra now; "Start in the CI/CD area" named a screen that no longer
-    // exists by that name (console walk, 2026-10-02).
-    expect(markup).toContain("Start in Infra");
-    expect(markup).not.toContain("CI/CD");
-    // Nested fleet chrome must not leak through the combined empty.
-    expect(markup).not.toContain("● not_deployed");
-    expect(markup).not.toContain("Deploy monitoring stack");
-    expect(markup).not.toContain("Open Grafana");
-  });
-
-  it("MonitoringArea keeps separate panels when only one side is empty", () => {
-    const markup = html(
-      <MonitoringArea
-        health={{
-          ...emptyHealth,
-          targets: [{
-            target_id: "dt_1",
-            app_name: "demo",
-            environment: "staging",
-            url: "demo.example",
-            status: "up",
-            status_since: "2026-08-11T00:00:00Z",
-            uptime_24h: 100,
-            uptime_7d: 100,
-            avg_ms: 12,
-            p95_ms: 20,
-            last_checked: "2026-08-11T01:00:00Z",
-            last_latency_ms: 11,
-            last_error: null,
-            sample_count: 4,
-            series: [],
-            incidents: [],
-            deployed_commit: "abc123",
-            deployed_at: "2026-08-11T00:30:00Z",
-            deployment_run_id: "deprun_1",
-          }],
-          summary: {
-            up: 1, degraded: 0, down: 0, unknown: 0, not_deployed: 0,
-            overall: "up", total: 1,
-          },
-        }}
-        observability={emptyObservability}
-        hostTargetId="dt_1"
-      />,
-    );
-    expect(markup).toContain('data-empty-state="monitoring-active"');
-    expect(markup).toContain("demo");
-    expect(markup).toContain("not deployed");
-  });
-});
+/**
+ * Monitoring's half. The MonitoringPanel / MonitoringArea empties (delivery-manage.tsx,
+ * monitoring-ui.tsx) retired into Observability, and the same first-paint promises are held there:
+ *   - nothing deployed is ONE line with the way to Infra, no fleet chrome —
+ *     observability-apps-is-one-pulse "nothing deployed: one line and the way to Infra"
+ *   - a stack that is not deployed and has no machine offers no deploy machinery —
+ *     sources-tab-deploys-checks-and-recommends "no machine: Needs a machine, Add host, and
+ *     nothing to deploy"
+ *   - one side empty, the other not: an app scraped but not health-checked is still named —
+ *     observability-apps-is-one-pulse "an app scraped but not health-checked is named, not dropped"
+ */

@@ -22,6 +22,7 @@ import {
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
+import { CapacityRow } from "./capacity-row";
 import { JobsRow } from "./jobs-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
@@ -40,7 +41,7 @@ function currentParams(): SetupParams {
   try { return readParams(window.location.search); } catch { return { focus: null, add: null, source: null }; }
 }
 
-export function SetupBoard({ projectId, initialView = null }: {
+export function SetupBoard({ projectId, actor, initialView = null }: {
   projectId: string; actor?: string; initialView?: SetupView | null;
 }) {
   const [rawView, setView] = useState<SetupView | null>(initialView);
@@ -204,6 +205,7 @@ export function SetupBoard({ projectId, initialView = null }: {
                    step={stepNumber(view, "models")} focused={focus === "models"}
                    add={params.add} source={params.source}
                    onAddHandled={() => setParams((p) => ({ ...p, add: null }))} />
+        <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
         <JobsRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
         <BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} />
         <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={stepNumber(view, "try")}

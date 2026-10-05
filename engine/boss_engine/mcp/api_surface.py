@@ -70,6 +70,8 @@ _EXCLUDED_EXACT = {
     # The worker hands its leased deployment.stack_apply job to the API, which applies the
     # approved ChangeSet. Only the job's live lease may start it: a worker protocol.
     "/v1/deployments/stack/{deployment_id}/execute": "stack_deploy_worker_lease_protocol",
+    # The same for an approved host deployment (services/governed_host_deploy.py).
+    "/v1/delivery/deployments/{deployment_run_id}/apply": "host_deploy_worker_lease_protocol",
     "/v1/github/code-sync-runs/{sync_run_id}/apply": "github_worker_lease_protocol",
     "/v1/github/resolution-plans/{plan_id}/apply": "github_worker_lease_protocol",
     "/v1/github/merge-authorizations/{authorization_id}/apply": "github_worker_lease_protocol",
