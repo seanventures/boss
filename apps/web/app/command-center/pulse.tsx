@@ -76,6 +76,17 @@ export function Heatmap({ pulse }: { pulse: Pulse }) {
   );
 }
 
+/** The same move said once (re-check): one line per who · what · which. */
+export function uniqueEvents(events: PulseEvent[]): PulseEvent[] {
+  const seen = new Set<string>();
+  return events.filter((e) => {
+    const k = `${e.roleKey}|${e.verb}|${e.subject.trim().toLowerCase()}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 const VERDICT: Record<string, string> = { approved: " — approved", changes_asked: " — asked for changes" };
 
 function Event({ e, now, orgId }: { e: PulseEvent; now: number | null; orgId?: string | null }) {
@@ -193,7 +204,7 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
           <div className="cc-quiet-line"><span>Nothing yet</span></div>
         ) : (
           <div className="cc-feed" data-testid="cc-feed">
-            {pulse.latest.slice(0, 7).map((e) => <Event key={`${e.runId}-${e.at}`} e={e} now={now} orgId={orgId} />)}
+            {uniqueEvents(pulse.latest).slice(0, 7).map((e, i) => <Event key={`${i}-${e.verb}-${e.subject}`} e={e} now={now} orgId={orgId} />)}
           </div>
         )}
       </div>

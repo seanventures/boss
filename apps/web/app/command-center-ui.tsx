@@ -211,7 +211,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const attention = useMemo(() => (view?.attention ?? []).filter((a) => !gone.has(a.id)), [view, gone]);
   const { lead, olderStopped } = needsOrder(view, attention);
   const waiting = useMemo(() => waitingOn(attention), [attention]);
-  const working = useMemo(() => workingOn(view?.missions ?? []), [view]);
+  const working = useMemo(() => new Set<string>(), []);
   const refresh = useCallback(() => { polled.refresh(); apps.refresh(); }, [polled, apps]);
 
   const startWork = useCallback(() => {
@@ -224,8 +224,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const lastWork = view?.pulse?.lastActAt ?? view?.today.lastWorkAt ?? null;
   // WORKING NOW while anything moves (independent test: "last work 22d ago" beside a run
   // that was working): open work on any agent, or a live run that is not stalled.
-  const workingNow = !!view && (view.counts.working > 0 || working.size > 0
-    || view.missions.some((m) => m.state === "running"));
+  const workingNow = !!view && (view.counts.working > 0 || view.missions.some((m) => m.state === "running"));
   const lastWorkWord = workingNow ? "working now" : ago(lastWork, now) ? `last work ${ago(lastWork, now)} ago` : "";
   const firstRun = !!view && !view.today.everRan;
   const appRows = apps.data;
@@ -294,7 +293,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       {fresh ? <FirstBuild onStart={startWork} /> : null}
       <TemplatesShelf />
       {fresh ? nowCards : null}
-      <AppsShelf apps={appRows} orgId={orgId} />
+      <AppsShelf apps={appRows} attention={attention} orgId={orgId} />
       {fresh ? null : (
         <PulseRow pulse={view?.pulse ?? null} week={view?.week ?? null} prsOpen={proof ? proof.prs : null}
                   now={now} orgId={orgId} />

@@ -963,6 +963,20 @@ def force(connection: Any, project_id: str, attention: list[AttentionItem]
     return teams, agents
 
 
+def mission_workers(missions: list[Mapping[str, Any]]) -> set[str]:
+    """Agents on the current hop of a running mission, when that hop is working. Pure."""
+    out: set[str] = set()
+    for m in missions:
+        if m.get("state") != "running":
+            continue
+        for h in reversed(m.get("hops") or []):
+            if h.get("role_key"):
+                if h.get("state") in ("working", "thinking", "speaking"):
+                    out.add(str(h["role_key"]))
+                break
+    return out
+
+
 def _agent(key: str, name: str, callsign: Any, team: str, here: Optional[Mapping[str, Any]],
            stuck: Optional[Mapping[str, Any]], lifecycle: str) -> BoardAgent:
     state = str((here or {}).get("state") or "idle")
@@ -1046,6 +1060,17 @@ def compose(connection: Any, settings: Any, project_id: str, *,
             logging.getLogger("boss.agents_live_board").warning(
                 "could not read the building builds", exc_info=True)
     teams, agents = force(connection, project_id, attention)
+    # ONE SOURCE FOR "WORKING" (independent re-check R6): an agent on a running mission's
+    # current working hop is working, whatever its presence row says this tick — so the team
+    # tiles, the pill and In flight count the same agents.
+    on_step = mission_workers(rows)
+    for a in agents:
+        if a["role_key"] in on_step and a["state"] in ("idle", "done"):
+            a["state"] = "working"
+    for t in teams:
+        members = set(t["members"])
+        t["working"] = sum(1 for a in agents if a["role_key"] in members
+                           and a["state"] in ("working", "in_panel"))
     board: LiveBoard = {
         "project_id": project_id,
         "etag": "",

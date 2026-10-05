@@ -576,6 +576,14 @@ def group_old_findings(attention: list[Mapping[str, Any]], now: datetime,
     }
 
 
+def subscription_connected(basics: Optional[Mapping[str, Any]]) -> bool:
+    """A working subscription model (Claude Code, Codex …) among Repo and models' rows."""
+    from . import setup_view
+
+    return any(str(m.get("kind") or "") == "subscription" and setup_view.model_working(m)
+               for m in (basics or {}).get("models") or [])
+
+
 def old_questions(connection: Any, project_id: str, now: datetime) -> tuple[int, Optional[datetime]]:
     """How many of the project's open Shepherd questions are older than OLD_FINDING, and the
     oldest — every row, not the page the cards read."""
@@ -991,6 +999,8 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "budget_timezone": str(budget_full.get("budget_timezone") or "UTC"),
         "day": {"cap_usd_micros": int(day_period.get("cap_usd_micros") or 0),
                 "actual_usd_micros": int(day_period.get("actual_usd_micros") or 0)},
+        # "Subscription calls free" only when a subscription is connected and working.
+        "subscription": subscription_connected(setup_out.get("basics")),
     }
 
     # REFUSED AT THE DOOR: work started while the money already spent leaves no room is refused

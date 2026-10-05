@@ -6605,7 +6605,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   flex: 0 1 auto; min-width: 0;
 }
 .askboss-wf-label {
-  font-size: 0.7rem; color: var(--faint); white-space: nowrap;
+  /* AA on the composer (re-check): --faint read 3.9:1 at this size. */
+  font-size: 0.7rem; color: var(--muted); white-space: nowrap;
   letter-spacing: .02em;
 }
 .askboss-wf-select {
@@ -8700,10 +8701,14 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   .bx-topbar > .bx-topbar-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 }
 @media (max-width: 1100px) {
-  .bx-topbar .ag-pill .ag-face-stack, .bx-topbar .ag-pill > :first-child:not(:last-child) { display: none; }
+  .bx-topbar .ag-pill .ag-stack { display: none; }
   .bx-live-status { font-size: 0; gap: 0; }
   .bx-org-chip { max-width: 90px; }
 }
 @media (max-width: 860px) {
   .bx-org-chip { display: none; }
+}
+
+@media (max-width: 560px) {
+  .ag-pill[data-n]::before { content: attr(data-n); font-weight: 700; font-variant-numeric: tabular-nums; }
 }

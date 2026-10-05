@@ -168,7 +168,7 @@ describe("needs you", () => {
     const many = [1, 2, 3, 4, 5].map((i) => gate({ id: `dec_${i}`, decision_id: `dec_${i}` }));
     await mount(page(V(view({ attention: many }))));
     expect($$('[data-testid="cc-need"]').length).toBe(3);
-    expect(text('[data-testid="cc-att-more"]')).toBe("+2 more");
+    expect(text('[data-testid="cc-att-more"]')).toBe("Show all 5");
     await click(tid("cc-att-more"));
     expect($$('[data-testid="cc-need"]').length).toBe(5);
   });
@@ -388,7 +388,7 @@ describe("re-test (independent tester)", () => {
   it("the Needs you number is decisions; other rows are said apart", async () => {
     await mount(page(V(view({ attention: [gate(), failed()] }))));
     expect(text('[data-testid="cc2-kpi-needs-you"]')).toBe("1");
-    expect(text('[data-testid="cc-needs-more"]')).toBe("+1 more");
+    expect(text('[data-testid="cc-needs-more"]')).toBe("+1 other");
     expect(text('[data-testid="cc-stopped-chip"]')).toBe("1 stopped");
   });
 
@@ -400,12 +400,50 @@ describe("re-test (independent tester)", () => {
     expect(text('[data-testid="cc-week"] summary')).toBe("This week: 38 finished · 4 failed");
   });
 
-  it("a face glows while its run's step is working, even before presence says so", async () => {
-    const w = view({ missions: [mission({ hops: [{ act_id: "a", role_key: "staff_engineer", state: "working", label: "Build", edge_label: "x" }] })] });
-    await mount(page(V(w)));
+  it("a face glows from the board's one working state (the server folds in live runs)", async () => {
+    await mount(page(V(view())));
+    // software_engineer is `working` on the board: it glows and moves; idle faces are still.
     expect($('[data-testid="cc-tile-engineering"] .cc-face-in[data-working="true"]')).not.toBeNull();
-    expect($$('[data-testid="cc-tile-engineering"] .cc-face[data-live="true"]').length).toBe(2);
+    expect($$('[data-testid="cc-tile-engineering"] .cc-face[data-live="true"]').length).toBe(1);
     expect($('[data-testid="cc-tile-leadership"] .cc-face[data-live="true"]')).toBeNull();
+  });
+
+  it("the shelf follows Needs you: a merge waiting on you anywhere in the app's lineage", async () => {
+    const merge = gate({ id: "dec_m", decision_kind: "pull_request", title: "Merge PR #207?", role_key: "software_engineer",
+                         run: null, build: { run_id: "crun_b_old", app: "Feature-Flag Expiry Tracker", where: "PR open", failing: [],
+                                             retryable: false, pr_url: "https://github.com/a/b/pull/207" } });
+    const w = apps() as { apps: Wire[] };
+    w.apps[1] = { ...w.apps[1], run_ids: ["crun_b", "crun_b_old"] };
+    stubFetch(w);
+    await mount(page(V(view({ attention: [merge] }))));
+    const card = $$('[data-testid="cc-app"]').find((c) => c.textContent?.includes("Feature-Flag"))!;
+    expect(card.querySelector(".cc-app-state")?.textContent).toBe("Merge waiting on you");
+    expect(card.getAttribute("href")).toContain("build=crun_b_old");
+  });
+
+  it("subscription calls are called free only when a subscription is connected", async () => {
+    await mount(page(V(view({ budget: { ...(view().budget as Wire), subscription: false } }))));
+    expect(text(".cc-gauge-text > span")).toBe("This month");
+  });
+
+  it("done today says its failures even when nothing finished", async () => {
+    await mount(page(V(view({ today: { ...(view().today as Wire), runs_finished: 0, runs_failed: 2 } }))));
+    expect(text('[data-testid="cc-kpi-done-today"]')).toBe("0 done today · 2 failed");
+  });
+
+  it("the latest feed says one move once", async () => {
+    const { uniqueEvents } = await import("../app/command-center/pulse");
+    const e = { roleKey: "qa", verb: "checked", subject: "X", verdict: null, at: "a", runId: "r", kind: "build" as const, url: null };
+    expect(uniqueEvents([e, { ...e, at: "b" }, { ...e, subject: "Y" }]).length).toBe(2);
+  });
+
+  it("a face's card sits in the popover layer, and Talk opens the dock", async () => {
+    await mount(page(V(view())));
+    await click(tid("cc-face"));
+    expect(tid("cc-facecard")?.parentElement).toBe(document.body);
+    await click(tid("cc-face-talk"));
+    expect(window.location.search).toContain("dock_role_key=");
+    expect(window.location.search).toContain("agent=general");
   });
 
   it("a system that needs a look is a sentence, never `HOST: DISK`", async () => {
@@ -492,5 +530,14 @@ describe("the composer's replies name what started, never an id", () => {
     expect(src).not.toMatch(/Run \\`\$\{runId\}\\`/);
     expect(src).not.toMatch(/Discovery run \\`\$\{/);
     expect(src).toContain("namedRun(directive)} run ↗");
+  });
+});
+
+describe("a refusal's fix keeps the org (shared readiness panel)", () => {
+  it("adds the console's org to the API's landing, once", async () => {
+    const { withOrg } = await import("../app/workflow-readiness-ui");
+    expect(withOrg("/?area=setup&focus=repository", "org_1")).toBe("/?org=org_1&area=setup&focus=repository");
+    expect(withOrg("/?org=x&area=setup", "org_1")).toBe("/?org=x&area=setup");
+    expect(withOrg("/?area=setup", null)).toBe("/?area=setup");
   });
 });

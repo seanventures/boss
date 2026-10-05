@@ -125,6 +125,8 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   return (
     <div className="ag-pill-wrap" ref={box} data-paused={consoleLive ? undefined : "true"}>
       <button type="button" className="ag-pill" data-testid="ag-presence-pill" data-needs={needs > 0 || undefined}
+              // THE COUNT, ALWAYS (re-check R3): where the words do not fit, CSS draws this.
+              data-n={needs || workingCount}
               title="Agents working now" aria-expanded={open} aria-haspopup="dialog"
               onClick={() => setOpen((x) => !x)}>
         {faceKeys.length ? <AgFaceStack roleKeys={faceKeys} size={20} max={4} states={states} decorative /> : null}

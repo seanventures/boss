@@ -116,6 +116,7 @@ export function view(over: Wire = {}): Wire {
       state: "green", period: "month", cap_usd_micros: 200_000_000, actual_usd_micros: 84_000_000,
       utilization_ratio: 0.42, resets_at_label: "00:00 UTC on 1 November", budget_timezone: "UTC",
       day: { cap_usd_micros: 0, actual_usd_micros: 4_120_000 },
+      subscription: true,
     },
     host: { show: false },
     systems: systems(),
