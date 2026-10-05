@@ -160,7 +160,10 @@
   background: none; color: var(--ink-soft); font: inherit; font-size: 0.78rem; cursor: pointer;
 }
 .obs-legend-item[aria-pressed="true"] { background: var(--surface-3); color: var(--ink); }
-.obs-legend-item[data-dim="1"] { opacity: 0.5; }
+/* Dimmed by the swatch, never by fading the name: an opacity on the text took the other models'
+   names to 3.7:1 in the model drawer. The name drops to --muted, which still meets AA. */
+.obs-legend-item[data-dim="1"] { color: var(--muted); }
+.obs-legend-item[data-dim="1"] .obs-swatch { opacity: 0.35; }
 .obs-legend-item:disabled { cursor: default; }
 .obs-swatch { flex: none; width: 10px; height: 10px; border-radius: 3px; background: var(--viz-other); }
 .obs-swatch[data-slot="1"] { background: var(--viz-1); }

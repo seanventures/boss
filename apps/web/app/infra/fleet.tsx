@@ -86,7 +86,9 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
   }, [f, query]);
 
   if (!f) {
-    return fleet.loading || !fleet.error ? <Skeleton testId="infra-fleet-loading" /> : <Empty testId="infra-fleet-unreachable">Nothing to show</Empty>;
+    // Unreachable: Infra's header already says "Can't reach BOSS"; "Nothing to show" under it was
+    // a second, false claim (an empty fleet nobody had read).
+    return fleet.loading || !fleet.error ? <Skeleton testId="infra-fleet-loading" /> : null;
   }
 
   const canAct = (a: StageAction): boolean => {
