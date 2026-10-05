@@ -14,7 +14,7 @@ export const LOG_FORWARD = [
   "project_id", "q", "kind", "status", "actor", "entity_type", "level", "exclude_level",
   "hide_verbose", "source", "exclude_source", "run_id", "workflow_run_id", "step_id", "agent",
   "exclude_agent", "service", "act", "subject", "since", "until", "range", "sort", "order",
-  "limit", "offset", "cursor", "after", "total", "summary", "id", "before", "format",
+  "limit", "offset", "cursor", "after", "total", "summary", "id", "before", "format", "prefix",
 ] as const;
 
 export async function forwardLogRead(req: Request, path: string): Promise<Response> {

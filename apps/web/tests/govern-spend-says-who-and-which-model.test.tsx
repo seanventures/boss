@@ -77,7 +77,9 @@ describe("the Spend tab", () => {
 
 describe("helpers", () => {
   it.each([["claude-sonnet-4-5-20250929", "Claude Sonnet 4.5"], ["claude-3-5-haiku-latest", "Claude 3.5 Haiku"],
-           ["claude-opus", "Claude Opus"], ["gpt-4o-mini", "GPT-4o-mini"], ["repo_scan", "Repo scan"]])("%s → %s", (id, name) => {
+           ["claude-opus", "Claude Opus"], ["gpt-4o-mini", "GPT-4o-mini"], ["repo_scan", "Repo scan"],
+           ["setup-openai", "OpenAI"], ["Setup-openai", "OpenAI"], ["setup-anthropic-2", "Anthropic 2"],
+           ["setup-custom", "Custom model"], ["openai", "OpenAI"]])("%s → %s", (id, name) => {
     expect(modelName(id)).toBe(name);
   });
   it("tip14 keeps at most 14 words", () => {

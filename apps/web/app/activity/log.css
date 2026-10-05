@@ -58,6 +58,10 @@
 
 /* Views. */
 .lx-views { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+/* In a scroll strip nothing may shrink (Lines / By run collapsed to 2px at 390): the strip
+   scrolls instead. Only the spacer gives way. */
+.lx-views > * { flex-shrink: 0; }
+.lx-views > .lx-spacer { flex: 1 0 0; min-width: 0; }
 .lx-view {
   flex: none; min-height: 28px; padding: 0 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2);
   color: var(--muted); font: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap;

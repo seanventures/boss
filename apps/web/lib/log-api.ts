@@ -59,6 +59,18 @@ export function fetchFacets(projectId: string, params: Record<string, string | n
   return read("/api/activity/facets", { project_id: projectId, ...params }, mapActivityFacets, opts);
 }
 
+export type KindCount = { kind: string; n: number };
+
+/** `kind:` completion by prefix, over the window and the current filter (not its kind). */
+export function fetchKinds(projectId: string, params: Record<string, string | number | undefined>, prefix: string,
+                           opts: { signal?: AbortSignal } = {}): Promise<Got<KindCount[]>> {
+  const { kind: _kind, ...rest } = params;
+  return read("/api/activity/kinds", { project_id: projectId, ...rest, prefix, limit: 20 }, (b) => {
+    const body = b as { kinds?: { kind?: unknown; n?: unknown }[] };
+    return (body.kinds ?? []).map((k) => ({ kind: String(k.kind ?? ""), n: Number(k.n ?? 0) })).filter((k) => k.kind);
+  }, opts);
+}
+
 export type LogRow = { item: ActivityLogItem; labels: Record<string, string> };
 
 export function fetchRow(projectId: string, id: string): Promise<Got<LogRow | null>> {

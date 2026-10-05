@@ -244,6 +244,28 @@ def activity_facets(
     return _json(body, etag)
 
 
+@router.get("/v1/activity/kinds")
+def activity_kinds(
+    filters: _FilterParams = Depends(),
+    project_id: Optional[str] = Query(default=None),
+    prefix: str = Query(default="", max_length=120),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> Response:
+    """`kind:` completion by prefix over the window, counted in SQL (kind:deploy →
+    deploy.production), whatever the facets' top 40 hold."""
+    project_id = _resolve_project_id(project_id)
+    service = _service_class()
+    values = {k: v for k, v in filters.values.items() if k != "kind"}
+    with begin(get_engine()) as connection:
+        _require_reader(connection, project_id)
+        try:
+            body = service.kinds(connection, project_id, prefix=prefix, limit=limit, **values)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from fastapi.encoders import jsonable_encoder
+    return JSONResponse(content=jsonable_encoder(body), headers={"Cache-Control": "no-cache"})
+
+
 @router.get("/v1/activity/row/{row_id}")
 def activity_row(row_id: str, project_id: Optional[str] = Query(default=None)) -> dict[str, Any]:
     """One line by id (a permalink's target). 404 when it is gone or another project's."""
