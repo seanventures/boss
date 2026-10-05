@@ -13671,6 +13671,9 @@ def create_deployment_endpoint(payload: FirstDeployBody = Body(...)) -> dict:
 def console_command_center_endpoint(project_id: str) -> dict:
     """The Command Center: what is running, what needs the operator, how recent runs went.
 
+    DEPRECATED: the console reads GET /v1/command-center/view since the bridge redesign; this is
+    kept (and tested) as the reference shape for one release, then removed.
+
     Read in workflow runs, not tasks — a run started by Build creates no task, so the old
     task-based landing page never showed the thing an operator had just started. See
     boss_engine.services.command_center.
@@ -13682,6 +13685,31 @@ def console_command_center_endpoint(project_id: str) -> dict:
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
         return command_center.build(connection, settings, project_id)
+
+
+@app.get("/v1/command-center/view")
+def command_center_view_endpoint(project_id: str, request: Request, response: Response,
+                                 tz: Optional[str] = None, viewer: Optional[str] = None):
+    """The Command Center in one read (command-center spec §6.2): Agents › Live's board plus
+    today by hour, the LAST 24H strip, the week, the budget, the host and seven system dots.
+    ETag'd: the page polls it every 10s while it is visible and Live, and an unchanged view is
+    a 304. `tz` is the viewer's zone (validated; unknown → UTC, and the body says which).
+    Composition only — see boss_engine.services.command_center_view."""
+    from boss_engine.services import command_center_view
+
+    project_id = _acts_reader(project_id)
+    started = time.perf_counter()
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        body = command_center_view.build(connection, settings, project_id, tz=tz,
+                                         viewer=_acts_viewer(viewer))
+    response.headers["Server-Timing"] = f"view;dur={(time.perf_counter() - started) * 1000:.1f}"
+    if request.headers.get("if-none-match") == body["etag"]:
+        return Response(status_code=304, headers={"ETag": body["etag"],
+                                                  "Server-Timing": response.headers["Server-Timing"]})
+    response.headers["ETag"] = body["etag"]
+    response.headers["Cache-Control"] = "no-cache"
+    return jsonable_encoder(body)
 
 
 @app.get("/v1/console/v2/overview")

@@ -28,7 +28,7 @@ import { openPlan } from "../../lib/converse-doors";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFace } from "./agent-face";
 import { edgeSummary, teamOfRole, type EdgeFocus } from "./org-edge-panel";
-import { OpenItemLink, consoleHref, liveFirst, liveState, nameOf, runHref, teamLabel } from "./org-shared";
+import { StuckItem, WaitItem, consoleHref, liveFirst, liveState, nameOf, runHref, teamLabel } from "./org-shared";
 import { shownTeams } from "./org-teams";
 import { curvePath, lastRunReplay } from "./team-swarm";
 import { matches, reducedMotion, teamHue } from "./team-zones";
@@ -747,11 +747,7 @@ function StuckNow({ board, teams }: { board: OrgBoard; teams: OrgTeam[] }) {
             {waits.map((w) => (
               <li key={w.actId} data-testid={`ag-flow-stuck-wait-${w.actId}`}>
                 <AgFace roleKey={w.roleKey} size={24} decorative />
-                <span className="ag-orgteam-who" data-user-text>{nameOf(w.roleKey)}</span>
-                <span className="ag-flow-waits" data-state="waiting">{openStatusWord(w.status)}</span>
-                <span title={`Open since ${w.since ? new Date(w.since).toLocaleString() : "unknown"}`}>{ageWords(w.since)}</span>
-                <span className="ag-trunc" title={w.label} data-user-text>{w.label}</span>
-                <OpenItemLink item={w} />
+                <WaitItem item={w} />
               </li>
             ))}
           </ul>
@@ -761,11 +757,9 @@ function StuckNow({ board, teams }: { board: OrgBoard; teams: OrgTeam[] }) {
             {failed.map((f) => (
               <li key={f.actId} data-testid={`ag-flow-stuck-failed-${f.actId}`}>
                 <AgFace roleKey={f.roleKey} size={24} decorative />
-                <span className="ag-orgteam-who" data-user-text>{nameOf(f.roleKey)}</span>
-                <span className="ag-flow-waits" data-state="failed">Failed ✕</span>
-                <span title={f.at ? new Date(f.at).toLocaleString() : undefined}>{ageWords(f.at)} ago</span>
-                <span className="ag-trunc" title={f.label} data-user-text>{f.label}</span>
-                {f.runId ? <a className="ag-link" href={runHref(f.runId)}>Open run ↗</a> : null}
+                <StuckItem roleKey={f.roleKey} age={`${ageWords(f.at)} ago`} ageTip={f.at ? new Date(f.at).toLocaleString() : undefined}
+                           state="failed" word="Failed ✕" label={f.label}
+                           action={f.runId ? <a className="ag-link" href={runHref(f.runId)}>Open run ↗</a> : null} />
               </li>
             ))}
           </ul>

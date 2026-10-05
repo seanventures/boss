@@ -26,6 +26,7 @@ import { AgFace, AgFaceStack, AgState } from "./agent-face";
 import { RunFace } from "./run-face";
 import { presenceLine } from "./roster-zones";
 import { ago, decisionPatch, localTime, navigate, useNow } from "./live-util";
+import { useConsoleLive } from "../../lib/console-live";
 
 export type CrewRow = { roleKey: string; name: string; zone: ReturnType<typeof zoneOf>; line: string;
                         state: import("../../lib/agent-world-types").AvatarState; since?: string };
@@ -74,6 +75,8 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   const polled = useLivePresence(given ? "" : projectId);
   const polledAttention = useAttention(given ? "" : projectId);
   const live = given ?? polled;
+  // PAUSED MEANS STILL: the console's Live/Paused chip stops the pill's halos too (motion rule).
+  const consoleLive = useConsoleLive();
   const attention = given ? (givenAttention ?? null) : polledAttention;
   const v = useIdentityVersion(); // the crew is named at render: repaint when identities load
   const now = useNow(30_000);
@@ -120,7 +123,7 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   for (const i of attention?.items ?? []) if (i.roleKey) states.set(i.roleKey, "needs_you");
   const crewRows = attention ? working : rows;
   return (
-    <div className="ag-pill-wrap" ref={box}>
+    <div className="ag-pill-wrap" ref={box} data-paused={consoleLive ? undefined : "true"}>
       <button type="button" className="ag-pill" data-testid="ag-presence-pill" data-needs={needs > 0 || undefined}
               title="Agents working now" aria-expanded={open} aria-haspopup="dialog"
               onClick={() => setOpen((x) => !x)}>

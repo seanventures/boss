@@ -6651,3 +6651,17 @@ CREATE TABLE IF NOT EXISTS agent_instruction_bodies (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, sha256)
 );
+
+-- THE COMMAND CENTER'S READS (command-center spec §6.2), each served by an index rather than a
+-- scan. The view polls every 10s while it is looked at, beside the pill (4s) and Live (8s).
+-- Hand-offs started in the last hour (the Floor's edges):
+CREATE INDEX IF NOT EXISTS agent_acts_started ON agent_acts(project_id, started_at DESC);
+-- Work finished by hour, yesterday and today (Today's line):
+CREATE INDEX IF NOT EXISTS agent_acts_ended ON agent_acts(project_id, ended_at DESC) WHERE ended_at IS NOT NULL;
+-- Every run touched in the week, counted exactly (the week bars, the day strip):
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_updated ON workflow_runs(project_id, updated_at DESC);
+-- The Queue dot: what is waiting, and since when.
+CREATE INDEX IF NOT EXISTS idx_jobs_project_open ON jobs(project_id, created_at) WHERE status IN ('queued','leased');
+-- command_center.read reads decisions by project and status with no LIMIT (the count has to
+-- equal the inbox's), and nothing served it: the pill, Live and this view all hit it.
+CREATE INDEX IF NOT EXISTS idx_decisions_project_status ON decisions(project_id, status);

@@ -27,7 +27,7 @@ import { openRoom } from "../../lib/converse-doors";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import type { OrgActions } from "./org-actions";
 import {
-  MenuPop, OpenItemLink, consoleHref, kitHref, liveFirst, liveState, nameOf, teamLabel, teamTip, workflowHref,
+  MenuPop, WaitItem, consoleHref, kitHref, liveFirst, liveState, nameOf, teamLabel, teamTip, workflowHref,
 } from "./org-shared";
 import { Badges, Face, matches, nextInGrid, teamHue, type ZoneMember } from "./team-zones";
 
@@ -300,7 +300,7 @@ function TeamCard(p: CardProps) {
             <div className="ag-orgteam-row" data-row="models">
               <dt>Models</dt>
               <dd title={`Models this team called.${team.configuredModels.length ? ` Configured: ${team.configuredModels.join(", ")}.` : ""}`}>
-                {team.models.slice(0, 2).map((m) => <span key={m.model}><span data-user-text>{m.model}</span> {m.calls}</span>)}
+                {team.models.slice(0, 2).map((m) => <span key={m.model} title={`${m.model} ${m.calls}`} data-user-text>{m.model} {m.calls}</span>)}
                 {team.models.length > 2 ? <span className="ag-team-more">+{team.models.length - 2}</span> : null}
               </dd>
             </div>
@@ -322,13 +322,7 @@ function WaitingRow({ team }: { team: OrgTeam }) {
       <dt>Waiting</dt>
       <dd className="ag-orgteam-waits">
         {rows.map((w) => (
-          <span key={w.actId} className="ag-orgteam-wait" data-testid={`ag-orgteam-wait-${w.actId}`}>
-            <span className="ag-orgteam-who" data-user-text>{nameOf(w.roleKey)}</span>
-            <span title={`Open since ${w.since ? new Date(w.since).toLocaleString() : "unknown"}`}>{ageWords(w.since)}</span>
-            <span className="ag-orgteam-status" data-status={w.status}>{openStatusWord(w.status)}</span>
-            <span className="ag-trunc" title={w.label} data-user-text>{w.label}</span>
-            <OpenItemLink item={w} />
-          </span>
+          <WaitItem key={w.actId} item={w} testid={`ag-orgteam-wait-${w.actId}`} />
         ))}
         {extra > 0 && !open ? (
           <button type="button" className="ag-link" data-testid={`ag-orgteam-more-waiting-${team.key}`}
@@ -558,11 +552,7 @@ function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
                 {t.waiting.length ? (
                   <ul className="ag-zones-lwaits">
                     {t.waiting.map((w) => (
-                      <li key={w.actId}>
-                        <span data-user-text>{nameOf(w.roleKey)}</span> <span>{ageWords(w.since)}</span>{" "}
-                        <span>{openStatusWord(w.status)}</span>{" "}
-                        <span className="ag-trunc" data-user-text title={w.label}>{w.label}</span> <OpenItemLink item={w} />
-                      </li>
+                      <li key={w.actId}><WaitItem item={w} /></li>
                     ))}
                   </ul>
                 ) : null}
