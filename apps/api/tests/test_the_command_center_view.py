@@ -1,12 +1,12 @@
 """The Command Center's one read tells the truth (command-center spec §6.2, §6.4, §10.1).
 
-GET /v1/command-center/view composes Agents › Live's board and adds five bounded reads. Pinned:
+GET /v1/command-center/view composes Agents › Live's board and adds its own bounded reads. Pinned:
   * the board's parts are Live's, byte for byte, for the same instant;
-  * `runs` are workflow runs counted over EVERY row in the window (the old page counted the
-    first sixty), and code tasks are `builds`;
   * money is the budget's measure — a plan-covered call is $0, its API value shown apart;
   * hours are the viewer's hours (a half-hour zone included), and an unknown zone says UTC;
-  * the Floor draws only hands it knows; the day strip caps at ten rows and counts the rest;
+  * `runs` are workflow runs counted over EVERY row in the window (the old page counted the
+    first sixty), and code tasks are `builds`;
+  * the v2 page draws no Floor or day strip, so the view no longer reads them;
   * the Previews dot reads app_previews and never changes a row;
   * nothing estimated: no percent, ETA, forecast or time to cap anywhere in the payload;
   * a reader only; an unchanged view is a 304; the indexes exist; and at the spec's seeded
@@ -56,8 +56,10 @@ def _build(engine, **kw):
 
 @pytest.fixture(autouse=True)
 def _fresh_memo():
+    ccv._PULSE_MEMO.clear()
     ccv._DELIVERY_MEMO.clear()
     yield
+    ccv._PULSE_MEMO.clear()
     ccv._DELIVERY_MEMO.clear()
 
 
@@ -148,84 +150,6 @@ def test_an_unknown_zone_falls_back_to_utc_and_says_so(engine, client):
     assert _view(client, tz="Not/A_Zone").json()["tz"] == "UTC"
 
 
-def test_flows_draw_only_known_hands(engine):
-    """The worker records BOSS as every step's hander. The Floor draws who really handed what:
-    the person who started the run → its first agent, each step's agent → the next step's agent
-    (agent_acts.observed_edges, sequence=True — the Organization view's helper)."""
-    now = datetime.now(timezone.utc)
-    with engine.begin() as c:
-        cast = seed.roster(c)
-        a, b, d = cast[0], cast[1], cast[2]
-        wf = seed.workflow(c)
-        rid = seed.run(c, wf, status="running", created=now - timedelta(minutes=30))
-        seed.run_acts(c, rid, [a, b, b, d], started=now - timedelta(minutes=30))
-        # An agent that asks another directly (parent → child) is a hand-off too.
-        asker = seed.act(c, role_key=d, started=now - timedelta(minutes=5), handed_by_kind="boss")
-        seed.act(c, role_key=a, started=now - timedelta(minutes=4), handed_by_kind="agent",
-                 handed_by_id=d, parent=asker, root=asker)
-        # Never drawn: a run an hour and a half old.
-        old = seed.run(c, wf, status="completed", created=now - timedelta(minutes=95),
-                       completed=now - timedelta(minutes=80))
-        seed.run_acts(c, old, [d, a], started=now - timedelta(minutes=95))
-    view = _build(engine)
-    flows = view["flows"]
-    edges = {(f["from_kind"], f["from"], f["to"]): f["n"] for f in flows}
-    assert edges == {("person", "you", a): 1, ("agent", a, b): 1, ("agent", b, d): 1,
-                     ("agent", d, a): 1}, edges
-    assert all(f["newest_act_id"] for f in flows)
-    # Every end is a node the Floor draws: never a guessed one.
-    board = {x["role_key"] for x in view["agents"]}
-    assert all(f["to"] in board and (f["from"] in board or f["from"] == "you") for f in flows)
-    # Nothing comes from BOSS when the hands are known.
-    assert not [f for f in flows if f["from_kind"] == "boss"]
-
-
-def test_the_day_strip_caps_rows_and_counts_the_rest(engine):
-    with engine.begin() as c:
-        wf = seed.workflow(c)
-        live = [seed.run(c, wf, status="running", created=NOW - timedelta(hours=h)) for h in (3, 1)]
-        for i in range(12):
-            at = NOW - timedelta(hours=2 + i)
-            seed.run(c, wf, status="completed", created=at - timedelta(minutes=30), completed=at)
-        # Finished two days ago: not on the strip at all.
-        seed.run(c, wf, status="completed", created=NOW - timedelta(hours=50),
-                 completed=NOW - timedelta(hours=49))
-    day = _build(engine, now=NOW)["day"]
-    assert len(day["rows"]) == 10 and day["more"] == 4
-    assert [r["run_id"] for r in day["rows"][:2]] == live          # live first, by start
-    finished = [r["finished_at"] for r in day["rows"][2:]]
-    assert finished == sorted(finished, reverse=True)               # then newest finish first
-
-
-def test_a_gate_interval_is_the_time_the_step_waited_on_a_decision(engine):
-    with engine.begin() as c:
-        wf = seed.workflow(c)
-        rid = seed.run(c, wf, status="running", created=NOW - timedelta(hours=2))
-        seed.step(c, rid, "s1", status="succeeded", started=NOW - timedelta(hours=2),
-                  completed=NOW - timedelta(minutes=100))
-        seed.step(c, rid, "s2", status="succeeded", kind="decision", started=NOW - timedelta(minutes=100),
-                  completed=NOW - timedelta(minutes=82), decision_id=f"dec_{uuid4().hex[:8]}")
-        seed.step(c, rid, "s3", status="waiting", kind="decision", started=NOW - timedelta(minutes=10),
-                  decision_id=f"dec_{uuid4().hex[:8]}")
-        # PRODUCTION'S SHAPE: the worker parks a gate without a started_at; its decision was
-        # asked 4 minutes ago and the step row written a moment before.
-        gated = seed.run(c, wf, status="waiting", created=NOW - timedelta(minutes=20))
-        seed.step(c, gated, "s1", status="succeeded", started=NOW - timedelta(minutes=20),
-                  completed=NOW - timedelta(minutes=5))
-        seed.step(c, gated, "s2", status="waiting", kind="decision", started=None,
-                  created=NOW - timedelta(minutes=5), asked=NOW - timedelta(minutes=4),
-                  decision_id=f"dec_{uuid4().hex[:8]}")
-    parked = next(r for r in _build(engine, now=NOW)["day"]["rows"] if r["run_id"] == gated)
-    assert [(datetime.fromisoformat(g["from"]), g["to"]) for g in parked["gates"]] == \
-        [(NOW - timedelta(minutes=4), None)]
-    row = next(r for r in _build(engine, now=NOW)["day"]["rows"] if r["run_id"] == rid)
-    gates = [(datetime.fromisoformat(g["from"]), g["to"] and datetime.fromisoformat(g["to"]))
-             for g in row["gates"]]
-    assert gates[0] == (NOW - timedelta(minutes=100), NOW - timedelta(minutes=82))
-    assert gates[1] == (NOW - timedelta(minutes=10), None)          # still open
-    assert len(row["ticks"]) == 2                                   # the two finished steps
-
-
 def test_previews_dot_never_mutates(engine):
     with engine.begin() as c:
         for status in ("running", "starting", "failed"):
@@ -293,17 +217,20 @@ def _count_statements(fn):
 
 #: Statements the view may add to the live board it composes (§6.4). Measured at the seeded
 #: scale: the board is 34 statements on main (the spec's "≤ 22 total" predates that), the view's
-#: own reads are 17 — host 1, budget 10 (status_for_project, unchanged), flows 1, finished 1,
-#: hours 2, strip 2 — plus one SAVEPOINT pair per secondary read, so a failing read degrades to
-#: its empty form instead of blanking the landing page. Never one per run, agent or act.
-VIEW_OVER_BOARD = 30
+#: own reads — host 1, budget 10 (status_for_project, unchanged), finished 1, hours 2, pulse ≤ 6
+#: (its artifacts read added for the latest feed), the old-question count 1, delivery (memoised)
+#: (memoised) — plus one SAVEPOINT pair per secondary read, so a failing read degrades to its
+#: empty form instead of blanking the landing page. Never one per run, agent or act.
+VIEW_OVER_BOARD = 34
 
 
 def test_view_issues_a_bounded_number_of_queries(engine, client):
     with engine.begin() as c:
         seed.busy_day(c, now=datetime.now(timezone.utc))
     _view(client)                                    # warm: zones, memo
+    ccv._PULSE_MEMO.clear()                          # count the pulse's reads too
     board = _count_statements(lambda: client.get("/v1/agents/live-board", params={"project_id": PID}))
+    ccv._PULSE_MEMO.clear()
     first = _count_statements(lambda: _view(client))
     with engine.begin() as c:
         wf = seed.workflow(c)
@@ -312,6 +239,7 @@ def test_view_issues_a_bounded_number_of_queries(engine, client):
             rid = seed.run(c, wf, status="completed", created=at - timedelta(minutes=3), completed=at)
             seed.step(c, rid, "s1", status="succeeded", started=at - timedelta(minutes=2), completed=at)
             seed.act(c, role_key=None, started=at, ended=at, run_id=rid)
+    ccv._PULSE_MEMO.clear()
     second = _count_statements(lambda: _view(client))
     print(f"\nlive board {len(board)} statements; view {len(first)}, then {len(second)} "
           f"after 30 more runs")

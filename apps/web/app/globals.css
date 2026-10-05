@@ -5650,27 +5650,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .askboss-assign:hover:not(:disabled) { transform: none; }
 }
 
-/* Delivery numbers. Real aggregates over a stated window — the row is hidden entirely when
-   the fetch fails, because a confident zero is worse than nothing. */
-.cc-delivery {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px;
-  margin: 12px 0 4px; padding: 12px 16px;
-  border: 1px solid var(--border, #1C2740);
-  border-left: 2px solid var(--green, #2ED18B);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, .025);
-}
-.cc-delivery-label {
-  color: var(--muted, #7C8CB0);
-  font-size: .7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-}
-.cc-delivery-item { color: var(--ink-soft, #9FB0D0); font-size: .88rem; }
-.cc-delivery-item b {
-  color: var(--ink, #E8EEFC); font-weight: 700; font-size: 1rem;
-  font-variant-numeric: tabular-nums; margin-right: 4px;
-}
-.cc-delivery-item small { color: var(--muted, #7C8CB0); font-size: .8rem; }
-
 /* Page dots. The row rotates on its own, so this shows position rather than demanding a click. */
 @media (prefers-reduced-motion: reduce) {
   .askboss-idea-strip { scroll-behavior: auto; }
@@ -6626,7 +6605,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   flex: 0 1 auto; min-width: 0;
 }
 .askboss-wf-label {
-  font-size: 0.7rem; color: var(--faint); white-space: nowrap;
+  /* AA on the composer (re-check): --faint read 3.9:1 at this size. */
+  font-size: 0.7rem; color: var(--muted); white-space: nowrap;
   letter-spacing: .02em;
 }
 .askboss-wf-select {
@@ -8713,3 +8693,22 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
 .host-advice-copy:hover { color: var(--ink); border-color: var(--accent-line); }
 @media (max-width: 639px) { .host-advice-copy { width: 44px; height: 44px; } }
+
+/* THE TOP BAR FITS FROM 701 TO 1279px (Command Center re-test: at 1024 and 768 System ran off
+   the window). The title gives way first (ellipsis), then the pill's faces, the Live word and
+   the org name; nothing leaves the bar. */
+@media (max-width: 1279px) {
+  .bx-topbar > .bx-topbar-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (max-width: 1100px) {
+  .bx-topbar .ag-pill .ag-stack { display: none; }
+  .bx-live-status { font-size: 0; gap: 0; }
+  .bx-org-chip { max-width: 90px; }
+}
+@media (max-width: 860px) {
+  .bx-org-chip { display: none; }
+}
+
+@media (max-width: 560px) {
+  .ag-pill[data-n]::before { content: attr(data-n); font-weight: 700; font-variant-numeric: tabular-nums; }
+}

@@ -157,13 +157,15 @@ def view_at(now):
     y0 = datetime(2026, 10, 3, tzinfo=timezone.utc)
     return {
         "tz": "UTC", "status": {"key": "quiet", "text": "All quiet", "tone": "green", "tip": "x"},
-        "counts": {"expired_answerable": 0}, "recent": [], "flows": [],
+        "counts": {"expired_answerable": 0}, "recent": [],
         "today": {"hours": [{"start": (y0 + timedelta(hours=i)).isoformat(), "work": 0,
                              "runs_finished": 0, "runs_failed": 0, "money_micros": 0,
                              "included_micros": 0} for i in range(48)],
                   "now": now.isoformat(), "runs_finished": 0, "runs_failed": 0,
                   "money_micros": 0, "included_micros": 0, "ever_ran": True},
-        "day": {"rows": [], "more": 0},
+        "pulse": {"total": 3, "start": "2026-07-06", "last_act_at": None, "top": [],
+                  "latest": []},
+        "cleanup": None,
         "week": {"days": [], "runs": 0, "passed": 0},
         "budget": {"state": "green", "actual_usd_micros": 1, "cap_usd_micros": 2,
                    "day": {"cap_usd_micros": 0}},
@@ -179,9 +181,16 @@ def test_etag_ignores_the_clock_and_moves_with_state():
     moved = view_at(NOW)
     moved["today"]["hours"][39]["work"] = 1                      # work landed this hour
     assert a != ccv.etag_of(moved, '"lb-1"')
-    flowed = copy.deepcopy(view_at(NOW))
-    flowed["flows"] = [{"from": "pm", "to": "qa", "n": 1, "newest_act_id": "act_1"}]
-    assert a != ccv.etag_of(flowed, '"lb-1"')
+    acted = copy.deepcopy(view_at(NOW))
+    acted["pulse"]["latest"] = [{"run_id": "crun_1", "at": "2026-10-04T10:00:00+00:00",
+                                 "verb": "planned"}]
+    assert a != ccv.etag_of(acted, '"lb-1"')                     # the team did something
+    grouped = copy.deepcopy(view_at(NOW))
+    grouped["cleanup"] = {"count": 2, "since": "2026-08-09T00:00:00+00:00", "ids": ["a", "b"]}
+    assert a != ccv.etag_of(grouped, '"lb-1"')
+    stalled = copy.deepcopy(view_at(NOW))
+    stalled["counts"]["stalled"] = 1
+    assert a != ccv.etag_of(stalled, '"lb-1"')
 
 
 def test_the_zone_is_three_midnights_in_the_viewers_zone():
@@ -256,3 +265,42 @@ def test_not_set_up_is_one_look_on_every_dot():
     unset = [d for d in got if d["state"] == "Not set up"]
     assert {d["key"] for d in unset} == {"models", "repo", "previews", "deploys"}
     assert {d["tone"] for d in unset} == {"grey"}
+
+
+# ── Command Center v2: stalled runs, old findings as one row, the pulse's week ───────────────
+
+
+def test_a_stalled_run_is_said_after_running_and_before_setup():
+    base = dict(attention=[], budget={"budget_state": "green"}, host={"show": False},
+                runs_24h=0, ever=True, last_work_at=None, now=NOW)
+    said = ccv.status(counts={"moving": 0, "stalled": 6}, **base)
+    assert (said["key"], said["text"], said["tone"]) == ("stalled", "6 stalled", "amber")
+    assert ccv.status(counts={"moving": 2, "stalled": 6}, **base)["key"] == "running"
+    assert ccv.status(counts={"needs_you": 1, "stalled": 6}, **base)["key"] == "needs_you"
+    assert ccv.status(counts={"stalled": 6, "setup": 1}, **base)["key"] == "stalled"
+
+
+def test_old_shepherd_questions_are_one_row_and_new_ones_stay_cards():
+    old = NOW - timedelta(days=40)
+    items = [
+        {"id": f"shepherd:shesc_{i}", "kind": "system_health", "severity": "warn",
+         "at": (old + timedelta(minutes=i)).isoformat()} for i in range(10)
+    ] + [
+        {"id": "shepherd:shesc_new", "kind": "system_health", "severity": "warn",
+         "at": (NOW - timedelta(days=1)).isoformat()},
+        {"id": "system:sf_1", "kind": "system_health", "severity": "critical",
+         "at": old.isoformat()},
+        {"id": "dec_1", "kind": "approval", "at": old.isoformat()},
+    ]
+    keep, group = ccv.group_old_findings(items, NOW)
+    assert [a["id"] for a in keep] == ["shepherd:shesc_new", "system:sf_1", "dec_1"]
+    assert group["count"] == 10 and len(group["ids"]) == 10
+    assert group["title"] == f"10 old builds stuck since {old.strftime('%b')} {old.day}"
+    assert ccv.group_old_findings(keep, NOW)[1] is None
+
+
+def test_the_pulse_starts_on_a_monday_thirteen_weeks_back():
+    start = ccv.pulse_start(datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc), "UTC")  # a Sunday
+    assert start.date().isoformat() == "2026-06-29" and start.weekday() == 0
+    empty = ccv.empty_pulse(datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc), "UTC")
+    assert len(empty["days"]) == 7 * 14 and empty["days"][-1]["date"] == "2026-10-04"

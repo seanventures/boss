@@ -52,6 +52,28 @@ from .task_shepherd import (
 # --------------------------------------------------------------------------- #
 # Observe — gather the evidence a human would look at
 # --------------------------------------------------------------------------- #
+
+def open_question(c: Any, *, project_id: str, task_ref: str, question: str,
+                  options: Any, evidence: Any) -> Optional[str]:
+    """THE ONE WAY SHEPHERD ASKS (independent re-check R4). Never about a build that waits on a
+    person (build_waits.build_waits_on_person: a plan, a merge, any open decision); never a
+    second open question about the same build; never the same words twice in a project.
+    Returns the new question's id, or None when it was not asked."""
+    from .build_waits import build_waits_on_person
+
+    if task_ref and build_waits_on_person(c, task_ref):
+        return None
+    if c.execute(sql("SELECT 1 FROM shepherd_escalations WHERE status = 'open' AND "
+                     "(task_ref = :t OR (project_id = :p AND question = :q)) LIMIT 1"),
+                 {"t": task_ref, "p": project_id, "q": question}).first():
+        return None
+    esc_id = make_id("shesc")
+    c.execute(sql("INSERT INTO shepherd_escalations (id, project_id, task_ref, question, options, "
+                  "evidence) VALUES (:id, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB))"),
+              {"id": esc_id, "p": project_id, "t": task_ref, "q": question,
+               "o": json.dumps(options), "e": json.dumps(evidence, default=str)})
+    return esc_id
+
 def signals(connection, run_id: str) -> dict[str, Any]:
     """Everything an engineer would check before forming an opinion, in one query pass.
 
@@ -296,14 +318,9 @@ def propose(engine, settings: Settings, run_id: str, *,
                              "checkpointed", "has_pr") if k in sig},
                 "error": sig["error"][:400],
             }, costs=({verdict.remedy.id: est} if verdict.remedy and est else None))
-            esc_id = make_id("shesc")
-            c.execute(
-                sql("INSERT INTO shepherd_escalations (id, project_id, task_ref, question, "
-                    "options, evidence) VALUES (:id, :p, :t, :q, CAST(:o AS JSONB), "
-                    "CAST(:e AS JSONB))"),
-                {"id": esc_id, "p": project_id, "t": run_id, "q": payload["question"],
-                 "o": json.dumps(payload["options"]), "e": json.dumps(payload["evidence"],
-                                                                     default=str)})
+            esc_id = open_question(c, project_id=project_id, task_ref=run_id,
+                                   question=payload["question"], options=payload["options"],
+                                   evidence=payload["evidence"])
 
         # Phase 1 records what it WOULD do. The ledger row is marked available, never used —
         # nothing here spends anything.
@@ -831,19 +848,16 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
             # the run stops being a candidate and becomes an escalation, which also makes the
             # NOT EXISTS clause above suppress it from here on — the loop closes itself.
             if row["failures"] >= PREVIEW_MAX_ATTEMPTS:
-                c.execute(
-                    sql("INSERT INTO shepherd_escalations "
-                        "(id, project_id, task_ref, question, options, evidence) "
-                        "VALUES (:i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB))"),
-                    {"i": make_id("shesc"), "p": project_id, "t": run_id,
-                     "q": (f"This app failed to preview {row['failures']} times"
-                           + ("" if row["signatures"] > 1 else " with the same error")
-                           + ". Rebuilding it again will not change that. Fix the app, or stop "
-                             "previewing this run?"),
-                     "o": json.dumps(["open a fix task", "stop previewing"]),
-                     "e": json.dumps({"failed_previews": row["failures"],
-                                      "distinct_errors": row["signatures"],
-                                      "limit": PREVIEW_MAX_ATTEMPTS}, default=str)})
+                open_question(
+                    c, project_id=project_id, task_ref=run_id,
+                    question=(f"This app failed to preview {row['failures']} times"
+                              + ("" if row["signatures"] > 1 else " with the same error")
+                              + ". Rebuilding it again will not change that. Fix the app, or "
+                                "stop previewing this run?"),
+                    options=["open a fix task", "stop previewing"],
+                    evidence={"failed_previews": row["failures"],
+                              "distinct_errors": row["signatures"],
+                              "limit": PREVIEW_MAX_ATTEMPTS})
                 continue
             if run_id not in candidates:
                 candidates.append(run_id)
@@ -1834,19 +1848,10 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
             # One open question per run. A shepherd that re-asks is noise, and an operator who
             # learns to ignore it is worse than no shepherd — the same rule sweep() follows.
             with begin(engine) as c:
-                existing = c.execute(
-                    sql("SELECT 1 FROM shepherd_escalations "
-                        "WHERE task_ref=:t AND status='open'"), {"t": snap.run_id}).first()
-                if not existing:
-                    c.execute(
-                        sql("INSERT INTO shepherd_escalations "
-                            "(id, project_id, task_ref, question, options, evidence) "
-                            "VALUES (:i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB))"),
-                        {"i": make_id("shesc"), "p": project_id, "t": snap.run_id,
-                         "q": f"{snap.title or snap.run_id}: {verdict.reason}. Let it continue, "
-                              f"or cancel it?",
-                         "o": json.dumps(["continue", "cancel"]),
-                         "e": json.dumps(verdict.evidence, default=str)})
+                if open_question(c, project_id=project_id, task_ref=snap.run_id,
+                                 question=f"{snap.title or snap.run_id}: {verdict.reason}. "
+                                          f"Let it continue, or cancel it?",
+                                 options=["continue", "cancel"], evidence=verdict.evidence):
                     escalated.append(record)
     return {"project_id": project_id, "in_flight": seen, "acted": acted,
             "escalated": escalated, "ineffective": ineffective, "dry_run": dry_run}
@@ -1868,18 +1873,12 @@ def _escalate_exhausted_lineage(engine, project_id: Optional[str], run_id: str,
         return
     try:
         with begin(engine) as c:
-            c.execute(
-                sql("INSERT INTO shepherd_escalations "
-                    "(id, project_id, task_ref, question, options, evidence) "
-                    "SELECT :i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB) "
-                    "WHERE NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
-                    "                  WHERE e.task_ref = :t AND e.status = 'open')"),
-                {"i": make_id("shesc"), "p": project_id, "t": run_id,
-                 "q": ("Automatic repair has stopped: this work has been retried to its limit "
-                       "and keeps failing the same way. Diagnose it, retry it explicitly, or "
-                       "abandon it?"),
-                 "o": json.dumps(["diagnose", "retry anyway", "abandon"]),
-                 "e": json.dumps({"reason": reason,
-                                  "limit": SHEPHERD_MAX_LINEAGE_ATTEMPTS}, default=str)})
+            open_question(
+                c, project_id=project_id, task_ref=run_id,
+                question=("Automatic repair has stopped: this work has been retried to its "
+                          "limit and keeps failing the same way. Diagnose it, retry it "
+                          "explicitly, or abandon it?"),
+                options=["diagnose", "retry anyway", "abandon"],
+                evidence={"reason": reason, "limit": SHEPHERD_MAX_LINEAGE_ATTEMPTS})
     except Exception:
         logger.debug("escalate_exhausted_lineage_failed run=%s", run_id, exc_info=True)

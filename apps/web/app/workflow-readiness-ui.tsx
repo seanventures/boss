@@ -18,6 +18,22 @@
 import React, { useEffect, useState } from "react";
 
 import { AreaLink } from "./area-link";
+
+/** THE FIX KEEPS THE ORG (re-check): the API's landing (`/?area=setup&focus=repository`)
+ *  carries no org, and a full load without it lands on the org picker. The org the console is
+ *  in is added here, at the source every refusal and start form draws. */
+export function withOrg(href: string, org: string | null): string {
+  if (!org || !href.startsWith("/?") || /[?&]org=/.test(href)) return href;
+  return `/?org=${encodeURIComponent(org)}&${href.slice(2)}`;
+}
+
+function useOrg(): string | null {
+  const [org, setOrg] = useState<string | null>(null);
+  useEffect(() => {
+    try { setOrg(new URL(window.location.href).searchParams.get("org")); } catch { /* none */ }
+  }, []);
+  return org;
+}
 import { isAreaId } from "../lib/area-ids";
 import { EmailSetup } from "./email-setup-ui";
 
@@ -109,6 +125,7 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
   /** Lets an item that can be fixed in place (email) draw its form. */
   projectId?: string;
 }) {
+  const org = useOrg();
   if (!readiness || !readiness.checked?.length) return null;
   const missing = readiness.missing ?? [];
   if (!missing.length) {
@@ -152,7 +169,7 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
               {/* The fix's own landing (`?area=setup&focus=repository`, `?area=skills&ability=email`)
                   when the API names one; the shell keeps the org and switches in place. */}
               {need.href && isAreaId(need.area) ? (
-                <a href={need.href} data-testid={`dw-readiness-fix-${need.key}`}>{need.fix}</a>
+                <a href={withOrg(need.href, org)} data-testid={`dw-readiness-fix-${need.key}`}>{need.fix}</a>
               ) : isAreaId(need.area) ? (
                 <AreaLink area={need.area}>{need.fix}</AreaLink>
               ) : need.fix}

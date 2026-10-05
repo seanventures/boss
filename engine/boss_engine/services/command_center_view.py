@@ -3,7 +3,7 @@
 THE FROZEN CONTRACT is apps/web/lib/command-center-view.ts; this module answers exactly that
 shape. Change it with the lead, never inside a stream.
 
-PURE COMPOSITION PLUS FIVE BOUNDED READS. Nothing here restates a rule another module owns:
+PURE COMPOSITION PLUS BOUNDED READS. Nothing here restates a rule another module owns:
   * attention, counts, missions, outcomes, teams, agents ARE agents_live_board.compose() —
     Agents › Live's board, built with `with_builds=False` (this page draws no builds) — so a
     card here and its twin on Live are one card, and `counts.needs_you` is the one number the
@@ -13,18 +13,22 @@ PURE COMPOSITION PLUS FIVE BOUNDED READS. Nothing here restates a rule another m
     Models and Repo dots read the setup basics view command_center.setup_gaps already built.
   * money is included_spend.MONEY_SQL — the budget's own measure, so a plan-covered call is $0
     here exactly as it is on Budget; INCLUDED_SQL is the plan's API value, shown apart.
-  * week builds / PRs / jobs / deploys / tokens / model hours are
-    self_observability.delivery_metrics, memoised 60s (eleven scalars that change slowly).
+  * old Shepherd questions (system_health, > 7 days) are one `cleanup` row whose button is
+    system_doctor.clean_up_old — the group lists exactly what that clears.
 
-The five reads (each bounded, each served by an index in db/schema.sql):
-  1. flows    — hand-offs in the last hour, from real hands (agent_acts.observed_edges) (the Floor's edges);
-  2. work     — agent work finished by hour, yesterday and today, in the viewer's zone;
-  3. money    — MONEY_SQL / INCLUDED_SQL by hour over the week, in the viewer's zone;
-  4. runs     — the week's finished runs counted in SQL over EVERY row (never the first sixty:
-                command_center.read's LIMIT 60 undercounted a busy install), plus the LAST 24H
-                strip's ≤ 10 rows and their steps;
+The reads (each bounded, each served by an index in db/schema.sql):
+  1. work     — agent work finished by hour, yesterday and today, in the viewer's zone;
+  2. money    — MONEY_SQL / INCLUDED_SQL by hour over the week, in the viewer's zone;
+  3. runs     — the week's finished runs counted in SQL over EVERY row (never the first sixty);
+  4. pulse    — finished agent steps per local day over 14 weeks, the five busiest agents and
+                the seven newest things the team did, one per app (memoised 60s);
   5. systems  — the queue, previews (read-only: never GET /v1/previews, which tears down and
                 deletes rows), deploys and the last hour of model calls.
+
+The v2 page draws no Floor and no day strip, so their reads (hand-offs, the 24h strip) are gone
+from the view. `week` stays: the week's delivery line (runs, builds, PRs, spend) is still drawn;
+its builds / PRs / jobs / deploys / tokens / model hours are self_observability.delivery_metrics,
+memoised 60s.
 
 NOTHING IS ESTIMATED. No percent next to a run, no ETA, no forecast, no time-to-cap: the budget's
 forecast fields are read past, never sent. `Budget at n%` is the one ratio, and it is money.
@@ -44,17 +48,16 @@ from sqlalchemy import text
 
 from .included_spend import INCLUDED_SQL, MONEY_SQL
 
-#: Hand-offs the Floor draws: acts started this recently.
-#: The Floor's edges: hand-offs started in the last hour (spec §4.7; the operator's decision
-#: after the independent test), thin and fading with age; comets fly only on new ones (web).
-FLOW_WINDOW = timedelta(minutes=60)
-FLOWS_MAX = 60
-#: Rows on the LAST 24H strip; the rest are counted (`day.more`).
-STRIP_ROWS = 10
-STRIP_WINDOW = timedelta(hours=24)
-TICKS_MAX = 40
-#: How long the week's delivery scalars are reused, per project, in this process.
-DELIVERY_MEMO_SECONDS = 60.0
+#: THE PULSE (Command Center v2): the team's last 14 weeks of finished agent steps, by day.
+PULSE_WEEKS = 14
+PULSE_TOP = 5
+PULSE_LATEST = 7
+#: The newest acts the "Latest from your team" feed looks through for one act per app.
+PULSE_SCAN = 400
+#: How long the pulse is reused, per (project, zone), in this process: it moves by the step.
+PULSE_MEMO_SECONDS = 60.0
+#: System findings older than this are history, grouped into one row with a Clean up.
+OLD_FINDING = timedelta(days=7)
 
 LIVE_RUN = ("queued", "validating", "running", "waiting", "paused", "blocked")
 COMPLETED = ("completed",)
@@ -174,12 +177,14 @@ def _hour_index(local_naive: datetime, y0: datetime) -> int:
 
 # ── the delivery memo ────────────────────────────────────────────────────────────────────────
 
+#: How long the week's delivery scalars are reused, per project, in this process.
+DELIVERY_MEMO_SECONDS = 60.0
 _DELIVERY_MEMO: dict[str, tuple[float, dict[str, Any]]] = {}
 _DELIVERY_LOCK = threading.Lock()
 
 
 def delivery(connection: Any, project_id: str) -> dict[str, Any]:
-    """self_observability.delivery_metrics(days=7), reused for 60s per project (§6.2 read 5)."""
+    """self_observability.delivery_metrics(days=7), reused for 60s per project."""
     from .self_observability import delivery_metrics
 
     at = time.monotonic()
@@ -191,40 +196,6 @@ def delivery(connection: Any, project_id: str) -> dict[str, Any]:
     with _DELIVERY_LOCK:
         _DELIVERY_MEMO[project_id] = (at, value)
     return value
-
-
-# ── read 1: flows ────────────────────────────────────────────────────────────────────────────
-
-
-def flows(connection: Any, project_id: str, roster: set[str], now: datetime) -> list[dict[str, Any]]:
-    """Who handed work to whom in the last hour, one edge per (hander, taker) — read by the ONE
-    helper the Organization view and the Team chart read (agent_acts.observed_edges), with
-    `sequence`: a workflow records BOSS as every step's hander, so the hand-off is the previous
-    step's agent → the next step's agent; a run's first agent is handed by the person who
-    started it. A hander that is not on the roster is DROPPED — never drawn to a guessed node.
-    `now` is the clock the helper uses (the database's); it is passed for the signature only."""
-    from . import agent_acts
-
-    del now
-    edges = agent_acts.observed_edges(connection, project_id,
-                                      hours=FLOW_WINDOW.total_seconds() / 3600,
-                                      include_people=True, sequence=True, with_newest=True)
-    out: list[dict[str, Any]] = []
-    for e in edges:
-        dst, src = str(e["target"]), str(e["source"])
-        if dst not in roster:
-            continue
-        if src == "person":
-            kind, src = "person", "you"
-        elif src in roster and src != dst:
-            kind = "agent"
-        else:
-            continue
-        out.append({"from_kind": kind, "from": src, "to": dst, "n": int(e["times"]),
-                    "last_at": _iso(e["last_at"]), "newest_act_id": str(e.get("newest_act_id") or ""),
-                    "run_id": e.get("run_id")})
-    out.sort(key=lambda f: str(f["last_at"]), reverse=True)
-    return out[:FLOWS_MAX]
 
 
 # ── reads 2 and 3: today, by hour ────────────────────────────────────────────────────────────
@@ -349,123 +320,278 @@ def finished_counts(connection: Any, project_id: str, tz: str, now: datetime
     return days, by_hour, bool(rows)
 
 
-def _row_state(status: str, mission: Optional[Mapping[str, Any]]) -> str:
-    if status in COMPLETED:
-        return "completed"
-    if status in FAILED:
-        return "failed"
-    if status in CANCELLED:
-        return "cancelled"
-    state = str((mission or {}).get("state") or "")
-    if state == "waiting_you":
-        return "waiting_you"
-    if status == "blocked" or state in ("blocked", "stopped"):
-        return "blocked"
-    return "running"
-
-
-def strip(connection: Any, project_id: str, now: datetime,
-          missions: list[Mapping[str, Any]]) -> dict[str, Any]:
-    """LAST 24H: runs that were live at any point in the window — still live, started in it, or
-    finished in it — live first (by start), then finished (newest first). ≤ 10 rows; the rest are
-    counted, in the same statement (`count(*) OVER ()`), so `more` is exact."""
-    from .command_center import run_name, step_index
-
-    since = now - STRIP_WINDOW
-    runs = [dict(r) for r in connection.execute(
-        text(
-            """
-            SELECT r.id, r.status, r.input, r.error, r.created_at, r.completed_at, r.updated_at,
-                   d.workflow_key, d.name AS workflow_name,
-                   COALESCE(jsonb_array_length(v.spec->'steps'), 0) AS spec_steps,
-                   count(*) OVER () AS total
-            FROM workflow_runs r
-            JOIN workflow_definitions d ON d.id = r.workflow_definition_id
-            JOIN workflow_versions v ON v.id = r.workflow_version_id
-            WHERE r.project_id = :p
-              AND COALESCE(d.namespace, 'system') = 'product'
-              AND r.parent_run_id IS NULL
-              AND (r.status = ANY(:live) OR r.created_at >= :since
-                   OR (r.updated_at >= :since AND COALESCE(r.completed_at, r.updated_at) >= :since))
-            ORDER BY (r.status = ANY(:live)) DESC,
-                     CASE WHEN r.status = ANY(:live) THEN r.created_at END ASC,
-                     COALESCE(r.completed_at, r.updated_at) DESC
-            LIMIT :lim
-            """
-        ),
-        {"p": project_id, "live": list(LIVE_RUN), "since": since, "lim": STRIP_ROWS},
-    ).mappings()]
-    total = int(runs[0]["total"]) if runs else 0
-    steps_by_run: dict[str, list[dict[str, Any]]] = {}
-    if runs:
-        for s in connection.execute(
-            text(
-                """
-                SELECT s.workflow_run_id, s.step_id, s.status, s.started_at, s.completed_at,
-                       s.decision_id, s.step_kind, s.created_at, s.updated_at,
-                       dd.created_at AS decision_at
-                FROM workflow_step_runs s
-                LEFT JOIN decisions dd ON dd.id = s.decision_id
-                WHERE s.workflow_run_id = ANY(:ids)
-                ORDER BY s.created_at, s.iteration
-                """
-            ),
-            {"ids": [r["id"] for r in runs]},
-        ).mappings():
-            steps_by_run.setdefault(str(s["workflow_run_id"]), []).append(dict(s))
-    by_mission = {str(m.get("run_id")): m for m in missions}
-    rows: list[dict[str, Any]] = []
-    for r in runs:
-        run_id = str(r["id"])
-        status = str(r["status"] or "")
-        latest: dict[str, dict[str, Any]] = {}
-        for s in steps_by_run.get(run_id, []):
-            latest[str(s["step_id"])] = s
-        steps = list(latest.values())
-        done = sum(1 for s in steps if s["status"] in ("succeeded", "skipped"))
-        count = max(int(r["spec_steps"] or 0), len(steps))
-        ticks = sorted(_iso(s["completed_at"]) for s in steps
-                       if s["status"] in ("succeeded", "skipped", "failed") and s["completed_at"])
-        gates = []
-        for s in steps:
-            if not (s.get("decision_id") or str(s.get("step_kind") or "") == "decision"):
-                continue
-            # A GATE THE WORKER PARKED NEVER "STARTS": a waiting decision step has no
-            # started_at in production, so it was never drawn. Its wait began when its decision
-            # was asked, else when the step row was written.
-            began = s.get("started_at") or s.get("decision_at") or s.get("created_at")
-            if not began:
-                continue
-            open_gate = s["status"] in ("waiting", "running", "leased", "ready", "queued")
-            gates.append({"from": _iso(began),
-                          "to": None if open_gate else _iso(s.get("completed_at")
-                                                            or s.get("updated_at") or began)})
-        mission = by_mission.get(run_id)
-        state = _row_state(status, mission)
-        finished = None
-        if state in ("completed", "failed", "cancelled"):
-            finished = _iso(r["completed_at"] or r["updated_at"])
-        rows.append({
-            "run_id": run_id,
-            "name": run_name(r),
-            "workflow_name": str(r["workflow_name"] or r["workflow_key"] or ""),
-            "state": state,
-            "started_at": _iso(r["created_at"]),
-            "finished_at": finished,
-            "step_index": int((mission or {}).get("step_index") or step_index(done, count, status)),
-            "step_count": int((mission or {}).get("step_count") or count),
-            "ticks": [t for t in ticks if t][-TICKS_MAX:],
-            "gates": sorted(gates, key=lambda g: str(g["from"])),
-            "verb": (mission or {}).get("verb") if state in ("running", "waiting_you", "blocked") else None,
-            "error": (str(r["error"]).strip().splitlines()[0][:220]
-                      if state == "failed" and r.get("error") and str(r["error"]).strip() else None),
-        })
-    return {"since": since.isoformat(), "rows": rows, "more": max(0, total - len(rows))}
-
-
 def ever_ran(connection: Any, project_id: str) -> bool:
     return bool(connection.execute(
         text(f"SELECT EXISTS (SELECT 1 {_RUN_SCOPE})"), {"p": project_id}).scalar())
+
+
+# ── the pulse: the team's last 14 weeks ──────────────────────────────────────────────────────
+
+_PULSE_MEMO: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_PULSE_LOCK = threading.Lock()
+
+#: What an agent did at a build's station, as a verb before the app's name.
+STATION_VERB = {"plan": "planned", "tests": "wrote the tests for", "build": "built",
+                "check": "checked", "review": "reviewed", "pr": "opened a PR for"}
+#: An agent step: finished work an agent did (never a run, a chat, an approval or a hand-off).
+STEP_KINDS = ("stage", "seat", "step")
+
+
+def pulse_start(now: datetime, tz: str) -> datetime:
+    """The Monday PULSE_WEEKS - 1 weeks before this week's Monday, 00:00 in `tz`."""
+    zone = ZoneInfo(tz)
+    today = now.astimezone(zone).date()
+    monday = today - timedelta(days=today.weekday()) - timedelta(weeks=PULSE_WEEKS - 1)
+    return datetime.combine(monday, dtime(0), tzinfo=zone)
+
+
+def pulse(connection: Any, project_id: str, tz: str, now: datetime) -> dict[str, Any]:
+    """THE TEAM'S PULSE, aggregated in SQL (never in the browser from the apps list): finished
+    agent steps per local day over 14 weeks, the five busiest agents, and the seven newest
+    things the team did — one per app — in words ("Atlas planned Interview Scorecard"). Three
+    bounded statements on agent_acts_ended / agent_acts_role_ended, plus one for subjects."""
+    from . import factory_view
+    from .command_center import run_name
+    from .code_task_service import is_internal_run
+
+    start = pulse_start(now, tz)
+    zone = ZoneInfo(tz)
+    base = {"p": project_id, "since": start, "kinds": list(STEP_KINDS), "tz": tz}
+    by_day = {r["d"]: int(r["n"]) for r in connection.execute(
+        text(
+            """
+            SELECT (ended_at AT TIME ZONE :tz)::date AS d, count(*) AS n
+            FROM agent_acts
+            WHERE project_id = :p AND ended_at >= :since AND role_key IS NOT NULL
+              AND kind = ANY(:kinds) AND status = 'complete'
+            GROUP BY 1
+            """
+        ), base).mappings()}
+    top = [{"role_key": str(r["role_key"]), "n": int(r["n"])} for r in connection.execute(
+        text(
+            """
+            SELECT role_key, count(*) AS n
+            FROM agent_acts
+            WHERE project_id = :p AND ended_at >= :since AND role_key IS NOT NULL
+              AND kind = ANY(:kinds) AND status = 'complete'
+            GROUP BY role_key ORDER BY count(*) DESC, role_key LIMIT :lim
+            """
+        ), {**base, "lim": PULSE_TOP}).mappings()]
+    first, last = start.date(), now.astimezone(zone).date()
+    days = []
+    d = first
+    while d <= last:
+        days.append({"date": d.isoformat(), "n": by_day.get(d, 0)})
+        d += timedelta(days=1)
+    busiest = max(days, key=lambda x: (x["n"], x["date"])) if days else None
+    recent = [dict(r) for r in connection.execute(
+        text(
+            """
+            SELECT a.role_key, a.kind, a.step_id, a.ended_at, a.code_task_run_id,
+                   a.workflow_run_id
+            FROM agent_acts a
+            WHERE a.project_id = :p AND a.ended_at IS NOT NULL AND a.ended_at >= :since
+              AND a.role_key IS NOT NULL AND a.kind = ANY(:kinds) AND a.status = 'complete'
+              AND (a.code_task_run_id IS NOT NULL OR a.workflow_run_id IS NOT NULL)
+            ORDER BY a.ended_at DESC
+            LIMIT :lim
+            """
+        ), {**base, "lim": PULSE_SCAN}).mappings()]
+    builds_ids = sorted({str(r["code_task_run_id"]) for r in recent if r["code_task_run_id"]})
+    run_ids = sorted({str(r["workflow_run_id"]) for r in recent
+                      if r["workflow_run_id"] and not r["code_task_run_id"]})
+    builds: dict[str, dict[str, Any]] = {}
+    if builds_ids:
+        builds = {str(r["id"]): dict(r) for r in connection.execute(
+            text("SELECT id, title, spec, state, finalize_ctx FROM code_task_runs "
+                 "WHERE id = ANY(:ids)"),
+            {"ids": builds_ids}).mappings()}
+    runs: dict[str, dict[str, Any]] = {}
+    if run_ids:
+        runs = {str(r["id"]): dict(r) for r in connection.execute(
+            text("SELECT r.id, r.input, d.workflow_key, d.name AS workflow_name, d.namespace "
+                 "FROM workflow_runs r JOIN workflow_definitions d "
+                 "ON d.id = r.workflow_definition_id WHERE r.id = ANY(:ids)"),
+            {"ids": run_ids}).mappings()}
+    # WHAT THE TEAM MADE, beside what it did (independent test, parity e): a pull request
+    # opened, a research dossier, a panel's minutes or PRD — the artifacts acts carry — are
+    # moves too, and the feed said only code-task steps.
+    made = [dict(r) for r in connection.execute(
+        text(
+            """
+            SELECT role_key, artifacts, label, ended_at, code_task_run_id, workflow_run_id,
+                   meeting_run_id
+            FROM agent_acts
+            WHERE project_id = :p AND ended_at >= :since AND role_key IS NOT NULL
+              AND jsonb_typeof(artifacts) = 'array' AND jsonb_array_length(artifacts) > 0
+            ORDER BY ended_at DESC
+            LIMIT :lim
+            """
+        ), {**base, "lim": PULSE_SCAN}).mappings()]
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    for a in recent:
+        verdict = None
+        if a["code_task_run_id"]:
+            run = builds.get(str(a["code_task_run_id"]))
+            if not run:
+                continue
+            if is_internal_run(run):
+                continue
+            subject = factory_view.app_name(run)
+            station = factory_view.STAGE_STATION.get(str(a["step_id"] or "").lower())
+            verb = STATION_VERB.get(station or "", "worked on")
+            if station == "review":
+                state = factory_view._j(run.get("state"), {}) or {}
+                verdict = factory_view._verdict(str(a["step_id"]), state, set())
+            kind, rid = "build", str(run["id"])
+        else:
+            run = runs.get(str(a["workflow_run_id"]))
+            if not run or str(run.get("namespace") or "system") != "product":
+                continue
+            subject = run_name(run)
+            verb, kind, rid = "worked on", "run", str(run["id"])
+        candidates.append((str(_iso(a["ended_at"])), {
+            "role_key": str(a["role_key"]), "verb": verb, "subject": subject,
+            "verdict": verdict, "at": _iso(a["ended_at"]), "run_id": rid, "kind": kind,
+            "url": None}))
+    for m in made:
+        for art in (m["artifacts"] if isinstance(m["artifacts"], list) else []):
+            if not isinstance(art, dict):
+                continue
+            words = made_words(str(art.get("kind") or ""), str(art.get("ref") or ""),
+                               str(art.get("url") or ""), str(m["label"] or ""))
+            if not words:
+                continue
+            verb, subject = words
+            url = str(art.get("url") or "")
+            candidates.append((str(_iso(m["ended_at"])), {
+                "role_key": str(m["role_key"]), "verb": verb, "subject": subject,
+                "verdict": None, "at": _iso(m["ended_at"]),
+                "run_id": str(m["workflow_run_id"] or m["code_task_run_id"] or "") or None,
+                "kind": "made", "url": url if url.startswith("http") else None}))
+            break
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    latest: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _at, item in candidates:
+        if len(latest) >= PULSE_LATEST:
+            break
+        key = str(item["subject"]).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        latest.append(item)
+    return {
+        "weeks": PULSE_WEEKS,
+        "start": first.isoformat(),
+        "days": days,
+        "total": sum(x["n"] for x in days),
+        "busiest": dict(busiest) if busiest and busiest["n"] else None,
+        "top": top,
+        "latest": latest,
+        "last_act_at": _iso(recent[0]["ended_at"]) if recent else None,
+    }
+
+
+_PR_NUM = __import__("re").compile(r"(?:#|/pull/)(\d+)")
+
+
+def made_words(kind: str, ref: str, url: str, label: str) -> Optional[tuple[str, str]]:
+    """An artifact as a move in the feed: (verb, subject). The subject is the act's own label
+    after its kind ("Build · Ship it #182" → "Ship it #182"). None for kinds the feed skips."""
+    subject = label.split("·", 1)[1].strip() if "·" in label else label.strip()
+    if not subject:
+        return None
+    if kind == "pr":
+        n = _PR_NUM.search(ref) or _PR_NUM.search(url)
+        return (f"opened PR #{n.group(1)} for" if n else "opened a PR for"), subject
+    if kind == "report":
+        return "wrote a research dossier on", subject
+    if kind == "minutes":
+        return ("wrote the PRD for" if "prd" in (ref + " " + label).lower()
+                else "wrote the minutes for"), subject
+    return None
+
+
+def pulse_memo(connection: Any, project_id: str, tz: str, now: datetime) -> dict[str, Any]:
+    """`pulse`, reused for PULSE_MEMO_SECONDS per (project, zone)."""
+    at = time.monotonic()
+    key = (project_id, tz)
+    with _PULSE_LOCK:
+        hit = _PULSE_MEMO.get(key)
+        if hit and at - hit[0] < PULSE_MEMO_SECONDS:
+            return hit[1]
+    value = pulse(connection, project_id, tz, now)
+    with _PULSE_LOCK:
+        _PULSE_MEMO[key] = (at, value)
+    return value
+
+
+def empty_pulse(now: datetime, tz: str) -> dict[str, Any]:
+    start = pulse_start(now, tz).date()
+    last = now.astimezone(ZoneInfo(tz)).date()
+    return {"weeks": PULSE_WEEKS, "start": start.isoformat(),
+            "days": [{"date": (start + timedelta(days=i)).isoformat(), "n": 0}
+                     for i in range((last - start).days + 1)],
+            "total": 0, "busiest": None, "top": [], "latest": [], "last_act_at": None}
+
+
+# ── old system findings: one row, one Clean up ───────────────────────────────────────────────
+
+
+def group_old_findings(attention: list[Mapping[str, Any]], now: datetime,
+                       total: Optional[tuple[int, Optional[datetime]]] = None,
+                       ) -> tuple[list[Mapping[str, Any]], Optional[dict[str, Any]]]:
+    """ELEVEN CARDS OF HISTORY WERE ONE FACT. Shepherd's questions about builds stuck weeks ago
+    ("stuck in `coding` … 53894 minutes. Let it continue, or cancel it?") filled Needs you on
+    shared-server. Those older than OLD_FINDING — and only the ones system_doctor.clean_up_old can
+    clear, so the row and its button agree — become one `cleanup` row. A critical finding and
+    anything recent stay cards. Pure."""
+    keep: list[Mapping[str, Any]] = []
+    old: list[Mapping[str, Any]] = []
+    for a in attention:
+        at = _aware(datetime.fromisoformat(str(a["at"]))) if a.get("at") else None
+        if (a.get("kind") == "system_health" and str(a.get("id") or "").startswith("shepherd:")
+                and a.get("severity") != "critical" and at is not None
+                and now - at > OLD_FINDING):
+            old.append(a)
+        else:
+            keep.append(a)
+    # THE TRUE COUNT (independent test): the cards are a bounded page of Shepherd's questions,
+    # so the row counts every old open question in the table when the caller read it.
+    n = len(old)
+    since = min((_aware(datetime.fromisoformat(str(a["at"]))) for a in old), default=None)
+    if total is not None and total[0] > n:
+        n = total[0]
+        since = _aware(total[1]) or since
+    if not n or since is None:
+        return keep, None
+    return keep, {
+        "count": n,
+        "since": since.isoformat(),
+        "ids": [str(a["id"]) for a in old],
+        "title": f"{n} old {'build' if n == 1 else 'builds'} stuck since "
+                 f"{since.strftime('%b')} {since.day}",
+        "detail": "Shepherd can clear them safely",
+    }
+
+
+def subscription_connected(basics: Optional[Mapping[str, Any]]) -> bool:
+    """A working subscription model (Claude Code, Codex …) among Repo and models' rows."""
+    from . import setup_view
+
+    return any(str(m.get("kind") or "") == "subscription" and setup_view.model_working(m)
+               for m in (basics or {}).get("models") or [])
+
+
+def old_questions(connection: Any, project_id: str, now: datetime) -> tuple[int, Optional[datetime]]:
+    """How many of the project's open Shepherd questions are older than OLD_FINDING, and the
+    oldest — every row, not the page the cards read."""
+    row = connection.execute(
+        text("SELECT count(*) AS n, min(created_at) AS since FROM shepherd_escalations "
+             "WHERE project_id = :p AND status = 'open' AND created_at < :cut"),
+        {"p": project_id, "cut": now - OLD_FINDING}).mappings().one()
+    return int(row["n"] or 0), row["since"]
 
 
 # ── read 5: systems ──────────────────────────────────────────────────────────────────────────
@@ -722,6 +848,12 @@ def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
     if running:
         return {"key": "running", "text": f"{running} running", "tone": "accent",
                 "tip": "Workflow runs in progress"}
+    # NOT RUNNING, STALLED: a live run with no progress for over a week (the live board's
+    # `stalled`, the same rows the In flight card groups) is said for what it is.
+    stalled = int(counts.get("stalled") or 0)
+    if stalled:
+        return {"key": "stalled", "text": f"{stalled} stalled", "tone": "amber",
+                "tip": "Runs with no progress for over 7 days. Resume or close them."}
     if int(counts.get("setup") or 0):
         return {"key": "setup", "text": "Finish setup", "tone": "amber",
                 "tip": "Builds can't start until setup is done"}
@@ -752,12 +884,14 @@ def etag_of(view: Mapping[str, Any], board_etag: str) -> str:
         "status": [view["status"]["key"], view["status"]["text"], view["status"]["tone"]],
         "expired": view["counts"].get("expired_answerable"),
         "recent": [(r.get("run_id"), r.get("outcome")) for r in view["recent"]],
-        "flows": [(f["from"], f["to"], f["n"], f["newest_act_id"]) for f in view["flows"]],
         "hours": [hours_[i] for i in (current - 1, current) if 0 <= i < 48],
         "today": [t["runs_finished"], t["runs_failed"], t["money_micros"], t["included_micros"],
                   t["ever_ran"], t["hours"][0]["start"]],
-        "day": [(r["run_id"], r["state"], r["step_index"], len(r["ticks"]), len(r["gates"]),
-                 r["finished_at"]) for r in view["day"]["rows"]] + [view["day"]["more"]],
+        "counts": [view["counts"].get(k) for k in ("running", "stalled", "needs_you", "stopped")],
+        "pulse": [view["pulse"]["total"], view["pulse"]["start"], view["pulse"]["last_act_at"],
+                  [(x["role_key"], x["n"]) for x in view["pulse"]["top"]],
+                  [(x["run_id"], x["at"], x["verb"]) for x in view["pulse"]["latest"]]],
+        "cleanup": (view.get("cleanup") or {}).get("ids"),
         "week": {k: v for k, v in view["week"].items() if k != "days"}
         | {"days": [(d["date"], d["completed"], d["failed"]) for d in view["week"]["days"]]},
         "budget": [view["budget"]["state"], round(view["budget"]["actual_usd_micros"] / 10_000),
@@ -799,15 +933,12 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
     setup_out: dict[str, Any] = {}
     board, cc, _read = agents_live_board.compose(connection, settings, project_id, viewer=viewer,
                                                  now=now, with_builds=False, setup_out=setup_out)
-    roster = {str(a["role_key"]) for a in board["agents"]}
 
     host = _quiet(connection, "host advice", host_advice, connection, project_id,
                   default={"show": False}) or {"show": False}
     budget_full = _quiet(connection, "the budget", BudgetGovernor(settings).status_for_project,
                          connection, project_id, now=now, default={}) or {}
 
-    edge_list = _quiet(connection, "hand-offs", flows, connection, project_id, roster, now,
-                       default=[]) or []
     days, by_hour, any_week = _quiet(connection, "finished runs", finished_counts, connection,
                                      project_id, zone, now,
                                      default=([], {}, False)) or ([], {}, False)
@@ -824,14 +955,15 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
                  "_week_money": 0, "_t0": t0}
     t0 = today.pop("_t0")
     week_money = int(today.pop("_week_money") or 0)
-    day = _quiet(connection, "the day strip", strip, connection, project_id, now,
-                 board["missions"], default=None) or {
-        "since": (now - STRIP_WINDOW).isoformat(), "rows": [], "more": 0}
-    ever = any_week or bool(day["rows"]) or bool(
+    live_runs = any(m["state"] not in ("done",) for m in board["missions"])
+    ever = any_week or live_runs or bool(
         _quiet(connection, "whether anything ran", ever_ran, connection, project_id, default=False))
+    team_pulse = _quiet(connection, "the pulse", pulse_memo, connection, project_id, zone, now,
+                        default=None) or empty_pulse(now, zone)
     if not today["last_work_at"]:
+        # The newest finished agent step (the pulse's), else the newest agent presence.
         idle = [a.get("since") for a in board["agents"] if a.get("since")]
-        today["last_work_at"] = max(idle) if idle else None
+        today["last_work_at"] = team_pulse.get("last_act_at") or (max(idle) if idle else None)
     today["ever_ran"] = ever
 
     metrics = _quiet(connection, "delivery metrics", delivery, connection, project_id,
@@ -867,6 +999,8 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "budget_timezone": str(budget_full.get("budget_timezone") or "UTC"),
         "day": {"cap_usd_micros": int(day_period.get("cap_usd_micros") or 0),
                 "actual_usd_micros": int(day_period.get("actual_usd_micros") or 0)},
+        # "Subscription calls free" only when a subscription is connected and working.
+        "subscription": subscription_connected(setup_out.get("basics")),
     }
 
     # REFUSED AT THE DOOR: work started while the money already spent leaves no room is refused
@@ -897,8 +1031,12 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
 
     counts = {**board["counts"], "expired_answerable": int(cc["counts"].get("expired_answerable") or 0)}
     moving = sum(1 for m in board["missions"]
-                 if m["state"] not in ("done", "stopped", "waiting_you", "waiting_person"))
-    runs_24h = len(day["rows"]) + int(day["more"])
+                 if m["state"] not in ("done", "stopped", "stalled", "waiting_you",
+                                       "waiting_person"))
+    runs_24h = int(today.get("runs_finished") or 0) + int(today.get("runs_failed") or 0) + moving
+    old_total = _quiet(connection, "old questions", old_questions, connection, project_id, now,
+                       default=None)
+    attention, cleanup = group_old_findings(board["attention"], now, old_total)
     view: dict[str, Any] = {
         "project_id": project_id,
         "etag": "",
@@ -909,16 +1047,16 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
                          host=host, runs_24h=runs_24h, ever=ever,
                          last_work_at=today["last_work_at"], now=now, refusal=refusal),
         "counts": counts,
-        "attention": board["attention"],
+        "attention": attention,
         "missions": board["missions"],
         "outcomes": board["outcomes"],
         "recent": cc["recent"],
         "teams": board["teams"],
         "agents": board["agents"],
-        "flows": edge_list,
         "today": today,
-        "day": day,
         "week": week,
+        "pulse": team_pulse,
+        "cleanup": cleanup,
         "budget": budget,
         "host": {k: v for k, v in host.items() if k != "gauges"},
         "systems": dots,

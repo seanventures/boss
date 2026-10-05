@@ -16,22 +16,35 @@
  * there is one way a team gets set rather than two that can disagree.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
+import { AgentAvatar } from "./agent-avatar";
 import { AgentChip } from "./agent-chip";
 import { notifyChanged } from "./changed";
 import { apiWrite } from "../lib/api-write";
 
 const PROJECT_DEFAULT = "*";
 
-export function DefaultAgentPicker({ projectId, actor }: {
+export function DefaultAgentPicker({ projectId, actor, faces = false }: {
   projectId: string; actor: string;
+  /** The hero composer's chip: the team's faces, stacked, and `n agents ⌄`. */
+  faces?: boolean;
 }) {
   const [team, setTeam] = useState<string[] | null>(null);
   const [roles, setRoles] = useState<Array<{ role_key: string; display_name?: string }>>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const wrap = useRef<HTMLDivElement>(null);
+  // A POPOVER CLOSES LIKE ONE (independent test): Escape, or a press anywhere outside it.
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [open]);
 
   const load = useCallback(async () => {
     try {
@@ -77,11 +90,21 @@ export function DefaultAgentPicker({ projectId, actor }: {
   const available = roles.filter((r) => !current.includes(r.role_key));
 
   return (
-    <div className="askboss-wf askboss-agents" data-testid="askboss-default-agents">
+    <div className="askboss-wf askboss-agents" data-testid="askboss-default-agents" ref={wrap}>
       <button type="button" className="askboss-wf-label askboss-agents-toggle"
-              onClick={() => setOpen((o) => !o)}
+              onClick={() => setOpen((o) => !o)} aria-expanded={open}
+              data-testid="askboss-agents-toggle"
               title="The agents every new project here starts with">
-        Agents {current.length ? `· ${current.length}` : ""} {open ? "▾" : "▸"}
+        {faces ? (
+          <>
+            {current.length ? (
+              <span className="askboss-agents-stack" aria-hidden>
+                {current.slice(0, 3).map((k) => <AgentAvatar key={k} agent={k} size={20} aiBadge={false} />)}
+              </span>
+            ) : null}
+            {current.length ? `${current.length} agent${current.length === 1 ? "" : "s"}` : "BOSS's team"} ⌄
+          </>
+        ) : <>Agents {current.length ? `· ${current.length}` : ""} {open ? "▾" : "▸"}</>}
       </button>
       {note ? <span className="askboss-wf-note">{note}</span> : null}
 

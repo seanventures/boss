@@ -26,6 +26,7 @@ Every action, automatic or chosen, is an `events` row (`system_doctor.acted`) an
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 import threading
@@ -33,7 +34,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from sqlalchemy import text
 
@@ -722,27 +723,107 @@ def open_findings(connection: Any, *, cards_only: bool = False) -> list[dict[str
     return out
 
 
+_RAW_ID = re.compile(r"\b(?:crun|wfr|drun|ctr|act|dec|job|shesc|mtg|mrun)_[0-9a-z]{6,}\b")
+_STUCK = re.compile(r"stuck in `?([a-z_ ]+)`? with no state change for (\d+) minutes?", re.I)
+_CLASS_Q = re.compile(r"^\s*([^—]+?)\s+—\s+how should this proceed\?\s*$", re.I)
+_STAGE_WORDS = {"coding": "coding", "queued": "waiting in the queue", "validating": "checking",
+                "provisioning": "starting", "opening_pr": "opening its PR"}
+
+
+def _span_words(minutes: int) -> str:
+    if minutes >= 2 * 1440:
+        return f"{minutes // 1440} days"
+    if minutes >= 120:
+        return f"{minutes // 60} hours"
+    return f"{minutes} minutes"
+
+
+def escalation_words(question: str, task_ref: str, build: Optional[Mapping[str, Any]]
+                     ) -> tuple[str, str]:
+    """A Shepherd question as an operator reads it: (title, detail). NEVER a raw id, never
+    "unknown" (independent test): the build's app name stands where its id stood, a stuck
+    time is days or hours, and an unrecognised failure is said as one. Pure."""
+    from . import factory_view
+
+    line = (str(question or "").splitlines() or [""])[0].strip()
+    name = factory_view.app_name(build) if build else ""
+    if not name and ":" in line:
+        # The question names its build before the colon ("Slugify util: stuck in …").
+        head = line.split(":", 1)[0].strip()
+        if head and not _RAW_ID.fullmatch(head) and len(head) <= 80:
+            name = head
+    thing = f"“{name}”" if name else "A build"
+    stuck = _STUCK.search(line)
+    cls = _CLASS_Q.match(line)
+    from .build_waits import waits_on_person as _waits, why_waiting as _why
+
+    if build and _waits(build.get("status"), build.get("phase"), build.get("decision_status")):
+        # A BUILD THAT WAITS ON YOU is never "stopped for a reason BOSS couldn't name".
+        title = f"{thing} waits on you to {_why(build.get('phase'), build.get('decision_status')) or 'answer it'}"
+    elif stuck:
+        stage = _STAGE_WORDS.get(stuck.group(1).strip().lower(), stuck.group(1).replace("_", " "))
+        title = f"{thing} stuck {stage} for {_span_words(int(stuck.group(2)))}. Continue or cancel?"
+    elif cls:
+        what = cls.group(1).strip()
+        what = "stopped for a reason BOSS couldn't name" if what.lower() == "unknown" else f"stopped: {what}"
+        title = f"{thing} {what}. How should it go on?"
+    else:
+        title = line
+        if name:
+            title = title.replace(task_ref, name)
+    title = _RAW_ID.sub(name or "a build", title).replace("`", "")
+    title = re.sub(r"\bunknown\b", "unrecognised", title, flags=re.I)[:160]
+    if build:
+        status = str(build.get("status") or "")
+        word = {"cancelled": "stopped", "failed": "failed", "completed": "finished",
+                "blocked": "waiting on you", "running": "still marked running"}.get(status, status or "unknown")
+        detail = f"Build {'of ' + name if name else ''} · {word}".replace("  ", " ")
+    else:
+        detail = "Its build is gone"
+    detail = re.sub(r"\bunknown\b", "state not recorded", detail)
+    return title, detail
+
+
+def plain_words(text_: Any) -> str:
+    """Every finding's words as a card shows them: no raw ids, no "unknown" (the class the
+    independent test asked for — escalation_words is the rich form for Shepherd's questions)."""
+    out = _RAW_ID.sub("a build", str(text_ or "")).replace("`", "")
+    return re.sub(r"\bunknown\b", "unrecognised", out, flags=re.I)
+
+
 def shepherd_escalation_cards(connection: Any, project_id: str) -> list[dict[str, Any]]:
     """Shepherd's open questions, which waited 2-3 days unanswered inside a console nobody
-    opened, are cards in What needs you through the same kind (spec §4d)."""
+    opened, are cards in What needs you through the same kind (spec §4d). Newest first: the
+    old ones are counted and cleared as one row (command_center_view.old_questions)."""
     try:
         with connection.begin_nested():
             rows = connection.execute(text(
                 "SELECT id, task_ref, question, options, created_at FROM shepherd_escalations "
-                "WHERE project_id = :p AND status = 'open' ORDER BY created_at LIMIT 10"),
+                "WHERE project_id = :p AND status = 'open' ORDER BY created_at DESC LIMIT 10"),
                 {"p": project_id}).mappings().all()
+            refs = [str(r["task_ref"]) for r in rows if r["task_ref"]]
+            builds = {str(b["id"]): dict(b) for b in connection.execute(text(
+                "SELECT r.id, r.title, r.status, r.phase, r.spec, r.finalize_ctx, "
+                "d.status AS decision_status FROM code_task_runs r "
+                "LEFT JOIN decisions d ON d.id = r.decision_id WHERE r.id = ANY(:ids)"),
+                {"ids": refs}).mappings()} if refs else {}
     except Exception:  # noqa: BLE001 — an older schema
         return []
     out = []
     for r in rows:
         options = r["options"] if isinstance(r["options"], list) else json.loads(
             r["options"] or "[]")
+        title, detail = escalation_words(str(r["question"] or ""), str(r["task_ref"] or ""),
+                                         builds.get(str(r["task_ref"] or "")))
+        opts = []
+        for o in options[:3]:
+            label = str(o.get("label") or o.get("action") or "") if isinstance(o, dict) else str(o)
+            key = str(o.get("action") or o.get("label") or "") if isinstance(o, dict) else str(o)
+            opts.append({"key": f"answer:{key}", "label": label[:60].capitalize(), "tip": label,
+                         "confirm": False})
         out.append({
             "id": f"shepherd:{r['id']}", "kind": "shepherd_escalation", "severity": "warn",
-            "title": (str(r["question"] or "").splitlines() or [""])[0][:160],
-            "detail": f"About {r['task_ref']}.",
-            "options": [{"key": f"answer:{o}", "label": str(o)[:60].capitalize(), "tip": str(o),
-                         "confirm": False} for o in options[:3]],
+            "title": title, "detail": detail, "options": opts,
             "first_seen": r["created_at"].isoformat() if r["created_at"] else None,
         })
     return out
@@ -763,7 +844,7 @@ def card_items(connection: Any, project_id: str) -> list[dict[str, Any]]:
             "kind": "system_health",
             "finding_id": fid, "finding_kind": f["kind"],
             "severity": f.get("severity") or "warn",
-            "title": f["title"], "detail": f.get("detail") or "",
+            "title": plain_words(f["title"]), "detail": plain_words(f.get("detail") or ""),
             "what_to_do": None,
             "answers": [{"key": o["key"], "label": o["label"], "enabled": True,
                          "reason": o.get("tip"), "confirm": bool(o.get("confirm"))}
@@ -834,6 +915,95 @@ def act(engine: Any, settings: Any, finding_id: str, option: str, *, actor: str)
                            "needs_choice=false WHERE id=:id"),
                       {"o": option, "a": actor, "id": finding_id})
     return {"ok": True, **result}
+
+
+
+#: Shepherd questions older than this are history: Clean up clears them (command_center_view
+#: groups exactly these into one row).
+OLD_QUESTION = timedelta(days=7)
+_ENDED_BUILD = frozenset({"completed", "failed", "cancelled", "simulated"})
+
+
+CLEAN_UP_PAGE = 200
+
+
+from .build_waits import waits_on_person, why_waiting  # noqa: E402
+
+
+def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
+                 older_than: timedelta = OLD_QUESTION) -> dict[str, Any]:
+    """CLEAN UP, the Command Center's one button for old stuck builds.
+
+    Each of the project's open Shepherd questions older than `older_than` ("stuck in `coding`
+    … Let it continue, or cancel it?") is about a build. If that build has already ended (or
+    no longer exists) the question is closed as answered — nothing else changes. If it is still
+    live with no state change for as long, nobody is going to continue it: it is cancelled the
+    way a person's Stop cancels it (code_task_service.cancel_run, the console's own path) and
+    the question is answered "cancel". Recent questions and findings are never touched. Every
+    choice is recorded (system_doctor_actions), as a person's choice on a card is."""
+    from . import code_task_service
+
+    cutoff = datetime.now(timezone.utc) - older_than
+    closed = cancelled = 0
+    def pages():
+        # PAGED, every old question (independent test: a page of ten looked like the total).
+        after = ""
+        while True:
+            with engine.begin() as c:
+                page = c.execute(text(
+                    "SELECT e.id, e.task_ref, r.status, r.phase, r.updated_at, "
+                    "d.status AS decision_status FROM shepherd_escalations e "
+                    "LEFT JOIN code_task_runs r ON r.id = e.task_ref "
+                    "LEFT JOIN decisions d ON d.id = r.decision_id "
+                    "WHERE e.project_id = :p AND e.status = 'open' AND e.created_at < :cut "
+                    "AND e.id > :after ORDER BY e.id LIMIT :n"),
+                    {"p": project_id, "cut": cutoff, "after": after, "n": CLEAN_UP_PAGE}).mappings().all()
+            yield from page
+            if len(page) < CLEAN_UP_PAGE:
+                return
+            after = str(page[-1]["id"])
+
+    for row in pages():
+        esc, ref = str(row["id"]), str(row["task_ref"] or "")
+        status = str(row["status"] or "")
+        updated = row["updated_at"]
+        if updated is not None and updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        live = bool(status) and status not in _ENDED_BUILD
+        answer = "cleared: the build already ended"
+        # WAITING ON A PERSON IS NOT STUCK (independent re-check R1): a build at its plan, its
+        # merge, or any open decision is the operator's move, never BOSS's. Clean up closes
+        # the stale question and leaves the build and its decision exactly as they are.
+        waiting = waits_on_person(status, row["phase"], row["decision_status"])
+        if waiting:
+            answer = "cleared: the build waits on a person"
+        with engine.begin() as c:
+            if live and not waiting and (updated is None or updated < cutoff):
+                try:
+                    code_task_service.cancel_run(
+                        c, ref, project_id, actor=actor,
+                        reason="Cleared by Clean up: no progress for over 7 days")
+                    cancelled += 1
+                    answer = "cancel"
+                except (code_task_service.CancelRefused, LookupError):
+                    pass
+            elif live and not waiting:
+                continue  # it moved since the question: not history, leave the card
+            n = c.execute(text(
+                "UPDATE shepherd_escalations SET status='answered', answer=:a, answered_by=:by, "
+                "answered_at=now() WHERE id=:id AND status='open'"),
+                {"a": answer, "by": actor, "id": esc}).rowcount
+            if not n:
+                continue
+            closed += 1
+            record_action(c, finding_id=f"shepherd:{esc}", kind="shepherd_escalation",
+                          action="clean_up_old", target=ref or esc, actor=actor,
+                          automatic=False, before={"build_status": status or None},
+                          outcome=answer, project_id=project_id)
+    words = f"Cleared {closed} old {'question' if closed == 1 else 'questions'}"
+    if cancelled:
+        words += f" · stopped {cancelled} stuck {'build' if cancelled == 1 else 'builds'}"
+    return {"ok": True, "closed": closed, "cancelled": cancelled, "result": words}
 
 
 def _snooze(minutes: float, message: str) -> Callable[..., dict[str, Any]]:

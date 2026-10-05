@@ -13676,6 +13676,25 @@ def console_command_center_endpoint(project_id: str) -> dict:
         return command_center.build(connection, settings, project_id)
 
 
+@app.post("/v1/command-center/clean-up")
+def command_center_clean_up_endpoint(payload: dict):
+    """The Command Center's Clean up (the In flight card's old-builds row): closes the project's
+    Shepherd questions older than a week — answered when their build already ended, and the
+    build stopped (the console's own Stop) when it is still marked live with no progress. The
+    same rows command_center_view groups into `cleanup`. Body: {project_id, actor}."""
+    from boss_engine.services import system_doctor
+
+    project_id = str((payload or {}).get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        actor = require_project_write_actor(connection, project_id,
+                                            (payload or {}).get("actor"), "task_create")
+    return system_doctor.clean_up_old(engine, settings, project_id, actor=actor)
+
+
 @app.get("/v1/command-center/view")
 def command_center_view_endpoint(project_id: str, request: Request, response: Response,
                                  tz: Optional[str] = None, viewer: Optional[str] = None):
