@@ -9,6 +9,8 @@
 /* Header: one row. */
 .lx-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
 .lx-title-main { margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--ink); }
+.lx-more-btn { display: none; }
+.lx-head-tools { display: contents; }
 .lx-head-count { font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lx-tail { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
 .lx-tail::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
@@ -201,13 +203,38 @@
 }
 /* < 720: two-line rows, a full-screen drawer, a short pulse. */
 @media (max-width: 719px) {
-  .lx-body { height: calc(100vh - 260px); }
+  .lx-body { height: calc(100vh - 220px); }
   .lx-pulse { height: 48px; }
-  .lx-row { height: 32px; grid-template-columns: 58px 18px 22px minmax(0, 1fr); gap: 6px; }
-  .lx-lvl > span:last-child, .lx-right { display: none; }
-  /* The whole log body, not the viewport: the console's own bar stays above it. */
-  .lx-drawer { inset: 0; width: 100%; }
-  .lx-view, .lx-rail-pick, .lx .ag-btn { min-height: 40px; }
+  /* A full-screen sheet over the console (its own close bar), like every sheet on a phone. */
+  .lx-drawer { position: fixed; inset: 0; z-index: 260; width: 100%; border-radius: 0; border: 0; }
+  .lx-drawer-head { min-height: 52px; }
+  /* Range and Export live behind ⋯ (D11): the header keeps the count, the tail and Filters. */
+  .lx-more-btn { display: inline-flex; }
+  .lx-head-tools { display: none; }
+  .lx-head-tools[data-open] {
+    display: flex; flex-wrap: wrap; gap: 8px; position: absolute; z-index: 40; top: calc(100% + 4px); right: 0; left: 0;
+    padding: 10px; border: 1px solid var(--border-strong); border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--shadow-lg);
+  }
+  .lx-head { position: relative; }
+  /* 44px targets (D10). */
+  .lx button, .lx [role="button"], .lx a.ag-link, .lx .ag-seg > button, .lx select, .lx input { min-height: 44px; }
+  .lx-row .lx-fold { min-height: 0; }
+}
+/* The LIST's width decides a line's shape — the same width the list measures to size its
+   windowed rows (log-rows.tsx, NARROW_PX), so the drawing and the arithmetic never disagree. */
+.lx-list { container: lx-list / inline-size; }
+@container lx-list (max-width: 719px) {
+  .lx-row {
+    height: 52px; grid-template-columns: 58px auto minmax(0, 1fr) auto; grid-template-rows: 22px 22px;
+    row-gap: 2px; column-gap: 6px; align-content: center;
+  }
+  .lx-row > .lx-time { grid-area: 1 / 1; }
+  .lx-row > .lx-lvl { grid-area: 1 / 2; }
+  .lx-row > .lx-who { grid-area: 1 / 3; justify-content: flex-start; }
+  .lx-row > .lx-right { grid-area: 1 / 4; }
+  .lx-row > .lx-right .lx-run { display: none; }
+  .lx-row > .lx-title { grid-area: 2 / 1 / 3 / -1; }
+  .lx-row .lx-preview { display: none; }
 }
 
 /* A still for every motion; Paused stills them too. */

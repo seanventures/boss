@@ -148,10 +148,12 @@
 
 /* 1024-1279: the meter's meta moves into its tooltip. */
 @media (max-width: 1279px) { .gv-meta { display: none; } }
-/* 720-1023: Evidence folds away (it is in the Log), Source is a word. */
+/* 720-1023: Evidence stacks under Enforced (D10: it was dropped — what a limit stopped is the
+   point of the row), Source is a word. */
 @media (max-width: 1023px) {
   .gv-row { grid-template-columns: minmax(120px, 1fr) minmax(110px, 1fr) minmax(90px, 0.8fr) minmax(90px, 0.8fr) 40px; }
-  .gv-evidence { display: none; }
+  .gv-evidence { grid-column: 4; grid-row: 2; }
+  .gv-act { grid-column: 5; grid-row: 1; }
 }
 /* < 720: two-line rows, full-width edits, 44px targets. */
 @media (max-width: 719px) {
@@ -163,7 +165,12 @@
   .gv-meter-other { grid-template-columns: 1fr auto; }
   .gv-meter-other .gv-bar { grid-column: 1 / -1; }
   .gv-alloc-line { grid-template-columns: 1fr auto; }
-  .gv .ag-btn, .gv-tab, .gv-input, .gv-switch { min-height: 44px; }
+  .gv-evidence { grid-column: 1 / -1; grid-row: auto; }
+  .gv-evidence:empty { display: none; }
+  /* 44px targets (D10): every button, link, tab and field. */
+  .gv button, .gv a, .gv select, .gv input, .gv [role="tab"], .gv [role="switch"] {
+    min-height: 44px; display: inline-flex; align-items: center;
+  }
   .gv-edit-form > * { flex: 1 1 100%; }
 }
 

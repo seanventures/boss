@@ -18,7 +18,8 @@ import { usd } from "../../lib/money";
 import { nameOf, RunFace } from "../agents/run-face";
 import { STREAM_ICON } from "./facet-rail";
 import {
-  REFUSAL_KINDS, LEVEL_LABEL, costOf, durationOf, firstLine, flatten, runChip, windowOf, type DisplayRow,
+  NARROW_PX, REFUSAL_KINDS, LEVEL_LABEL, ROW_H, ROW_H_NARROW, costOf, durationOf, firstLine, flatten, runChip, windowOf,
+  type DisplayRow,
 } from "./log-model";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
@@ -103,15 +104,21 @@ export function LogRows({ items, labels, byRun, selectedId, arrived, onOpen, onH
   const box = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(800);
+  const [narrow, setNarrow] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const rows = useMemo(() => flatten(items, { byRun, open, labels }), [items, byRun, open, labels]);
+  const rows = useMemo(() => flatten(items, { byRun, open, labels, rowH: narrow ? ROW_H_NARROW : ROW_H }),
+                       [items, byRun, open, labels, narrow]);
   const visible = useMemo(() => windowOf(rows, scrollTop, height), [rows, scrollTop, height]);
   const total = rows.length ? rows[rows.length - 1].top + rows[rows.length - 1].height : 0;
 
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return undefined;
-    const measure = () => setHeight(el.clientHeight || 800);
+    const measure = () => {
+      setHeight(el.clientHeight || 800);
+      // Measured, not guessed: the same width at which the CSS stacks a line on two lines.
+      setNarrow(el.clientWidth > 0 && el.clientWidth < NARROW_PX);
+    };
     measure();
     if (typeof ResizeObserver === "undefined") return undefined;
     const ro = new ResizeObserver(measure);
