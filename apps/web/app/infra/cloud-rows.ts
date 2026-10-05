@@ -22,7 +22,11 @@ const ref = (v: unknown): { id: string; name: string } | null => {
 const strs = (v: unknown): string[] => arr(v).map(String);
 
 /** A money cell: the server's string, or `—` when it sent none. Never micros. */
-export const money = (v: unknown): string => optStr(v) ?? "—";
+/** The server's dollar string, or `—`. Cost is shown only when > 0: a zero is never `$0.00`. */
+export const money = (v: unknown): string => {
+  const s = optStr(v);
+  return !s || /^\$0(?:\.0+)?$/.test(s.trim()) ? "—" : s;
+};
 
 // ── Accounts ────────────────────────────────────────────────────────────────────────────────
 
