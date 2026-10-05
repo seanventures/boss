@@ -2700,8 +2700,9 @@ def copy_declared_lines(connection: Connection, project_id: Optional[str] = None
 
 
 def observed_edges(connection: Connection, project_id: str, *,
-                   hours: int = 168, with_outcomes: bool = False,
-                   include_people: bool = False) -> list[dict[str, Any]]:
+                   hours: float = 168, with_outcomes: bool = False,
+                   include_people: bool = False, sequence: bool = False,
+                   with_newest: bool = False) -> list[dict[str, Any]]:
     """Agent→agent parent→child pairs in the window: the Team chart's observed handoffs.
 
     The defaults are the Team chart's reader, unchanged. Organization (agents_org_board) asks
@@ -2709,52 +2710,119 @@ def observed_edges(connection: Connection, project_id: str, *,
     ended in `error`, are open and `awaiting_input`, or went `stale`, plus the raw `how`;
     `include_people` adds person→agent rows (`source: "person"`): an agent's act whose parent is
     no agent and that a person handed — directly (a chat they opened), or as the first work of a
-    run they started (the step is handed by BOSS; the RUN act it hangs from is the person's)."""
+    run they started (the step is handed by BOSS; the RUN act it hangs from is the person's).
+
+    `sequence` adds the hand-offs a workflow makes WITHOUT naming them: the worker records BOSS
+    as every step's hander and hangs each step from the run act, so no step has an agent parent
+    and every edge looked like it came from BOSS. Inside one run (root act), the step after
+    another is handed by the previous step's agent — the order the work actually went — so
+    consecutive BOSS-handed steps/stages/seats by different agents become previous→next pairs.
+    Their counts merge into the parent→child pairs. The Command Center's Floor asks for it.
+    `with_newest` adds, per pair, the newest handed act and its run (for a comet to fly once).
+
+    `hours` may be fractional (the Floor reads the last hour)."""
     outcomes = (
         ", count(*) FILTER (WHERE c.status = 'error') AS failed,"
         " count(*) FILTER (WHERE c.status = 'awaiting_input' AND c.ended_at IS NULL) AS waiting,"
         " count(*) FILTER (WHERE c.status = 'stale') AS stale"
     ) if with_outcomes else ""
+    newest = (
+        ", (array_agg(c.act_id ORDER BY c.started_at DESC))[1] AS newest_act_id,"
+        " (array_agg(c.workflow_run_id ORDER BY c.started_at DESC))[1] AS run_id"
+    ) if with_newest else ""
+    window = "c.started_at > now() - make_interval(secs => :s)"
+    # With `sequence`, a person hands a run's FIRST agent; the later steps are the agents' own
+    # hand-offs (below), not the person's again.
+    first_only = (
+        "AND NOT EXISTS (SELECT 1 FROM agent_acts e WHERE e.root_act_id = c.root_act_id"
+        " AND e.role_key IS NOT NULL AND e.kind IN ('step', 'stage', 'seat')"
+        " AND (e.started_at, e.act_id) < (c.started_at, c.act_id))"
+    ) if sequence else ""
     rows = connection.execute(
         text(
             f"""
             SELECT p.role_key AS source, c.role_key AS target, count(*) AS times,
                    max(c.started_at) AS last_at, mode() WITHIN GROUP (ORDER BY c.how) AS how
-                   {outcomes}
+                   {outcomes}{newest}
             FROM agent_acts c JOIN agent_acts p ON p.act_id = c.parent_act_id
             WHERE c.project_id = :p AND c.role_key IS NOT NULL AND p.role_key IS NOT NULL
               AND c.role_key <> p.role_key
-              AND c.started_at > now() - make_interval(hours => :h)
+              AND {window}
             GROUP BY 1, 2
             """
         ),
-        {"p": project_id, "h": int(hours)},
+        {"p": project_id, "s": float(hours) * 3600},
     ).mappings().all()
     people = connection.execute(
         text(
             f"""
             SELECT 'person' AS source, c.role_key AS target, count(*) AS times,
                    max(c.started_at) AS last_at, mode() WITHIN GROUP (ORDER BY c.how) AS how
-                   {outcomes}
+                   {outcomes}{newest}
             FROM agent_acts c LEFT JOIN agent_acts p ON p.act_id = c.parent_act_id
             WHERE c.project_id = :p AND c.role_key IS NOT NULL AND p.role_key IS NULL
               AND (c.handed_by_kind = 'person' OR p.handed_by_kind = 'person')
-              AND c.started_at > now() - make_interval(hours => :h)
+              AND {window}
+              {first_only}
             GROUP BY 2
             """
         ),
-        {"p": project_id, "h": int(hours)},
+        {"p": project_id, "s": float(hours) * 3600},
     ).mappings().all() if include_people else []
-    out = []
-    for r in [*rows, *people]:
+    # PREVIOUS STEP'S AGENT → NEXT STEP'S AGENT, inside one run (see the docstring).
+    steps = connection.execute(
+        text(
+            f"""
+            WITH seq AS (
+              SELECT a.act_id, a.role_key, a.status, a.ended_at, a.how, a.started_at,
+                     a.workflow_run_id, a.handed_by_kind, a.parent_act_id,
+                     LAG(a.role_key) OVER (PARTITION BY a.root_act_id
+                                           ORDER BY a.started_at, a.act_id) AS prev_role
+              FROM agent_acts a
+              WHERE a.project_id = :p AND a.role_key IS NOT NULL
+                AND a.kind IN ('step', 'stage', 'seat')
+                AND a.root_act_id IN (SELECT root_act_id FROM agent_acts
+                                      WHERE project_id = :p
+                                        AND started_at > now() - make_interval(secs => :s))
+            )
+            SELECT c.prev_role AS source, c.role_key AS target, count(*) AS times,
+                   max(c.started_at) AS last_at, mode() WITHIN GROUP (ORDER BY c.how) AS how
+                   {outcomes}{newest}
+            FROM seq c LEFT JOIN agent_acts p ON p.act_id = c.parent_act_id
+            WHERE c.prev_role IS NOT NULL AND c.prev_role <> c.role_key
+              AND c.handed_by_kind = 'boss' AND p.role_key IS NULL
+              AND {window}
+            GROUP BY 1, 2
+            """
+        ),
+        {"p": project_id, "s": float(hours) * 3600},
+    ).mappings().all() if sequence else []
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in [*rows, *steps, *people]:
         edge = {"source": r["source"], "target": r["target"], "times": int(r["times"]),
                 "last_action": edge_label(r["how"]) if r["how"] in HOWS else None,
                 "last_at": r["last_at"]}
         if with_outcomes:
             edge.update(failed=int(r["failed"] or 0), waiting=int(r["waiting"] or 0),
                         stale=int(r["stale"] or 0), how=r["how"])
-        out.append(edge)
-    return out
+        if with_newest:
+            edge.update(newest_act_id=r["newest_act_id"], run_id=r["run_id"])
+        key = (str(edge["source"]), str(edge["target"]))
+        have = merged.get(key)
+        if have is None:
+            merged[key] = edge
+            continue
+        # One pair, two readings (named parent and run order): one edge, counts summed.
+        have["times"] += edge["times"]
+        for k in ("failed", "waiting", "stale"):
+            if k in have:
+                have[k] += edge[k]
+        if edge["last_at"] and (not have["last_at"] or edge["last_at"] > have["last_at"]):
+            have["last_at"] = edge["last_at"]
+            for k in ("last_action", "how", "newest_act_id", "run_id"):
+                if k in edge:
+                    have[k] = edge[k]
+    return list(merged.values())
 
 
 def my_recent_work(connection: Connection, project_id: str, role_key: str, *, limit: int = 10,

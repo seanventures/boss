@@ -209,3 +209,33 @@ def test_an_unknown_zone_falls_back_to_utc_without_asking_twice():
         assert Conn.calls == 1
     finally:
         ccv._ZONES = None
+
+
+# ── From the independent test (D5, D12) ─────────────────────────────────────────────────────
+
+DISK = {"show": True, "severity": "warning", "cause": "disk",
+        "headline": "This server's disk is nearly full", "detail": "Right now: disk 85% full."}
+REFUSAL = {"period": "day", "cap_usd_micros": 5_000_000, "actual_usd_micros": 6_200_000}
+
+
+def test_a_refusal_at_the_door_is_budget_stopped_work_without_a_build_row():
+    """The budget refuses new work before any build exists, so no budget_refused card does."""
+    got = status(budget=RED, refusal=REFUSAL, counts=counts(running=2))
+    assert (got["key"], got["text"]) == ("budget_stopped", "Budget stopped work")
+    assert got["tip"] == "Over the day cap. Raise it in Budget."
+    # The budget's own state need not be red: the refusal is the budget's rule.
+    assert status(budget=ORANGE, refusal=REFUSAL)["key"] == "budget_stopped"
+
+
+def test_a_full_disk_is_the_host_dots_word_not_the_headline():
+    assert status(host=DISK, counts=counts(running=1))["key"] == "running"
+    assert status(host=DISK)["key"] == "quiet"
+    dot = dots(host=DISK)["host"]
+    assert (dot["tone"], dot["state"]) == ("amber", "Disk")
+    assert dot["tip"] == "This server's disk is nearly full · Right now: disk 85% full."
+
+
+def test_only_a_critical_host_outranks_ready_for_first_build():
+    assert status(host=WARNING, runs_24h=0, ever=False)["key"] == "first_build"
+    assert status(host=CRITICAL, runs_24h=0, ever=False)["key"] == "host_critical"
+    assert status(host=WARNING)["key"] == "host_slow"

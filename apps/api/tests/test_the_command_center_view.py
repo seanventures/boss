@@ -149,22 +149,35 @@ def test_an_unknown_zone_falls_back_to_utc_and_says_so(engine, client):
 
 
 def test_flows_draw_only_known_hands(engine):
+    """The worker records BOSS as every step's hander. The Floor draws who really handed what:
+    the person who started the run → its first agent, each step's agent → the next step's agent
+    (agent_acts.observed_edges, sequence=True — the Organization view's helper)."""
+    now = datetime.now(timezone.utc)
     with engine.begin() as c:
         cast = seed.roster(c)
-        a, b = cast[0], cast[1]
-        seed.act(c, role_key=b, started=NOW - timedelta(minutes=4), handed_by_kind="agent", handed_by_id=a)
-        seed.act(c, role_key=b, started=NOW - timedelta(minutes=3), handed_by_kind="agent", handed_by_id=a)
-        seed.act(c, role_key=a, started=NOW - timedelta(minutes=2), handed_by_kind="person", handed_by_id="ceo")
-        seed.act(c, role_key=a, started=NOW - timedelta(minutes=1), handed_by_kind="boss")
-        # Never drawn: a hander nobody knows, a chat, and an act six hours and a minute old.
-        seed.act(c, role_key=b, started=NOW - timedelta(minutes=5), handed_by_kind="agent",
-                 handed_by_id="nobody_we_know")
-        seed.act(c, role_key=b, started=NOW - timedelta(minutes=5), kind="chat", handed_by_kind="agent",
-                 handed_by_id=a)
-        seed.act(c, role_key=b, started=NOW - timedelta(hours=6, minutes=1), handed_by_kind="agent", handed_by_id=a)
-    flows = _build(engine, now=NOW)["flows"]
+        a, b, d = cast[0], cast[1], cast[2]
+        wf = seed.workflow(c)
+        rid = seed.run(c, wf, status="running", created=now - timedelta(minutes=30))
+        seed.run_acts(c, rid, [a, b, b, d], started=now - timedelta(minutes=30))
+        # An agent that asks another directly (parent → child) is a hand-off too.
+        asker = seed.act(c, role_key=d, started=now - timedelta(minutes=5), handed_by_kind="boss")
+        seed.act(c, role_key=a, started=now - timedelta(minutes=4), handed_by_kind="agent",
+                 handed_by_id=d, parent=asker, root=asker)
+        # Never drawn: a run an hour and a half old.
+        old = seed.run(c, wf, status="completed", created=now - timedelta(minutes=95),
+                       completed=now - timedelta(minutes=80))
+        seed.run_acts(c, old, [d, a], started=now - timedelta(minutes=95))
+    view = _build(engine)
+    flows = view["flows"]
     edges = {(f["from_kind"], f["from"], f["to"]): f["n"] for f in flows}
-    assert edges == {("agent", a, b): 2, ("person", "you", a): 1, ("boss", "boss", a): 1}
+    assert edges == {("person", "you", a): 1, ("agent", a, b): 1, ("agent", b, d): 1,
+                     ("agent", d, a): 1}, edges
+    assert all(f["newest_act_id"] for f in flows)
+    # Every end is a node the Floor draws: never a guessed one.
+    board = {x["role_key"] for x in view["agents"]}
+    assert all(f["to"] in board and (f["from"] in board or f["from"] == "you") for f in flows)
+    # Nothing comes from BOSS when the hands are known.
+    assert not [f for f in flows if f["from_kind"] == "boss"]
 
 
 def test_the_day_strip_caps_rows_and_counts_the_rest(engine):
@@ -194,6 +207,17 @@ def test_a_gate_interval_is_the_time_the_step_waited_on_a_decision(engine):
                   completed=NOW - timedelta(minutes=82), decision_id=f"dec_{uuid4().hex[:8]}")
         seed.step(c, rid, "s3", status="waiting", kind="decision", started=NOW - timedelta(minutes=10),
                   decision_id=f"dec_{uuid4().hex[:8]}")
+        # PRODUCTION'S SHAPE: the worker parks a gate without a started_at; its decision was
+        # asked 4 minutes ago and the step row written a moment before.
+        gated = seed.run(c, wf, status="waiting", created=NOW - timedelta(minutes=20))
+        seed.step(c, gated, "s1", status="succeeded", started=NOW - timedelta(minutes=20),
+                  completed=NOW - timedelta(minutes=5))
+        seed.step(c, gated, "s2", status="waiting", kind="decision", started=None,
+                  created=NOW - timedelta(minutes=5), asked=NOW - timedelta(minutes=4),
+                  decision_id=f"dec_{uuid4().hex[:8]}")
+    parked = next(r for r in _build(engine, now=NOW)["day"]["rows"] if r["run_id"] == gated)
+    assert [(datetime.fromisoformat(g["from"]), g["to"]) for g in parked["gates"]] == \
+        [(NOW - timedelta(minutes=4), None)]
     row = next(r for r in _build(engine, now=NOW)["day"]["rows"] if r["run_id"] == rid)
     gates = [(datetime.fromisoformat(g["from"]), g["to"] and datetime.fromisoformat(g["to"]))
              for g in row["gates"]]
@@ -325,3 +349,26 @@ def test_view_answers_in_200ms_at_realistic_scale(engine, client):
     assert p95 < 200, took
     assert p95_304 < 200, not_modified
     assert gz < 40 * 1024
+
+
+def test_a_budget_that_refuses_at_the_door_stops_work_on_the_landing_page(engine, client):
+    """Independent test D5: the cap was spent, every new start was refused at the door, and the
+    page still said "n stopped" with no budget card, because no build row recorded the refusal.
+    The budget's own rule (cap_refusal) now says it."""
+    from boss_engine.services.budget import BudgetGovernor
+
+    with engine.begin() as c:
+        BudgetGovernor(get_settings()).set_intensity(c, "project", PID, 0, "ceo")   # $5 a day
+        for i in range(6):
+            seed.receipt(c, at=datetime.now(timezone.utc) - timedelta(minutes=2 + i), micros=1_000_000)
+    view = _view(client).json()
+    assert view["status"]["key"] == "budget_stopped"
+    assert view["status"]["text"] == "Budget stopped work"
+    refusal = view["budget_refusal"]
+    assert refusal["period"] == "day" and refusal["actual_usd_micros"] >= 6_000_000
+    assert refusal["detail"] == "$6 of $5 today. Raise the cap to start work."
+    # Raise the cap: the refusal and the sentence go.
+    with engine.begin() as c:
+        BudgetGovernor(get_settings()).set_intensity(c, "project", PID, 60, "ceo")
+    view = _view(client).json()
+    assert view["budget_refusal"] is None and view["status"]["key"] != "budget_stopped"
