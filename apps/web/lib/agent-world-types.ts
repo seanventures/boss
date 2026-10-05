@@ -181,7 +181,9 @@ export type ConverseApi = {
   roomPresets(): Promise<RoomPreset[]>;
   listConversations(projectId: string, o?: { kind?: ConversationKind; limit?: number }): Promise<ConversationSummary[]>;
   createConversation(projectId: string, body: { kind: ConversationKind; seats: string[]; leadRoleKey?: string;
-    preset?: string; title?: string; context?: ConversationContext }): Promise<Conversation>;
+    preset?: string; title?: string; context?: ConversationContext;
+    /** A talk: reopen the operator's open talk with that agent about the same thing. */
+    resume?: boolean }): Promise<Conversation>;
   getConversation(projectId: string, conversationId: string): Promise<Conversation>;
   sendTurn(projectId: string, conversationId: string, body: { message: string; to?: string[]; rounds?: 1 | 2 },
     signal?: AbortSignal): AsyncIterable<ConverseEvent>;

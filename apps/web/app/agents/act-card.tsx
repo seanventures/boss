@@ -68,14 +68,16 @@ export function subjectOf(act: Act): DockSubject | null {
 
 /** Talk to the agent that did this work, 1:1 and about the work itself: the conversation carries
  *  the act, so the agent sees what it did and its reply is signed as a child of that act (it
- *  shows in the run's lineage). Work no agent signed (a built-in, a person's) keeps the dock. */
+ *  shows in the run's lineage). Asking again reopens the talk about this step — never a fresh,
+ *  empty one — so what was asked is still there. Work no agent signed (a built-in, a person's)
+ *  keeps the dock. */
 export function askAboutAct(act: Act, question = ""): void {
   if (act.roleKey) {
     openTalk(act.roleKey, {
       from: "run_step", actId: act.actId,
       ...(act.links.workflow_run_id ? { workflowRunId: act.links.workflow_run_id } : {}),
       ...(act.links.step_id ? { stepId: act.links.step_id } : {}),
-    }, { fresh: true, draft: question || undefined });
+    }, { draft: question || undefined });
     return;
   }
   openDockAbout({ subject: subjectOf(act), question, role: null, actId: act.actId, history: "push" });

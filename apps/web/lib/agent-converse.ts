@@ -280,6 +280,7 @@ export function converseApi(actor: string): ConverseApi & {
     async createConversation(projectId, body) {
       const w = await postJson("", { project_id: projectId, ...who, kind: body.kind, seats: body.seats,
         lead_role_key: body.leadRoleKey, preset: body.preset, title: body.title,
+        ...(body.resume ? { resume: true } : {}),
         context: body.context ? { from: body.context.from, act_id: body.context.actId,
           workflow_run_id: body.context.workflowRunId, step_id: body.context.stepId } : undefined },
         "Open conversation");

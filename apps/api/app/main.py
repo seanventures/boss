@@ -28365,6 +28365,9 @@ class ConversationCreateBody(open_bodies.ProjectBody):
     preset: str | None = None
     title: str | None = None
     context: dict[str, Any] | None = None
+    # A talk: reopen the operator's open talk with that agent about the same thing instead of
+    # starting an empty one (agent_converse._resumable_talk).
+    resume: bool | None = None
 
 
 class ConversationTurnBody(open_bodies.ProjectBody):
@@ -28434,7 +28437,8 @@ def create_conversation_endpoint(payload: ConversationCreateBody) -> dict:
                 connection, project_id=str(payload.project_id), actor=actor,
                 kind=str(payload.kind or ""), seats=list(payload.seats or []),
                 lead_role_key=payload.lead_role_key, preset=payload.preset,
-                title=str(payload.title or ""), context=payload.context)
+                title=str(payload.title or ""), context=payload.context,
+                resume=bool(payload.resume))
         except _converse.ConverseError as error:
             raise _converse_refused(error) from error
 
