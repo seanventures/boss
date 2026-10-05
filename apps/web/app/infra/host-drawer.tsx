@@ -384,7 +384,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
               {h.findings.length ? (
                 <ul className="inf-checks">
                   {h.findings.map((f, i) => (
-                    <li key={`${f.kind}-${i}`} data-ok={f.ok ? "1" : "0"} title={[f.detail, f.remedy].filter(Boolean).join(" · ") || undefined}>
+                    <li key={`${f.kind}-${i}`} data-ok={f.ok ? "1" : "0"} data-copy="data" title={[f.detail, f.remedy].filter(Boolean).join(" · ") || undefined}>
                       <span className="inf-check-mark" aria-label={f.ok ? "Passed" : "Failed"}>{f.ok ? "✓" : "✗"}</span>
                       <span>{f.label}</span>
                       {!f.ok && f.remedy ? <span className="inf-muted inf-trunc" data-copy="data">{f.remedy}</span> : null}
