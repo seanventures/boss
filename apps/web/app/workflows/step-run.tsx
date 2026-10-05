@@ -16,15 +16,18 @@
  * else who the workflow assigns it to — the very view the lane node draws — so the node, the
  * chain and this panel cannot name three different people for one step.
  */
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 
 import type { Act, AvatarVariant } from "../../lib/agent-world-types";
 import type { StepView } from "../../lib/workflow-editor-types";
-import { fetchActivityLog } from "../../lib/activity-log-client";
-import type { ActivityLogItem } from "../../lib/activity-log";
+import type { ActivityLog, ActivityLogItem } from "../../lib/activity-log";
+import { useConsoleLive } from "../../lib/console-live";
+import { fetchLogPage } from "../../lib/log-api";
+import { usePolledRead } from "../../lib/log-stream";
+import { clock as logClock, utcTitle } from "../../lib/log-time";
+import { logHref } from "../../lib/log-url";
 import { usd } from "../../lib/money";
 import { isLoopbackPreviewUrl } from "../../lib/code-tasks";
-import { consoleHref } from "../url-intent";
 import { laneAgentOf, type LaneAgent } from "../agents/chain-model";
 import { nameOf, RunFace } from "../agents/run-face";
 import { StepSignedBy } from "../agents/step-signed-by";
@@ -39,8 +42,8 @@ export const STEP_ACTIVITY_ROWS = 5;
  *  Inbox" rather than two ids. */
 export function stepLogHref(search: string, workflowRunId: string, stepId: string,
                             names: { step?: string; run?: string } = {}): string {
-  return consoleHref(search, { area: "activity", wfr: workflowRunId, step: stepId,
-                               step_name: names.step || null, run_name: names.run || null });
+  return logHref({ wfr: workflowRunId, step: stepId, step_name: names.step || null,
+                   run_name: names.run || null }, search);
 }
 
 /* ── Who ─────────────────────────────────────────────────────────────────────────── */
@@ -241,40 +244,43 @@ export function summariseStepActivity(items: ActivityLogItem[]): Omit<StepActivi
   };
 }
 
-/** One read of the step's log; re-read while the step is live, never in a hidden tab. */
+/** The step's log, read in ONE bounded query (`summary=1`: the newest non-verbose rows, errors
+ *  first, with the error/warn counts and the step's model calls), re-read every 5s while the
+ *  step is live with its ETag — a 304 when nothing happened — and never while the console is
+ *  Paused or the tab hidden. It used to page 100 rows through a 50,000-row scan every 5s. */
 export function useStepActivity(projectId: string, workflowRunId: string | undefined, stepId: string,
                                 live: boolean, version: string): StepActivityState {
-  const [state, setState] = useState<StepActivityState>(EMPTY);
-  useEffect(() => {
-    if (!workflowRunId) { setState({ ...EMPTY, loaded: true }); return; }
-    let alive = true;
-    let timer: number | undefined;
-    const load = async () => {
-      const log = await fetchActivityLog(projectId, {
-        workflow_run_id: workflowRunId, step_id: stepId, limit: 100,
-      });
-      if (alive) setState({ ...summariseStepActivity(log.items ?? []), loaded: true });
-    };
-    const tick = () => {
-      timer = window.setTimeout(async () => {
-        if (!alive) return;
-        if (typeof document === "undefined" || document.visibilityState !== "hidden") await load();
-        if (alive) tick();
-      }, 5000);
-    };
-    void load();
-    if (live) tick();
-    return () => { alive = false; if (timer) window.clearTimeout(timer); };
-  }, [projectId, workflowRunId, stepId, live, version]);
-  return state;
+  const consoleLive = useConsoleLive();
+  const read = usePolledRead<ActivityLog>({
+    key: `${projectId}|${workflowRunId ?? ""}|${stepId}|${version}`,
+    pollMs: live ? 5000 : null,
+    paused: !consoleLive,
+    enabled: Boolean(workflowRunId),
+    read: async (etag, signal) => {
+      const got = await fetchLogPage(projectId, { workflow_run_id: workflowRunId, step_id: stepId,
+                                                  summary: 1, limit: 12 }, { etag, signal });
+      if (!got.ok) return { ok: false as const, error: got.error };
+      return got.data ? { ok: true as const, data: got.data, etag: got.etag }
+        : { ok: true as const, notModified: true, etag: got.etag };
+    },
+  });
+  if (!workflowRunId) return { ...EMPTY, loaded: true };
+  if (!read.data) return { ...EMPTY, loaded: !read.loading };
+  const summary = summariseStepActivity(read.data.items);
+  return {
+    ...summary,
+    errors: read.data.counts?.error ?? summary.errors,
+    warnings: read.data.counts?.warn ?? summary.warnings,
+    model: read.data.calls?.model || summary.model,
+    cost: read.data.calls ? read.data.calls.costUsd : summary.cost,
+    calls: read.data.calls ? read.data.calls.count : summary.calls,
+    loaded: true,
+  };
 }
 
-/** "18:02", in UTC, as the run's own "started 4 Oct 18:01Z" says it. */
+/** `18:02`, local, as every log in the console says a time (lib/log-time); UTC in the tooltip. */
 export function clock(iso: string): string {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "";
-  const d = new Date(t);
-  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+  return logClock(iso, { seconds: false });
 }
 
 /* ── The panel's parts ───────────────────────────────────────────────────────────── */
@@ -429,7 +435,7 @@ export function StepActivity({ state, href, live }: { state: StepActivityState; 
         <ol className="wf-step-log">
           {rows.map((r) => (
             <li key={r.id} data-level={r.level} data-testid="dw-step-log-row">
-              <time dateTime={r.at}>{clock(r.at)}</time>
+              <time dateTime={r.at} title={utcTitle(r.at)}>{clock(r.at)}</time>
               <span className="wf-step-log-title" data-tip={r.tip} data-user-text>{r.text}</span>
             </li>
           ))}

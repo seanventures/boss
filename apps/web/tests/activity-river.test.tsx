@@ -89,7 +89,8 @@ describe("Activity: the river", () => {
     expect(row.querySelector(".ag-river-text")!.textContent).toBe("Forge coding Build · Ship it #182");
     const time = row.querySelector("time")!;
     expect(time.textContent).toMatch(/^\d\d:\d\d$/);
-    expect(time.getAttribute("title")).toBe(a1.started_at);
+    // One clock for every log (lib/log-time): local on screen, the UTC instant in the tooltip.
+    expect(time.getAttribute("title")).toBe(new Date(a1.started_at).toISOString().replace(".000Z", "Z"));
     expect(row.querySelector(".ag-river-status")!.textContent).toBe("Done");
     expect(row.querySelector(".ag-river-took")!.textContent).toBe("2m");
     expect(dayLabel("2026-09-29T10:00:00", new Date("2026-10-04T10:00:00"))).toBe("Tue 29 Sep");
@@ -124,9 +125,13 @@ describe("Activity: the river", () => {
     expect(list.textContent).toContain("run_tests · failed · 1200ms");
     expect(list.textContent).not.toContain("SECRET");
     const log = $('[data-testid="ag-river-log-a_parent"]')!;
-    expect(log.textContent).toBe("Open in Activity log ↗");
-    expect(log.getAttribute("href")).toContain("area=activity");
-    expect(log.getAttribute("href")).toContain("workflow_run_id=wfr_1");
+    // THE BROKEN LINK, FIXED AS A CLASS. This sent `workflow_run_id=`, which the Log never
+    // read, so it landed on the whole project. It is built by logHref() now, scoped to the work.
+    expect(log.textContent).toBe("All lines ↗");
+    const href = new URLSearchParams(log.getAttribute("href")!.split("?")[1]);
+    expect(href.get("area")).toBe("activity");
+    expect(href.get("act")).toBe("a_parent");
+    expect(href.get("workflow_run_id")).toBeNull();
   });
 
   it("new work waits behind `n new ↑` and does not shift the rows", async () => {
