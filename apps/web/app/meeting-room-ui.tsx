@@ -1,13 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useFormStatus } from "react-dom";
-import Link from "next/link";
-import { formatDateTimeShort } from "../lib/datetime";
+/**
+ * PANELS — agent meetings that debate to a decision or a PRD (area `meetings`).
+ *
+ * Not a sidebar page: the usual way in is a workflow run's panel step, whose step panel shows
+ * `MeetingCompact` and links here for the full room. A dossier's "Convene a panel", the
+ * Factory's PRD links, Approvals and old links land here too — by `meeting=`, `run=`, `task=`
+ * or `#id`. The look is the approved mockup (boss-research-panels-mockup: panels-home,
+ * meeting); styles in research/research.css.
+ *
+ *   Panels home  — convene hero (type, directive, website, task, the seats around the table),
+ *                  recent panel cards, Manage seats, Maintenance (vote, sweep).
+ *   Meeting room — hero with the stage stepper and the outcome card; the rounds as speaker
+ *                  cards (each seat's gist, "Read all" for the full reply); the facilitator's
+ *                  synthesis beside the PRD's sections (or the verdict / the actions for a
+ *                  go/no-go or a stand-up); a drawer with the vote, what was asked and the
+ *                  context BOSS added, the linked task, status and cost, and the timeline.
+ *
+ * NEVER THE PROMPT. Titles, heroes, cards and the drawer read the person's own words through
+ * humanBrief (lib/research-panels) — the scaffolding BOSS wraps around a panel's prompt is
+ * shown only as the readable "Context BOSS added".
+ */
+import React, { useActionState, useCallback, useEffect, useMemo, useState } from "react";
+
 import type { Meeting, MeetingRole } from "../lib/meeting-rooms";
 import { Markdown } from "./markdown";
 import { meetingCardTitle } from "../lib/meeting-title";
-import { pushUrlParam, readUrlParam } from "./url-nav";
 import {
   conveneMeetingAction,
   upsertMeetingRoleAction,
@@ -15,67 +33,46 @@ import {
   deleteMeetingRoleAction,
   runSimulatedMeetingAction,
   loadMeetingEvidenceAction,
+  tallyVotesAction,
+  sweepStalledMeetingsAction,
 } from "./actions";
 import { MeetingConsensusCard } from "./phase3-ui";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
+import { consoleHref } from "./url-intent";
+import { Ago, BossMark, CopyId, How, Stepper, Verdict, clip, pushParams, useSearch } from "./research/bits";
 
 import { callAction } from "../lib/call-action";
 import type { AvatarState } from "../lib/agent-world-types";
-import { seatAvatar } from "../lib/agent-identity";
+import { agentIdentity, seatAvatar } from "../lib/agent-identity";
 import { useIdentityVersion } from "../lib/use-agent-identities";
+import { fetchMeetingForTask, fetchMeetingPage, fetchMeetingRoom, sayLoadError } from "../lib/meeting-room-detail";
+import {
+  ago, briefLine, composerHref, decisionHref, dissentLine, humanBrief, voteSentence, kindOf, meetingFromUrl, meetingLive,
+  meetingOutcome, orderedSeats, panelDoing, panelStages, prdDigest, prdSections, repoOf, roundNames,
+  seatGist, seatsOf, shortTitle, took, usd, SEAT_ORDER, type StageState,
+} from "../lib/research-panels";
 import { AgentAvatar } from "./agent-avatar";
 
-export const ROLE_ORDER = [
-  "Product Manager", "Engineer / Architect", "UX Designer", "Privacy & Safety",
-  "Finance / FinOps", "Growth / Marketing", "QA / Test", "Customer Advocate", "Security", "Data / Analytics",
-];
+export const ROLE_ORDER = SEAT_ORDER;
 
-function orderedRoles(map: Record<string, string>): string[] {
-  const known = ROLE_ORDER.filter((r) => map[r] !== undefined);
-  const extra = Object.keys(map).filter((r) => !ROLE_ORDER.includes(r));
-  return [...known, ...extra];
-}
-
-function fmtCost(micros?: number | null): string {
-  if (!micros) return "—";
-  return `$${(micros / 1e6).toFixed(4)}`;
-}
-
-const PHASE_STEPS = ["research", "round1", "round2", "synthesis", "draft", "finalize"];
 const PHASE_LABEL: Record<string, string> = {
   research: "Researching the site",
-  round1: "Round 1 · perspectives",
+  round1: "Round 1 · opening views",
   round2: "Round 2 · debate",
-  synthesis: "Synthesizing",
+  synthesis: "Synthesis",
   draft: "Drafting the PRD",
   finalize: "Finalizing",
   done: "Done",
 };
-function isRunning(m: Meeting): boolean {
-  return m.status === "running";
-}
-function phaseIndex(phase?: string): number {
-  const i = PHASE_STEPS.indexOf(phase ?? "done");
-  return i < 0 ? PHASE_STEPS.length : i;
-}
-function fmtDate(iso?: string | null): string {
-  return formatDateTimeShort(iso, "");
-}
 
-// How long the meeting took, from start to conclusion (e.g. "2m 41s").
-function fmtDuration(start?: string | null, end?: string | null): string {
-  if (!start || !end) return "";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "";
-  const secs = Math.round(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
+const TYPE_LABEL: Record<string, string> = { prd_panel: "PRD panel", go_no_go: "Go / no-go", standup: "Stand-up" };
+
+/** A status in words: the drawer never shows a raw status code. */
+const STATUS_WORDS: Record<string, string> = {
+  running: "In session", queued: "Waiting to start", completed: "Finished", simulated: "Finished (no-spend fixture)",
+  failed: "Stopped", cancelled: "Cancelled",
+};
 
 /** A seat's face. The seat title resolves to its agent through the one resolver, so a panel's
  *  "QA / Test" is the same face as `qa` on a workflow step. Seats that share an agent (Growth and
@@ -89,152 +86,275 @@ export function SeatAvatar({ role, size = 26, state }: { role: string; size?: nu
   return <AgentAvatar agent={role} spec={seatAvatar(role)} size={size} state={state} aiBadge={false} className="mr-avatar ag-face" />;
 }
 
-function ContributionCard({ role, text }: { role: string; text: string }) {
-  return (
-    <div className="mr-card">
-      <div className="mr-card-head">
-        <SeatAvatar role={role} />
-        <span className="mr-card-role">{role}</span>
-      </div>
-      <div className="mr-card-body"><Markdown text={text} /></div>
-    </div>
-  );
+/** The agent's callsign for a seat ("Juno" for Product Manager), or "" when it has none. */
+function callsignOf(seat: string): string {
+  return agentIdentity(seat).callsign ?? "";
 }
 
-/* ---- New meeting form ------------------------------------------------------- */
-function NewMeetingForm({
-  projectId,
-  roles,
-  tasks,
-  onCancel,
-}: {
-  projectId: string;
-  roles: MeetingRole[];
-  tasks: { id: string; title: string }[];
-  onCancel: () => void;
-}) {
-  const [meetingType, setMeetingType] = useState<"prd_panel" | "standup">("prd_panel");
-  return (
-    <ActionForm action={conveneMeetingAction} className="mr-convene" data-testid="meeting-new-form">
-      <input type="hidden" name="project_id" value={projectId} />
-      <label className="mr-field-label" htmlFor="mr-type">Meeting type</label>
-      <select
-        id="mr-type"
-        name="meeting_type"
-        className="mr-select"
-        value={meetingType}
-        onChange={(event) => setMeetingType(event.target.value === "standup" ? "standup" : "prd_panel")}
-      >
-        <option value="prd_panel">PRD panel (live model)</option>
-        <option value="standup">Standup (no-spend fixture)</option>
-      </select>
-      <label className="mr-field-label" htmlFor="mr-directive">Directive</label>
-      <textarea
-        id="mr-directive"
-        name="directive"
-        className="mr-textarea"
-        rows={8}
-        required
-        placeholder={
-          meetingType === "standup"
-            ? "Daily standup — blockers, commitments, and today's plan."
-            : (
-              "Describe the goal in detail. e.g.\n" +
-              "Produce a PRD to redesign our website (study the URL below).\n" +
-              "• Preserve 100% of current features — list them.\n" +
-              "• Make accessibility the priority.\n" +
-              "• Add online donations and a volunteer-hours portal.\n" +
-              "Publish the final PRD as a PDF pull request."
-            )
-        }
-      />
-      {meetingType === "prd_panel" ? (
-        <>
-          <label className="mr-field-label" htmlFor="mr-url">Website to study (optional)</label>
-          <input id="mr-url" name="url" className="mr-url-input" placeholder="https://example.com" />
-
-          <label className="mr-field-label">Attach to a task (optional — otherwise a new task is created)</label>
-          <select name="task_id" className="mr-select" defaultValue="">
-            <option value="">＋ Create a new task for this meeting</option>
-            {tasks.map((t) => (
-              <option key={t.id} value={t.id}>{t.title.replace(/^CEO command:\s*/, "").slice(0, 70)}</option>
-            ))}
-          </select>
-
-          <label className="mr-field-label">Staff the panel (the meeting template)</label>
-          <div className="mr-roles">
-            {roles.filter((r) => r.enabled !== false).map((r) => (
-              <label key={r.key} className="mr-role-pick" title={r.lens}>
-                <input type="checkbox" name="roles" value={r.key} defaultChecked={r.default} />
-                <SeatAvatar role={r.title} />
-                <span className="mr-role-pick-title">{r.title}</span>
-              </label>
-            ))}
-          </div>
-          <span className="mr-convene-note">
-            A Facilitator is always added. The panel studies the site, debates over two rounds, synthesizes, and drafts a
-            PRD — then it goes to your approval gate before publishing. Runs ~3–5 min.
-          </span>
-        </>
-      ) : (
-        <span className="mr-convene-note">
-          Standup uses the no-spend fixture by default: minutes, action items, optional dissent, and a Decision.
-          No live model is called.
-        </span>
-      )}
-      <ConveneActions meetingType={meetingType} onCancel={onCancel} />
-    </ActionForm>
-  );
+/** The person's words for a meeting (never the prompt), and its title. */
+function briefOf(m: Pick<Meeting, "directive" | "brief" | "title">): string {
+  return humanBrief(m.directive ?? meetingCardTitle(m.title), m.brief);
+}
+function titleOf(m: Pick<Meeting, "directive" | "brief" | "title">): string {
+  return shortTitle(meetingCardTitle(m.title));
 }
 
 /**
- * Convene / Cancel, with the pending state taken from the FORM rather than tracked by hand.
- *
- * Convening runs a full agent panel for three to five minutes and costs real money, so the
- * button has to say it is working — it once gave no feedback at all and an operator pressed it
- * six times, producing six PRDs, three inside the same second.
- *
- * The fix for that was a `convening` flag set to true on submit — AND NEVER SET BACK. Nothing
- * cleared it on success, on failure, or on a thrown action, so once the API was slow enough to
- * fail the request the button read "Convening the panel…" forever and the operator reported the
- * meeting as stuck. useFormStatus is derived from the form's own lifecycle and therefore clears
- * itself however the action ends; a hand-rolled boolean only clears on paths someone remembered
- * to write.
+ * A meeting, kept fresh: the list's copy when it has one, else read by id (or, for `task:<id>`,
+ * the panel held for that task). Re-read every 4s ONLY while the panel is in session; a meeting
+ * that is not there is said once and not asked for again.
  */
-function ConveneActions({ meetingType, onCancel }: {
-  meetingType: "prd_panel" | "standup";
-  onCancel: () => void;
-}) {
-  const { pending } = useFormStatus();
-  const idle = meetingType === "standup" ? "Run standup fixture" : "Convene the panel";
-  const busy = meetingType === "standup" ? "Running standup fixture…" : "Convening the panel…";
+function useMeeting(id: string, projectId: string, listed: Meeting | null): { meeting: Meeting | null; error: string | null } {
+  const [loaded, setLoaded] = useState<Meeting | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const byTask = id.startsWith("task:");
+  const mine = loaded && (byTask || loaded.id === id) ? loaded : null;
+  const current = mine && listed && !meetingLive(listed) && meetingLive(mine) ? listed : mine ?? listed;
+  const live = current ? meetingLive(current) : false;
+  const have = Boolean(current);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => (byTask ? fetchMeetingForTask(id.slice(5), projectId) : fetchMeetingRoom(id, projectId))
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok) { setLoaded(res.meeting); setError(null); } else setError(res.error);
+      });
+    if (!have) void load();
+    if (!live) return () => { cancelled = true; };
+    const t = setInterval(() => { void load(); }, 4000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [id, projectId, live, have, byTask]);
+  return { meeting: current ?? null, error: current ? null : error };
+}
+
+// ── Speaker cards ──────────────────────────────────────────────────────────────────────────
+
+function TurnCard({ meeting, round, seat, live }: { meeting: Meeting; round: 1 | 2; seat: string; live: boolean }) {
+  useIdentityVersion();
+  const [open, setOpen] = useState(false);
+  const text = (round === 1 ? meeting.round1 : meeting.round2)?.[seat];
+  const gist = seatGist(meeting, round, seat);
+  const name = callsignOf(seat) || seat;
+  if (!text) {
+    return (
+      <article className="rp-turn" data-pending="true" data-testid="meeting-turn-pending">
+        <div className="rp-t-h">
+          <SeatAvatar role={seat} size={36} state={live ? "thinking" : "idle"} />
+          <div><b>{name}</b><span>{seat}</span></div>
+        </div>
+        <p className="rp-thinking">{live ? "Thinking…" : "Did not speak this round"}</p>
+      </article>
+    );
+  }
   return (
-    <div className="mr-form-actions">
-      <SubmitButton type="submit" className="cap-btn primary" pendingLabel={busy}>
-        {idle}
-      </SubmitButton>
-      <button type="button" className="cap-btn" onClick={onCancel} disabled={pending}>
-        Cancel
+    <article className="rp-turn" data-open={open ? "true" : undefined} data-testid="meeting-turn">
+      <div className="rp-t-h">
+        <SeatAvatar role={seat} size={36} state="done" />
+        <div><b>{name}</b><span>{seat}</span></div>
+      </div>
+      {gist?.headline ? <p className="rp-t-head">{gist.headline}</p> : null}
+      {gist?.points.length ? <ul>{gist.points.map((p, i) => <li key={i}>{p}</li>)}</ul> : null}
+      <button type="button" className="rp-link sm" aria-expanded={open} onClick={() => setOpen((x) => !x)}
+              style={{ alignSelf: "flex-start" }}>
+        {open ? "Show less ↑" : "Read all ↓"}
       </button>
-      {pending ? (
-        <span className="detail">
-          {meetingType === "standup"
-            ? "standup fixture is completing — minutes and a Decision appear below"
-            : "the panel is being staffed — this takes 3–5 minutes and appears in the list below"}
-        </span>
+      {open ? <div className="rp-full"><Markdown text={text} /></div> : null}
+    </article>
+  );
+}
+
+function Round({ meeting, round, seats, live }: { meeting: Meeting; round: 1 | 2; seats: string[]; live: boolean }) {
+  const have = round === 1 ? meeting.round1 : meeting.round2;
+  const started = Object.keys(have ?? {}).length > 0;
+  const now = live && ((round === 1 && ["research", "round1"].includes(meeting.phase ?? ""))
+                       || (round === 2 && meeting.phase === "round2"));
+  if (!started && !now) return null;
+  const names = roundNames(meeting);
+  const [label, sub] = round === 1 ? [names[0], names[1]] : [names[2], names[3]];
+  return (
+    <section className="rp-round" aria-label={label} data-testid={`meeting-round-${round}`}>
+      <div className="rp-r-h">
+        <span className="rp-r-n" aria-hidden>{round}</span>
+        <b>{label}</b>
+        <span className="rp-sub">{sub}</span>
+      </div>
+      <div className="rp-turns" data-n={Math.min(seats.length, 4)}>
+        {seats.map((s) => <TurnCard key={s} meeting={meeting} round={round} seat={s} live={now} />)}
+      </div>
+    </section>
+  );
+}
+
+/** What a go/no-go decided and who disagreed, or what a stand-up committed to. */
+function TypedResult({ meeting }: { meeting: Meeting }) {
+  const k = kindOf(meeting);
+  if (k === "prd_panel") return null;
+  const dissent = meeting.dissent ?? [];
+  const actions = meeting.action_items ?? [];
+  return (
+    <div className="rp-prd" data-testid="meeting-typed-result">
+      {k === "go_no_go" ? (
+        <div className="rp-verdict-big" data-verdict={meeting.verdict ?? "none"} data-testid="meeting-verdict">
+          {meeting.verdict === "go" ? "GO" : meeting.verdict === "no_go" ? "NO-GO" : "No verdict"}
+        </div>
+      ) : null}
+      {dissent.length ? (
+        <>
+          <small className="rp-cap">Dissent</small>
+          <ul className="rp-dis">{dissent.map((d, i) => (
+            <li key={i}><b>{d.role}</b>{d.position ? ` (${d.position})` : ""}: {d.reason}</li>
+          ))}</ul>
+        </>
+      ) : k === "go_no_go" ? <span className="rp-sub">No dissent recorded.</span> : null}
+      {actions.length ? (
+        <>
+          <small className="rp-cap">{k === "standup" ? "Commitments" : "Follow-ups"}</small>
+          <ul className="rp-dis">{actions.map((a, i) => <li key={i}>{a.title}</li>)}</ul>
+        </>
       ) : null}
     </div>
   );
 }
 
-/* ---- Single meeting detail (the Meeting Room) ------------------------------- */
-function MeetingEvidence({
-  meetingId,
-  projectId,
-}: {
-  meetingId: string;
-  projectId: string;
+function Synthesis({ meeting }: { meeting: Meeting }) {
+  const [open, setOpen] = useState(false);
+  const [prdOpen, setPrdOpen] = useState(false);
+  const typed = kindOf(meeting) !== "prd_panel";
+  const sections = prdSections(meeting.prd_markdown);
+  const gist = meeting.synthesis_gist ?? null;
+  if (!meeting.synthesis && !meeting.prd_markdown) return null;
+  return (
+    <div className="rp-synth-row">
+      {meeting.synthesis ? (
+        <div className="rp-synth" data-testid="meeting-synthesis">
+          <div className="rp-t-h">
+            <BossMark size={36} />
+            <div><b>Facilitator</b><span>{typed ? "Calls it" : "Reconciles the panel"}</span></div>
+          </div>
+          {gist?.headline ? <p className="rp-t-head">{gist.headline}</p> : null}
+          {gist?.points.length ? <ul>{gist.points.map((p, i) => <li key={i}>{p}</li>)}</ul> : null}
+          <button type="button" className="rp-link sm" aria-expanded={open} onClick={() => setOpen((x) => !x)}
+                  style={{ alignSelf: "flex-start" }}>
+            {open ? "Show less ↑" : "Read all ↓"}
+          </button>
+          {open || !gist?.headline ? <div className="rp-full"><Markdown text={meeting.synthesis} /></div> : null}
+        </div>
+      ) : <div />}
+      {typed ? <TypedResult meeting={meeting} /> : meeting.prd_markdown ? (
+        <div className="rp-prd" data-testid="meeting-prd">
+          <div className="rp-card-h">
+            <b>The PRD</b><span className="rp-spacer" />
+            {meeting.pull_request_url ? (
+              <a className="rp-link" href={meeting.pull_request_url} target="_blank" rel="noreferrer">
+                PR #{meeting.pull_request_number ?? ""} ↗
+              </a>
+            ) : null}
+          </div>
+          {sections.length ? <ol>{sections.map((h) => <li key={h}>{h}</li>)}</ol> : null}
+          <button type="button" className="rp-link sm" aria-expanded={prdOpen} onClick={() => setPrdOpen((x) => !x)}
+                  style={{ alignSelf: "flex-start" }}>
+            {prdOpen ? "Hide the PRD ↑" : "Read the PRD ↓"}
+          </button>
+          {prdOpen ? <div className="rp-full"><Markdown text={meeting.prd_markdown} /></div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── The outcome card ───────────────────────────────────────────────────────────────────────
+
+/** "Build it": the composer, prefilled from the AGREED PRD — never the raw directive. */
+function buildHref(meeting: Meeting, search: string): string {
+  const title = titleOf(meeting);
+  return composerHref(search, {
+    title,
+    brief: meeting.prd_markdown ? prdDigest(meeting.prd_markdown, title, meeting.pull_request_url) : briefOf(meeting),
+  });
+}
+
+/** Convene the same panel again: a failed one's way forward. */
+function ConveneAgain({ meeting, projectId }: { meeting: Meeting; projectId: string }) {
+  return (
+    <ActionForm action={conveneMeetingAction} successMessage="Convened again — the new panel is in session."
+                onResult={(r) => {
+                  // Into the new panel (or the one already in session on this ask).
+                  const id = r.ok ? (r.data?.run_id as string | undefined) : undefined;
+                  if (id && id !== meeting.id) {
+                    pushParams({ meeting: id, run: null, task: null });
+                    window.dispatchEvent(new PopStateEvent("popstate"));
+                  }
+                }}>
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="directive" value={meeting.directive ?? briefOf(meeting)} />
+      <input type="hidden" name="meeting_type" value={kindOf(meeting)} />
+      {meeting.url ? <input type="hidden" name="url" value={meeting.url} /> : null}
+      {meeting.task_id ? <input type="hidden" name="task_id" value={meeting.task_id} /> : null}
+      {(meeting.role_keys ?? []).map((r) => <input key={r} type="hidden" name="roles" value={r} />)}
+      <SubmitButton type="submit" className="rp-btn primary" pendingLabel="Convening…" data-testid="meeting-convene-again">
+        Convene again
+      </SubmitButton>
+    </ActionForm>
+  );
+}
+
+export function OutcomeCard({ meeting, search, projectId, inWorkflow = false }: {
+  meeting: Meeting; search: string; projectId: string; inWorkflow?: boolean;
 }) {
+  const o = meetingOutcome(meeting);
+  const sections = prdSections(meeting.prd_markdown).length;
+  const seats = seatsOf(meeting);
+  const repo = repoOf(meeting.pull_request_url);
+  const typed = kindOf(meeting) !== "prd_panel";
+  const sub = o.stage === "live" ? `${seats.length} seats · updates live`
+    : o.stage === "published" ? [repo, sections ? `${sections} sections` : ""].filter(Boolean).join(" · ")
+    : o.stage === "building" ? "The PRD is being built"
+    : o.stage === "approved" ? "Approved — publishing it as a pull request"
+    : o.stage === "awaiting" ? "Publishing waits for your approval"
+    : o.stage === "simulated" ? "No model was called"
+    : o.stage === "verdict" ? `${(meeting.dissent ?? []).length} dissent${(meeting.dissent ?? []).length === 1 ? "" : "s"} recorded`
+    : o.stage === "failed" ? `Stopped at ${PHASE_LABEL[meeting.phase ?? ""] ?? "a phase"}`
+    : "";
+  return (
+    <div className="rp-vcard" data-tone={o.tone} data-testid="meeting-outcome" data-stage={o.stage}>
+      <Verdict tone={o.tone} big>{o.pill}</Verdict>
+      <b>{o.stage === "live" ? panelDoing(meeting) : o.headline}</b>
+      {sub ? <span className="rp-sub">{sub}</span> : null}
+      {o.stage === "failed" && meeting.error ? (
+        <div className="rp-attn" data-testid="meeting-error"><b>Why it stopped</b><span>{meeting.error}</span></div>
+      ) : null}
+      {o.stage === "live" ? (
+        <span className="rp-faces" aria-label="Seats">
+          {seats.map((s) => <SeatAvatar key={s} role={s} size={32} state="thinking" />)}
+          <BossMark size={32} />
+        </span>
+      ) : null}
+      <div className="rp-vact">
+        {o.stage === "failed" ? <ConveneAgain meeting={meeting} projectId={projectId} /> : null}
+        {o.stage === "building" || o.stage === "built" ? (
+          <a className="rp-btn primary" href={consoleHref(search, { area: "code_tasks", run: meeting.build?.id })}>
+            Open the build →</a>
+        ) : null}
+        {!typed && !inWorkflow && (o.stage === "published" || o.stage === "approved") ? (
+          <a className="rp-btn primary" data-testid="meeting-build-it" href={buildHref(meeting, search)}>Build it →</a>
+        ) : null}
+        {meeting.pull_request_url ? (
+          <a className={`rp-btn${inWorkflow ? " primary" : ""}`} href={meeting.pull_request_url} target="_blank" rel="noreferrer">
+            Open the PR ↗
+          </a>
+        ) : null}
+        {(o.stage === "awaiting" || o.stage === "declined" || (typed && meeting.decision_id)) ? (
+          <a className="rp-btn primary" data-testid="meeting-review" href={decisionHref(search, meeting.decision_id)}>
+            {typed ? "Answer it in Approvals →" : "Review in Approvals →"}</a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ── The drawer: vote, what was asked, task, status, timeline ───────────────────────────────
+
+function MeetingEvidence({ meetingId, projectId }: { meetingId: string; projectId: string }) {
   const [evidence, setEvidence] = useState<{
     phase_timeline: Array<{ phase: string; status?: string; artifact_id?: string }>;
     artifact_links: Array<{ kind: string; artifact_id: string }>;
@@ -246,291 +366,460 @@ function MeetingEvidence({
   useEffect(() => {
     let cancelled = false;
     callAction(loadMeetingEvidenceAction)(meetingId, projectId).then((result) => {
-      if (!cancelled && result.ok) {
-        setEvidence(result);
-      }
+      if (!cancelled && result.ok) setEvidence(result);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [meetingId, projectId]);
   if (!evidence || (evidence.phase_timeline.length === 0 && evidence.artifact_links.length === 0)) {
-    return null;
+    return (
+      <div className="rp-card" data-testid="meeting-evidence-none">
+        <div className="rp-card-h"><b>Phase timeline</b></div>
+        <span className="rp-sub">{evidence ? "No phase records were kept for this panel." : "Loading…"}</span>
+      </div>
+    );
   }
+  const ids = [evidence.decision_id, evidence.receipt_id, ...evidence.artifact_links.map((l) => l.artifact_id)]
+    .filter(Boolean).join(" ");
   return (
-    <div className="mr-evidence" data-testid="meeting-evidence">
-      <div className="mr-section-title">Phase timeline &amp; artifacts</div>
-      {evidence.meeting_type ? (
-        <p className="detail" data-testid="meeting-type">Type <code>{evidence.meeting_type}</code></p>
-      ) : null}
-      {evidence.simulated ? (
-        <p className="detail">Simulated fixture — no live model was called.</p>
-      ) : null}
-      {evidence.decision_id ? (
-        <p className="detail">Decision <code>{evidence.decision_id}</code></p>
-      ) : null}
-      {evidence.phase_timeline.length > 0 ? (
-        <ol className="mr-phase-timeline">
+    <div className="rp-card" data-testid="meeting-evidence">
+      <div className="rp-card-h"><b>Phase timeline</b></div>
+      {evidence.simulated ? <p className="rp-sub">A no-spend fixture — no live model was called.</p> : null}
+      {evidence.phase_timeline.length ? (
+        <ol className="rp-timeline">
           {evidence.phase_timeline.map((step) => (
             <li key={step.phase}>
-              <strong>{PHASE_LABEL[step.phase] ?? step.phase}</strong>
-              <span className="detail"> {step.status ?? "recorded"}</span>
-              {step.artifact_id ? (
-                <span className="mr-artifact-link"> artifact {step.artifact_id}</span>
-              ) : null}
+              <b>{PHASE_LABEL[step.phase] ?? step.phase.replace(/_/g, " ")}</b>
+              {" — "}{step.status === "completed" || !step.status ? "done" : step.status.replace(/_/g, " ")}
             </li>
           ))}
         </ol>
       ) : null}
-      {evidence.artifact_links.length > 0 ? (
-        <ul className="mr-artifact-list">
-          {evidence.artifact_links.map((link) => (
-            <li key={`${link.kind}:${link.artifact_id}`}>
-              {link.kind}: <code>{link.artifact_id}</code>
-            </li>
-          ))}
-        </ul>
+      {evidence.artifact_links.length ? (
+        <p className="rp-sub">{evidence.artifact_links.length} record{evidence.artifact_links.length === 1 ? "" : "s"} kept
+          ({[...new Set(evidence.artifact_links.map((l) => l.kind.replace(/_/g, " ")))].join(", ")})</p>
       ) : null}
-      {evidence.receipt_id ? (
-        <p className="detail">Receipt <code>{evidence.receipt_id}</code></p>
-      ) : null}
+      {ids ? <CopyId id={ids} label="Copy record ids" /> : null}
     </div>
   );
 }
 
-function MeetingDetail({
-  meeting,
-  onBack,
-  orgId,
-  projectId,
-  actor,
-}: {
-  meeting: Meeting;
-  onBack: () => void;
-  orgId?: string;
-  projectId: string;
-  actor: string;
-}) {
-  const orgQuery = orgId ? `org=${encodeURIComponent(orgId)}&` : "";
+function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; projectId: string; actor: string; search: string }) {
+  const brief = briefOf(meeting);
   return (
-    <div className="mr">
-      <button type="button" className="mr-back" onClick={onBack}>← All meetings</button>
-
-      <div className="mr-header">
-        <div className="mr-header-main">
-          <span className="eyebrow">Meeting room</span>
-          {/* A meeting launched from a benchmark is titled with the ENTIRE directive — every
-              acceptance rule, every required npm script, ~2k characters. Rendered as an <h3>
-              that became a wall of 28px bold text pushing the whole panel below the fold, so
-              the meeting looked broken rather than verbose. The heading takes the lead
-              sentence; the directive itself belongs in the body, at body size. */}
-          <h3 className="mr-title">{leadTitle(meeting.title)}</h3>
-          {fullDirective(meeting.title) ? (
-            <details className="mr-directive">
-              <summary>Full directive</summary>
-              <p className="detail">{fullDirective(meeting.title)}</p>
+    <details className="rp-more" data-testid="meeting-drawer">
+      <summary>{[meeting.can_vote === false ? "The vote" : "Record the vote", "What was asked",
+                 meeting.task_id ? "Linked task" : "", "Status"].filter(Boolean).join(" · ")}</summary>
+      <div className="rp-drawer">
+        {meeting.can_vote === false ? (
+          <div className="rp-card" data-testid="meeting-vote-closed">
+            <div className="rp-card-h"><b>Meeting consensus</b></div>
+            <span className="rp-sub">The vote opens when the panel finishes and records its minutes.</span>
+          </div>
+        ) : (
+          <MeetingConsensusCard projectId={projectId} actor={actor} meetingId={meeting.id} />
+        )}
+        <div className="rp-card" data-testid="meeting-directive">
+          <div className="rp-card-h"><b>What was asked</b></div>
+          <div className="rp-directive">{brief || "—"}</div>
+          {meeting.context ? (
+            <details className="rp-fold" data-testid="meeting-context">
+              <summary>Context BOSS added</summary>
+              <div className="rp-full"><Markdown text={meeting.context} /></div>
             </details>
           ) : null}
           {meeting.url ? (
-            <a className="mr-source" href={meeting.url} target="_blank" rel="noreferrer">studied {meeting.url} ↗</a>
+            <a className="rp-link sm" href={meeting.url} target="_blank" rel="noreferrer">Studied {meeting.url} ↗</a>
           ) : null}
         </div>
-        <div className="mr-header-meta">
-          <span className={`cap-badge tone-${meeting.status === "completed" || meeting.status === "simulated" ? "green" : "amber"}`}>{meeting.status}</span>
-          {fmtDuration(meeting.created_at, meeting.completed_at) ? (
-            <span className="mr-meta-item" title="Time from convening to conclusion">⏱ took {fmtDuration(meeting.created_at, meeting.completed_at)}</span>
-          ) : null}
-          <span className="mr-meta-item">{meeting.model}</span>
-          <span className="mr-meta-item">{fmtCost(meeting.cost_usd_micros)} equiv</span>
-          {meeting.research_summary?.pages_studied ? (
-            <span className="mr-meta-item">{meeting.research_summary.pages_studied} pages studied</span>
-          ) : null}
+        <div className="rp-card" data-testid="meeting-task">
+          <div className="rp-card-h"><b>Linked task</b></div>
+          {meeting.task_id ? (
+            <>
+              <p className="rp-hyp">{shortTitle(meeting.task_title ?? "", 200)}</p>
+              {meeting.task_status ? <span className="rp-sub">{meeting.task_status.replace(/_/g, " ")}</span> : null}
+              <a className="rp-link sm" href={consoleHref(search, { area: "work", task: meeting.task_id })}>View in Work →</a>
+            </>
+          ) : <span className="rp-sub">No task — this panel stands on its own.</span>}
+        </div>
+        <div className="rp-card" data-testid="meeting-status">
+          <div className="rp-card-h"><b>Status and cost</b></div>
+          <dl className="rp-kv">
+            <dt>Kind</dt><dd>{TYPE_LABEL[kindOf(meeting)]}</dd>
+            <dt>Status</dt><dd>{STATUS_WORDS[meeting.status] ?? meeting.status}{meetingLive(meeting) ? ` · ${PHASE_LABEL[meeting.phase ?? ""] ?? ""}` : ""}</dd>
+            {meeting.prd_label && kindOf(meeting) === "prd_panel" ? <><dt>PRD</dt><dd>{meeting.prd_label}</dd></> : null}
+            {took(meeting.created_at, meeting.completed_at) ? <><dt>Took</dt><dd>{took(meeting.created_at, meeting.completed_at)}</dd></> : null}
+            {meeting.model ? <><dt>Model</dt><dd>{meeting.model}</dd></> : null}
+            <dt>Cost</dt><dd>{meeting.cost_usd_micros ? usd(meeting.cost_usd_micros, 2) : "—"}</dd>
+            {meeting.research_summary?.pages_studied ? <><dt>Studied</dt><dd>{meeting.research_summary.pages_studied} pages</dd></> : null}
+            <dt>Seats</dt><dd>{(meeting.participants ?? []).join(", ")}</dd>
+          </dl>
+          <CopyId id={meeting.id} />
+        </div>
+        <MeetingEvidence meetingId={meeting.id} projectId={projectId} />
+      </div>
+    </details>
+  );
+}
+
+// ── The meeting room ───────────────────────────────────────────────────────────────────────
+
+function MeetingRoom({ id, listed, projectId, actor, onBack }: {
+  id: string; listed: Meeting | null; projectId: string; actor: string; onBack: () => void;
+}) {
+  const search = useSearch();
+  const { meeting, error } = useMeeting(id, projectId, listed);
+  if (!meeting) {
+    return (
+      <div className="rp" data-testid="meeting-room">
+        <button type="button" className="rp-back" onClick={onBack}>← All panels</button>
+        <div className="rp-empty" role="status" data-testid={error ? "meeting-not-found" : undefined}>
+          {error ? <><b>This panel isn&apos;t here any more.</b>{sayLoadError(error, "panel")}</>
+            : <b>Opening the panel…</b>}
         </div>
       </div>
-
-      {/* Linked task */}
-      {meeting.task_id ? (
-        <div className="mr-task-link">
-          <span className="mr-task-link-label">Linked task</span>
-          <span className="mr-task-link-title">{(meeting.task_title ?? meeting.task_id).replace(/^CEO command:\s*/, "")}</span>
-          {meeting.task_status ? <span className="cap-badge tone-muted">{meeting.task_status}</span> : null}
-          <Link className="mr-task-link-go" href={`/?${orgQuery}area=work&task=${encodeURIComponent(meeting.task_id)}`}>
-            View in Work →
-          </Link>
-        </div>
-      ) : null}
-
-      {/* Directive (full text — collapsed, expand to read) */}
-      {meeting.directive ? (
-        <details className="mr-directive-detail">
-          <summary>Directive</summary>
-          <div className="mr-directive-body">{meeting.directive.replace(/\r\n/g, "\n")}</div>
-        </details>
-      ) : null}
-
-      {/* Participants */}
-      <div className="mr-participants">
-        {(meeting.participants ?? []).map((p) => (
-          <span key={p} className="mr-participant"><SeatAvatar role={p} />{p}</span>
-        ))}
-      </div>
-
-      {/* Flow ribbon — reflects the live phase for in-progress meetings */}
-      <div className="mr-flow">
-        {(() => {
-          const labels = ["Research", "Round 1", "Round 2", "Synthesis", "Draft PRD", meeting.pull_request_url ? "Published" : "Publish"];
-          const running = isRunning(meeting);
-          const cur = phaseIndex(meeting.phase);
-          return labels.map((s, i, arr) => {
-            let cls = "";
-            if (running) cls = i < cur ? "" : i === cur ? " active" : " pending";
-            const showSpinner = running && i === cur;
-            return (
-              <span key={s} className="mr-flow-step">
-                <span className={`mr-flow-dot${cls}`} />
-                {showSpinner ? <em className="mr-flow-now">{s}…</em> : s}
-                {i < arr.length - 1 ? <span className="mr-flow-arrow">→</span> : null}
-              </span>
-            );
-          });
-        })()}
-      </div>
-      {isRunning(meeting) ? (
-        <p className="mr-running-note">⏳ Meeting in progress — {PHASE_LABEL[meeting.phase ?? ""] ?? meeting.phase}. This view updates live; the panel survives restarts.</p>
-      ) : null}
-      <MeetingEvidence meetingId={meeting.id} projectId={projectId} />
-      <MeetingConsensusCard projectId={projectId} actor={actor} meetingId={meeting.id} />
-
-      <div className="mr-section-title">Round 1 — opening perspectives</div>
-      <div className="mr-grid">
-        {orderedRoles(meeting.round1).map((role) => (
-          <ContributionCard key={role} role={role} text={meeting.round1[role]} />
-        ))}
-      </div>
-
-      <div className="mr-section-title">Round 2 — debate &amp; critique</div>
-      <div className="mr-grid">
-        {orderedRoles(meeting.round2).map((role) => (
-          <ContributionCard key={role} role={role} text={meeting.round2[role]} />
-        ))}
-      </div>
-
-      {meeting.synthesis ? (
-        <>
-          <div className="mr-section-title">Synthesis — the facilitator reconciles</div>
-          <div className="mr-synth">
-            <div className="mr-card-head">
-              <SeatAvatar role="Facilitator / Chief of Staff" />
-              <span className="mr-card-role">Facilitator / Chief of Staff</span>
-            </div>
-            <div className="mr-card-body tall"><Markdown text={meeting.synthesis} /></div>
+    );
+  }
+  const live = meetingLive(meeting);
+  const seats = orderedSeats(Object.fromEntries(seatsOf(meeting).map((s) => [s, 1])));
+  const line = briefLine(meeting.directive, 220, meeting.brief);
+  const kind = kindOf(meeting);
+  return (
+    <div className="rp" data-testid="meeting-room" data-status={meeting.status} data-kind={kind}>
+      <button type="button" className="rp-back" onClick={onBack}>← All panels</button>
+      <section className="rp-dhero" data-kind="meeting">
+        <div className="rp-aurora" aria-hidden />
+        <div className="rp-dh-l">
+          <div className="rp-eyebrow">
+            <span className="rp-dot" data-tone={live ? undefined : meeting.status === "failed" ? "bad" : "idle"} aria-hidden />
+            {TYPE_LABEL[kind]}{meeting.status === "simulated" ? " · fixture" : ""}
+            <Ago iso={meeting.created_at} prefix=" · " />
+            {took(meeting.created_at, meeting.completed_at) ? ` · took ${took(meeting.created_at, meeting.completed_at)}` : ""}
+            {meeting.cost_usd_micros ? ` · ${usd(meeting.cost_usd_micros)}` : ""}
           </div>
-        </>
-      ) : null}
+          <h2 className="rp-dh-t" title={briefOf(meeting)}>{titleOf(meeting)}</h2>
+          {line ? <p className="rp-dh-s">{line}</p> : null}
+          <Stepper stages={panelStages(meeting)} live={live} testId="meeting-stages" />
+        </div>
+        <div className="rp-dh-r"><OutcomeCard meeting={meeting} search={search} projectId={projectId} /></div>
+      </section>
 
-      <div className="mr-section-title">Outcome</div>
-      <div className="mr-outcome">
-        {meeting.pull_request_url ? (
-          <a className="wf-out wf-out-ext" href={meeting.pull_request_url} target="_blank" rel="noreferrer">
-            <span className="wf-out-body">
-              <span className="wf-out-title">The team&apos;s PRD{meeting.pull_request_number ? ` — GitHub PR #${meeting.pull_request_number}` : ""}</span>
-              <span className="wf-out-sub mono">{meeting.pull_request_url}</span>
-            </span>
-            <span className="wf-out-go">open ↗</span>
-          </a>
-        ) : (
-          <p className="detail">PRD drafted — awaiting your approval to publish (see Decisions).</p>
-        )}
-        {meeting.prd_markdown ? (
-          <details className="mr-prd">
-            <summary>Read the drafted PRD ▾</summary>
-            <div className="mr-card-body tall"><Markdown text={meeting.prd_markdown} /></div>
-          </details>
-        ) : null}
-      </div>
+      <Round meeting={meeting} round={1} seats={seats} live={live} />
+      <Round meeting={meeting} round={2} seats={seats} live={live} />
+      <Synthesis meeting={meeting} />
+      {!live && !Object.keys(meeting.round1 ?? {}).length && !meeting.synthesis ? (
+        <div className="rp-empty"><b>No turns were recorded.</b>
+          {meeting.status === "failed" ? "The panel stopped before anyone spoke." : "This meeting kept minutes only."}</div>
+      ) : null}
+      <Drawer meeting={meeting} projectId={projectId} actor={actor} search={search} />
     </div>
   );
 }
 
-/* ---- Manage the org's role-agent template --------------------------------- */
-function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRole[] }) {
+// ── Panels home ────────────────────────────────────────────────────────────────────────────
+
+function median(xs: number[]): number | null {
+  const s = xs.filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
+  return s.length ? s[Math.floor(s.length / 2)] : null;
+}
+
+function RoundTable({ seats }: { seats: MeetingRole[] }) {
+  useIdentityVersion();
+  const n = seats.length;
   return (
-    <div className="mr-manage">
-      <p className="mr-convene-note">
-        These role-agents are this organization&apos;s meeting template — stored in the DB and editable
-        here. The 10 baseline roles are seeded for every org; add your own (e.g. Legal, Clinical, Sales)
-        and toggle which appear in the panel.
+    <div className="rp-table-wrap" data-testid="meeting-table">
+      <div className="rp-table">
+        <span className="rp-tmark">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/boss-mark.png" alt="" />
+          <small>Facilitator</small>
+        </span>
+      </div>
+      {seats.map((r, i) => {
+        const a = (-90 + (360 * i) / Math.max(n, 1)) * (Math.PI / 180);
+        return (
+          <span key={r.key} className="rp-tseat"
+                style={{ left: `calc(50% + var(--rx, 128px) * ${Math.cos(a).toFixed(3)})`,
+                         top: `calc(50% + var(--ry, 116px) * ${Math.sin(a).toFixed(3)})`,
+                         animationDelay: `${-i * 1.3}s` }}>
+            <SeatAvatar role={r.title} size={48} />
+            <small>{callsignOf(r.title) || r.title}</small>
+          </span>
+        );
+      })}
+      {n === 0 ? <span className="rp-table-empty">Pick at least one seat</span> : null}
+    </div>
+  );
+}
+
+type MeetingType = "prd_panel" | "go_no_go" | "standup";
+const TYPES: Array<{ key: MeetingType; title: string; sub: string }> = [
+  { key: "prd_panel", title: "PRD panel", sub: "Debate to a spec in a PR" },
+  { key: "go_no_go", title: "Go / no-go", sub: "A decision with dissent" },
+  { key: "standup", title: "Stand-up", sub: "Status across the team" },
+];
+
+function ConveneHero({ projectId, roles, tasks, meetings }: {
+  projectId: string; roles: MeetingRole[]; tasks: { id: string; title: string }[]; meetings: Meeting[];
+}) {
+  useIdentityVersion(); // seat callsigns are read here
+  const [type, setType] = useState<MeetingType>("prd_panel");
+  const [site, setSite] = useState(false);
+  const enabled = useMemo(() => roles.filter((r) => r.enabled !== false), [roles]);
+  const [chosen, setChosen] = useState<Set<string>>(
+    () => new Set(enabled.filter((r) => r.default ?? r.is_default).map((r) => r.key)));
+  // Roles arrive after the first render on some loads; seed the defaults once they do.
+  useEffect(() => {
+    setChosen((cur) => (cur.size || !enabled.length ? cur
+      : new Set(enabled.filter((r) => r.default ?? r.is_default).map((r) => r.key))));
+  }, [enabled]);
+  const toggle = (key: string) => setChosen((cur) => {
+    const next = new Set(cur);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const done = meetings.filter((m) => m.status === "completed");
+  const secs = median(done.map((m) => (m.completed_at && m.created_at
+    ? (new Date(m.completed_at).getTime() - new Date(m.created_at).getTime()) / 1000 : NaN)));
+  const cost = median(done.map((m) => m.cost_usd_micros ?? NaN));
+  const estimate = type === "prd_panel"
+    ? `${secs ? `About ${secs < 120 ? `${Math.round(secs)} seconds` : `${Math.round(secs / 60)} minutes`}` : "A few minutes"}${cost ? ` and ${usd(cost)}` : ""} a panel · nothing is built until you say so`
+    : "A no-spend fixture today — no model is called";
+  const fixture = type !== "prd_panel";
+  return (
+    <ActionForm action={conveneMeetingAction} className="rp-convene" data-testid="meeting-new-form"
+                successMessage={fixture ? "The fixture ran — its minutes are below." : "Convened — the panel is in session below."}>
+      <div className="rp-aurora" aria-hidden />
+      <input type="hidden" name="project_id" value={projectId} />
+      <div className="rp-cv-l">
+        <div className="rp-eyebrow"><span className="rp-dot" aria-hidden />Panels · agents debate it, you get a decision</div>
+        <h2 className="rp-h2">Convene a <em>panel</em></h2>
+        <div className="rp-types" role="radiogroup" aria-label="Meeting type">
+          {TYPES.map((t) => (
+            <label key={t.key} className="rp-type" data-on={type === t.key ? "true" : undefined}>
+              <input type="radio" name="meeting_type" value={t.key} checked={type === t.key}
+                     onChange={() => setType(t.key)} data-testid={`meeting-type-${t.key}`} />
+              <b>{t.title}</b><span>{t.sub}</span>
+            </label>
+          ))}
+        </div>
+        <div className="rp-composer">
+          <label className="rp-sr" htmlFor="rp-directive">Directive</label>
+          <textarea id="rp-directive" name="directive" rows={2} required data-testid="meeting-directive-input"
+                    placeholder={type === "standup" ? "Daily stand-up — blockers, commitments, today's plan."
+                      : type === "go_no_go" ? "Should we ship the Lead-Triage Inbox to the first ten pilot teams this week?"
+                      : "What should the panel decide or spec? e.g. “Add snoozing to the Lead-Triage Inbox: a rep snoozes a lead until a date and it returns that morning at the top.”"} />
+          {site ? (
+            <input name="url" className="rp-ctx rp-url" type="url" placeholder="https://example.com — the panel studies it first"
+                   aria-label="Website to study" data-testid="meeting-url" autoFocus />
+          ) : null}
+          <div className="rp-c-row">
+            {type === "prd_panel" ? (
+              <>
+                <button type="button" className="rp-chip" aria-pressed={site} onClick={() => setSite((x) => !x)}
+                        data-testid="meeting-study-site">↗ Study a website</button>
+                <span className="rp-chip">
+                  <span aria-hidden>⛓</span>
+                  <select name="task_id" defaultValue="" aria-label="Attach to a task" data-testid="meeting-task-select">
+                    <option value="">Attach to: new task</option>
+                    {tasks.map((t) => (
+                      <option key={t.id} value={t.id}>{shortTitle(t.title.replace(/^CEO command:\s*/, ""), 70)}</option>
+                    ))}
+                  </select>
+                  <span className="rp-chip-caret" aria-hidden>⌄</span>
+                </span>
+              </>
+            ) : <span className="rp-sub">Stand-up and go / no-go run as a no-spend fixture.</span>}
+            <span className="rp-spacer" />
+            <SubmitButton type="submit" className="rp-btn primary" data-testid="meeting-convene"
+                          pendingLabel={fixture ? "Running…" : "Convening…"} disabled={chosen.size === 0}>
+              Convene →
+            </SubmitButton>
+          </div>
+        </div>
+        <How steps={["Opening views", "They debate", "The facilitator reconciles",
+                     type === "prd_panel" ? "A PRD in a pull request" : type === "go_no_go" ? "A decision, with dissent" : "Minutes and actions"]} />
+        <div className="rp-sub">{estimate}</div>
+      </div>
+      <div className="rp-cv-r">
+        <RoundTable seats={enabled.filter((r) => chosen.has(r.key))} />
+        <div className="rp-lbl" style={{ marginTop: 6 }}>Who sits at the table <em>tap to add or remove</em></div>
+        <div className="rp-seats" data-testid="meeting-seats">
+          {enabled.map((r) => {
+            const on = chosen.has(r.key);
+            return (
+              <label key={r.key} className="rp-seat" data-on={on ? "true" : undefined} title={r.lens}>
+                <input type="checkbox" name="roles" value={r.key} checked={on} onChange={() => toggle(r.key)} />
+                <SeatAvatar role={r.title} size={28} />
+                <b>{r.title}</b>
+                <span className="rp-cs">{callsignOf(r.title)}</span>
+              </label>
+            );
+          })}
+          {enabled.length === 0 ? <span className="rp-sub">No seats yet — add one under Manage seats.</span> : null}
+        </div>
+      </div>
+    </ActionForm>
+  );
+}
+
+function PanelCard({ m, onOpen }: { m: Meeting; onOpen: () => void }) {
+  const o = meetingOutcome(m);
+  const seats = seatsOf(m);
+  const live = meetingLive(m);
+  const t = took(m.created_at, m.completed_at);
+  return (
+    <button type="button" className="rp-card-link" onClick={onOpen} data-testid="meeting-card" data-status={m.status}
+            title={briefOf(m)}>
+      <span className="rp-dtop">
+        <Verdict tone={o.tone}>{o.pill}</Verdict>
+        <span className="rp-when"><Ago iso={m.created_at} /></span>
+      </span>
+      <b className="rp-dtitle">{shortTitle(meetingCardTitle(m.title))}</b>
+      <span className="rp-mrow">
+        <span className="rp-faces">
+          {seats.map((s) => <SeatAvatar key={s} role={s} size={28} state={live ? "thinking" : undefined} />)}
+          <BossMark size={28} />
+        </span>
+        {live ? <span className="rp-prc">{PHASE_LABEL[m.phase ?? ""] ?? "In session"}</span>
+          : kindOf(m) !== "prd_panel" ? <span className="rp-prc" data-tone="muted">{TYPE_LABEL[kindOf(m)]}</span>
+          : m.pull_request_url ? <span className="rp-prc">PRD · PR #{m.pull_request_number}</span>
+          // FROM THE PRD'S DECISION, never a hard-coded guess (meeting_service.prd_state_of).
+          : <span className="rp-prc" data-tone="muted" data-testid="mr-meeting-prd-state">{m.prd_label ?? "PRD state unknown"}</span>}
+      </span>
+      <span className="rp-mfoot">
+        <span>{seats.length} seat{seats.length === 1 ? "" : "s"} + facilitator{m.task_id ? " · task linked" : ""}</span>
+        <span>{[t, m.cost_usd_micros ? usd(m.cost_usd_micros) : ""].filter(Boolean).join(" · ") || "—"}</span>
+      </span>
+    </button>
+  );
+}
+
+/* ---- Manage the org's seat template ------------------------------------------- */
+function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRole[] }) {
+  return (
+    <section className="rp-manage" data-testid="meeting-manage" aria-label="Manage seats">
+      <p className="rp-sub">
+        The seats are this organization&apos;s panel template. Add your own (Legal, Clinical, Sales…),
+        and turn seats off to leave them out of new panels.
       </p>
-      <div className="mr-role-list">
+      <div>
         {roles.map((r) => (
-          <div key={r.key} className={`mr-role-row${r.enabled === false ? " off" : ""}`}>
-            <SeatAvatar role={r.title} />
-            <div className="mr-role-row-body">
-              <span className="mr-role-row-title">{r.title} {r.is_default ? <span className="cap-badge tone-green">default</span> : null}</span>
-              <span className="mr-role-row-lens">{r.lens}</span>
+          <div key={r.key} className="rp-role-row" data-off={r.enabled === false ? "true" : undefined}>
+            <SeatAvatar role={r.title} size={28} />
+            <div>
+              <b>{r.title}{r.is_default ? <span className="rp-sub"> · default</span> : null}</b>
+              <span>{r.lens}</span>
             </div>
-            <div className="mr-role-row-actions">
+            <div className="rp-role-acts">
               <ActionForm action={setMeetingRoleEnabledAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
                 <input type="hidden" name="enabled" value={r.enabled === false ? "true" : "false"} />
-                <SubmitButton type="submit" className="cap-btn">{r.enabled === false ? "Enable" : "Disable"}</SubmitButton>
+                <SubmitButton type="submit" className="rp-btn sm">{r.enabled === false ? "Enable" : "Disable"}</SubmitButton>
               </ActionForm>
               <ActionForm action={deleteMeetingRoleAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
-                <SubmitButton type="submit" className="cap-btn danger">Remove</SubmitButton>
+                <SubmitButton type="submit" className="rp-btn sm" data-testid="meeting-seat-remove"
+                              onClick={(e) => {
+                                // Removing a seat drops it from every new panel: ask first.
+                                if (!window.confirm(`Remove the ${r.title} seat from new panels?`)) e.preventDefault();
+                              }}>Remove</SubmitButton>
               </ActionForm>
             </div>
           </div>
         ))}
       </div>
-      <ActionForm action={upsertMeetingRoleAction} className="mr-convene">
+      <ActionForm action={upsertMeetingRoleAction} className="rp-add-role">
         <input type="hidden" name="project_id" value={projectId} />
-        <div className="mr-convene-row">
-          <label>Role title<input name="title" placeholder="e.g. Legal Counsel" required /></label>
-          <label className="mr-role-default-pick">
-            <input type="checkbox" name="is_default" value="true" /> default-checked in new meetings
-          </label>
+        <div className="rp-lbl">Add a seat</div>
+        <input type="text" name="title" placeholder="Seat title — e.g. Legal Counsel" required aria-label="Seat title" />
+        <textarea name="lens" rows={3} required aria-label="Lens"
+                  placeholder="Its lens — how this seat thinks. e.g. legal and contractual risk: IP, liability, compliance, terms." />
+        <div className="rp-c-row">
+          <label className="rp-toggle"><input type="checkbox" name="is_default" value="true" /><i aria-hidden />On by default</label>
+          <span className="rp-spacer" />
+          <SubmitButton type="submit" className="rp-btn primary sm">Add seat</SubmitButton>
         </div>
-        <label className="mr-field-label">Persona / lens (the system prompt that defines how this agent thinks)</label>
-        <textarea name="lens" className="mr-lens-input" rows={3} required
-          placeholder="e.g. legal and contractual risk — IP, liability, compliance, terms, and what could expose the org legally." />
-        <SubmitButton type="submit" className="cap-btn primary">Add role-agent</SubmitButton>
       </ActionForm>
-    </div>
+    </section>
   );
 }
 
-/* ---- Meetings home (landing + routing) ------------------------------------- */
+/* ---- Maintenance: one menu, two jobs ------------------------------------------- */
 
-/** The first sentence, capped — what a heading can carry without becoming the document. */
-function cleanTitle(raw: string): string {
-  return (raw || "").replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ").trim();
+/**
+ * Maintenance ⌄ → [Record a vote] [Sweep stalled panels]. One level, each job named once —
+ * not the consensus card's own folds three deep. The vote lists only panels with minutes to vote
+ * against, and says why when there are none; results read as sentences.
+ */
+function PanelsMaintenance({ actor, meetings }: { actor: string; meetings: Meeting[] }) {
+  const [job, setJob] = useState<"vote" | "sweep" | null>(null);
+  const [vote, voteAction, votePending] = useActionState(callAction(tallyVotesAction), null);
+  const [sweep, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction), null);
+  const votable = meetings.filter((m) => m.can_vote !== false && !meetingLive(m));
+  const data = (r: typeof vote) => ((r?.data ?? {}) as Record<string, unknown>);
+  return (
+    <details className="rp-menu" data-testid="panels-maintenance">
+      <summary className="rp-link">Maintenance ⌄</summary>
+      <div className="rp-menu-body">
+        <div className="rp-c-row">
+          <button type="button" className={`rp-btn sm${job === "vote" ? " primary" : ""}`} aria-pressed={job === "vote"}
+                  data-testid="maint-vote" onClick={() => setJob("vote")}>Record a vote</button>
+          <button type="button" className={`rp-btn sm${job === "sweep" ? " primary" : ""}`} aria-pressed={job === "sweep"}
+                  data-testid="maint-sweep" onClick={() => setJob("sweep")}>Sweep stalled panels</button>
+        </div>
+        {job === "vote" ? (
+          votable.length ? (
+            <form action={voteAction} className="rp-maint-form" data-testid="maint-vote-form">
+              <input type="hidden" name="actor" value={actor} />
+              <label className="rp-maint-field">Panel
+                <select name="meeting_id" required defaultValue="" className="rp-ctx">
+                  <option value="" disabled>Pick a finished panel…</option>
+                  {votable.map((m) => <option key={m.id} value={m.id}>{titleOf(m)}</option>)}
+                </select>
+              </label>
+              <div className="rp-c-row">
+                {(["approve", "reject", "abstain"] as const).map((k) => (
+                  <label key={k} className="rp-maint-field">{k === "approve" ? "For" : k === "reject" ? "Against" : "Abstain"}
+                    <input name={k} type="number" min={0} required className="rp-ctx" />
+                  </label>
+                ))}
+              </div>
+              <SubmitButton type="submit" className="rp-btn primary sm" disabled={votePending}>Record the vote</SubmitButton>
+              {vote ? (vote.ok
+                ? <p className="rp-okmsg" data-testid="maint-vote-result">{voteSentence(data(vote))}
+                    {((data(vote).dissent_records as Array<{ role?: string; reason?: string }> | undefined) ?? [])
+                      .map((r, i) => <span key={i} style={{ display: "block" }}>{dissentLine(r)}</span>)}</p>
+                : <p className="rp-err" role="alert">{vote.error}</p>) : null}
+            </form>
+          ) : <p className="rp-sub" data-testid="maint-vote-none">No panel has finished with minutes yet, so there is nothing to vote on.</p>
+        ) : null}
+        {job === "sweep" ? (
+          <form action={sweepAction} className="rp-maint-form" data-testid="maint-sweep-form">
+            <input type="hidden" name="actor" value={actor} />
+            <p className="rp-sub">A panel whose worker died mid-round stays “in session” until it is swept. Sweeping marks it
+              stopped, so it can be convened again.</p>
+            <SubmitButton type="submit" className="rp-btn primary sm" disabled={sweepPending}>Sweep stalled panels</SubmitButton>
+            {sweep ? (sweep.ok
+              ? <p className="rp-okmsg" data-testid="maint-sweep-result">{Number(data(sweep).swept)
+                  ? `Swept ${Number(data(sweep).swept)} stalled panel${Number(data(sweep).swept) === 1 ? "" : "s"}.`
+                  : "Nothing was stalled."}</p>
+              : <p className="rp-err" role="alert">{sweep.error}</p>) : null}
+          </form>
+        ) : null}
+      </div>
+    </details>
+  );
 }
 
-
-function leadTitle(raw: string): string {
-  const text = cleanTitle(raw);
-  if (text.length <= 96) return text;
-  // Prefer a real sentence break; fall back to a word break so a title never ends mid-word.
-  const stop = text.slice(0, 120).search(/[.:;]\s/);
-  if (stop > 24) return text.slice(0, stop);
-  const cut = text.lastIndexOf(" ", 93);
-  return `${text.slice(0, cut > 24 ? cut : 93)}…`;
-}
-
-/** Whatever the heading had to leave out — empty when the title already fits. */
-function fullDirective(raw: string): string {
-  const text = cleanTitle(raw);
-  return text.length > 96 ? text : "";
-}
+/* ---- Meetings home (landing + routing) ---------------------------------------- */
 
 export function MeetingsHome({
   projectId,
-  orgId,
   actor,
   meetings,
+  totals = null,
   roles,
   tasks,
   apiReachable,
@@ -539,115 +828,203 @@ export function MeetingsHome({
   orgId?: string;
   actor: string;
   meetings: Meeting[];
+  /** The server's totals over EVERY panel; the loaded pages only when an older API sends none. */
+  totals?: { panels: number; prds: number } | null;
   roles: MeetingRole[];
   tasks: { id: string; title: string }[];
   apiReachable: boolean;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [showNew, setShowNew] = useState(false);
-  const [showRoles, setShowRoles] = useState(false);
+  const [showSeats, setShowSeats] = useState(false);
+  // Panels past the first page ("Show more"), and whether there may be more still.
+  const [more, setMore] = useState<Meeting[]>([]);
+  const [moreState, setMoreState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const all = useMemo(() => {
+    const seen = new Set(meetings.map((m) => m.id));
+    return [...meetings, ...more.filter((m) => !seen.has(m.id))];
+  }, [meetings, more]);
 
-  // Open from a ?meeting= deep link after mount (avoids a hydration mismatch),
-  // and keep selection in sync with Back/Forward.
+  // Open from a deep link after mount (avoids a hydration mismatch) — `meeting=`, a run id in
+  // `run=`, the task a dossier's panel was convened for (`task=`), or `#id` — and keep the
+  // selection in sync with Back/Forward. A task whose panel is not on this page is looked up
+  // by task (`task:<id>`), never dropped on the list.
+  const meetingsRef = useMemo(() => all.map((m) => ({ id: m.id, task_id: m.task_id })), [all]);
   useEffect(() => {
-    setSelected(readUrlParam("meeting") ?? null);
-    const onPop = () => setSelected(readUrlParam("meeting") ?? null);
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
+    const read = () => {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get("area") && q.get("area") !== "meetings") return;
+      const found = meetingFromUrl(window.location.search, window.location.hash, meetingsRef);
+      const task = q.get("task");
+      setSelected(found ?? (task ? `task:${task}` : null));
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, [meetingsRef]);
 
   // Select a meeting AND reflect it in the URL (?meeting=…) as a back-able entry.
   const selectMeeting = useCallback((id: string | null) => {
     setSelected(id);
-    pushUrlParam("meeting", id);
+    pushParams({ meeting: id, run: null, task: null });
   }, []);
 
-  if (!apiReachable) return <p className="detail">Meetings API unreachable.</p>;
+  const loadMore = useCallback(async () => {
+    setMoreState("loading");
+    const page = await fetchMeetingPage(projectId, meetings.length + more.length);
+    if (page === null) { setMoreState("error"); return; }
+    setMore((cur) => [...cur, ...page]);
+    setMoreState(page.length < 25 ? "done" : "idle");
+  }, [projectId, meetings.length, more.length]);
 
-  const active = meetings.find((m) => m.id === selected);
-  if (active) {
+  if (selected) {
     return (
-      <MeetingDetail
-        meeting={active}
-        onBack={() => selectMeeting(null)}
-        orgId={orgId}
-        projectId={projectId}
-        actor={actor}
-      />
+      <MeetingRoom id={selected} listed={all.find((m) => m.id === selected) ?? null}
+                   projectId={projectId} actor={actor} onBack={() => selectMeeting(null)} />
     );
   }
 
+  const panels = totals?.panels ?? all.length;
+  const prds = totals?.prds ?? all.filter((m) => m.pull_request_url).length;
+  const seatsAvailable = roles.filter((r) => r.enabled !== false).length;
   return (
-    <div className="mr">
-      <div className="mr-home-bar">
-        <span className="mr-home-count">{meetings.length} meeting{meetings.length === 1 ? "" : "s"} · {roles.filter((r) => r.enabled !== false).length} role-agents</span>
-        <div className="mr-home-actions">
-          <button type="button" className="cap-btn" onClick={() => { setShowRoles((v) => !v); setShowNew(false); }}>
-            {showRoles ? "Close" : "Manage roles"}
+    <div className="rp" data-testid="panels-home">
+      <ConveneHero projectId={projectId} roles={roles} tasks={tasks} meetings={meetings} />
+      <section aria-label="Recent panels">
+        <div className="rp-sec-h">
+          <h3>Recent panels</h3>
+          <span className="rp-sub" data-testid="panels-counts">
+            {panels} panel{panels === 1 ? "" : "s"} · {prds} became PRDs · {seatsAvailable} role-agent{seatsAvailable === 1 ? "" : "s"}
+          </span>
+          <span className="rp-spacer" />
+          <PanelsMaintenance actor={actor} meetings={all} />
+          <button type="button" className="rp-link" aria-expanded={showSeats} data-testid="meeting-manage-seats"
+                  onClick={() => setShowSeats((x) => !x)}>
+            {showSeats ? "Done with seats" : "Manage seats ↗"}
           </button>
-          <button type="button" className="cap-btn primary" data-testid="meeting-new"
-                  onClick={() => { setShowNew((v) => !v); setShowRoles(false); }}>
-            {showNew ? "Close" : "＋ New meeting"}
-          </button>
         </div>
-      </div>
-
-      {showRoles ? <ManageRoles projectId={projectId} roles={roles} /> : null}
-
-      {showNew ? (
-        <NewMeetingForm projectId={projectId} roles={roles} tasks={tasks} onCancel={() => setShowNew(false)} />
-      ) : null}
-
-      {meetings.length === 0 ? (
-        <div className="mr-empty">
-          <p>No meetings yet. Convene your first cross-functional panel with “New meeting”.</p>
-          <p className="detail">
-            A live panel calls a model. To prove the phase machine without spend, run a simulated fixture.
-          </p>
-          <ActionForm action={runSimulatedMeetingAction}>
-            <input type="hidden" name="project_id" value={projectId} />
-            <input type="hidden" name="directive" value="Community simulated panel fixture" />
-            <SubmitButton type="submit" className="cap-btn">
-              Run no-spend fixture
-            </SubmitButton>
-          </ActionForm>
-        </div>
-      ) : (
-        <div className="mr-home-grid">
-          {meetings.map((m) => (
-            <button key={m.id} type="button" className="mr-meeting-card" onClick={() => selectMeeting(m.id)}>
-              <div className="mr-meeting-card-head">
-                <span className={`cap-badge tone-${m.status === "completed" || m.status === "simulated" ? "green" : isRunning(m) ? "blue" : "amber"}`}>
-                  {isRunning(m) ? "running" : m.status}
-                </span>
-                <span className="mr-meeting-date">{fmtDate(m.completed_at ?? m.created_at)}</span>
+        {showSeats ? <div style={{ marginBottom: 14 }}><ManageSeats projectId={projectId} roles={roles} /></div> : null}
+        {!apiReachable ? (
+          <div className="rp-empty" role="status"><b>The control plane is not answering.</b>Panels will show here once it is back.</div>
+        ) : all.length === 0 ? (
+          <div className="rp-empty" data-testid="panels-empty">
+            <b>No panels yet.</b>
+            Convene one above. To see the phases without spending anything, run the no-spend fixture.
+            <ActionForm action={runSimulatedMeetingAction}>
+              <input type="hidden" name="project_id" value={projectId} />
+              <input type="hidden" name="directive" value="Community simulated panel fixture" />
+              <SubmitButton type="submit" className="rp-btn sm">Run no-spend fixture</SubmitButton>
+            </ActionForm>
+          </div>
+        ) : (
+          <>
+            <div className="rp-grid">
+              {all.map((m) => <PanelCard key={m.id} m={m} onOpen={() => selectMeeting(m.id)} />)}
+            </div>
+            {(totals ? all.length < totals.panels : meetings.length >= 25) && moreState !== "done" ? (
+              <div className="rp-more-row">
+                <button type="button" className="rp-btn" onClick={() => void loadMore()} disabled={moreState === "loading"}
+                        data-testid="panels-show-more">
+                  {moreState === "loading" ? "Loading…" : moreState === "error" ? "Try again" : "Show more"}
+                </button>
               </div>
-              <span className="mr-meeting-title">{meetingCardTitle(m.title)}</span>
-              <div className="mr-meeting-avatars">
-                {(m.participants ?? []).map((p) => <SeatAvatar key={p} role={p} size={24} />)}
-              </div>
-              <div className="mr-meeting-foot">
-                {isRunning(m) ? (
-                  <span className="mr-meeting-pill accent">⏳ {PHASE_LABEL[m.phase ?? ""] ?? "running"}</span>
-                ) : m.pull_request_url ? (
-                  <span className="mr-meeting-pill accent">PR #{m.pull_request_number}</span>
-                ) : (
-                  // FROM THE PRD'S DECISION, not from "has a PR URL": every card without one said
-                  // "awaiting approval" on boss-1, including meetings whose PRD fed shipped projects.
-                  <span className="mr-meeting-pill" data-testid="mr-meeting-prd-state">
-                    {m.prd_label ?? "PRD state unknown"}
-                  </span>
-                )}
-                <span className="mr-meeting-pill">{fmtCost(m.cost_usd_micros)}</span>
-                {fmtDuration(m.created_at, m.completed_at) ? (
-                  <span className="mr-meeting-pill">⏱ {fmtDuration(m.created_at, m.completed_at)}</span>
-                ) : null}
-                {m.task_id ? <span className="mr-meeting-pill">task linked</span> : null}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
+            ) : null}
+          </>
+        )}
+      </section>
     </div>
   );
 }
+
+// ── Inside a workflow run ──────────────────────────────────────────────────────────────────
+
+/**
+ * A panel step's meeting, inside a workflow run's step panel: the outcome first (agreed, the
+ * PR), the stages and each round filling in with seat faces while it runs, and the full room
+ * one press away. `buildState` is the run's own build step, so "Build" says what the run did.
+ */
+export function MeetingCompact({ meetingId, projectId, buildState }: {
+  meetingId: string; projectId: string; buildState?: StageState;
+}) {
+  useIdentityVersion(); // seat callsigns are read here
+  const search = useSearch();
+  const { meeting, error } = useMeeting(meetingId, projectId, null);
+  const full = consoleHref(search, { area: "meetings", meeting: meetingId });
+  if (!meeting) {
+    return (
+      <div className="rp rp-compact" data-testid="meeting-compact">
+        <div className="rp-cmp">
+          <BossMark size={48} />
+          <div className="rp-cmp-body">
+            <span className={error ? "rp-err" : "rp-sub"}>{error ? `This panel isn't here any more. ${sayLoadError(error, "panel")}` : "Opening the panel…"}</span>
+          </div>
+          <div className="rp-cmp-foot"><a className="rp-btn sm" href={full}>Open full view ↗</a></div>
+        </div>
+      </div>
+    );
+  }
+  const live = meetingLive(meeting);
+  const o = meetingOutcome(meeting);
+  const seats = orderedSeats(Object.fromEntries(seatsOf(meeting).map((s) => [s, 1])));
+  const t = took(meeting.created_at, meeting.completed_at);
+  const head = meeting.synthesis_gist?.headline;
+  const names = roundNames(meeting);
+  return (
+    <div className="rp rp-compact" data-testid="meeting-compact" data-status={meeting.status}>
+      <div className="rp-cmp">
+        <span className="rp-faces" aria-label="Seats">
+          {seats.slice(0, 4).map((s) => <SeatAvatar key={s} role={s} size={40} state={live ? "thinking" : "done"} />)}
+          <BossMark size={40} />
+        </span>
+        <div className="rp-cmp-body">
+          <div className="rp-cmp-top">
+            <Verdict tone={o.tone} testId="meeting-compact-outcome">{o.pill}</Verdict>
+            <span className="rp-sub">
+              {[`${seats.length} seats`, t ? `took ${t}` : "", meeting.cost_usd_micros ? usd(meeting.cost_usd_micros) : ""].filter(Boolean).join(" · ")}
+            </span>
+          </div>
+          <b className="rp-cmp-title">{live ? panelDoing(meeting) : o.headline}</b>
+          {head && !live ? <p className="rp-cmp-line" title={head}><b>Agreed:</b> {clip(head, 160)}</p>
+            : <p className="rp-cmp-line">{titleOf(meeting)}</p>}
+        </div>
+        <div className="rp-cmp-foot"><Stepper stages={panelStages(meeting, buildState)} live={live} /></div>
+        {live || Object.keys(meeting.round1 ?? {}).length ? (
+          <div className="rp-rounds-live" data-testid="meeting-compact-rounds">
+            {([1, 2] as const).map((r) => {
+              const have = (r === 1 ? meeting.round1 : meeting.round2) ?? {};
+              return (
+                <div key={r} className="rp-round-live">
+                  <span>{r === 1 ? names[0] : names[2]}</span>
+                  <span className="rp-faces">
+                    {seats.map((s) => (
+                      <span key={s} data-filled={have[s] ? "true" : "false"}
+                            title={have[s] ? `${callsignOf(s) || s}: ${seatGist(meeting, r, s)?.headline ?? ""}` : `${s} — not yet`}>
+                        <SeatAvatar role={s} size={24} state={have[s] ? "done" : live ? "thinking" : "idle"} />
+                      </span>
+                    ))}
+                  </span>
+                  <span>{Object.keys(have).length}/{seats.length}</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+        {meeting.status === "failed" && meeting.error ? (
+          <div className="rp-cmp-err"><div className="rp-attn"><b>Why it stopped</b><span>{meeting.error}</span></div></div>
+        ) : null}
+        <div className="rp-cmp-foot">
+          {meeting.pull_request_url ? (
+            <a className="rp-btn sm primary" href={meeting.pull_request_url} target="_blank" rel="noreferrer"
+               data-testid="meeting-compact-pr">Open the PR ↗</a>
+          ) : o.stage === "awaiting" ? (
+            <a className="rp-btn sm primary" href={decisionHref(search, meeting.decision_id)}>Review in Approvals →</a>
+          ) : null}
+          <a className={`rp-btn sm${meeting.pull_request_url || o.stage === "awaiting" ? "" : " primary"}`}
+             href={full} data-testid="meeting-compact-open">Open full view ↗</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Kept for the stage words elsewhere in the console.
+export { PHASE_LABEL as MEETING_PHASE_LABEL };

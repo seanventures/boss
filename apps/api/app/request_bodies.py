@@ -716,6 +716,8 @@ class DiscoveryStartBody(OpenRequestBody):
     project_id: SkipValidation[str | None] = None
     actor: SkipValidation[str | None] = None
     context: SkipValidation[str | None] = None
+    # The Research hero's Deep toggle: the multi-source scout sweep from the first pass.
+    deep: SkipValidation[bool | None] = None
 
 class DiscoveryExecuteBody(BaseModel):
     """The worker's lease of a discovery.run job. All three are required: every research stage

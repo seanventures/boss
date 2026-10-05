@@ -97,7 +97,6 @@ import { fetchWipStatus } from "../lib/factory";
 import {
   InboxAckCard,
   SlackToolsCard,
-  MeetingConsensusCard,
   FactoryScaleCard,
 } from "./phase3-ui";
 import { fetchChaosRuns } from "../lib/chaos";
@@ -114,6 +113,7 @@ import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
+import { researchRunParam } from "../lib/research-panels";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchOpsQueueFeed } from "../lib/ops";
 import { fetchLiveJobsFeed } from "../lib/live-jobs";
@@ -528,8 +528,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // discovery id, but the page kept the open dossier in local state alone, so every link
   // landed on the list and the operator had to go and find the run they had just clicked.
   // `run` as well as `discovery`, because that is the name the workflow step already sends.
-  const requestedDiscovery =
-    getParam(resolvedSearchParams?.discovery) ?? getParam(resolvedSearchParams?.run);
+  // ONLY A DOSSIER'S ID. `run=` is shared: Panels reads a meeting run there (mrun_) and the
+  // Factory a code task (crun_), and taking those as a dossier sent Research looking for a
+  // dossier called mrun_… — a not-found it then kept asking about.
+  const requestedDiscovery = researchRunParam(
+    getParam(resolvedSearchParams?.discovery), getParam(resolvedSearchParams?.run));
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
@@ -4528,29 +4531,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("meetings") ? (
-        <section className="panel-stack" data-area="meetings" aria-label="Meeting room">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Meeting Room</span>
-              <h2>Cross-functional agent panels — watch them debate to a PRD.</h2>
-            </div>
-          </div>
+        <section className="panel-stack" data-area="meetings" aria-label="Panels">
+          {/* PANELS. Off the nav: a workflow's panel step opens its room inline and links here
+              for the full view; the vote and maintenance live in each room's drawer. */}
           <MeetingsHome
             projectId={activeProjectId}
             orgId={activeOrgId}
             actor={activeActorId}
             meetings={meetingRooms.items}
+            totals={meetingRooms.totals ?? null}
             roles={meetingRooms.roles}
             tasks={tasks.items.map((t) => ({ id: t.id, title: t.title }))}
             apiReachable={meetingRooms.apiReachable}
           />
-          <div className="stack-grid" style={{ marginTop: 14 }}>
-            <MeetingConsensusCard
-              projectId={activeProjectId}
-              actor={activeActorId}
-              meetings={meetingRooms.items.map((item) => ({ id: item.id, title: item.title }))}
-            />
-          </div>
         </section>
         ) : null}
 
@@ -4769,17 +4762,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("discovery") ? (
-        <section className="panel-stack" data-area="discovery" aria-label="Discovery">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Discovery</span>
-              <h2>Review saved Discovery dossiers and the outcomes they identified.</h2>
-            </div>
-          </div>
+        <section className="panel-stack" data-area="discovery" aria-label="Research">
+          {/* RESEARCH. Off the nav: a workflow's research step opens its dossier inline and
+              links here for the full view. */}
           <DiscoveriesHome
             projectId={activeProjectId}
             orgId={activeOrgId}
             discoveries={discoveryFeed.items}
+            totals={discoveryFeed.totals ?? null}
             apiReachable={discoveryFeed.apiReachable}
             initialDiscoveryId={requestedDiscovery}
           />

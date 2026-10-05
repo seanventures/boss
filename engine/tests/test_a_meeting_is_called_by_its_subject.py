@@ -163,6 +163,8 @@ _NOT_A_TITLE_READER = {
         "locks the row to record an outcome; shows no title",
     "engine/boss_engine/services/meeting_service.py::load_meeting_run":
         "hands the row to _row_to_run, which calls meeting_title",
+    "engine/boss_engine/services/meeting_rooms.py::meeting_room_items":
+        "names every record through _title, which calls meeting_title",
     "engine/boss_engine/services/meeting_service.py::meeting_evidence":
         "reads artifact ids and status; returns no title",
     "engine/boss_engine/tools/builtin.py::read_spec":

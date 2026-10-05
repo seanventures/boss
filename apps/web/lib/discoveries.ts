@@ -3,6 +3,7 @@ import {
   type DiscoveryListItem,
   type DiscoveryRun,
   type DiscoverySummary,
+  type DiscoveryTotals,
 } from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
@@ -13,6 +14,7 @@ export type DiscoveryFeed = {
   apiReachable: boolean;
   blockedReason?: string;
   items: DiscoveryListItem[];
+  totals?: DiscoveryTotals | null;
 };
 
 export function emptyDiscoveryFeed(reason?: string, projectId = PROJECT_ID): DiscoveryFeed {
@@ -67,6 +69,7 @@ export async function fetchDiscoveriesFeed(projectId = PROJECT_ID, active = true
       projectId: resolved,
       apiReachable: true,
       items: (res.discoveries ?? []).map((row) => toDiscoveryListItem(row as AnyDiscoveryRow)),
+      totals: res.totals ?? null,
     };
   } catch (error) {
     if (error instanceof BossApiError) {

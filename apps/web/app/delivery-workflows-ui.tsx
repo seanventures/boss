@@ -37,6 +37,9 @@ import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
 import { Library, type Schedule } from "./workflows/library";
 import { get, post } from "./workflows/delivery-api";
 import { NewProjectComposer } from "./workflows/new-project-composer";
+import { DossierCompact } from "./discoveries-ui";
+import { MeetingCompact } from "./meeting-room-ui";
+import { readComposerPrefill } from "../lib/research-panels";
 // The Runs composer moved to app/workflows/; its helpers are re-exported so imports hold.
 export {
   blockingReason, briefFrom, composerFields, criteriaFrom, linksFrom, repositoryHint,
@@ -804,6 +807,28 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         window.history.replaceState(null, "",
           `${window.location.pathname}?${next}${window.location.hash}`);
         setEditing(null);
+      } catch { /* non-browser — the composer is on screen either way */ }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+
+  // PREFILLED FROM WHERE IT CAME. A dossier outcome's or a panel's "Build it" carries its brief
+  // (lib/research-panels composerHref): the composer opens on the product path with it written
+  // in, and the brief is consumed like `new=1`, so a later navigation cannot re-deliver it.
+  useEffect(() => {
+    const read = () => {
+      const pre = readComposerPrefill(window.location.search);
+      if (!pre) return;
+      setStartWith("standard_product_delivery");
+      setStartExample(pre);
+      setTabState("runs");
+      setComposerOpen(true);
+      try {
+        const next = new URLSearchParams(window.location.search);
+        for (const key of ["compose", "brief", "title", "new"]) next.delete(key);
+        window.history.replaceState(null, "", `${window.location.pathname}?${next}${window.location.hash}`);
       } catch { /* non-browser — the composer is on screen either way */ }
     };
     read();
@@ -1789,7 +1814,28 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   // to "what is happening".
   const initial = steps.find(needsYou) ?? stoppedStep(run) ?? steps.find((s) => phaseOf(s) === "now")
     ?? steps.find((s) => phaseOf(s) === "failed") ?? steps[0];
-  const [picked, setPicked] = useState<string | null>(initial?.step_id ?? null);
+  // THE STEP IS IN THE URL (`step=`), so Back from a step's full dossier or meeting room lands
+  // on the step it was opened from, not on whichever step the run would open on by itself.
+  // Read after mount, never during render: the server has no URL to read, and a first paint
+  // that differs from it is a hydration error.
+  const [picked, setPickedState] = useState<string | null>(initial?.step_id ?? null);
+  const setPicked = useCallback((id: string | null) => {
+    setPickedState(id);
+    try {
+      const url = new URL(window.location.href);
+      if (id) url.searchParams.set("step", id); else url.searchParams.delete("step");
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch { /* non-browser */ }
+  }, []);
+  useEffect(() => {
+    const onPop = () => {
+      const asked = new URLSearchParams(window.location.search).get("step");
+      if (asked && steps.some((s) => s.step_id === asked)) setPickedState(asked);
+    };
+    onPop();
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [steps]);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
   // A LINK TO ONE STEP LANDS ON THAT STEP (`?wfr=<this run>&step=<id>` — the Log's Step ↗, a
   // step panel's link). It opened on the run's own choice above, so every such link showed
@@ -1947,6 +1993,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           projectId={projectId}
           previewStarting={previewStarting}
           busy={busy}
+          panelBuild={buildStageOf(steps)}
         />
         </div>
       ) : null}
@@ -2677,11 +2724,61 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
   );
 }
 
+/**
+ * THE STEP'S OWN WORK, IN THE STEP. A research step's dossier and a panel step's meeting are
+ * what an operator clicked the step to see; they used to be a link to another area ("open the
+ * research", "open the panel"). The step panel now shows them inline — the verdict or outcome
+ * first, live progress while the step runs — with the full view one press away.
+ */
+export function stepWorkOf(step: Pick<RunStep, "capability" | "output">):
+  { kind: "discovery" | "meeting"; id: string } | null {
+  const out = (step.output ?? {}) as Record<string, unknown>;
+  const awaited = (out.await as { kind?: string; id?: string } | undefined) ?? {};
+  const str = (k: string) => (typeof out[k] === "string" ? (out[k] as string) : "");
+  const cap = String(step.capability ?? out.capability ?? "");
+  if (cap === "research" || awaited.kind === "discovery") {
+    const id = str("discovery_id") || (awaited.kind === "discovery" ? awaited.id ?? "" : "");
+    return id ? { kind: "discovery", id } : null;
+  }
+  if (["meeting", "prd_panel", "panel"].includes(cap) || awaited.kind === "meeting") {
+    const id = str("meeting_run_id") || (awaited.kind === "meeting" ? awaited.id ?? "" : "");
+    return id ? { kind: "meeting", id } : null;
+  }
+  return null;
+}
+
+/**
+ * The step's links, less the ones something else on the step already offers — ONE way in to
+ * each thing. The preview block has its own "Open preview"; a research step's dossier and a
+ * panel step's meeting are on the step with "Open full view", and the panel's compact view
+ * carries "Open the PR".
+ */
+export function visibleStepLinks<L extends { label: string }>(links: L[],
+  work: { kind: "discovery" | "meeting" } | null): L[] {
+  return links.filter((l) => l.label !== "open the preview"
+    && !(work?.kind === "discovery" && l.label === "open the research")
+    && !(work?.kind === "meeting" && (l.label === "open the panel" || l.label.startsWith("pull request #"))));
+}
+
+/** The run's own build step as a stage state, for a panel step's "Build" stage. */
+export function buildStageOf(steps: Array<Pick<RunStep, "capability" | "status">>):
+  "done" | "now" | "todo" | "stopped" | "skipped" | undefined {
+  const b = steps.find((s) => s.capability === "build");
+  if (!b) return undefined;
+  if (b.status === "succeeded") return "done";
+  if (["running", "waiting", "leased", "ready"].includes(b.status)) return "now";
+  if (b.status === "skipped" || b.status === "cancelled") return "skipped";
+  if (b.status === "failed" || b.status === "deadlettered") return "stopped";
+  return "todo";
+}
+
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
                      actions, actor = "", act = null, approval: gateAnswer = null, planned,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
-                     workflowRunId, previewStarting, busy }: {
+                     workflowRunId, previewStarting, busy, panelBuild }: {
   projectId: string;
+  /** The run's build step, as the panel step's "Build" stage shows it. */
+  panelBuild?: "done" | "now" | "todo" | "stopped" | "skipped";
   /** Who is acting — what a stack deployment's Approve/Reject is recorded as. */
   actor?: string;
   /** The workflow run this step belongs to — what "Ask about this step" is about. */
@@ -2828,7 +2925,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const previewHref = links.find((l) => l.label === "open the preview")?.href ?? null;
   // ONE WAY IN. The preview block renders "Open preview" as a button; leaving the link of the
   // same name in the row below it puts the identical href on screen twice, four words apart.
-  const visibleLinks = links.filter((l) => l.label !== "open the preview");
+  const work = stepWorkOf(step);
+  const visibleLinks = visibleStepLinks(links, work);
   // Asked for on THIS build and not yet serving. The URL is the finish line; a POST returning
   // is not — which is why the old busy flag cleared a second after the click.
   // A FRESH ONE IS ON ITS WAY UNTIL A DIFFERENT LINK ARRIVES. This used to require "no link
@@ -3000,6 +3098,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             {String(step.output.note)}
           </p>
         )
+      ) : null}
+
+      {work?.kind === "discovery" ? (
+        <div className="dw-step-work" data-testid="dw-step-dossier"><DossierCompact discoveryId={work.id} /></div>
+      ) : work?.kind === "meeting" ? (
+        <div className="dw-step-work" data-testid="dw-step-meeting">
+          <MeetingCompact meetingId={work.id} projectId={projectId} buildState={panelBuild} />
+        </div>
       ) : null}
 
       {/* WHERE THE THING IS. The point of a deploy is an address somebody can open, and the

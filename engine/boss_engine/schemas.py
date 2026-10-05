@@ -915,7 +915,10 @@ class MeetingProposeRequest(BaseModel):
 class MeetingProposeResponse(BaseModel):
     status: str
     task_id: str
-    job_id: str
+    #: None when this convene found the same panel already in session and returned it.
+    job_id: Optional[str] = None
+    #: The panel this convene started — or the one already in session on the same ask.
+    run_id: Optional[str] = None
 
 
 class BudgetReserveRequest(BaseModel):
