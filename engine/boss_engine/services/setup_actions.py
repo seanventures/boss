@@ -1014,7 +1014,7 @@ def set_job(connection: Connection, settings: Any, project_id: str, job: str,
 # ── Budget ────────────────────────────────────────────────────────────────────────────────────
 
 def set_budget(connection: Connection, settings: Any, project_id: str, monthly_cap_usd: Any, *,
-               actor: str = "ceo") -> None:
+               actor: str = "ceo", via: str = "repo_and_models") -> None:
     """The monthly cap — the same setting Govern edits."""
     from .core import emit_event, make_id
 
@@ -1040,7 +1040,9 @@ def set_budget(connection: Connection, settings: Any, project_id: str, monthly_c
 
     release_budget_holds(connection, project_id)
     emit_event(connection, project_id, "budget.monthly_cap_set", actor, "budget_policy",
-               project_id, {"monthly_cap_usd_micros": micros, "via": "repo_and_models"})
+               project_id, {"monthly_cap_usd_micros": micros,
+                            "via": via if via in ("govern", "repo_and_models") else
+                            "repo_and_models"})
 
 
 # ── Checks ────────────────────────────────────────────────────────────────────────────────────

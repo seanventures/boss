@@ -61,6 +61,14 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
     return next;
   }
 
+  // GOVERN HAS ONE ID, `budget`; "govern" is what people type and what the spec, the agents
+  // and the chat call it. A link naming it lands on the same screen, keeping its tab and focus.
+  if (area === "govern") {
+    const next = copyWithout(params, []);
+    next.set("area", "budget");
+    return next;
+  }
+
   if (area === "org_chart") {
     const next = copyWithout(params, []);
     next.set("area", "workforce");

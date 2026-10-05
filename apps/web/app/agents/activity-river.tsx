@@ -12,13 +12,16 @@
  * it is pressed; the list only grows downwards (`Load more`). Times are absolute (`09:42`, ISO
  * in the tooltip): this is an audit trail.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { ArrowBendDownRight, CaretDown, CaretRight, X } from "@phosphor-icons/react";
 
 import type { Act, AvatarState } from "../../lib/agent-world-types";
 import type { ActivityFilter, ActivityItem, ToolCallRow } from "../../lib/agents-live-board";
 import { listActivity, listToolCalls } from "../../lib/agents-activity";
 import { getAct, identityOf, money } from "../../lib/agent-world";
+import { useLogStream } from "../../lib/log-stream";
+import { clock as logClock, dayLabel as logDayLabel, utcTitle } from "../../lib/log-time";
+import { logHref, type LogScope } from "../../lib/log-url";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ActCard, consoleHref } from "./act-card";
 import { AgState } from "./agent-face";
@@ -89,26 +92,15 @@ export function sentenceOf(item: ActivityItem): { who: { roleKey: string | null;
   return { who: whoOf(item), verb: item.verb.toLowerCase() };
 }
 
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** `Today` · `Yesterday` · `Mon 29 Sep`, in the reader's own time zone. */
+/** `Today` · `Yesterday` · `Mon 29 Sep`, in the reader's own time zone (lib/log-time: one
+ *  clock for every log in the console). */
 export function dayLabel(iso: string, now: Date = new Date()): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const key = (x: Date) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
-  if (key(d) === key(now)) return "Today";
-  const y = new Date(now);
-  y.setDate(now.getDate() - 1);
-  if (key(d) === key(y)) return "Yesterday";
-  // Fixed three-letter names: Intl writes "Sept" in some locales and the label must not drift.
-  return `${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  return logDayLabel(iso, now);
 }
 
+/** `09:42`, local; UTC in the tooltip. */
 export function clock(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return logClock(iso, { seconds: false });
 }
 
 /** How long it took, once it ended. Open work shows no duration (no clock read in render). */
@@ -134,18 +126,17 @@ function whoOf(item: ActivityItem): { roleKey: string | null; variant: AvatarVar
 
 /** Agent-to-agent handoffs carry the edge glyph; work a workflow simply named does not. */
 const HANDOFF_HOWS = new Set(["captain", "asked_by_agent", "model_pick", "only_holder", "only_candidate"]);
-function isHandoff(item: ActivityItem): boolean {
-  return item.kind === "handoff" || HANDOFF_HOWS.has(item.how) || item.from?.kind === "agent";
+/** Where a river row's `All lines ↗` goes: the act's own lines when it wrote any (turns or
+ *  model calls), else its workflow run's — an act scope with no lines was an empty Log. */
+export function riverLogScope(item: Pick<ActivityItem, "actId" | "label" | "verb" | "toolCalls" | "costUsd" | "workflowRunId">): LogScope {
+  const name = withoutVerb(item.label, item.verb).trim() || item.label;
+  const wroteLines = item.toolCalls > 0 || item.costUsd > 0;
+  if (!wroteLines && item.workflowRunId) return { wfr: item.workflowRunId, run_name: name || null };
+  return { act: item.actId, run_name: name || null };
 }
 
-function useVisible(): boolean {
-  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
-  useEffect(() => {
-    const on = () => setVisible(document.visibilityState !== "hidden");
-    document.addEventListener("visibilitychange", on);
-    return () => document.removeEventListener("visibilitychange", on);
-  }, []);
-  return visible;
+function isHandoff(item: ActivityItem): boolean {
+  return item.kind === "handoff" || HANDOFF_HOWS.has(item.how) || item.from?.kind === "agent";
 }
 
 export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, runLabel, viewer = "",
@@ -153,62 +144,37 @@ export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, r
   useIdentityVersion();
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [days, setDays] = useState<1 | 7>(initialDays);
-  const [items, setItems] = useState<ActivityItem[] | null>(null);
-  const [next, setNext] = useState<string | null>(null);
-  const [fresh, setFresh] = useState<ActivityItem[]>([]);
-  const [failed, setFailed] = useState("");
-  const [loadingMore, setLoadingMore] = useState(false);
-  const visible = useVisible();
   const query = useMemo(() => ({ projectId, filter, days, role: roleKey || null, run: runId || null }),
                         [projectId, filter, days, roleKey, runId]);
-  const queryKey = JSON.stringify(query);
-  const seen = useRef<Set<string>>(new Set());
-
-  // A new question (filter, window, agent, run) starts the river again.
-  useEffect(() => {
-    let alive = true;
-    setItems(null); setFresh([]); setNext(null); setFailed("");
-    void listActivity(query).then((r) => {
-      if (!alive) return;
-      if (!r.ok) { setFailed(r.error); setItems([]); return; }
-      seen.current = new Set(r.data.items.map((i) => i.actId));
-      setItems(r.data.items);
-      setNext(r.data.next);
-    });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the query's value
-  }, [queryKey]);
-
-  // New work collects behind the pill, never above the line the reader is on.
-  useEffect(() => {
-    if (paused || !visible || items === null) return undefined;
-    const t = setInterval(() => {
-      void listActivity(query).then((r) => {
-        if (!r.ok) return;
-        const unseen = r.data.items.filter((i) => !seen.current.has(i.actId));
-        if (unseen.length) setFresh((f) => [...unseen.filter((u) => !f.some((x) => x.actId === u.actId)), ...f]);
-      });
-    }, RIVER_POLL_MS);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the query's value
-  }, [queryKey, paused, visible, items === null]);
-
-  const showFresh = () => {
-    for (const f of fresh) seen.current.add(f.actId);
-    setItems((cur) => [...fresh, ...(cur ?? [])]);
-    setFresh([]);
-  };
-  const loadMore = async () => {
-    if (!next) return;
-    setLoadingMore(true);
-    const r = await listActivity({ ...query, cursor: next });
-    setLoadingMore(false);
-    if (!r.ok) return;
-    const add = r.data.items.filter((i) => !seen.current.has(i.actId));
-    for (const a of add) seen.current.add(a.actId);
-    setItems((cur) => [...(cur ?? []), ...add]);
-    setNext(r.data.next);
-  };
+  // THE SHARED STREAM ENGINE (lib/log-stream), the same loop as the Activity log's: cursor
+  // paging, an 8s poll that stops while Paused or hidden, and new work that ALWAYS waits behind
+  // `n new ↑` here (the river never moves under the reader).
+  const stream = useLogStream<ActivityItem>({
+    key: JSON.stringify(query),
+    idOf: (i) => i.actId,
+    pollMs: RIVER_POLL_MS,
+    paused: Boolean(paused),
+    holding: true,
+    first: async () => {
+      const r = await listActivity(query);
+      return r.ok ? { items: r.data.items, next: r.data.next, newest: null } : { error: r.error };
+    },
+    older: async (cursor) => {
+      const r = await listActivity({ ...query, cursor });
+      return r.ok ? { items: r.data.items, next: r.data.next, newest: null } : { error: r.error };
+    },
+    newer: async () => {
+      const r = await listActivity(query);
+      return r.ok ? { items: r.data.items, newest: null, etag: null } : { error: r.error };
+    },
+  });
+  const items = stream.items;
+  const fresh = stream.fresh;
+  const failed = stream.error;
+  const next = stream.next;
+  const loadingMore = stream.loadingOlder;
+  const showFresh = stream.showFresh;
+  const loadMore = async () => stream.loadOlder();
 
   const groups = useMemo(() => {
     const out: { day: string; rows: ActivityItem[] }[] = [];
@@ -323,7 +289,7 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
            data-state={state} aria-expanded={!!card}
            onClick={(e) => { if (!(e.target as Element).closest("button, a")) void openCard(); }}
            onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) void openCard(); }}>
-        <time className="ag-river-time" dateTime={item.startedAt} title={item.startedAt}>{clock(item.startedAt)}</time>
+        <time className="ag-river-time" dateTime={item.startedAt} title={utcTitle(item.startedAt)}>{clock(item.startedAt)}</time>
         <span className="ag-river-face" data-still>
           <RunFace roleKey={who.roleKey} variant={who.variant} size={24} state={state} />
         </span>
@@ -346,8 +312,7 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
           {item.costUsd > 0 ? money(item.costUsd) : ""}
         </span>
       </div>
-      {item.children > 0 || item.toolCalls > 0 ? (
-        <div className="ag-river-folds">
+      <div className="ag-river-folds">
           {item.children > 0 ? (
             <button type="button" className="ag-link" aria-expanded={kidsOpen} data-testid={`ag-river-inside-${item.actId}`}
                     onClick={() => void toggleKids()}>
@@ -360,8 +325,11 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
               {item.toolCalls} tool call{item.toolCalls === 1 ? "" : "s"} {toolsOpen ? "▴" : "▾"}
             </button>
           ) : null}
+          {/* EVERY ROW reaches its lines (D7): the work's own lines, or its run's when the work
+              wrote none of its own; the name rides along so the chip reads before the server. */}
+          <a className="ag-link ag-river-log" data-testid={`ag-river-log-${item.actId}`} title="Every log line of this work"
+             href={logHref(riverLogScope(item))}>All lines ↗</a>
         </div>
-      ) : null}
       {card ? (
         <div className="ag-river-card" data-testid={`ag-river-card-${item.actId}`}>
           <ActCard act={card} viewer={viewer} inline onClose={() => setCard(null)} />
@@ -377,12 +345,7 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
             </li>
           ))}
           {tools.more || item.toolCalls > TOOL_CAP ? (
-            <li>
-              <a className="ag-link" data-testid={`ag-river-log-${item.actId}`}
-                 href={consoleHref({ area: "activity", ...(item.workflowRunId ? { workflow_run_id: item.workflowRunId } : {}) })}>
-                Open in Activity log ↗
-              </a>
-            </li>
+            <li className="ag-river-tool">{item.toolCalls - TOOL_CAP > 0 ? `+${item.toolCalls - TOOL_CAP} more in All lines` : "More in All lines"}</li>
           ) : null}
         </ul>
       ) : null}
