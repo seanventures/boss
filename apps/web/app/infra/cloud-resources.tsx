@@ -83,7 +83,7 @@ export function CloudResources(p: CloudViewProps & { scope: Scope; setScope: (s:
                   <td><button type="button" className="cloud-open" onClick={(e) => { e.stopPropagation(); go({ resource: r.id }); }}>
                     <span className="inf-trunc" data-copy="data" title={r.name}>{r.name}</span></button>
                     {r.kind === "Droplet" ? <span className="cloud-chip">Droplet</span> : null}</td>
-                  <td><span data-copy="data">{r.provider}{r.account ? ` · ${r.account.name}` : ""}</span></td>
+                  <td><span data-copy="data">{r.providerName}{r.account ? ` · ${r.account.name}` : ""}</span></td>
                   <td><span data-copy="data">{[r.region, r.service].filter(Boolean).join(" · ") || "—"}</span></td>
                   <td><span data-copy="data">{r.owner ?? "—"}</span></td>
                   <td><StateWord w={r.health} /></td>
@@ -110,7 +110,8 @@ function ResourceDrawer({ r, onClose }: { r: CloudResource; onClose: () => void 
         <dl className="inf-facts">
           <dt>External ID</dt><dd className="inf-mono" data-copy="data">{r.externalId ?? "—"}</dd>
           <dt>Env</dt><dd data-copy="data">{r.env ?? "—"}</dd>
-          <dt>Region</dt><dd data-copy="data">{[r.region, r.service].filter(Boolean).join(" · ") || "—"}</dd>
+          <dt>Provider</dt><dd data-copy="data">{r.providerName}</dd>
+          <dt>{r.provider === "ssh_host" ? "Host" : "Region"}</dt><dd data-copy="data">{[r.region, r.service].filter(Boolean).join(" · ") || "—"}</dd>
           <dt>Owner</dt><dd data-copy="data">{r.owner ?? "—"}</dd>
           <dt>Cost/mo</dt><dd>{r.costMonth}</dd>
           <dt>Last seen</dt><dd>{r.lastSeenAt ? localTime(r.lastSeenAt) : "—"}</dd>

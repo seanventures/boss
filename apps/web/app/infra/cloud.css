@@ -90,4 +90,17 @@ ol.cloud-list > li { display: list-item; }
   .cloud-open { max-width: 160px; min-height: 44px; }
   .cloud-filter select { min-height: 44px; }
   .cloud-cat { min-height: 44px; }
+  /* CHANGES KEEPS ITS STATE AND AGE AT 390. The narrow rule above hides every column from the
+     fourth, which took a change's state and age with it — the two things you open Changes on a
+     phone to read. Each change is a two-row card: the title, then its state over its age. */
+  .cloud .cloud-sec[aria-labelledby="inf-cloud-changes"] .inf-table thead { display: none; }
+  .cloud .cloud-sec[aria-labelledby="inf-cloud-changes"] .inf-table tbody { display: block; }
+  .cloud .cloud-sec[aria-labelledby="inf-cloud-changes"] .inf-table tr.cloud-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "c s" "c a";
+    align-items: center; column-gap: 8px; border-bottom: 1px solid var(--border);
+  }
+  .cloud .cloud-sec[aria-labelledby="inf-cloud-changes"] .inf-table tr.cloud-row td { border-bottom: 0; max-width: none; }
+  .cloud .cloud-sec[aria-labelledby="inf-cloud-changes"] .inf-table td:nth-child(1) { grid-area: c; min-width: 0; }
+  .cloud .cloud-sec[aria-labelledby="inf-cloud-changes"] .inf-table td:nth-child(5) { display: block; grid-area: s; justify-self: end; padding-bottom: 0; }
+  .cloud .cloud-sec[aria-labelledby="inf-cloud-changes"] .inf-table td:nth-child(6) { display: block; grid-area: a; justify-self: end; padding-top: 0; color: var(--muted); font-size: 0.76rem; }
 }

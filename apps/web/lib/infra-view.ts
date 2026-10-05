@@ -307,6 +307,8 @@ export type PreviewRow = {
   substrate: Substrate; port: number | null; host: { id: string; name: string } | null; url: string | null;
   createdAt: string | null; expiresAt: string | null; lastSeenAt: string | null;
   can: { open: boolean; log: boolean; stop: boolean; restart: boolean };
+  /** Why Restart cannot run (its build is gone); the button is shown disabled with it. */
+  restartWhy: string | null;
 };
 export function parsePreviewRow(w: unknown): PreviewRow {
   const o = obj(w);
@@ -319,6 +321,7 @@ export function parsePreviewRow(w: unknown): PreviewRow {
     port: optNum(o.port), host: ref(o.host), url: optStr(o.url), createdAt: optStr(o.created_at),
     expiresAt: optStr(o.expires_at), lastSeenAt: optStr(o.last_seen_at),
     can: { open: !!can.open, log: !!can.log, stop: !!can.stop, restart: !!can.restart },
+    restartWhy: optStr(o.restart_why),
   };
 }
 export type PreviewList = {

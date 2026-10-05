@@ -32,7 +32,25 @@ PAYLOAD_KB = {"models": 40, "system": 16}
 PULSE_KB = 48
 
 
+def _llm_span() -> tuple[float, float]:
+    """(newest, spacing) for 200,000 calls that all fall inside the 30-day window the view asks.
+
+    The window is ALIGNED to its 8-hour cell (obs_view.window_bounds): it starts up to 8 h after
+    `now - 30 days`. Seeded back from now by a flat 30 days, up to 2,222 of the oldest calls fell
+    before its start, so `>= 199,000` passed or failed with the time of day. They are spread over
+    the aligned window instead, one cell clear of its start so a boundary crossed while seeding
+    (the window moving on by one cell) still holds every one of them.
+    """
+    from boss_engine.services.obs_view import window_bounds
+
+    w = window_bounds("30d")
+    newest = time.time() - 5
+    oldest = w["start_epoch"] + w["cell_s"] + 60
+    return newest, (newest - oldest) / 200_000
+
+
 def _seed_big(engine, pid):
+    newest, spacing = _llm_span()
     with begin(engine) as c:
         c.execute(text(
             "INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
@@ -64,8 +82,8 @@ def _seed_big(engine, pid):
             " (ARRAY['software_engineer','adversarial_reviewer','architect','qa'])[1 + g % 4], "
             " 100 + g % 5000, 10 + g % 700, 110 + g % 5700, (g * 13) % 40000, g % 501 = 0, "
             " 200 + (g * 7) % 60000, g % 4, g % 23 <> 0, g % 3 = 0, "
-            " now() - make_interval(secs => g * 12.96) "
-            "FROM generate_series(0, 199999) g"), {"p": pid})
+            " to_timestamp(:newest) - make_interval(secs => g * :spacing) "
+            "FROM generate_series(0, 199999) g"), {"p": pid, "newest": newest, "spacing": spacing})
         c.execute(text("ANALYZE deployment_health_samples"))
         c.execute(text("ANALYZE llm_calls"))
 
@@ -150,3 +168,23 @@ def test_the_pulse_fits_48kb_at_fifty_apps(client, engine):
     assert r.status_code == 200
     assert r.headers.get("content-encoding") == "gzip"
     assert r.num_bytes_downloaded / 1024 <= PULSE_KB, f"{r.num_bytes_downloaded / 1024:.1f} KB on the wire"
+
+
+def test_the_seeded_calls_fall_inside_the_aligned_window_at_any_time_of_day(monkeypatch):
+    """The worst instant: just after an 8-hour boundary, when the aligned 30-day window starts
+    almost 8 hours after `now - 30 days`. Seeding back a flat 30 days put ~2,200 calls before
+    it; the span is taken from the window itself, so every call is inside."""
+    from datetime import datetime, timezone
+
+    from boss_engine.services import obs_view
+
+    cell = obs_view.WINDOWS["30d"][0] // obs_view.WINDOWS["30d"][1]
+    for offset in (1, cell // 2, cell - 1):
+        instant = (1_790_000_000 // cell) * cell + offset
+        monkeypatch.setattr(obs_view, "_now",
+                            lambda i=instant: datetime.fromtimestamp(i, timezone.utc))
+        monkeypatch.setattr(time, "time", lambda i=instant: float(i))
+        newest, spacing = _llm_span()
+        start = obs_view.window_bounds("30d")["start_epoch"]
+        assert newest - 199_999 * spacing >= start
+        assert newest <= instant

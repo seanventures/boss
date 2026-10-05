@@ -95,12 +95,20 @@ type Script = {
   repositories?: unknown[];
   /** Successive answers to GET /v1/deployments/stack/{id}. The last one repeats. */
   reads?: StackDeployment[];
+  /** Hold each answer until the test calls `nextRead()` (the first is answered at once). Without
+   *  it a 5 ms poll under a busy combined run passed `running` before the test looked, and the
+   *  test failed with "running did not happen". */
+  held?: boolean;
   plan?: { status: number; body: unknown };
 };
+
+let nextRead: () => void = () => {};
 
 function installFetch(script: Script = {}) {
   calls = [];
   const reads = [...(script.reads ?? [])];
+  let cursor = 0;
+  nextRead = () => { cursor += 1; };
   const hosts = (script.hosts ?? [VM, UNREACHED]) as Array<typeof VM>;
   const targets = [...(script.targets ?? [TARGET, PER_APP_TARGET])] as Array<Record<string, unknown>>;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -124,7 +132,7 @@ function installFetch(script: Script = {}) {
       return json({ items: script.deployments ?? [] });
     }
     if (method === "GET" && url.startsWith("/v1/deployments/stack/")) {
-      const next = reads.length > 1 ? reads.shift()! : reads[0];
+      const next = reads[Math.min(script.held ? cursor : cursor++, reads.length - 1)];
       return next ? json({ deployment: next }) : json({ detail: "no such deployment" }, 404);
     }
     if (method === "POST" && url === "/v1/deployments/stack/targets") {
@@ -147,9 +155,12 @@ function installFetch(script: Script = {}) {
 }
 
 async function settle(until: () => boolean, what: string) {
-  for (let i = 0; i < 40; i += 1) {
+  // A deadline, not a count of ticks: forty zero-delay ticks are a few milliseconds alone and
+  // far less than a busy combined run needs for one poll to land.
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
     if (until()) return;
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
   }
   throw new Error(`${what} did not happen: ${host.textContent}`);
 }
@@ -399,7 +410,7 @@ describe("a deployment view follows the record", () => {
   }
 
   it("approves through the decisions API with the record's decision, then follows it to healthy", async () => {
-    installFetch({ reads: [
+    installFetch({ held: true, reads: [
       deployment({ status: "running", steps: [{ name: "fetch", status: "succeeded" }, { name: "install", status: "running" }],
                    log_tail: "Step 3/9: building api" }),
       deployment({ status: "healthy", open_url: "https://boss.example.com",
@@ -418,6 +429,7 @@ describe("a deployment view follows the record", () => {
     expect(buttons()).not.toContain("Approve");
     expect(buttons()).not.toContain("Roll back");
 
+    nextRead(); // and then it is healthy
     await settle(() => host.querySelector('[data-testid="stack-deployment"]')?.getAttribute("data-status") === "healthy", "healthy");
     const open = host.querySelector('[data-testid="stack-open"]') as HTMLAnchorElement;
     expect(open.getAttribute("href")).toBe("https://boss.example.com");
