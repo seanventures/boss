@@ -15,6 +15,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { consoleHref } from "./console-href";
+import { changeHref } from "../lib/infra-view";
 import {
   deployTargetAction, getDeliveryDefaultsAction, getDeploymentAction, listRefsAction,
   redeployAction,
@@ -25,10 +26,20 @@ type Step = {
   step: string; label: string; status: "pending" | "running" | "ok" | "failed" | "skipped";
   duration_ms?: number | null; log?: string; error?: string;
 };
+/**
+ * Where a deployment's change is reviewed: Infra › Cloud › Changes, opened on that change when
+ * the id is known (changeHref), else the Changes list. Keeps the rest of the query (org=).
+ */
+export function changeReviewHref(changesetId?: string | null, search?: string): string {
+  const to = changesetId ? changeHref(changesetId) : "?area=infra&view=cloud&cloud=changes";
+  return consoleHref(Object.fromEntries(new URLSearchParams(to.slice(1))), search);
+}
+
 type Run = {
   deployment_run_id: string; status: string; app_name?: string; environment?: string;
   commit_ref?: string | null; trigger?: string | null; failure_reason?: string | null;
   duration_ms?: number | null; url?: string | null; steps: Step[]; running: boolean;
+  changeset_id?: string | null;
 };
 
 const box: React.CSSProperties = {
@@ -193,7 +204,7 @@ export function LiveDeployment({ runId, onFinished }: {
       {planned && (
         <div className="detail" style={{ fontSize: 12, marginTop: 8 }}>
           No deployment is running. Review, approve, and apply its ChangeSet in{" "}
-          <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+          <a href={changeReviewHref(run.changeset_id)}>ProviderOps ChangeSet Review</a>.
         </div>
       )}
       {deployed && run.url && (
@@ -248,7 +259,7 @@ export function ChangeSetNextStep({ plan }: { plan: PlannedDeployment }) {
       <strong>Deployment plan created</strong>
       <div className="detail" style={{ fontSize: 12, marginTop: 6 }}>
         Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready for review.
-        Next, open <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>,
+        Next, open <a href={changeReviewHref(plan.changeset_id)}>ProviderOps ChangeSet Review</a>,
         approve it, then apply it. Deployment run <code>{plan.deployment_run_id}</code>
         records the plan.
       </div>
@@ -457,6 +468,7 @@ type Deployment = {
   id: string; status: string; app_name: string; environment: string;
   commit_ref: string | null; trigger: string | null; duration_ms: number | null;
   finished_at: string | null; failure_reason: string | null; url: string | null;
+  changeset_id?: string | null;
 };
 
 export function RecentDeployments({ deployments }: { deployments?: Deployment[] | null }) {
@@ -537,7 +549,7 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
           {["planned", "created"].includes(d.status) && !plannedFrom[d.id] && (
             <div className="detail" style={{ fontSize: 12, marginTop: 4 }}>
               No deployment is running. Review its ChangeSet in{" "}
-              <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+              <a href={changeReviewHref(d.changeset_id)}>ProviderOps ChangeSet Review</a>.
             </div>
           )}
           {errors[d.id] && (

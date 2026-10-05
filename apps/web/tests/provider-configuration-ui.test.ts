@@ -1,236 +1,113 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+// @vitest-environment happy-dom
 
-import { describe, expect, it } from "vitest";
+import { act } from "react";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { pasteConnectSuccessCopy } from "../lib/paste-connect";
-import {
-  accountFreshness,
-  costByProvider,
-  matchesScope,
-} from "../app/provider-configuration-ui";
-import type {
-  CostEventFeedItem,
-  ExternalResourceFeedItem,
-  ProviderAccountFeedItem,
-} from "../lib/providerops";
+import { cloudFixture, readOnly } from "./_helpers/infra-cloud-fixtures";
+import { $, mountCloud, press, settle, type, type Mounted } from "./_helpers/infra-cloud-render";
 
-const account: ProviderAccountFeedItem = {
-  id: "pa_aws",
-  provider: "aws",
-  accountLabel: "AWS production",
-  authMethod: "access_key",
-  credentialRefs: {
-    access_key_id: "env:BOSS_AWS_ACCESS_KEY_ID",
-    secret_access_key: "env:BOSS_AWS_SECRET_ACCESS_KEY",
-  },
-  connectionMetadata: {},
-  scopes: ["read"],
-  status: "active",
-  credentialVersion: 2,
-  readOnly: true,
-  deployCapable: false,
-  billingReadable: true,
-  destructiveActionsDisabled: true,
-  capabilities: ["resource.sync"],
-  missingPermissions: [],
-  createdBy: "ceo",
-  createdAt: "2026-07-25T00:00:00Z",
-  updatedAt: "2026-07-26T00:00:00Z",
-};
+/**
+ * The cloud-account workspace keeps every capability it had (infra-observability spec §4.8,
+ * parity P-S-03..P-S-15), now as Infra › Cloud › Accounts.
+ *
+ * Rewritten consciously: this file used to read provider-configuration-ui.tsx's source for
+ * strings ("Paste and connect", "Advanced: bind an existing SecretRef", "Partial data (secondary
+ * APIs):"). That screen moved into Infra › Cloud, so the same promises are checked by rendering
+ * the new one: the paste card comes before the secret-reference form, a key is write-only and
+ * never drawn, a planned adapter accepts nothing, rotation keeps its bounded overlap, revoking
+ * asks for the account's name, a read-only viewer gets no write control, and Community says
+ * `Bring your own key`.
+ */
 
-const resource: ExternalResourceFeedItem = {
-  id: "res_1",
-  providerAccountId: "pa_aws",
-  provider: "aws",
-  resourceType: "instance",
-  externalId: "i-123",
-  name: "worker-1",
-  state: "active",
-  ownership: "managed_by_boss",
-  environment: "production",
-  ownerRole: "infra_steward",
-  healthStatus: "healthy",
-  estimatedMonthlyUsdMicros: 2_000_000,
-  costConfidence: "estimated_from_price_catalog",
-  lastSeenAt: "2026-07-26T00:00:00Z",
-  tags: ["region:us-east-1", "service:compute"],
-  metadata: {},
-  updatedAt: "2026-07-26T00:00:00Z",
-};
+let m: Mounted | null = null;
+afterEach(async () => { await m?.done(); m = null; });
 
-describe("provider configuration workspace", () => {
-  it("classifies untested, fresh, and stale connection evidence", () => {
-    expect(accountFreshness(account, "2026-07-26T12:00:00Z")).toBe("untested");
-    expect(
-      accountFreshness(
-        { ...account, lastTestedAt: "2026-07-26T10:00:00Z" },
-        "2026-07-26T12:00:00Z",
-      ),
-    ).toBe("fresh");
-    expect(
-      accountFreshness(
-        { ...account, lastTestedAt: "2026-07-24T10:00:00Z" },
-        "2026-07-26T12:00:00Z",
-      ),
-    ).toBe("stale");
+describe("cloud accounts (was the provider configuration workspace)", () => {
+  it("puts Paste key above Use secret ref, with write-only key fields", async () => {
+    m = await mountCloud("?area=infra&view=cloud");
+    await settle(() => !!$("inf-account-new"), "accounts");
+    await press("inf-account-new");
+    const paste = $("inf-account-paste")!;
+    const refs = $("inf-account-secret-ref")!;
+    expect(paste.compareDocumentPosition(refs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const secret = $("inf-paste-secret") as HTMLInputElement;
+    expect(secret.type).toBe("password");
+    expect(secret.autocomplete).toBe("new-password");
+    expect(secret.minLength).toBe(8);
+    for (const input of refs.querySelectorAll<HTMLInputElement>("input[placeholder='Secret reference']")) expect(input.type).toBe("password");
   });
 
-  it("filters inventory across provider, account, environment, region, and service", () => {
-    expect(
-      matchesScope(resource, {
-        provider: "aws",
-        account: "pa_aws",
-        environment: "production",
-        region: "us-east-1",
-        service: "compute",
-      }),
-    ).toBe(true);
-    expect(
-      matchesScope(resource, {
-        provider: "aws",
-        account: "",
-        environment: "",
-        region: "eu-west-1",
-        service: "",
-      }),
-    ).toBe(false);
+  it("offers Base URL only for a provider that takes one, and clears the pasted key once sent", async () => {
+    m = await mountCloud("?area=infra&view=cloud");
+    await settle(() => !!$("inf-account-new"), "accounts");
+    await press("inf-account-new");
+    expect($("inf-account-paste")?.textContent).not.toContain("Base URL");
+    await type($("inf-paste-provider"), "openai");
+    expect($("inf-account-paste")?.textContent).toContain("Base URL");
+    await type($("inf-paste-label"), "Local models");
+    await type($("inf-paste-secret"), "sk-local-1234567890");
+    await act(async () => { ($("inf-paste-submit") as HTMLButtonElement).click(); });
+    await settle(() => m!.api.writes().length === 1, "paste");
+    expect(document.body.textContent).not.toContain("sk-local-1234567890");
   });
 
-  it("groups observed costs without changing confidence-bearing source rows", () => {
-    const costs: CostEventFeedItem[] = [
-      {
-        id: "cost_1",
-        providerAccountId: "pa_aws",
-        provider: "aws",
-        category: "compute",
-        amountUsdMicros: 2_000_000,
-        costLayer: "observed",
-        confidence: "provider_reported",
-        createdAt: "2026-07-26T00:00:00Z",
-      },
-      {
-        id: "cost_2",
-        providerAccountId: "pa_aws",
-        provider: "aws",
-        category: "storage",
-        amountUsdMicros: 500_000,
-        costLayer: "estimated",
-        confidence: "estimated_from_price_catalog",
-        createdAt: "2026-07-26T01:00:00Z",
-      },
-      {
-        id: "cost_3",
-        provider: "digitalocean",
-        category: "compute",
-        amountUsdMicros: 1_000_000,
-        costLayer: "observed",
-        confidence: "provider_reported",
-        createdAt: "2026-07-26T02:00:00Z",
-      },
-    ];
-
-    expect(costByProvider(costs)).toEqual([
-      { provider: "aws", amount: 2_500_000 },
-      { provider: "digitalocean", amount: 1_000_000 },
-    ]);
-    expect(costs[1].confidence).toBe("estimated_from_price_catalog");
+  it("a planned adapter accepts no credential", async () => {
+    m = await mountCloud("?area=infra&view=cloud");
+    await settle(() => !!$("inf-account-new"), "accounts");
+    await press("inf-account-new");
+    await press("inf-catalog-hetzner");
+    expect(($("inf-ref-submit") as HTMLButtonElement).disabled).toBe(true);
+    expect($("inf-account-secret-ref")?.textContent).toContain("Adapter planned");
   });
 
-  it("keeps credentials masked and exposes the complete operator-state contract", () => {
-    const source = readFileSync(
-      resolve(__dirname, "../app/provider-configuration-ui.tsx"),
-      "utf8",
-    );
-
-    expect(source).toContain('type="password"');
-    expect(source).toContain("•••••• configured");
-    expect(source).not.toContain("{account.credentialRef}");
-    expect(source).not.toContain("{account.credentialRefs[");
-    expect(source).toContain("Partial data (secondary APIs):");
-    expect(source).toContain("bring their own");
-    expect(source).toContain("ChangeSets");
-    expect(source).toContain("Read-only view.");
-    expect(source).toContain('status === "revoked"');
-    expect(source).toContain('status === "disabled"');
-    expect(source).toContain("accountFreshness");
-    expect(source).toContain('role="dialog"');
-    expect(source).toContain('aria-label="Saved resource scope filters"');
-    expect(source).toContain("boss.providerops.scope");
-    expect(source).toContain("Connections");
-    expect(source).toContain("Scaling & Health");
-    expect(source).toContain("Cloud FinOps");
-    expect(source).toContain("describeSpendHonesty");
-    expect(source).toContain("Resource receipts prove actions");
-    expect(source).toContain("ResourceReceipt");
-    expect(source).toContain("editionLimitations");
-    expect(source).toContain("fully functional when operators bring their own");
+  it("never draws a credential reference; rotation offers 5, 15, 30 and 60 minutes of overlap", async () => {
+    m = await mountCloud("?area=infra&view=cloud&account=acct_1");
+    await settle(() => !!$("inf-account-drawer"), "drawer");
+    expect($("inf-account-credentials")?.textContent).toContain("•••••• set");
+    expect(document.body.textContent).not.toMatch(/env:BOSS_/);
+    const overlap = $("inf-account-overlap") as HTMLSelectElement;
+    expect([...overlap.options].map((o) => o.value)).toEqual(["5", "15", "30", "60"]);
+    expect(overlap.value).toBe("30");
   });
 
-  it("renders paste-and-connect above the pointer-only SecretRef form", () => {
-    const source = readFileSync(
-      resolve(__dirname, "../app/provider-configuration-ui.tsx"),
-      "utf8",
-    );
-    const forms = readFileSync(
-      resolve(__dirname, "../app/client-forms.tsx"),
-      "utf8",
-    );
-
-    expect(source).toContain("Paste and connect");
-    expect(source).toContain(
-      "Value is written to the local vault. BOSS stores only a SecretRef. Agents",
-    );
-    expect(source).toContain("Advanced: bind an existing SecretRef");
-    expect(source).toContain("<PasteAndConnect");
-    expect(source).toContain("<ConnectionCreate");
-    expect(source.indexOf("<PasteAndConnect")).toBeLessThan(
-      source.indexOf("<ConnectionCreate"),
-    );
-    expect(source).toContain('name="secret_value"');
-    expect(source).toContain('autoComplete="new-password"');
-    expect(source).toContain('name="base_url"');
-    expect(forms).toContain('data-testid="provider-paste-connect-form"');
-    expect(forms).toContain('data-testid="provider-create-form"');
-    expect(forms).toContain("easyConnectProviderAction");
-    expect(forms).toContain("createProviderAccountAction");
-    expect(source).toContain("minLength={8}");
-    expect(source).toContain('type="password"');
-    expect(source).toContain('data-testid="provider-paste-connect-empty"');
-    expect(forms).toContain("pasteConnectSuccessCopy");
-    expect(forms).toContain("formRef.current?.reset()");
-    expect(forms).toContain("secret_ref_id");
-    expect(forms).toContain('data-testid="provider-paste-connect-success"');
-    expect(forms).not.toContain("secret_value}");
-    expect(forms).not.toContain("Key written to the local vault. BOSS stored only a SecretRef.");
+  it("revokes only after the account's exact name is typed", async () => {
+    m = await mountCloud("?area=infra&view=cloud&account=acct_1");
+    await settle(() => !!$("inf-account-revoke"), "drawer");
+    await press("inf-account-revoke");
+    const yes = () => $("inf-account-revoke-confirm") as HTMLButtonElement;
+    expect(yes().disabled).toBe(true);
+    await type($("inf-account-revoke-name"), "digitalocean · prod");
+    expect(yes().disabled).toBe(true);
+    await type($("inf-account-revoke-name"), "DigitalOcean · prod");
+    expect(yes().disabled).toBe(false);
   });
 
-  it("success copy shows secret_ref only and never interpolates a raw key", () => {
-    const raw = "sk-test-easy-connect-never-leak-xyz";
-    const copy = pasteConnectSuccessCopy("sref_abc123");
-    expect(copy).toBe(
-      "Stored as secret_ref sref_abc123. The raw key is not kept in BOSS.",
-    );
-    expect(copy).toContain("secret_ref sref_abc123");
-    expect(copy).not.toContain(raw);
-    expect(copy).not.toContain("sk-");
+  it("a disabled account offers Enable, an active one Disable", async () => {
+    m = await mountCloud("?area=infra&view=cloud&account=acct_2");
+    await settle(() => !!$("inf-account-drawer"), "drawer");
+    expect($("inf-account-enable")).not.toBeNull();
+    expect($("inf-account-disable")).toBeNull();
   });
 
-  it("keeps the paste card on the Community ProviderOps surface", () => {
-    const page = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
-    const suiteCall = page.indexOf("<ProviderConfigurationSuite");
-    const paidGateAfter = page.indexOf("<PaidSurfaceGate", suiteCall);
-    expect(suiteCall).toBeGreaterThan(-1);
-    expect(sourceContainsCommunityPasteCard(page)).toBe(true);
-    if (paidGateAfter !== -1) {
-      expect(suiteCall).toBeLessThan(paidGateAfter);
-    }
+  it("a read-only viewer sees the accounts and their impact, and no write control", async () => {
+    const route = { match: /^\/v1\/infra\/cloud$/, etag: true, reply: (u: URL) => readOnly(cloudFixture(u.searchParams.get("view") ?? "accounts")) };
+    m = await mountCloud("?area=infra&view=cloud&account=acct_1", [route]);
+    await settle(() => !!$("inf-account-drawer"), "drawer");
+    expect($("inf-cloud-notice")?.getAttribute("title")).toBe("You lack providerops_manage");
+    for (const id of ["inf-account-new", "inf-account-save", "inf-account-test", "inf-account-rotate", "inf-account-revoke"]) expect($(id), id).toBeNull();
+    expect($("inf-account-impact")).not.toBeNull();
+  });
+
+  it("Community says Bring your own key, as one chip", async () => {
+    m = await mountCloud("?area=infra&view=cloud");
+    await settle(() => !!$("inf-cloud-notice"), "notice");
+    expect($("inf-cloud-notice")?.textContent).toBe("Bring your own key");
+  });
+
+  it("a feed that did not answer is named in one line", async () => {
+    const route = { match: /^\/v1\/infra\/cloud$/, etag: true, reply: () => ({ ...cloudFixture("accounts"), partial: ["costs"] }) };
+    m = await mountCloud("?area=infra&view=cloud", [route]);
+    await settle(() => !!$("inf-cloud-partial"), "partial");
+    expect($("inf-cloud-partial")?.textContent).toBe("Some data missing · costs");
   });
 });
-
-function sourceContainsCommunityPasteCard(pageSource: string): boolean {
-  return (
-    pageSource.includes("<ProviderConfigurationSuite") &&
-    !pageSource.includes('surface="providerops"')
-  );
-}
