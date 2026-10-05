@@ -1,0 +1,158 @@
+/* ── Infra › Deploys and Previews (infra-observability spec §4.6, §4.7, §5.2, §5.3) ──
+   inf-dep-, inf-dd-, inf-pv- classes; design-system tokens only (no hex). The rail row is the
+   Factory row (fx-row): a 56px bordered card in a list, dot + word first, the action last.
+   Motion only on a real state change: the running step dot sweeps; the TTL bar's width moves
+   only when the poll lands. Reduced motion and Paused stop both (infra.css). */
+
+.inf-deploys, .inf-previews { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+/* Toolbar: chips · App · Env · spacer · + Deploy · ⋯ */
+.inf-dep-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
+.inf-dep-filter select {
+  min-height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+  color: var(--ink); font: inherit; font-size: 0.82rem;
+}
+.inf-dep-filter select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+
+/* The rail: day groups of 56px rows. */
+.inf-rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.inf-rail-day { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.inf-rail-day-head { margin: 0; padding: 0 2px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; color: var(--faint); }
+.inf-dep-rows, .inf-pv-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.inf-dep-row {
+  display: grid; align-items: center; gap: 10px; min-height: 56px; padding: 6px 12px; min-width: 0;
+  /* Every column a fixed track (no `auto`): each row is its own grid, so an auto track sized
+     by one row's Approve/Reject pushed that row's columns out of line with the rest. */
+  grid-template-columns: minmax(96px, 120px) minmax(150px, 1.6fr) 64px minmax(64px, 0.7fr) 72px 24px 96px 56px 36px 172px 20px;
+  border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
+}
+.inf-dep-row:hover { border-color: var(--accent-line); }
+.inf-dep-row[data-tone="amber"] { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
+.inf-dep-row[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+/* The app · env WRAPS, never ellipsizes: at 1440 "Lead-Triage Inbox · staging" was cut to
+   "Lead-Triage Inbox · sta…" in a 1.2fr track, and the env is the half that says where it went. */
+.inf-dep-name {
+  display: inline-flex; flex-wrap: wrap; align-items: baseline; min-width: 0; padding: 0; border: 0; background: none;
+  color: var(--ink); font: inherit; font-weight: 650; font-size: 0.86rem; line-height: 1.25; text-align: left; cursor: pointer;
+  white-space: normal; overflow-wrap: anywhere;
+}
+.inf-dep-name:hover { text-decoration: underline; }
+.inf-dep-name:focus-visible, .inf-dep-go:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }
+.inf-dep-sha { font-size: 0.78rem; color: var(--muted); }
+.inf-dep-host, .inf-dep-trigger { font-size: 0.8rem; }
+.inf-dep-trigger { white-space: nowrap; }
+.inf-dep-who { display: inline-flex; width: 20px; height: 20px; }
+.inf-dep-dur, .inf-dep-age { font-size: 0.78rem; text-align: right; white-space: nowrap; }
+.inf-dep-act { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.inf-dep-go { justify-self: end; font-size: 0.9rem; }
+.inf-dep-older { justify-content: center; }
+
+/* Step dots: one per manifest step. ✗ and ◐ are glyphs, so colour is never the only signal. */
+.inf-steps { display: inline-flex; align-items: center; gap: 2px; font-size: 0.72rem; line-height: 1; letter-spacing: 0; white-space: nowrap; }
+.inf-step { display: inline-block; width: 10px; text-align: center; color: var(--faint); }
+.inf-step[data-s="done"] { color: var(--green); }
+.inf-step[data-s="running"] { color: var(--accent-text); animation: inf-dep-sweep 1.6s linear infinite; }
+.inf-step[data-s="failed"] { color: var(--red); font-weight: 700; }
+@keyframes inf-dep-sweep { to { transform: rotate(360deg); } }
+@keyframes inf-dep-fill { from { transform: scale(0.4); } to { transform: none; } }
+
+/* The deploy drawer. */
+.inf-dd-head { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.inf-dd-now { font-size: 0.82rem; color: var(--ink); }
+.inf-dd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.inf-dd-steps li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.84rem; }
+.inf-dd-steps li[data-s="pending"] { color: var(--muted); }
+.inf-dd-glyph { text-align: center; color: var(--faint); }
+.inf-dd-glyph[data-s="done"] { color: var(--green); animation: inf-dep-fill 300ms ease-out 1; }
+.inf-dd-glyph[data-s="running"] { color: var(--accent-text); animation: inf-dep-sweep 1.6s linear infinite; }
+.inf-dd-glyph[data-s="failed"] { color: var(--red); font-weight: 700; }
+.inf-dd-fail { color: var(--red); font-weight: 650; font-size: 0.86rem; }
+.inf-dlog {
+  margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--surface-2); color: var(--ink); font-family: var(--mono); font-size: 0.76rem; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.inf-dlog-short { max-height: 160px; }
+.inf-dlog:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.inf-dd-plan summary { cursor: pointer; font-size: 0.84rem; color: var(--ink); }
+.inf-dd-plan[open] { display: flex; flex-direction: column; gap: 8px; }
+.inf-dd-plan-steps { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
+.inf-dchecks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.inf-dchecks li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.82rem; }
+.inf-dchecks li[data-ok="1"] > span:first-child { color: var(--green); }
+.inf-dchecks li[data-ok="0"] > span:first-child { color: var(--red); font-weight: 700; }
+.inf-dchecks li[data-ok="warn"] > span:first-child { color: var(--amber); font-weight: 700; }
+.inf-dchecks-row { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; border: 0; }
+.inf-promo { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 0; }
+.inf-promo li { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.inf-promo li + li::before { content: ""; display: inline-block; width: 22px; margin: 0 6px; border-top: 1px solid var(--border-strong); }
+.inf-promo li[data-s="done"], .inf-promo li[data-s="running"] { color: var(--ink); }
+.inf-promo-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--faint); }
+.inf-promo-dot[data-s="done"] { background: var(--green); box-shadow: none; }
+.inf-promo-dot[data-s="running"] { background: var(--accent-text); box-shadow: none; }
+.inf-promo-dot[data-s="failed"] { background: var(--red); box-shadow: none; }
+.inf-dd-actions { padding-top: 4px; border-top: 1px solid var(--border); }
+.inf-caption { caption-side: top; text-align: left; padding: 4px 2px 6px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+
+/* CI config vendor cards. */
+.inf-ci-vendors { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.inf-ci-card {
+  display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-xl);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer;
+}
+.inf-ci-card[aria-checked="true"] { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
+.inf-ci-card:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+
+/* Previews: one row each; the TTL bar is an SVG whose fill width is the time left. */
+.inf-pv-row {
+  display: grid; align-items: center; gap: 10px; min-height: 52px; padding: 6px 12px; min-width: 0;
+  grid-template-columns: minmax(110px, 230px) minmax(120px, 1.4fr) 64px 48px minmax(56px, 0.6fr) 84px minmax(110px, 150px) auto;
+  border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
+}
+.inf-pv-row[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.inf-pv-name { font-weight: 650; font-size: 0.86rem; }
+.inf-pv-host { font-size: 0.8rem; }
+.inf-pvchip {
+  justify-self: start; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2);
+  color: var(--muted); font-size: 0.72rem; white-space: nowrap;
+}
+.inf-ttl { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.inf-ttl-bar { display: block; width: 64px; height: 4px; flex: none; }
+.inf-ttl-track { fill: var(--surface-2); stroke: var(--border); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+.inf-ttl-fill { fill: var(--green); transition: width 300ms ease-out; }
+.inf-ttl[data-tone="amber"] .inf-ttl-fill { fill: var(--amber); }
+.inf-ttl[data-tone="amber"] .inf-ttl-label { color: var(--amber); font-weight: 650; }
+.inf-ttl-label { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+.inf-pv-act { display: inline-flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .inf-step[data-s="running"], .inf-dd-glyph[data-s="running"], .inf-dd-glyph[data-s="done"] { animation: none; }
+  .inf-ttl-fill { transition: none; }
+}
+
+/* 640-1023: host and approver go to the row's tooltip; previews drop host. */
+@media (max-width: 1023px) {
+  .inf-dep-row { grid-template-columns: minmax(90px, 110px) minmax(100px, 1fr) 64px 72px 96px 56px 36px 172px 20px; }
+  .inf-dep-host, .inf-dep-who { display: none; }
+  .inf-pv-row { grid-template-columns: minmax(100px, 160px) minmax(110px, 1fr) 64px 48px 84px minmax(100px, 140px) auto; }
+  .inf-pv-host { display: none; }
+}
+
+/* < 640: two lines — `app · env` / `word · sha7 · age`; actions wrap under. */
+@media (max-width: 639px) {
+  .inf-dep-row {
+    grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "name act go" "state sha age";
+    gap: 4px 8px; padding: 8px 10px;
+  }
+  .inf-dep-row > .inf-state { grid-area: state; }
+  .inf-dep-name { grid-area: name; }
+  .inf-dep-sha { grid-area: sha; }
+  .inf-dep-age { grid-area: age; }
+  .inf-dep-act { grid-area: act; }
+  .inf-dep-go { grid-area: go; min-width: 44px; min-height: 44px; }
+  .inf-dep-trigger, .inf-dep-row > .inf-steps, .inf-dep-dur { display: none; }
+  .inf-pv-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; }
+  .inf-pv-row > .inf-pvchip, .inf-pv-row > .inf-mono, .inf-pv-row > .inf-num { display: none; }
+  .inf-pv-act { grid-column: 1 / -1; justify-content: flex-start; }
+  .inf-dep-filter select, .inf-ci-card { min-height: 44px; }
+}

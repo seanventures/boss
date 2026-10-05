@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { codeOnly } from "./_helpers/source";
 
@@ -18,52 +16,40 @@ import { codeOnly } from "./_helpers/source";
  * nowhere to go — the operator had to open Monitoring and then find that app in it, for a step
  * whose entire subject is that one app.
  */
-const HEALTH = codeOnly("app/delivery-ui.tsx");
-const STACK = codeOnly("app/delivery-manage.tsx");
-const AREA = codeOnly("app/monitoring-ui.tsx");
+//
+// Both panels (delivery-ui.tsx's health table, delivery-manage.tsx's stack card) and the area
+// that merged them (monitoring-ui.tsx) retired into Observability: Apps is ONE Pulse table — one
+// row per app, its dashboard in the app's drawer — and the stack lives in Sources. The rendered
+// behaviour is held by observability-apps-is-one-pulse.test.tsx; this file keeps the promises
+// pinned in the source so they cannot be split apart again.
+const PULSE = codeOnly("app/observability/pulse.tsx");
+const DRAWER = codeOnly("app/observability/app-drawer.tsx");
+const SOURCES = codeOnly("app/observability/sources.tsx");
+const OBS_VIEW = codeOnly("lib/obs-view.ts");
+const LEGACY = codeOnly("app/legacy-areas.ts");
 const WORKFLOWS = codeOnly("app/delivery-workflows-ui.tsx");
-const CSS = readFileSync(join(process.cwd(), "app/globals.css"), "utf8");
 
 describe("one panel, not two", () => {
-  it("the dashboard link sits on the health row it describes", () => {
-    expect(HEALTH).toContain("dashboards?: DashboardIndex");
-    expect(HEALTH).toContain("Open dashboard ↗");
-    expect(HEALTH).toContain("scraped at");
+  it("the dashboard link sits with the app it describes", () => {
+    // Health and graphs are one record per app now: the Pulse row opens a drawer whose facts
+    // carry the dashboard, joined by the server (lib/obs-view.ts facts.dashboard_url).
+    expect(OBS_VIEW).toContain("dashboardUrl: optStr(f.dashboard_url)");
+    expect(DRAWER).toContain('data-testid="obs-app-dashboard">Dashboard ↗</a>');
   });
 
-  it("the two lists are joined on app and environment", () => {
-    expect(HEALTH).toContain("export const dashboardKey");
-    expect(AREA).toContain("dashboardKey(a.app, a.environment)");
-    expect(AREA).toContain("dashboardKey(t.app_name, t.environment)");
-  });
-
-  it("the stack becomes a footer rather than a second card", () => {
-    expect(AREA).toContain("footer={");
-    expect(AREA).toContain("compact");
-    // A nested ct-block would draw a second bordered card and undo the merge.
-    expect(STACK).toContain("const Frame = compact");
-  });
-
-  it("and stops repeating the app table in that mode", () => {
-    expect(STACK).toContain("{compact ? (");
+  it("the stack is not a second card on the Apps screen", () => {
+    // It has its own tab (Sources); the Apps tab draws no stack block.
+    expect(PULSE).not.toContain("obs-stack");
+    expect(SOURCES).toContain('data-testid="obs-stack-state"');
   });
 
   it("an app the stack scrapes but health does not know about is named, not dropped", () => {
     // Health is keyed on deployment TARGETS and the stack on what it was told to scrape; the
     // two can legitimately differ, and a merge that silently loses rows is worse than two
-    // panels that at least showed everything.
-    expect(AREA).toContain("Scraped but not health-checked");
-    expect(AREA).toContain('data-testid="monitoring-orphans"');
-  });
-
-  it("the standalone stack panel still stands alone", () => {
-    // Health can be empty while the stack is not — the merged panel renders nothing then, so
-    // the stack still needs somewhere to live.
-    expect(AREA).toContain("healthEmpty && !stackEmpty ?");
-  });
-
-  it("the copy no longer points at a table that moved", () => {
-    expect(STACK).toContain('{compact ? "above" : "below"}');
+    // panels that at least showed everything. (Rendered: observability-apps-is-one-pulse
+    // "an app scraped but not health-checked is named, not dropped".)
+    expect(OBS_VIEW).toContain("notWatched: arr(o.not_watched)");
+    expect(PULSE).toContain('data-testid="obs-not-watched"');
   });
 });
 
@@ -88,33 +74,20 @@ describe("the monitoring step links to the app it is watching", () => {
 });
 
 describe("the link actually arrives somewhere", () => {
-  it("each health row is addressable", () => {
-    expect(HEALTH).toContain("id={`watch-${dashboardKey(t.app_name, t.environment)}`}");
+  // The old area highlighted a row and scrolled to it; Observability opens that app's drawer —
+  // the record itself — which is what "take me to the app this step watches" means.
+  // (Rendered: observability-apps-is-one-pulse "the workflow's watch= link opens that app's
+  // drawer" and "an unknown watch= becomes Find with the app's name".)
+  it("the old monitoring link lands on Observability with watch= kept", () => {
+    expect(LEGACY).toContain('if (area === "monitoring")');
   });
 
-  it("the area reads the param and re-reads it on navigation", () => {
-    // Areas switch client-side, so the param can change without a server render.
-    expect(AREA).toContain('new URLSearchParams(window.location.search).get("watch")');
-    expect(AREA).toContain('window.addEventListener("popstate", read)');
+  it("the area reads the param", () => {
+    expect(PULSE).toContain('new URLSearchParams(window.location.search).get("watch")');
   });
 
-  it("and the row is brought into view", () => {
-    // Landing at the top of a list of every deployed app, with the one you asked for somewhere
-    // below, has not taken you anywhere.
-    expect(HEALTH).toContain("scrollIntoView");
-  });
-
-  it("the row is marked so the eye finds it", () => {
-    expect(HEALTH).toContain('data-watched=');
-    expect(CSS).toContain('.dh-row[data-watched="yes"]');
-  });
-
-  it("the mark fades rather than becoming permanent decoration", () => {
-    expect(CSS).toContain("dh-watch-fade");
-  });
-
-  it("and a reader who turned motion off still sees the mark", () => {
-    const reduced = CSS.split("@media (prefers-reduced-motion: reduce)").slice(1).join("\n");
-    expect(reduced).toContain(".dh-row[data-watched=");
+  it("matched on app and environment, and opens that app", () => {
+    expect(PULSE).toContain("r.app === app && (!env || r.env === env)");
+    expect(PULSE).toContain("go(hit ? { app: hit.targetId, watch: null } : { q: app || null, watch: null }");
   });
 });

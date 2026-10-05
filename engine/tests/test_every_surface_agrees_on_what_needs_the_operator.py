@@ -137,6 +137,9 @@ THE_RULE = "engine/boss_engine/services/decision_actions.py"
 #: (file, function) -> why it may name decision statuses itself. None of these tells the
 #: operator what is waiting on them.
 NOT_READERS = {
+    ("engine/boss_engine/services/governed_host_deploy.py", "repair_refusal_records"):
+        "a boot repair (a writer) that withdraws the never-actionable decisions earlier "
+        "refused deployment plans raised",
     ("engine/boss_engine/services/decisions.py", "expire_overdue"):
         "the writer that expires overdue pending and delegated decisions",
     ("engine/boss_engine/services/decisions.py", "hold_plan_gates"):

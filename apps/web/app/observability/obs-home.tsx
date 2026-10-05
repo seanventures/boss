@@ -1,0 +1,125 @@
+"use client";
+
+/**
+ * OBSERVABILITY (infra-observability spec §4.9-§4.13): is it alive, how fast, and what is BOSS's
+ * thinking costing.
+ *
+ *   Observability [● Apps 5] [Models] [System ●] [Sources]   4 up · 1 slow · $3.12 · 24h   [24h|7d|30d] [Find] [Ask BOSS]
+ *   NEEDS YOU   AttentionCards filtered to Observability (app down, the system doctor)
+ *   <tab>       Apps (the Pulse) · Models (the llm_calls ledger) · System (BOSS's machine) · Sources
+ *
+ * One window control drives every number and chart on a tab, and it lives in the URL (`win=`).
+ * `view=` names the tab; `tab=` is accepted too (Govern links `?area=observability&tab=models`).
+ * The Pulse and System views are polled on every tab: they carry the header counts, the System
+ * tab's dot and the attention list. Nothing here refreshes the console.
+ */
+import React, { useCallback, useRef, useState } from "react";
+
+import { useConsoleLive } from "../../lib/console-live";
+import { useBand } from "../agents/live-util";
+import { usePolled } from "../../lib/factory-floor";
+import {
+  OBS_TABS, WINDOWS, parseSystem, readObsUrl, systemUrl, usePulse, usd,
+  type ObsTab, type ObsUrl, type Pulse, type System, type Win,
+} from "../../lib/obs-view";
+import type { Polled } from "../../lib/factory-floor";
+import { AreaHead, FindBox, NeedsYou, PartialLine, useUrlState, writeUrl } from "../infra/kit";
+import { AppsTab, ObsAskBoss } from "./pulse";
+import { ModelsTab } from "./models";
+import { SystemTab } from "./system";
+import { SourcesTab } from "./sources";
+import "../infra/infra.css";
+import "./obs.css";
+
+export type ObsTabProps = {
+  projectId: string;
+  actor: string;
+  orgId: string | null;
+  url: ObsUrl;
+  go: (patch: Record<string, string | null>, mode?: "push" | "replace") => void;
+  query: string;
+  pulse: Polled<Pulse>;
+  system: Polled<System>;
+};
+
+const SYSTEM_FOREGROUND_MS = 10_000;
+const SYSTEM_BACKGROUND_MS = 30_000;
+
+export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor: string; orgId?: string | null }) {
+  const live = useConsoleLive();
+  const [url, reread] = useUrlState(readObsUrl);
+  const [query, setQuery] = useState(url.q);
+  const go = useCallback((patch: Record<string, string | null>, mode: "push" | "replace" = "push") => {
+    // `tab=` is read once and rewritten as `view=`.
+    writeUrl({ tab: null, ...patch }, mode);
+    reread();
+  }, [reread]);
+  // Narrow layouts ask the server for fewer, wider cells (§5.3); the web never re-buckets.
+  const band = useBand();
+  const cells = band === "phone" ? 24 : band === "narrow" ? 48 : undefined;
+  const pulse = usePulse(projectId, url.win, cells);
+  const onSystem = useRef(url.view === "system");
+  onSystem.current = url.view === "system";
+  const system = usePolled(projectId ? systemUrl(projectId) : null, parseSystem,
+                           () => (onSystem.current ? SYSTEM_FOREGROUND_MS : SYSTEM_BACKGROUND_MS));
+
+  const setTab = (key: string) => go({ view: key === "apps" ? null : key, app: null, model: null }, "push");
+  const setWin = (w: Win) => go({ win: w === "24h" ? null : w }, "replace");
+  const c = pulse.data?.counts;
+  const sys = system.data;
+  const tabs = OBS_TABS.map((t) => ({
+    ...t,
+    count: t.key === "apps" && pulse.data ? pulse.data.rows.length || undefined : undefined,
+    dot: t.key === "system" && sys && sys.state !== "ok"
+      ? { tone: (sys.state === "critical" ? "red" : "amber") as "red" | "amber", tip: `BOSS's machine: ${sys.reason ?? sys.state}` }
+      : t.key === "apps" && c && c.down > 0 ? { tone: "red" as const, tip: `${c.down} down` } : null,
+  }));
+  const props: ObsTabProps = { projectId, actor, orgId: orgId ?? null, url, go, query, pulse, system };
+  const panel: Record<ObsTab, React.ReactNode> = {
+    apps: <AppsTab {...props} />,
+    models: <ModelsTab {...props} />,
+    system: <SystemTab {...props} />,
+    sources: <SourcesTab {...props} />,
+  };
+  const spend = pulse.data?.spend24hMicros ?? 0;
+  const attention = [
+    ...(pulse.data?.attention ?? []).filter((a) => !a.area || a.area === "observability"),
+  // On System, the doctor's findings are its FINDINGS section: one card, not two on one screen.
+  ].filter((a) => !(url.view === "system" && a.kind === "system_health"));
+
+  return (
+    <div className="inf obs" data-testid="obs" data-paused={live ? undefined : ""}>
+      <AreaHead area="obs" title="Observability" tabs={tabs} active={url.view} onTab={setTab}
+                counts={c ? (
+                  <>
+                    <span>{c.up} up</span>
+                    {c.slow ? <><span aria-hidden> · </span><span>{c.slow} slow</span></> : null}
+                    {c.down ? <><span aria-hidden> · </span><span className="inf-needs-count">{c.down} down</span></> : null}
+                    {spend > 0 ? (
+                      <><span aria-hidden> · </span>
+                        <span title={pulse.data?.spend24hEstimated ? "Some prices were estimated, not billed" : "Metered model spend, last 24 hours"}>
+                          {usd(spend)}{pulse.data?.spend24hEstimated ? " est." : ""} · 24h
+                        </span></>
+                    ) : null}
+                  </>
+                ) : null}>
+        {url.view !== "sources" ? (
+          <span className="inf-seg" role="radiogroup" aria-label="Window" data-testid="obs-window">
+            {WINDOWS.map((w) => (
+              <button key={w} type="button" role="radio" aria-checked={url.win === w} className="inf-seg-btn"
+                      data-testid={`obs-win-${w}`} onClick={() => setWin(w)}>{w}</button>
+            ))}
+          </span>
+        ) : null}
+        <FindBox value={query} onChange={(v) => { setQuery(v); writeUrl({ q: v || null }, "replace"); }} label="Find" testId="obs-find" />
+        <ObsAskBoss {...props} />
+      </AreaHead>
+      <PartialLine partial={pulse.data?.partial ?? []} error={pulse.data ? null : pulse.error} testId="obs-partial" />
+      <NeedsYou items={attention} projectId={projectId} actor={actor} orgId={orgId}
+                onRefresh={() => { pulse.refresh(); system.refresh(); }} testId="obs-needs" />
+      <div role="tabpanel" aria-label={OBS_TABS.find((t) => t.key === url.view)?.label} data-testid={`obs-panel-${url.view}`}>
+        {panel[url.view]}
+      </div>
+    </div>
+  );
+}

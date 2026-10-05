@@ -15,6 +15,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { consoleHref } from "./console-href";
+import { changeHref } from "../lib/infra-view";
 import {
   deployTargetAction, getDeliveryDefaultsAction, getDeploymentAction, listRefsAction,
   redeployAction,
@@ -25,11 +26,41 @@ type Step = {
   step: string; label: string; status: "pending" | "running" | "ok" | "failed" | "skipped";
   duration_ms?: number | null; log?: string; error?: string;
 };
+/**
+ * Where a deployment's change is reviewed: Infra › Cloud › Changes, opened on that change when
+ * the id is known (changeHref), else the Changes list. Keeps the rest of the query (org=).
+ */
+export function changeReviewHref(changesetId?: string | null, search?: string): string {
+  const to = changesetId ? changeHref(changesetId) : "?area=infra&view=cloud&cloud=changes";
+  return consoleHref(Object.fromEntries(new URLSearchParams(to.slice(1))), search);
+}
+
 type Run = {
   deployment_run_id: string; status: string; app_name?: string; environment?: string;
   commit_ref?: string | null; trigger?: string | null; failure_reason?: string | null;
   duration_ms?: number | null; url?: string | null; steps: Step[]; running: boolean;
+  changeset_id?: string | null;
+  /** A governed host deployment: one decision in Approvals, then BOSS applies it. */
+  governed?: boolean; decision_id?: string | null; plan_review?: PlanReview | null;
 };
+
+/** What a host deployment plan will do, as the API records it (governed_host_deploy.py).
+ *  Secrets are listed by NAME and reference only. */
+export type PlanReview = {
+  app_name?: string; environment?: string; host?: string; address?: string;
+  commit_ref?: string | null; repo?: string | null; app_port?: number | null;
+  url?: string | null; steps?: string[]; rollback?: string[];
+  secret_refs?: { name: string; ref: string }[];
+  cost?: { expected_cost_usd_micros?: number; note?: string };
+};
+
+/** Approvals, where a host deployment's one decision waits. */
+export const approvalsHref = () =>
+  consoleHref({ area: "decisions", decision_filter: "needs_action" });
+
+/** Statuses a governed host deployment passes through before it has a verdict. */
+const WAITING = ["awaiting_approval", "approved"];
+const DONE_OK = ["succeeded", "deployed", "healthy"];
 
 const box: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,.09)", borderRadius: 8, padding: 12,
@@ -121,18 +152,30 @@ export function LiveDeployment({ runId, onFinished }: {
   // forever — a console that keeps asking after the answer is final is just noise on the API.
   useEffect(() => {
     let live = true;
+    let ticks = 0;
+    let lastStatus = "";
     const tick = async () => {
       const d = await callAction(getDeploymentAction)(runId);
       if (!live || !d || d.error) return;
+      lastStatus = d.status;
       setRun(d);
       const isPlan = ["created", "planned"].includes(d.status);
-      if ((!d.running || isPlan) && !done.current) {
+      // Waiting on approval (or queued after it) is not finished: keep watching, so the row
+      // turns live by itself once somebody approves.
+      const waiting = WAITING.includes(d.status);
+      if ((!d.running || isPlan) && !waiting && !done.current) {
         done.current = true;
         if (!isPlan) onFinished?.(d);
       }
     };
     tick();
-    const poll = setInterval(() => { if (!done.current) tick(); }, 2000);
+    // Every 2s while it runs; every 6s while it waits for a person.
+    const poll = setInterval(() => {
+      ticks += 1;
+      if (done.current) return;
+      if (WAITING.includes(lastStatus) && ticks % 3) return;
+      tick();
+    }, 2000);
     const clock = setInterval(() => setElapsed((n) => n + 1), 1000);
     return () => { live = false; clearInterval(poll); clearInterval(clock); };
   }, [runId, onFinished]);
@@ -147,12 +190,15 @@ export function LiveDeployment({ runId, onFinished }: {
     );
   }
 
-  const failed = run.status === "failed" || run.status === "blocked";
+  const failed = ["failed", "blocked", "rolled_back"].includes(run.status);
   const planned = run.status === "planned" || run.status === "created";
-  const deployed = ["succeeded", "deployed", "healthy"].includes(run.status);
+  const awaiting = run.status === "awaiting_approval";
+  const queued = run.status === "approved";
+  const rejected = run.status === "rejected";
+  const deployed = DONE_OK.includes(run.status);
   const active = run.running && !planned;
   const tone = active ? "#58a6ff" : failed ? "#f85149"
-    : planned ? "#d29922" : deployed ? "#3fb950" : "#8b949e";
+    : planned || awaiting || queued ? "#d29922" : deployed ? "#3fb950" : "#8b949e";
   const runningStep = run.steps.find((s) => s.status === "running");
 
   return (
@@ -161,7 +207,12 @@ export function LiveDeployment({ runId, onFinished }: {
         <span style={{ color: tone, fontWeight: 600, display: "inline-flex",
                        alignItems: "center", gap: 7 }}>
           {active && <Spin size={14} />}
-          {active ? "Deploying" : failed ? "Deployment failed"
+          {active ? "Deploying"
+            : run.status === "rolled_back" ? "Rolled back"
+            : failed ? "Deployment failed"
+            : awaiting ? "Waiting for approval"
+            : queued ? "Approved — starting"
+            : rejected ? "Rejected — nothing deployed"
             : planned ? "Awaiting ChangeSet review" : deployed ? "Deployed" : run.status}
         </span>
         <strong style={{ fontSize: 13 }}>{run.app_name}</strong>
@@ -193,7 +244,21 @@ export function LiveDeployment({ runId, onFinished }: {
       {planned && (
         <div className="detail" style={{ fontSize: 12, marginTop: 8 }}>
           No deployment is running. Review, approve, and apply its ChangeSet in{" "}
-          <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+          <a href={changeReviewHref(run.changeset_id)}>ProviderOps ChangeSet Review</a>.
+        </div>
+      )}
+      {awaiting && (
+        <div style={{ marginTop: 8 }}>
+          {run.plan_review && <PlanReviewDetails review={run.plan_review} />}
+          <div className="detail" style={{ fontSize: 12, marginTop: 6 }}>
+            Nothing runs until it is approved.{" "}
+            <a href={approvalsHref()}>Open in Approvals</a>
+          </div>
+        </div>
+      )}
+      {queued && (
+        <div className="detail" style={{ fontSize: 12, marginTop: 8 }}>
+          Approved. BOSS starts it in a moment; steps appear here.
         </div>
       )}
       {deployed && run.url && (
@@ -226,7 +291,10 @@ type WizardTarget = {
 export type PlannedDeployment = {
   deployment_run_id: string;
   changeset_id: string;
-  next_action: "approve_and_apply_changeset";
+  next_action: "approve_and_apply_changeset" | "approve_decision";
+  /** A host deployment: the one decision to approve, and what it will do. */
+  decision_id?: string;
+  review?: PlanReview;
 };
 
 export function plannedDeploymentFrom(value: unknown): PlannedDeployment | null {
@@ -234,7 +302,19 @@ export function plannedDeploymentFrom(value: unknown): PlannedDeployment | null 
   const out = value as Record<string, unknown>;
   if (out.status !== "planned" || typeof out.deployment_run_id !== "string"
       || !out.deployment_run_id || typeof out.changeset_id !== "string"
-      || !out.changeset_id || out.next_action !== "approve_and_apply_changeset") return null;
+      || !out.changeset_id) return null;
+  if (out.next_action === "approve_decision" && typeof out.decision_id === "string"
+      && out.decision_id) {
+    return {
+      deployment_run_id: out.deployment_run_id,
+      changeset_id: out.changeset_id,
+      next_action: "approve_decision",
+      decision_id: out.decision_id,
+      review: (out.plan_review && typeof out.plan_review === "object"
+        ? out.plan_review : {}) as PlanReview,
+    };
+  }
+  if (out.next_action !== "approve_and_apply_changeset") return null;
   return {
     deployment_run_id: out.deployment_run_id,
     changeset_id: out.changeset_id,
@@ -242,13 +322,49 @@ export function plannedDeploymentFrom(value: unknown): PlannedDeployment | null 
   };
 }
 
+/** What a host deployment plan will do: where, which commit, rollback and cost. */
+export function PlanReviewDetails({ review }: { review: PlanReview }) {
+  const where = [review.host, review.environment].filter(Boolean).join(" · ");
+  const micros = review.cost?.expected_cost_usd_micros ?? 0;
+  return (
+    <div className="detail" style={{ fontSize: 12, display: "grid", gap: 4 }}
+         data-testid="plan-review">
+      <div>
+        <strong>{review.app_name || "App"}</strong>{where && <> → {where}</>}
+        {review.commit_ref && <> at <code>{String(review.commit_ref).slice(0, 12)}</code></>}
+        {review.app_port ? <> on port {review.app_port}</> : null}
+      </div>
+      {!!review.steps?.length && <div>Steps: {review.steps.join(" → ")}</div>}
+      {!!review.secret_refs?.length && (
+        <div>Secrets (by reference): {review.secret_refs.map((s) => s.name).join(", ")}</div>
+      )}
+      {!!review.rollback?.length && <div>Rollback: {review.rollback[0]}</div>}
+      <div>Cost: ${(micros / 1_000_000).toFixed(2)}{review.cost?.note ? ` — ${review.cost.note}` : ""}</div>
+    </div>
+  );
+}
+
 export function ChangeSetNextStep({ plan }: { plan: PlannedDeployment }) {
+  if (plan.next_action === "approve_decision") {
+    return (
+      <div style={{ ...box, borderColor: "rgba(210,153,34,.35)" }} role="status">
+        <strong>Plan ready — waiting for approval</strong>
+        <div style={{ marginTop: 6 }}>
+          <PlanReviewDetails review={plan.review || {}} />
+        </div>
+        <div className="detail" style={{ fontSize: 12, marginTop: 6 }}>
+          Nothing has deployed. <a href={approvalsHref()}>Approve it in Approvals</a>; BOSS
+          then deploys and health-checks it here.
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ ...box, borderColor: "rgba(210,153,34,.35)" }} role="status">
       <strong>Deployment plan created</strong>
       <div className="detail" style={{ fontSize: 12, marginTop: 6 }}>
         Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready for review.
-        Next, open <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>,
+        Next, open <a href={changeReviewHref(plan.changeset_id)}>ProviderOps ChangeSet Review</a>,
         approve it, then apply it. Deployment run <code>{plan.deployment_run_id}</code>
         records the plan.
       </div>
@@ -396,7 +512,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
               <code>{target.environment}</code>
               {target.domains?.[0] && <> at <code>{target.domains[0]}</code></>}.
               For a provider-backed target, BOSS creates a ChangeSet to review, approve, and
-              apply before any deployment runs.
+              apply before any deployment runs; for a host, a plan you approve in Approvals.
             </div>
           )}
 
@@ -457,6 +573,8 @@ type Deployment = {
   id: string; status: string; app_name: string; environment: string;
   commit_ref: string | null; trigger: string | null; duration_ms: number | null;
   finished_at: string | null; failure_reason: string | null; url: string | null;
+  changeset_id?: string | null;
+  decision_id?: string | null;
 };
 
 export function RecentDeployments({ deployments }: { deployments?: Deployment[] | null }) {
@@ -491,12 +609,16 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
   };
 
   const tone = (s: string) =>
-    s === "succeeded" ? "#3fb950" : ["failed", "blocked"].includes(s) ? "#f85149"
-      : s === "running" ? "#58a6ff" : "#8b949e";
+    s === "succeeded" ? "#3fb950" : ["failed", "blocked", "rolled_back"].includes(s) ? "#f85149"
+      : s === "running" ? "#58a6ff" : WAITING.includes(s) ? "#d29922" : "#8b949e";
   // `created` is what a plan-only run is called in the database. Shown as "planned", because
   // "created" alongside "succeeded" and "failed" reads as a deployment that went nowhere
   // rather than one that was never asked to go anywhere.
-  const label = (s: string) => (s === "created" ? "planned" : s);
+  const label = (s: string) => (s === "created" ? "planned"
+    : s === "awaiting_approval" ? "awaiting approval" : s.replace("_", " "));
+  // A host deployment that is waiting or running is watched in place: the row turns live
+  // when it is approved, shows its steps, and ends with the URL or the rollback.
+  const watched = (s: string) => WAITING.includes(s) || s === "running";
 
   return (
     <section className="ct-block">
@@ -524,7 +646,8 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
             <button style={{ ...btn, padding: "2px 9px", fontSize: 11 }}
                     onClick={() => setOpenId(openId === d.id ? null : d.id)}>
               {openId === d.id ? "hide details"
-                : ["planned", "created"].includes(d.status) ? "plan details" : "steps & logs"}
+                : ["planned", "created", "awaiting_approval"].includes(d.status)
+                  ? "plan details" : "steps & logs"}
             </button>
             {/* Request a new reviewable plan while preserving this run's history. */}
             <button style={{ ...btn, padding: "2px 9px", fontSize: 11 }}
@@ -534,10 +657,15 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
               {busy === d.id ? "planning…" : "plan redeploy"}
             </button>
           </div>
+          {d.status === "awaiting_approval" && openId !== d.id && (
+            <div className="detail" style={{ fontSize: 12, marginTop: 4 }}>
+              Nothing runs until it is approved. <a href={approvalsHref()}>Open in Approvals</a>
+            </div>
+          )}
           {["planned", "created"].includes(d.status) && !plannedFrom[d.id] && (
             <div className="detail" style={{ fontSize: 12, marginTop: 4 }}>
               No deployment is running. Review its ChangeSet in{" "}
-              <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+              <a href={changeReviewHref(d.changeset_id)}>ProviderOps ChangeSet Review</a>.
             </div>
           )}
           {errors[d.id] && (
@@ -555,7 +683,7 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
               {readableFailure(d.failure_reason).slice(0, 200)}
             </div>
           )}
-          {openId === d.id && (
+          {(openId === d.id || (watched(d.status) && d.status !== "awaiting_approval")) && (
             <div style={{ marginTop: 8 }}><LiveDeployment runId={d.id} /></div>
           )}
         </div>

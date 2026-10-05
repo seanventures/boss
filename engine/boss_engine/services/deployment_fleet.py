@@ -818,24 +818,29 @@ def verify_host(connection, settings: Settings, *, host_id: str) -> dict[str, An
         "required_resources": [],
         "domains": [],
     }
-    try:
-        report = preflight(probe, settings, connection)
-    except Exception as exc:  # noqa: BLE001 — a failed probe is a finding, not a crash
-        report = {"ready": False, "problems": [f"{type(exc).__name__}: {exc}"[:300]]}
+    # VERIFY IS WHERE TRUST IS GIVEN: the key the host shows this authenticated session is
+    # recorded (host_key_pin), and every governed connection after this one insists on it.
+    from .host_key_pin import pinned
 
-    # `preflight` validates a DEPLOY TARGET: it also asks whether the app has a domain and
-    # declared health checks. Those are properties of an app, and a host has neither — so
-    # reporting them here told an operator their machine was unreachable when the only thing
-    # missing was an app that has not been attached yet. Kept in the record, out of the verdict.
-    all_problems = [str(p) for p in (report.get("problems") or [])]
-    problems = [p for p in all_problems if not _is_app_scope(p)]
-    deferred = [p for p in all_problems if _is_app_scope(p)]
+    with pinned(connection, host_id, capture=True):
+        try:
+            report = preflight(probe, settings, connection)
+        except Exception as exc:  # noqa: BLE001 — a failed probe is a finding, not a crash
+            report = {"ready": False, "problems": [f"{type(exc).__name__}: {exc}"[:300]]}
 
-    # Credentials resolving is necessary but NOT sufficient. Only a real session decides.
-    probe_result: dict[str, Any] = {"reachable": False, "problems": []}
-    if probe["secret_refs"] and not problems:
-        probe_result = _connection_probe(connection, settings, host, probe)
-        problems += [str(p) for p in probe_result.get("problems") or []]
+        # `preflight` validates a DEPLOY TARGET: it also asks whether the app has a domain and
+        # declared health checks. Those are properties of an app, and a host has neither — so
+        # reporting them here told an operator their machine was unreachable when the only thing
+        # missing was an app that has not been attached yet. Kept in the record, out of the verdict.
+        all_problems = [str(p) for p in (report.get("problems") or [])]
+        problems = [p for p in all_problems if not _is_app_scope(p)]
+        deferred = [p for p in all_problems if _is_app_scope(p)]
+
+        # Credentials resolving is necessary but NOT sufficient. Only a real session decides.
+        probe_result: dict[str, Any] = {"reachable": False, "problems": []}
+        if probe["secret_refs"] and not problems:
+            probe_result = _connection_probe(connection, settings, host, probe)
+            problems += [str(p) for p in probe_result.get("problems") or []]
 
     findings = _classify(problems)
     ready = bool(probe_result.get("reachable")) and not problems

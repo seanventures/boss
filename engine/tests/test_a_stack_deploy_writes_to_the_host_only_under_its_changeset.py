@@ -218,7 +218,9 @@ def test_community_keeps_the_ungoverned_one_container_ssh_deploy_closed(edition)
     blocked = SSHContainerConnector().apply(object(), settings, {"target_ref": "u@h"}, "crun",
                                             {})
     assert blocked["status"] == "blocked"
-    assert "stack target" in blocked["problems"][0]
+    # The refusal points at the governed path that now exists (governed_host_deploy.py).
+    assert "approved Resource Plane ChangeSet" in blocked["problems"][0]
+    assert "Approvals" in blocked["problems"][0]
     with pytest.raises(PermissionError, match="ChangeSet"):
         deploy_ssh(object(), settings, "crun", host="203.0.113.9")
 

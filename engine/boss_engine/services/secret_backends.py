@@ -738,8 +738,15 @@ class DatabaseBackend:
             # under the configured key, so material migrates as it is rewritten.
             fallback = self._provisioned_key_if_present()
             if fallback is None or fallback == self._key:
-                raise
-            return _aes_gcm_decrypt(fallback, blob).decode("utf-8")
+                # A value stored under another master key (an ephemeral key from an earlier run,
+                # a rotated key) is UNAVAILABLE, not a crash: every reader already turns
+                # SecretUnavailable into "this key cannot be read — generate a new one", while a
+                # raw InvalidTag became a 500 (Infra's Roll back, found in the browser walk).
+                raise SecretUnavailable(f"{key} cannot be decrypted with this install's key") from None
+            try:
+                return _aes_gcm_decrypt(fallback, blob).decode("utf-8")
+            except Exception:  # noqa: BLE001
+                raise SecretUnavailable(f"{key} cannot be decrypted with this install's key") from None
 
     def _provisioned_key_if_present(self) -> Optional[bytes]:
         import base64

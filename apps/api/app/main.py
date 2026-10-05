@@ -1342,6 +1342,18 @@ async def lifespan(_: FastAPI):
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     _install_shipped_cast()
     _backfill_agent_identities()
+    # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
+    # used to raise a pending decision nobody could act on and a failed run that never ran;
+    # those are withdrawn and removed here, idempotently (governed_host_deploy).
+    try:
+        from boss_engine.services.governed_host_deploy import repair_refusal_records
+
+        with begin(engine) as connection:
+            repaired = repair_refusal_records(connection)
+        if any(repaired.values()):
+            print(f"[lifespan] refused deployment plans cleared: {repaired}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] refused-plan repair skipped: {exc}")
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
     # per-command durations, the queueing-vs-work split, why a preview refused — went to a
     # container log an operator cannot open. From here it also lands in `app_logs`, which the
@@ -1469,6 +1481,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan)
+# COMPRESSED JSON (infra-observability spec §6.8; operator decision 2026-10-04). The console's
+# view endpoints are polled and some are large by nature: the Pulse at 50 apps × 96 cells is
+# ~63 KB of JSON and ~1.2 KB gzipped. Starlette's GZip skips `text/event-stream` (preview logs,
+# talks, MCP streams), so SSE is never buffered; bodies under 1 KB are sent as they are.
+# Added first, so it is the INNERMOST layer: auth and idempotency see the request unchanged.
+from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 @app.exception_handler(RequestValidationError)
@@ -2210,11 +2230,50 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
         raise HTTPException(status_code=403, detail=str(error)) from error
 
 
+def _may_act_as(connection, project_id: str, actor: str) -> bool:
+    """May this request's principal act as `actor`? The same answer
+    require_authenticated_actor_binding gives, without recording a denial: no principal (auth
+    off), the principal itself, or a member whose role_keys name the principal (the console's
+    `executive_console` carries `ceo`, so the console's key may act as it)."""
+    principal = current_api_principal.get()
+    if not principal or principal == actor:
+        return True
+    try:
+        member = members.get_member(connection, project_id, actor)
+    except Exception:  # noqa: BLE001 — no member, no delegation
+        return False
+    return principal in ((member or {}).get("role_keys") or [])
+
+
+def signed_in_actor(connection, project_id: str, claimed: str | None) -> str:
+    """THE ONE ACTOR RULE (govern_guard.govern_actor's, bound): the signed-in operator the
+    console names is who acted — when this key may act as them — else the key's principal.
+
+    Plans, approvals and redeploys of one deploy were recorded as three different people: the
+    plan as the operator the console named, the approval as the key's principal (`ceo`), the
+    redeploy as whichever route it went through. An exact MCP confirmation still records its
+    independently authenticated reviewer."""
+    claimed = str(claimed or "").strip()
+    if current_mcp_human_attribution.get():
+        return _decision_action_actor(claimed)
+    if claimed and _may_act_as(connection, project_id, claimed):
+        return claimed
+    return str(current_api_principal.get() or claimed or "").strip()
+
+
+def _decision_route_actor(connection, decision_id: str, claimed: str | None) -> str:
+    row = connection.execute(text("SELECT project_id FROM decisions WHERE id = :d"),
+                             {"d": decision_id}).mappings().first()
+    if not row:
+        return _decision_action_actor(claimed)
+    return signed_in_actor(connection, row["project_id"], claimed)
+
+
 def require_project_write_actor(
     connection, project_id: str, claimed_actor: str | None, permission: str,
 ) -> str:
     """Bind a project mutation to the authenticated member and its permission."""
-    actor = str(current_api_principal.get() or claimed_actor or "").strip()
+    actor = signed_in_actor(connection, project_id, claimed_actor)
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
     require_project_actor(connection, project_id, actor, permission)
@@ -2339,7 +2398,11 @@ def require_decision_actor_binding(
     ).mappings().first()
     if not row:
         raise HTTPException(status_code=404, detail="Decision not found")
-    require_authenticated_actor_binding(row["project_id"], actor, "decision_resolve")
+    # With the connection, so the bounded delegation every other write honours applies here
+    # too: the console's key may answer as the operator signed in to it (`executive_console`
+    # carries `ceo`), and as nobody else.
+    require_authenticated_actor_binding(row["project_id"], actor, "decision_resolve",
+                                        connection)
 
 
 def raise_project_actor_error(error: Exception) -> None:
@@ -8437,6 +8500,9 @@ def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
                           host_target_id=payload["host_target_id"],
                           ports=payload.get("ports"),
                           actor=str(payload.get("actor") or "operator"))
+    # Observability › Sources caches its body for 60 s; a deploy shows on the next poll.
+    from boss_engine.services.obs_view import forget_sources
+    forget_sources(payload["project_id"])
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result)
     return result
@@ -8591,6 +8657,7 @@ def delivery_deploy_endpoint(payload: ManualDeployBody):
             {"i": target_id}).mappings().first()
         if not target:
             raise HTTPException(status_code=404, detail="no such deployment target")
+        actor = signed_in_actor(connection, target["project_id"], actor)
         require_project_actor(
             connection, target["project_id"], actor, "providerops_manage")
         # A newly registered cloud target is still `created`. It must be able
@@ -8669,13 +8736,13 @@ def delivery_deploy_endpoint(payload: ManualDeployBody):
         return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual",
                 "changeset_id": planned.get("changeset_id")}
 
-    # Provider-backed runs now stop at the reviewable ChangeSet. Its existing
-    # apply endpoint owns approval, reservation, provider receipts, and settlement.
-    # A direct connector launch here would bypass all four.
+    # Every deployment stops at its reviewable ChangeSet. A provider ChangeSet's apply endpoint
+    # owns approval, reservation, receipts and settlement; a host deployment's decision does
+    # (services/governed_host_deploy.py). A direct connector launch here would bypass all four.
     if planned.get("changeset_id"):
         return {"deployment_run_id": run_id, "status": "planned",
                 "trigger": "manual", "changeset_id": planned["changeset_id"],
-                "next_action": "approve_and_apply_changeset"}
+                **_planned_next_action(planned)}
     raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
 
 
@@ -9312,6 +9379,36 @@ def execute_stack_deployment_endpoint(deployment_id: str,
                              lease_token=payload.lease_token)
 
 
+@app.post("/v1/delivery/deployments/{deployment_run_id}/apply")
+def apply_host_deployment_endpoint(deployment_run_id: str,
+                                   payload: open_bodies.StackDeployExecuteBody):
+    """The worker hands its leased `deployment.host_apply` job here. Fenced by the lease; the
+    apply runs inside the approved ChangeSet (services/governed_host_deploy.py)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.governed_host_deploy import execute_host_job
+
+    result = execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
+                              job_id=payload.job_id, worker_id=payload.worker_id,
+                              lease_token=payload.lease_token)
+    if result.get("http_status"):
+        # A lease that is not this job's, or a run that does not exist: 4xx, never a 200.
+        raise HTTPException(status_code=int(result["http_status"]),
+                            detail=str(result.get("error") or "Refused."))
+    return result
+
+
+def _planned_next_action(planned: dict) -> dict:
+    """What the console does next with a plan. A governed host deployment waits on ONE
+    decision in Approvals; a provider ChangeSet goes through ChangeSet review."""
+    review = (planned.get("release_packet") or {}).get("plan_review") \
+        or planned.get("plan_review")
+    if review and planned.get("decision_id"):
+        return {"next_action": "approve_decision", "decision_id": planned["decision_id"],
+                "plan_review": review}
+    return {"next_action": "approve_and_apply_changeset"}
+
+
 @app.post("/v1/deployment-targets/{target_id}/auto-deploy")
 def set_auto_deploy_endpoint(target_id: str, payload: AutoDeployBody):
     """Turn deploy-on-merge on/off, or pause it.
@@ -9381,6 +9478,8 @@ def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
             text("SELECT d.id, d.status, d.environment, d.commit_ref, d.trigger, "
                  "       d.started_at, d.finished_at, d.duration_ms, d.failure_reason, "
                  "       d.app_name, t.app_name AS target_app, t.domains, "
+                 "       d.decision_id, d.changeset_id, "
+                 "       (d.release_packet->>'governed') IS NOT NULL AS governed, "
                  "       jsonb_array_length(COALESCE(d.steps,'[]'::jsonb)) AS step_count "
                  "FROM deployment_runs d LEFT JOIN deployment_targets t "
                  "  ON t.id = d.deployment_target_id "
@@ -9394,6 +9493,9 @@ def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
         "finished_at": r["finished_at"].isoformat() if r["finished_at"] else None,
         "failure_reason": r["failure_reason"], "step_count": r["step_count"],
         "url": (r["domains"] or [None])[0],
+        # A governed host deployment links to its one decision in Approvals.
+        "decision_id": r["decision_id"] if r["governed"] else None,
+        "changeset_id": r["changeset_id"],
     } for r in rows]}
 
 
@@ -9431,6 +9533,8 @@ def get_deployment_run_endpoint(deployment_run_id: str):
     upcoming = (
         [s for s in planned_steps() if s["step"] not in seen] if running else []
     )
+    packet = row["release_packet"] or {}
+    governed = bool(packet.get("governed"))
 
     return {
         "deployment_run_id": row["id"], "status": row["status"],
@@ -9444,6 +9548,14 @@ def get_deployment_run_endpoint(deployment_run_id: str):
         "health": row["health_check_results"],
         "steps": done + upcoming,
         "running": running,
+        # A governed host deployment: its decision, ChangeSet and the plan that was approved.
+        # `approved` is queued for the worker, so the console keeps watching it.
+        "governed": governed,
+        "decision_id": row["decision_id"] if governed else None,
+        "changeset_id": row["changeset_id"],
+        "plan_review": packet.get("plan_review") if governed else None,
+        "rollback_plan": row["rollback_plan"] or [],
+        "waiting": row["status"] in {"awaiting_approval", "approved"},
     }
 
 
@@ -9479,6 +9591,7 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
         if not run_row:
             raise HTTPException(status_code=404, detail=p.get("reason")
                                 or f"no deployment run {deployment_run_id}")
+        actor = signed_in_actor(connection, run_row["project_id"], actor)
         require_project_actor(
             connection, run_row["project_id"], actor, "providerops_manage"
         )
@@ -9500,7 +9613,9 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
                             or "Deployment policy blocked this run.")
     if not result.get("changeset_id"):
         raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
-    return {**result, "next_action": "approve_and_apply_changeset"}
+    # `ref` opens the new plan in Infra's deploy drawer.
+    return {**result, **_planned_next_action(result),
+            "ref": f"delivery:{result.get('deployment_run_id')}"}
 
 
 @app.post("/v1/deployments/{deployment_run_id}/promote")
@@ -9931,10 +10046,10 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     if mode != "ssh":
         raise HTTPException(status_code=422, detail="mode must be 'dry_run' or 'ssh'")
     if str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}:
-        raise HTTPException(status_code=409, detail=(
-            "Community SSH deployment is disabled until it uses an approved Resource Plane "
-            "ChangeSet, budget reservation, and ResourceReceipt."
-        ))
+        from boss_engine.services.governed_host_deploy import ungoverned_refusal
+
+        raise HTTPException(status_code=409,
+                            detail=ungoverned_refusal("Community SSH deployment"))
 
     # mode == 'ssh' — actuate on a real host (Phase 2/3). Requires an explicit host, the SSH key,
     # and the outward gate; otherwise return the plan + the reason it's held (never touch a host).
@@ -20907,10 +21022,22 @@ def list_project_llm_calls(
     code_task_run_id: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    since: Optional[str] = None,
 ) -> LlmCallListResponse:
-    """Operator read path over the llm_calls spend/quality ledger (filters + pagination)."""
+    """Operator read path over the llm_calls spend/quality ledger (filters + pagination).
+    `since` keeps calls made at or after it (Observability › Models' group drawer)."""
+    from datetime import datetime as _since_dt
+
     from boss_engine.services.llm_telemetry import list_llm_calls
 
+    if since:
+        # An unencoded "+00:00" arrives as " 00:00" (a query string's "+" is a space).
+        raw = since.strip()
+        raw = raw.replace(" ", "+") if "T" in raw else raw
+        try:
+            since = _since_dt.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="since must be an ISO time") from error
     try:
         with begin(engine) as connection:
             result = list_llm_calls(
@@ -20924,6 +21051,7 @@ def list_project_llm_calls(
                 code_task_run_id=code_task_run_id,
                 limit=limit,
                 offset=offset,
+                since=since or None,
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -21620,7 +21748,7 @@ def approve_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21657,7 +21785,7 @@ def reject_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21685,7 +21813,7 @@ def revise_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21715,7 +21843,7 @@ def delegate_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21745,7 +21873,7 @@ def execute_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -28246,6 +28374,23 @@ app.include_router(build_kit_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# INFRA AND OBSERVABILITY (infra-observability spec §6.2): one ETag'd view per tab, polled by
+# the console; Infra routes by target kind so one button replaces three (routers/infra_view.py,
+# routers/observability_view.py).
+from .routers.infra_view import build_infra_router
+from .routers.observability_view import build_observability_router
+
+for _build_view_router in (build_infra_router, build_observability_router):
+    app.include_router(_build_view_router(
+        engine=engine,
+        # main's own settings object (what every other route reads, and what tests patch).
+        settings=lambda: settings,
+        require_write_actor=require_project_write_actor,
+        require_reader=require_project_reader,
+        reader_project=_acts_reader,
+        viewer_of=_acts_viewer,
+        etagged=_etagged,
+    ))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)

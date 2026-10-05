@@ -3,6 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ShepherdConsole } from "../app/shepherd-ui";
+import {
+  parseDeployList, parseFleet, parsePreviewList, parseTargetDetail,
+} from "../lib/infra-view";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -19,7 +22,6 @@ import { codeOnly } from "./_helpers/source";
  * The whole console went white because one feed answered badly.
  */
 const SHEPHERD = codeOnly("app/shepherd-ui.tsx");
-const DELIVERY = codeOnly("app/delivery-ui.tsx");
 const ACTIONS = codeOnly("app/actions.ts");
 
 // This suite compiles JSX with the classic runtime, which needs React in scope at call time.
@@ -56,16 +58,32 @@ describe("the shepherd panel", () => {
   });
 });
 
-describe("the delivery panel", () => {
-  it("checks for an error payload before reading fields", () => {
-    expect(DELIVERY).toContain("Delivery: {data.error}");
+// The delivery panel (delivery-ui.tsx) retired into Infra. Its feeds now arrive through the
+// parsers in lib/infra-view.ts — the only place the wire is read — so the same two promises are
+// checked against them, on the payloads that took the old panel down.
+describe("the Infra views (the delivery panel's successor)", () => {
+  it("an error payload reads as an empty view, not as data to dereference", () => {
+    const fleet = parseFleet({ error: "fleet 500" });
+    expect(fleet.racks).toEqual([]);
+    expect(fleet.unplaced).toEqual([]);
+    expect(fleet.attention).toEqual([]);
+    expect(parseDeployList({ error: "deploys 500" }).rows).toEqual([]);
+    expect(parsePreviewList(null).live).toEqual([]);
+  });
+
+  it("says the reason a feed failed instead of rendering nothing", () => {
+    // The old panel's `Delivery: {data.error}`: a failed poll is shown as its reason.
+    expect(codeOnly("app/infra/deploys.tsx")).toContain("<ErrorLine error={list.error}");
+    expect(codeOnly("app/infra/infra-home.tsx")).toContain("error={fleet.data ? null : fleet.error}");
   });
 
   it("never maps targets that might not be there", () => {
-    // Two of the three reads already defended themselves; the third did not, and a record with
-    // `configured: true` and no targets is what a half-written one looks like.
-    expect(DELIVERY).not.toMatch(/\{data\.targets\.map\(/);
-    expect((DELIVERY.match(/\(data\.targets \|\| \[\]\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    // A record with `configured: true` and no targets is what a half-written one looks like.
+    expect(() => parseDeployList({ configured: true })).not.toThrow();
+    const detail = parseTargetDetail({ configured: true });
+    expect(detail.recent).toEqual([]);
+    expect(detail.secrets).toEqual([]);
+    expect(parseFleet({ racks: [{ residents: null }] }).racks[0].residents).toEqual([]);
   });
 });
 

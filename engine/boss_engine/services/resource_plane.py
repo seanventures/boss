@@ -154,6 +154,9 @@ SUPPORTED_PROVIDERS = {
             # A whole application stack from its own boss.deploy.yaml, on a fleet host, with
             # that host's key. See services/stack_deploy.py.
             "ssh_host.stack.deploy",
+            # One app on a verified host through the SSH connector, under an approved
+            # ChangeSet. See services/governed_host_deploy.py.
+            "ssh_host.app.deploy",
         ],
     },
 }
@@ -169,6 +172,11 @@ PHASED_APPLY_SKILLS: dict[str, str] = {
         "is a stack deployment: approve its decision{decision} and BOSS's worker applies it "
         "(services/stack_deploy.py). It is never approved or applied through the ChangeSet "
         "routes."
+    ),
+    "ssh_host.app.deploy": (
+        "is a host deployment: approve its decision{decision} in Approvals and BOSS's worker "
+        "applies it (services/governed_host_deploy.py). It is never approved or applied "
+        "through the ChangeSet routes."
     ),
 }
 
@@ -2430,47 +2438,28 @@ class ResourcePlaneService:
             return self._get_deployment_run(connection, project_id, deployment_run_id)
 
         rollback_plan = self._deployment_rollback_plan(target)
-        target_kind = str(target["target_kind"]).strip().lower().replace("-", "_")
-        if target_kind in {"ssh", "container"}:
-            # These implemented connectors currently produce no Resource Plane
-            # operation in any edition. A runnable connector deployment would
-            # bypass ChangeSet approval and could not create a ResourceReceipt.
-            # Refuse before acquiring a surface, worker, or host connection.
-            community_host = (
-                str(getattr(self.settings, "boss_edition", "community")).strip().lower()
-                in {"community", "oss", "local"}
-            )
-            label = "Community host" if community_host else "Direct host"
-            return self._record_blocked_deployment_run(
-                connection,
-                project_id=project_id,
-                target=target,
-                commit_ref=commit_ref,
-                release_packet=release_packet or {},
-                rollback_plan=rollback_plan,
-                actor=actor,
-                title=f"{label} deployment requires a governed ChangeSet",
-                recommendation={
-                    "action": "implement_governed_host_deployment",
-                    "deployment_target_id": deployment_target_id,
-                    "required": ["ChangeSet", "approval", "budget_reservation",
-                                 "ResourceReceipt"],
-                },
-                evidence={"target_kind": target["target_kind"],
-                          "environment": target["environment"]},
-                reason_code=(
-                    "community_host_deployment_unavailable"
-                    if community_host else "direct_host_deployment_ungoverned"
-                ),
-                failure_reason=(
-                    f"{label} deployment is disabled until a policy-guarded "
-                    "ChangeSet, budget reservation, approval, and ResourceReceipt exist."
-                ),
-                event_reason=(
-                    "community_host_deployment_unavailable"
-                    if community_host else "direct_host_deployment_ungoverned"
-                ),
-            )
+        from . import governed_host_deploy as governed_host
+
+        host_target = governed_host.is_host_kind(target["target_kind"])
+        if host_target:
+            # A host target deploys ONLY through the governed path: a ChangeSet, a budget
+            # reservation, a person's approval and a ResourceReceipt
+            # (services/governed_host_deploy.py). The same commit already on its way is the
+            # same deployment; a target that cannot be deployed is refused before anything
+            # is recorded against the host.
+            existing = governed_host.live_run(connection, target["id"], commit_ref)
+            if existing:
+                run = self._get_deployment_run(connection, project_id, existing)
+                return {**run, "reused": True}
+            problem = governed_host.plan_problem(connection, target)
+            if problem:
+                # A plan BOSS will not make is an answer, not a record: no decision to
+                # resolve, no failed run on the rail, no failure card — the caller answers
+                # 409 with the next step, and the refusal is one plain event.
+                return governed_host.refuse_plan(
+                    connection, project_id=project_id, target=target, actor=actor,
+                    headline=problem["headline"], action=problem["action"],
+                    reason=problem["reason"])
         rollout_policy = self._deployment_rollout_policy_for_target(
             connection,
             project_id,
@@ -2481,8 +2470,16 @@ class ResourcePlaneService:
                 target,
                 rollout_policy,
                 rollback_plan,
-                reservation_id,
+                # A host deployment always reserves its own (zero) budget below.
+                reservation_id or ("governed_host_reservation" if host_target else None),
             )
+            if policy_block_reason and host_target:
+                return governed_host.refuse_plan(
+                    connection, project_id=project_id, target=target, actor=actor,
+                    headline=("The environment's rollout policy does not allow this "
+                              f"deployment ({policy_block_reason.replace('_', ' ')})."),
+                    action="Change the environment's rules in Infra › Deploys › Rules.",
+                    reason=policy_block_reason)
             if policy_block_reason:
                 return self._record_blocked_deployment_run(
                     connection,
@@ -2555,6 +2552,13 @@ class ResourcePlaneService:
             # fix above would only protect targets that had not already been wedged.
             stale_after=timedelta(seconds=_SURFACE_LEASE_SECONDS),
         )
+        if not ownership_result["allowed"] and host_target:
+            return governed_host.refuse_plan(
+                connection, project_id=project_id, target=target, actor=actor,
+                headline=(f"{ownership_result['ownership']['owner_ref']} is deploying "
+                          f"{target['app_name']} right now."),
+                action="Wait for that deployment to finish, then plan again.",
+                reason="surface_ownership_conflict")
         if not ownership_result["allowed"]:
             return self._record_blocked_deployment_run(
                 connection,
@@ -2617,6 +2621,26 @@ class ResourcePlaneService:
             release_content,
             data_boundary="internal",
         )
+
+        if host_target:
+            try:
+                return governed_host.plan_host_deployment(
+                    self,
+                    connection,
+                    project_id=project_id,
+                    target=target,
+                    commit_ref=commit_ref,
+                    release_packet=release_packet,
+                    release_artifact_id=release_artifact_id,
+                    ownership_guard=ownership_guard,
+                    actor=actor,
+                )
+            except governed_host.GovernedHostDeployError as refused:
+                governed_host.release_guard(connection, ownership_guard)
+                return governed_host.refuse_plan(
+                    connection, project_id=project_id, target=target, actor=actor,
+                    headline=refused.headline, action=refused.action,
+                    reason="governed_host_plan_refused")
 
         changeset = None
         operation = self._deployment_operation_for_target(

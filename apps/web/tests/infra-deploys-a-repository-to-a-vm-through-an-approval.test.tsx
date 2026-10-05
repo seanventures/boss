@@ -4,7 +4,10 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StackDeployPanel, StackDeploymentView } from "../app/stack-deploy-ui";
+import { DeploysTab } from "../app/infra/deploys";
+import { StackDeploymentView } from "../app/stack-deploy-ui";
+import { mockInfraFetch, type Route } from "./_helpers/infra-fixtures";
+import { TabHarness } from "./_helpers/infra-tab-render";
 import {
   canHostStack, deployFormProblem, deploymentActions, isStackTarget, targetFormProblem,
   targetManifestPath, targetPublicUrl, targetRepository, type StackDeployment,
@@ -92,12 +95,20 @@ type Script = {
   repositories?: unknown[];
   /** Successive answers to GET /v1/deployments/stack/{id}. The last one repeats. */
   reads?: StackDeployment[];
+  /** Hold each answer until the test calls `nextRead()` (the first is answered at once). Without
+   *  it a 5 ms poll under a busy combined run passed `running` before the test looked, and the
+   *  test failed with "running did not happen". */
+  held?: boolean;
   plan?: { status: number; body: unknown };
 };
+
+let nextRead: () => void = () => {};
 
 function installFetch(script: Script = {}) {
   calls = [];
   const reads = [...(script.reads ?? [])];
+  let cursor = 0;
+  nextRead = () => { cursor += 1; };
   const hosts = (script.hosts ?? [VM, UNREACHED]) as Array<typeof VM>;
   const targets = [...(script.targets ?? [TARGET, PER_APP_TARGET])] as Array<Record<string, unknown>>;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -121,7 +132,7 @@ function installFetch(script: Script = {}) {
       return json({ items: script.deployments ?? [] });
     }
     if (method === "GET" && url.startsWith("/v1/deployments/stack/")) {
-      const next = reads.length > 1 ? reads.shift()! : reads[0];
+      const next = reads[Math.min(script.held ? cursor : cursor++, reads.length - 1)];
       return next ? json({ deployment: next }) : json({ detail: "no such deployment" }, 404);
     }
     if (method === "POST" && url === "/v1/deployments/stack/targets") {
@@ -144,16 +155,14 @@ function installFetch(script: Script = {}) {
 }
 
 async function settle(until: () => boolean, what: string) {
-  for (let i = 0; i < 40; i += 1) {
+  // A deadline, not a count of ticks: forty zero-delay ticks are a few milliseconds alone and
+  // far less than a busy combined run needs for one poll to land.
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
     if (until()) return;
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
   }
   throw new Error(`${what} did not happen: ${host.textContent}`);
-}
-
-async function renderPanel() {
-  await act(async () => { root.render(<StackDeployPanel projectId="project_1" actor="ceo" />); });
-  await settle(() => !host.textContent?.includes("Loading stack targets"), "panel load");
 }
 
 function button(label: string, scope: ParentNode = host): HTMLButtonElement {
@@ -164,15 +173,6 @@ function button(label: string, scope: ParentNode = host): HTMLButtonElement {
 
 function buttons(scope: ParentNode = host): string[] {
   return [...scope.querySelectorAll("button")].map((b) => b.textContent?.trim() ?? "");
-}
-
-function setField(form: HTMLFormElement, name: string, value: string) {
-  const el = form.querySelector(`[name="${name}"]`) as HTMLInputElement | HTMLSelectElement;
-  el.value = value;
-}
-
-async function submit(form: HTMLFormElement) {
-  await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
 }
 
 beforeEach(() => {
@@ -252,120 +252,153 @@ describe("the forms say what is wrong before anything is sent", () => {
   });
 });
 
-describe("Infra → Deploy a repository", () => {
-  it("lists only stack targets, each with its VM, repository, manifest and recent deployments", async () => {
-    installFetch({ deployments: [deployment({ status: "healthy", open_url: "https://boss.example.com" })] });
-    await renderPanel();
-    const cards = host.querySelectorAll('[data-testid="stack-target"]');
-    expect(cards).toHaveLength(1);
-    expect(cards[0].textContent).toContain("boss");
-    expect(cards[0].textContent).toContain("boss-vm");
-    expect(cards[0].textContent).toContain("seanventures/boss");
-    expect(cards[0].textContent).toContain("boss.deploy.yaml");
-    expect(cards[0].querySelector('[data-testid="stack-recent"]')?.textContent).toContain("Healthy");
-    expect(host.textContent).not.toContain("todo");
-  });
+/**
+ * The same journey on Infra › Deploys, the one place a deploy is planned now (spec §4.6): `+
+ * Deploy` (Repository, Ref, Target → `Plan`, the routed POST /v1/infra/targets/{id}/deploy),
+ * the toast `Deploy planned`, the new deploy's drawer with its plan, and Approve through the
+ * decisions API. Stack targets are added in Fleet's `App target` sheet.
+ */
+describe("Infra › Deploys: + Deploy → plan → approve in the drawer", () => {
+  let infra: { writes: () => { path: string; body: unknown }[]; gets: (re: RegExp) => unknown[] } | null = null;
+  let uninstall: (() => void) | null = null;
+  afterEach(() => { uninstall?.(); uninstall = null; infra = null; });
 
-  it("adds a stack target on a reachable VM in one write, and it is listed with Deploy after reload", async () => {
-    installFetch({ targets: [] });
-    await renderPanel();
-    expect(host.querySelector('[data-testid="stack-targets-empty"]')).not.toBeNull();
-    await act(async () => { button("Add a stack target").click(); });
-    const form = host.querySelector('[data-testid="stack-add-target"]') as HTMLFormElement;
-    // Only VMs BOSS has reached are offered.
-    const vmOptions = [...form.querySelectorAll('select[name="host_id"] option')].map((o) => o.getAttribute("value"));
-    expect(vmOptions).toEqual(["host_1"]);
-    expect((form.querySelector('[name="manifest_path"]') as HTMLInputElement).value).toBe("boss.deploy.yaml");
-    setField(form, "name", "boss");
-    setField(form, "public_url", "https://boss.example.com");
-    await submit(form);
-    await settle(() => host.querySelectorAll('[data-testid="stack-target"]').length === 1, "target listed");
+  function setValue(el: Element | null, value: string) {
+    if (!el) throw new Error("missing field");
+    const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
+      : el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
-    const created = calls.filter((c) => c.method === "POST" && c.url === "/v1/deployments/stack/targets");
-    expect(created).toHaveLength(1);
-    expect(created[0].body).toEqual({
-      project_id: "project_1", actor: "ceo", host_id: "host_1", repository: "seanventures/boss",
-      app_name: "boss", environment: "production",
-      manifest_path: "boss.deploy.yaml", public_url: "https://boss.example.com",
-    });
-    expect(calls.some((c) => c.url === "/v1/deployment-targets" && c.method === "POST")).toBe(false);
-    // Where it runs is part of the same write: no second call can fail and leave an orphan.
-    expect(calls.some((c) => c.url.endsWith("/attach"))).toBe(false);
-    const card = host.querySelector('[data-testid="stack-target"]')!;
-    expect(card.textContent).toContain("boss-vm");
-    expect(card.textContent).toContain("https://boss.example.com");
-    expect(card.querySelector('[data-testid="stack-target-deploy"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="stack-deploy-form"]')).not.toBeNull();
-  });
+  async function openDeploys(routes: Route[] = [], search = "?area=infra&view=deploys") {
+    const f = mockInfraFetch({ routes });
+    infra = f;
+    uninstall = f.install();
+    window.history.replaceState(null, "", `/${search}`);
+    await act(async () => { root.render(<TabHarness Tab={DeploysTab} />); });
+    await settle(() => !!q("inf-deploys") && document.querySelectorAll('[data-testid="inf-deploy-row"]').length > 0, "deploys");
+    return f;
+  }
+  async function openSheet() {
+    await act(async () => { q("inf-deploy-new")!.click(); });
+    await settle(() => (q("inf-deploy-repo") as HTMLSelectElement | null)?.value === "acme/invoice"
+      && (q("inf-deploy-target") as HTMLSelectElement | null)?.value === "t_live", "sheet loaded");
+  }
 
-  it("a stack target with no VM offers no Deploy", async () => {
-    const orphan = { ...TARGET, id: "deptgt_orphan", host_id: null, target_ref: "typed@198.51.100.9:22" };
-    installFetch({ targets: [orphan] });
-    await renderPanel();
-    const card = host.querySelector('[data-testid="stack-target"]')!;
-    expect(card.textContent).toContain("Not on a VM");
-    expect(card.textContent).not.toContain("198.51.100.9");
-    expect(card.querySelector('[data-testid="stack-target-deploy"]')).toBeNull();
-    // Nor can a plan be raised against it from the form.
-    expect(host.querySelector('[data-testid="stack-deploy-form"]')).toBeNull();
-    // No second write path: a stack target is only ever created bound to its VM.
-    expect(buttons()).not.toContain("Point at a VM");
-  });
+  it("plans the chosen ref onto the chosen target through the routed deploy, then opens its plan", async () => {
+    const f = await openDeploys([{ method: "POST", match: /^\/v1\/infra\/targets\/[^/]+\/deploy$/, reply: () => ({ ref: "stack:sd_wait" }) }]);
+    const toasts: string[] = [];
+    const onToast = (e: Event) => toasts.push((e as CustomEvent<{ message: string }>).detail.message);
+    window.addEventListener("boss:toast", onToast);
+    try {
+      await openSheet();
+      // The repository narrows the targets to its own.
+      expect([...(q("inf-deploy-target") as HTMLSelectElement).options].map((o) => o.value)).toEqual(["t_live"]);
+      await act(async () => { setValue(q("inf-deploy-target"), "t_live"); setValue(q("inf-deploy-ref"), "feature/deploy"); });
+      await act(async () => { q("inf-deploy-plan-btn")!.click(); });
+      await settle(() => f.writes().some((w) => w.path === "/v1/infra/targets/t_live/deploy"), "plan");
+      expect(f.writes().find((w) => w.path === "/v1/infra/targets/t_live/deploy")?.body)
+        .toEqual({ project_id: "project_1", actor: "ceo", ref: "feature/deploy" });
+      await settle(() => !!q("inf-deploy-drawer") && !!q("inf-deploy-plan"), "drawer");
+      expect(toasts).toContain("Deploy planned");
+      expect(new URLSearchParams(window.location.search).get("deploy")).toBe("stack:sd_wait");
+      const plan = q("inf-deploy-plan")!;
+      expect(plan.textContent).toContain("docker build -t invoice .");
+      expect(plan.querySelector('[data-testid="inf-deploy-env-keys"]')?.textContent).toContain("DATABASE_URL");
+      expect(q("inf-deploy-rollback-to")).toBeNull();
 
-  it("refuses a bad stack name without sending anything", async () => {
-    installFetch({ targets: [] });
-    await renderPanel();
-    await act(async () => { button("Add a stack target").click(); });
-    const form = host.querySelector('[data-testid="stack-add-target"]') as HTMLFormElement;
-    setField(form, "name", "My Stack");
-    await submit(form);
-    expect(host.querySelector('[data-testid="stack-add-target-error"]')?.textContent).toMatch(/lowercase/);
-    expect(calls.some((c) => c.method === "POST")).toBe(false);
-  });
-
-  it("says where to start when no VM is reachable yet", async () => {
-    installFetch({ targets: [], hosts: [UNREACHED] });
-    await renderPanel();
-    expect(host.querySelector('[data-testid="stack-targets-empty"]')?.textContent).toMatch(/Add and verify a VM/);
-    await act(async () => { button("Add a stack target").click(); });
-    expect(host.querySelector('[data-testid="stack-add-target-no-host"]')).not.toBeNull();
-  });
-
-  it("plans a deployment of the chosen repository at the ref, and shows the plan for approval", async () => {
-    installFetch({ reads: [deployment()] });
-    await renderPanel();
-    const form = host.querySelector('[data-testid="stack-deploy-form"]') as HTMLFormElement;
-    expect((form.querySelector('[name="ref"]') as HTMLInputElement).value).toBe("main");
-    expect((form.querySelector('[name="repository"]') as HTMLSelectElement).value).toBe("seanventures/boss");
-    setField(form, "ref", "feature/deploy");
-    await submit(form);
-    await settle(() => !!host.querySelector('[data-testid="stack-deployment"]'), "deployment view");
-
-    const plan = calls.find((c) => c.url === "/v1/deployments/stack/plan");
-    expect(plan?.body).toEqual({
-      project_id: "project_1", target_id: "deptgt_1", repository: "seanventures/boss",
-      ref: "feature/deploy", actor: "ceo",
-    });
-    const view = host.querySelector('[data-testid="stack-deployment"]')!;
-    expect(view.getAttribute("data-status")).toBe("awaiting_approval");
-    expect(view.textContent).toContain("Waiting for your approval");
-    expect(view.textContent).toContain("0123456789ab");
-    const manifest = view.querySelector('[data-testid="stack-manifest"]')!;
-    expect(manifest.textContent).toContain("install: ./scripts/install/install.sh --yes");
-    expect(manifest.textContent).toContain("migrate: make migrate");
-    expect(manifest.textContent).toContain("http://127.0.0.1:8000/health");
-    expect(view.querySelector('[data-testid="stack-env-keys"]')?.textContent).toContain("POSTGRES_PASSWORD");
-    expect(buttons(view)).toEqual(expect.arrayContaining(["Approve", "Reject"]));
-    expect(buttons(view)).not.toContain("Roll back");
+      await act(async () => { q("inf-deploy-approve")!.click(); });
+      await settle(() => f.writes().some((w) => w.path === "/v1/decisions/dec_wait/approve"), "approve");
+      await settle(() => toasts.includes("Deploy approved"), "approve toast");
+    } finally {
+      window.removeEventListener("boss:toast", onToast);
+    }
   });
 
   it("shows the API's refusal of a plan in words", async () => {
-    installFetch({ plan: { status: 422, body: { detail: "boss.deploy.yaml at abc123: health[0].url is required" } } });
-    await renderPanel();
-    await submit(host.querySelector('[data-testid="stack-deploy-form"]') as HTMLFormElement);
-    await settle(() => !!host.querySelector('[data-testid="stack-deploy-error"]'), "error");
-    expect(host.querySelector('[data-testid="stack-deploy-error"]')?.textContent)
-      .toBe("boss.deploy.yaml at abc123: health[0].url is required");
+    await openDeploys([{ method: "POST", match: /^\/v1\/infra\/targets\/[^/]+\/deploy$/, reply: () => new Response(
+      JSON.stringify({ detail: "boss.deploy.yaml at abc123: health[0].url is required" }), { status: 422 }) }]);
+    await openSheet();
+    await act(async () => { q("inf-deploy-plan-btn")!.click(); });
+    await settle(() => !!q("inf-deploy-sheet-error"), "error");
+    expect(q("inf-deploy-sheet-error")?.textContent).toBe("boss.deploy.yaml at abc123: health[0].url is required");
+    expect(q("inf-deploy-sheet")).not.toBeNull();
+  });
+
+  it("More takes cost in dollars and refuses a release packet that is not a JSON object", async () => {
+    const f = await openDeploys();
+    await openSheet();
+    await act(async () => { q("inf-deploy-more")!.click(); });
+    await act(async () => { setValue(q("inf-deploy-repo"), "acme/billing"); });
+    await settle(() => (q("inf-deploy-target") as HTMLSelectElement).value === "t_cloud", "billing target");
+    await act(async () => { setValue(q("inf-deploy-cost"), "1.50"); setValue(q("inf-deploy-packet"), "{\"ci\": "); });
+    expect(q("inf-deploy-packet-error")?.textContent).toBeTruthy();
+    expect((q("inf-deploy-plan-btn") as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { setValue(q("inf-deploy-packet"), "{\"ci_status\": \"passed\"}"); });
+    expect(q("inf-deploy-packet-error")).toBeNull();
+    await act(async () => { q("inf-deploy-plan-btn")!.click(); });
+    await settle(() => f.writes().some((w) => w.path === "/v1/infra/targets/t_cloud/deploy"), "plan");
+    expect(f.writes().find((w) => w.path === "/v1/infra/targets/t_cloud/deploy")?.body).toMatchObject({
+      expected_cost_usd: 1.5, release_packet: { ci_status: "passed" } });
+  });
+
+  it("a live deploy's drawer: steps, log, Open app, Redeploy of the same commit", async () => {
+    const f = await openDeploys([], "?area=infra&view=deploys&deploy=stack%3Asd_live");
+    await settle(() => !!q("inf-deploy-log"), "drawer");
+    expect(q("inf-deploy-steps")?.querySelectorAll("li")).toHaveLength(6);
+    expect(q("inf-deploy-log")?.textContent).toContain("Health check passed");
+    expect(q("inf-deploy-open-app")?.getAttribute("href")).toBe("https://invoice.example.com");
+    expect(q("inf-deploy-full-log")?.getAttribute("href")).toBe("?area=activity&source=deployment&subject=stack%3Asd_live");
+    await act(async () => { q("inf-deploy-redeploy")!.click(); });
+    await settle(() => f.writes().some((w) => w.path === "/v1/infra/targets/t_live/deploy"), "redeploy");
+    expect(f.writes().find((w) => w.path === "/v1/infra/targets/t_live/deploy")?.body).toMatchObject({ ref: "9f8e7d6" });
+  });
+
+  it("a failed deploy's drawer says why in a line and shows the raw error on request", async () => {
+    await openDeploys([], "?area=infra&view=deploys&deploy=stack%3Asd_failed");
+    await settle(() => !!q("inf-deploy-failed"), "drawer");
+    expect(q("inf-deploy-failed")?.textContent).toContain("Migration failed");
+    expect(q("inf-deploy-error-raw")).toBeNull();
+    await act(async () => { q("inf-deploy-show-error")!.click(); });
+    expect(q("inf-deploy-error-raw")?.textContent).toContain("already exists");
+    expect(q("inf-deploy-rollback-to")).not.toBeNull();
+  });
+
+  it("a registry deploy's drawer: health check, promotion, and its change in Cloud", async () => {
+    const f = await openDeploys([], "?area=infra&view=deploys&deploy=registry%3Adr_1");
+    await settle(() => !!q("inf-deploy-promotion"), "drawer");
+    expect([...q("inf-deploy-promotion")!.querySelectorAll("li")].map((l) => l.textContent))
+      .toEqual(["Pipeline verdict", "Staging", "Smoke", "Production", "Rollout"]);
+    expect(q("inf-deploy-open-change")?.getAttribute("href")).toBe("?area=infra&view=cloud&cloud=changes&changeset=cs_1");
+    await act(async () => { q("inf-deploy-run-check")!.click(); });
+    await settle(() => f.writes().some((w) => w.path === "/v1/deployment-runs/dr_1/health-check"), "check");
+  });
+
+  it("⋯ holds Rules, CI config and Secrets", async () => {
+    const f = await openDeploys();
+    await act(async () => { q("inf-deploys-more")!.click(); });
+    await act(async () => { q("inf-deploys-rules")!.click(); });
+    await settle(() => !!q("inf-rules-list")?.textContent?.includes("Production allowed"), "rules");
+    await act(async () => { q("inf-rules-save")!.click(); });
+    await settle(() => f.writes().some((w) => w.path === "/v1/deployment-environment-policies"), "save rule");
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="inf-rules-sheet"] .ag-act-close')!.click(); });
+
+    await act(async () => { q("inf-deploys-more")!.click(); });
+    await act(async () => { q("inf-deploys-ci")!.click(); });
+    await settle(() => !!q("inf-ci-vendor-github_actions") && !!q("inf-ci-runs")?.textContent?.includes("acme/invoice"), "ci");
+    expect(q("inf-ci-api")?.textContent).toBe("API reachable");
+    await act(async () => { q("inf-ci-generate")!.click(); });
+    await settle(() => (q("inf-ci-yaml") as HTMLTextAreaElement).value.includes("jobs:"), "generated");
+    await act(async () => { q("inf-ci-validate")!.click(); });
+    await settle(() => !!q("inf-ci-verdict")?.textContent?.includes("Valid"), "validated");
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="inf-ci-sheet"] .ag-act-close')!.click(); });
+
+    await act(async () => { q("inf-deploys-more")!.click(); });
+    await act(async () => { q("inf-deploys-secrets")!.click(); });
+    expect(q("inf-secrets-sheet")).not.toBeNull();
   });
 });
 
@@ -377,7 +410,7 @@ describe("a deployment view follows the record", () => {
   }
 
   it("approves through the decisions API with the record's decision, then follows it to healthy", async () => {
-    installFetch({ reads: [
+    installFetch({ held: true, reads: [
       deployment({ status: "running", steps: [{ name: "fetch", status: "succeeded" }, { name: "install", status: "running" }],
                    log_tail: "Step 3/9: building api" }),
       deployment({ status: "healthy", open_url: "https://boss.example.com",
@@ -396,6 +429,7 @@ describe("a deployment view follows the record", () => {
     expect(buttons()).not.toContain("Approve");
     expect(buttons()).not.toContain("Roll back");
 
+    nextRead(); // and then it is healthy
     await settle(() => host.querySelector('[data-testid="stack-deployment"]')?.getAttribute("data-status") === "healthy", "healthy");
     const open = host.querySelector('[data-testid="stack-open"]') as HTMLAnchorElement;
     expect(open.getAttribute("href")).toBe("https://boss.example.com");

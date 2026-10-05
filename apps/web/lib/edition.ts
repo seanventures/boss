@@ -112,8 +112,10 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // deep link.
   "discovery",
   "meetings",
-  "delivery",   // labelled "Infra" in the nav — the id and the label differ
-  "monitoring",
+  // Where it runs and whether it is alive (infra-observability spec §4.1). The old ids
+  // `delivery` and `monitoring` redirect to these two (app/legacy-areas.ts).
+  "infra",
+  "observability",
 
   // How work moves through the factory. A self-hosted operator who cannot choose or see the
   // path their work takes is running the product blind, so this is not a paid feature either.

@@ -5,6 +5,7 @@ import {
   sessionCookieName, validSession,
 } from "./lib/console-session";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
+import { resolveLegacyArea } from "./app/legacy-areas";
 
 /**
  * Lift a server action's press into a request header.
@@ -74,12 +75,34 @@ export async function middleware(request: NextRequest) {
   return passThrough(request);
 }
 
+/**
+ * A link to a retired area is rewritten by an HTTP redirect, before anything renders.
+ *
+ * page.tsx's redirect() runs after the shell has streamed, so the browser followed it as a
+ * client navigation and dropped the URL's fragment: `?area=delivery#hardware-manager` (the old
+ * "Where apps install" anchor) landed on Infra › Fleet with no `#hardware-manager` left to open
+ * This computer (P-I-07). A real 307 keeps the fragment (RFC 7231 §7.1.2). Relative Location, so a
+ * console behind a proxy redirects to its own public host. Document loads only: an RSC fetch or
+ * a server action is the client's own navigation, which the shell rewrites itself.
+ */
+function legacyRedirect(request: NextRequest): NextResponse | null {
+  if (request.method !== "GET" || request.nextUrl.pathname !== "/") return null;
+  if (request.headers.get("rsc") || request.headers.get("next-action")) return null;
+  const legacy = resolveLegacyArea(request.nextUrl.searchParams);
+  if (!legacy) return null;
+  return new NextResponse(null, {
+    status: 307, headers: { Location: `/?${legacy}`, "Cache-Control": "no-store" },
+  });
+}
+
 /** A request that may reach the console: still never a cross-site write. */
 async function passThrough(request: NextRequest) {
   if (!sameOriginMutation(request)) {
     return NextResponse.json({ error: "Cross-origin console mutation denied." },
       { status: 403, headers: { "Cache-Control": "no-store" } });
   }
+  const moved = legacyRedirect(request);
+  if (moved) return moved;
   const intentHeaders = await pressIntentHeaders(request);
   const response = intentHeaders
     ? NextResponse.next({ request: { headers: intentHeaders } })

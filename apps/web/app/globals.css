@@ -3,7 +3,7 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* ============================================================
+/* =====================================================
    BOSS Executive Console — Dark "impressive startup" theme
    Aligned to the Kaappu design system: near-black base,
    indigo -> violet -> pink gradient, glass, glow, orbs.
@@ -8688,6 +8688,21 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .email-setup-grid input { min-width: 0; }
 .email-setup.compact { margin-top: 6px; }
 
+/* ── Data-viz categorical slots (Observability › Models bands; dataviz reference palette) ──
+   Fixed order, never cycled; a sixth group folds into Other (--viz-other). Validated with the
+   dataviz validator: dark against --surface #101A30 (all checks pass; worst adjacent CVD ΔE 8.4)
+   and light against #fcfcfb (CVD 9.1; three slots under 3:1, relieved by the table that shares
+   the colour key and `View as table`). The console is dark; the light steps are ready for a
+   light theme. Charts read these tokens, never a hex. */
+:root {
+  --viz-1: #3987e5; --viz-2: #d95926; --viz-3: #199e70; --viz-4: #c98500; --viz-5: #d55181;
+  --viz-other: #5b6b8c;
+}
+:root[data-theme="light"] {
+  --viz-1: #2a78d6; --viz-2: #eb6834; --viz-3: #1baf7a; --viz-4: #eda100; --viz-5: #e87ba4;
+  --viz-other: #9a9a96;
+}
+=======
 /* A command inside the host's advice: code, with its own Copy (never literal backticks). */
 .host-advice-code { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .host-advice-code code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.85em; padding: 1px 6px;

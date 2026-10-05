@@ -85,6 +85,8 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "role.autonomy_change",
     # Approving a planned stack deployment approves its ChangeSet and queues the apply.
     "deploy_stack",
+    # Approving a planned host deployment approves its ChangeSet and queues the apply.
+    "deploy_host",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -121,7 +123,6 @@ RECORDED_ON_APPROVAL = frozenset({
     "discovery_reconciliation",
     "fix_phase_spec_and_retry",
     "github.community.triage_review",
-    "implement_governed_host_deployment",
     "investigate_regression",
     "plan_governed_changeset",
     "provide_github_token",
@@ -352,6 +353,16 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Releases the step and the workflow continues from it."),
             _action("reject", "Reject", "reject",
                     "Fails the step. The run stops there unless you retry it."),
+            _delegate(),
+        ]
+    if _action_of(decision) in ("deploy_host", "deploy_stack"):
+        # A DEPLOY SAYS WHAT IT DOES: the approval ships to a host, under its ChangeSet.
+        return [
+            _action("approve", "Approve deploy", "approve",
+                    "BOSS deploys it to the host, checks its health, and rolls back if the "
+                    "check fails."),
+            _action("reject", "Reject", "reject",
+                    "Nothing is deployed and the host is not contacted."),
             _delegate(),
         ]
     if kind == "pull_request":

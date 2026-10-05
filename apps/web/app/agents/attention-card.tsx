@@ -26,6 +26,7 @@ import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { sendRunAnswer, type RunAction } from "../delivery-workflows-ui";
 import { actOnSystemFindingAction } from "../system-health-actions";
+import { actOnInfraAttentionAction } from "../infra/infra-attention-actions";
 import type { AttentionAction, AttentionAnswer, AttentionItem } from "../../lib/agents-live-board";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFace } from "./agent-face";
@@ -41,12 +42,18 @@ const KIND_WORD: Record<string, string> = {
 
 /** The word for what kind of thing this is: `Gate`, `Decision`, `Deploy`, `Pull request`,
  *  `Refusal`, `Setup`. A plain decision is not a gate (walk D16). */
-export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind">): string {
+export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind"> & { infraKind?: string }): string {
   if (item.kind === "readiness") return "Setup";
   if (item.kind === "failed_step") return "Failed";
   if (item.kind === "gate_override") return "Checks";
   if (item.kind === "budget_refused") return "Budget";
   if (item.kind === "system_health") return "System";
+  if (item.kind === "infra") {
+    // What the card is about, not which screen raised it: on Observability an app that is down
+    // is a health card, on Infra a failed deploy is a deploy card.
+    return ({ app_down: "Health", deploy_failed: "Deploy", host_unreachable: "Machine" } as Record<string, string>)[
+      item.infraKind ?? ""] ?? "Infra";
+  }
   return KIND_WORD[item.decisionKind ?? ""] ?? "Decision";
 }
 
@@ -104,6 +111,14 @@ function openTarget(target: string) {
   if (/^https?:/i.test(target)) { window.open(target, "_blank", "noopener"); return; }
   const area = new URLSearchParams(target.replace(/^\?/, "")).get("area");
   if (area) navigate({ area, view: null, role: null });
+}
+
+/** An infra item's home (`?area=infra&view=deploys&deploy=…`) as a console patch: every param
+ *  it names, and the other drawers closed. */
+export function infraOpenPatch(open: string): Record<string, string | null> {
+  const patch: Record<string, string | null> = { view: null, role: null, host: null, target: null, deploy: null, preview: null, app: null };
+  new URLSearchParams(open.replace(/^[^?]*\?/, "")).forEach((v, k) => { patch[k] = v; });
+  return patch;
 }
 
 export function AttentionCard({ item, projectId, actor, density = "card", focusKey, enter, still, onDone, onRefresh, orgId, dim }: AttentionCardProps) {
@@ -262,6 +277,34 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     }
   }
 
+  async function chooseInfra(a: AttentionAnswer) {
+    if (busy || !a.enabled) return;
+    setBusy(a.key);
+    setError(""); setErrorTip("");
+    const form = new FormData();
+    form.set("id", item.id);
+    form.set("option", a.key);
+    form.set("actor", actor);
+    form.set("project_id", projectId);
+    try {
+      const r = await callAction(actOnInfraAttentionAction)(form);
+      if (r.ok) {
+        if (r.open) navigate(infraOpenPatch(r.open));
+        setDone(r.result || a.label);
+        showToast("success", r.result || a.label);
+        notifyChanged("infra");
+        onRefresh?.();
+      } else {
+        setError("Couldn't do that"); setErrorTip(r.error ?? "");
+        onRefresh?.();
+      }
+    } catch (e) {
+      setError("Couldn't do that"); setErrorTip(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function press(a: AttentionAction) {
     if (a.action === "reject") setConfirming(a); else void decide(a);
   }
@@ -392,7 +435,21 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
             <span data-user-text>{a.label}</span>
           </button>
         )) : null}
-        {item.kind === "system_health" && done ? (
+        {item.kind === "infra" && !done ? item.answers.filter((a) => a.key !== "open").map((a) => (
+          <button key={a.key} type="button" className="ag-btn" data-testid={`ag-att-infra-${a.key}`}
+                  disabled={!a.enabled || busy !== null} title={a.reason || undefined}
+                  aria-busy={busy === a.key || undefined} onClick={() => void chooseInfra(a)}>
+            {busy === a.key ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
+            <span data-user-text>{a.label}</span>
+          </button>
+        )) : null}
+        {item.kind === "infra" && item.open ? (
+          <a className="ag-btn" data-testid="ag-att-infra-open" href={linkTo(infraOpenPatch(item.open), orgId)}
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(infraOpenPatch(item.open!)); } }}>
+            Open
+          </a>
+        ) : null}
+        {(item.kind === "system_health" || item.kind === "infra") && done ? (
           <span className="ag-att-done" role="status" data-testid="ag-att-done" data-user-text>{done}</span>
         ) : null}
         {item.kind === "readiness" ? (

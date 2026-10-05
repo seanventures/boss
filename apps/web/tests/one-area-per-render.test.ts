@@ -46,12 +46,13 @@ describe("only the requested area is rendered", () => {
   });
 
   it("every area section passes through it", () => {
-    // 59 sections at the top level of the frame (the budget sections became one Govern
-    // section). A section added without a gate is a section every other area pays for; the
-    // floor only proves the pattern still finds the sections.
+    // Sections at the top level of the frame (68 before Infra, System Configuration and
+    // Observability became two client areas, infra-observability spec §6.6, and the budget
+    // sections became one Govern section). A section added without a gate is a section every
+    // other area pays for; the floor only proves the pattern still finds the sections.
     const sections = PAGE_RAW.split("\n").filter((l) => /^        <section\b/.test(l)).length;
     const gates = (PAGE_RAW.match(/\{shows\("/g) ?? []).length;
-    expect(sections).toBeGreaterThan(50);
+    expect(sections).toBeGreaterThan(40);
     expect(gates).toBeGreaterThanOrEqual(sections);
   });
 

@@ -47,6 +47,7 @@ import {
   Database,
   Gauge,
   GitBranch,
+  HardDrives,
   ShieldCheck,
   House,
   List,
@@ -104,13 +105,13 @@ type AreaDef = {
   parent?: NavSectionId;
 };
 
-type NavSectionId = "observability";
+// No section holds an area today: Observability is one area (infra-observability spec §4.1) and
+// the dead `observability` section that no area used is gone. The machinery stays for the next.
+type NavSectionId = string;
 
 /** Sections that hold areas. A section is not itself an area: it has no screen, and clicking it
  *  opens or closes the group rather than navigating somewhere that does not exist. */
-const NAV_SECTIONS: Record<NavSectionId, { label: string; icon: Icon; group: AreaDef["group"] }> = {
-  observability: { label: "Observability", icon: Heartbeat, group: "Run" },
-};
+const NAV_SECTIONS: Record<NavSectionId, { label: string; icon: Icon; group: AreaDef["group"] }> = {};
 
 const ICONS = {
   agent: Robot,
@@ -125,7 +126,8 @@ const ICONS = {
   pipeline: ArrowsClockwise,
   comms: ChatsCircle,
   github: GitBranch,
-  infra: Database,
+  infra: HardDrives,
+  observability: Heartbeat,
   ops: Pulse,
   assurance: ShieldCheck,
   org: Users,
@@ -194,11 +196,13 @@ const AREAS: AreaDef[] = [
   { id: "delivery_workflows", label: "Workflows", sub: "Build, run and watch workflows", group: "Run", icon: ICONS.delivery_workflows },
   { id: "workforce", label: "Agent Studio", sub: "Who does the work", group: "Run", icon: ICONS.org },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
-  { id: "delivery", label: "Infra", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
-  // TOP LEVEL, NOT NESTED. Grouping these under an "Observability" heading put the two screens
-  // an operator opens most often one click deeper than everything else, behind a heading that
-  // was not itself a destination. Monitoring IS the observability screen, so it takes the name.
-  { id: "monitoring", label: "Observability", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring },
+  // TWO SCREENS, TWO QUESTIONS (infra-observability spec §0, §4.1). Infra is where it runs and
+  // how it got there; Observability is whether it is alive, how fast, and what thinking costs.
+  // The ids say so now: `delivery` (labelled Infra) and `monitoring` (labelled Observability)
+  // redirect here (app/legacy-areas.ts), and System Configuration's contents moved into Infra ›
+  // Cloud, Repo and models, Skills & MCP and Observability, so it has no rail entry.
+  { id: "infra", label: "Infra", sub: "Where your apps run and how they got there", group: "Run", icon: ICONS.infra },
+  { id: "observability", label: "Observability", sub: "Is it alive, how fast, what thinking costs", group: "Run", icon: ICONS.observability },
   { id: "activity", label: "Activity log", sub: "Every line BOSS wrote, searchable", group: "Run", icon: ICONS.activity },
   { id: "discovery", label: "Research", sub: "Cited dossiers — a verdict, outcomes and the evidence", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Panels", sub: "Agents debate it — a decision or a PRD", group: "Run", icon: ICONS.meetings },
@@ -219,7 +223,7 @@ const AREAS: AreaDef[] = [
   // it reads as something you do once and never open again, so the page an operator needs when
   // a model runs out of credit or a repo token expires was filed under a name that says
   // "already done". It carries a badge while anything on it is unfinished or failing.
-  { id: "setup", label: "Repo and models", sub: "Where BOSS writes code and what it thinks with", group: "Settings", icon: ICONS.infra },
+  { id: "setup", label: "Repo and models", sub: "Where BOSS writes code and what it thinks with", group: "Settings", icon: Database },
   // WHAT YOUR CREW CAN DO (skills-mcp spec §5.1): the Kit of abilities, who holds them, and every
   // skill and MCP server. Second in Settings: a repo and a model come first.
   { id: "skills", label: "Skills & MCP", sub: "What your crew can do", group: "Settings", icon: ICONS.capabilities },
@@ -230,7 +234,6 @@ const AREAS: AreaDef[] = [
   { id: "assurance", label: "Assurance", sub: "Ground truth, proof gates, and security scanning", group: "Settings", icon: ICONS.assurance },
   { id: "org", label: "Access and packs", sub: "Actors, permissions, packs, and modules", group: "Settings", icon: ICONS.org },
   { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
-  { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, worker scaling, and FinOps", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
@@ -356,7 +359,7 @@ export default function ConsoleShell({
   // does not already know they are there, which for a newly-added area is indistinguishable
   // from not having shipped it.
   const [openSections, setOpenSections] = useState<Set<NavSectionId>>(
-    () => new Set<NavSectionId>(["observability"]),
+    () => new Set<NavSectionId>(),
   );
   const toggleSection = (id: NavSectionId) =>
     setOpenSections((current) => {

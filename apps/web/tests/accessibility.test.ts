@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -55,15 +55,27 @@ describe("executive console accessibility baseline", () => {
       resolve(__dirname, "../app/page.tsx"),
       "utf8",
     );
-    const providerConfigurationSource = readFileSync(
-      resolve(__dirname, "../app/provider-configuration-ui.tsx"),
-      "utf8",
-    );
-
     expect(findVisibleControlsWithoutAccessibleName(pageSource)).toEqual([]);
-    expect(
-      findVisibleControlsWithoutAccessibleName(providerConfigurationSource),
-    ).toEqual([]);
+  });
+
+  // This scanned provider-configuration-ui.tsx, the cloud-account workspace. It retired into
+  // Infra (Cloud, Deploys, Fleet sheets) and Observability (Sources, Add tools), so the same rule
+  // now reads every file of both screens — every form those workspaces had now lives there.
+  const SCREEN_DIRS = ["../app/infra", "../app/observability"];
+  const screenFiles = SCREEN_DIRS.flatMap((d) =>
+    readdirSync(resolve(__dirname, d))
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => `${d.slice(3)}/${f}`),
+  );
+
+  it("reads every Infra and Observability screen file", () => {
+    expect(screenFiles).toContain("app/infra/cloud-accounts.tsx");
+    expect(screenFiles).toContain("app/observability/sources.tsx");
+  });
+
+  it.each(screenFiles)("%s gives every visible form control an accessible name", (file) => {
+    const source = readFileSync(resolve(__dirname, "..", file), "utf8");
+    expect(findVisibleControlsWithoutAccessibleName(source)).toEqual([]);
   });
 
   it("provides keyboard skip navigation and labelled landmarks", () => {
@@ -93,10 +105,10 @@ describe("executive console accessibility baseline", () => {
     // <main> content region.
     expect(shellSource).toContain("<nav");
     expect(shellSource).toContain('aria-label="Console areas"');
-    expect(shellSource).toContain("System Configuration");
-    expect(shellSource).toContain(
-      "Connections, providers, resources, worker scaling, and FinOps",
-    );
+    // System Configuration (connections, providers, resources, worker scaling, FinOps) has no
+    // rail entry any more: its contents moved into Infra and Observability, which the rail names.
+    expect(shellSource).toContain('{ id: "infra", label: "Infra"');
+    expect(shellSource).toContain('{ id: "observability", label: "Observability"');
     expect(shellSource).toContain("<main");
     expect(shellSource).toMatch(/<main[^>]*aria-label=/);
 
