@@ -332,6 +332,30 @@ prune_remote() {
   say "disk: $(printf '%s\n' "$out" | grep -E '^disk (before|after)' | tr '\n' ' ')"
 }
 
+# UPDATES RESTARTED BUILDS (stability spec C6): every recreate killed the API mid-turn and the
+# build redid clone and install, four times in an hour on boss-1. The API now drains on SIGTERM
+# (builds resume after), and when the operator chose "Hold updates while builds run" on the
+# system-health card this waits for running builds first — up to BOSS_DEPLOY_WAIT_MINUTES
+# (default 30), then updates anyway. The key is read on the host, never shipped.
+wait_for_builds() {
+  local limit="${BOSS_DEPLOY_WAIT_MINUTES:-30}" waited=0 state
+  while :; do
+    state="$(rshq "k=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+      [ -n \"\$k\" ] && curl -s -m 10 -H \"Authorization: Bearer \$k\" 'http://127.0.0.1:$API_PORT/v1/system/deploy-readiness'" || true)"
+    case "$state" in
+      *'"safe_to_deploy":false'*|*'"safe_to_deploy": false'*) ;;
+      *) return 0 ;;
+    esac
+    if [[ "$waited" -ge "$limit" ]]; then
+      warn "builds still running after ${limit} min; updating anyway (they resume afterwards)"
+      return 0
+    fi
+    [[ "$waited" -eq 0 ]] && say "builds are running and updates are held until they finish — waiting (up to ${limit} min)"
+    sleep 60
+    waited=$((waited + 1))
+  done
+}
+
 cmd_prune() {
   head_ "Free BOSS's disk on $HOST"
   preflight
@@ -393,6 +417,8 @@ cmd_update() {
 
   rsh "cd '$DIR' && mv '$next_env' .env && chmod 600 .env" \
     || die "could not promote the worker credentials on $HOST; old containers still run and previous source remains at $DIR.prev"
+
+  wait_for_builds
 
   # BUILD FIRST, THEN SWAP. A failed build above leaves the running install untouched, which is
   # the whole reason these are two steps rather than `up -d --build`.

@@ -379,6 +379,19 @@ def was_cancelled(owner_id: Optional[str]) -> bool:
     return bool(owner_id) and str(owner_id) in _CANCELLED
 
 
+_DRAINING = threading.Event()
+
+
+def begin_drain() -> None:
+    """The process is shutting down for a deploy: no new workload spawns, and the executors
+    that see their stage die hand their job back instead of failing it."""
+    _DRAINING.set()
+
+
+def draining() -> bool:
+    return _DRAINING.is_set()
+
+
 class OwnerCancelled(RuntimeError):
     """A spawn refused because its owner was stopped. Without this a stage's retry loop would
     start a fresh agent a second after Stop killed the last one."""
@@ -544,6 +557,8 @@ class OwnedPopen(subprocess.Popen):
             stopped = next((i for i in self.owner.ids() if i in _CANCELLED), None)
             if stopped:
                 raise OwnerCancelled(f"{stopped} was stopped; not starting {_argv0(args)}")
+            if _DRAINING.is_set() and self.owner.kind in WORKLOAD_KINDS:
+                raise OwnerCancelled(f"shutting down for a deploy; not starting {_argv0(args)}")
         # The creator's pid rides in the token: the orphan sweep can tell a tree whose creator
         # is gone (an orphan) from one another live process in this container still owns.
         self.token = f"own_{os.getpid()}_{uuid.uuid4().hex}"
@@ -572,6 +587,7 @@ class OwnedPopen(subprocess.Popen):
                 _LEDGER.release(self.ledger_id, "spawn_failed")
             raise
         self.pgid = self.pid
+        _make_first_to_go(self.pid, self.owner)
         with contextlib.suppress(Exception):
             if self.ledger_id:
                 _LEDGER.set_handle(self.ledger_id, pgid=self.pgid, token=self.token)
@@ -632,6 +648,25 @@ class OwnedPopen(subprocess.Popen):
         if rc is not None:
             self._leader_exited()
         return rc
+
+
+#: Owner kinds whose processes are WORKLOAD — builds, seats, previews, sandboxes — as opposed
+#: to the control plane itself.
+WORKLOAD_KINDS = frozenset({"code_run", "review_seat", "preview", "sandbox", "deploy"})
+
+
+def _make_first_to_go(pid: int, owner: Optional[Owner]) -> None:
+    """Under memory pressure the kernel kills the process with the highest badness. A build
+    raised to +500 (inherited by everything it starts) goes before uvicorn and long before
+    Postgres (-900), instead of whichever process happened to be largest — often the API
+    (stability spec §4b.1). Raising one's own child needs no privilege; Linux only."""
+    if owner is None or owner.kind not in WORKLOAD_KINDS or not _proc_available():
+        return
+    from .workload_profiles import workload_oom_score_adj
+
+    with contextlib.suppress(OSError):
+        with open(f"/proc/{pid}/oom_score_adj", "w", encoding="ascii") as fh:
+            fh.write(str(workload_oom_score_adj()))
 
 
 def _argv0(args: Any) -> str:
@@ -759,7 +794,7 @@ __all__ = [
     "DEFAULT_GRACE_SECONDS", "Owner", "OwnedPopen", "ProcInfo", "TOKEN_ENV", "current_owner",
     "ledger", "live", "live_owner_ids", "members", "owner_scope", "pids_with_token", "popen",
     "processes", "run", "set_ledger", "terminate_all", "terminate_owner", "terminate_tree",
-    "was_cancelled", "zombie_count", "OwnerCancelled", "orphan_trees", "poll_all",
+    "was_cancelled", "zombie_count", "OwnerCancelled", "begin_drain", "draining", "orphan_trees", "poll_all",
     "sweep_orphans", "token_census",
 ]
 
