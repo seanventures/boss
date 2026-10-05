@@ -4,15 +4,20 @@
  * THE FLOOR (command-center spec §4.7): the landing page's hero. Your agents in a ring of teams,
  * You at the centre.
  *
- *   a working agent      its real face (AgFace), lit, in its real ring state
- *   an idle agent        a dim star (a 10px dot): thirty idle agents read as a quiet ring
- *   a hand-off           a curve between two nodes, from an act started in the last hour
- *   a NEW hand-off       a comet along that curve, once, the poll after the ledger records it
- *   a decision for you   an amber dashed thread from the agent that asked, to You
+ *   every agent          its real face (AgFace), sized and lit by what it is doing (floorKinds):
+ *                        working and waiting-on-you largest, on a run next, worked in the last
+ *                        six hours brighter than at rest, never used small and dim
+ *   a hand-off           a soft arc woven through the centre, weighted by volume, faded by age
+ *                        (agent_acts started in the last six hours, known hands only)
+ *   a NEW hand-off       a comet along that arc, once, the poll after the ledger records it
+ *   a run in flight      its chain of faces joined in order (missions[].hops), ending at You in
+ *                        amber when it waits on you: a busy day shows its runs even when every
+ *                        agent has finished its step and presence says idle
+ *   a decision for you   an amber dashed thread from the agent that asked, to You (count badge)
  *   stopped work         a red solid thread
  *
- * EVERY MARK IS REAL. Edges are `flows[]` (agent_acts, last 60 min, known hands only); threads are
- * `attention[]` items that name their agent; faces are `agents[]` presence. Nothing here moves
+ * EVERY MARK IS REAL. Edges are `flows[]`, chains `missions[]`, threads `attention[]` items that
+ * name their agent, faces `agents[]` presence and `since`. Nothing here moves
  * unless one of those changed between two polls, and nothing moves at all when the console is
  * Paused, the tab is hidden, BOSS is unreachable or the host is struggling (`motion="none"`).
  *
@@ -23,11 +28,13 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { openAgent } from "../../lib/agent-world";
+import type { AvatarState } from "../../lib/agent-world-types";
 import type { BoardAgent } from "../../lib/agents-live-board";
 import {
-  arcPath, edgeCurve, edgeWidth, floorLayout, freshFlows, quadAt, recencyOpacity, COMET_CAP,
-  type FloorLayout,
+  arcPath, chainsOf, edgeCurve, edgeWidth, floorCounts, floorKinds, floorLayout, freshFlows, quadAt,
+  recencyOpacity, COMET_CAP, FLOW_HOURS, KIND_SIZE, type FloorKind, type FloorLayout,
 } from "../../lib/command-center-graphics";
+import { openTalk } from "../../lib/converse-doors";
 import { boardOf, type CommandCenterView, type Flow, type MotionMode } from "../../lib/command-center-view";
 import { AgFace } from "../agents/agent-face";
 import { ANIMATED_STATES, RING_BUDGET, ago, linkTo, navigate, plainClick, runPatch, useNow, type Band } from "../agents/live-util";
@@ -51,15 +58,17 @@ export type FloorProps = {
 };
 
 /** The stage before it is measured (and on the server): the 1440px layout's box. */
-export const STAGE = { width: 720, height: 440 };
+export const STAGE = { width: 720, height: 500 };
 /** Where BOSS sits, above You. */
-const BOSS_DY = -62;
+const BOSS_DY = -64;
 const COMET_MS = 600;
 const COMET_GAP_MS = 150;
 const COMET_FLYING_MAX = 4;
 const ARRIVE_MS = 400;
 const LIT_MS = 1000;
 const STOPPED = new Set(["failed_step", "gate_override", "budget_refused"]);
+/** Past this many agents every face shrinks a step. */
+const SMALL_FACES = 48;
 
 type Pt = { x: number; y: number };
 type Edge = { key: string; flow: Flow; a: Pt; b: Pt; c: Pt; d: string; fromName: string; toName: string };
@@ -93,21 +102,29 @@ export function edgeTip(fromName: string, toName: string, n: number, lastAt: str
   return `${fromName} → ${toName} · ${n} hand-off${n === 1 ? "" : "s"}${age ? ` · ${age} ago` : ""}`;
 }
 
-/** The footer's words (§4.7): who is working, or how long the floor has been still. */
+/** The footer's words (§4.7): what the team is doing, counted from floorKinds — so a busy day
+ *  whose runs all wait on you says `5 on runs`, not `0 working · 32 idle`. Each part is its own
+ *  short run of words. */
 export function floorFooter(view: CommandCenterView, nowMs: number | null):
-    { text: string; tip?: string } {
-  const idle = view.agents.filter(isIdle);
-  const busy = view.agents.length - idle.length;
-  if (busy === 0 && view.flows.length === 0) {
+    { text: string; parts: string[]; tip?: string } {
+  const now = nowMs ?? Date.parse(view.generatedAt);
+  const kinds = floorKinds(view, now);
+  const c = floorCounts(kinds);
+  if (c.working === 0 && c.onRuns === 0 && view.flows.length === 0) {
     if (!view.today.everRan) {
-      return { text: "Your team is ready", tip: `${view.agents.length} agents, idle until work starts` };
+      const text = "Your team is ready";
+      return { text, parts: [text], tip: `${view.agents.length} agents, idle until work starts` };
     }
+    const idle = view.agents.filter(isIdle);
     const last = idle.map((a) => Date.parse(a.since ?? "")).filter(Number.isFinite);
     const latest = last.length ? new Date(Math.max(...last)).toISOString() : view.today.lastWorkAt;
-    const age = ago(latest, nowMs ?? Date.parse(view.generatedAt));
-    return { text: age ? `All idle · last work ${age}` : "All idle" };
+    const age = ago(latest, now);
+    const text = age ? `All idle · last work ${age}` : "All idle";
+    return { text, parts: age ? ["All idle", `last work ${age}`] : ["All idle"] };
   }
-  return { text: `${busy} working · ${idle.length} idle` };
+  const parts = [`${c.working} working`, ...(c.onRuns ? [`${c.onRuns} on runs`] : []), `${c.idle} idle`];
+  return { text: parts.join(" · "), parts,
+           tip: c.onRuns ? "On runs: their run is in flight or waiting on you" : undefined };
 }
 
 export function Floor({ view, projectId, motion, motionWhy, band, orgId, onYou, onThread }: FloorProps) {
@@ -146,7 +163,11 @@ export function Floor({ view, projectId, motion, motionWhy, band, orgId, onYou, 
       )}
       {!list && !compact ? <FloorList view={view} visible={false} onThread={onThread} /> : null}
       <footer className="cc-floor-foot">
-        <span className="cc-floor-count" title={footer.tip} data-testid="cc-floor-footer">{footer.text}</span>
+        <span className="cc-floor-count" title={footer.tip} data-testid="cc-floor-footer">
+          {footer.parts.map((p, i) => (
+            <React.Fragment key={p}>{i ? <span className="cc-sep" aria-hidden> · </span> : null}<span>{p}</span></React.Fragment>
+          ))}
+        </span>
         <span className="ag-spacer" />
         {compact ? null : (
           <button type="button" className="cc-floor-toggle" aria-pressed={list} data-testid="cc-floor-list-toggle"
@@ -162,7 +183,9 @@ export function Floor({ view, projectId, motion, motionWhy, band, orgId, onYou, 
 /** The same facts as the ring, as a list: who is working, and every thread to You. Hidden
  *  (for screen readers) beside the map; shown instead of it when `List` is pressed. */
 function FloorList({ view, visible, onThread }: { view: CommandCenterView; visible: boolean; onThread: (id: string) => void }) {
-  const working = view.agents.filter((a) => !isIdle(a));
+  // Who is on the floor right now: working, waiting on you, stuck, or on a run in flight.
+  const kinds = floorKinds(view, Date.parse(view.generatedAt));
+  const working = view.agents.filter((a) => ["working", "waiting", "stuck", "on_run"].includes(kinds.get(a.roleKey) ?? ""));
   const names = new Map(view.agents.map((a) => [a.roleKey, a]));
   const threads = view.attention.filter((a) => a.roleKey && (a.kind === "approval" || STOPPED.has(a.kind)));
   return (
@@ -171,8 +194,9 @@ function FloorList({ view, visible, onThread }: { view: CommandCenterView; visib
       {working.map((a) => (
         <li key={a.roleKey}>
           <button type="button" className="cc-floor-li" onClick={() => openAgent(a.roleKey)} title={a.line || undefined}>
-            <AgFace roleKey={a.roleKey} size={20} state={faceStateOf(a)} decorative />
+            <AgFace roleKey={a.roleKey} size={20} state={faceOf(a, kinds.get(a.roleKey) ?? "never")} decorative />
             <span>{short(a, a.roleKey)}</span>
+            <span className="cc-floor-li-k">{KIND_WORD[kinds.get(a.roleKey) ?? "never"]}</span>
           </button>
         </li>
       ))}
@@ -195,6 +219,30 @@ function FloorList({ view, visible, onThread }: { view: CommandCenterView; visib
 
 type Comet = { key: string; to: string; a: Pt; c: Pt; b: Pt; t0: number; el: SVGGElement | null };
 
+/** The face each kind shows: the real state where presence has one, otherwise the kind's. */
+function faceOf(a: BoardAgent, kind: FloorKind): AvatarState {
+  if (kind === "waiting") return "needs_you";
+  if (kind === "stuck") return "stuck";
+  if (kind === "working") return faceStateOf(a);
+  return "idle";
+}
+
+const KIND_WORD: Record<FloorKind, string> = {
+  working: "Working", waiting: "Waiting on you", stuck: "Stuck", on_run: "On a run",
+  recent: "Worked recently", rested: "Resting", never: "No work yet",
+};
+
+/** A chain's path through its faces: each step bows toward the centre, the last may run to You. */
+function chainPath(pts: Pt[], centre: Pt): string {
+  if (!pts.length) return "";
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  for (let i = 1; i < pts.length; i += 1) {
+    const { c } = edgeCurve(pts[i - 1], pts[i], centre, 0.32);
+    d += ` Q ${c.x} ${c.y} ${pts[i].x.toFixed(1)} ${pts[i].y.toFixed(1)}`;
+  }
+  return d;
+}
+
 function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
   view: CommandCenterView; motion: MotionMode; motionWhy?: string | null; nowMs: number;
   onYou: () => void; onThread: (id: string) => void;
@@ -209,6 +257,11 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
   const bossAt = { x: layout.cx, y: layout.cy + BOSS_DY };
   const at = useMemo(() => new Map(layout.nodes.map((n) => [n.roleKey, n])), [layout]);
   const byKey = useMemo(() => new Map(view.agents.map((a) => [a.roleKey, a])), [view.agents]);
+  const kinds = useMemo(() => floorKinds(view, nowMs), [view, nowMs]);
+  const total = view.agents.length;
+  // Past 48 agents every face shrinks a step, so the ring keeps its gaps.
+  const scale = total > SMALL_FACES ? 0.8 : 1;
+  const sizeOf = (k: FloorKind) => Math.round(KIND_SIZE[k] * scale);
 
   // Edges: a hand-off is drawn only between two nodes that are on the map — an unknown hander
   // is never drawn to a guessed node (the server drops it too).
@@ -217,12 +270,14 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
     const from = f.fromKind === "person" ? centre : f.fromKind === "boss" ? bossAt : at.get(f.from);
     const to = at.get(f.to);
     if (!from || !to) continue;
-    const { d, c } = edgeCurve(from, to, centre);
+    const { d, c } = edgeCurve(from, to, centre, 0.62);
     edges.push({ key: `${f.fromKind}:${f.from}>${f.to}`, flow: f, a: from, b: to, c, d,
                  fromName: f.fromKind === "person" ? "You" : f.fromKind === "boss" ? "BOSS" : short(byKey.get(f.from), f.from),
                  toName: short(byKey.get(f.to), f.to) });
   }
   const handoffs = view.flows.reduce((n, f) => n + f.n, 0);
+  const chains = chainsOf(view.missions, new Set(at.keys())).slice(0, 16);
+  const current = new Set(chains.map((c) => c.keys[c.keys.length - 1]));
 
   // Threads to You: one per agent and tone, with a count past one.
   const threads: Thread[] = [];
@@ -260,11 +315,11 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
   }, [view.attention, motion]); // eslint-disable-line react-hooks/exhaustive-deps -- per poll
   const woke = useMemo(() => {
     const prev = seenAwake.current;
-    const awake = view.agents.filter((a) => !isIdle(a)).map((a) => a.roleKey);
+    const awake = [...kinds].filter(([, k]) => k === "working" || k === "waiting").map(([r]) => r);
     const out = prev === null || motion === "none" ? new Set<string>() : new Set(awake.filter((k) => !prev.has(k)));
     seenAwake.current = new Set(awake);
     return out;
-  }, [view.agents, motion]); // eslint-disable-line react-hooks/exhaustive-deps -- per poll
+  }, [view.agents, view.missions, motion]); // eslint-disable-line react-hooks/exhaustive-deps -- per poll
 
   // ── Comets: one loop, alive only while one flies.
   const cometLayer = useRef<SVGGElement>(null);
@@ -283,8 +338,7 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
     const light = (motion === "full" ? fresh.slice(COMET_CAP) : fresh).map(keyOf);
     if (light.length) {
       setLit((s) => new Set([...s, ...light]));
-      const t = window.setTimeout(() => setLit((s) => new Set([...s].filter((k) => !light.includes(k)))), LIT_MS);
-      void t;
+      window.setTimeout(() => setLit((s) => new Set([...s].filter((k) => !light.includes(k)))), LIT_MS);
     }
     for (const f of flyable) {
       const e = edgesRef.current.find((x) => x.key === keyOf(f));
@@ -328,10 +382,10 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
       g.setAttribute("class", "cc-comet");
       g.setAttribute("data-comet", "");
       const tail = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      tail.setAttribute("r", "9");
+      tail.setAttribute("r", "11");
       tail.setAttribute("class", "cc-comet-glow");
       const head = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      head.setAttribute("r", "3");
+      head.setAttribute("r", "3.5");
       head.setAttribute("class", "cc-comet-head");
       g.append(tail, head);
       g.setAttribute("transform", `translate(${c.a.x} ${c.a.y})`);
@@ -356,10 +410,25 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
     en.raf = en.flying.length || en.queue.length ? requestAnimationFrame(frame) : null;
   }
 
+  // ── The mini card: hover, focus or tap a face. Esc or leaving closes it.
+  const [card, setCard] = useState<{ key: string; pinned: boolean } | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  const show = (key: string, pinned = false) => {
+    if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; }
+    setCard((c) => (c && c.key === key && c.pinned && !pinned ? c : { key, pinned }));
+  };
+  const hide = (soon = true) => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current);
+    if (!soon) { setCard(null); return; }
+    closeTimer.current = window.setTimeout(() => setCard((c) => (c?.pinned ? c : null)), 160);
+  };
+  useEffect(() => () => { if (closeTimer.current) window.clearTimeout(closeTimer.current); }, []);
+
   // ── Keyboard: arrows go round the ring, Enter opens the Passport, Esc leaves.
   const order = layout.nodes.map((n) => n.roleKey);
   const [active, setActive] = useState(0);
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape" && card) { setCard(null); return; }
     const key = (e.target as HTMLElement).dataset?.role;
     const i = key ? order.indexOf(key) : -1;
     if (i < 0) return;
@@ -381,8 +450,8 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
   const stillOf = new Map<string, boolean>();
   for (const n of layout.nodes) {
     const a = byKey.get(n.roleKey);
-    if (!a || isIdle(a)) continue;
-    const moves = ANIMATED_STATES.has(faceStateOf(a));
+    if (!a) continue;
+    const moves = ANIMATED_STATES.has(faceOf(a, kinds.get(n.roleKey) ?? "never"));
     stillOf.set(n.roleKey, !moves || budget <= 0);
     if (moves && budget > 0) budget -= 1;
   }
@@ -390,11 +459,14 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
   const youTone = view.counts.stopped > 0 ? "red" : view.counts.needsYou > 0 ? "amber" : "calm";
   const youTip = motion === "none" && motionWhy ? motionWhy
     : view.counts.needsYou > 0 ? `${view.counts.needsYou} ${view.counts.needsYou === 1 ? "needs" : "need"} you` : "You";
-  const label = `Team map: ${view.counts.working} working, ${view.counts.needsYou} waiting on you, `
-    + `${handoffs} hand-off${handoffs === 1 ? "" : "s"} in the last hour`;
-  const total = view.agents.length;
+  const counts = floorCounts(kinds);
+  const label = `Team map: ${counts.working} working, ${counts.onRuns} on runs, `
+    + `${view.counts.needsYou} waiting on you, `
+    + `${handoffs} hand-off${handoffs === 1 ? "" : "s"} in the last ${FLOW_HOURS} hours`;
   const fold = total > 120;
   const { width: W, height: H, radius: R } = layout;
+  const cardAgent = card ? byKey.get(card.key) : undefined;
+  const cardNode = card ? at.get(card.key) : undefined;
 
   return (
     <div className="cc-floor-stage" ref={stageRef} data-testid="cc-floor-stage" data-motion={motion}
@@ -402,56 +474,72 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
       <svg className="cc-floor-svg" role="img" aria-label={label} width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
         <defs>
           <radialGradient id="cc-floor-core" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.22" />
-            <stop offset="55%" stopColor="var(--accent)" stopOpacity="0.06" />
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.30" />
+            <stop offset="45%" stopColor="var(--accent)" stopOpacity="0.10" />
             <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="cc-floor-you" cx="38%" cy="32%" r="75%">
-            <stop offset="0%" stopColor="var(--accent-text)" stopOpacity="0.95" />
-            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.95" />
+            <stop offset="0%" stopColor="var(--accent-text)" stopOpacity="1" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="1" />
           </radialGradient>
           <radialGradient id="cc-floor-glow" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="var(--accent-text)" stopOpacity="0.55" />
             <stop offset="100%" stopColor="var(--accent-text)" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="cc-floor-glow-amber" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="var(--amber)" stopOpacity="0.55" />
+            <stop offset="0%" stopColor="var(--amber)" stopOpacity="0.6" />
             <stop offset="100%" stopColor="var(--amber)" stopOpacity="0" />
           </radialGradient>
+          <radialGradient id="cc-floor-glow-red" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="var(--red)" stopOpacity="0.55" />
+            <stop offset="100%" stopColor="var(--red)" stopOpacity="0" />
+          </radialGradient>
+          <pattern id="cc-floor-grid" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.8" className="cc-grid-dot" />
+          </pattern>
         </defs>
-        {/* Depth: a soft core and two faint orbits. Static: they carry no state. */}
-        <circle cx={layout.cx} cy={layout.cy} r={R * 0.95} fill="url(#cc-floor-core)" />
-        <circle className="cc-orbit" cx={layout.cx} cy={layout.cy} r={R * 0.55} />
-        <circle className="cc-orbit cc-orbit-outer" cx={layout.cx} cy={layout.cy} r={R + 30} />
+        {/* Depth: a dotted floor, a soft core, three faint orbits and the team spokes. Static. */}
+        <rect x={0} y={0} width={W} height={H} fill="url(#cc-floor-grid)" className="cc-grid" />
+        <circle cx={layout.cx} cy={layout.cy} r={R * 1.15} fill="url(#cc-floor-core)" />
+        <circle className="cc-orbit" cx={layout.cx} cy={layout.cy} r={R * 0.34} />
+        <circle className="cc-orbit" cx={layout.cx} cy={layout.cy} r={R * 0.68} />
+        <circle className="cc-orbit cc-orbit-outer" cx={layout.cx} cy={layout.cy} r={R + 40} />
+        {layout.arcs.map((arc) => (
+          <line key={`s-${arc.team}`} className="cc-spoke" x1={layout.cx + R * 0.36 * Math.cos(arc.start)}
+                y1={layout.cy + R * 0.36 * Math.sin(arc.start)} x2={layout.cx + (R + 40) * Math.cos(arc.start)}
+                y2={layout.cy + (R + 40) * Math.sin(arc.start)} />
+        ))}
 
         {layout.arcs.map((arc) => {
           const mid = (arc.start + arc.end) / 2;
-          const lr = R + 44;
+          const lr = R + 50;
           const lx = layout.cx + lr * Math.cos(mid), ly = layout.cy + lr * Math.sin(mid);
-          const anchor = Math.abs(Math.cos(mid)) < 0.25 ? "middle" : Math.cos(mid) > 0 ? "start" : "end";
+          const anchor = Math.abs(Math.cos(mid)) < 0.3 ? "middle" : Math.cos(mid) > 0 ? "start" : "end";
           const hue = teamHue(arc.team);
           const team = view.teams.find((t) => t.key === arc.team);
+          const busy = view.agents.filter((a) => a.team === arc.team && kinds.get(a.roleKey) === "working").length;
           return (
             <g key={arc.team} className="cc-arc" data-team={arc.team} style={{ ["--team-hue" as string]: hue }}>
               <path className="cc-arc-band" d={arcPath(layout.cx, layout.cy, R, arc.start, arc.end)} />
-              <path className="cc-arc-line" d={arcPath(layout.cx, layout.cy, R, arc.start, arc.end)} />
+              <path className="cc-arc-line" d={arcPath(layout.cx, layout.cy, R + 26, arc.start, arc.end)} />
               <text className="cc-arc-label" x={lx} y={ly} textAnchor={anchor} dominantBaseline="middle">
-                {arc.label.toUpperCase()}
+                {arc.label}
+                {busy > 0 ? <tspan className="cc-arc-busy">{` · ${busy}`}</tspan> : null}
               </text>
               {fold && arc.idleFolded ? (
-                <text className="cc-arc-fold" x={lx} y={ly + 13} textAnchor={anchor}>{`+${arc.idleFolded} idle`}</text>
+                <text className="cc-arc-fold" x={lx} y={ly + 14} textAnchor={anchor}>{`+${arc.idleFolded} idle`}</text>
               ) : null}
-              {team?.tip ? <title>{team.tip}</title> : null}
+              <title>{busy > 0 ? `${team?.tip || arc.label} · ${busy} working` : (team?.tip || arc.label)}</title>
             </g>
           );
         })}
 
         {/* Glow sprites under the lit faces: pre-rendered gradients, only their opacity changes. */}
         {layout.nodes.map((n) => {
-          const a = byKey.get(n.roleKey);
-          if (!a || isIdle(a)) return null;
-          return <circle key={`g-${n.roleKey}`} className="cc-node-glow" cx={n.x} cy={n.y} r={30}
-                         fill={a.state === "needs_you" ? "url(#cc-floor-glow-amber)" : "url(#cc-floor-glow)"} />;
+          const k = kinds.get(n.roleKey);
+          if (k !== "working" && k !== "waiting" && k !== "stuck") return null;
+          const fill = k === "waiting" ? "url(#cc-floor-glow-amber)" : k === "stuck" ? "url(#cc-floor-glow-red)" : "url(#cc-floor-glow)";
+          return <circle key={`g-${n.roleKey}`} className="cc-node-glow" cx={n.x} cy={n.y} r={38} fill={fill} />;
         })}
 
         {edges.map((e) => {
@@ -463,7 +551,24 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
                onClick={() => { if (e.flow.runId) navigate(runPatch(e.flow.runId)); }}>
               <title>{tip}</title>
               <path className="cc-edge-hit" d={e.d} />
+              <path className="cc-edge-soft" d={e.d} strokeWidth={edgeWidth(e.flow.n) * 3.2} />
               <path className="cc-edge-line" d={e.d} pathLength={1} strokeWidth={edgeWidth(e.flow.n)} />
+            </g>
+          );
+        })}
+
+        {/* Runs in flight: each one's chain of faces, joined in order; to You when it waits on you. */}
+        {chains.map((c) => {
+          const pts = c.keys.map((k) => at.get(k)!).map((n) => ({ x: n.x, y: n.y }));
+          const d = chainPath(c.toYou ? [...pts, centre] : pts, centre);
+          return (
+            <g key={c.runId} className="cc-chain" data-tone={c.tone} data-testid="cc-floor-chain" data-run-id={c.runId} data-tip={c.tip}
+               onClick={() => navigate(runPatch(c.runId))}>
+              <title>{c.tip}</title>
+              <path className="cc-chain-hit" d={d} />
+              <path className="cc-chain-glow" d={d} />
+              <path className="cc-chain-line" d={d} />
+              {pts.map((p, i) => <circle key={i} className="cc-chain-dot" cx={p.x} cy={p.y} r={2.5} />)}
             </g>
           );
         })}
@@ -480,7 +585,7 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
               <line className="cc-thread-line" x1={t.a.x} y1={t.a.y} x2={layout.cx} y2={layout.cy} />
               {t.ids.length > 1 ? (
                 <g className="cc-thread-badge" transform={`translate(${mx} ${my})`}>
-                  <circle r={8} />
+                  <circle r={9} />
                   <text textAnchor="middle" dominantBaseline="central">{t.ids.length}</text>
                 </g>
               ) : null}
@@ -493,11 +598,11 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
         {/* BOSS: where `handed_by_kind = boss` edges start. */}
         <g className="cc-boss" transform={`translate(${bossAt.x} ${bossAt.y})`} data-tip="BOSS">
           <title>BOSS</title>
-          <path d="M0 -7 L7 0 L0 7 L-7 0 Z" />
+          <path d="M0 -8 L8 0 L0 8 L-8 0 Z" />
         </g>
       </svg>
 
-      {/* The HTML layer: real faces at the map's positions, and You. */}
+      {/* The HTML layer: every agent's real face at the map's position, and You. */}
       <div className="cc-floor-nodes">
         <button type="button" className="cc-you" data-tone={youTone} data-testid="cc-floor-you"
                 style={{ left: layout.cx, top: layout.cy }} title={youTip} aria-label={youTip}
@@ -506,36 +611,84 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
             <circle cx="24" cy="24" r="22" fill="url(#cc-floor-you)" />
           </svg>
           <span className="cc-you-word">You</span>
+          {view.counts.needsYou > 0 ? (
+            <span className="cc-you-count" data-testid="cc-floor-you-count" aria-hidden>{view.counts.needsYou}</span>
+          ) : null}
         </button>
         {layout.nodes.map((n, i) => {
           const a = byKey.get(n.roleKey);
           if (!a) return null;
-          const idle = isIdle(a);
-          if (idle && fold) return null;
+          const kind = kinds.get(n.roleKey) ?? "never";
+          if (fold && (kind === "rested" || kind === "never")) return null;
           const name = short(a, a.roleKey);
-          const tip = idle
-            ? `${name} · idle${a.since ? ` · last work ${ago(a.since, nowMs)}` : ""}`
-            : `${name} · ${a.line || faceStateOf(a)}`;
+          const age = a.since ? ago(a.since, nowMs) : "";
+          const tip = `${name} · ${kind === "working" && a.line ? a.line : KIND_WORD[kind]}${
+            kind !== "working" && age ? ` · last work ${age}` : ""}`;
           const side = Math.cos(n.angle);
+          const px = sizeOf(kind);
+          const named = kind === "working" || kind === "waiting" || kind === "stuck" || kind === "on_run";
           return (
-            <button key={n.roleKey} type="button" data-role={n.roleKey} data-testid={idle ? "cc-floor-dot" : "cc-floor-face"}
-                    className={idle ? "cc-node cc-node-idle" : "cc-node cc-node-live"} data-state={a.state}
+            <button key={n.roleKey} type="button" data-role={n.roleKey} data-testid="cc-floor-face"
+                    className="cc-node" data-kind={kind} data-state={a.state}
+                    data-current={current.has(n.roleKey) || undefined}
                     data-still={stillOf.get(n.roleKey) || undefined} data-woke={woke.has(n.roleKey) || undefined}
                     tabIndex={i === active ? 0 : -1} title={tip} aria-label={tip}
                     ref={(el) => { if (el) nodeEls.current.set(n.roleKey, el); else nodeEls.current.delete(n.roleKey); }}
-                    style={{ left: n.x, top: n.y, ["--team-hue" as string]: teamHue(n.team),
-                             ["--dot" as string]: `${layout.idleR * 2}px` }}
-                    onClick={() => openAgent(n.roleKey)}>
-              {idle ? <span className="cc-dot" aria-hidden /> : (
-                <>
-                  <AgFace roleKey={n.roleKey} size={32} state={faceStateOf(a)} decorative />
-                  {a.state === "needs_you" ? <span className="cc-node-pause" aria-hidden>❙❙</span> : null}
-                  <span className="cc-node-name" data-side={side > 0.2 ? "right" : side < -0.2 ? "left" : "mid"}>{name}</span>
-                </>
-              )}
+                    style={{ left: n.x, top: n.y, width: px + 6, height: px + 6, ["--team-hue" as string]: teamHue(n.team) }}
+                    onMouseEnter={() => show(n.roleKey)} onMouseLeave={() => hide()}
+                    onFocus={() => show(n.roleKey)} onBlur={() => hide()}
+                    onClick={() => show(n.roleKey, true)}>
+              <AgFace roleKey={n.roleKey} size={px} state={faceOf(a, kind)} decorative />
+              {kind === "waiting" ? <span className="cc-node-pause" aria-hidden>❙❙</span> : null}
+              {named ? (
+                <span className="cc-node-name" data-side={side > 0.2 ? "right" : side < -0.2 ? "left" : "mid"}>{name}</span>
+              ) : null}
             </button>
           );
         })}
+        {cardAgent && cardNode ? (
+          <MiniCard agent={cardAgent} kind={kinds.get(cardAgent.roleKey) ?? "never"} nowMs={nowMs}
+                    x={cardNode.x} y={cardNode.y} stage={{ width: W, height: H }}
+                    onEnter={() => show(cardAgent.roleKey, card?.pinned)} onLeave={() => hide()}
+                    onClose={() => hide(false)} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Hover, focus or tap a face: who it is, what it is doing (or last did), and two ways in. */
+function MiniCard({ agent, kind, nowMs, x, y, stage, onEnter, onLeave, onClose }: {
+  agent: BoardAgent; kind: FloorKind; nowMs: number; x: number; y: number;
+  stage: { width: number; height: number }; onEnter: () => void; onLeave: () => void; onClose: () => void;
+}) {
+  const CARD_W = 228, CARD_H = 132;
+  const right = x < stage.width / 2;
+  const left = Math.max(8, Math.min(stage.width - CARD_W - 8, right ? x + 30 : x - 30 - CARD_W));
+  const top = Math.max(8, Math.min(stage.height - CARD_H - 8, y - CARD_H / 2));
+  const age = agent.since ? ago(agent.since, nowMs) : "";
+  const doing = kind === "working" && agent.line ? agent.line : KIND_WORD[kind];
+  return (
+    <div className="cc-mini" role="dialog" aria-label={agent.callsign || agent.name} data-testid="cc-floor-card"
+         style={{ left, top, width: CARD_W }} onMouseEnter={onEnter} onMouseLeave={onLeave}
+         onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+      <div className="cc-mini-head">
+        <AgFace roleKey={agent.roleKey} size={40} state={faceOf(agent, kind)} decorative />
+        <span className="cc-mini-who">
+          <b>{agent.callsign || agent.name}</b>
+          {agent.callsign ? <span className="cc-mini-role">{agent.name}</span> : null}
+        </span>
+      </div>
+      <div className="cc-mini-line" data-kind={kind}>
+        <span className="cc-mini-now" data-user-text title={agent.line || undefined}>{doing}</span>
+        {age && kind !== "working" ? <span className="cc-mini-age">{`last work ${age}`}</span> : null}
+      </div>
+      <div className="cc-mini-acts">
+        <button type="button" className="ag-btn ag-btn-primary" data-testid="cc-floor-card-talk"
+                title={`Talk with ${agent.callsign || agent.name}`}
+                onClick={() => { onClose(); openTalk(agent.roleKey); }}>Talk</button>
+        <button type="button" className="ag-link" data-testid="cc-floor-card-passport"
+                onClick={() => { onClose(); openAgent(agent.roleKey); }}>Passport ↗</button>
       </div>
     </div>
   );
