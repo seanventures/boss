@@ -3540,8 +3540,11 @@ select.input:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 360px;
+  max-width: min(360px, calc(100vw - 32px));
 }
+
+/* A long token (an id, a key) wraps inside the toast instead of running off the screen. */
+.toast > * { min-width: 0; overflow-wrap: anywhere; }
 
 .toast {
   display: flex;

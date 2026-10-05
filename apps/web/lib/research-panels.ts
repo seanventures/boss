@@ -45,7 +45,9 @@ export function humanBrief(raw: string | null | undefined, apiBrief?: string | n
 /** What a card or a hero can carry: the first sentence of a brief, without "Build a" and
  *  without the "Who it is for" block a workflow brief continues with. A question keeps its "?". */
 export function shortTitle(raw: string | null | undefined, max = 80): string {
-  let t = humanBrief(String(raw ?? "").replace(/^PRD meeting:\s*/i, "")).replace(/\s+/g, " ").trim();
+  // The kind is the eyebrow's to say: "Go/No-Go:", "Standup:" are not part of a title.
+  let t = humanBrief(String(raw ?? "").replace(/^(?:PRD meeting|Go\/No-Go|Go \/ no-go|Stand-?up|Simulated meeting):\s*/i, ""))
+    .replace(/\s+/g, " ").trim();
   t = t.replace(/^(?:build|make|create)\s+(?:a|an|the)\s+/i, "");
   t = t.split(/\s(?:Who it is for|What it does|What it must do|Who it's for)\b/i)[0];
   const sentence = /^(.*?[.!?])(?:\s|$)/.exec(t);
@@ -261,7 +263,8 @@ function buildStage(m: Pick<Meeting, "build" | "pull_request_url" | "prd_state">
   if (b === "running" || b === "queued") return "now";
   if (b === "completed" || b === "succeeded") return "done";
   if (b === "failed" || b === "blocked") return "stopped";
-  return m.pull_request_url || m.prd_state === "approved" || m.prd_state === "published" ? "now" : "todo";
+  // Not started: the same "not yet" the workflow's step view shows, never "now".
+  return "todo";
 }
 
 export function panelStages(m: Pick<Meeting, "status" | "phase" | "pull_request_url" | "prd_markdown"
@@ -273,6 +276,8 @@ export function panelStages(m: Pick<Meeting, "status" | "phase" | "pull_request_
   return stages.map((s, i) => {
     let state: StageState | "skipped" = "todo";
     if (s.key === "build" && done) state = buildStage(m, build);
+    // The PRD is done only when there is one; a panel that ended without writing it skipped it.
+    else if (s.key === "prd" && done) state = m.prd_markdown ? "done" : "skipped";
     else if (done) state = "done";
     else if (m.status === "failed") state = at < 0 ? (i === 0 ? "stopped" : "todo") : i < at ? "done" : i === at ? "stopped" : "todo";
     else if (live) state = at < 0 ? (i === 0 ? "now" : "todo") : i < at ? "done" : i === at ? "now" : "todo";
@@ -333,28 +338,85 @@ export function decisionHref(search: string, decisionId?: string | null): string
   return consoleHref(search, { area: "decisions", ...(decisionId ? { decision: decisionId } : {}) });
 }
 
+export type PrdParts = { summary: string[]; goals: string[]; nonGoals: string[]; requirements: string[] };
+type Role = keyof PrdParts | "other" | "stop";
+
+/** A heading's ROLE, by its words — "Goals & Non-Goals" opens goals, "Non-Goals (out of scope)"
+ *  is never a goal, "Non-Functional Requirements" is never a requirement to build. */
+function roleOf(heading: string): Role {
+  const h = heading.toLowerCase().replace(/[‐‑‒–—]/g, "-").replace(/^[\d.\s]+/, "").replace(/[*_`#:]/g, "").trim();
+  if (/^non-?\s*goals?\b|out of scope|^deferred/.test(h)) return "nonGoals";
+  if (/\bgoals?\b/.test(h)) return "goals";
+  // A section of its own, even as a sub-heading: never part of the goals or what to build.
+  if (/non-?\s*functional|risk|user|persona|solution|architecture|acceptance|rollout|question|metric|timeline|wirefram|sketch/.test(h)) return "stop";
+  if (/^(?:functional\s+)?requirements?\b|^functional\b|must-?ship|^scope\b/.test(h)) return "requirements";
+  if (/^(summary|overview|executive summary|tl;?dr)\b/.test(h)) return "summary";
+  return "other";
+}
+
+const plain = (t: string) => t.replace(/[*_`>]/g, "").replace(/\s+/g, " ").trim();
+const isId = (t: string) => /^[A-Z]{1,4}[-‐‑]?\d+(?:\.\d+)?$/.test(plain(t));
+
+/**
+ * A PRD's parts by the ROLE of each section, reading bullets, numbered lines and TABLES (row by
+ * row, the column that names the thing). goldeneye's PRDs put Goals in a table and Non-Goals in
+ * bullets under a bold line, so a keyword match on "goal" handed the composer the Non-Goals.
+ */
+export function prdParts(md: string | null | undefined): PrdParts {
+  const out: PrdParts = { summary: [], goals: [], nonGoals: [], requirements: [] };
+  let role: Role = "other";
+  let level = 0;
+  let table: { col: number } | null = null;
+  for (const raw of String(md ?? "").split("\n")) {
+    const line = raw.trim();
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    // A bold line standing alone is a heading too: "**Non‑Goals** (out of scope for MVP)".
+    const bold = /^(?:\*\*|__)([^*_]+?)(?:\*\*|__)\s*(?:\([^)]*\))?\s*:?\s*$/.exec(line);
+    if (h || (bold && !["other", "stop"].includes(roleOf(bold[1])))) {
+      const named = roleOf(h ? h[2] : bold![1]);
+      const lv = h ? h[1].length : level + 1;
+      // A sub-heading inside a role keeps it unless it names a section of its own.
+      if (named === "stop") { role = "other"; level = lv; }
+      else if (named !== "other" || !h || lv <= level || role === "other") { role = named; level = lv; }
+      table = null;
+      continue;
+    }
+    if (!line || /^-{3,}$/.test(line)) { table = null; continue; }
+    if (role === "other") continue;
+    if (line.startsWith("|")) {
+      const cells = line.replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+      if (!table) {
+        // The header row: which column names the thing.
+        const named = cells.findIndex((c) => /goal|requirement|feature|capability|item|what/i.test(c));
+        table = { col: named >= 0 ? named : 0 };
+        continue;
+      }
+      let cell = cells[table.col] ?? "";
+      if (isId(cell)) cell = cells.find((c, i) => i !== table!.col && c && !isId(c)) ?? cell;
+      const text = plain(cell);
+      if (text) out[role].push(text);
+      continue;
+    }
+    table = null;
+    const item = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(line);
+    const text = plain(item ? item[1] : line);
+    if (!text) continue;
+    if (role === "summary" || item) out[role].push(text);
+  }
+  return out;
+}
+
 /**
  * The brief "Build it" hands the composer from a panel: the AGREED PRD — its title, summary,
- * goals and requirements, and a link to read all of it — never the raw directive.
+ * goals and what it must do, and a link to read all of it — never the raw directive, and never
+ * a Non-Goal as a goal.
  */
 export function prdDigest(md: string | null | undefined, title: string, prUrl?: string | null): string {
-  const sections = new Map<string, string[]>();
-  let current = "";
-  for (const raw of String(md ?? "").split("\n")) {
-    const h = /^#{2,3}\s+(.*)$/.exec(raw);
-    if (h) { current = h[1].replace(/[*_`#]/g, "").replace(/^\d+[.)]\s*/, "").trim().toLowerCase(); continue; }
-    if (!current) continue;
-    const line = raw.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/[*_`>]/g, "").replace(/\s+/g, " ").trim();
-    if (!line || line.startsWith("|") || /^-{3,}$/.test(line)) continue;
-    sections.set(current, [...(sections.get(current) ?? []), line]);
-  }
-  const pick = (re: RegExp, n: number) => {
-    for (const [k, v] of sections) if (re.test(k)) return v.slice(0, n);
-    return [];
-  };
-  const summary = pick(/summary|overview|tl;?dr/, 2).join(" ");
-  const goals = pick(/goal/, 4);
-  const reqs = pick(/requirement|must|scope|mvp|solution/, 6);
+  const p = prdParts(md);
+  const summary = p.summary.slice(0, 2).join(" ");
+  const goals = p.goals.slice(0, 4);
+  const reqs = p.requirements.slice(0, 6);
   return [
     title,
     summary,
@@ -473,4 +535,15 @@ export function readComposerPrefill(search: string): { title?: string; directive
 export function researchRunParam(discovery?: string | null, run?: string | null): string | undefined {
   if (discovery) return discovery;
   return run && !/^(mrun|mtg|crun|wfr)_/.test(run) ? run : undefined;
+}
+
+/** One dissent record in words. A named seat leads; the panel's count and the quorum note speak
+ *  for themselves; a machine id ("r0", "a1") is never shown as a voter. */
+export function dissentLine(r: { role?: string | null; reason?: string | null }): string {
+  const role = String(r.role ?? "").trim();
+  const reason = String(r.reason ?? "").trim();
+  if (!role || ["panel", "quorum", "participant"].includes(role) || /^[a-z]\d+$/i.test(role)) {
+    return reason ? reason[0].toUpperCase() + reason.slice(1) : "";
+  }
+  return `${role}: ${reason}`;
 }

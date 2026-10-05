@@ -82,3 +82,17 @@ def test_a_go_no_go_says_its_verdict_and_keeps_its_dissent():
     assert got["action_items"][0]["title"] == "Record residual risk"
     assert typed_result("go_no_go", {"synthesis": "Verdict: NO-GO."})["verdict"] == "no_go"
     assert typed_result("prd_panel", state)["verdict"] is None
+
+
+# ── A recorded vote names no machine voter ─────────────────────────────────────────────────
+
+def test_a_counted_vote_has_no_invented_voters():
+    """The console records counts, not voters. Inventing ids for them put "r0: voted to reject"
+    on the meeting's record; unnamed votes are one record in words."""
+    from boss_engine.services.meeting_consensus import tally_votes
+
+    got = tally_votes([{"vote": "approve"}, {"vote": "reject"}, {"vote": "reject"}], eligible_count=3)
+    assert got["dissent_records"] == [{"role": "panel", "position": "reject", "reason": "2 seats voted to reject"}]
+    named = tally_votes([{"voter": "QA / Test", "vote": "reject", "reason": "Flake open"}], eligible_count=4)
+    assert named["dissent_records"][0] == {"role": "QA / Test", "position": "reject", "reason": "Flake open"}
+    assert named["dissent_records"][1]["reason"].startswith("Only 1 of the 2 votes needed were cast")

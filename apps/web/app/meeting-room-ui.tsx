@@ -21,7 +21,7 @@
  * humanBrief (lib/research-panels) — the scaffolding BOSS wraps around a panel's prompt is
  * shown only as the readable "Context BOSS added".
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useActionState, useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Meeting, MeetingRole } from "../lib/meeting-rooms";
 import { Markdown } from "./markdown";
@@ -33,6 +33,8 @@ import {
   deleteMeetingRoleAction,
   runSimulatedMeetingAction,
   loadMeetingEvidenceAction,
+  tallyVotesAction,
+  sweepStalledMeetingsAction,
 } from "./actions";
 import { MeetingConsensusCard } from "./phase3-ui";
 import { SubmitButton } from "./submit-button";
@@ -46,7 +48,7 @@ import { agentIdentity, seatAvatar } from "../lib/agent-identity";
 import { useIdentityVersion } from "../lib/use-agent-identities";
 import { fetchMeetingForTask, fetchMeetingPage, fetchMeetingRoom, sayLoadError } from "../lib/meeting-room-detail";
 import {
-  ago, briefLine, composerHref, decisionHref, humanBrief, kindOf, meetingFromUrl, meetingLive,
+  ago, briefLine, composerHref, decisionHref, dissentLine, humanBrief, voteSentence, kindOf, meetingFromUrl, meetingLive,
   meetingOutcome, orderedSeats, panelDoing, panelStages, prdDigest, prdSections, repoOf, roundNames,
   seatGist, seatsOf, shortTitle, took, usd, SEAT_ORDER, type StageState,
 } from "../lib/research-panels";
@@ -274,7 +276,15 @@ function buildHref(meeting: Meeting, search: string): string {
 /** Convene the same panel again: a failed one's way forward. */
 function ConveneAgain({ meeting, projectId }: { meeting: Meeting; projectId: string }) {
   return (
-    <ActionForm action={conveneMeetingAction} successMessage="Convened again — the new panel is in session.">
+    <ActionForm action={conveneMeetingAction} successMessage="Convened again — the new panel is in session."
+                onResult={(r) => {
+                  // Into the new panel (or the one already in session on this ask).
+                  const id = r.ok ? (r.data?.run_id as string | undefined) : undefined;
+                  if (id && id !== meeting.id) {
+                    pushParams({ meeting: id, run: null, task: null });
+                    window.dispatchEvent(new PopStateEvent("popstate"));
+                  }
+                }}>
       <input type="hidden" name="project_id" value={projectId} />
       <input type="hidden" name="directive" value={meeting.directive ?? briefOf(meeting)} />
       <input type="hidden" name="meeting_type" value={kindOf(meeting)} />
@@ -397,7 +407,8 @@ function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; proje
   const brief = briefOf(meeting);
   return (
     <details className="rp-more" data-testid="meeting-drawer">
-      <summary>Record the vote · what was asked · linked task</summary>
+      <summary>{[meeting.can_vote === false ? "The vote" : "Record the vote", "What was asked",
+                 meeting.task_id ? "Linked task" : "", "Status"].filter(Boolean).join(" · ")}</summary>
       <div className="rp-drawer">
         {meeting.can_vote === false ? (
           <div className="rp-card" data-testid="meeting-vote-closed">
@@ -611,7 +622,7 @@ function ConveneHero({ projectId, roles, tasks, meetings }: {
                   <select name="task_id" defaultValue="" aria-label="Attach to a task" data-testid="meeting-task-select">
                     <option value="">Attach to: new task</option>
                     {tasks.map((t) => (
-                      <option key={t.id} value={t.id}>{t.title.replace(/^(CEO command|PRD meeting):\s*/, "").slice(0, 70)}</option>
+                      <option key={t.id} value={t.id}>{shortTitle(t.title.replace(/^CEO command:\s*/, ""), 70)}</option>
                     ))}
                   </select>
                   <span className="rp-chip-caret" aria-hidden>⌄</span>
@@ -735,12 +746,80 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
   );
 }
 
+/* ---- Maintenance: one menu, two jobs ------------------------------------------- */
+
+/**
+ * Maintenance ⌄ → [Record a vote] [Sweep stalled panels]. One level, each job named once —
+ * not the consensus card's own folds three deep. The vote lists only panels with minutes to vote
+ * against, and says why when there are none; results read as sentences.
+ */
+function PanelsMaintenance({ actor, meetings }: { actor: string; meetings: Meeting[] }) {
+  const [job, setJob] = useState<"vote" | "sweep" | null>(null);
+  const [vote, voteAction, votePending] = useActionState(callAction(tallyVotesAction), null);
+  const [sweep, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction), null);
+  const votable = meetings.filter((m) => m.can_vote !== false && !meetingLive(m));
+  const data = (r: typeof vote) => ((r?.data ?? {}) as Record<string, unknown>);
+  return (
+    <details className="rp-menu" data-testid="panels-maintenance">
+      <summary className="rp-link">Maintenance ⌄</summary>
+      <div className="rp-menu-body">
+        <div className="rp-c-row">
+          <button type="button" className={`rp-btn sm${job === "vote" ? " primary" : ""}`} aria-pressed={job === "vote"}
+                  data-testid="maint-vote" onClick={() => setJob("vote")}>Record a vote</button>
+          <button type="button" className={`rp-btn sm${job === "sweep" ? " primary" : ""}`} aria-pressed={job === "sweep"}
+                  data-testid="maint-sweep" onClick={() => setJob("sweep")}>Sweep stalled panels</button>
+        </div>
+        {job === "vote" ? (
+          votable.length ? (
+            <form action={voteAction} className="rp-maint-form" data-testid="maint-vote-form">
+              <input type="hidden" name="actor" value={actor} />
+              <label className="rp-maint-field">Panel
+                <select name="meeting_id" required defaultValue="" className="rp-ctx">
+                  <option value="" disabled>Pick a finished panel…</option>
+                  {votable.map((m) => <option key={m.id} value={m.id}>{titleOf(m)}</option>)}
+                </select>
+              </label>
+              <div className="rp-c-row">
+                {(["approve", "reject", "abstain"] as const).map((k) => (
+                  <label key={k} className="rp-maint-field">{k === "approve" ? "For" : k === "reject" ? "Against" : "Abstain"}
+                    <input name={k} type="number" min={0} required className="rp-ctx" />
+                  </label>
+                ))}
+              </div>
+              <SubmitButton type="submit" className="rp-btn primary sm" disabled={votePending}>Record the vote</SubmitButton>
+              {vote ? (vote.ok
+                ? <p className="rp-okmsg" data-testid="maint-vote-result">{voteSentence(data(vote))}
+                    {((data(vote).dissent_records as Array<{ role?: string; reason?: string }> | undefined) ?? [])
+                      .map((r, i) => <span key={i} style={{ display: "block" }}>{dissentLine(r)}</span>)}</p>
+                : <p className="rp-err" role="alert">{vote.error}</p>) : null}
+            </form>
+          ) : <p className="rp-sub" data-testid="maint-vote-none">No panel has finished with minutes yet, so there is nothing to vote on.</p>
+        ) : null}
+        {job === "sweep" ? (
+          <form action={sweepAction} className="rp-maint-form" data-testid="maint-sweep-form">
+            <input type="hidden" name="actor" value={actor} />
+            <p className="rp-sub">A panel whose worker died mid-round stays “in session” until it is swept. Sweeping marks it
+              stopped, so it can be convened again.</p>
+            <SubmitButton type="submit" className="rp-btn primary sm" disabled={sweepPending}>Sweep stalled panels</SubmitButton>
+            {sweep ? (sweep.ok
+              ? <p className="rp-okmsg" data-testid="maint-sweep-result">{Number(data(sweep).swept)
+                  ? `Swept ${Number(data(sweep).swept)} stalled panel${Number(data(sweep).swept) === 1 ? "" : "s"}.`
+                  : "Nothing was stalled."}</p>
+              : <p className="rp-err" role="alert">{sweep.error}</p>) : null}
+          </form>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 /* ---- Meetings home (landing + routing) ---------------------------------------- */
 
 export function MeetingsHome({
   projectId,
   actor,
   meetings,
+  totals = null,
   roles,
   tasks,
   apiReachable,
@@ -749,6 +828,8 @@ export function MeetingsHome({
   orgId?: string;
   actor: string;
   meetings: Meeting[];
+  /** The server's totals over EVERY panel; the loaded pages only when an older API sends none. */
+  totals?: { panels: number; prds: number } | null;
   roles: MeetingRole[];
   tasks: { id: string; title: string }[];
   apiReachable: boolean;
@@ -802,7 +883,8 @@ export function MeetingsHome({
     );
   }
 
-  const prds = all.filter((m) => m.pull_request_url).length;
+  const panels = totals?.panels ?? all.length;
+  const prds = totals?.prds ?? all.filter((m) => m.pull_request_url).length;
   const seatsAvailable = roles.filter((r) => r.enabled !== false).length;
   return (
     <div className="rp" data-testid="panels-home">
@@ -811,18 +893,10 @@ export function MeetingsHome({
         <div className="rp-sec-h">
           <h3>Recent panels</h3>
           <span className="rp-sub" data-testid="panels-counts">
-            {all.length} panel{all.length === 1 ? "" : "s"} · {prds} became PRDs · {seatsAvailable} role-agent{seatsAvailable === 1 ? "" : "s"}
+            {panels} panel{panels === 1 ? "" : "s"} · {prds} became PRDs · {seatsAvailable} role-agent{seatsAvailable === 1 ? "" : "s"}
           </span>
           <span className="rp-spacer" />
-          <details className="rp-menu" data-testid="panels-maintenance">
-            <summary className="rp-link">Maintenance</summary>
-            <div className="rp-menu-body">
-              {/* Voting on any panel, and the stall sweep, without a deep link into the room. */}
-              <MeetingConsensusCard projectId={projectId} actor={actor}
-                                    meetings={all.filter((m) => m.can_vote !== false)
-                                      .map((m) => ({ id: m.id, title: titleOf(m) }))} />
-            </div>
-          </details>
+          <PanelsMaintenance actor={actor} meetings={all} />
           <button type="button" className="rp-link" aria-expanded={showSeats} data-testid="meeting-manage-seats"
                   onClick={() => setShowSeats((x) => !x)}>
             {showSeats ? "Done with seats" : "Manage seats ↗"}
@@ -846,7 +920,7 @@ export function MeetingsHome({
             <div className="rp-grid">
               {all.map((m) => <PanelCard key={m.id} m={m} onOpen={() => selectMeeting(m.id)} />)}
             </div>
-            {meetings.length >= 25 && moreState !== "done" ? (
+            {(totals ? all.length < totals.panels : meetings.length >= 25) && moreState !== "done" ? (
               <div className="rp-more-row">
                 <button type="button" className="rp-btn" onClick={() => void loadMore()} disabled={moreState === "loading"}
                         data-testid="panels-show-more">

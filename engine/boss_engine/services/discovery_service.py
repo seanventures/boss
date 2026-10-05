@@ -515,6 +515,25 @@ def list_discovery_runs(connection, project_id: str, limit: int = 50, offset: in
     return [_row_to_summary(r) for r in rows]
 
 
+def discovery_totals(connection, project_id: str) -> dict:
+    """The project's TRUE totals for Research's hero and filters — every dossier, not only the
+    page the console has loaded (it shows the newest 50 and pages the rest)."""
+    r = connection.execute(
+        text(f"""SELECT count(*) AS dossiers,
+                       count(*) FILTER (WHERE d.state->'gate'->>'verdict' IN ('pursue', 'promising')
+                                        AND d.status NOT IN ('failed', 'running', 'queued')) AS promising,
+                       count(*) FILTER (WHERE d.state->'gate'->>'verdict' = 'needs_more_research'
+                                        AND d.status NOT IN ('failed', 'running', 'queued')) AS needs_more,
+                       count(*) FILTER (WHERE d.state->'gate'->>'verdict' IN ('not_promising', 'kill', 'not_worth_it')
+                                        AND d.status NOT IN ('failed', 'running', 'queued')) AS not_worth,
+                       COALESCE(sum({_json_count("d.state->'signal_findings'")}), 0) AS signals,
+                       COALESCE(sum({_json_count("d.state->'candidate_outcomes'")}), 0) AS outcomes
+                FROM discovery_runs d WHERE d.project_id = :p"""),
+        {"p": project_id},
+    ).mappings().first()
+    return {k: int(r[k] or 0) for k in ("dossiers", "promising", "needs_more", "not_worth", "signals", "outcomes")}
+
+
 def _row_to_summary(r) -> dict:
     state = r["state"]
     state = json.loads(state) if isinstance(state, str) else (state or {})

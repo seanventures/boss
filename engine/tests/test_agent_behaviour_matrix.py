@@ -1094,13 +1094,15 @@ def test_the_discovery_LIST_is_restyled_not_only_the_expanded_run():
     work went into RunDetail, which is one click away, so the page the operator opens was
     untouched — and my own check showed dx-flow absent from that page's HTML, which I explained
     away instead of following."""
+    # Restyled again (rp/research-panels, the approved Research mockup): the list is cards, each
+    # with its verdict pill, where a live run has got to, and its numbers beside a ring.
     src = pathlib.Path("apps/web/app/discoveries-ui.tsx").read_text(encoding="utf-8")
-    i = src.index("setSelected(d.id)")           # the list row, not the detail
-    row = src[max(0, i - 400):i + 2600]
-    assert "dx-row" in row, "the list row is still the old ct-card"
-    assert "dx-stage" in row, "no stage chip on the row"
-    assert "dx-mini-flow" in row, "the row does not show where the run got to"
-    assert "dx-pill" in row, "the numbers are still plain grey text"
+    i = src.index("function DossierCard")       # the list card, not the dossier
+    row = src[i:src.index("export function DiscoveriesHome")]
+    assert "rp-card-link" in row, "the list card is not the restyled card"
+    assert "<Verdict" in row, "no verdict pill on the card"
+    assert "researchStages(d)" in row, "the card does not show where a live run got to"
+    assert "rp-dnums" in row and "<Ring" in row, "the numbers are not beside a ring"
 
 
 def test_the_hover_overlay_cannot_be_clipped_by_the_scroll_container():

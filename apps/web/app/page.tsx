@@ -4537,6 +4537,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             actor={activeActorId}
             meetings={meetingRooms.items}
+            totals={meetingRooms.totals ?? null}
             roles={meetingRooms.roles}
             tasks={tasks.items.map((t) => ({ id: t.id, title: t.title }))}
             apiReachable={meetingRooms.apiReachable}
@@ -4766,6 +4767,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             projectId={activeProjectId}
             orgId={activeOrgId}
             discoveries={discoveryFeed.items}
+            totals={discoveryFeed.totals ?? null}
             apiReachable={discoveryFeed.apiReachable}
             initialDiscoveryId={requestedDiscovery}
           />

@@ -47,12 +47,15 @@ def _iso(v: Any) -> Any:
     return v.isoformat() if hasattr(v, "isoformat") else v
 
 
-def _pr_for_task(connection, tid):
+def _pr_for_task(connection, tid, since=None):
+    """The PRD's pull request — published by THIS meeting: a panel convened again on an old
+    task must not show the earlier panel's PR as its own outcome."""
     if not tid:
         return None, None
     pub = connection.execute(
         text("SELECT content FROM artifacts WHERE task_id = :t AND artifact_type = 'published_document' "
-             "ORDER BY created_at DESC LIMIT 1"), {"t": tid},
+             "AND (CAST(:since AS timestamptz) IS NULL OR created_at >= :since) "
+             "ORDER BY created_at DESC LIMIT 1"), {"t": tid, "since": since},
     ).mappings().first()
     if not pub:
         return None, None
@@ -67,13 +70,14 @@ def _task_info(connection, tid):
     return (tr["title"], tr["status"]) if tr else (None, None)
 
 
-def _build_for_task(connection, tid) -> Optional[dict]:
-    """The build the PRD fed, when one started: what "Build" means on the panel's stepper."""
+def _build_for_task(connection, tid, since=None) -> Optional[dict]:
+    """The build THIS meeting's PRD fed, when one started: what "Build" means on its stepper."""
     if not tid:
         return None
     row = connection.execute(
         text("SELECT id, status, phase, pull_request_url FROM code_task_runs WHERE task_id = :t "
-             "ORDER BY created_at DESC LIMIT 1"), {"t": tid},
+             "AND (CAST(:since AS timestamptz) IS NULL OR created_at >= :since) "
+             "ORDER BY created_at DESC LIMIT 1"), {"t": tid, "since": since},
     ).mappings().first()
     return dict(row) if row else None
 
@@ -149,7 +153,7 @@ def meeting_room_items(connection, project_id: str, *, limit: int = 25, offset: 
                 else meeting_type_of(constraints)
         except ValueError:
             mtype = meeting_type_of(constraints)
-        pr_url, pr_num = _pr_for_task(connection, r["task_id"])
+        pr_url, pr_num = _pr_for_task(connection, r["task_id"], r["created_at"])
         t_title, t_status = _task_info(connection, r["task_id"])
         research = state.get("research") or {}
         split = split_brief(r["directive"], constraints.get("brief"))
@@ -180,7 +184,7 @@ def meeting_room_items(connection, project_id: str, *, limit: int = 25, offset: 
                          state.get("round1_gists"), state.get("round2_gists")),
             "synthesis": state.get("synthesis"), "prd_markdown": state.get("prd_markdown"),
             "pull_request_url": pr_url, "pull_request_number": pr_num,
-            "build": _build_for_task(connection, r["task_id"]),
+            "build": _build_for_task(connection, r["task_id"], r["created_at"]),
             **typed_result(mtype, state),
         })
     if only_id and items:
@@ -247,3 +251,20 @@ def meeting_room_items(connection, project_id: str, *, limit: int = 25, offset: 
             **typed_result(mtype, content),
         })
     return items
+
+
+def meeting_room_totals(connection, project_id: str) -> dict:
+    """The project's TRUE totals for Panels' header — every panel, not only the loaded page."""
+    r = connection.execute(
+        text("""SELECT
+                  (SELECT count(*) FROM meeting_runs WHERE project_id = :p)
+                + (SELECT count(*) FROM meetings m WHERE m.project_id = :p
+                     AND NOT EXISTS (SELECT 1 FROM meeting_runs r WHERE r.meeting_id = m.id)
+                     AND NOT EXISTS (SELECT 1 FROM artifacts a JOIN meeting_runs r ON r.task_id = a.task_id
+                                     WHERE a.id = m.minutes_artifact_id)) AS panels,
+                  (SELECT count(*) FROM meeting_runs r WHERE r.project_id = :p AND EXISTS (
+                     SELECT 1 FROM artifacts a WHERE a.task_id = r.task_id
+                       AND a.artifact_type = 'published_document' AND a.created_at >= r.created_at)) AS prds"""),
+        {"p": project_id},
+    ).mappings().first()
+    return {"panels": int(r["panels"] or 0), "prds": int(r["prds"] or 0)}
