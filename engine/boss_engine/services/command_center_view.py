@@ -17,7 +17,7 @@ PURE COMPOSITION PLUS FIVE BOUNDED READS. Nothing here restates a rule another m
     self_observability.delivery_metrics, memoised 60s (eleven scalars that change slowly).
 
 The five reads (each bounded, each served by an index in db/schema.sql):
-  1. flows    — acts STARTED in the last 6 hours with a known hander (the Floor's edges);
+  1. flows    — hand-offs in the last hour, from real hands (agent_acts.observed_edges) (the Floor's edges);
   2. work     — agent work finished by hour, yesterday and today, in the viewer's zone;
   3. money    — MONEY_SQL / INCLUDED_SQL by hour over the week, in the viewer's zone;
   4. runs     — the week's finished runs counted in SQL over EVERY row (never the first sixty:
@@ -45,9 +45,9 @@ from sqlalchemy import text
 from .included_spend import INCLUDED_SQL, MONEY_SQL
 
 #: Hand-offs the Floor draws: acts started this recently.
-#: The Floor draws the day's working pattern, not one hour of it: hand-offs started in the
-#: last six hours, weighted by volume and faded by age; comets fly only on new ones (web).
-FLOW_WINDOW = timedelta(hours=6)
+#: The Floor's edges: hand-offs started in the last hour (spec §4.7; the operator's decision
+#: after the independent test), thin and fading with age; comets fly only on new ones (web).
+FLOW_WINDOW = timedelta(minutes=60)
 FLOWS_MAX = 60
 #: Rows on the LAST 24H strip; the rest are counted (`day.more`).
 STRIP_ROWS = 10
@@ -197,55 +197,34 @@ def delivery(connection: Any, project_id: str) -> dict[str, Any]:
 
 
 def flows(connection: Any, project_id: str, roster: set[str], now: datetime) -> list[dict[str, Any]]:
-    """Who handed work to whom in the last six hours, one edge per (hander, taker). A hand-over from a
-    role that is not on the roster is DROPPED — never drawn to a guessed node; a person is `you`,
-    BOSS is `boss`. Chat acts are conversation, not hand-offs."""
-    rows = connection.execute(
-        text(
-            """
-            SELECT handed_by_kind AS kind, COALESCE(handed_by_id, 'boss') AS src, role_key AS dst,
-                   count(*) AS n, max(started_at) AS last_at,
-                   (array_agg(act_id ORDER BY started_at DESC))[1] AS newest,
-                   (array_agg(workflow_run_id ORDER BY started_at DESC))[1] AS run_id
-            FROM agent_acts
-            WHERE project_id = :p AND started_at > :since AND role_key IS NOT NULL
-              AND kind <> 'chat'
-            GROUP BY 1, 2, 3
-            ORDER BY last_at DESC
-            LIMIT :lim
-            """
-        ),
-        {"p": project_id, "since": now - FLOW_WINDOW, "lim": FLOWS_MAX},
-    ).mappings().all()
+    """Who handed work to whom in the last hour, one edge per (hander, taker) — read by the ONE
+    helper the Organization view and the Team chart read (agent_acts.observed_edges), with
+    `sequence`: a workflow records BOSS as every step's hander, so the hand-off is the previous
+    step's agent → the next step's agent; a run's first agent is handed by the person who
+    started it. A hander that is not on the roster is DROPPED — never drawn to a guessed node.
+    `now` is the clock the helper uses (the database's); it is passed for the signature only."""
+    from . import agent_acts
+
+    del now
+    edges = agent_acts.observed_edges(connection, project_id,
+                                      hours=FLOW_WINDOW.total_seconds() / 3600,
+                                      include_people=True, sequence=True, with_newest=True)
     out: list[dict[str, Any]] = []
-    for r in rows:
-        kind = str(r["kind"] or "boss")
-        dst = str(r["dst"])
+    for e in edges:
+        dst, src = str(e["target"]), str(e["source"])
         if dst not in roster:
             continue
-        if kind == "agent":
-            src = str(r["src"])
-            if src not in roster or src == dst:
-                continue
-        elif kind == "person":
-            src = "you"
+        if src == "person":
+            kind, src = "person", "you"
+        elif src in roster and src != dst:
+            kind = "agent"
         else:
-            kind, src = "boss", "boss"
-        out.append({"from_kind": kind, "from": src, "to": dst, "n": int(r["n"]),
-                    "last_at": _iso(r["last_at"]), "newest_act_id": str(r["newest"]),
-                    "run_id": r["run_id"]})
-    # Two people's hand-offs to the same agent are one edge from You.
-    merged: dict[tuple[str, str], dict[str, Any]] = {}
-    for f in out:
-        key = (f["from"], f["to"])
-        if key in merged:
-            m = merged[key]
-            m["n"] += f["n"]
-            if str(f["last_at"]) > str(m["last_at"]):
-                m.update(last_at=f["last_at"], newest_act_id=f["newest_act_id"], run_id=f["run_id"])
-        else:
-            merged[key] = dict(f)
-    return sorted(merged.values(), key=lambda f: str(f["last_at"]), reverse=True)
+            continue
+        out.append({"from_kind": kind, "from": src, "to": dst, "n": int(e["times"]),
+                    "last_at": _iso(e["last_at"]), "newest_act_id": str(e.get("newest_act_id") or ""),
+                    "run_id": e.get("run_id")})
+    out.sort(key=lambda f: str(f["last_at"]), reverse=True)
+    return out[:FLOWS_MAX]
 
 
 # ── reads 2 and 3: today, by hour ────────────────────────────────────────────────────────────
@@ -422,11 +401,13 @@ def strip(connection: Any, project_id: str, now: datetime,
         for s in connection.execute(
             text(
                 """
-                SELECT workflow_run_id, step_id, status, started_at, completed_at, decision_id,
-                       step_kind
-                FROM workflow_step_runs
-                WHERE workflow_run_id = ANY(:ids)
-                ORDER BY created_at, iteration
+                SELECT s.workflow_run_id, s.step_id, s.status, s.started_at, s.completed_at,
+                       s.decision_id, s.step_kind, s.created_at, s.updated_at,
+                       dd.created_at AS decision_at
+                FROM workflow_step_runs s
+                LEFT JOIN decisions dd ON dd.id = s.decision_id
+                WHERE s.workflow_run_id = ANY(:ids)
+                ORDER BY s.created_at, s.iteration
                 """
             ),
             {"ids": [r["id"] for r in runs]},
@@ -449,11 +430,16 @@ def strip(connection: Any, project_id: str, now: datetime,
         for s in steps:
             if not (s.get("decision_id") or str(s.get("step_kind") or "") == "decision"):
                 continue
-            if not s.get("started_at"):
+            # A GATE THE WORKER PARKED NEVER "STARTS": a waiting decision step has no
+            # started_at in production, so it was never drawn. Its wait began when its decision
+            # was asked, else when the step row was written.
+            began = s.get("started_at") or s.get("decision_at") or s.get("created_at")
+            if not began:
                 continue
             open_gate = s["status"] in ("waiting", "running", "leased", "ready", "queued")
-            gates.append({"from": _iso(s["started_at"]),
-                          "to": None if open_gate else _iso(s.get("completed_at") or s.get("started_at"))})
+            gates.append({"from": _iso(began),
+                          "to": None if open_gate else _iso(s.get("completed_at")
+                                                            or s.get("updated_at") or began)})
         mission = by_mission.get(run_id)
         state = _row_state(status, mission)
         finished = None
@@ -606,9 +592,12 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
                     "tip": "No memory, disk or stall trouble in the last hour", "href": "?area=infra"})
     else:
         critical = host.get("severity") == "critical"
+        disk = host.get("cause") == "disk"
+        reason = " · ".join(str(x) for x in (host.get("headline"), host.get("detail")) if x)
         out.append({"key": "host", "tone": "red" if critical else "amber", "word": "Host",
-                    "state": "Struggling" if critical else "Slow",
-                    "tip": _clip(str(host.get("headline") or "The host needs attention")),
+                    # A full disk is its own state, not "slow": nothing is slow yet.
+                    "state": "Struggling" if critical else ("Disk" if disk else "Slow"),
+                    "tip": _clip(reason or "The host needs attention"),
                     "href": "?area=infra"})
 
     # QUEUE: how long the oldest job has waited; dead letters in 24h.
@@ -684,15 +673,22 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
 
 def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
            budget: Mapping[str, Any], host: Mapping[str, Any], runs_24h: int, ever: bool,
-           last_work_at: Optional[str], now: datetime) -> ViewStatus:
+           last_work_at: Optional[str], now: datetime,
+           refusal: Optional[Mapping[str, Any]] = None) -> ViewStatus:
     """THE STATE SENTENCE (§4.5), first matching rule wins. Row 1 (`Can't reach BOSS`) is the
-    web's: only it can know. Pure."""
+    web's: only it can know. Pure.
+
+    Two refinements from the independent test: a budget that REFUSES AT THE DOOR (the budget's
+    own cap_refusal: the money already spent leaves no room) stopped work even when no build
+    row records the refusal; and a host WARNING is no headline when its cause is the disk (the
+    Host dot says Disk), nor ever outranks "Ready for first build" — only critical does."""
     state = str(budget.get("budget_state") or "unknown")
-    refused = any(a.get("kind") == "budget_refused" for a in attention)
+    refused = refusal is not None or any(a.get("kind") == "budget_refused" for a in attention)
     period = str(budget.get("period") or "month")
-    if state == "red" and refused:
+    if refused and (state == "red" or refusal is not None):
+        over = str((refusal or {}).get("period") or period)
         return {"key": "budget_stopped", "text": "Budget stopped work", "tone": "red",
-                "tip": f"Over the {period} cap. Raise it in Budget."}
+                "tip": f"Over the {over} cap. Raise it in Budget."}
     if host.get("show") and host.get("severity") == "critical":
         return {"key": "host_critical", "text": "Host struggling", "tone": "red",
                 "tip": _clip(str(host.get("headline") or "The host needs attention"))}
@@ -704,7 +700,8 @@ def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
     if needs:
         return {"key": "needs_you", "text": f"{needs} {'needs' if needs == 1 else 'need'} you",
                 "tone": "amber", "tip": "Decisions waiting on you. Same count as Approvals."}
-    if host.get("show"):
+    fresh = runs_24h == 0 and not ever and not int(counts.get("setup") or 0)
+    if host.get("show") and host.get("cause") != "disk" and not fresh:
         return {"key": "host_slow", "text": "Host is slow", "tone": "amber",
                 "tip": _clip(str(host.get("headline") or "The host is under pressure"))}
     if state in ("orange", "red"):
@@ -763,6 +760,7 @@ def etag_of(view: Mapping[str, Any], board_etag: str) -> str:
         "host": [view["host"].get("show"), view["host"].get("severity"),
                  view["host"].get("headline")],
         "systems": [(s["key"], s["tone"], s["tip"]) for s in view["systems"]],
+        "refusal": [(view.get("budget_refusal") or {}).get(k) for k in ("period", "actual_usd_micros")],
     }
     digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode())
     return f'"cc-{digest.hexdigest()[:24]}"'
@@ -866,6 +864,27 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
                 "actual_usd_micros": int(day_period.get("actual_usd_micros") or 0)},
     }
 
+    # REFUSED AT THE DOOR: work started while the money already spent leaves no room is refused
+    # before any build row exists, so no attention item records it. The budget's own rule
+    # (cap_refusal of one more micro-dollar, kind `cap`) says it; the page draws it as the
+    # first card and the sentence says "Budget stopped work".
+    refusal: Optional[dict[str, Any]] = None
+    if budget_full.get("periods"):
+        hit = BudgetGovernor(settings).cap_refusal(budget_full, 1)
+        if hit and hit.get("kind") == "cap":
+            words = {"day": "today", "week": "this week", "month": "this month"}
+            p_ = str(hit.get("period") or "")
+            refusal = {
+                "period": p_,
+                "cap_usd_micros": int(hit.get("cap_usd_micros") or 0),
+                "actual_usd_micros": int(hit.get("actual_usd_micros") or 0),
+                "resets_at_label": str(hit.get("resets_at_label") or ""),
+                "title": "Budget refused new work",
+                "detail": _clip(f"{_money(int(hit.get('actual_usd_micros') or 0))} of "
+                                f"{_money(int(hit.get('cap_usd_micros') or 0))} "
+                                f"{words.get(p_, 'this ' + p_)}. Raise the cap to start work."),
+            }
+
     probe = _quiet(connection, "the systems", _probe, connection, project_id, now, t0,
                    default={}) or {}
     dots = systems(probe=probe, basics=setup_out.get("basics"), budget=budget_full, host=host,
@@ -880,7 +899,7 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "tz": zone,
         "status": status(counts=counts, attention=board["attention"], budget=budget_full,
                          host=host, runs_24h=runs_24h, ever=ever,
-                         last_work_at=today["last_work_at"], now=now),
+                         last_work_at=today["last_work_at"], now=now, refusal=refusal),
         "counts": counts,
         "attention": board["attention"],
         "missions": board["missions"],
@@ -895,6 +914,7 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "budget": budget,
         "host": {k: v for k, v in host.items() if k != "gauges"},
         "systems": dots,
+        "budget_refusal": refusal,
     }
     view["etag"] = etag_of(view, board["etag"])
     return view

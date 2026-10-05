@@ -53,32 +53,49 @@ def run(c, wf: tuple[str, str], *, status: str, created: datetime,
 
 def step(c, run_id: str, step_id: str, *, status: str, started: Optional[datetime],
          completed: Optional[datetime] = None, kind: str = "agent",
-         decision_id: Optional[str] = None) -> str:
+         decision_id: Optional[str] = None, created: Optional[datetime] = None,
+         asked: Optional[datetime] = None) -> str:
     sid = uid("wsr")
     if decision_id:
-        c.execute(text("INSERT INTO decisions (id, project_id, question, status, risk_tier, default_action) "
-                       "VALUES (:i, :p, 'Go on?', :s, 1, 'hold') ON CONFLICT (id) DO NOTHING"),
-                  {"i": decision_id, "p": PROJECT, "s": "approved" if completed else "pending"})
+        c.execute(text("INSERT INTO decisions (id, project_id, question, status, risk_tier, default_action, "
+                       "created_at) VALUES (:i, :p, 'Go on?', :s, 1, 'hold', COALESCE(:at, now())) "
+                       "ON CONFLICT (id) DO NOTHING"),
+                  {"i": decision_id, "p": PROJECT, "s": "approved" if completed else "pending",
+                   "at": asked or started or created})
     c.execute(text(
         "INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, step_kind, status, "
         "started_at, completed_at, decision_id, created_at, updated_at) VALUES "
-        "(:i, :p, :r, :s, :k, :st, :a, :b, :d, COALESCE(:a, now()), COALESCE(:b, :a, now()))"),
+        "(:i, :p, :r, :s, :k, :st, :a, :b, :d, COALESCE(:a, :c, now()), COALESCE(:b, :a, :c, now()))"),
         {"i": sid, "p": PROJECT, "r": run_id, "s": step_id, "k": kind, "st": status, "a": started,
-         "b": completed, "d": decision_id})
+         "b": completed, "d": decision_id, "c": created})
     return sid
 
 
 def act(c, *, role_key: Optional[str], started: datetime, ended: Optional[datetime] = None,
         kind: str = "step", status: str = "complete", handed_by_kind: str = "boss",
-        handed_by_id: Optional[str] = None, run_id: Optional[str] = None) -> str:
+        handed_by_id: Optional[str] = None, run_id: Optional[str] = None,
+        parent: Optional[str] = None, root: Optional[str] = None) -> str:
     aid = uid("act")
     c.execute(text(
-        "INSERT INTO agent_acts (act_id, project_id, role_key, kind, status, root_act_id, handed_by_kind, "
-        "handed_by_id, how, accountable, workflow_run_id, label, started_at, ended_at) VALUES "
-        "(:i, :p, :r, :k, :s, :i, :hk, :hi, 'started', 'ceo', :run, 'Step · test', :a, :b)"),
+        "INSERT INTO agent_acts (act_id, project_id, role_key, kind, status, parent_act_id, root_act_id, "
+        "handed_by_kind, handed_by_id, how, accountable, workflow_run_id, label, started_at, ended_at) VALUES "
+        "(:i, :p, :r, :k, :s, :par, COALESCE(:root, :i), :hk, :hi, 'started', 'ceo', :run, 'Step · test', :a, :b)"),
         {"i": aid, "p": PROJECT, "r": role_key, "k": kind, "s": status, "hk": handed_by_kind,
-         "hi": handed_by_id, "run": run_id, "a": started, "b": ended})
+         "hi": handed_by_id, "run": run_id, "a": started, "b": ended, "par": parent, "root": root})
     return aid
+
+
+def run_acts(c, run_id: str, roles: list[str], *, started: datetime, step: timedelta = timedelta(minutes=3)) -> list[str]:
+    """A run as the worker writes it: the run act handed by the person who started it, and one
+    step act per agent in order, each handed by BOSS and hung from the run act."""
+    root = act(c, role_key=None, kind="run", started=started, handed_by_kind="person",
+               handed_by_id="ceo", run_id=run_id)
+    out = []
+    for i, r in enumerate(roles):
+        at = started + step * (i + 1)
+        out.append(act(c, role_key=r, started=at, ended=at + step / 2, handed_by_kind="boss",
+                       run_id=run_id, parent=root, root=root))
+    return out
 
 
 def receipt(c, *, at: datetime, micros: int, included: bool = False,
