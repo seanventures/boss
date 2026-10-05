@@ -536,6 +536,26 @@ def _attention(connection: Any, settings: Any, project_id: str,
     return out
 
 
+#: What the system doctor did, in words (≤ 3). A key it adds later reads as its own words.
+_ACTION_WORDS = {
+    "reap_previews": "Reaped previews", "end_orphaned_processes": "Ended orphans",
+    "remove_orphan_containers": "Removed containers", "sweep_temp_dirs": "Swept temp files",
+    "prune_boss_disk": "Freed disk", "set_degradation_level": "Set build pace",
+    "stop_idle_previews": "Stopped idle previews", "close_idle_transactions": "Closed idle queries",
+    "queue_new_builds": "Queued new builds", "pause_largest_build": "Paused a build",
+    "one_build_at_a_time": "One build at once", "build_one_at_a_time": "One build at once",
+    "free_disk_now": "Freed disk", "remind_at_90": "Set a reminder", "restart_step": "Restarted a step",
+    "cancel_build": "Cancelled a build", "wait_15": "Waited 15 minutes", "hold_updates": "Held updates",
+    "keep_updating": "Kept updating", "keep_going": "Kept going", "dismiss_today": "Dismissed today",
+    "acknowledge": "Acknowledged", "use_bigger_place": "Suggested a bigger host",
+}
+
+
+def _action_word(key: Any) -> str:
+    k = str(key or "")
+    return _ACTION_WORDS.get(k) or k.replace("_", " ").strip().capitalize()
+
+
 def _spend_24h(connection: Any, project_id: str) -> tuple[int, bool]:
     row = connection.execute(text(
         "SELECT COALESCE(sum(cost_usd_micros) FILTER (WHERE NOT included_in_subscription), 0) "
@@ -1221,7 +1241,8 @@ def system(connection: Any, settings: Any, project_id: str) -> System:
                           {"strip": [0] * 96, "rows": [], "total": 0}),
         "findings": guarded("findings", lambda: _findings(connection, project_id), []),
         "actions": guarded("actions", lambda: [
-            {"at": a.get("created_at"), "action": a.get("action"), "target": a.get("target"),
+            {"at": a.get("created_at"), "action": _action_word(a.get("action")),
+             "action_key": a.get("action"), "target": a.get("target"),
              "outcome": a.get("outcome"), "automatic": bool(a.get("automatic")),
              "improved": a.get("improved")}
             for a in system_doctor.recent_actions(connection, limit=8)], []),

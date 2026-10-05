@@ -206,7 +206,12 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
           <span><span className="inf-muted">Leased</span> {s.work.leased}</span>
           <span><span className="inf-muted">Running</span> {s.work.running}</span>
           <span><span className="inf-muted">In flight</span> {s.work.inFlight}</span>
-          {s.work.buildsAtOnce ? <span title="Builds BOSS runs at once on this machine"><span className="inf-muted">At once</span> {s.work.buildsAtOnce}</span> : null}
+          {s.work.buildsAtOnce ? (
+            // The admission label is a sentence ("Builds at once: 2 (auto) · 1 queued…"): the
+            // line names the setting once and shows its value.
+            <span title={s.work.buildsAtOnce}><span className="inf-muted">At once</span>{" "}
+              {s.work.buildsAtOnce.replace(/^Builds at once:\s*/i, "").split(" · ")[0]}</span>
+          ) : null}
         </span>
       </section>
 
@@ -234,7 +239,7 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
             {s.actions.map((a, i) => (
               <li key={`${a.at}-${i}`} className="obs-line" data-testid="obs-action-row">
                 <span className="inf-num inf-muted" title={new Date(a.at).toLocaleString()}>{ago(a.at, now) || "—"}</span>
-                <span className="obs-strong" data-copy="data">{a.action}</span>
+                <span className="obs-strong">{a.action}</span>
                 {a.target ? <span className="inf-mono inf-faint inf-trunc" data-copy="data">{a.target}</span> : null}
                 {a.outcome ? <span className="inf-muted inf-trunc" data-copy="data">{a.outcome}</span> : null}
                 <span className="ag-spacer" />
