@@ -302,3 +302,26 @@ export function statusOf(view: CommandCenterView | null, reachable: boolean, rea
  *  edges light instead of comets, rings hold still); `none` (Paused, a hidden tab, BOSS
  *  unreachable, or the host struggling: nothing moves at all). */
 export type MotionMode = "full" | "reduced" | "none";
+
+// ── Server first paint ──────────────────────────────────────────────────────────────────────
+
+/** The server render's read (page.tsx): one call for the whole landing page. A failure is said
+ *  (`error`), never drawn as a confident empty factory. */
+export async function fetchCommandCenterView(projectId: string, tz: string, viewer?: string | null,
+                                             enabled = true):
+    Promise<{ view: CommandCenterView | null; error: string | null }> {
+  if (!enabled || !projectId) return { view: null, error: null };
+  const { API_URL, authHeaders } = await import("./client");
+  try {
+    const r = await fetch(`${API_URL}${viewUrl(projectId, tz, viewer)}`,
+                          { headers: authHeaders({}), cache: "no-store" });
+    if (!r.ok) {
+      let said = "";
+      try { said = String(((await r.json()) as { detail?: unknown }).detail ?? ""); } catch { /* none */ }
+      return { view: null, error: said || `The API answered ${r.status}.` };
+    }
+    return { view: parseCommandCenterView(await r.json()), error: null };
+  } catch (e) {
+    return { view: null, error: e instanceof Error ? e.message : "API unreachable" };
+  }
+}

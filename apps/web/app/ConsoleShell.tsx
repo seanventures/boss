@@ -178,7 +178,7 @@ const ICONS = {
 const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
 
 const AREAS: AreaDef[] = [
-  { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
+  { id: "overview", label: "Command Center", sub: "What needs you · what's moving", group: "Platform", icon: ICONS.overview },
   // THE ORDER IS THE ARGUMENT. The Run group opens with the place work is DONE and the path it
   // follows — Factory, then the workflow governing it, then who does it and who approves it,
   // then where it ships and whether it is alive. Discovery and Meetings are ways IN and follow
