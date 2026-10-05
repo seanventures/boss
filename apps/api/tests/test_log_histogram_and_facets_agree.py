@@ -77,3 +77,15 @@ def test_each_facet_ignores_its_own_selection(client, log):
     assert facets["levels"] == unfiltered["levels"]
     assert {a["role_key"] for a in unfiltered["agents"]} == {"software_engineer", "qa_engineer"}
     assert unfiltered["services"] == {"api": 15, "worker": 15}
+
+
+def test_kinds_are_counted_for_autocomplete_and_ignore_their_own_selection(client, log):
+    """D13: `kind:` suggests the window's real kinds, counted in SQL, most common first."""
+    base = {"project_id": PROJECT, "range": "24h"}
+    every = client.get("/v1/activity/facets", params=base).json()["kinds"]
+    assert every and all(k["kind"] and k["n"] > 0 for k in every)
+    assert [k["n"] for k in every] == sorted((k["n"] for k in every), reverse=True)
+    picked = every[-1]["kind"]
+    narrowed = client.get("/v1/activity/facets", params={**base, "kind": picked}).json()
+    assert narrowed["kinds"] == every  # picking a kind never hides the others
+    assert narrowed["total"] == every[-1]["n"]

@@ -699,8 +699,8 @@ def _build_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
         classify_row={"action": f"deploy {app_name} to {environment} {status}".strip(),
                       "status": status, "kind": "deployment", "stage": environment},
         level="error" if failure or status == "failed" else "info",
-        # The app is the service here: `service=` means "which app's infrastructure".
-        service=app_name, body=failure,
+        # No process: the app is named in the row and found by `subject=` (D16).
+        body=failure,
     )
 
 
@@ -947,9 +947,12 @@ def _where(query: LogQuery, source: str, *, skip: frozenset[str] = frozenset(),
         if query.exclude_agents and spec.agent is not None:
             clauses.append(f"coalesce({spec.agent}, '') <> ALL(:exclude_agents)")
     if "service" not in skip and query.service:
-        if spec.service is None:
+        if spec.service is not None:
+            clauses.append(f"{spec.service} = :service")
+        elif spec.service_match is not None:
+            clauses.append(spec.service_match)
+        else:
             return None
-        clauses.append(f"{spec.service} = :service")
     if query.run_id:
         if spec.run_match is None:
             return None
@@ -1010,7 +1013,8 @@ def _branches(query: LogQuery, select: str, *, sources: Optional[list[str]] = No
                 src=f"'{name}'", ts=spec.ts, level=spec.level, status=spec.status,
                 raw=spec.raw, started=spec.started, finished=spec.finished,
                 agent=spec.agent or "NULL::text", service=spec.service or "NULL::text",
-                run_key=spec.run_key, fts=(spec.fts if (spec.fts and query.q) else "false"))
+                run_key=spec.run_key, kind=spec.kind or "NULL::text",
+                fts=(spec.fts if (spec.fts and query.q) else "false"))
             sql = f"SELECT {columns} FROM {spec.table} t WHERE {where}"
             if order:
                 sql += " " + order.format(ts=spec.ts)
@@ -1360,17 +1364,18 @@ class ActivityLogService:
         base_query = LogQuery(**{**query.__dict__, "levels": [], "exclude_levels": [],
                                  "hide_verbose": False, "status": "", "agents": [],
                                  "exclude_agents": [], "service": "", "sources": [],
-                                 "exclude_sources": []})
+                                 "exclude_sources": [], "kinds": []})
         branches = _branches(
             base_query,
             "{src} AS src, {level} AS lvl, {status} AS st, {agent} AS agent, "
-            "{service} AS svc, {run_key} AS run_key",
+            "{service} AS svc, {run_key} AS run_key, {kind} AS kd",
             sources=list(SOURCES))
         levels = {name: 0 for name in LEVELS}
         sources = {name: 0 for name in SOURCES}
         agents: list[dict[str, Any]] = []
         runs: list[dict[str, Any]] = []
         services: dict[str, int] = {}
+        kinds: list[dict[str, Any]] = []
         statuses = {name: 0 for name in STATUSES}
         total = 0
         if branches:
@@ -1387,6 +1392,8 @@ class ActivityLogService:
                    if query.exclude_agents else ""),
                 "service": "svc = :service" if query.service else "true",
                 "status": "st = :status" if query.status else "true",
+                # A kind token is a real kind or a stream name (`kind:job`), as in _where.
+                "kind": ("(kd = ANY(:kinds) OR src = ANY(:kinds))" if query.kinds else "true"),
             }
 
             def but(name: str) -> str:
@@ -1405,6 +1412,8 @@ class ActivityLogService:
                     AND coalesce(svc, '') <> '' GROUP BY svc
                 UNION ALL (SELECT 'agent', agent, count(*) FROM base WHERE {but('agent')}
                     AND coalesce(agent, '') <> '' GROUP BY agent ORDER BY 3 DESC, 2 LIMIT 41)
+                UNION ALL (SELECT 'kind', kd, count(*) FROM base WHERE {but('kind')}
+                    AND coalesce(kd, '') <> '' GROUP BY kd ORDER BY 3 DESC, 2 LIMIT 40)
                 UNION ALL (SELECT 'run', run_key, count(*) FROM base WHERE {everything}
                     AND coalesce(run_key, '') <> '' GROUP BY run_key ORDER BY 3 DESC, 2 LIMIT 9)
                 UNION ALL SELECT 'total', '', count(*) FROM base WHERE {everything}"""
@@ -1423,6 +1432,8 @@ class ActivityLogService:
                     agents.append({"role_key": k, "n": n})
                 elif f == "run":
                     runs.append({"id": k, "n": n})
+                elif f == "kind":
+                    kinds.append({"kind": k, "n": n})
                 elif f == "total":
                     total = n
         labels = _labels(connection, query.project_id,
@@ -1435,6 +1446,8 @@ class ActivityLogService:
             "project_id": query.project_id,
             "levels": levels, "sources": sources, "statuses": statuses, "services": services,
             "agents": agents[:40], "agents_more": max(0, len(agents) - 40),
+            # The real kinds in the window, for `kind:` autocomplete (D13), most common first.
+            "kinds": kinds,
             "runs": runs[:8], "runs_more": len(runs) > 8,
             "total": total, "levels_exact": exact, "sources_exact": exact, "exact": exact,
             "window": query.window(),

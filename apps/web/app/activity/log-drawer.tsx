@@ -23,6 +23,7 @@ import { LogLine } from "./log-rows";
 import {
   LEVEL_LABEL, SERVICE_LABEL, STREAM_LABEL, costOf, durationOf, linksOf, flatten, type DisplayRow,
 } from "./log-model";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 type Fact = { label: string; value: React.ReactNode; title?: string; token?: LogToken };
 
@@ -42,6 +43,15 @@ function factsOf(item: ActivityLogItem, labels: Record<string, string>): Fact[] 
     facts.push({ label: "Process", value: SERVICE_LABEL[item.service] ?? item.service,
                  token: { key: "svc", value: item.service } });
   }
+  // The pipeline stage an agent turn or model call ran in (D13), and a deploy's app (D16:
+  // an app is not a process, so it is named here rather than under Process).
+  if ((item.source === "agent_turn" || item.source === "llm_call") && item.stage) {
+    facts.push({ label: "Stage", value: item.stage.replace(/_/g, " "), title: item.stage });
+  }
+  if (item.source === "deployment" && item.data.app) {
+    facts.push({ label: "App", value: String(item.data.app), token: { key: "subject", value: String(item.data.app) },
+                 title: item.data.environment ? `${String(item.data.environment)}` : undefined });
+  }
   const step = item.source === "workflow_step" ? item.stage : String(item.data.step_id ?? "");
   if (step && item.workflowRunId) {
     facts.push({ label: "Step", value: labels[`${item.workflowRunId}/${step}`] || step, title: step });
@@ -57,7 +67,7 @@ function factsOf(item: ActivityLogItem, labels: Record<string, string>): Fact[] 
   return facts;
 }
 
-const FILTERABLE: ReadonlySet<LogTokenKey> = new Set(["src", "kind", "status", "agent", "actor", "svc"]);
+const FILTERABLE: ReadonlySet<LogTokenKey> = new Set(["src", "kind", "status", "agent", "actor", "svc", "subject"]);
 const NEGATABLE_HERE: ReadonlySet<LogTokenKey> = new Set(["src", "agent"]);
 
 export function LogDrawer({ item, labels, gone, projectId, viewer, onClose, onFilter, onPrev, onNext }: {
@@ -73,6 +83,7 @@ export function LogDrawer({ item, labels, gone, projectId, viewer, onClose, onFi
   onPrev?: () => void;
   onNext?: () => void;
 }) {
+  useIdentityVersion(); // names land when the install's agents load
   const box = useRef<HTMLElement>(null);
   const [around, setAround] = useState<LogContext | null>(null);
   const [aroundState, setAroundState] = useState<"idle" | "loading" | "failed">("idle");

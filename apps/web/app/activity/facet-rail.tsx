@@ -17,6 +17,7 @@ import type { ActivityFacets } from "../../lib/activity-log";
 import { toggleToken, type LogToken, type LogTokenKey } from "../../lib/log-url";
 import { nameOf, RunFace } from "../agents/run-face";
 import { LEVELS, SERVICE_LABEL, STATUSES, STREAMS } from "./log-model";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export const STREAM_ICON: Record<string, React.ComponentType<{ size?: number; weight?: "bold" | "regular" }>> = {
   event: Lightning, workflow_step: TreeStructure, process_step: ArrowsLeftRight, agent_turn: ChatText,
@@ -71,6 +72,7 @@ export function FacetRail({ facets, tokens, showVerbose, onTokens, onVerbose }: 
   onTokens: (tokens: LogToken[]) => void;
   onVerbose: (show: boolean) => void;
 }) {
+  useIdentityVersion(); // names land when the install's agents load
   const [closed, setClosed] = useState<Record<string, boolean>>({ status: true });
   const [moreAgents, setMoreAgents] = useState(false);
   const [moreRuns, setMoreRuns] = useState(false);
