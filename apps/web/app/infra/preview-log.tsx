@@ -14,9 +14,32 @@ import { Drawer, DrawerSection, StateWord } from "./kit";
 
 const MAX_CHARS = 64_000;
 
-/** The log as text from whatever the API answered: SSE-ish text, `{lines}`, `{log}` or `{text}`. */
+/** The text an SSE body carries: each `event: log` frame's `data:` decoded, heartbeats and the
+ *  `end` frame dropped. A finished preview's log was read from the streaming route and printed
+ *  its frames verbatim (`event: log`, `data: "…\n"`), escapes and all. */
+export function sseText(raw: string): string {
+  const out: string[] = [];
+  for (const frame of raw.split(/\r?\n\r?\n/)) {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of frame.split(/\r?\n/)) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    }
+    if (!data.length || event === "end") continue;
+    const joined = data.join("\n");
+    let text = joined;
+    try { const v = JSON.parse(joined); text = typeof v === "string" ? v : joined; } catch { /* raw */ }
+    out.push(text);
+  }
+  return out.join("");
+}
+
+const looksLikeSse = (raw: string) => /^(event|data):/m.test(raw) || raw.startsWith(": heartbeat");
+
+/** The log as text from whatever the API answered: SSE text, `{lines}`, `{log}` or `{text}`. */
 export function logText(body: unknown): string {
-  if (typeof body === "string") return body;
+  if (typeof body === "string") return looksLikeSse(body) ? sseText(body) : body;
   const b = (body ?? {}) as { lines?: unknown; log?: unknown; text?: unknown; output?: unknown };
   if (Array.isArray(b.lines)) return b.lines.map(String).join("\n");
   for (const v of [b.log, b.text, b.output]) if (typeof v === "string") return v;
@@ -53,7 +76,8 @@ function useOnce(previewId: string, on: boolean) {
     let gone = false;
     void (async () => {
       try {
-        const r = await fetch(`/v1/previews/${encodeURIComponent(previewId)}/logs`, { cache: "no-store" });
+        // `stream=false`: the snapshot ({log}), never the live SSE route, for a preview that ended.
+        const r = await fetch(`/v1/previews/${encodeURIComponent(previewId)}/logs?stream=false`, { cache: "no-store" });
         const raw = await r.text();
         if (gone) return;
         if (!r.ok) { setError(`The API answered ${r.status}.`); return; }

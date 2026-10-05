@@ -63,6 +63,24 @@ describe("one Pulse", () => {
     expect($("[data-testid='obs-pulse-row']")).toBeNull();
   });
 
+  it("an unreachable API is one state, never a false empty Pulse", async () => {
+    // Every Observability read fails (the API is down). The header says Can't reach BOSS; the
+    // tab must not also claim "Nothing deployed yet" or "Every scraped app is watched".
+    const down = vi.fn(async () => new Response(JSON.stringify({ detail: "Postgres is not reachable." }),
+                                                 { status: 503, headers: { "content-type": "application/json" } }));
+    const { mount, settle } = await import("./_helpers/live-render");
+    const { ObsHome } = await import("../app/observability/obs-home");
+    const React = await import("react");
+    vi.stubGlobal("fetch", down);
+    window.history.replaceState(null, "", "/?area=observability&view=apps");
+    await mount(React.createElement(ObsHome, { projectId: "p1", actor: "ceo" }));
+    await settle();
+    expect(text($("[data-testid='obs-partial-unreachable']"))).toBe("Can't reach BOSS");
+    expect($("[data-testid='obs-apps-empty']")).toBeNull();
+    expect(document.body.textContent).not.toContain("Every scraped app is watched");
+    expect(document.body.textContent).not.toContain("Nothing deployed yet");
+  });
+
   it("a pin is a link to that deploy in Infra", async () => {
     await openObs("?view=apps");
     const pin = $("[data-testid='obs-pulse-row'][data-target='t_live'] svg.obs-pins a");

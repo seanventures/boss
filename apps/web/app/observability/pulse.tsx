@@ -137,6 +137,10 @@ export function AppsTab(props: ObsTabProps) {
   }, [data, go]);
 
   if (pulse.loading && !data) return <Skeleton testId="obs-apps-loading" />;
+  // UNREACHABLE IS ONE STATE, NOT THREE. With no answer the tab said "Nothing deployed yet" and
+  // "Every scraped app is watched" under the header's "Can't reach BOSS" — two claims about apps
+  // nobody had read. The header line is the whole answer until the view answers.
+  if (!data && pulse.error) return null;
   const rows = (data?.rows ?? []).filter((r) => {
     const q = (query || url.q).trim().toLowerCase();
     return !q || `${r.app} ${r.env} ${r.host?.name ?? ""}`.toLowerCase().includes(q);

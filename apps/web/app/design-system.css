@@ -33,7 +33,9 @@
   --ink: #eef3fb;
   --ink-soft: #c3d0e8;
   --muted: #9fb0ce;
-  --faint: #64769a;
+  /* AA on every panel (≥4.5:1 on --raised, the lightest one): #64769a was 3.49–3.79, so every
+     faint label, count and age failed. tests/faint-text-meets-aa-on-every-panel.test.ts. */
+  --faint: #7b8db0;
   --quiet: #47597e;
 
   --accent: #2f6fe0;

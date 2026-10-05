@@ -233,6 +233,7 @@ class Rack(TypedDict, total=False):
     residents: list[Resident]
     # Inline action for a setting-up rack's current stage (same buttons as the host drawer).
     stage_action: Optional[str]    # "generate_key" | "verify" | "install_docker" | "copy_command" | None
+    retired: bool         # a retired machine: drawn only when the console shows retired
 
 
 class Preconditions(TypedDict):
@@ -996,7 +997,20 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     retired = 0
     for h in hosts:
         if h.get("status") == "retired":
+            # DRAWN, MARKED RETIRED (P-I-45). "Show retired" toggled a client filter over racks
+            # the server had already dropped, so it never showed anything. A retired machine is
+            # a rack with the Retired word, no residents and nothing to press; the console hides
+            # it until the operator asks.
             retired += 1
+            racks[h["id"]] = {
+                "id": h["id"], "this_computer": False, "name": h["name"],
+                "address": h.get("address"), "arch": h.get("arch"),
+                "state": word("host", "retired"),
+                "stage": {"stage": "ready", "index": 5, "label": "Retired"},  # type: ignore
+                "checked_at": _iso(h.get("last_preflight_at")), "max_apps": h.get("max_apps"),
+                "apps": 0, "ports_used": 0, "ports_total": None, "residents": [],
+                "stage_action": None, "retired": True,
+            }
             continue
         st = host_stage(h)
         racks[h["id"]] = {
@@ -1026,6 +1040,8 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     for t in targets:
         res = _target_resident(t, health, strip_, last)
         rack = racks.get(str(t.get("host_id") or ""))
+        if rack is not None and rack.get("retired"):
+            rack = None  # an app still pointed at a retired machine is not placed anywhere
         if rack is None:
             unplaced.append(res)
             continue
@@ -1051,7 +1067,8 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     for rid, rack in racks.items():
         rack["ports_used"] = len(ports.get(rid) or ())
     ordered = sorted(racks.values(), key=lambda r: (
-        0 if r.get("this_computer") else 1, _host_rank(r["state"]), str(r["name"]).lower()))
+        2 if r.get("retired") else 0 if r.get("this_computer") else 1, _host_rank(r["state"]),
+        str(r["name"]).lower()))
     return {"hosts": hosts, "targets": targets, "previews": previews, "health": health,
             "strips": strip_, "last": last, "this": this, "place": place, "racks": ordered,
             "unplaced": unplaced, "retired": retired}
