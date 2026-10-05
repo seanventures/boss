@@ -154,7 +154,7 @@ import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { buildAgentRoster } from "../lib/roster";
-import { fetchCommandCenter } from "../lib/command-center";
+import { TZ_COOKIE, fetchCommandCenterView } from "../lib/command-center-view";
 import { CommandCenter } from "./command-center-ui";
 import { ReliabilityHome } from "./reliability-ui";
 import { AssuranceCenter } from "./assurance-ui";
@@ -190,7 +190,6 @@ import { RepoActivityPanel } from "./repo-activity-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
-import { fetchDeliveryMetrics } from "../lib/metrics";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
@@ -697,13 +696,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const projectsP = fetchProjectFeed(activeProjectId);
   // Behind the 66-feed wave for no reason: these need the project id and nothing that wave
   // produces, so they were a whole round trip spent waiting.
+  const ccZone = (() => {
+    const raw = requestCookies.get(TZ_COOKIE)?.value;
+    try { return raw ? decodeURIComponent(raw) : "UTC"; } catch { return "UTC"; }
+  })();
   const reliabilityWaveP = Promise.all([
     fetchReliabilityFeed(activeProjectId),
     fetchAiSreCapabilities(activeProjectId),
-    fetchDeliveryMetrics(activeProjectId, 7),
-    // The Command Center's one call, in this wave rather than after it: an await on its
-    // own is a round trip every other feed waits behind.
-    fetchCommandCenter(activeProjectId, needs("overview")),
+    // Was the delivery strip's feed. THIS WEEK reads the same numbers, relabelled honestly,
+    // from the view below (command-center spec §4.12), so the position holds a settled value
+    // rather than a second request.
+    Promise.resolve(null),
+    // The Command Center's ONE call (command-center spec §6.2), in this wave rather than after
+    // it: an await on its own is a round trip every other feed waits behind. The zone is the
+    // viewer's (the cookie the page writes), so the first paint's day is their day.
+    fetchCommandCenterView(activeProjectId, ccZone, undefined, needs("overview")),
   ] as const);
 
   const [workforceData, orgChartData] = await Promise.all([workforceP, orgChartP]);
@@ -907,7 +914,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing
   // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
   // calls, so serialising it was pure waste on every single render.
-  const [reliabilityFeed, aiSreFeed, deliveryMetrics, commandCenter] = await reliabilityWaveP;
+  const [reliabilityFeed, aiSreFeed, , commandCenter] = await reliabilityWaveP;
   const [costInsights, llmSpend] = await Promise.all([
     Promise.resolve(budgetArea.costInsights),
     Promise.resolve(budgetArea.llmSpend),
@@ -1126,57 +1133,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {/* FIRST, NOT BURIED. The old entry point was a Metatron "Status Query" form far
-            below the fold that could only answer. This is the agent, and it can act. */}
-        {shows("overview") ? (
-        <section data-area="overview" aria-label="Ask BOSS">
-          <AskBossHero projectId={activeProjectId} actor={activeActorId}
-            orgId={activeOrgId} deploymentAvailable={false} />
-        </section>
-        ) : null}
-
+        {/* THE BRIDGE (command-center spec §4): one section, one read. Ask BOSS is still FIRST
+            and still the agent that can act — the old entry point was a Metatron "Status Query"
+            form far below the fold that could only answer — laid out as one line until used.
+            The delivery strip is THIS WEEK now, counting workflow runs (it counted code tasks
+            beside tiles that counted runs), and the help card is a `?` on the status line,
+            inline before the first run. See command-center-ui.tsx. */}
         {shows("overview") ? (
         <section className="ov-cc" data-area="overview" aria-label="Command center">
-          {/* The "Assign an outcome to your team…" bar stood here, directly under Ask BOSS —
-              two prompts on the same screen, with nothing to say which took what. They are one
-              composer now (see AskBossHero): the same words are either ANSWERED or BUILT, and
-              the operator chooses with a button instead of by picking a lane first. */}
-
-          {/* REAL, OR ABSENT. Every figure is count()/sum() over the whole window in SQL —
-              none sampled, capped or estimated. apiReachable gates the row so a failed fetch
-              shows nothing rather than a confident zero. */}
-          {deliveryMetrics.apiReachable ? (
-            <div className="cc-delivery" data-testid="cc-delivery">
-              <span className="cc-delivery-label">Last {deliveryMetrics.windowDays} days</span>
-              <span className="cc-delivery-item">
-                <b>{deliveryMetrics.runsTotal}</b> runs
-                {deliveryMetrics.runSuccessRate !== null ? (
-                  <small> · {deliveryMetrics.runSuccessRate}% passed</small>
-                ) : null}
-              </span>
-              <span className="cc-delivery-item"><b>{deliveryMetrics.jobsRan}</b> jobs</span>
-              <span className="cc-delivery-item"><b>{deliveryMetrics.deployments}</b> deployments</span>
-              <span className="cc-delivery-item"><b>${deliveryMetrics.spendUsd.toFixed(2)}</b> spent</span>
-              <span className="cc-delivery-item"><b>{deliveryMetrics.agentHours}</b> agent-hours</span>
-              <span className="cc-delivery-item">
-                <b>{(deliveryMetrics.tokens / 1_000_000).toFixed(1)}M</b> tokens
-              </span>
-            </div>
-          ) : null}
-
-          {/* THE FACTORY AS WORKFLOW RUNS. What needs you, what is running (step, agent,
-              elapsed) and how recent runs ended — every row a link into its run. This replaced
-              task-based KPI tiles, an orb graph over a field nothing populates, quick actions
-              to off-rail areas, a Metatron card whose button did nothing and a "Pending
-              decisions" list that linked nowhere. See command-center-ui.tsx. */}
           <CommandCenter key={`${activeOrgId}:${activeProjectId}`} projectId={activeProjectId}
-            orgId={activeOrgId} actor={activeActorId} initial={commandCenter} />
-        </section>
-        ) : null}
-
-        {shows("overview") ? (
-        <section className="panel-stack" data-area="overview" aria-label="What you can do here">
-          <OnboardingHelpCard />
+            orgId={activeOrgId} actor={activeActorId} viewer={activeActorId}
+            initial={commandCenter.view} initialError={commandCenter.error} tz={ccZone}
+            composer={
+              <AskBossHero projectId={activeProjectId} actor={activeActorId}
+                orgId={activeOrgId} deploymentAvailable={false}
+                ideasInline={!!commandCenter.view && !commandCenter.view.today.everRan} />
+            }
+            help={<OnboardingHelpCard />} />
         </section>
         ) : null}
 
