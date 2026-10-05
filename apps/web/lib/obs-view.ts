@@ -216,6 +216,8 @@ export type System = {
   stalls: { strip: number[]; rows: { at: string; word: string; subject: string | null; did: string | null; shadow: boolean; runId: string | null }[]; total: number };
   findings: AttentionItem[];
   actions: { at: string; action: string; target: string | null; outcome: string | null; automatic: boolean; improved: boolean | null }[];
+  /** The host advice line (the HostAdviceBanner Workflows and Factory show), when there is one. */
+  advice: { title: string; tip: string; href: string | null } | null;
   partial: string[];
 };
 const parseBand = (w: unknown): Band | null => {
@@ -249,6 +251,7 @@ export function parseSystem(w: unknown): System {
     actions: arr(o.actions).slice(0, 8).map((a) => { const x = obj(a); return { at: str(x.at), action: str(x.action), target: optStr(x.target),
                                                                                outcome: optStr(x.outcome), automatic: x.automatic === true,
                                                                                improved: typeof x.improved === "boolean" ? x.improved : null }; }),
+    advice: o.advice ? { title: str(obj(o.advice).title), tip: str(obj(o.advice).tip), href: optStr(obj(o.advice).href) } : null,
     partial: arr(o.partial).map(String),
   };
 }
