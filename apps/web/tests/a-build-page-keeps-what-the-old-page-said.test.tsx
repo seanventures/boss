@@ -258,7 +258,7 @@ describe("links into a build land on that build", () => {
 });
 
 describe("an app opens on the build that works", () => {
-  it("↗ opens its newest built attempt, not a newer failed one; the row says its PR, spend and that the last one failed", async () => {
+  it("the row opens its newest built attempt, not a newer failed one; the row says its PR, spend and that the last one failed", async () => {
     const { AppsTab } = await import("../app/factory/apps-tab");
     const { buildRow } = await import("./_helpers/factory-fixtures");
     const failed = { ...buildRow({ run_id: "crun_b3", attempt: 3, state: "failed", word: "Failed · Build" }), at: at(0) };
@@ -271,9 +271,9 @@ describe("an app opens on the build that works", () => {
     await mount(<AppsTab projectId="p1" runs={[]} previews={[]} query="" onOpen={(id) => opened.push(id)} onNew={() => {}} />);
     await settle();
     expect(text(".fx-app .fx-row-now")).toBe("PR open · last failed");
-    expect(text('[data-testid="fx-app-pr-crun_b3"]')).toBe("PR #218");
-    expect(text(".fx-app-pr")).toContain("$14");
-    await click($(".fx-app .fx-row-go"));
+    expect(text('[data-testid="fx-app-pr-crun_b3"]')).toBe("#218");
+    expect(text(".fx-app-spend")).toBe("$14");
+    await click($(".fx-app-row .fx-c-state"));
     expect(opened).toEqual(["crun_b2"]);
   });
 
