@@ -139,6 +139,9 @@ THE_RULE = "engine/boss_engine/services/decision_actions.py"
 NOT_READERS = {
     ("engine/boss_engine/services/decisions.py", "expire_overdue"):
         "the writer that expires overdue pending and delegated decisions",
+    ("engine/boss_engine/services/decisions.py", "hold_plan_gates"):
+        "a writer: keeps a build's plan question open (pending, no deadline) while its build "
+        "waits at the plan, so every reader counts it",
     ("engine/boss_engine/services/decisions.py", "transition"):
         "the transition guard (only an open decision may be answered) and the writer that "
         "sets a decision to delegated",

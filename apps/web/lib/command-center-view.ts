@@ -33,14 +33,8 @@ export type ViewStatus = { key: string; text: string; tone: StatusTone; tip: str
 
 export type ViewCounts = {
   agents: number; working: number; needsYou: number; stopped: number; setup: number;
-  running: number; expiredAnswerable: number;
-};
-
-/** A hand-off on the Floor: acts STARTED in the last 60 min with a known hander (§6.2 read 1).
- *  `from` is a role_key, `you` (a person) or `boss`. */
-export type Flow = {
-  fromKind: "agent" | "person" | "boss"; from: string; to: string; n: number;
-  lastAt: string; newestActId: string; runId: string | null;
+  /** Live runs that moved in the last 7 days; a run with no progress for longer is `stalled`. */
+  running: number; stalled: number; expiredAnswerable: number;
 };
 
 /** One hour in the viewer's zone. Buckets 0-23 are yesterday, 24-47 today. Money is the budget's
@@ -59,28 +53,39 @@ export type Today = {
   everRan: boolean;
 };
 
-export type DayRowState = "running" | "waiting_you" | "blocked" | "completed" | "failed" | "cancelled";
+/** One day of the team's history (the pulse heatmap): finished agent steps that day. */
+export type PulseDay = { date: string; n: number };
 
-/** One bar on the LAST 24H strip. `ticks` are the finished steps' ended_at (≤ 40); `gates` the
- *  intervals a step waited on a decision (an open gate has `to: null`). */
-export type DayRow = {
-  runId: string; name: string; workflowName: string; state: DayRowState;
-  startedAt: string; finishedAt: string | null; stepIndex: number; stepCount: number;
-  ticks: string[]; gates: { from: string; to: string | null }[];
-  verb: string | null; error: string | null;
+/** One of the team's latest moves, one per app or run: "Atlas planned Interview Scorecard". */
+export type PulseEvent = {
+  roleKey: string; verb: string; subject: string;
+  verdict: "approved" | "changes_asked" | null;
+  at: string; runId: string | null; kind: "build" | "run" | "made";
+  /** What it made, when it is a link (a PR). */
+  url: string | null;
 };
 
-export type Day = { since: string; rows: DayRow[]; more: number };
+/** THE PULSE (served by the API, aggregated in SQL from the acts ledger): the team's last 14
+ *  weeks by day, its busiest day, its five most active agents and its latest moves. */
+export type Pulse = {
+  weeks: number; start: string; days: PulseDay[]; total: number;
+  busiest: PulseDay | null;
+  top: { roleKey: string; n: number }[];
+  latest: PulseEvent[];
+  lastActAt: string | null;
+};
 
 export type WeekDay = { date: string; completed: number; failed: number };
 
-/** `runs` means WORKFLOW runs everywhere on this page; code tasks are `builds` (truth bug 2).
- *  Counted over every row in the window, never the first sixty (truth bug 3). */
+/** `runs` means WORKFLOW runs; code tasks are `builds`. Counted over every row in the window. */
 export type Week = {
   days: WeekDay[]; runs: number; passed: number; failed: number;
   builds: number; buildsPassed: number; prsOpened: number; jobs: number; deployments: number;
   moneyMicros: number; tokens: number; modelHours: number;
 };
+
+/** Old system-doctor findings, folded into one row with one safe fix (Clean up). */
+export type Cleanup = { count: number; since: string; ids: string[]; title: string; detail: string };
 
 export type BudgetState = "unknown" | "green" | "yellow" | "orange" | "red";
 
@@ -89,6 +94,8 @@ export type ViewBudget = {
   utilizationRatio: number | null; resetsAtLabel: string; budgetTimezone: string;
   /** The day period, when the budget has one (a cap of 0 = no day cap). */
   day: { capUsdMicros: number; actualUsdMicros: number };
+  /** A working subscription model is connected: its calls cost nothing. */
+  subscription: boolean;
 };
 
 export type SystemKey = "models" | "repo" | "budget" | "host" | "queue" | "previews" | "deploys";
@@ -123,10 +130,10 @@ export type CommandCenterView = {
   recent: RecentRun[];
   teams: TeamSummary[];
   agents: BoardAgent[];
-  flows: Flow[];
   today: Today;
-  day: Day;
   week: Week;
+  pulse: Pulse | null;
+  cleanup: Cleanup | null;
   budget: ViewBudget;
   host: HostAdvice;
   systems: SystemDot[];
@@ -154,7 +161,6 @@ const optStr = (w: unknown): string | null => (typeof w === "string" && w ? w : 
 
 const TONES = new Set(["green", "amber", "red", "accent", "grey"]);
 const SYS_TONES = new Set(["green", "amber", "red", "grey"]);
-const DAY_STATES = new Set(["running", "waiting_you", "blocked", "completed", "failed", "cancelled"]);
 const BUDGET_STATES = new Set(["unknown", "green", "yellow", "orange", "red"]);
 
 export function parseHour(w: unknown): HourBucket {
@@ -164,26 +170,34 @@ export function parseHour(w: unknown): HourBucket {
            includedMicros: num(o.included_micros) };
 }
 
-export function parseFlow(w: unknown): Flow {
+export function parsePulse(w: unknown): Pulse | null {
+  if (!w || typeof w !== "object") return null;
   const o = obj(w);
-  const kind = str(o.from_kind, "agent");
-  return { fromKind: kind === "person" || kind === "boss" ? kind : "agent",
-           from: str(o.from), to: str(o.to), n: num(o.n), lastAt: str(o.last_at),
-           newestActId: str(o.newest_act_id), runId: optStr(o.run_id) };
+  const day = (x: unknown): PulseDay => { const y = obj(x); return { date: str(y.date), n: num(y.n) }; };
+  return {
+    weeks: num(o.weeks) || 14, start: str(o.start), days: arr(o.days).map(day), total: num(o.total),
+    busiest: o.busiest ? day(o.busiest) : null,
+    top: arr(o.top).map((x) => { const y = obj(x); return { roleKey: str(y.role_key), n: num(y.n) }; }),
+    latest: arr(o.latest).map((x) => {
+      const y = obj(x);
+      const v = str(y.verdict);
+      return { roleKey: str(y.role_key), verb: str(y.verb), subject: str(y.subject),
+               verdict: v === "approved" || v === "changes_asked" ? v : null,
+               at: str(y.at), runId: optStr(y.run_id),
+               kind: y.kind === "run" ? "run" : y.kind === "made" ? "made" : "build",
+               url: typeof y.url === "string" && y.url.startsWith("http") ? y.url : null };
+    }),
+    lastActAt: optStr(o.last_act_at),
+  };
 }
 
-export function parseDayRow(w: unknown): DayRow {
+export function parseCleanup(w: unknown): Cleanup | null {
+  if (!w || typeof w !== "object") return null;
   const o = obj(w);
-  const state = str(o.state, "running");
-  return {
-    runId: str(o.run_id), name: str(o.name), workflowName: str(o.workflow_name),
-    state: (DAY_STATES.has(state) ? state : "running") as DayRowState,
-    startedAt: str(o.started_at), finishedAt: optStr(o.finished_at),
-    stepIndex: num(o.step_index), stepCount: num(o.step_count),
-    ticks: arr(o.ticks).map((t) => str(t)).filter(Boolean),
-    gates: arr(o.gates).map((g) => { const x = obj(g); return { from: str(x.from), to: optStr(x.to) }; }),
-    verb: optStr(o.verb), error: optStr(o.error),
-  };
+  const count = num(o.count);
+  if (!count) return null;
+  return { count, since: str(o.since), ids: arr(o.ids).map((x) => str(x)), title: str(o.title),
+           detail: str(o.detail) };
 }
 
 export function parseSystem(w: unknown): SystemDot {
@@ -198,8 +212,6 @@ export function parseCommandCenterView(w: unknown): CommandCenterView {
   const s = obj(o.status);
   const c = obj(o.counts);
   const t = obj(o.today);
-  const d = obj(o.day);
-  const wk = obj(o.week);
   const b = obj(o.budget);
   const bd = obj(b.day);
   const h = obj(o.host);
@@ -212,7 +224,7 @@ export function parseCommandCenterView(w: unknown): CommandCenterView {
               tip: str(s.tip) },
     counts: { agents: num(c.agents), working: num(c.working), needsYou: num(c.needs_you),
               stopped: num(c.stopped), setup: num(c.setup), running: num(c.running),
-              expiredAnswerable: num(c.expired_answerable) },
+              stalled: num(c.stalled), expiredAnswerable: num(c.expired_answerable) },
     // Live's own parser, over Live's own fields: the same cards, lanes, chips and faces.
     attention: board.attention, missions: board.missions, outcomes: board.outcomes,
     recent: arr(o.recent).map((x) => {
@@ -222,27 +234,31 @@ export function parseCommandCenterView(w: unknown): CommandCenterView {
                finishedAt: optStr(y.finished_at), error: optStr(y.error) };
     }),
     teams: board.teams, agents: board.agents,
-    flows: arr(o.flows).map(parseFlow),
     today: {
       hours: arr(t.hours).map(parseHour), now: str(t.now),
       runsFinished: num(t.runs_finished), runsFailed: num(t.runs_failed),
       moneyMicros: num(t.money_micros), includedMicros: num(t.included_micros),
       lastWorkAt: optStr(t.last_work_at), everRan: t.ever_ran === true,
     },
-    day: { since: str(d.since), rows: arr(d.rows).map(parseDayRow), more: num(d.more) },
-    week: {
-      days: arr(wk.days).map((x) => { const y = obj(x); return { date: str(y.date), completed: num(y.completed), failed: num(y.failed) }; }),
-      runs: num(wk.runs), passed: num(wk.passed), failed: num(wk.failed),
-      builds: num(wk.builds), buildsPassed: num(wk.builds_passed), prsOpened: num(wk.prs_opened),
-      jobs: num(wk.jobs), deployments: num(wk.deployments), moneyMicros: num(wk.money_micros),
-      tokens: num(wk.tokens), modelHours: num(wk.model_hours),
-    },
+    week: (() => {
+      const wk = obj(o.week);
+      return {
+        days: arr(wk.days).map((x) => { const y = obj(x); return { date: str(y.date), completed: num(y.completed), failed: num(y.failed) }; }),
+        runs: num(wk.runs), passed: num(wk.passed), failed: num(wk.failed),
+        builds: num(wk.builds), buildsPassed: num(wk.builds_passed), prsOpened: num(wk.prs_opened),
+        jobs: num(wk.jobs), deployments: num(wk.deployments), moneyMicros: num(wk.money_micros),
+        tokens: num(wk.tokens), modelHours: num(wk.model_hours),
+      };
+    })(),
+    pulse: parsePulse(o.pulse),
+    cleanup: parseCleanup(o.cleanup),
     budget: {
       state: (BUDGET_STATES.has(budgetState) ? budgetState : "unknown") as BudgetState,
       period: str(b.period), capUsdMicros: num(b.cap_usd_micros), actualUsdMicros: num(b.actual_usd_micros),
       utilizationRatio: typeof b.utilization_ratio === "number" ? b.utilization_ratio : null,
       resetsAtLabel: str(b.resets_at_label), budgetTimezone: str(b.budget_timezone, "UTC"),
       day: { capUsdMicros: num(bd.cap_usd_micros), actualUsdMicros: num(bd.actual_usd_micros) },
+      subscription: b.subscription === true,
     },
     host: { show: h.show === true,
             ...(h.severity === "warning" || h.severity === "critical" ? { severity: h.severity } : {}),

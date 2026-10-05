@@ -113,7 +113,7 @@ describe("the inbox groups by the engine's attention", () => {
 
 describe("the Command Center points at the expired ones without listing them", () => {
   const counts = (over: Record<string, number>) => ({
-    agents: 7, working: 0, needs_you: 0, stopped: 0, setup: 0, running: 0, expired_answerable: 0, ...over,
+    agents: 7, working: 0, needs_you: 0, stopped: 0, setup: 0, running: 0, stalled: 0, expired_answerable: 0, ...over,
   });
 
   it("says how many and links to the Expired view", () => {
@@ -143,7 +143,7 @@ describe("the Command Center points at the expired ones without listing them", (
       <CommandCenter projectId="p" orgId="org_1" actor="ceo"
         initial={parseCommandCenterView(view({ counts: counts({ needs_you: needs }) }))} />,
     );
-    const kpi = /data-testid="cc2-kpi-needs-you"[\s\S]*?<span class="cc-num-n">(\d+)<\/span>/.exec(html);
+    const kpi = /data-testid="cc2-kpi-needs-you"[^>]*>(\d+)</.exec(html);
     expect(Number(kpi?.[1])).toBe(needs);
   });
 });

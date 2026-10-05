@@ -27,7 +27,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 
-from . import decision_actions, factory_view, workflow_capabilities
+from . import decision_actions, decision_words, factory_view, workflow_capabilities
 
 #: A run in one of these is in flight.
 LIVE_RUN = frozenset({"queued", "validating", "running", "waiting", "paused", "blocked"})
@@ -350,7 +350,11 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         elif run:
             title = f"“{run['step_label']}” is waiting for you on {run['name']}"
         else:
-            title = _first_line(decision.get("question"), 160)
+            # NEVER THE PRODUCER'S LOG LINE: "Missing active reservation for OpenAI call" is
+            # "Allow an OpenAI call without a reservation · Spend guard" (decision_words).
+            title = decision_words.headline(decision)["title"]
+        source = ("Factory" if build else (run["workflow_name"] if run else
+                  decision_words.headline(decision)["source"])) or None
         needs_you.append({
             "id": str(decision.get("id")),
             "kind": "approval",
@@ -358,8 +362,10 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "title": title,
             # WHY IT ASKS, in the server's words (agents-home D6) — never the approve button's
             # effect, which the card already shows on the button.
-            "detail": (hint.get("what_happened") or _first_line(decision.get("reason"))
-                       or _first_line(_rec_reason(decision)) or ""),
+            "detail": decision_words.plain_detail(
+                hint.get("what_happened") or _first_line(decision.get("reason"))
+                or _first_line(_rec_reason(decision)) or ""),
+            "source": source,
             "what_to_do": hint.get("what_to_do"),
             "fix_area": hint.get("area"),
             "fix_label": hint.get("link_label"),

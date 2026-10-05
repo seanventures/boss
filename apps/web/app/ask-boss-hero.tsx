@@ -17,6 +17,7 @@
  * no purely ornamental motion, and all of it collapses under prefers-reduced-motion.
  */
 
+import React from "react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
@@ -33,6 +34,8 @@ import { askBossAction, runAgentActionAction } from "./actions";
 import { apiWrite } from "../lib/api-write";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { openDockAbout } from "../lib/dock-subject";
+import { addFeaturePatch } from "../lib/compose-links";
+import { linkTo, navigate, plainClick } from "./agents/live-util";
 
 import { callAction } from "../lib/call-action";
 const NORMAL_SECONDS = 20;
@@ -80,7 +83,7 @@ const OPENERS = [
  * than fetched, so they work offline and cost nothing to show; a live feed is a separate
  * capability and is noted in the UI rather than faked here.
  */
-type Idea = {
+export type Idea = {
   tag: string; title: string; brief: string;
   /** Hue for the card's thumbnail. A wall of identical grey cards is a list pretending to be a
    *  gallery — colour is what makes sixteen of them scannable rather than readable. */
@@ -212,7 +215,7 @@ function photoFor(title: string): string {
 }
 
 /** The slug used for both the file name and the accent, so they cannot disagree. */
-function slugFor(title: string): string {
+export function slugFor(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
@@ -582,7 +585,7 @@ const GLYPHS = {
  * looks like. Radial gradients produce the same soft orb with no filter graph at all, so the
  * artwork paints with the first frame like any other fill.
  */
-function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
+export function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
   const slug = `${scope}-${slugFor(idea.title)}`;
   const accent = accentFor(idea.title);
   return (
@@ -656,7 +659,7 @@ function IdeaPhoto({ title }: { title: string }) {
   );
 }
 
-const IDEAS: Idea[] = [
+export const IDEAS: Idea[] = [
   {
     tag: "Ops", title: "Incident timeline builder", glyph: "clock",
     brief: `Build an incident timeline builder.
@@ -874,6 +877,36 @@ const RESEARCH: Array<{ label: string; seed: string }> = [
 
 const IDEAS_PER_PAGE = 4;
 
+/** Who a template is for, from its brief ("an on-call engineer writing the post-mortem…"). */
+export function ideaFor(idea: Idea): string {
+  return (idea.brief.split("Who it is for:")[1] ?? "").split("\n")[0].trim()
+    || idea.brief.split("\n")[0].replace(/^Build /, "");
+}
+
+/** Opens the composer's Ideas — the gallery when `grid` — from elsewhere on the page (the
+ *  Command Center's "All 16 ↗"). The composer owns the gallery; nothing else draws a copy. */
+/** A run named by what was asked for: its first line, cut at a word, never an id. */
+export function namedRun(text: string): string {
+  const line = (text.trim().split("\n")[0] ?? "").replace(/^(build|make|create)\s+(an?|the)\s+/i, "");
+  const cut = line.length > 48 ? `${line.slice(0, 48).replace(/\s+\S*$/, "")}…` : line;
+  return (cut.charAt(0).toUpperCase() + cut.slice(1)).replace(/[.!?]$/, "") || "This";
+}
+
+export const OPEN_IDEAS_EVENT = "askboss:open-ideas";
+export function openIdeas(grid = true): void {
+  try { window.dispatchEvent(new CustomEvent(OPEN_IDEAS_EVENT, { detail: { grid } })); } catch { /* none */ }
+}
+
+/** Opens a template's page (`?template=<slug>`): the composer listens for the history change. */
+export function openTemplate(title: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("template", slugFor(title));
+    window.history.pushState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
 /**
  * POST to one of our own route handlers, with the same stall bound `ask` already had.
  *
@@ -1027,8 +1060,12 @@ export function AskBossHero({
   researchAvailable = true,
   deploymentAvailable = true,
   ideasInline = false,
+  layout = "bar",
 }: {
   projectId: string;
+  //: `hero`: the Command Center's composer (cc v2) — the pickers as chips on the row, Talk to
+  //: BOSS beside Build. Only the look changes; every action and state is the same.
+  layout?: "bar" | "hero";
   actor: string;
   orgId?: string;
   researchAvailable?: boolean;
@@ -1326,7 +1363,8 @@ export function AskBossHero({
       setInput("");
       setReply(
         `**Started.** Taking you to the workflow…\n\n` +
-        (runId ? `Run \`${runId}\`.` : ""),
+        // NAMED, NEVER AN ID (independent test): the run as the operator called it, linked.
+        (runId ? `[${namedRun(directive)} run ↗](${linkTo({ area: "delivery_workflows", wfr: runId }, orgId)})` : ""),
       );
       // GO WHERE THE WORK IS. Telling somebody to "open Workflow" after they pressed Build is
       // asking them to do the navigation the press already implied — and they had no way to
@@ -1338,7 +1376,7 @@ export function AskBossHero({
       window.dispatchEvent(new PopStateEvent("popstate"));
       window.dispatchEvent(new CustomEvent("boss:navigate"));
     });
-  }, [busy, projectId, actor]);
+  }, [busy, projectId, actor, orgId]);
 
   /**
    * Put a brief in the composer. Deliberately does NOT build.
@@ -1423,12 +1461,12 @@ export function AskBossHero({
       if (!r.ok) { setError(r.error ?? "Could not start the research run."); return; }
       setInput("");
       setReply(
-        `**Researching.** Discovery run \`${r.data?.run_id ?? ""}\` is gathering sources.\n\n` +
+        `**Researching.** ${r.data?.run_id ? `[${namedRun(seed)} research ↗](${linkTo({ area: "discovery" }, orgId)})` : "The research"} is gathering sources.\n\n` +
         `It produces a cited dossier and candidate outcomes — watch it under **Discovery**. ` +
         `When something looks worth building, bring it back here and press Build.`,
       );
     });
-  }, [busy, projectId, actor, researchAvailable]);
+  }, [busy, projectId, actor, researchAvailable, orgId]);
 
   // A SLOW DRIFT THE OPERATOR CAN OVERRIDE.
   //
@@ -1468,6 +1506,18 @@ export function AskBossHero({
       document.removeEventListener("keydown", escape);
     };
   }, [ideasOpen, ideasInline]);
+  useEffect(() => {
+    const open = (e: Event) => {
+      const grid = (e as CustomEvent<{ grid?: boolean }>).detail?.grid !== false;
+      setIdeasOpen(true);
+      setGridMode(grid);
+      window.requestAnimationFrame(() => {
+        ideasRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+    };
+    window.addEventListener(OPEN_IDEAS_EVENT, open);
+    return () => window.removeEventListener(OPEN_IDEAS_EVENT, open);
+  }, []);
   // Defaults to OFF for anyone who asked the OS for less motion, but it is a VISIBLE toggle
   // rather than a silent gate: drifting was requested, and a requested feature that quietly
   // does nothing because of a system setting is indistinguishable from a bug.
@@ -1530,7 +1580,7 @@ export function AskBossHero({
   const state = busy ? (slow ? "slow" : "thinking") : reply || error ? "answered" : "idle";
 
   return (
-    <section className="askboss" data-state={state} data-layout="bar" aria-label="Ask BOSS">
+    <section className="askboss" data-state={state} data-layout={layout} aria-label="Ask BOSS">
       <div className="askboss-aura" aria-hidden />
       <div className="askboss-inner">
         {/* NO HEADER IN VIEW (command-center spec §4.6, copy budget). The eyebrow is the
@@ -1563,7 +1613,9 @@ export function AskBossHero({
               // NOT "or ask a question": ⌘/Ctrl+Enter runs Build, the path that spends budget,
               // so a box inviting questions turned typed questions into builds. Questions go
               // through "Talk to BOSS" beside Build.
-              placeholder="Describe what to build…"
+              placeholder={layout === "hero"
+                ? "Describe an app or a change — e.g. “A lead-triage inbox that scores inbound and drafts replies”"
+                : "Describe what to build…"}
               onChange={(e) => {
                 setInput(e.target.value);
                 // A brief is many lines; a fixed one-row box hid all but the first.
@@ -1590,7 +1642,7 @@ export function AskBossHero({
                 picker and the agent picker — so the textarea collapsed to half its width and
                 the buttons marched toward the right edge. A composer's box is for what you are
                 writing; everything that acts on it belongs beneath. */}
-            <div className="askboss-bar" data-settings-open={settingsOpen ? "true" : undefined}>
+            <div className="askboss-bar" data-settings-open={settingsOpen || layout === "hero" ? "true" : undefined}>
               {busy ? (
                 <span className="askboss-busy" role="status">
                   {slow ? `Still working · ${elapsed}s` : "Working"}
@@ -1602,8 +1654,19 @@ export function AskBossHero({
                     project — it sends the directive down panel → PRD → code — so there is no
                     app here to assign anyone to. What can be set is what this project does by
                     default, which then seeds every app that follows. */}
-                <DefaultAgentPicker projectId={projectId} actor={actor} />
+                <DefaultAgentPicker projectId={projectId} actor={actor} faces={layout === "hero"} />
               </div>
+              {layout === "hero" ? <span className="askboss-bar-spacer" aria-hidden /> : null}
+              {layout === "hero" ? (
+                // TALK TO BOSS ON ITS OWN BUTTON in the hero (the approved look): free, and
+                // the same `discuss` the split menu runs in the bar layout.
+                <button type="button" className="askboss-talk" data-testid="askboss-talk"
+                        disabled={busy || !input.trim()}
+                        title="An idea or the running system — BOSS asks what it needs to know, pushes back, and starts nothing unless you say so."
+                        onClick={() => discuss(input)}>
+                  Talk to BOSS
+                </button>
+              ) : null}
               <SplitAction
                 busy={busy}
                 disabled={busy || !input.trim()}
@@ -1612,6 +1675,7 @@ export function AskBossHero({
                   hint: "Down the governed path — a panel, a PRD you approve, then code",
                 }}
                 others={[
+                  ...(layout === "hero" ? [] : [
                   /* ONE DOOR. "Discuss it" and "Ask about the system" were the same model over
                      the same tools writing into the same threads, separated by a paragraph of
                      system prompt — so the menu was asking the operator to classify their own
@@ -1621,16 +1685,26 @@ export function AskBossHero({
                   { id: "discuss", label: "Talk to BOSS", cost: "free",
                     hint: "An idea or the running system — BOSS asks what it needs to know, "
                           + "pushes back, and starts nothing unless you say so.",
-                    onRun: () => discuss(input) },
+                    onRun: () => discuss(input) }]),
                   ...(researchAvailable ? [{ id: "research", label: "Research",
                     cost: "spends money",
                     hint: "Web sources first, into a cited dossier and candidate outcomes",
                     onRun: () => research(input) }] : []),
                 ]}
               />
-              <button type="button" className="askboss-more" aria-label="Workflow and team"
+              {layout === "hero" ? (
+                // ADDING TO WHAT EXISTS is the main job (np/compose owns the flow): a quiet
+                // second door beside Build, never a second primary.
+                <a className="askboss-add" data-testid="askboss-add-existing"
+                   href={linkTo(addFeaturePatch(), orgId)}
+                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(addFeaturePatch()); } }}
+                   title="Add a feature to an app your team already built">
+                  ＋ Add to an existing app
+                </a>
+              ) : null}
+              {layout === "hero" ? null : <button type="button" className="askboss-more" aria-label="Workflow and team"
                       title="Workflow and team" aria-expanded={settingsOpen}
-                      onClick={() => setSettingsOpen((o) => !o)}>▾</button>
+                      onClick={() => setSettingsOpen((o) => !o)}>▾</button>}
               {!reply && !busy ? (
                 <button type="button" ref={ideasButton} className="askboss-ideas-btn"
                         data-testid="askboss-examples" aria-expanded={ideasOpen}

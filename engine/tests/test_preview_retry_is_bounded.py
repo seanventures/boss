@@ -51,7 +51,8 @@ def _act_source() -> str:
 def test_exceeding_the_limit_escalates_instead_of_going_quiet():
     """Stopping silently would trade a retry storm for an app nobody is told is broken."""
     src = _act_source()
-    assert "INSERT INTO shepherd_escalations" in src
+    # Every question goes through Shepherd's one door (shepherd_service.open_question).
+    assert "open_question(" in src
     assert "PREVIEW_MAX_ATTEMPTS" in src
 
 
@@ -60,7 +61,7 @@ def test_the_escalation_suppresses_further_retries():
     so the loop closes itself rather than needing a second mechanism."""
     src = _act_source()
     assert "NOT EXISTS" in src and "shepherd_escalations" in src
-    assert src.index("NOT EXISTS") < src.index("INSERT INTO shepherd_escalations")
+    assert src.index("NOT EXISTS") < src.index("open_question(")
 
 
 def test_the_operator_is_offered_something_other_than_retry():

@@ -34,3 +34,19 @@ export async function fetchCommandCenterView(projectId: string, tz: string, view
     return { wire: null, everRan: null, error: e instanceof Error ? e.message : "API unreachable" };
   }
 }
+
+/** Server-side first paint of the Factory's apps (the hero's numbers, the shelf): the wire and
+ *  its ETag, or null — the client's poll then reads it. Never blocks the page on a failure. */
+export async function fetchCommandCenterApps(projectId: string, enabled = true):
+    Promise<{ wire: unknown; etag: string | null } | null> {
+  if (!enabled || !projectId) return null;
+  const { API_URL, authHeaders } = await import("./client");
+  try {
+    const r = await fetch(`${API_URL}/v1/factory/apps?project_id=${encodeURIComponent(projectId)}`,
+                          { headers: authHeaders({}), cache: "no-store" });
+    if (!r.ok) return null;
+    return { wire: await r.json(), etag: r.headers.get("etag") };
+  } catch {
+    return null;
+  }
+}

@@ -14,6 +14,7 @@ import {
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
+import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
 import { openPlan } from "../lib/converse-doors";
@@ -827,23 +828,30 @@ export default function ConsoleShell({
 
   // Width is the operator's choice and it persists. A chat you cannot widen is a chat you
   // stop using for anything longer than a sentence.
-  const [dockWidth, setDockWidth] = useState(520);
+  // RESPONSIVE BY DEFAULT (cc/v2): clamp(360px, 40vw, 520px), the dragged width when there
+  // is one, and never so wide that the page column falls under 560px (lib/shell-rail.ts).
+  const [dragged, setDragged] = useState<number | null>(null);
+  const [viewportW, setViewportW] = useState(1440);
   useEffect(() => {
     const saved = Number(window.localStorage.getItem("boss.dock.width") || 0);
-    if (saved >= 320) setDockWidth(Math.min(saved, window.innerWidth - 280));
+    if (saved >= 320) setDragged(saved);
+    const read = () => setViewportW(window.innerWidth || 1440);
+    read();
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
   }, []);
+  const dockWidth = dockWidthFor(viewportW, dragged);
   const startResize = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
     const onMove = (move: MouseEvent) => {
       // Clamped so the panel can never swallow the console or shrink past readable.
-      const next = Math.max(320, Math.min(window.innerWidth - 280, window.innerWidth - move.clientX));
-      setDockWidth(next);
+      setDragged(dockWidthFor(window.innerWidth, window.innerWidth - move.clientX));
     };
     const onUp = () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       document.body.style.userSelect = "";
-      setDockWidth((w) => { window.localStorage.setItem("boss.dock.width", String(w)); return w; });
+      setDragged((w) => { if (w) window.localStorage.setItem("boss.dock.width", String(w)); return w; });
     };
     document.body.style.userSelect = "none";     // dragging must not select the page text
     document.addEventListener("mousemove", onMove);
@@ -972,7 +980,22 @@ export default function ConsoleShell({
   useEffect(() => {
     try { setDocked(localStorage.getItem("boss.nav.docked") === "1"); } catch { /* private mode */ }
   }, []);
+  // THE DOCK MAKES ROOM (operator decision, cc/v2): with Talk to BOSS open and the page column
+  // under 720px, the sidebar folds to its icon rail; it comes back when the dock closes. The
+  // operator's own collapse is `docked` (remembered) and is never touched by this. Pressing the
+  // toggle while it is folded for the dock keeps it open until the dock closes.
+  const [railForChat, setRailForChat] = useState(false);
+  const [keptOpen, setKeptOpen] = useState(false);
+  useEffect(() => {
+    if (!dockedRun) { setRailForChat(false); setKeptOpen(false); return undefined; }
+    const read = () => setRailForChat(railForDock({ dockOpen: true, viewport: window.innerWidth, dockWidth }));
+    read();
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, [dockedRun, dockWidth]);
+  const railed = docked || (railForChat && !keptOpen);
   const toggleDock = () => {
+    if (!docked && railForChat && !keptOpen) { setKeptOpen(true); return; }
     setDocked((wasDocked) => {
       const next = !wasDocked;
       try { localStorage.setItem("boss.nav.docked", next ? "1" : "0"); } catch { /* ignore */ }
@@ -981,7 +1004,8 @@ export default function ConsoleShell({
   };
 
   return (
-    <div className={`bx-shell${navOpen ? " nav-open" : ""}${docked ? " nav-docked" : ""}`}>
+    <div className={`bx-shell${navOpen ? " nav-open" : ""}${railed ? " nav-docked" : ""}`}
+         data-rail-for-dock={railed && !docked ? "true" : undefined}>
       <a className="skip-link" href="#decision-inbox">Skip to decision inbox</a>
 
       <aside className="bx-sidebar">
@@ -1000,9 +1024,9 @@ export default function ConsoleShell({
             type="button"
             className="bx-dock-toggle"
             data-testid="nav-dock-toggle"
-            aria-pressed={docked}
-            aria-label={docked ? "Expand the sidebar" : "Collapse the sidebar to icons"}
-            title={docked ? "Expand the sidebar" : "Collapse to icons"}
+            aria-pressed={railed}
+            aria-label={railed ? "Expand the sidebar" : "Collapse the sidebar to icons"}
+            title={railed ? "Expand the sidebar" : "Collapse to icons"}
             onClick={toggleDock}
           >
             <CaretRight size={14} weight="bold" aria-hidden />

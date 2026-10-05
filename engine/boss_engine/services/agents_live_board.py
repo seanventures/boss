@@ -25,7 +25,7 @@ from typing import Any, Literal, Mapping, Optional, TypedDict
 from sqlalchemy import text
 
 MissionState = Literal["running", "waiting_you", "waiting_person", "waiting", "stopped",
-                       "blocked", "done"]
+                       "blocked", "stalled", "done"]
 AttentionKind = Literal["approval", "failed_step", "readiness", "gate_override", "budget_refused",
                         "system_health"]
 
@@ -65,6 +65,9 @@ class AttentionItem(TypedDict, total=False):
     risk_tier: Optional[int]
     fix: Optional[dict[str, str]]
     at: Optional[str]
+    # Where the question comes from, in a word or two ("Spend guard", the workflow's name,
+    # "Factory"): decision_words.headline, never a raw code.
+    source: Optional[str]
     # The build this is about when its subject is a code task (factory spec §6.5):
     # {run_id, app, where, failing: [{name, label, waivable, reason?}], retryable, retry_reason,
     #  pr_url?, preview_url?, plan_url?}
@@ -113,6 +116,7 @@ class Mission(TypedDict, total=False):
     step_since: Optional[str]
     elapsed_seconds: Optional[int]
     step_elapsed_seconds: Optional[int]
+    last_progress_at: Optional[str]
     cost_usd: float
     hops: list[Hop]
     folded: bool
@@ -156,6 +160,7 @@ class Counts(TypedDict, total=False):
     working: int
     needs_you: int               # decisions only (agents-home D2)
     running: int
+    stalled: int                 # live runs with no progress for STALLED_AFTER, apart from running
     stopped: int
     setup: int                   # readiness gaps, counted apart
     building: int            # the Factory's BUILDING rows (factory spec §10, decision 2)
@@ -314,6 +319,7 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
                     if n.get("fix_area") else None),
             "at": n.get("at"),
             "build": n.get("build"),
+            "source": n.get("source"),
         }
         if kind == "approval":
             decision = by_id.get(str(n.get("decision_id"))) or {}
@@ -620,7 +626,23 @@ def _next_steps(spec_steps: Mapping[str, Mapping[str, Any]], started: set[str],
 
 
 _SORT = {"stopped": 0, "waiting_you": 1, "blocked": 2, "running": 3, "waiting_person": 3,
-         "waiting": 3, "done": 4}
+         "waiting": 3, "stalled": 4, "done": 5}
+
+#: A live run with no progress for this long is STALLED, not running: on goldeneye eight runs
+#: "running" for a month made the page say "8 running" while nothing moved. The rule is here,
+#: once; every count (running, stalled) and the state sentence read the state it sets.
+STALLED_AFTER = timedelta(days=7)
+#: The states a stall can turn into "stalled". A gate waiting on YOU is your wait, never a
+#: stall; a stopped run already says it stopped.
+STALLABLE = frozenset({"running", "blocked", "waiting", "waiting_person"})
+
+
+def last_progress(run: Mapping[str, Any], steps: list[Mapping[str, Any]]) -> Optional[datetime]:
+    """When the run last moved: the newest of its steps' completed/started/updated times, else
+    when it was created. Never the run row's own updated_at, which bookkeeping touches."""
+    times = [t for s in steps for t in (_aware(s.get("completed_at")), _aware(s.get("started_at")),
+                                         _aware(s.get("updated_at"))) if t]
+    return max(times) if times else _aware(run.get("created_at"))
 
 
 def missions(connection: Any, project_id: str, read: Mapping[str, Any],
@@ -690,6 +712,9 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
                 state = "waiting"
                 waiting_on = workflows.waiting_on_label({
                     "approval": approval, "decision_id": None, "output": output})
+        moved = last_progress(run, by_run.get(str(run["id"]), []))
+        if state in STALLABLE and moved is not None and now - moved > STALLED_AFTER:
+            state = "stalled"
         step_since = (_aware(here.get("started_at")) or _aware(here.get("updated_at"))
                       if here else None)
         created = _aware(run.get("created_at"))
@@ -718,6 +743,7 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
             if created else None,
             "step_elapsed_seconds": int((now - step_since).total_seconds())
             if step_since and not just_done else None,
+            "last_progress_at": _iso(moved),
             "cost_usd": 0.0,
             "hops": [],
             "next": _next_steps(spec, {str(s.get("step_id")) for s in run_steps},
@@ -770,6 +796,8 @@ def _mission_verb(m: Mapping[str, Any], acts: list[dict[str, Any]], verbs: Mappi
         return "Stuck"
     if state == "blocked":
         return "Blocked"
+    if state == "stalled":
+        return "Stalled"
     if state == "waiting_you":
         return "Needs you"
     if state in ("waiting", "waiting_person"):
@@ -935,6 +963,20 @@ def force(connection: Any, project_id: str, attention: list[AttentionItem]
     return teams, agents
 
 
+def mission_workers(missions: list[Mapping[str, Any]]) -> set[str]:
+    """Agents on the current hop of a running mission, when that hop is working. Pure."""
+    out: set[str] = set()
+    for m in missions:
+        if m.get("state") != "running":
+            continue
+        for h in reversed(m.get("hops") or []):
+            if h.get("role_key"):
+                if h.get("state") in ("working", "thinking", "speaking"):
+                    out.add(str(h["role_key"]))
+                break
+    return out
+
+
 def _agent(key: str, name: str, callsign: Any, team: str, here: Optional[Mapping[str, Any]],
            stuck: Optional[Mapping[str, Any]], lifecycle: str) -> BoardAgent:
     state = str((here or {}).get("state") or "idle")
@@ -1018,6 +1060,17 @@ def compose(connection: Any, settings: Any, project_id: str, *,
             logging.getLogger("boss.agents_live_board").warning(
                 "could not read the building builds", exc_info=True)
     teams, agents = force(connection, project_id, attention)
+    # ONE SOURCE FOR "WORKING" (independent re-check R6): an agent on a running mission's
+    # current working hop is working, whatever its presence row says this tick — so the team
+    # tiles, the pill and In flight count the same agents.
+    on_step = mission_workers(rows)
+    for a in agents:
+        if a["role_key"] in on_step and a["state"] in ("idle", "done"):
+            a["state"] = "working"
+    for t in teams:
+        members = set(t["members"])
+        t["working"] = sum(1 for a in agents if a["role_key"] in members
+                           and a["state"] in ("working", "in_panel"))
     board: LiveBoard = {
         "project_id": project_id,
         "etag": "",
@@ -1029,7 +1082,10 @@ def compose(connection: Any, settings: Any, project_id: str, *,
             # count, Approvals' badge and Needs action: decisions only (agents-home D2).
             "needs_you": int(cc["counts"]["needs_you"]),
             "setup": int(cc["counts"]["setup"]),
-            "running": sum(1 for m in rows if m["state"] not in ("done", "stopped")),
+            # RUNNING IS WHAT MOVES: a run with no progress for a week is `stalled`, counted
+            # apart, never "running" (goldeneye said "8 running" for a month of nothing).
+            "running": sum(1 for m in rows if m["state"] not in ("done", "stopped", "stalled")),
+            "stalled": sum(1 for m in rows if m["state"] == "stalled"),
             # What NEEDS YOU lists as stopped work, counted by the one rule (attention_counts).
             "stopped": command_center.attention_counts(attention)["stopped"],
             "building": len(builds),

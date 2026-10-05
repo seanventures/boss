@@ -145,7 +145,7 @@ import { fetchAiSreCapabilities } from "../lib/ai-sre";
 import { AiSreHome } from "./ai-sre-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { buildAgentRoster } from "../lib/roster";
-import { TZ_COOKIE, fetchCommandCenterView } from "../lib/command-center-view-server";
+import { TZ_COOKIE, fetchCommandCenterApps, fetchCommandCenterView } from "../lib/command-center-view-server";
 import { CommandCenter } from "./command-center-ui";
 import { ReliabilityHome } from "./reliability-ui";
 import { AssuranceCenter } from "./assurance-ui";
@@ -675,6 +675,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     // it: an await on its own is a round trip every other feed waits behind. The zone is the
     // viewer's (the cookie the page writes), so the first paint's day is their day.
     fetchCommandCenterView(activeProjectId, ccZone, undefined, needs("overview")),
+    // The Factory's apps for the hero's numbers and the shelf, in the same wave (cc v2).
+    fetchCommandCenterApps(activeProjectId, needs("overview")),
   ] as const);
 
   const [workforceData, orgChartData] = await Promise.all([workforceP, orgChartP]);
@@ -865,7 +867,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing
   // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
   // calls, so serialising it was pure waste on every single render.
-  const [reliabilityFeed, aiSreFeed, , commandCenter] = await reliabilityWaveP;
+  const [reliabilityFeed, aiSreFeed, , commandCenter, commandCenterApps] = await reliabilityWaveP;
   // Platform ops panels nested into existing Mission Control areas (no new nav).
   const [
     identityProvidersFeed,
@@ -1087,10 +1089,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <CommandCenter key={`${activeOrgId}:${activeProjectId}`} projectId={activeProjectId}
             orgId={activeOrgId} actor={activeActorId} viewer={activeActorId}
             initial={null} initialWire={commandCenter.wire} initialError={commandCenter.error} tz={ccZone}
+            initialApps={commandCenterApps}
             composer={
               <AskBossHero projectId={activeProjectId} actor={activeActorId}
-                orgId={activeOrgId} deploymentAvailable={false}
-                ideasInline={commandCenter.everRan === false} />
+                orgId={activeOrgId} deploymentAvailable={false} layout="hero" />
             }
             help={<OnboardingHelpCard />} />
         </section>

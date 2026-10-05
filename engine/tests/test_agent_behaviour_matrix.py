@@ -802,11 +802,11 @@ def test_the_landing_panel_shows_started_work_not_the_event_log():
     page = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
     assert "<CommandCenter" in page
     assert "<CoordinationPanel" not in page
-    panel = pathlib.Path("apps/web/app/command-center-ui.tsx").read_text(encoding="utf-8")
+    # cc v2: In flight lists the moving runs; each row opens its run.
+    panel = pathlib.Path("apps/web/app/command-center/cards.tsx").read_text(encoding="utf-8")
     assert 'aria-labelledby="cc2-running-h"' in panel
-    assert "data.running.map((run)" in panel
-    assert "run.step_label" in panel and "agentPhrase(run.agent)" in panel
-    assert "runHref(run.run_id, orgId)" in panel, "running rows do not open their run"
+    assert "shown.map((m) => <FlightRow" in panel
+    assert "runHref(m.runId, orgId)" in panel, "running rows do not open their run"
     from boss_engine.services import command_center
     import inspect
     # build() is assemble() over read(); read() is where the runs are read (shared with

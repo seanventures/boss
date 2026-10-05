@@ -16,9 +16,13 @@ const CSS = readFileSync(join(here, "../app/globals.css"), "utf8");
  * memory survives the collapse — which is the only reason to dock rather than hide.
  */
 describe("the sidebar docks to icons", () => {
-  it("has a control to collapse it", () => {
+  it("has a control to collapse it, and it says the state the sidebar is really in", () => {
     expect(SHELL).toContain('data-testid="nav-dock-toggle"');
-    expect(SHELL).toContain("aria-pressed={docked}");
+    // Railed = the operator collapsed it, OR the open dock folded it to make room
+    // (lib/shell-rail.ts); the control reports what is on screen, not only the preference.
+    expect(SHELL).toContain("const railed = docked || (railForChat && !keptOpen);");
+    expect(SHELL).toContain("aria-pressed={railed}");
+    expect(SHELL).toContain('${railed ? " nav-docked" : ""}');
   });
 
   it("says which way it will go, for a screen reader too", () => {

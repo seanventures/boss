@@ -1118,6 +1118,23 @@ def _finalize_cancel(connection, run_id: str, project_id: str, *, actor: str, re
         {"id": run_id, "e": reason[:2000], "p": project_id, "a": actor, "t": stamp,
          "ph": phase or ""},
     )
+    # A STOPPED BUILD TAKES ITS PLAN QUESTION WITH IT. The plan gate no longer times out (it
+    # holds its build), so a build stopped at its plan must close the question itself, or
+    # "Approve the plan?" would wait in Needs you for a build that is gone.
+    try:
+        with connection.begin_nested():
+            from .run_decisions import _withdraw_with_note
+
+            for row in connection.execute(
+                sql("SELECT d.id FROM decisions d JOIN code_task_runs c ON c.decision_id = d.id "
+                    "WHERE c.id = :id AND d.recommendation->>'action' = 'resume_code_task'"),
+                {"id": run_id},
+            ).mappings().all():
+                _withdraw_with_note(connection, str(row["id"]), project_id,
+                                    "Withdrawn: the build was stopped before its plan was approved",
+                                    actor=actor, why={"code_task_run_id": run_id})
+    except Exception:  # noqa: BLE001 — the stop stands even if the question can't be closed
+        logger.warning("could not withdraw the plan question of %s", run_id, exc_info=True)
     jobs = connection.execute(
         sql("SELECT id FROM jobs WHERE project_id=:p AND payload::text LIKE :pat "
             "AND status NOT IN ('succeeded','cancelled','deadlettered','failed')"),
