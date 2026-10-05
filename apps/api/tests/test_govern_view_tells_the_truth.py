@@ -238,3 +238,28 @@ def test_spend_by_agent_and_by_model_is_money_with_included_beside_it(client, en
     week = client.get("/v1/govern/spend", params={"project_id": PROJECT, "window": "7d"}).json()
     assert week["by_agent"][0] == {"id": "qa_engineer", "calls": 2, "money_usd_micros": 10_000_000,
                                    "included_usd_micros": 0}
+
+
+def test_lanes_say_what_the_panel_runs_under_memory_pressure(client, engine, clean):
+    """Under memory pressure (admission L1+) the panel runs one seat; the board says so, from
+    the same reading the pipeline uses (project_settings.memory_limited_seats)."""
+    def level(n):
+        with engine.begin() as c:
+            if n is None:
+                c.execute(text("DELETE FROM system_state WHERE key = 'degradation'"))
+            else:
+                c.execute(text("INSERT INTO system_state (key, value) VALUES ('degradation', "
+                               "CAST(:v AS JSONB)) ON CONFLICT (key) DO UPDATE SET value = "
+                               "EXCLUDED.value"), {"v": f'{{"level": {n}}}'})
+    try:
+        level(0)
+        assert _controls(client)["code_agent_max_concurrency"]["running_now"] is None
+        level(1)
+        lanes = _controls(client)["code_agent_max_concurrency"]
+        assert lanes["value_effective"] == 6
+        assert lanes["running_now"] == {"value": 1, "reason": "memory"}
+        with engine.begin() as c:
+            assert ps.memory_limited_seats(c) == 1
+        assert _controls(client)["code_agent_max_turns"]["running_now"] is None
+    finally:
+        level(None)
