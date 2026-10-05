@@ -8610,6 +8610,9 @@ def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
                           host_target_id=payload["host_target_id"],
                           ports=payload.get("ports"),
                           actor=str(payload.get("actor") or "operator"))
+    # Observability › Sources caches its body for 60 s; a deploy shows on the next poll.
+    from boss_engine.services.obs_view import forget_sources
+    forget_sources(payload["project_id"])
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result)
     return result
@@ -21027,10 +21030,22 @@ def list_project_llm_calls(
     code_task_run_id: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    since: Optional[str] = None,
 ) -> LlmCallListResponse:
-    """Operator read path over the llm_calls spend/quality ledger (filters + pagination)."""
+    """Operator read path over the llm_calls spend/quality ledger (filters + pagination).
+    `since` keeps calls made at or after it (Observability › Models' group drawer)."""
+    from datetime import datetime as _since_dt
+
     from boss_engine.services.llm_telemetry import list_llm_calls
 
+    if since:
+        # An unencoded "+00:00" arrives as " 00:00" (a query string's "+" is a space).
+        raw = since.strip()
+        raw = raw.replace(" ", "+") if "T" in raw else raw
+        try:
+            since = _since_dt.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="since must be an ISO time") from error
     try:
         with begin(engine) as connection:
             result = list_llm_calls(
@@ -21044,6 +21059,7 @@ def list_project_llm_calls(
                 code_task_run_id=code_task_run_id,
                 limit=limit,
                 offset=offset,
+                since=since or None,
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

@@ -78,7 +78,17 @@ def build_observability_router(
         return _read(project_id, request, response, lambda c: obs_view.sources(
             c, settings(), project_id.strip(), fresh=fresh))
 
-    # Writes (S2): POST /v1/observability/apps/{target_id}/probe — probes ONLY that app
-    # (operator decision §11.5), returns {word, tone, checked_at}.
+    @router.post("/v1/observability/apps/{target_id}/probe")
+    def obs_probe_app(target_id: str, payload: ObsBody):
+        """`Probe now` in the app drawer: probes ONLY this app (operator decision §11.5), not
+        the project sweep, records the sample and answers {word, tone, checked_at}. Gated like
+        the sweep it replaces for this press: anyone who can read the project."""
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            require_reader(connection, pid)
+        try:
+            return obs_view.probe_app(engine, settings(), pid, target_id)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
     return router

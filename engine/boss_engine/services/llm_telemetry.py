@@ -341,8 +341,12 @@ def list_llm_calls(
     code_task_run_id: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    since: Optional[str] = None,
 ) -> dict:
-    """List llm_calls rows for a project with optional filters (operator read path)."""
+    """List llm_calls rows for a project with optional filters (operator read path).
+
+    `since` (ISO time) keeps calls made at or after it — Observability › Models' group drawer
+    reads the window it is showing."""
     if not (project_id or "").strip():
         raise ValueError("project_id is required.")
     limit = max(1, min(int(limit), 200))
@@ -368,6 +372,9 @@ def list_llm_calls(
     if code_task_run_id:
         clauses.append("code_task_run_id = :run")
         params["run"] = code_task_run_id
+    if since:
+        clauses.append("created_at >= CAST(:since AS timestamptz)")
+        params["since"] = since
 
     where = " AND ".join(clauses)
     total = connection.execute(
