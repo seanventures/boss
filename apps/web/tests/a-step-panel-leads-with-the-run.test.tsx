@@ -29,7 +29,7 @@ const { laneAgentOf } = await import("../app/agents/chain-model");
 const { usd } = await import("../lib/money");
 const { stepQuestion } = await import("../app/delivery-workflows-ui");
 const { FlowLane } = await import("../app/workflows/flow/flow-lane");
-const { ActivityLog } = await import("../app/activity-log-ui");
+const { LogExplorer } = await import("../app/activity/log-explorer");
 const { toChain } = await import("../app/agents/act-wire");
 
 const CHAIN = toChain(shipItChain());
@@ -198,6 +198,10 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     const call = asked.find((u) => u.startsWith("/api/activity?"))!;
     expect(new URLSearchParams(call.split("?")[1]).get("step_id")).toBe("plan");
     expect(new URLSearchParams(call.split("?")[1]).get("workflow_run_id")).toBe("wfr_1");
+    // ONE bounded read: the server's summary (rows, error/warn counts, model calls), not a
+    // 100-row page re-scanned every five seconds.
+    expect(new URLSearchParams(call.split("?")[1]).get("summary")).toBe("1");
+    expect(asked.filter((u) => u.startsWith("/api/activity"))).toHaveLength(1);
     const rows = host!.querySelectorAll('[data-testid="dw-step-log-row"]');
     expect(rows).toHaveLength(4);
     // An error the step log holds is never below the fold of the panel: pinned first, counted.
@@ -213,20 +217,20 @@ describe("(A) the step's activity, and the way straight into its log", () => {
 
   it("the activity log opened on that link is scoped to the step, and says so", async () => {
     window.history.replaceState({}, "", "/?area=activity&wfr=wfr_1&step=plan&step_name=Plan+it&run_name=Lead+Triage+Inbox");
-    await render(<ActivityLog projectId="p1" actor="ceo" />);
+    await render(<LogExplorer projectId="p1" actor="ceo" />);
     const lists = asked.filter((u) => u.startsWith("/api/activity?"));
     expect(lists.length).toBeGreaterThan(0);
-    // What the log settles on is the step's scope, for the rows and for the chips' counts.
+    // What the log settles on is the step's scope, for the rows and for the rail's counts.
     expect(lists.at(-1)).toContain("step_id=plan");
     expect(lists.at(-1)).toContain("workflow_run_id=wfr_1");
     expect(asked.filter((u) => u.startsWith("/api/activity/facets?")).at(-1)).toContain("step_id=plan");
-    // Names, not ids: the ids are its tooltip.
-    expect(q('[data-testid="activity-scope-step"]')!.textContent).toBe("Plan it · Lead Triage Inbox");
-    expect(q('[data-testid="activity-scope-workflow"]')!.textContent).not.toContain("wfr_1");
-    await act(async () => q('[data-testid="activity-scope-step-clear"]')!.click());
+    // Names, not ids: the ids are the tokens' tooltips.
+    expect(q('[data-testid="lx-token-step"]')!.textContent).toBe("step: Plan it");
+    expect(q('[data-testid="lx-token-wfr"]')!.textContent).toBe("wfr: Lead Triage Inbox");
+    await act(async () => q('[data-testid="lx-whole-run"]')!.click());
     for (let i = 0; i < 4; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(new URLSearchParams(window.location.search).get("step")).toBeNull();
-    expect(q('[data-testid="activity-scope-step"]')).toBeNull();
+    expect(q('[data-testid="lx-token-step"]')).toBeNull();
   });
 
   it("prints no sentence: six words at most outside a tooltip, no paragraphs", async () => {

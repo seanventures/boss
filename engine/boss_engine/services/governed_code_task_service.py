@@ -58,6 +58,7 @@ from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 
 logger = logging.getLogger(__name__)
 from .pipeline_profile_service import resolve_for_run
+from .project_settings import effective_review_lanes, effective_review_rounds
 from .factory_quality_loop import (
     bind_test_outcomes,
     bind_verify_log_to_jtbd,
@@ -3721,15 +3722,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as _sc:
                 _lanes = _effective_setting(
                     _sc, project_id, settings, "code_agent_max_concurrency")
-            max_workers = min(len(checks), max(int(_lanes or 3), 6))
+            # Floor of 6, capped by the panel: project_settings.effective_review_lanes.
+            max_workers = effective_review_lanes(_lanes, panel_size=len(checks))
             # UNDER MEMORY PRESSURE THE PANEL SITS ONE SEAT AT A TIME (stability spec §4b.3,
             # L1+): each seat is a ~300 MB CLI, and six at once is what tips a small machine
             # into swap. Slower, and it finishes.
+            # project_settings.memory_limited_seats: the same reading Govern shows on the board.
             try:
-                from .admission import current_level, L1 as _L1
+                from .project_settings import memory_limited_seats
                 with _transaction(engine) as _lc:
-                    if current_level(_lc) >= _L1:
-                        max_workers = 1
+                    _seats_now = memory_limited_seats(_lc)
+                if _seats_now is not None:
+                    max_workers = min(max_workers, _seats_now)
             except Exception:  # noqa: BLE001 — an unread level never changes the panel
                 pass
             panel_parallel = max_workers > 1
@@ -4205,7 +4209,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # so the context is cache reads), the frozen tests re-verify, and ONLY the
             # failed judges re-review the delta. Ships when every gate turns green;
             # falls back to the legacy paths below if it can't converge.
-            inrun_max = max(0, int(getattr(settings, "code_review_inrun_max_rounds", 2) or 2))
+            inrun_max = effective_review_rounds(getattr(settings, "code_review_inrun_max_rounds", 2))
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.

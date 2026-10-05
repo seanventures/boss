@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 
@@ -42,6 +42,8 @@ class PolicyIn(BaseModel):
 class PoliciesPutRequest(BaseModel):
     project_id: str
     policies: list[PolicyIn] = Field(min_length=1)
+    #: Who is writing. The signed-in principal wins when the request is authenticated.
+    actor: Optional[str] = None
 
 
 class RecommendationsRequest(BaseModel):
@@ -85,13 +87,27 @@ def get_policies(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.put("/policies")
-def put_policies(payload: PoliciesPutRequest) -> dict[str, Any]:
-    """Upsert token budget policies for a project."""
+def put_policies(payload: PoliciesPutRequest, request: Request) -> dict[str, Any]:
+    """Upsert token budget policies for a project.
+
+    Needs `budget_manage` (it needed nothing: anyone who could reach the API could rewrite a
+    project's token guides). An `If-Match` (the stage's version, from GET /v1/govern) guards a
+    one-stage edit against a stale screen; without one, the old behaviour."""
+    from apps.api.app.govern_guard import govern_actor, require_fresh
+    from apps.api.app.main import current_api_principal, engine, require_project_actor
+
+    actor = govern_actor(payload.actor, current_api_principal.get())
     try:
-        with begin(get_engine()) as connection:
+        with begin(engine) as connection:
+            require_project_actor(connection, payload.project_id, actor, "budget_manage")
             te.ensure_tables(connection)
+            if len(payload.policies) == 1:
+                current, who = te.version_of(connection, payload.project_id,
+                                             payload.policies[0].stage)
+                require_fresh(request, current, who)
             return te.upsert_policies(
                 connection,
+                actor=actor,
                 project_id=payload.project_id,
                 # exclude_unset: a key the caller did not send must reach the engine as absent,
                 # not as None, or the merge in upsert_policies reads it as "clear this cap"
