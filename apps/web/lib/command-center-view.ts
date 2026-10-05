@@ -17,6 +17,9 @@ import {
 } from "./agents-live-board";
 import { usePolled, type Polled } from "./factory-floor";
 import type { HostAdvice } from "../app/host-advice";
+import { TZ_COOKIE, viewUrl } from "./command-center-view-server";
+
+export { TZ_COOKIE, viewUrl };
 
 // ── Shapes ──────────────────────────────────────────────────────────────────────────────────
 
@@ -269,13 +272,6 @@ export function viewerZone(): string {
   }
 }
 
-/** The cookie the page writes so the server's first paint uses the viewer's zone too. */
-export const TZ_COOKIE = "boss_tz";
-
-export function viewUrl(projectId: string, tz: string, viewer?: string | null): string {
-  return `/v1/command-center/view?project_id=${encodeURIComponent(projectId)}&tz=${encodeURIComponent(tz)}`
-    + (viewer ? `&viewer=${encodeURIComponent(viewer)}` : "");
-}
 
 /** The poll, seeded with the server's first paint so nothing flashes and the first poll is a 304. */
 export function useCommandCenterView(projectId: string, tz: string, initial: CommandCenterView | null,
@@ -307,21 +303,3 @@ export type MotionMode = "full" | "reduced" | "none";
 
 /** The server render's read (page.tsx): one call for the whole landing page. A failure is said
  *  (`error`), never drawn as a confident empty factory. */
-export async function fetchCommandCenterView(projectId: string, tz: string, viewer?: string | null,
-                                             enabled = true):
-    Promise<{ view: CommandCenterView | null; error: string | null }> {
-  if (!enabled || !projectId) return { view: null, error: null };
-  const { API_URL, authHeaders } = await import("./client");
-  try {
-    const r = await fetch(`${API_URL}${viewUrl(projectId, tz, viewer)}`,
-                          { headers: authHeaders({}), cache: "no-store" });
-    if (!r.ok) {
-      let said = "";
-      try { said = String(((await r.json()) as { detail?: unknown }).detail ?? ""); } catch { /* none */ }
-      return { view: null, error: said || `The API answered ${r.status}.` };
-    }
-    return { view: parseCommandCenterView(await r.json()), error: null };
-  } catch (e) {
-    return { view: null, error: e instanceof Error ? e.message : "API unreachable" };
-  }
-}

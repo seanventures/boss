@@ -74,7 +74,6 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
   if (rows.length === 0) {
     return (
       <div className="cc-day" data-testid="cc-day-strip" data-empty="true">
-        <span className="ag-zone-label cc-day-head">LAST 24H</span>
         <div className="cc-day-empty">
           <span>No runs in 24h</span>
           <button type="button" className="ag-link" onClick={onStartWork} data-testid="cc-day-start">Start work ↗</button>
@@ -85,7 +84,6 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
 
   return (
     <div className="cc-day" data-testid="cc-day-strip" data-window={windowHours} data-motion={motion}>
-      <span className="ag-zone-label cc-day-head">{windowHours === 24 ? "LAST 24H" : "LAST 12H"}</span>
       <div className="cc-day-rows" onMouseLeave={() => onHover(null)}>
         {shown.map((r) => {
           const start = Date.parse(r.startedAt);

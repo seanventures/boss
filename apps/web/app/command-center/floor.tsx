@@ -115,10 +115,6 @@ export function Floor({ view, projectId, motion, motionWhy, band, orgId, onYou, 
   const clock = useNow(30_000);
   const nowMs = clock ?? Date.parse(view.generatedAt);
   const footer = floorFooter(view, clock);
-  const mapHref = linkTo({ area: "workforce", view: "organization", role: null }, orgId);
-  const openMap = (e: React.MouseEvent) => {
-    if (plainClick(e)) { e.preventDefault(); navigate({ area: "workforce", view: "organization", role: null }); }
-  };
 
   if (view.agents.length === 0) {
     return (
@@ -158,7 +154,6 @@ export function Floor({ view, projectId, motion, motionWhy, band, orgId, onYou, 
             {list ? "Map" : "List"}
           </button>
         )}
-        <a className="ag-link" href={mapHref} onClick={openMap} data-testid="cc-floor-open-map">Open map ↗</a>
       </footer>
     </div>
   );
@@ -331,6 +326,7 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
       en.last = now;
       const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
       g.setAttribute("class", "cc-comet");
+      g.setAttribute("data-comet", "");
       const tail = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       tail.setAttribute("r", "9");
       tail.setAttribute("class", "cc-comet-glow");

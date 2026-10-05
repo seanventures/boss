@@ -6,6 +6,7 @@ import { CheckCircle } from "@phosphor-icons/react";
 
 import {
   TZ_COOKIE,
+  parseCommandCenterView,
   statusOf,
   useCommandCenterView,
   viewerZone,
@@ -154,6 +155,9 @@ export type CommandCenterProps = {
   actor: string;
   /** The server's first paint (same view the poll reads), or null when it could not be read. */
   initial: CommandCenterView | null;
+  /** The same first paint as the API sent it: page.tsx is a server component and may not import
+   *  the parser (it pulls in client hooks), so it hands over the wire and this parses it. */
+  initialWire?: unknown;
   /** Why the server could not read it. */
   initialError?: string | null;
   /** The zone the server read in (the `boss_tz` cookie, else UTC). */
@@ -165,8 +169,10 @@ export type CommandCenterProps = {
   help?: React.ReactNode;
 };
 
-export function CommandCenter({ projectId, orgId, actor, initial, initialError = null, tz = "UTC",
-                                viewer, composer, help }: CommandCenterProps) {
+export function CommandCenter({ projectId, orgId, actor, initial: given, initialWire, initialError = null,
+                                tz = "UTC", viewer, composer, help }: CommandCenterProps) {
+  const [initial] = useState<CommandCenterView | null>(
+    () => given ?? (initialWire ? parseCommandCenterView(initialWire) : null));
   // THE VIEWER'S ZONE. The server painted in the cookie's zone (UTC on a first visit); the
   // browser knows the real one, so it remembers it for the next server paint and reads in it.
   const [zone, setZone] = useState(tz);
@@ -308,7 +314,8 @@ export function CommandCenter({ projectId, orgId, actor, initial, initialError =
   );
   const composeSec = (
     <section className="cc-sec cc-sec-compose" id="cc-compose" aria-label="Ask BOSS">
-      {composer}
+      {/* Keyed: it is an element the server page made, rendered here among siblings. */}
+      <React.Fragment key="composer">{composer}</React.Fragment>
       {firstRun ? <OnboardingHelpRows onMore={() => setHelpOpen(true)} /> : null}
     </section>
   );
@@ -394,7 +401,7 @@ export function CommandCenter({ projectId, orgId, actor, initial, initialError =
   );
   const workSec = (
     <section className="cc-sec cc-sec-work" id="cc2-running" aria-labelledby="cc-work-h">
-      <Head id="cc-work-h" label="LAST 24H">
+      <Head id="cc-work-h" label={phone ? "LAST 12H" : "LAST 24H"}>
         <HeadLink patch={{ area: "delivery_workflows", role: null, view: null }} orgId={orgId}>Workflow ↗</HeadLink>
       </Head>
       {view ? (

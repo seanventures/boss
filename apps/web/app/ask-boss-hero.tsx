@@ -1702,7 +1702,7 @@ export function AskBossHero({
                   for a trackpad that will not scroll sideways. */}
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label"
-                      title="Open one to read what it must do and how you will know it worked. Nothing builds until you press Build.">
+                      title="Open one to read what it does. Nothing builds until you press Build.">
                   Or start something
                 </span>
                 {/* NO FILTERS. Eight chips were added by analogy with Lovable, which has 204

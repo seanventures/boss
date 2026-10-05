@@ -154,7 +154,7 @@ import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { buildAgentRoster } from "../lib/roster";
-import { TZ_COOKIE, fetchCommandCenterView } from "../lib/command-center-view";
+import { TZ_COOKIE, fetchCommandCenterView } from "../lib/command-center-view-server";
 import { CommandCenter } from "./command-center-ui";
 import { ReliabilityHome } from "./reliability-ui";
 import { AssuranceCenter } from "./assurance-ui";
@@ -1143,11 +1143,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           <CommandCenter key={`${activeOrgId}:${activeProjectId}`} projectId={activeProjectId}
             orgId={activeOrgId} actor={activeActorId} viewer={activeActorId}
-            initial={commandCenter.view} initialError={commandCenter.error} tz={ccZone}
+            initial={null} initialWire={commandCenter.wire} initialError={commandCenter.error} tz={ccZone}
             composer={
               <AskBossHero projectId={activeProjectId} actor={activeActorId}
                 orgId={activeOrgId} deploymentAvailable={false}
-                ideasInline={!!commandCenter.view && !commandCenter.view.today.everRan} />
+                ideasInline={commandCenter.everRan === false} />
             }
             help={<OnboardingHelpCard />} />
         </section>

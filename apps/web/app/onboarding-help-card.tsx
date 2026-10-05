@@ -86,13 +86,13 @@ export function OnboardingHelpCard() {
 export function OnboardingHelpRows({ onMore }: { onMore?: () => void }) {
   return (
     <ul className="cc-help-rows" data-testid="console-capabilities-card" aria-label="What you can do here">
-      <li title="Describe what you want. BOSS starts a workflow run: a panel writes the spec, an agent builds and tests it and opens a pull request. Watch it in Workflow; the finished project is in Factory.">
+      <li title="A panel writes the plan; an agent builds, tests and opens a PR.">
         <b>Build</b><span>describe it, BOSS builds it</span>
       </li>
-      <li title="Ask about your work. BOSS answers from live state and can act on the answer when you press the button it offers.">
+      <li title="BOSS answers from live state, and acts only when you press.">
         <b>Talk to BOSS</b><span>ask about your work</span>
       </li>
-      <li title="Approvals holds what BOSS will not do without you: shipping to a host, merging a pull request. A failed step waits here with Retry.">
+      <li title="Shipping, merging and failed steps wait here for you.">
         <b>Approvals</b><span>what waits on you</span>
       </li>
       {onMore ? (
