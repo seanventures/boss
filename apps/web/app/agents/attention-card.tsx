@@ -42,13 +42,18 @@ const KIND_WORD: Record<string, string> = {
 
 /** The word for what kind of thing this is: `Gate`, `Decision`, `Deploy`, `Pull request`,
  *  `Refusal`, `Setup`. A plain decision is not a gate (walk D16). */
-export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind">): string {
+export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind"> & { infraKind?: string }): string {
   if (item.kind === "readiness") return "Setup";
   if (item.kind === "failed_step") return "Failed";
   if (item.kind === "gate_override") return "Checks";
   if (item.kind === "budget_refused") return "Budget";
   if (item.kind === "system_health") return "System";
-  if (item.kind === "infra") return "Infra";
+  if (item.kind === "infra") {
+    // What the card is about, not which screen raised it: on Observability an app that is down
+    // is a health card, on Infra a failed deploy is a deploy card.
+    return ({ app_down: "Health", deploy_failed: "Deploy", host_unreachable: "Machine" } as Record<string, string>)[
+      item.infraKind ?? ""] ?? "Infra";
+  }
   return KIND_WORD[item.decisionKind ?? ""] ?? "Decision";
 }
 

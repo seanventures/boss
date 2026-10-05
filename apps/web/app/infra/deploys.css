@@ -21,7 +21,9 @@
 .inf-dep-rows, .inf-pv-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .inf-dep-row {
   display: grid; align-items: center; gap: 10px; min-height: 56px; padding: 6px 12px; min-width: 0;
-  grid-template-columns: minmax(96px, 120px) minmax(110px, 1.2fr) 64px minmax(64px, 0.8fr) 72px 24px minmax(70px, auto) 56px 36px auto 20px;
+  /* Every column a fixed track (no `auto`): each row is its own grid, so an auto track sized
+     by one row's Approve/Reject pushed that row's columns out of line with the rest. */
+  grid-template-columns: minmax(96px, 120px) minmax(110px, 1.2fr) 64px minmax(64px, 0.8fr) 72px 24px 96px 56px 36px 172px 20px;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .inf-dep-row:hover { border-color: var(--accent-line); }
@@ -127,7 +129,7 @@
 
 /* 640-1023: host and approver go to the row's tooltip; previews drop host. */
 @media (max-width: 1023px) {
-  .inf-dep-row { grid-template-columns: minmax(90px, 110px) minmax(100px, 1fr) 64px 72px minmax(64px, auto) 56px 36px auto 20px; }
+  .inf-dep-row { grid-template-columns: minmax(90px, 110px) minmax(100px, 1fr) 64px 72px 96px 56px 36px 172px 20px; }
   .inf-dep-host, .inf-dep-who { display: none; }
   .inf-pv-row { grid-template-columns: minmax(100px, 160px) minmax(110px, 1fr) 64px 48px 84px minmax(100px, 140px) auto; }
   .inf-pv-host { display: none; }
