@@ -39,8 +39,9 @@ describe("a workflow that declares inputs opens the form", () => {
     // question they have answered. A catalogue template's one required answer is its brief,
     // collected on the first step, so it opens there.
     // Its start form is the first step (rendered: tests/the-start-form-is-the-workflows-own).
-    expect(UI).toContain('useState<StepId>("brief")');
-    expect(UI).toContain("{ ...EMPTY_DRAFT, workflowKey: startWith, inputs: defaultsFor(startWith),");
+    // One screen: the form is on it from the start, already on that workflow.
+    expect(UI).toContain("const firstPath = startWith ?? defaultPath(\"new\", installedKeys);");
+    expect(UI).toContain("{ ...EMPTY_DRAFT, workflowKey: firstPath, inputs: firstPath ? defaultsFor(firstPath)");
   });
 
   it("no Start fires a sample: an example is shown before it runs", () => {
@@ -72,7 +73,7 @@ describe("the brief is not demanded of a workflow that has its own inputs", () =
     // all. It now returns only when the same `blocked` that disables the button is set, and a
     // workflow that is not a product brief sends its own fields, not a made-up run title (the
     // video example's `title` is the YouTube title).
-    expect(UI).toContain("if (blocked || busy) return;");
+    expect(UI).toContain("if (busy || (blocked && !(adding && proposal?.proposal))) return;");
     expect(UI).toContain("if (!o.brief) return { ...typed, ...where };");
   });
 });

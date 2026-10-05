@@ -1936,6 +1936,22 @@ def _notify(
             "receipt": receipt, "subject": subject}
 
 
+def _existing_app_note(connection: Connection, project_id: str, run_id: str) -> str:
+    """What a panel must know when the run builds onto an existing app; "" when it does not."""
+    if not run_id:
+        return ""
+    from .code_task_service import load_code_task_run, work_branch_for
+    from .factory_view import app_name
+
+    run = load_code_task_run(connection, run_id)
+    if not run or str(run.get("project_id")) != str(project_id):
+        return ""
+    return (f"This is a change to an EXISTING, working app, {app_name(run)!r}, whose code is on "
+            f"branch {work_branch_for(run)}. Write a PRD for this feature only: do not "
+            "re-scaffold the app and do not redesign it. Its existing behaviour and its "
+            "existing tests must keep passing.")
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -2178,6 +2194,12 @@ def _perform_capability(
     # and that branch above returns for every key it handles. Moved up rather than duplicated.
     if key == "build":
         inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
+        # A FEATURE FOR AN APP THAT EXISTS is that app's next build, not a new app: the tool
+        # starts it from the app's branch and lineage. Read from the run input, which the start
+        # endpoint validated, rather than bound by each workflow — every build step honours it.
+        extends = str((context.get("input") or {}).get("extends_run_id") or "").strip()
+        if extends:
+            inputs = {**inputs, "extends_run_id": extends}
 
     # WHAT THE PANEL IS BEING CONVENED FOR.
     #
@@ -2191,6 +2213,14 @@ def _perform_capability(
     # owns how a brief is folded into the panel's prompt, and it already does that for research.
     if key == "meeting":
         objective = str(context.get("objective") or "").strip()
+        # A PANEL ASKED FOR A FEATURE OF A WORKING APP writes a PRD for a whole new product
+        # unless told otherwise — and the build then follows that PRD. Said in the objective,
+        # which request_meeting already puts first in every seat's prompt.
+        existing = _existing_app_note(
+            connection, project_id,
+            str((context.get("input") or {}).get("extends_run_id") or "").strip())
+        if existing:
+            objective = f"{objective}\n\n{existing}".strip()
         if objective:
             inputs = {**inputs, "objective": objective,
                       "workflow_name": str(context.get("workflow_name") or "").strip()}

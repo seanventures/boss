@@ -17,6 +17,7 @@
  * no purely ornamental motion, and all of it collapses under prefers-reduced-motion.
  */
 
+import React from "react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
@@ -80,7 +81,7 @@ const OPENERS = [
  * than fetched, so they work offline and cost nothing to show; a live feed is a separate
  * capability and is noted in the UI rather than faked here.
  */
-type Idea = {
+export type Idea = {
   tag: string; title: string; brief: string;
   /** Hue for the card's thumbnail. A wall of identical grey cards is a list pretending to be a
    *  gallery — colour is what makes sixteen of them scannable rather than readable. */
@@ -212,7 +213,7 @@ function photoFor(title: string): string {
 }
 
 /** The slug used for both the file name and the accent, so they cannot disagree. */
-function slugFor(title: string): string {
+export function slugFor(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
@@ -582,7 +583,7 @@ const GLYPHS = {
  * looks like. Radial gradients produce the same soft orb with no filter graph at all, so the
  * artwork paints with the first frame like any other fill.
  */
-function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
+export function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string }) {
   const slug = `${scope}-${slugFor(idea.title)}`;
   const accent = accentFor(idea.title);
   return (
@@ -656,7 +657,7 @@ function IdeaPhoto({ title }: { title: string }) {
   );
 }
 
-const IDEAS: Idea[] = [
+export const IDEAS: Idea[] = [
   {
     tag: "Ops", title: "Incident timeline builder", glyph: "clock",
     brief: `Build an incident timeline builder.

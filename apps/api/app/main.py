@@ -23506,6 +23506,17 @@ def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
         }
 
 
+@app.get("/v1/delivery-workflows/costs")
+def get_delivery_workflow_costs(project_id: str) -> dict:
+    """What a run of each workflow has cost in this project, as a 20th–80th percentile range,
+    and `@change` for a quick change with no workflow. From recorded model calls only; a
+    workflow with no history is left out rather than guessed (services/workflow_costs.py)."""
+    from boss_engine.services.workflow_costs import workflow_costs
+
+    with begin(engine) as connection:
+        return workflow_costs(connection, project_id)
+
+
 @app.get("/v1/delivery-workflows/runs")
 def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     """Live and recent delivery runs, each with where it has got to.
@@ -24796,6 +24807,33 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             # alternative is a run against an app that does not exist.
             raise HTTPException(status_code=409, detail=why_no_sample(str(wanted or "")))
         run_input = {**chosen, **run_input}
+
+    # BUILD ONTO AN APP THAT EXISTS. `extends_run_id` names a build of the app; every build
+    # step of this run then continues that app — its branch, its repository, its lineage — and
+    # the Factory shows the result as the app's next build. Checked here — before anything is
+    # spent, and after a re-run or a sample has filled the input in — because a run told to
+    # extend an app that is not in this project, or a simulated fixture with no code behind
+    # it, would otherwise convene a panel and fail only at the build.
+    extends: Optional[dict] = None
+    extends_run_id = str(run_input.get("extends_run_id") or "").strip()
+    run_input.pop("extends_run_id", None)
+    if extends_run_id:
+        from boss_engine.services.code_task_service import (
+            is_simulated_run, load_code_task_run, work_branch_for,
+        )
+        from boss_engine.services.factory_view import app_name
+
+        with begin(engine) as connection:
+            parent = load_code_task_run(connection, extends_run_id)
+        if not parent or str(parent.get("project_id")) != project_id:
+            raise HTTPException(status_code=404, detail="that app is not in this project")
+        if is_simulated_run(parent):
+            raise HTTPException(
+                status_code=422,
+                detail="that build is a simulated fixture — there is no code to build onto")
+        run_input["extends_run_id"] = extends_run_id
+        extends = {"run_id": extends_run_id, "app": app_name(parent),
+                   "branch": work_branch_for(parent)}
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)
@@ -24873,7 +24911,8 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         # adoption and did not get it should be able to see that, not wonder why its run
         # behaved differently from the one it copied.
         return {"run": run, **({"ignored_input": dropped} if dropped else {}),
-                **({"readiness": readiness} if readiness.get("missing") else {})}
+                **({"readiness": readiness} if readiness.get("missing") else {}),
+                **({"extends": extends} if extends else {})}
 
 
 def _delivery_readiness_or_409(
