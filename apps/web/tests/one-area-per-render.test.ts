@@ -46,11 +46,12 @@ describe("only the requested area is rendered", () => {
   });
 
   it("every area section passes through it", () => {
-    // 68 sections at the top level of the frame. A section added without a gate is a section
-    // every other area pays for.
+    // 57 sections at the top level of the frame (68 before Infra, System Configuration and
+    // Observability became two client areas, infra-observability spec §6.6). A section added
+    // without a gate is a section every other area pays for.
     const sections = PAGE_RAW.split("\n").filter((l) => /^        <section\b/.test(l)).length;
     const gates = (PAGE_RAW.match(/\{shows\("/g) ?? []).length;
-    expect(sections).toBeGreaterThan(60);
+    expect(sections).toBeGreaterThan(50);
     expect(gates).toBeGreaterThanOrEqual(sections);
   });
 
