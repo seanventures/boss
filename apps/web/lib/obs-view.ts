@@ -300,8 +300,10 @@ const OBS_TAB_KEYS = new Set<string>(OBS_TABS.map((t) => t.key));
 export function readObsUrl(search: string): ObsUrl {
   const p = new URLSearchParams(search);
   const view = p.get("view") ?? p.get("tab") ?? "";
+  // Govern's `tab=models` link (no `view=`, no `win=`) means the month.
+  const govern = !p.get("view") && p.get("tab") === "models" && !p.get("win");
   return {
-    view: (OBS_TAB_KEYS.has(view) ? view : "apps") as ObsTab, win: winOf(p.get("win")), group: groupOf(p.get("group")),
+    view: (OBS_TAB_KEYS.has(view) ? view : "apps") as ObsTab, win: govern ? "30d" : winOf(p.get("win")), group: groupOf(p.get("group")),
     metric: metricOf(p.get("metric")), app: p.get("app"), model: p.get("model"), q: p.get("q") ?? "",
   };
 }

@@ -29,7 +29,8 @@ describe("legacy Infra / System Configuration / Observability links", () => {
     ["area=infra&infra_view=finops", { area: "infra", view: "cloud", cloud: "spend" }],
     ["area=infra&infra_view=mcp", { area: "skills", tab: "library", lib: "mcp" }],
     ["area=infra&provider_account_id=acct_1", { area: "infra", view: "cloud", cloud: "accounts", account: "acct_1" }],
-    ["area=observability&tab=models", { area: "observability", view: "models" }],
+    ["area=observability&tab=models", { area: "observability", view: "models", win: "30d" }],
+    ["area=observability&tab=models&win=7d", { area: "observability", view: "models", win: "7d" }],
   ])("%s", (qs, want) => {
     expect(land(qs)).toEqual(want);
   });
@@ -61,6 +62,8 @@ describe("legacy Infra / System Configuration / Observability links", () => {
     expect(readInfraUrl("?area=infra").view).toBe("fleet");
     // Govern's link (activity-govern spec) reads as the Models tab even before the rewrite.
     expect(readObsUrl("?area=observability&tab=models").view).toBe("models");
+    expect(readObsUrl("?area=observability&tab=models").win).toBe("30d");
+    expect(readObsUrl("?area=observability&view=models").win).toBe("24h");
     expect(readObsUrl("?area=observability").view).toBe("apps");
   });
 

@@ -139,6 +139,8 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
   if (area === "observability" && params.get("tab") !== null && params.get("view") === null) {
     const next = copyWithout(params, ["tab"]);
     next.set("view", params.get("tab") ?? "apps");
+    // Govern's spend-vs-cap link means the month: with no window named, Models opens on 30d.
+    if (params.get("tab") === "models" && !next.get("win")) next.set("win", "30d");
     return next;
   }
 
