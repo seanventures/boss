@@ -387,7 +387,7 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
           now: Optional[datetime] = None) -> dict[str, Any]:
     """The Spend tab: daily money (30 days), cache, scorecard, savings and drivers over ONE
     window, so the figures stop disagreeing. Money excludes subscription calls; what those ran
-    is reported beside it. Model spend by agent and by model is Observability › Models' job."""
+    is reported beside it — the totals, by agent and by model."""
     from . import token_efficiency as te
     from .cost_insights import build_insights
 
@@ -422,6 +422,11 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
     status = BudgetGovernor(settings).status_for_project(connection, project_id, now=now)
     return {
         "project_id": project_id, "window": window,
+        # Model spend by agent and by model, over the same window: money (subscription calls
+        # are $0) with what subscriptions ran beside it as `included` — the old card summed the
+        # two at list price and called it spend.
+        "by_agent": _model_spend(connection, project_id, since, "role"),
+        "by_model": _model_spend(connection, project_id, since, "model"),
         "money_usd_micros": int(totals["money"] or 0),
         "included_usd_micros": int(totals["included"] or 0),
         "daily": daily_spend(connection, project_id, now=now),
@@ -432,6 +437,25 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
         "top_drivers": drivers,
         "spent_vs_cap": meter(status),
     }
+
+
+def _model_spend(connection: Connection, project_id: str, since: datetime,
+                 column: str) -> list[dict[str, Any]]:
+    """llm_calls grouped by role or model since `since`: calls, money, included. Top 12."""
+    assert column in ("role", "model")
+    return [
+        {"id": str(r["id"]), "calls": int(r["calls"]), "money_usd_micros": int(r["money"] or 0),
+         "included_usd_micros": int(r["included"] or 0)}
+        for r in connection.execute(text(f"""
+            SELECT COALESCE(NULLIF(TRIM({column}), ''), 'unknown') AS id, COUNT(*) AS calls,
+                   COALESCE(SUM(CASE WHEN COALESCE(included_in_subscription, false) THEN 0
+                                     ELSE cost_usd_micros END), 0) AS money,
+                   COALESCE(SUM(CASE WHEN COALESCE(included_in_subscription, false)
+                                     THEN cost_usd_micros ELSE 0 END), 0) AS included
+            FROM llm_calls WHERE project_id = :p AND created_at >= :s
+            GROUP BY 1 ORDER BY 3 DESC, 4 DESC, 1 LIMIT 12"""),
+            {"p": project_id, "s": since}).mappings()
+    ]
 
 
 # ── Envelopes ────────────────────────────────────────────────────────────────────────────────

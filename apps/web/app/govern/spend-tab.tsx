@@ -5,18 +5,47 @@
  * the six screens that each defined "spend" their own way are one definition here. Money
  * excludes subscription calls; what those ran is shown beside it as `Included`, never in it.
  *
- * Model spend by agent and by model is Observability › Models' job (infra-observability spec
- * §6.7): this tab shows spent vs cap and links there, and draws no model table of its own.
+ * By agent and by model (D4, parity with the old card): money, with `Included` beside it —
+ * the old card added subscription runs at list price into "spend". Spent vs cap links on to
+ * Observability › Models (infra-observability spec §6.7) for the deeper model view.
  */
 import React, { useState } from "react";
 
-import { money, readGovern, type SpendView } from "../../lib/govern";
+import { modelName, money, readGovern, tip14, type ModelSpendRow, type SpendView } from "../../lib/govern";
+import { nameOf } from "../agents/run-face";
 import { usePolledRead } from "../../lib/log-stream";
 import { consoleHref } from "../url-intent";
 import { DailyBars } from "./cap-preview";
 
 
 const WINDOWS = ["24h", "7d", "30d"] as const;
+
+function SpendRows({ rows, label, testid, nameFor }: {
+  rows: ModelSpendRow[]; label: string; testid: string; nameFor: (id: string) => string;
+}) {
+  const anyIncluded = rows.some((r) => r.included_usd_micros > 0);
+  return (
+    <section className="gv-card" aria-label={label} data-testid={testid}>
+      <h3 className="gv-sec-head">{label.toUpperCase()}</h3>
+      {rows.length ? (
+        <ul className="gv-list gv-spend-rows">
+          <li className="gv-spend-head" aria-hidden="true">
+            <span />
+            <span>Calls</span><span>Money</span>{anyIncluded ? <span title="Ran on a subscription. Not money.">Included</span> : null}
+          </li>
+          {rows.map((r) => (
+            <li key={r.id}>
+              <span data-user-text title={r.id}>{nameFor(r.id)}</span>
+              <span>{r.calls.toLocaleString("en-US")}</span>
+              <span>{money(r.money_usd_micros)}</span>
+              {anyIncluded ? <span className="gv-muted">{r.included_usd_micros ? money(r.included_usd_micros) : "—"}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : <span className="gv-muted">No model calls</span>}
+    </section>
+  );
+}
 
 function pctText(v: unknown): string {
   return typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}%` : "—";
@@ -75,6 +104,11 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
                  title="Spend by agent and by model">Models ↗</a>
             </span>
           </section>
+          <div className="gv-pair">
+            <SpendRows rows={s.by_agent ?? []} label="By agent" testid="gv-by-agent"
+                       nameFor={(id) => (id === "unknown" ? "Unknown" : nameOf(id).name)} />
+            <SpendRows rows={s.by_model ?? []} label="By model" testid="gv-by-model" nameFor={modelName} />
+          </div>
           <div className="gv-tiles">
             <section className="gv-tile" data-testid="gv-cache">
               <span className="gv-tile-label">CACHE</span>
@@ -117,11 +151,11 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
                 {s.savings.map((x) => (
                   <li key={x.kind}>
                     <span className="gv-sev" data-sev={x.severity}>{x.severity ?? "info"}</span>
-                    <span className="gv-finding" data-user-text title={x.finding}>{x.finding}</span>
+                    <span className="gv-finding" data-user-text title={tip14(x.finding)}>{x.finding}</span>
                     {Number((x as { potential_saving_usd_micros?: number }).potential_saving_usd_micros ?? 0) > 0 ? (
                       <span>Save ≈ {money(Number((x as { potential_saving_usd_micros?: number }).potential_saving_usd_micros))}</span>
                     ) : null}
-                    {x.action ? <span className="gv-action" title={x.action}>What to do</span> : null}
+                    {x.action ? <span className="gv-action" title={tip14(x.action)}>What to do</span> : null}
                   </li>
                 ))}
               </ul>
@@ -132,7 +166,7 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
             {s.top_drivers.length ? (
               <ul className="gv-list">
                 {s.top_drivers.map((d) => (
-                  <li key={d.id}><span data-user-text title={d.id}>{d.id}</span><span>{money(d.amount_usd_micros)}</span></li>
+                  <li key={d.id}><span data-user-text title={d.id}>{modelName(d.id)}</span><span>{money(d.amount_usd_micros)}</span></li>
                 ))}
               </ul>
             ) : <span className="gv-muted">No money spent</span>}

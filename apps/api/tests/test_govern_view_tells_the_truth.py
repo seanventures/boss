@@ -31,6 +31,7 @@ def clean(engine):
             c.execute(text("DELETE FROM project_settings WHERE project_id = :p AND key = ANY(:k)"),
                       {"p": PROJECT, "k": list(KNOB_KEYS)})
             c.execute(text("DELETE FROM cost_receipts WHERE project_id = :p"), {"p": PROJECT})
+            c.execute(text("DELETE FROM llm_calls WHERE project_id = :p"), {"p": PROJECT})
             c.execute(text("DELETE FROM budget_reservations WHERE project_id = :p"),
                       {"p": PROJECT})
             c.execute(text("DELETE FROM events WHERE project_id = :p AND event_type IN "
@@ -150,8 +151,6 @@ def test_spend_money_excludes_subscription_and_the_window_is_one(client, engine,
     assert week["money_usd_micros"] == 4_000_000
     assert len(week["daily"]) == 30 and week["daily"][-1]["money_usd_micros"] == 3_000_000
     assert week["daily"][-1]["included_usd_micros"] == 7_000_000
-    assert "by_agent" not in week and "by_model" not in week, \
-        "model spend by agent/model is Observability › Models' job"
     assert week["spent_vs_cap"]["state_label"] in govern_view.STATE_LABELS.values()
 
 
@@ -203,3 +202,31 @@ def test_a_month_cap_preview_counts_from_the_first(engine, clean):
     # (21st-30th = 10 days); October restarts at the 1st and stays under.
     assert preview["stopped_days"] == [f"2026-09-{d}" for d in range(21, 31)]
     assert preview["days_considered"] == 30
+
+
+def test_spend_by_agent_and_by_model_is_money_with_included_beside_it(client, engine, clean):
+    """D4 (parity): the Spend tab keeps BY AGENT and BY MODEL — money excludes subscription
+    calls, and what subscriptions ran is its own column, over the tab's one window."""
+    from apps.api.tests import log_seed as seed
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        seed.llm_call(c, at=now - timedelta(hours=1), role="software_engineer", model="claude-opus",
+                      cost_usd_micros=2_000_000)
+        seed.llm_call(c, at=now - timedelta(hours=2), role="software_engineer",
+                      model="claude-sonnet", cost_usd_micros=5_000_000, included=True)
+        seed.llm_call(c, at=now - timedelta(hours=3), role="qa_engineer", model="claude-sonnet",
+                      cost_usd_micros=1_000_000)
+        seed.llm_call(c, at=now - timedelta(days=3), role="qa_engineer", model="claude-sonnet",
+                      cost_usd_micros=9_000_000)
+    day = client.get("/v1/govern/spend", params={"project_id": PROJECT, "window": "24h"}).json()
+    assert day["by_agent"] == [
+        {"id": "software_engineer", "calls": 2, "money_usd_micros": 2_000_000,
+         "included_usd_micros": 5_000_000},
+        {"id": "qa_engineer", "calls": 1, "money_usd_micros": 1_000_000, "included_usd_micros": 0}]
+    assert day["by_model"] == [
+        {"id": "claude-opus", "calls": 1, "money_usd_micros": 2_000_000, "included_usd_micros": 0},
+        {"id": "claude-sonnet", "calls": 2, "money_usd_micros": 1_000_000,
+         "included_usd_micros": 5_000_000}]
+    week = client.get("/v1/govern/spend", params={"project_id": PROJECT, "window": "7d"}).json()
+    assert week["by_agent"][0] == {"id": "qa_engineer", "calls": 2, "money_usd_micros": 10_000_000,
+                                   "included_usd_micros": 0}
