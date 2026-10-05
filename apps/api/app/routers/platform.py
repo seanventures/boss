@@ -311,6 +311,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # Govern: the Limits board and its tabs (one read each; writes stay on their own routes).
+    from .govern import router as govern_router
+
+    app.include_router(govern_router)
+
     try:
         from .factory_flow import router as factory_flow_router
 

@@ -347,6 +347,32 @@ def offered_choices(connection, settings, project_id: str,
     return sorted(offered) or allowed
 
 
+#: `Agents at once` is the review panel's parallelism, and the panel never runs narrower than
+#: this: values 1-6 all behave like 6 (governed_code_task_service reads it through
+#: `effective_review_lanes`). Govern shows the effective value beside the stored one.
+REVIEW_LANES_FLOOR = 6
+#: What `Agents at once` reads as when nothing is stored and the deployment says 0/None.
+REVIEW_LANES_FALLBACK = 3
+#: What `Review rounds` reads as when it is 0 or unset: `int(v or 2)` — 0 is falsy, so 0 means 2.
+REVIEW_ROUNDS_FALLBACK = 2
+
+
+def effective_review_lanes(stored: Any, panel_size: Optional[int] = None) -> int:
+    """How many reviewers work at once on a build, from the `Agents at once` value.
+
+    THE ONE PLACE this arithmetic lives: the pipeline sizes its review panel with it and the
+    Govern board shows its result, so the screen cannot claim a number the engine does not use.
+    `panel_size` caps it at the number of checks the panel actually has."""
+    lanes = max(int(stored or REVIEW_LANES_FALLBACK), REVIEW_LANES_FLOOR)
+    return min(int(panel_size), lanes) if panel_size is not None else lanes
+
+
+def effective_review_rounds(stored: Any) -> int:
+    """How many times reviewers and the implementer converse in a run (`Review rounds`).
+    0 reads as 2 — the same truthiness the pipeline always had; Govern says so."""
+    return max(0, int(stored or REVIEW_ROUNDS_FALLBACK))
+
+
 class UnknownKnob(ValueError):
     """The key is not one of ours. Refused rather than stored."""
 
@@ -407,8 +433,34 @@ def get_all(connection, project_id: str) -> dict[str, Any]:
     return {r["key"]: r["value"] for r in rows}
 
 
+def _record_change(connection, project_id: str, key: str, before: Any, after: Any,
+                   actor: str) -> None:
+    """`settings.changed`, so Govern's changes are read in the Log (`Govern changes`) and Govern
+    keeps no change list of its own. Best effort, in a savepoint: a failed write of the record
+    must never undo or refuse the change itself."""
+    if before == after:
+        return
+    from .core import emit_event
+
+    spec = KNOBS.get(key) or {}
+    try:
+        with connection.begin_nested():
+            emit_event(connection, project_id, "settings.changed", actor or "operator",
+                       "project_setting", key,
+                       {"key": key, "label": spec.get("label") or key, "from": before,
+                        "to": after,
+                        "source_before": "project" if before is not None else "default",
+                        "source_after": "project" if after is not None else "default"})
+    except Exception:  # noqa: BLE001 — the record of a change is not the change
+        logger.exception("could not record settings.changed for %s", key)
+
+
 def set_one(connection, project_id: str, key: str, value: Any, actor: str = "operator") -> Any:
     clean = coerce(key, value)
+    before = connection.execute(
+        text("SELECT value FROM project_settings WHERE project_id = :p AND key = :k"),
+        {"p": project_id, "k": key},
+    ).scalar()
     connection.execute(
         text("INSERT INTO project_settings (project_id, key, value, updated_by, updated_at) "
              "VALUES (:p, :k, CAST(:v AS JSONB), :by, now()) "
@@ -417,16 +469,33 @@ def set_one(connection, project_id: str, key: str, value: Any, actor: str = "ope
              "    updated_at = now()"),
         {"p": project_id, "k": key, "v": json.dumps(clean), "by": actor},
     )
+    _record_change(connection, project_id, key, before, clean, actor)
     return clean
 
 
-def clear_one(connection, project_id: str, key: str) -> None:
+def clear_one(connection, project_id: str, key: str, actor: str = "operator") -> None:
     """Hand the knob back to the environment. Deleting is how a project says 'use the default'
     — storing the current default instead would freeze it against a later change."""
-    connection.execute(
-        text("DELETE FROM project_settings WHERE project_id = :p AND key = :k"),
+    before = connection.execute(
+        text("DELETE FROM project_settings WHERE project_id = :p AND key = :k RETURNING value"),
         {"p": project_id, "k": key},
-    )
+    ).scalar()
+    if before is not None:
+        _record_change(connection, project_id, key, before, None, actor)
+
+
+def version_of(connection, project_id: str, key: str) -> tuple[str, Optional[str]]:
+    """(version, who changed it last) for one knob — the If-Match a Govern edit sends. A knob
+    nobody set is version 'unset'; otherwise its last write time."""
+    row = connection.execute(
+        text("SELECT updated_at, updated_by FROM project_settings "
+             "WHERE project_id = :p AND key = :k"),
+        {"p": project_id, "k": key},
+    ).mappings().first()
+    if not row:
+        return "unset", None
+    stamp = row["updated_at"]
+    return (stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)), row["updated_by"]
 
 
 def applied(connection, project_id: Optional[str], settings: Any) -> Any:
