@@ -28356,6 +28356,22 @@ app.include_router(build_kit_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# INFRA AND OBSERVABILITY (infra-observability spec §6.2): one ETag'd view per tab, polled by
+# the console; Infra routes by target kind so one button replaces three (routers/infra_view.py,
+# routers/observability_view.py).
+from .routers.infra_view import build_infra_router
+from .routers.observability_view import build_observability_router
+
+for _build_view_router in (build_infra_router, build_observability_router):
+    app.include_router(_build_view_router(
+        engine=engine,
+        settings=get_settings,
+        require_write_actor=require_project_write_actor,
+        require_reader=require_project_reader,
+        reader_project=_acts_reader,
+        viewer_of=_acts_viewer,
+        etagged=_etagged,
+    ))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)
