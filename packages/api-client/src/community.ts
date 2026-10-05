@@ -1034,7 +1034,10 @@ export type DiscoverySummary = {
   deep?: boolean;
 };
 export type DiscoveryListItem = Omit<DiscoveryRun, "state" | "context"> & { summary: DiscoverySummary };
-export type DiscoveriesResponse = { discoveries: DiscoveryListItem[] };
+/** The project's true totals (every dossier, not only the listed page). */
+export type DiscoveryTotals = { dossiers: number; promising: number; needs_more: number; not_worth: number;
+                               signals: number; outcomes: number };
+export type DiscoveriesResponse = { discoveries: DiscoveryListItem[]; totals?: DiscoveryTotals };
 
 /** engine/boss_engine/services/model_failures.py `explain`, plus where the work stands. */
 export type ModelAttention = {
@@ -1627,6 +1630,12 @@ export type Meeting = {
   research_summary?: { sitemap?: string[]; pages_studied?: number };
   round1: Record<string, string>;
   round2: Record<string, string>;
+  /** Each seat's headline and up to three key points, per round — the seat's own, or cut from
+   *  its reply when it wrote none (engine meeting_gist). Keyed like `round1`/`round2`. */
+  round1_gists?: Record<string, MeetingTurnGist>;
+  round2_gists?: Record<string, MeetingTurnGist>;
+  /** The facilitator's synthesis as a headline and up to five points. */
+  synthesis_gist?: MeetingTurnGist | null;
   synthesis?: string | null;
   prd_markdown?: string | null;
   pull_request_url?: string | null;
@@ -1635,11 +1644,33 @@ export type Meeting = {
   prd_state?: string | null;
   /** The same, in the operator's words. Rendered as given; the console does not re-derive it. */
   prd_label?: string | null;
+  /** What the person asked, apart from the prompt scaffolding (engine meeting_brief). */
+  brief?: string | null;
+  /** What BOSS added to the prompt (the workflow's purpose, the research), as markdown. */
+  context?: string | null;
+  meeting_type?: "prd_panel" | "go_no_go" | "standup" | string | null;
+  /** Why a failed panel stopped. */
+  error?: string | null;
+  /** The decision that gates publishing the PRD. */
+  decision_id?: string | null;
+  /** Whether minutes exist to record a vote against. */
+  can_vote?: boolean;
+  /** The build the PRD fed, once one started. */
+  build?: { id: string; status: string; phase?: string | null; pull_request_url?: string | null } | null;
+  /** go/no-go: the verdict; typed meetings: the dissent and actions they recorded. */
+  verdict?: "go" | "no_go" | null;
+  dissent?: Array<{ role?: string | null; position?: string | null; reason?: string | null }>;
+  action_items?: Array<{ title: string; description?: string | null }>;
 };
+
+/** A panel turn in brief: plain text, never markdown. */
+export type MeetingTurnGist = { headline: string; points: string[] };
 
 export type MeetingsResponse = {
   project_id: string;
   items: Meeting[];
+  /** The project's true totals (every panel, not only the listed page). */
+  totals?: { panels: number; prds: number };
 };
 
 export type MeetingConvenePayload = {
@@ -5738,6 +5769,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId },
       });
     },
+    getMeetingRoom(meetingId: string, projectId: string) {
+      return request<Meeting>("GET", `/v1/meeting-rooms/${encodeURIComponent(meetingId)}`, {
+        query: { project_id: projectId },
+      });
+    },
     getMeetingRoles(projectId: string) {
       return request<MeetingRolesResponse>("GET", "/v1/meeting-roles", {
         query: { project_id: projectId },
@@ -5761,7 +5797,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     conveneMeeting(payload: MeetingConvenePayload) {
-      return request<{ status: string; task_id: string; job_id: string }>(
+      return request<{ status: string; task_id: string; job_id: string | null; run_id?: string | null }>(
         "POST", "/v1/meetings/prd", { body: payload },
       );
     },
@@ -5849,7 +5885,8 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getDiscovery(runId: string) {
       return request<DiscoveryRun>("GET", `/v1/discoveries/${encodeURIComponent(runId)}`);
     },
-    startDiscovery(payload: { project_id: string; seed: string; title?: string; context?: string }) {
+    startDiscovery(payload: { project_id: string; seed: string; title?: string; context?: string;
+                              deep?: boolean }) {
       return request<{ status: string; run_id: string }>("POST", "/v1/discoveries", { body: payload });
     },
     promoteDiscoveryOutcome(runId: string, outcomeIndex: number) {

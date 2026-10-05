@@ -9,7 +9,7 @@ import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../li
 import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
 import { act, apiFetch } from "../lib/server-action";
-import { missingInput, type ActionResult } from "../lib/action-result";
+import { missingInput, okResult, type ActionResult } from "../lib/action-result";
 import { previewWebHref } from "../lib/browser-links";
 import { apiErrorTechnical } from "../lib/api-error";
 
@@ -352,10 +352,12 @@ export async function tallyVotesAction(_prev: ActionResult | null, formData: For
   const abstain = Math.max(0, Number(formData.get("abstain") ?? 0));
   const eligibleRaw = String(formData.get("eligible") ?? "").trim();
   const quorumRaw = String(formData.get("quorum") ?? "").trim();
+  // Counts, not voters: the form records how many seats voted each way, so no voter is named —
+  // never invented ids ("r0") that then sit on the meeting's record as a dissenter.
   const votes = [
-    ...Array.from({ length: approve }, (_v, i) => ({ voter: `a${i}`, vote: "approve" })),
-    ...Array.from({ length: reject }, (_v, i) => ({ voter: `r${i}`, vote: "reject" })),
-    ...Array.from({ length: abstain }, (_v, i) => ({ voter: `x${i}`, vote: "abstain" })),
+    ...Array.from({ length: approve }, () => ({ vote: "approve" })),
+    ...Array.from({ length: reject }, () => ({ vote: "reject" })),
+    ...Array.from({ length: abstain }, () => ({ vote: "abstain" })),
   ];
   if (!votes.length) return { ok: false, error: "Enter at least one vote." };
   return postJsonReturn(`/v1/meetings/${encodeURIComponent(meetingId)}/tally`, {
@@ -2302,8 +2304,10 @@ export async function conveneMeetingAction(formData: FormData): Promise<ActionRe
   if (!directive) {
     return missingInput("directive");
   }
-  if (meetingType === "standup") {
-    await apiFetch(`${API_URL}/v1/meetings/standup`, {
+  if (meetingType === "standup" || meetingType === "go_no_go") {
+    // Both are no-spend fixtures today: minutes, a Decision and optional dissent, no model.
+    const path = meetingType === "standup" ? "/v1/meetings/standup" : "/v1/meetings/go-no-go";
+    await apiFetch(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
@@ -2318,7 +2322,7 @@ export async function conveneMeetingAction(formData: FormData): Promise<ActionRe
     revalidatePath("/");
     return;
   }
-  await client.conveneMeeting({
+  const res = await client.conveneMeeting({
     project_id: projectId,
     directive,
     url: url || undefined,
@@ -2328,6 +2332,14 @@ export async function conveneMeetingAction(formData: FormData): Promise<ActionRe
     constraints: { meeting_type: "prd_panel" },
   });
   revalidatePath("/");
+  // WHERE IT IS: the panel just convened — or the one already in session on the same ask,
+  // which the API returns rather than starting a second (meeting_service.convene_prd_meeting_core).
+  const runId = (res as { run_id?: string | null }).run_id ?? null;
+  const again = (res as { status?: string }).status === "already_running";
+  return okResult(again ? "That panel is already in session." : "Convened — the panel is in session.", {
+    ...(runId ? { href: `?area=meetings&meeting=${encodeURIComponent(runId)}`, hrefLabel: "Open it →",
+                  data: { run_id: runId } } : {}),
+  });
 }); }
 
 export async function runSimulatedMeetingAction(formData: FormData): Promise<ActionResult> { return act(async () => {
@@ -2952,6 +2964,8 @@ export async function startDiscoveryAction(
       seed,
       title: String(formData.get("title") ?? "").trim() || undefined,
       context: String(formData.get("context") ?? "").trim() || undefined,
+      // The hero's Deep toggle: the multi-source scout sweep on the first pass.
+      ...(formData.get("deep") === "on" || formData.get("deep") === "true" ? { deep: true } : {}),
     });
     revalidatePath("/");
     return { runId: res.run_id };
@@ -2961,16 +2975,17 @@ export async function startDiscoveryAction(
 }
 
 export async function promoteOutcomeAction(
-  _prev: { taskId?: string; error?: string } | null,
+  _prev: { taskId?: string; meetingRunId?: string; error?: string } | null,
   formData: FormData,
-): Promise<{ taskId?: string; error?: string }> {
+): Promise<{ taskId?: string; meetingRunId?: string; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   const idx = Number(formData.get("outcome_index") ?? "0");
   if (!runId) return { error: "missing run_id" };
   try {
     const res = await client.promoteDiscoveryOutcome(runId, idx);
     revalidatePath("/");
-    return { taskId: res.task_id };
+    // The panel it convened, so "Convene a panel" lands IN that meeting room.
+    return { taskId: res.task_id, meetingRunId: res.meeting_run_id || undefined };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }

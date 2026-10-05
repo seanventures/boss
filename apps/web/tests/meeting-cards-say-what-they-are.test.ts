@@ -22,7 +22,7 @@ describe("meeting cards", () => {
   });
 
   it("the cards and the consensus picker read titles through the same function", () => {
-    expect(ROOM).toContain("{meetingCardTitle(m.title)}");
+    expect(ROOM).toContain("shortTitle(meetingCardTitle(m.title))");
     expect(PHASE3).toContain("meetingCardTitle(item.title)");
   });
 

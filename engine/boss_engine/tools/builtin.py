@@ -1663,6 +1663,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         # workflow-convened meeting on boss-1 was called "PRD meeting: --- WHAT THIS PANEL IS
         # FOR ---" and the Meetings screen could not tell them apart.
         title = ms.meeting_subject(directive)
+        brief = directive  # the ask in the caller's words, before any framing
         if objective:
             # The markers are meeting_service's, so directive_subject() can take them off
             # again for anything that NAMES the meeting (the task title, the console's cards).
@@ -1695,6 +1696,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 url=(args.get("url") or "").strip(),
                 task_id=args.get("task_id"),
                 title=title,
+                brief=brief,
                 # Who convened it (agent_acts.origin): its seats sit under that work.
                 origin=services_module("agent_acts").current_origin(actor),
             )

@@ -171,6 +171,13 @@ def tally_bound_to_meeting(meeting_id: str, payload: BoundMeetingTallyRequest) -
                     ),
                     {"id": row["meeting_id"]},
                 ).mappings().first()
+            elif row:
+                # The panel exists but has not written its minutes: there is nothing to vote on
+                # yet. Said in words, not "meeting not found" about a meeting on screen.
+                raise HTTPException(
+                    status_code=409,
+                    detail="This panel has not recorded its minutes yet, so there is no vote to "
+                           "take. The vote opens when the panel finishes.")
         if meeting is None:
             raise HTTPException(status_code=404, detail="meeting not found")
         _require_actor(connection, meeting["project_id"], payload.actor, "task_create")

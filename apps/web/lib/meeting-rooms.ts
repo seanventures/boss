@@ -9,6 +9,7 @@ export type MeetingRoomsFeed = {
   blockedReason?: string;
   items: Meeting[];
   roles: MeetingRole[];
+  totals?: { panels: number; prds: number } | null;
 };
 
 export async function fetchMeetingRooms(projectId = PROJECT_ID, active = true): Promise<MeetingRoomsFeed> {
@@ -19,7 +20,7 @@ export async function fetchMeetingRooms(projectId = PROJECT_ID, active = true): 
       client.getMeetings(resolveProjectId(projectId)),
       client.getMeetingRoles(resolveProjectId(projectId)).catch(() => ({ roles: [] as MeetingRole[], default_role_keys: [] })),
     ]);
-    return { apiReachable: true, items: data.items, roles: rolesData.roles ?? [] };
+    return { apiReachable: true, items: data.items, roles: rolesData.roles ?? [], totals: data.totals ?? null };
   } catch (error) {
     const reason =
       error instanceof BossApiError

@@ -82,11 +82,13 @@ describe("what the page passes per discovery", async () => {
 describe("the Discovery screen", () => {
   it("the list reads the summary, and the dossier is fetched when one is opened", () => {
     const ui = codeOnly("app/discoveries-ui.tsx");
-    const list = ui.slice(ui.indexOf("export function DiscoveriesHome"), ui.indexOf("function DiscoveryDetail"));
+    // The research home: its hero totals, its cards and the shelf itself.
+    const list = ui.slice(ui.indexOf("function ResearchHero"), ui.indexOf("function VerdictCard"));
     expect(list).not.toMatch(/\bd\.state\b|\bst\.(gate|signal_findings|candidate_outcomes)\b/);
     expect(list).toContain("d.summary");
-    const detail = ui.slice(ui.indexOf("function DiscoveryDetail"));
-    expect(detail).toContain("fetchDiscoveryDetail(row.id)");
+    const detail = ui.slice(ui.indexOf("function useDossier"), ui.indexOf("const isLive"));
+    expect(detail).toContain("fetchDiscoveryDetail(id)");
+    expect(ui).toContain("useDossier(id,");
   });
 
   it("the detail is read through the same-origin proxy", async () => {

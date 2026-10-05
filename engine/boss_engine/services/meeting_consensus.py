@@ -110,23 +110,26 @@ def tally_votes(
         outcome = "rejected"
         consensus = False
 
+    # WHO DISSENTED, NAMED ONLY WHEN THEY HAVE A NAME. A count recorded from the console has no
+    # voters, and inventing ids for it put "r0: voted to reject" on the meeting's record. The
+    # unnamed are one record in words: "1 seat voted to reject".
+    named = [v for v in normalized if v["vote"] == "reject" and str(v["voter"] or "").strip()]
+    unnamed = sum(1 for v in normalized if v["vote"] == "reject" and not str(v["voter"] or "").strip())
     dissent = [
-        {
-            "role": v["voter"] or "participant",
-            "position": "reject",
-            "reason": v["reason"] or "voted to reject",
-        }
-        for v in normalized
-        if v["vote"] == "reject"
+        {"role": v["voter"], "position": "reject", "reason": v["reason"] or "voted to reject"}
+        for v in named
     ]
+    if unnamed:
+        dissent.append({"role": "panel", "position": "reject",
+                        "reason": f"{unnamed} seat{'' if unnamed == 1 else 's'} voted to reject"})
     if outcome == "no_quorum":
         dissent.append(
             {
                 "role": "quorum",
                 "position": "no_quorum",
                 "reason": (
-                    f"only {votes_cast}/{quorum} required votes cast; "
-                    f"default action '{default_action}' applies"
+                    f"Only {votes_cast} of the {quorum} votes needed were cast, so the default "
+                    f"— {default_action} — applies."
                 ),
             }
         )

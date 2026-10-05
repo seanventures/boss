@@ -485,7 +485,7 @@ def _json_count(expr: str) -> str:
             "ELSE 0 END")
 
 
-def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
+def list_discovery_runs(connection, project_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
     """The runs of a project as LIST ROWS: a bounded summary each, never the dossier.
 
     Postgres reads the summary out of `state` so the dossier never leaves the database for a
@@ -509,10 +509,29 @@ def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[di
                        j.last_error AS job_error, j.lease_owner AS job_lease_owner,
                        j.run_after AS job_run_after, (now() - j.created_at) AS job_age
                 FROM discovery_runs d LEFT JOIN jobs j ON j.id = d.state->>'job_id'
-                WHERE d.project_id=:p ORDER BY d.created_at DESC LIMIT :n"""),
-        {"p": project_id, "n": limit},
+                WHERE d.project_id=:p ORDER BY d.created_at DESC LIMIT :n OFFSET :o"""),
+        {"p": project_id, "n": limit, "o": max(0, int(offset or 0))},
     ).mappings().all()
     return [_row_to_summary(r) for r in rows]
+
+
+def discovery_totals(connection, project_id: str) -> dict:
+    """The project's TRUE totals for Research's hero and filters — every dossier, not only the
+    page the console has loaded (it shows the newest 50 and pages the rest)."""
+    r = connection.execute(
+        text(f"""SELECT count(*) AS dossiers,
+                       count(*) FILTER (WHERE d.state->'gate'->>'verdict' IN ('pursue', 'promising')
+                                        AND d.status NOT IN ('failed', 'running', 'queued')) AS promising,
+                       count(*) FILTER (WHERE d.state->'gate'->>'verdict' = 'needs_more_research'
+                                        AND d.status NOT IN ('failed', 'running', 'queued')) AS needs_more,
+                       count(*) FILTER (WHERE d.state->'gate'->>'verdict' IN ('not_promising', 'kill', 'not_worth_it')
+                                        AND d.status NOT IN ('failed', 'running', 'queued')) AS not_worth,
+                       COALESCE(sum({_json_count("d.state->'signal_findings'")}), 0) AS signals,
+                       COALESCE(sum({_json_count("d.state->'candidate_outcomes'")}), 0) AS outcomes
+                FROM discovery_runs d WHERE d.project_id = :p"""),
+        {"p": project_id},
+    ).mappings().first()
+    return {k: int(r[k] or 0) for k in ("dossiers", "promising", "needs_more", "not_worth", "signals", "outcomes")}
 
 
 def _row_to_summary(r) -> dict:
@@ -559,7 +578,11 @@ def build_promote_directive(run: dict, idx: int) -> tuple[str, str]:
     crit = state.get("critique") or {}
     findings = [f for f in (state.get("signal_findings") or []) if (f or {}).get("finding")][:4]
     outcome = (o.get("outcome") or "").strip()
-    title = f"Build: {outcome[:80]}" if outcome else f"Build outcome from {run['id']}"
+    # NAMED FOR THE OUTCOME, not for the template below: "Batch triage prototype — lead triage
+    # inbox", where it used to be "Produce a PRD for this evidence-backed opportunity, …".
+    from .meeting_brief import promoted_title
+    title = promoted_title(outcome, run.get("title") or run.get("seed")) if outcome \
+        else f"Outcome from {run.get('title') or 'research'}"
     sig = "\n".join(f"- {f.get('finding')} [{f.get('citation_url', '')}]" for f in findings)
     directive = (
         "Produce a PRD for this evidence-backed opportunity, surfaced by BOSS Discovery research "
