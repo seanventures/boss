@@ -87,7 +87,9 @@ describe("area-data loaders (BOSS-13)", () => {
     const source = readFileSync(pagePath, "utf8");
     expect(source).toContain('from "../lib/area-data"');
     expect(source).toContain("loadBudgetAreaData");
-    expect(source).toContain("loadInfraAreaData");
+    // Infra › Cloud reads GET /v1/infra/cloud client-side (infra-observability spec §6.6): the
+    // page no longer loads an infra pack, whose ProviderOps fan-out was 17 calls per render.
+    expect(source).not.toContain("loadInfraAreaData");
     expect(source).toContain("loadAssuranceAreaData");
   });
 
@@ -101,7 +103,7 @@ describe("area-data loaders (BOSS-13)", () => {
   it("gates every area pack on needs(), never on the requested area", () => {
     const source = codeOnly("app/page.tsx");
     const calls = [...source.matchAll(/load(\w+)AreaData\(\{[^}]*active:\s*(\w+)/g)];
-    expect(calls.length, "found no area-pack loads — the scan is broken").toBeGreaterThanOrEqual(3);
+    expect(calls.length, "found no area-pack loads — the scan is broken").toBeGreaterThanOrEqual(2);
     for (const [, pack, flag] of calls) {
       const def = source.match(new RegExp(`const ${flag}\\s*=\\s*([^;]+);`));
       expect(def, `${pack}: ${flag} is not defined in page.tsx`).not.toBeNull();

@@ -35,16 +35,11 @@ const PLATFORM_OPS_FEEDS: ReadonlyArray<readonly [string, string]> = [
   ["fetchReleaseStatus", "portfolio"],
   ["fetchReleaseBoard", "portfolio"],
   ["fetchReleases", "portfolio"],
-  ["fetchWorkerAutoscalingStatus", "infra"],
-  ["fetchWorkerAutoscalingHistory", "infra"],
   ["fetchTokenScorecard", "budget"],
   ["fetchTokenConsumption", "budget"],
   ["fetchTokenPolicies", "budget"],
   ["fetchTokenRecommendations", "budget"],
-  ["fetchObservabilitySuiteFeed", "monitoring"],
   ["fetchKnowledgeGraphFeed", "reliability"],
-  ["fetchCICDCatalog", "delivery"],
-  ["fetchCICDStatus", "delivery"],
   ["fetchLiveJobsFeed", "work"],
   ["fetchQaScorecardFeed", "reports"],
 ];
@@ -94,7 +89,7 @@ describe("only the requested area is fetched", () => {
       .split("\n")
       .slice(1)
       .findIndex((l) => l.trim().startsWith("]"));
-    expect(entries).toBe(19);
+    expect(entries).toBe(14);
   });
 
   it("the main wave gates the feeds that only one area reads", () => {
@@ -107,8 +102,6 @@ describe("only the requested area is fetched", () => {
     const mustGate: ReadonlyArray<readonly [string, string]> = [
       ["fetchGitHubOperationsFeed", "github"],
       ["fetchRepoActivity", "github"],
-      ["fetchInfraFabricFeed", "infra"],
-      ["fetchRoutingLogFeed", "infra"],
       ["fetchHealthSnapshotFeed", "ops"],
       ["fetchDiscoveriesFeed", "discovery"],
       ["fetchSandboxFeed", "sandboxes"],
@@ -121,6 +114,23 @@ describe("only the requested area is fetched", () => {
       const call = new RegExp(`${fn}\\((?:[^()]|\\([^()]*\\))*\\)`, "s").exec(wave)?.[0];
       expect(call, `${fn} is not called in the main wave`).toBeTruthy();
       expect(call, `${fn} fetches on every area`).toContain(`needs("${area}")`);
+    }
+  });
+
+  it("Infra and Observability fetch nothing through the page (infra-observability spec §6.6)", () => {
+    // The delivery pipeline, deployment health, secrets, deployments and the observability stack
+    // (which SSHes to a host and probes Grafana) were fetched on EVERY render of EVERY area,
+    // ungated, with the env PROJECT_ID. So were the ProviderOps fan-out (17 calls), the entitlement
+    // feed, routing logs, InfraFabric, worker autoscaling and CI generators. The two areas read
+    // their own ETag'd views client-side now; none of these may come back.
+    for (const fn of [
+      "getDeliveryPipelineAction", "getDeploymentHealthAction", "listSecretsAction",
+      "listDeploymentsAction", "getObservabilityAction", "fetchProviderOpsFeed",
+      "loadInfraAreaData", "fetchEntitlementFeed", "fetchRoutingLogFeed", "fetchInfraFabricFeed",
+      "fetchWorkerAutoscalingStatus", "fetchObservabilitySuiteFeed", "fetchCICDStatus",
+      "fetchInfrastructureResourceFeed",
+    ]) {
+      expect(PAGE, `${fn} is fetched by the page again`).not.toContain(`${fn}(`);
     }
   });
 
@@ -159,7 +169,6 @@ describe("only the requested area is fetched", () => {
         "fetchRoleFeed",
         "fetchCommercialFeed",
         "fetchEnterpriseFeed",
-        "fetchEntitlementFeed",
         "fetchSkillFeed",
         "fetchReceiptFeed",
         "fetchSelfImprovementFeed",
