@@ -433,6 +433,17 @@ def get_all(connection, project_id: str) -> dict[str, Any]:
     return {r["key"]: r["value"] for r in rows}
 
 
+#: What Govern calls each knob — the names on the board AND in the Log's change lines, one
+#: table (D14e: a change read "Agents at once" while the board said "Review lanes"). The KNOBS
+#: labels stay as they are: they phrase the bounds errors callers already depend on.
+GOVERN_NAMES: dict[str, str] = {
+    "code_agent_max_concurrency": "Review lanes",
+    "code_agent_max_turns": "Turn budget",
+    "code_review_inrun_max_rounds": "Review rounds",
+    "captain_leads_projects": "Captain leads",
+}
+
+
 def _record_change(connection, project_id: str, key: str, before: Any, after: Any,
                    actor: str) -> None:
     """`settings.changed`, so Govern's changes are read in the Log (`Govern changes`) and Govern
@@ -447,7 +458,8 @@ def _record_change(connection, project_id: str, key: str, before: Any, after: An
         with connection.begin_nested():
             emit_event(connection, project_id, "settings.changed", actor or "operator",
                        "project_setting", key,
-                       {"key": key, "label": spec.get("label") or key, "from": before,
+                       {"key": key, "label": GOVERN_NAMES.get(key) or spec.get("label") or key,
+                        "from": before,
                         "to": after,
                         "source_before": "project" if before is not None else "default",
                         "source_after": "project" if after is not None else "default"})

@@ -27,6 +27,12 @@ describe("the meter draws real numbers", () => {
     expect($("[data-testid=gv-meter-month]")!.textContent).toContain("$41.80 of $200");
   });
 
+  it("one hold is a hold", async () => {
+    await mount(<GovernMeter meter={{ ...METER, active_reservations_count: 1 } as Meter} error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-meter]")!.textContent).toContain("· 1 hold");
+    expect($("[data-testid=gv-meter]")!.textContent).not.toContain("1 holds");
+  });
+
   it("ticks sit at the thresholds' own percentages", async () => {
     await mount(<GovernMeter meter={{ ...METER, soft_cap_pct: 0.6 }} error="" onRetry={() => {}} />);
     expect($("[data-testid=gv-tick-soft_cap_pct]")!.getAttribute("style")).toContain("left: 60.00%");

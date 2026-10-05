@@ -43,6 +43,8 @@ export type LogState = {
   showVerbose: boolean;
   /** Display hints carried by inbound links until the server's labels arrive. */
   names: { step?: string; run?: string };
+  /** The link's from/to was not a date: dropped (the default range shows) and said once. */
+  badRange?: boolean;
 };
 
 export type LogView = { key: string; label: string; tip: string; tokens: LogToken[] };
@@ -109,8 +111,14 @@ export function readLogParams(search: string): LogState {
   const view = VIEWS.find((v) => v.key === params.get("view"));
   if (view && !tokens.length) tokens.push(...view.tokens);
   const range = params.get("range");
-  const from = params.get("from") || params.get("since");
-  const to = params.get("to") || params.get("until");
+  // A from/to that isn't a date is dropped here, once, rather than sent to every read to fail
+  // three times over (list, pulse, rail) — D14a: one state, not three.
+  const isDate = (v: string | null) => !!v && !Number.isNaN(Date.parse(v));
+  const rawFrom = params.get("from") || params.get("since");
+  const rawTo = params.get("to") || params.get("until");
+  const from = isDate(rawFrom) ? rawFrom : null;
+  const to = from && isDate(rawTo) ? rawTo : null;
+  const badRange = (!!rawFrom && !from) || (!!rawTo && !to && !!from);
   const names: LogState["names"] = {};
   if (params.get("step_name")) names.step = params.get("step_name")!;
   if (params.get("run_name")) names.run = params.get("run_name")!;
@@ -124,6 +132,7 @@ export function readLogParams(search: string): LogState {
     group: params.get("group") === "run" ? "run" : null,
     showVerbose: params.get("verbose") === "1",
     names,
+    ...(badRange ? { badRange: true } : {}),
   };
 }
 

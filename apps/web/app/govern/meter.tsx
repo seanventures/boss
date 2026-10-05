@@ -15,6 +15,7 @@ const TICK_LABEL: Record<string, string> = {
   freeze_provisioning_pct: "No new servers", freeze_tier2_pct: "Risky work stops",
 };
 
+const holds = (n: number) => `${n} hold${n === 1 ? "" : "s"}`;
 const pct = (n: number) => `${Math.max(0, Math.min(100, n * 100)).toFixed(2)}%`;
 
 function Bar({ cap, actual, reserved, ticks, forecast, forecastTip, thin, testid }: {
@@ -72,7 +73,7 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
     .map((key) => ({ key, at: Number(meter[key] ?? 0) }));
   const forecast = meter.period === "day" ? meter.forecasted_24h_usd_micros : 0;
   const metaTip = [
-    `Reserved ${money(meter.reserved_usd_micros)} · ${meter.active_reservations_count} holds`,
+    `Reserved ${money(meter.reserved_usd_micros)} · ${holds(meter.active_reservations_count)}`,
     `Burn ${money(meter.burn_rate_usd_micros_per_hour)}/h`,
     meter.time_to_cap_seconds !== null ? `Cap in ${capIn(meter.time_to_cap_seconds)}` : "",
   ].filter(Boolean).join(" · ");
@@ -87,7 +88,7 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
         <span className="gv-reset">resets {meter.resets_at_label}</span>
         <span className="gv-spacer" />
         <span className="gv-meta" data-testid="gv-meter-meta">
-          <span>Reserved {money(meter.reserved_usd_micros)} · {meter.active_reservations_count} holds</span>
+          <span>Reserved {money(meter.reserved_usd_micros)} · {holds(meter.active_reservations_count)}</span>
           <span>Burn {money(meter.burn_rate_usd_micros_per_hour)}/h</span>
           {meter.time_to_cap_seconds !== null ? <span>Cap in {capIn(meter.time_to_cap_seconds)}</span> : null}
         </span>

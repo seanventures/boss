@@ -63,7 +63,7 @@ export function fakeLogApi(log: FakeLog) {
     if (url.pathname.startsWith("/api/activity/row/")) {
       const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
       const found = [...log.page.items, ...log.tail].find((r) => r.id === id);
-      return found ? Response.json({ item: found, labels: {} }) : Response.json({ error: "This line is gone." }, { status: 404 });
+      return found ? Response.json({ item: found, labels: {} }) : Response.json({ item: null, gone: true, labels: {} }); // as the route answers (D14b)
     }
     if (url.pathname === "/api/activity/context") {
       return Response.json({ anchor: url.searchParams.get("id"), items: log.page.items.slice(0, 5), labels: {} });

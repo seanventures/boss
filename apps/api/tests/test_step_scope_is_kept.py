@@ -42,6 +42,8 @@ def test_the_step_scope_is_its_rows_and_its_builds_rows(client, step_log):
     assert body["labels"][wfr] == "Lead Triage Inbox"
     assert body["labels"][f"{wfr}/build"] == "Build it"
     assert body["labels"][crun] == "Ship it #182"
+    # Whether the step can still log: an empty finished step reads "Nothing logged" (D16).
+    assert body["labels"][f"{wfr}/build@state"] == "open"
 
 
 def test_summary_is_five_non_verbose_rows_errors_first_with_counts(client, step_log):
@@ -61,3 +63,12 @@ def test_a_step_without_its_run_is_refused(client):
     response = client.get("/v1/activity", params={"project_id": PROJECT, "step_id": "build"})
     assert response.status_code == 422
     assert "step_id needs workflow_run_id" in response.json()["detail"]
+
+
+def test_a_finished_step_says_it_is_finished(client, engine, step_log):
+    wfr, _crun = step_log
+    with engine.begin() as c:
+        c.execute(seed.text("UPDATE workflow_step_runs SET status = 'succeeded' WHERE id = 'wsr_build'"))
+    body = client.get("/v1/activity", params={"project_id": PROJECT, "workflow_run_id": wfr,
+                                              "step_id": "build"}).json()
+    assert body["labels"][f"{wfr}/build@state"] == "finished"

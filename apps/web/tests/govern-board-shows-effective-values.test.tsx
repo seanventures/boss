@@ -166,6 +166,11 @@ describe("every write outcome says what happened", () => {
     expect(t("[data-testid=gv-fail]")).toBe("Turn budget per agent has to be between 10 and 200.");
   });
 
+  it("a default reads as the default: \"90 (default)\", never a note about a value no one set", async () => {
+    await mount(<GovernHome projectId="p1" actor="ceo" />);
+    expect(t("[data-testid=gv-control-code_agent_max_turns] .gv-value")).toBe("90(default)");
+  });
+
   it("Use default: a toast that says it is back", async () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     await click($("[data-testid=gv-reset-code_review_inrun_max_rounds]"));

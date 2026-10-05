@@ -77,6 +77,14 @@ def test_every_value_is_the_one_the_engine_uses(client, engine, clean):
     turns = controls["code_agent_max_turns"]
     assert turns["value_effective"] == 90 and turns["source"] == "default"
     assert turns["bounds"] == {"min": 10, "max": 200, "step": 1}
+    assert turns["note"] == {"kind": "default"}
+    # D14c: after Use default, the default reads as the default — the floor note explains a
+    # value someone set, never the deployment's own number.
+    with engine.begin() as c:
+        ps.clear_one(c, PROJECT, "code_agent_max_concurrency", actor="ceo")
+    lanes = _controls(client)["code_agent_max_concurrency"]
+    assert lanes["source"] == "default" and lanes["note"] == {"kind": "default"}
+    assert lanes["value_effective"] == ps.effective_review_lanes(lanes["default"])
 
 
 def test_pace_and_its_caps_say_where_they_came_from(client, clean):
