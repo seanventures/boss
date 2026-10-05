@@ -93,7 +93,7 @@ describe("the Floor reads at a glance", () => {
     expect(sizes.every((s) => s === null || s === "24")).toBe(true);
   });
 
-  it("D21: Apps lists an app's attempts as compact rows with their stations", async () => {
+  it("D21: Apps parses an app's attempts as rows with their stations", async () => {
     const attempt = { ...buildRow({ run_id: "crun_a2", attempt: 2 }), at: "2026-10-04T09:00:00.000Z" };
     const apps = parseApps({ apps: [{ key: "crun_a2", app: "Invoice export", run_id: "crun_a2", builders: ["qa"],
       state: "building", word: "Coding", preview: null, deploys: [{ env: "dev", ok: true, word: "dev ✓" }],
@@ -107,8 +107,8 @@ describe("the Floor reads at a glance", () => {
     await mount(<AppsTab projectId="p1" runs={[]} previews={[]} query="" onOpen={noop} onNew={noop} />);
     await settle();
     expect($(".fx-app-deploys")?.textContent).toContain("dev ✓");
-    await click($(".fx-app .fx-row-open"));
-    expect($('[data-testid="fx-build-row-crun_a2"][data-density="compact"]')).not.toBeNull();
+    // One build: the chevron is there (names align) but has nothing to open.
+    expect(($(".fx-app-chev") as HTMLButtonElement | null)?.disabled).toBe(true);
   });
 
   it("D12: the benchmark sheet speaks the Factory's words", async () => {
