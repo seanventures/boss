@@ -7,7 +7,7 @@ import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
 import { AgentsOnThis } from "./agents-on-this";
-import { consoleHref, readNewProjectIntent } from "./url-intent";
+import { consoleHref, readComposeIntent } from "./url-intent";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
@@ -687,12 +687,16 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   /** "Try example" — the standard's own example brief, filled in for the operator to read. */
   const [startExample, setStartExample] =
     useState<{ title?: string; directive?: string } | null>(null);
+  /** What a compose link asked for: the mode, the app, and a running preview of it. */
+  const [compose, setCompose] = useState<{ mode: "new" | "add" | null; app: string | null;
+                                           preview: string | null; n: number } | null>(null);
   /** EVERY START OPENS THE FORM: the composer on that workflow, with its readiness. A run is
    *  never started blind on a sample directive (boss-1 map, 2026-10-02). */
   const openComposerOn = useCallback((key: string,
                                       example?: { title?: string; directive?: string } | null) => {
     setStartWith(key);
     setStartExample(example ?? null);
+    setCompose(null);
     setComposerOpen(true);
     setTab("runs");
   }, [setTab]);
@@ -785,16 +789,22 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.clearInterval(t);
   }, [awaited, load]);
 
-  // SENT HERE TO START SOMETHING. `?new=1` is a one-shot command, consumed on read so a later
-  // navigation cannot re-deliver it.
+  // SENT HERE TO START SOMETHING. `?new=1` and `?compose=new|add[&app=…]` (the Factory's and
+  // the Command Center's "Add a feature") are one-shot commands, consumed on read so a later
+  // navigation cannot re-deliver them.
   useEffect(() => {
     const read = () => {
-      const intent = readNewProjectIntent(window.location.search);
+      const intent = readComposeIntent(window.location.search);
       if (!intent.open) return;
       setTabState("runs");
+      setStartWith(undefined);
+      setStartExample(null);
+      setCompose((c) => ({ mode: intent.mode, app: intent.app, preview: intent.preview,
+                           n: (c?.n ?? 0) + 1 }));
       setComposerOpen(true);
       window.setTimeout(() => {
-        document.querySelector<HTMLTextAreaElement>('[data-testid="dw-new-directive"]')?.focus();
+        document.querySelector<HTMLTextAreaElement>(
+          intent.mode === "add" ? '[data-testid="np-gain"]' : '[data-testid="dw-new-directive"]')?.focus();
       }, 0);
       try {
         // Consumed, and the URL says where it landed: the Runs tab, not an editor left open.
@@ -1051,32 +1061,33 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             <span className="wf-lib-spacer" />
             {runs.length && !composerOpen ? (
               <button type="button" className="wf-btn wf-btn-primary" data-testid="dw-composer-open"
-                      title="Describe an outcome, choose a workflow, follow it"
-                      onClick={() => setComposerOpen(true)}>
-                + Start a project
+                      title="A new app, or a feature added to one you have"
+                      onClick={() => { setCompose(null); setComposerOpen(true); }}>
+                + New project
               </button>
             ) : null}
           </header>
           {composerOpen || runs.length === 0 ? (
             <div className="dw-composer-open">
-              {runs.length ? (
-                <button type="button" className="linklike dw-composer-hide"
-                        data-testid="dw-composer-hide"
-                        onClick={() => {
-                          setComposerOpen(false); setStartWith(undefined); setStartExample(null);
-                        }}>Hide</button>
-              ) : null}
               <NewProjectComposer
                 projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
                 startWith={startWith} example={startExample}
-                // KEYED ON THE CHOICE, so Start on a different workflow rebuilds the composer
-                // rather than leaving it on the first one's inputs.
-                key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}`}
+                mode={compose?.mode ?? (startWith ? "new" : null)} appKey={compose?.app}
+                previewId={compose?.preview}
+                // KEYED ON THE CHOICE, so Start on a different workflow (or a link to another
+                // app) rebuilds the composer rather than leaving it on the first one's inputs.
+                key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}:${compose?.n ?? 0}`}
+                // Cancel closes it; with no runs yet there is nothing behind it to go back to.
+                onCancel={runs.length ? () => {
+                  setComposerOpen(false); setStartWith(undefined); setStartExample(null);
+                  setCompose(null);
+                } : undefined}
                 onStarted={(runId) => {
                   if (runId) setOpenRun(runId);
                   setComposerOpen(false);
                   setStartWith(undefined);
                   setStartExample(null);
+                  setCompose(null);
                   setNotice(runId ? `Started ${runId}.` : "Started.");
                   void load();
                 }}

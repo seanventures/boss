@@ -35,6 +35,7 @@ import { CreditsButton } from "../agents/run-credits";
 import { useRunChain } from "../agents/run-acts";
 import { nameOf } from "../agents/run-face";
 import { ChangeIt } from "./change-it";
+import { addFeatureHref } from "./apps-tab";
 import { stopBuild, steerBuild } from "./cockpit-actions";
 import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
 import { LogsDrawer, type LogTab } from "./logs-drawer";
@@ -330,6 +331,11 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         <div className="fx-head-1">
           <button type="button" className="ag-link fx-back" onClick={onClose} data-testid="fx-back">← Floor</button>
           <h1 ref={h1} tabIndex={-1} className="fx-ck-app ag-trunc" title={c.app} data-user-text>{c.app}</h1>
+          {/* THE EVERYDAY JOB, IN THE OPEN: a feature added to this app, built on its branch with its
+              tests kept. It used to be ⋯ › Change it; that sheet stays for a rebuild. */}
+          <a className="ag-btn fx-add-feature" data-testid="fx-add-feature"
+             href={addFeatureHref(c.run.id, c.outputs.preview?.status === "running" ? c.outputs.preview.id : null)}
+             title="New project, adding to this app: its branch, its PR, its tests">＋ Add a feature</a>
           <span className="fx-state" data-state={s.state} data-testid="fx-state">
             <span className="fx-state-word" title={s.tip || undefined}>{s.word}</span>
             {s.n ? <span className="fx-k" title="Stations done. BOSS doesn't guess finish times." data-testid="fx-k">{s.k} of {s.n}</span> : null}

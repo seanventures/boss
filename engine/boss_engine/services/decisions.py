@@ -1150,6 +1150,9 @@ class DecisionService:
                                 + directive
                             ),
                             jobs=jobs,
+                            # The workflow run this panel sat in governs the change, as it
+                            # does a fresh build below — not the run that built the app.
+                            workflow_run_id=(origin_ctx or {}).get("workflow_run_id"),
                         )
                     return
                 if _looks_like_web_app(directive):

@@ -30,6 +30,9 @@ const VIEWS: Record<string, (project: string) => string> = {
   // so the form that starts work could not offer a choice and every build went to whatever the
   // deployment's global default happened to be.
   repositories: (p) => `/v1/projects/${encodeURIComponent(p)}/repositories`,
+  // What each workflow has cost before, from its real runs: New project's "Builds like this
+  // cost $a–$b". No history, no line.
+  costs: (p) => `/v1/delivery-workflows/costs?project_id=${encodeURIComponent(p)}`,
 };
 
 /** `view=spec&key=…[&version=n]` — the steps a workflow currently has (or had at version n),

@@ -109,10 +109,11 @@ describe("what the wizard insists on", () => {
 });
 
 describe("it can still be a one-liner", () => {
-  it("Start is offered from the first step", () => {
-    // The wizard is for the operator who wants it. Making somebody walk four screens to accept
-    // four defaults would be ceremony, and ceremony is what gets routed around.
-    expect(UI).toContain('data-testid="dw-wiz-start-now"');
+  it("Start is one press: the composer is one screen, with its defaults filled in", () => {
+    // Making somebody walk four screens to accept four defaults was ceremony, and ceremony is
+    // what gets routed around. New project (2026-10-05) is one screen.
+    expect(UI).toContain('data-testid="dw-new-start"');
+    expect(UI).not.toContain("dw-wiz-next");
   });
 
   it("and the keyboard shortcut every other composer uses still starts it", () => {
@@ -125,9 +126,11 @@ describe("the choices show why one is right", () => {
     // A <select> hides the descriptions, and the descriptions are the entire basis for
     // choosing: the paths differ in how much argument and gating happens, which is a question
     // about risk rather than speed.
-    expect(UI).toContain("e.description");
-    expect(UI).toContain("you approve: ");
-    expect(UI).toContain("no approval gates");
+    // Cards with their step count and approvals; the description is the card's tooltip, and
+    // the chosen path's steps are drawn beside them.
+    expect(UI).toContain("title={c.tip}");
+    expect(UI).toContain("approvalsWord(counts(steps).approvals)");
+    expect(UI).toContain("<Timeline steps={timeline} />");
   });
 
   it("the repository arrives already answered", () => {
@@ -146,14 +149,14 @@ describe("the choices show why one is right", () => {
   it("reference links are described as fetched, never as a knowledge base", () => {
     // Nothing indexes or searches them. Calling this a knowledge base would promise retrieval
     // that does not exist, and the operator would size their expectations to the promise.
-    expect(UI).toContain("not indexed or");
+    expect(UI).toContain("Fetched and read");
     expect(UI).not.toMatch(/knowledge base/i);
   });
 });
 
 describe("the last step says what the press will do", () => {
-  it("it restates the decisions rather than repeating the form", () => {
-    for (const id of ["dw-review-directive", "dw-review-workflow", "dw-review-repo"]) {
+  it("the plan restates the decisions beside the form, live", () => {
+    for (const id of ["np-timeline", "np-team", "np-lives", "np-cost"]) {
       expect(UI).toContain(`data-testid="${id}"`);
     }
   });

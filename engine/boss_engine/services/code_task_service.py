@@ -866,14 +866,42 @@ def work_branch_for(run: dict) -> str:
     return f"boss/code/{root}"
 
 
+#: What every change to an existing app is held to, whoever wrote the rest of its criteria.
+EXISTING_TESTS_CRITERION = (
+    "Everything that worked before still works: the app's existing tests still pass."
+)
+
+
+def with_existing_tests_criterion(criteria: Optional[list]) -> list[str]:
+    """`criteria`, plus the existing-tests promise unless one of them already makes it.
+
+    A brief written for a feature names what the feature must do and nothing about what it
+    must not break; on an app someone already uses, that second half is the larger promise.
+    """
+    out = [str(c) for c in (criteria or []) if str(c).strip()]
+    # The composer's own wording ("Everything that worked before still works") is the same
+    # promise; saying it twice reads as two checks.
+    if not any(re.search(r"existing\s+(?:\w+\s+)?tests?|worked before still works", c, re.I)
+               for c in out):
+        out.append(EXISTING_TESTS_CRITERION)
+    return out
+
+
 def start_followup_task(
     connection, *, parent_run_id: str, instructions: str, jobs,
     title: Optional[str] = None, acceptance_criteria: Optional[list] = None,
     test_commands: Optional[list] = None, profile: Optional[str] = None,
     actor: str = "operator", engine: Optional[str] = None,
     review_panel_size: Optional[int] = None,
+    reference_links: Optional[list[str]] = None,
+    workflow_run_id: Optional[str] = None,
+    finalize_extra: Optional[dict] = None,
 ) -> dict:
     """Continue work on an app that already exists, from the run that built it.
+
+    ``workflow_run_id`` names the workflow run that governs this change when a workflow step
+    started it, so no second outer run is opened for it; ``finalize_extra`` carries what that
+    step records about itself (``origin``, ``agent``) over whatever the parent had.
 
     BOSS could already do this for itself: when a review deferred a finding, it spawned a task
     on the shipped branch with the parent's repo, profile and lineage. It could not be ASKED to.
@@ -935,6 +963,14 @@ def start_followup_task(
     parent_design = (run.get("state") or {}).get("design")
     if isinstance(parent_design, dict) and str(parent_design.get("plan") or "").strip():
         child_fctx["inherited_design"] = dict(parent_design)
+    # THE STEP THAT STARTED THIS, over the parent's. The parent's `origin` may name the workflow
+    # run that built the app first; left in place, start_code_task would lift it and file this
+    # change under a run that finished long ago instead of the one that asked for it.
+    for k, v in (finalize_extra or {}).items():
+        if v:
+            child_fctx[k] = v
+    if workflow_run_id:
+        child_fctx["workflow_run_id"] = str(workflow_run_id)
     model_config = spec.get("model_config")
     engine_name = str(engine or "").strip().lower()
     if engine_name:
@@ -975,6 +1011,7 @@ def start_followup_task(
         repair_retries=spec.get("repair_retries"),
         review_panel_size=review_panel_size if isinstance(review_panel_size, int)
         else spec.get("review_panel_size"),
+        reference_links=reference_links or None,
     )
     official = bool(child_fctx.get("official") or child_fctx.get("qa_benchmark"))
     swarm = None

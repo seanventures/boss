@@ -24,7 +24,12 @@ import { ago, localTime, useNow } from "../agents/live-util";
 import { groupRunsIntoApps } from "../app-grouping";
 import { appIdentity } from "../app-identity";
 import { previewWebHref } from "../../lib/browser-links";
-import { costWord } from "./cockpit-util";
+import { areaHref, costWord } from "./cockpit-util";
+
+/** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
+export function addFeatureHref(appKey: string, previewId?: string | null): string {
+  return areaHref({ area: "delivery_workflows", compose: "add", app: appKey, preview: previewId ?? null });
+}
 
 /** One build of an app. `row` is the full Floor row when the server sends one (walk D21): then
  *  the attempt is drawn as a compact BuildRow with its stations, else as a line of words. */
@@ -240,6 +245,17 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   const apps = sortApps((served ?? fallback).filter((a) => !q || a.app.toLowerCase().includes(q)
     || (a.brief ?? "").toLowerCase().includes(q)), sort);
   const [open, setOpen] = useState<string | null>(null);
+  /** The app whose row menu is open. */
+  const [menu, setMenu] = useState<string | null>(null);
+  // A row menu closes on a press anywhere else, or Esc.
+  useEffect(() => {
+    if (!menu) return undefined;
+    const away = (e: Event) => { if (!(e.target as HTMLElement | null)?.closest?.(".fx-app-acts")) setMenu(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [menu]);
 
   if (!apps.length) {
     return (
@@ -288,7 +304,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
           const deploy = a.deploys[0];
           const openRow = (e: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>) => {
             const t = e.target as HTMLElement;
-            if (t.closest("a, .fx-app-chev")) return;
+            if (t.closest("a, .fx-app-chev, .fx-app-acts")) return;
             onOpen(opens, (e.currentTarget as HTMLElement).closest("li"));
           };
           return (
@@ -304,7 +320,30 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                     {expanded ? <CaretDown size={12} weight="bold" aria-hidden /> : <CaretRight size={12} weight="bold" aria-hidden />}
                   </button>
                 </span>
-                <span className="fx-c-app fx-app-name" role="cell" title={a.brief || a.app} data-user-text>{a.app}</span>
+                <span className="fx-c-app fx-app-cell" role="cell">
+                  <span className="fx-app-name" title={a.brief || a.app} data-user-text>{a.app}</span>
+                  {/* ADD A FEATURE, ON THE ROW (the everyday job): on hover, and in the row's menu. */}
+                  <span className="fx-app-acts">
+                    <a className="fx-app-add" href={addFeatureHref(opens)} data-testid={`fx-app-add-${a.key}`}
+                       title="Add a feature to this app: built on its branch, its tests kept"
+                       onClick={(e) => e.stopPropagation()}>＋ Add a feature</a>
+                    <span className="fx-pop-anchor">
+                      <button type="button" className="fx-app-more ag-icon-btn" aria-label={`More for ${a.app}`}
+                              aria-haspopup="menu" aria-expanded={menu === a.key} data-testid={`fx-app-more-${a.key}`}
+                              onClick={(e) => { e.stopPropagation(); setMenu(menu === a.key ? null : a.key); }}>⋯</button>
+                      {menu === a.key ? (
+                        <span role="menu" className="fx-ck-menu fx-app-menu" data-testid={`fx-app-menu-${a.key}`}>
+                          <a role="menuitem" href={addFeatureHref(opens)} data-testid={`fx-app-menu-add-${a.key}`}
+                             onClick={(e) => e.stopPropagation()}>Add a feature</a>
+                          <button type="button" role="menuitem" onClick={(e) => {
+                            e.stopPropagation(); setMenu(null);
+                            onOpen(opens, (e.currentTarget as HTMLElement).closest("li"));
+                          }}>Open its build</button>
+                        </span>
+                      ) : null}
+                    </span>
+                  </span>
+                </span>
                 <span className="fx-c-crew" role="cell"><Crew roleKeys={a.builders} /></span>
                 <span className="fx-c-state fx-row-now" role="cell">
                   <span className="fx-word">{state.word}</span>
