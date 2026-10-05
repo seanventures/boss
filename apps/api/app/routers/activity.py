@@ -297,6 +297,7 @@ def activity_export(
     Streamed straight from the keyset pages, never held in memory. `X-Truncated: 1` is decided
     before the first byte by counting the filter in SQL."""
     from boss_engine.services.activity_log import EXPORT_MAX_ROWS
+    from boss_engine.services.redaction import redact_secrets
 
     project_id = _resolve_project_id(project_id)
     service = _service_class()
@@ -317,7 +318,8 @@ def activity_export(
 
     def ndjson() -> Iterator[str]:
         for item in items():
-            yield json.dumps(item, default=str) + "\n"
+            # A final scrub of the line as written: the file is the last boundary.
+            yield redact_secrets(json.dumps(item, default=str)) + "\n"
 
     def as_csv() -> Iterator[str]:
         buffer = io.StringIO()
@@ -330,7 +332,7 @@ def activity_export(
             writer.writerow([
                 json.dumps(item.get(c), default=str) if c == "data" else item.get(c, "")
                 for c in _CSV_COLUMNS])
-            yield buffer.getvalue()
+            yield redact_secrets(buffer.getvalue())
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     headers = {"Content-Disposition": f'attachment; filename="boss-log-{stamp}.{format}"',

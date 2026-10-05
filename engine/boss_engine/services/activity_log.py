@@ -20,7 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import activity_sql
-from .redaction import redact
+from .redaction import redact, redact_secrets
 
 try:
     from .activity_classify import classify_activity, redact_activity_data
@@ -372,6 +372,21 @@ def _level_for(severity: str, status_value: str) -> str:
     return "info"
 
 
+def scrub(value: Any) -> Any:
+    """Every string a log read returns, credentials masked — titles, ids, labels, data, body.
+
+    The one gate every log read passes (list, row, context, export, labels): a key that slipped
+    past capture is never shown, whichever field it landed in. PII masking stays on the body
+    and data only, where it was before (it would mangle ids and times)."""
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, Mapping):
+        return {k: scrub(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [scrub(v) for v in value]
+    return value
+
+
 def _item(
     *,
     id: str,
@@ -393,7 +408,7 @@ def _item(
 ) -> dict[str, Any]:
     classified = _classify(classify_row)
     status_value = classified["status"]
-    return {
+    return scrub({
         "id": id,
         "source": source,
         "kind": kind,
@@ -429,7 +444,7 @@ def _item(
         # second time: the SQL matched on content that `_matches_q` cannot see, so re-checking
         # would throw away exactly the rows full-text search just found.
         "_sql_matched": sql_matched,
-    }
+    })
 
 
 
@@ -1056,7 +1071,7 @@ def _labels(connection: Connection, project_id: str,
                                {"ids": acts, "p": project_id}):
             if _text(row.get("label")):
                 labels[_text(row["act_id"])] = _text(row["label"])
-    return labels
+    return scrub(labels)
 
 
 def _scope_probe(query: LogQuery) -> list[dict[str, Any]]:
