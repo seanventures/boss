@@ -39,7 +39,10 @@ def stopped_runs(connection: Any, run_ids: list[str]) -> list[str]:
         return []
     rows = connection.execute(text(
         "SELECT id FROM code_task_runs WHERE id = ANY(:ids) AND status = ANY(:ended) "
-        "UNION SELECT run_id FROM code_task_stop_requests WHERE run_id = ANY(:ids)"),
+        # An honoured request has already become the run's `cancelled` status; reading only
+        # pending ones keeps a later attempt of the same run id from being stopped by an old one.
+        "UNION SELECT run_id FROM code_task_stop_requests WHERE run_id = ANY(:ids) "
+        "AND honoured_at IS NULL"),
         {"ids": list(run_ids), "ended": list(_ENDED)}).all()
     return sorted({str(r[0]) for r in rows})
 
