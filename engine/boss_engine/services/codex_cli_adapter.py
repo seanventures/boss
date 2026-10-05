@@ -31,6 +31,7 @@ import tempfile
 from typing import Optional
 
 from ..config import Settings
+from . import owned_process
 from .claude_cli_adapter import CliChatBrain
 from .included_spend import BILLING_SUBSCRIPTION
 from .scheduling import low_priority
@@ -109,7 +110,7 @@ class CodexCliAdapter(CliChatBrain):
             cmd += ["--model", model]
         cmd.append("-")  # read the prompt from stdin
         try:
-            proc = subprocess.run(
+            proc = owned_process.run(
                 low_priority(cmd), input=prompt, capture_output=True, text=True,
                 timeout=timeout, cwd=self._scratch_dir(), env=self._child_env(),
             )

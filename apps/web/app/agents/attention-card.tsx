@@ -25,6 +25,7 @@ import { WaiveSheet } from "../factory/waive-sheet";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { sendRunAnswer, type RunAction } from "../delivery-workflows-ui";
+import { actOnSystemFindingAction } from "../system-health-actions";
 import type { AttentionAction, AttentionAnswer, AttentionItem } from "../../lib/agents-live-board";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFace } from "./agent-face";
@@ -45,6 +46,7 @@ export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind">): st
   if (item.kind === "failed_step") return "Failed";
   if (item.kind === "gate_override") return "Checks";
   if (item.kind === "budget_refused") return "Budget";
+  if (item.kind === "system_health") return "System";
   return KIND_WORD[item.decisionKind ?? ""] ?? "Decision";
 }
 
@@ -97,6 +99,13 @@ type Busy = null | string;
 export const buildPatch = (runId: string) => ({ area: "code_tasks", build: runId, run: null, view: null, role: null });
 const STUCK_KINDS = new Set(["failed_step", "gate_override", "budget_refused"]);
 
+/** Where a system-health option's "open" answer goes: a guide in a new tab, an area in place. */
+function openTarget(target: string) {
+  if (/^https?:/i.test(target)) { window.open(target, "_blank", "noopener"); return; }
+  const area = new URLSearchParams(target.replace(/^\?/, "")).get("area");
+  if (area) navigate({ area, view: null, role: null });
+}
+
 export function AttentionCard({ item, projectId, actor, density = "card", focusKey, enter, still, onDone, onRefresh, orgId, dim }: AttentionCardProps) {
   useIdentityVersion();
   const titleId = useId();
@@ -115,6 +124,10 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const [leaving, setLeaving] = useState(false);
   const [pulse, setPulse] = useState(false);
   const [waiving, setWaiving] = useState(false);
+  // A system-health option that stops something a person started asks first, like Stop.
+  const [confirmingOpt, setConfirmingOpt] = useState<AttentionAnswer | null>(null);
+  // What the option did, said in place ("Freed 1.2 GB · pressure 12% → 1%").
+  const [done, setDone] = useState("");
 
   useEffect(() => {
     if (!focusKey || !box.current) return undefined;
@@ -220,6 +233,35 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     }
   }
 
+  async function choose(a: AttentionAnswer, sure = false) {
+    if (!item.findingId || busy) return;
+    if (a.confirm && !sure) { setConfirmingOpt(a); return; }
+    setConfirmingOpt(null);
+    setBusy(a.key);
+    setError(""); setErrorTip("");
+    const form = new FormData();
+    form.set("finding_id", item.findingId);
+    form.set("option", a.key);
+    form.set("actor", actor);
+    try {
+      const r = await callAction(actOnSystemFindingAction)(form);
+      if (r.ok) {
+        if (r.open) openTarget(r.open);
+        setDone(r.result || a.label);
+        showToast("success", r.result || a.label);
+        notifyChanged("decisions");
+        onRefresh?.();
+      } else {
+        setError("Couldn't do that"); setErrorTip(r.error ?? "");
+        onRefresh?.();
+      }
+    } catch (e) {
+      setError("Couldn't do that"); setErrorTip(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function press(a: AttentionAction) {
     if (a.action === "reject") setConfirming(a); else void decide(a);
   }
@@ -249,7 +291,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     <div ref={box} className="ag-att" role="group" aria-labelledby={titleId} tabIndex={-1}
          aria-describedby={inline ? hintId : undefined}
          data-testid={`ag-att-${item.id}`} data-att-card data-att-id={item.id} data-kind={item.kind}
-         data-density={density} data-enter={enter || undefined} data-leaving={leaving || undefined}
+         data-density={density} data-severity={item.severity || undefined} data-enter={enter || undefined} data-leaving={leaving || undefined}
          data-pulse={pulse || undefined} data-still={still || undefined} onKeyDown={onKey}>
       <div className="ag-att-head">
         <span className="ag-att-face" title={named} data-dim={dim ? "true" : undefined}>
@@ -342,6 +384,17 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
             <span data-user-text>{a.label}</span>
           </button>
         )) : null}
+        {item.kind === "system_health" && !done ? item.answers.map((a) => (
+          <button key={a.key} type="button" className="ag-btn" data-testid={`ag-att-option-${a.key}`}
+                  disabled={!a.enabled || busy !== null} title={a.reason || undefined}
+                  aria-busy={busy === a.key || undefined} onClick={() => void choose(a)}>
+            {busy === a.key ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
+            <span data-user-text>{a.label}</span>
+          </button>
+        )) : null}
+        {item.kind === "system_health" && done ? (
+          <span className="ag-att-done" role="status" data-testid="ag-att-done" data-user-text>{done}</span>
+        ) : null}
         {item.kind === "readiness" ? (
           <a className="ag-btn" data-testid="ag-att-fix" href={linkTo({ area: item.fix?.area || "setup", view: null, role: null }, orgId)}
              title={item.whatToDo || undefined}
@@ -373,6 +426,19 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
                   title="It ends here; nothing after the refused approval runs"
                   onClick={() => void answer(stopping, undefined, true)}>Stop</button>
           <button type="button" className="ag-link" onClick={() => setStopping(null)}>Cancel</button>
+        </div>
+      ) : null}
+
+      {confirmingOpt ? (
+        <div className="ag-att-confirm" role="alertdialog" aria-label={`${confirmingOpt.label}?`}
+             data-testid="ag-att-option-confirm">
+          <span data-user-text>{confirmingOpt.label}?</span>
+          <button type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-option-confirm-yes"
+                  title={confirmingOpt.reason || undefined}
+                  onClick={() => void choose(confirmingOpt, true)}>
+            <span data-user-text>{confirmingOpt.label}</span>
+          </button>
+          <button type="button" className="ag-link" onClick={() => setConfirmingOpt(null)}>Cancel</button>
         </div>
       ) : null}
 

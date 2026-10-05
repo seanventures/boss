@@ -166,7 +166,7 @@ def test_an_unhealthy_app_fails_at_health_and_is_not_finalized():
 
 def test_the_adapter_refuses_a_stack_write_without_a_changeset_before_running_ssh(monkeypatch):
     ran = []
-    monkeypatch.setattr(ssh_host_adapter.subprocess, "run",
+    monkeypatch.setattr(ssh_host_adapter.owned_process, "run",
                         lambda *a, **k: ran.append(a) or subprocess.CompletedProcess([], 0))
     # A default Community install: no BOSS_SSH_HOST_DEPLOY_ALLOWED, outward SSH on by default.
     adapter = ssh_host_adapter.SSHHostAdapter(SimpleNamespace(ssh_host_deploy_allowed=False))

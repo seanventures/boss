@@ -735,6 +735,13 @@ def validate_move(
         budget_state not in {"red", "orange"},
         f"budget_state={budget_state}",
     )
+    level = int(snapshot.get("system_level") or 0)
+    if kind == "restart_preview":
+        check("host_has_room", level < 1,
+              f"system level {level}: no preview restarts under memory pressure")
+    if kind == "launch_factory_job":
+        check("host_has_room", level < 2,
+              f"system level {level}: the system doctor paused new builds")
     if kind == "restart_preview":
         check(
             "verify_green_target",
@@ -757,6 +764,15 @@ def validate_move(
         "checks": checks,
         "failed": [c["name"] for c in checks if not c["ok"]],
     }
+
+
+def _system_level(connection: Connection) -> int:
+    try:
+        with connection.begin_nested():
+            from .admission import current_level
+            return int(current_level(connection))
+    except Exception:  # noqa: BLE001 — no level known: normal
+        return 0
 
 
 class MetatronCaptain:
@@ -1090,6 +1106,9 @@ class MetatronCaptain:
             ),
             "top_risks": health.get("top_risks") or [],
             "scorecard": self._latest_run_scorecard(connection, project_id),
+            # THE SYSTEM DOCTOR'S RUNG (stability spec §4c): Metatron's own moves start
+            # previews and builds, so they wait while the host is under pressure.
+            "system_level": _system_level(connection),
         }
         return MetatronCommand(self.settings).overlay_snapshot(connection, project_id, snap)
 

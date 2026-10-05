@@ -10,6 +10,13 @@ from fastapi import FastAPI
 
 def mount_platform_routers(app: FastAPI) -> None:
     """Include optional platform domain routers when present."""
+    # System health: deploy readiness, the system doctor's findings and actions (stability).
+    try:
+        from .system_health import router as system_health_router
+
+        app.include_router(system_health_router)
+    except ImportError:
+        pass
     # Identity IdP catalog + setup blueprints
     try:
         from .identity_providers import router as identity_router

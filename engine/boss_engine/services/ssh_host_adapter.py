@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 
 from ..config import Settings
+from . import owned_process
 from .github_adapter import IntegrationConfigurationError
 
 
@@ -126,7 +127,7 @@ class SSHHostAdapter:
                 f"{user}@{host}",
                 command,
             ]
-            return subprocess.run(
+            return owned_process.run(
                 argv, capture_output=True, text=True, timeout=timeout
             )
         finally:
@@ -373,13 +374,13 @@ class SSHHostAdapter:
             try:
                 if stdin_path:
                     with open(stdin_path, "rb") as source:
-                        proc = subprocess.run(argv, stdin=source, capture_output=True,
+                        proc = owned_process.run(argv, stdin=source, capture_output=True,
                                               timeout=timeout)
                     return subprocess.CompletedProcess(
                         argv, proc.returncode,
                         (proc.stdout or b"").decode("utf-8", "replace"),
                         (proc.stderr or b"").decode("utf-8", "replace"))
-                return subprocess.run(argv, input=stdin_text if stdin_text is not None else "",
+                return owned_process.run(argv, input=stdin_text if stdin_text is not None else "",
                                       capture_output=True, text=True, timeout=timeout)
             except FileNotFoundError:
                 return subprocess.CompletedProcess(

@@ -3710,6 +3710,105 @@ ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS failure_kind TEXT;
 ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_app_previews_project ON app_previews (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_previews_run ON app_previews (run_id);
+-- When the preview last served a proxied request: a preview nobody has looked at for N minutes
+-- is stopped (stability spec §4a.6 idle-stop), not left running to its TTL.
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+
+-- EVERYTHING A BUILD MAKES IS OWNED AND REAPED (stability spec §4a.1). One row per resource BOSS
+-- creates — a process tree, a container, an image, a directory — written BEFORE it is created
+-- and closed (released_at) when it is gone. The reaper (resource_reaper) works from both sides:
+-- an open row whose owner has ended is released by ending its resource, and a labelled
+-- resource on the host with no open row is removed. `handle` is what the resource is found by:
+-- `token:<owner token>` for a process tree (the token every descendant carries), a container
+-- id or name, an image tag, a path. `node` is the container/host that can see the handle.
+CREATE TABLE IF NOT EXISTS owned_resources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  owner_kind TEXT NOT NULL,      -- code_run|preview|sandbox|review_seat|deploy|api
+  owner_id TEXT NOT NULL,
+  owner_chain TEXT[] NOT NULL DEFAULT '{}',
+  resource_kind TEXT NOT NULL,   -- process_group|container|image|dir|port
+  handle TEXT NOT NULL,
+  pgid INTEGER,
+  node TEXT,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ,
+  released_at TIMESTAMPTZ,
+  release_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_owned_resources_open ON owned_resources (resource_kind, created_at)
+  WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_owned_resources_owner ON owned_resources (owner_id);
+
+-- What a kind of work costs the machine (stability spec §4b.2): the memory it must find free to
+-- start (request) and the most it may take (limit), seeded from measured footprints and moved by
+-- the observed peaks of real runs (EWMA of memory.peak). Admission at lease reads this.
+CREATE TABLE IF NOT EXISTS workload_profiles (
+  kind TEXT PRIMARY KEY,
+  request_mb INTEGER NOT NULL,
+  limit_mb INTEGER NOT NULL,
+  observed_peak_mb INTEGER,
+  samples INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The system doctor's diagnoses (stability spec §4c): one row per finding, kept open while its
+-- signal holds and resolved when the signal has been clear for two minutes. A finding that
+-- needs a person's choice is a `system_health` card in What needs you; one BOSS fixed itself is
+-- only a line in the action log.
+CREATE TABLE IF NOT EXISTS system_findings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  kind TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'warn',   -- info|warn|critical
+  status TEXT NOT NULL DEFAULT 'open',     -- open|resolved|dismissed|snoozed
+  title TEXT NOT NULL,
+  detail TEXT,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  options JSONB NOT NULL DEFAULT '[]'::jsonb,
+  needs_choice BOOLEAN NOT NULL DEFAULT false,
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  clear_since TIMESTAMPTZ,
+  snoozed_until TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  chosen_option TEXT,
+  chosen_by TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_system_findings_open_kind ON system_findings (kind)
+  WHERE status IN ('open', 'snoozed');
+
+-- Every action the doctor took or a person chose (stability spec §4c Audit): before and after
+-- metrics, whether the signal improved, who acted. Also the rate limit's and the circuit
+-- breaker's memory.
+CREATE TABLE IF NOT EXISTS system_doctor_actions (
+  id TEXT PRIMARY KEY,
+  finding_id TEXT,
+  finding_kind TEXT,
+  action TEXT NOT NULL,
+  target TEXT,
+  actor TEXT NOT NULL,                      -- boss | <member>
+  automatic BOOLEAN NOT NULL DEFAULT true,
+  outcome TEXT,
+  detail TEXT,
+  before_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  after_metrics JSONB,
+  improved BOOLEAN,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  verified_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_system_doctor_actions_recent ON system_doctor_actions (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_system_doctor_actions_target ON system_doctor_actions (action, target, created_at DESC);
+
+-- Install-wide state the doctor and admission share: the install id containers are labelled
+-- with, the degradation level, "Builds at once" (auto or pinned), deploy hold, a host sample
+-- pushed by the optional Mac helper.
+CREATE TABLE IF NOT EXISTS system_state (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Durable, per-lineage feedback conversation.  Dispatch is confirmation-gated;
 -- messages preserve the operator request, clarification, proposal and retry link.
