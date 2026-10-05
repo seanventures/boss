@@ -268,6 +268,8 @@ services:
       BOSS_CONTROL_PLANE_URL: http://api:8000
       BOSS_WORKER_ID: community-worker-1
       BOSS_DB_POOL_SIZE: ${BOSS_WORKER_DB_POOL_SIZE:-5}
+      # Lease slots: `auto` = the API's measured "Builds at once"; a number pins it.
+      BOSS_WORKER_SLOTS: ${BOSS_WORKER_SLOTS:-auto}
       BOSS_DB_MAX_OVERFLOW: ${BOSS_WORKER_DB_MAX_OVERFLOW:-5}
       # THE PRODUCT'S OWN LOOP, ON. Both default to false in config.py, which is right for a
       # library and wrong for an install whose entire purpose is to build software: pressing

@@ -545,7 +545,8 @@ class JobLeaseService:
             """
             SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
                    allocation_id, kind, payload, data_boundary, priority_score,
-                   workload_class, resource_units, attempt, max_attempts, status
+                   workload_class, resource_units, attempt, max_attempts, status,
+                   last_error
             FROM jobs
             WHERE kind IN :capabilities
               AND run_after <= :now_utc
@@ -584,8 +585,25 @@ class JobLeaseService:
             connection, list(candidates)
         )
 
+        admission_cap = None
         for candidate in candidates:
             payload = candidate["payload"] or {}
+            # THE MACHINE IS ASKED BEFORE A HEAVY JOB STARTS (stability spec §4b.2). A queued
+            # build costs nothing; a thrashing host slows every build and the control plane
+            # with it. A reclaim (its previous holder is gone) is never held back.
+            if candidate["status"] not in {"leased", "running"}:
+                from . import admission
+                if admission.profile_for_job(candidate["kind"]) is not None:
+                    try:
+                        if admission_cap is None:
+                            admission_cap = admission.sample()
+                        verdict = admission.admit_job(connection, candidate["kind"],
+                                                      cap=admission_cap)
+                    except Exception:  # noqa: BLE001 — an unreadable host never blocks work
+                        verdict = None
+                    if verdict is not None and not verdict.admitted:
+                        self._defer_for_host_capacity(connection, candidate, verdict)
+                        continue
             allocated, allocation_reason = (
                 self.work_orchestration.reserve_job_slot(
                     connection,
@@ -2047,6 +2065,43 @@ class JobLeaseService:
                 "run_after": run_after.isoformat(),
             },
         )
+
+    def _defer_for_host_capacity(self, connection: Connection, candidate, verdict) -> None:
+        """Leave the job queued with WHY in the operator's words; the event once per wait,
+        not once per poll (a poll every few seconds would otherwise flood the log)."""
+        run_after = now_utc() + timedelta(seconds=20)
+        previous = candidate.get("last_error") or {}
+        if isinstance(previous, str):
+            try:
+                previous = json.loads(previous)
+            except ValueError:
+                previous = {}
+        message = f"Queued: waiting for room on this machine ({verdict.shortfall})."
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status='queued', run_after=:run_after,
+                    last_error=CAST(:last_error AS JSONB), updated_at=now()
+                WHERE id=:job_id
+                """
+            ),
+            {
+                "job_id": candidate["id"],
+                "run_after": run_after,
+                "last_error": json.dumps({
+                    "code": "host_capacity", "deferred_reason": "host_capacity",
+                    "message": message, "shortfall": verdict.shortfall,
+                    "slots": verdict.slots, "in_flight": verdict.in_flight,
+                }),
+            },
+        )
+        if (previous or {}).get("code") != "host_capacity":
+            emit_event(connection, candidate["project_id"], "job.capacity_deferred",
+                       "admission", "job", candidate["id"],
+                       {"kind": candidate["kind"], "shortfall": verdict.shortfall,
+                        "slots": verdict.slots, "in_flight": verdict.in_flight,
+                        "level": verdict.level})
 
     def _hash_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()

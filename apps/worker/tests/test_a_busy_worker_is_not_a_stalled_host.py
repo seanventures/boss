@@ -64,3 +64,28 @@ def test_the_loop_no_longer_times_the_cycle():
     body = inspect.getsource(worker_main.main)
     assert "_now - _last_cycle" not in body
     assert "observe_idle_wait(" in body
+
+
+def test_lease_slots_follow_the_control_planes_measure_or_a_pin():
+    from types import SimpleNamespace
+
+    class _Resp:
+        def __init__(self, value):
+            self.value = value
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"admission": {"builds_at_once": {"value": self.value}}}
+
+    def client(value):
+        return SimpleNamespace(_client=SimpleNamespace(get=lambda *_a, **_k: _Resp(value)))
+
+    auto = SimpleNamespace(worker_slots="auto")
+    assert worker_main.worker_slots(client(3), auto) == 3
+    assert worker_main.worker_slots(client(9), auto) == worker_main.MAX_WORKER_SLOTS
+    assert worker_main.worker_slots(client(2), SimpleNamespace(worker_slots="1")) == 1
+
+    broken = SimpleNamespace(_client=SimpleNamespace(get=lambda *_a, **_k: 1 / 0))
+    assert worker_main.worker_slots(broken, auto) == 1, "an older API: one slot, as before"
