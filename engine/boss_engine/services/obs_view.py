@@ -445,54 +445,53 @@ _ORDER = {"down": 0, "degraded": 1, "unknown": 2, "up": 3, "not_deployed": 4}
 
 def _strips(connection: Any, ids: list[str], w: dict[str, Any]
             ) -> tuple[dict[str, list[list]], dict[str, dict[str, Any]]]:
-    """ONE grouped query: per (target, bucket) and per target — count, ok, p95 of the
-    successful probes' latency (a timeout's duration is not a latency)."""
+    """ONE scan, one grouped query: per (target, bucket) and per target — count, ok, the p95
+    of the successful probes' latency (a timeout's duration is not a latency), and per target
+    the incidents that opened in the window (`_opened_sql`)."""
     strips = {i: [[0, 0, None] for _ in range(w["cells"])] for i in ids}
-    rollup: dict[str, dict[str, Any]] = {i: {"n": 0, "ok": 0, "p95": None} for i in ids}
+    rollup: dict[str, dict[str, Any]] = {
+        i: {"n": 0, "ok": 0, "p95": None, "incidents": 0} for i in ids}
     if not ids:
         return strips, rollup
+    lags, opened = _opened_sql()
     rows = connection.execute(text(
         "SELECT t, b, GROUPING(b) AS whole, count(*) AS n, "
         "       sum(CASE WHEN ok THEN 1 ELSE 0 END) AS okn, "
         "       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) "
-        "         FILTER (WHERE ok AND latency_ms IS NOT NULL) AS p95 "
-        "FROM (SELECT deployment_target_id AS t, ok, latency_ms, "
-        f"             {_bucket_sql('checked_at')} AS b "
-        "      FROM deployment_health_samples "
-        "      WHERE deployment_target_id = ANY(:ids) AND checked_at >= :a AND checked_at < :z"
+        "         FILTER (WHERE ok AND latency_ms IS NOT NULL) AS p95, "
+        "       count(*) FILTER (WHERE opened) AS incidents "
+        "FROM (SELECT t, ok, latency_ms, b, (NOT ok AND " + opened + ") AS opened "
+        "      FROM (SELECT deployment_target_id AS t, ok, latency_ms, "
+        f"                   {_bucket_sql('checked_at')} AS b, {lags} "
+        "            FROM deployment_health_samples "
+        "            WHERE deployment_target_id = ANY(:ids) AND checked_at >= :a "
+        "              AND checked_at < :z "
+        "            WINDOW w AS (PARTITION BY deployment_target_id ORDER BY checked_at DESC)"
+        "           ) l"
         "     ) s "
         "GROUP BY GROUPING SETS ((t, b), (t))"),
         {"ids": ids, "a": w["start"], "z": w["end"], "s0": w["start_epoch"],
          "cs": w["cell_s"]}).mappings().all()
     for r in rows:
         if r["whole"]:
-            rollup[r["t"]] = {"n": int(r["n"]), "ok": int(r["okn"] or 0), "p95": _int(r["p95"])}
+            rollup[r["t"]] = {"n": int(r["n"]), "ok": int(r["okn"] or 0), "p95": _int(r["p95"]),
+                              "incidents": int(r["incidents"] or 0)}
         elif 0 <= int(r["b"]) < w["cells"]:
             strips[r["t"]][int(r["b"])] = [int(r["okn"] or 0), int(r["n"]), _int(r["p95"])]
     return strips, rollup
 
 
-def _incident_counts(connection: Any, ids: list[str], w: dict[str, Any]) -> dict[str, int]:
-    """Outages in the window: runs of ≥ DOWN_AFTER_CONSECUTIVE_FAILURES failed probes (the
-    deployment_health.incidents rule), counted in SQL for the targets that failed at all."""
-    from .deployment_health import DOWN_AFTER_CONSECUTIVE_FAILURES
+def _opened_sql() -> tuple[str, str]:
+    """An incident OPENS on the k-th consecutive failed probe (deployment_health.incidents'
+    rule): the k-1 probes before it failed and the k-th before it did not, or does not exist.
+    Returns (the lag columns over WINDOW w, the predicate over them)."""
+    from .deployment_health import DOWN_AFTER_CONSECUTIVE_FAILURES as k
 
-    if not ids:
-        return {}
-    rows = connection.execute(text(
-        "SELECT t, count(*) AS n FROM ("
-        "  SELECT t, grp FROM ("
-        "    SELECT deployment_target_id AS t, ok, "
-        "           row_number() OVER (PARTITION BY deployment_target_id ORDER BY checked_at) "
-        "         - row_number() OVER (PARTITION BY deployment_target_id, ok "
-        "                              ORDER BY checked_at) AS grp "
-        "    FROM deployment_health_samples "
-        "    WHERE deployment_target_id = ANY(:ids) AND checked_at >= :a AND checked_at < :z"
-        "  ) s WHERE NOT ok GROUP BY t, grp HAVING count(*) >= :k"
-        ") runs GROUP BY t"),
-        {"ids": ids, "a": w["start"], "z": w["end"],
-         "k": DOWN_AFTER_CONSECUTIVE_FAILURES}).mappings().all()
-    return {r["t"]: int(r["n"]) for r in rows}
+    # `lead` over newest-first is the probe i before it in time: the window then reads the
+    # (target, checked_at DESC) index in its own order, with no sort.
+    lags = ", ".join(f"lead(ok, {i}) OVER w AS l{i}" for i in range(1, k + 1))
+    opened = " AND ".join([f"l{i} IS FALSE" for i in range(1, k)] + [f"l{k} IS NOT FALSE"])
+    return lags, f"({opened})"
 
 
 def _not_watched(connection: Any, project_id: str, targets: list[dict],
@@ -550,8 +549,6 @@ def pulse(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
     deployed = _deployed(connection, ids)
     samples = _newest_samples(connection, ids, now)
     strips, rollup = _strips(connection, ids, w)
-    failing = [i for i in ids if rollup[i]["ok"] < rollup[i]["n"]]
-    incidents = _incident_counts(connection, failing, w)
     pins = _pins(connection, ids, w["start"], w["end"], partial)
 
     rows: list[PulseRow] = []
@@ -566,7 +563,7 @@ def pulse(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
             "state": state, "word": word["word"], "tone": word["tone"], "since": since,
             "uptime": _ratio(rollup[tid]["ok"], rollup[tid]["n"]),
             "p95_ms": rollup[tid]["p95"], "strip": strips[tid], "pins": pins.get(tid, []),
-            "incidents": incidents.get(tid, 0),
+            "incidents": rollup[tid]["incidents"],
         })
     rows.sort(key=lambda r: (_ORDER.get(r["state"], 9), r["app"].lower(), r["env"]))
     counts = {"up": 0, "slow": 0, "down": 0, "no_signal": 0, "not_deployed": 0}
