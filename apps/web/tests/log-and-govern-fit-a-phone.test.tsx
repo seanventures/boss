@@ -61,6 +61,21 @@ describe("the Log on a phone", () => {
   });
 });
 
+describe("the drawer on a phone", () => {
+  it("is portalled to <body>, out of the console's transformed panel that trapped it", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("max-width: 719px"), media: q,
+      addEventListener: () => {}, removeEventListener: () => {} }));
+    vi.stubGlobal("fetch", fakeLogApi(newLog({ page: { items: rows(2) }, facets: FACETS })));
+    setConsoleLive(true);
+    window.history.replaceState({}, "", "/?area=activity&row=r0");
+    await mount(<LogExplorer projectId="p1" actor="ceo" />);
+    const drawer = $("[data-testid=lx-drawer]")!;
+    expect(drawer.parentElement!.className).toBe("lx lx-sheet-host");
+    expect(drawer.parentElement!.parentElement).toBe(document.body);
+    expect(drawer.closest(".lx-body")).toBeNull();
+  });
+});
+
 describe("Govern on a phone", () => {
   it("never drops Evidence; it stacks", () => {
     for (const at of ["@media (max-width: 1023px)", "@media (max-width: 719px)"]) {
