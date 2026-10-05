@@ -26,6 +26,7 @@ import { AddToolsSheet } from "./add-tools-sheet";
 import { leaveTo } from "./obs-util";
 import { obsRead, obsWrite } from "./obs-write";
 import { Empty, Skeleton, StateWord, ZoneHead } from "../infra/kit";
+import { useLocalTime } from "../../lib/local-time";
 
 const CHECK_WORD: Record<string, { word: string; tone: "green" | "red" | "grey" }> = {
   config_ok: { word: "Config OK", tone: "green" }, reachable: { word: "Reachable", tone: "green" },
@@ -34,6 +35,7 @@ const CHECK_WORD: Record<string, { word: string; tone: "green" | "red" | "grey" 
 type CheckItem = { id?: string; name?: string; kind?: string; status: string; config_error?: string; note?: string };
 
 function Stack({ s, projectId, actor, refresh }: { s: Sources; projectId: string; actor: string; refresh: () => void }) {
+  const lt = useLocalTime();
   const st = s.stack;
   const now = useNow(30_000);
   const [busy, setBusy] = useState<"deploy" | "check" | null>(null);
@@ -69,14 +71,14 @@ function Stack({ s, projectId, actor, refresh }: { s: Sources; projectId: string
       </ZoneHead>
       <div className="obs-line obs-stackline">
         <span className="obs-strong">OTel → Prometheus → Grafana</span>
-        <span data-testid="obs-stack-state" title={st.error ?? (st.checkedAt ? `Checked ${new Date(st.checkedAt).toLocaleString()}` : undefined)}>
+        <span data-testid="obs-stack-state" title={st.error ?? (st.checkedAt ? `Checked ${lt.full(st.checkedAt)}` : undefined)}>
           <StateWord w={{ word: unknown ? "Status unknown" : st.word, tone: unknown ? "hollow" : st.tone }} />
         </span>
         {st.host ? (
           <a className="inf-link" href={hostHref(st.host.id)} data-copy="data" title={`${st.host.name} in Infra`}
              onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(hostHref(st.host!.id)); } }}>{st.host.name} ↗</a>
         ) : null}
-        {st.checkedAt && !unknown ? <span className="inf-faint inf-num" title={new Date(st.checkedAt).toLocaleString()}>checked {ago(st.checkedAt, now)}</span> : null}
+        {st.checkedAt && !unknown ? <span className="inf-faint inf-num" title={lt.full(st.checkedAt)}>checked {ago(st.checkedAt, now)}</span> : null}
         {unknown ? (
           <button type="button" className="inf-link" data-testid="obs-stack-check" disabled={busy !== null} onClick={check}>
             {busy === "check" ? "Checking…" : "Check now"}

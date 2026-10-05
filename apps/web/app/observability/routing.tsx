@@ -12,6 +12,7 @@ import React, { useEffect, useState } from "react";
 import type { RoutingRow } from "../../lib/obs-view";
 import { Empty, Sheet, ZoneHead } from "../infra/kit";
 import { obsRead } from "./obs-write";
+import { useLocalTime } from "../../lib/local-time";
 
 export type RouteFilters = { provider: string; budget: string; boundary: string; outcome: string };
 const NONE: RouteFilters = { provider: "", budget: "", boundary: "", outcome: "" };
@@ -60,12 +61,13 @@ export function outcomeOf(v: string | null | undefined): { key: "selected" | "de
 }
 
 function RouteLine({ r }: { r: RoutingRow }) {
+  const lt = useLocalTime();
   const t = Date.parse(r.at);
   const out = outcomeOf(r.outcome);
   return (
     <li className="obs-line obs-route" data-testid="obs-route-row" data-outcome={out.key}>
-      <span className="inf-num inf-muted" title={Number.isFinite(t) ? new Date(t).toLocaleString() : undefined}>
-        {Number.isFinite(t) ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}
+      <span className="inf-num inf-muted" title={Number.isFinite(t) ? lt.full(t) : undefined}>
+        {Number.isFinite(t) ? lt.hhmm(t) : "—"}
       </span>
       <span data-copy="data">{word(r.provider)}</span>
       <span className="inf-muted" title="Budget state">{word(r.budget)}</span>

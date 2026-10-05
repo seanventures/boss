@@ -16,6 +16,7 @@ import { plainClick } from "../agents/live-util";
 import { Drawer, DrawerSection, Skeleton } from "../infra/kit";
 import { leaveTo } from "./obs-util";
 import { obsRead } from "./obs-write";
+import { useLocalTime } from "../../lib/local-time";
 
 export const PAGE = 20;
 
@@ -43,6 +44,7 @@ export function spendWord(spendMicros: number, included: boolean, estimated: boo
 export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: {
   projectId: string; group: Group; keyName: string; row: ModelGroupRow | null; since: string | null; onClose: () => void;
 }) {
+  const lt = useLocalTime();
   const [calls, setCalls] = useState<LlmCall[] | null>(null);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -92,8 +94,8 @@ export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: 
           <ul className="obs-list obs-calls">
             {calls.map((c) => (
               <li key={c.id} className="obs-call" data-testid="obs-call-row" data-ok={c.ok ? "1" : "0"}>
-                <span className="inf-num inf-muted" title={new Date(c.at).toLocaleString()}>
-                  {new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}
+                <span className="inf-num inf-muted" title={lt.full(c.at)}>
+                  {lt.hhmm(Date.parse(String(c.at)))}
                 </span>
                 <RunFace roleKey={c.roleKey} variant={c.roleKey ? "agent" : "boss"} size={20} />
                 <span className="inf-trunc" data-copy="data">{c.stage ?? "—"}</span>

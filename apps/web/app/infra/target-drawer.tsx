@@ -308,7 +308,7 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
   const t = detail.data;
   const openDeploy = (ref: string) => go({ view: "deploys", target: null, host: null, deploy: ref });
   const label = t ? `${t.app} · ${t.env}` : "App";
-  const end = Date.now();
+  const end = now ?? NaN;   // the clock starts after mount
   const head = t ? (
     <>
       <span className="inf-drawer-title inf-trunc" data-copy="data">{label}</span>
@@ -353,7 +353,7 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
           </DrawerSection>
           <Preflight projectId={projectId} targetId={t.id} can={t.can.check} />
           <DrawerSection label="HEALTH" testId="inf-target-health">
-            <PulseStrip cells={t.strip} fromIso={new Date(end - t.strip.length * CELL_S * 1000).toISOString()} cellS={CELL_S}
+            <PulseStrip cells={t.strip} fromIso={Number.isFinite(end) ? new Date(end - t.strip.length * CELL_S * 1000).toISOString() : null} cellS={CELL_S}
                         label={label} span="24 hours" testId="inf-target-strip" />
             <div className="inf-actions">
               <span className="inf-num" data-testid="inf-target-uptime">{uptimeLine(t)}</span>

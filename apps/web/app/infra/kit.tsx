@@ -302,8 +302,8 @@ export function useAnnouncer(): [string, (text: string) => void] {
   const [text, setText] = useState("");
   const last = useRef(0);
   const say = (t: string) => {
-    const now = Date.now();
-    if (now - last.current < 10_000) return;
+    const now = performance.now();
+    if (last.current && now - last.current < 10_000) return;
     last.current = now;
     setText(t);
   };

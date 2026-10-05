@@ -26,6 +26,7 @@ import { fetchSetup } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
 import { Dot, Tip } from "./pill";
 import { SetupRow } from "./setup-row";
+import { useLocalTime } from "../../lib/local-time";
 
 // ── the wire, parsed ────────────────────────────────────────────────────────────────────────
 
@@ -208,6 +209,7 @@ function CompleteForm({ session, onDone }: { session: CapSession; onDone: (body:
 // ── the row ─────────────────────────────────────────────────────────────────────────────────
 
 export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: boolean }>(function CapacityRow({ actor, focused }, ref) {
+  const lt = useLocalTime();
   const { projectId, view, apply } = useBoard();
   const [sources, setSources] = useState<CapSource[] | null>(null);
   const [sessions, setSessions] = useState<CapSession[]>([]);
@@ -324,7 +326,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                     <li key={x.id} className="su-stack" data-testid="setup-cap-session-row">
                       <span className="su-line">
                         <span className="su-strong">{words(x.mode || "login")}</span>
-                        <Tip tip={x.action ?? `Requested ${new Date(x.at).toLocaleString()}`} className="su-chip">
+                        <Tip tip={x.action ?? `Requested ${lt.full(x.at)}`} className="su-chip">
                           {SESSION_WORD[x.status] ?? words(x.status)}
                         </Tip>
                         {x.login ? <code className="su-mono" data-user-text>{x.login}</code> : null}
