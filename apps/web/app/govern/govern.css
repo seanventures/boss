@@ -101,6 +101,8 @@
 .gv-chart-bar[data-over] { fill: var(--red); }
 .gv-chart-included { fill: var(--border-strong); }
 .gv-chart-cap { stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.gv-chart-wrap { display: flex; flex-direction: column; gap: 2px; }
+.gv-chart-note { align-self: flex-end; font-size: 0.74rem; color: var(--amber-text, var(--muted)); }
 .gv-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .gv-chip { padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--ink-soft); font-size: 0.8rem; }
 .gv-chip[data-passed] { border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); animation: gv-chip 300ms ease-out 1; }
@@ -115,6 +117,9 @@
 .gv-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .gv-models-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; font-size: 0.88rem; color: var(--ink); }
 .gv-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.gv-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.gv-spend-rows li > :not(:first-child) { flex: 0 0 72px; text-align: right; font-variant-numeric: tabular-nums; }
+.gv-spend-head { min-height: 24px !important; font-size: 0.72rem !important; color: var(--faint) !important; text-transform: uppercase; letter-spacing: 0.04em; }
 .gv-tile { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); font-size: 0.84rem; color: var(--ink-soft); }
 .gv-tile-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; color: var(--faint); }
 .gv-tile-sub { font-size: 0.78rem; color: var(--muted); }
@@ -126,7 +131,7 @@
 .gv-sev { flex: none !important; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); font-size: 0.72rem; text-transform: capitalize; }
 .gv-sev[data-sev="high"] { background: var(--red-soft); color: var(--red); }
 .gv-sev[data-sev="medium"] { background: var(--amber-soft); color: var(--amber); }
-.gv-finding { flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gv-finding { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
 .gv-action { color: var(--accent-text); cursor: help; }
 .gv-muted { color: var(--faint); font-size: 0.8rem; }
 .gv-tree { list-style: none; margin: 0; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 4px; }

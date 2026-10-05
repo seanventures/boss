@@ -59,7 +59,7 @@ describe("Govern reads its own data", () => {
     expect(page).toContain("<GovernHome projectId={activeProjectId} actor={activeActorId} />");
   });
 
-  it("Spend links model spend to Observability › Models and draws no model table", async () => {
+  it("Spend links spent-vs-cap on to Observability › Models", async () => {
     g.spend = { window: "7d", money_usd_micros: 3_000_000, included_usd_micros: 7_000_000,
                 daily: [{ day: "2026-10-04", money_usd_micros: 3_000_000, included_usd_micros: 7_000_000 }],
                 daily_cap_usd_micros: 10_000_000, scorecard: { calls: 9, cache_ratio: 0.2, prompt_tokens: 100, cache_read_tokens: 20 },
@@ -69,7 +69,6 @@ describe("Govern reads its own data", () => {
     const models = $("[data-testid=gv-models-link] a")!;
     const q = new URLSearchParams(models.getAttribute("href")!.split("?")[1]);
     expect([q.get("area"), q.get("tab")]).toEqual(["observability", "models"]);
-    expect($("[data-testid=gv-spend]")!.textContent).not.toMatch(/by agent|by model/i);
     expect($("[data-testid=gv-spend-total]")!.textContent).toBe("$3.00 spent · Included $7.00");
     expect($("[data-testid=gv-cache] .gv-low")!.getAttribute("title")).toBe("Under 30% of input came from cache");
   });

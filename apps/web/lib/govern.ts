@@ -78,8 +78,11 @@ export type SpendView = {
   savings: { kind: string; severity?: string; finding?: string; action?: string; save_usd_micros?: number;
              est_save_usd_micros?: number; message?: string; detail?: string }[];
   top_drivers: { id: string; amount_usd_micros: number }[];
+  by_agent?: ModelSpendRow[];
+  by_model?: ModelSpendRow[];
   spent_vs_cap: Meter;
 };
+export type ModelSpendRow = { id: string; calls: number; money_usd_micros: number; included_usd_micros: number };
 export type Allocation = {
   id: string; parent_allocation_id: string | null; scope_type: string; scope_id: string;
   amount_usd_micros: number; available_usd_micros: number; reserved_usd_micros: number;
@@ -186,4 +189,36 @@ export function effectiveOf(control: Pick<Control, "rule">, stored: number | nul
 /** The 403 tooltip names the permission a write needs. */
 export function rightsFor(op: string): string {
   return op === "setting" ? "Needs provider rights" : "Needs budget rights";
+}
+
+const MODEL_FAMILY = /^(claude|gpt|gemini|o\d|llama|mistral|mixtral|grok|deepseek|qwen|command)/i;
+const WORD: Record<string, string> = { claude: "Claude", gpt: "GPT", gemini: "Gemini", llama: "Llama",
+  opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable", mini: "mini", turbo: "Turbo", pro: "Pro",
+  flash: "Flash", mistral: "Mistral", deepseek: "DeepSeek", qwen: "Qwen", grok: "Grok" };
+
+/** A model id as people say it: `claude-sonnet-4-5-20250929` → `Claude Sonnet 4.5`,
+ *  `gpt-4o` → `GPT-4o`. Anything that isn't a model id reads as words (`repo_scan` → `Repo scan`). */
+export function modelName(id: string): string {
+  const raw = String(id ?? "").trim();
+  if (!raw) return "Unknown";
+  if (!MODEL_FAMILY.test(raw)) {
+    const words = raw.replace(/[_:]+/g, " ").replace(/\s+/g, " ").trim();
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+  const parts = raw.replace(/[-@](\d{8}|latest)$/i, "").split(/[-_/]/).filter(Boolean);
+  if (/^gpt$/i.test(parts[0]) && parts.length > 1) return `GPT-${parts.slice(1).join("-")}`;
+  const out: string[] = [];
+  for (const part of parts) {
+    const prev = out[out.length - 1];
+    if (/^\d+$/.test(part) && prev && /^\d+(\.\d+)*$/.test(prev)) out[out.length - 1] = `${prev}.${part}`;
+    else out.push(WORD[part.toLowerCase()] ?? part);
+  }
+  return out.join(" ");
+}
+
+/** A tooltip within the copy budget: at most 14 words. */
+export function tip14(text: string | null | undefined): string | undefined {
+  const words = String(text ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return undefined;
+  return words.length <= 14 ? words.join(" ") : `${words.slice(0, 13).join(" ")}…`;
 }
