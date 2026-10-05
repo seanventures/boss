@@ -193,6 +193,8 @@ export type CloudChange = {
   receipts: { id: string; action: string; status: string }[];
   drift: { id: string; classification: string; summary: string; unmanaged: number; orphaned: number; security: number }[];
   can: Record<string, boolean>;
+  /** A deploy's ChangeSet is approved through this decision (the drawer's and Approvals'). */
+  decisionId: string | null;
 };
 export function parseChange(w: unknown): CloudChange {
   const o = obj(w);
@@ -211,6 +213,7 @@ export function parseChange(w: unknown): CloudChange {
                orphaned: num(y.orphaned), security: num(y.security) };
     }),
     can: bools(o.can),
+    decisionId: optStr(o.decision_id),
   };
 }
 

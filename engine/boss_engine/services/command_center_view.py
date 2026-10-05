@@ -82,6 +82,33 @@ class SystemDot(TypedDict):
     href: str
 
 
+#: Infra's dot tones, as the Command Center draws them.
+_TONE = {"green": "green", "red": "red", "amber": "amber", "accent": "amber", "grey": "grey",
+         "hollow": "grey", "none": "grey"}
+
+
+def deploy_dot(status: str, *, ago: str, recent: bool) -> SystemDot:
+    """THE DEPLOYS DOT, IN INFRA'S WORDS. One vocabulary (infra_view.deploy_word): a deploy
+    waiting on a person says Needs you here as it does in Infra › Deploys, a rejected one
+    Rejected, one refused by policy Blocked. Only a failure older than a week reads as settled."""
+    from .infra_view import deploy_word
+
+    w = deploy_word(status, newest_for_target=True)
+    word, tone = w["word"], _TONE.get(w["tone"], "grey")
+    if word in ("Failed", "Rolled back", "Blocked") and not recent:
+        word, tone = "OK", "green"
+    tips = {"Live": f"Last deploy {ago} ago", "OK": f"Last deploy {ago} ago",
+            "Needs you": "A deploy is waiting for your approval",
+            "Failed": f"The latest deploy failed {ago} ago",
+            "Rolled back": f"The latest deploy was rolled back {ago} ago",
+            "Rejected": f"The latest deploy was rejected {ago} ago",
+            "Blocked": f"The latest deploy was blocked by a rule {ago} ago"}
+    return {"key": "deploys", "tone": tone, "word": "Deploys",
+            "state": "OK" if word == "Live" else word,
+            "tip": tips.get(word, f"A deploy is in progress ({word.lower()})"),
+            "href": "?area=infra&view=deploys"}
+
+
 # ── small helpers ────────────────────────────────────────────────────────────────────────────
 
 
@@ -496,14 +523,25 @@ def _probe(connection: Any, project_id: str, now: datetime, t0: datetime) -> dic
         {"p": project_id, "day": now - timedelta(hours=24), "hour": now - timedelta(hours=1),
          "t0": t0},
     ).mappings().one()
+    # The newest preview OF EACH APP in the last day, plus the newest overall: a failed preview
+    # of one app is not hidden because another app's preview started after it.
     previews = [dict(r) for r in connection.execute(
-        text("SELECT status, created_at FROM app_previews WHERE project_id = :p "
-             "ORDER BY created_at DESC LIMIT 5"),
+        text("SELECT DISTINCT ON (COALESCE(repo, run_id, id)) status, created_at, "
+             "       COALESCE(repo, run_id, id) AS app FROM app_previews "
+             "WHERE project_id = :p "
+             "ORDER BY COALESCE(repo, run_id, id), created_at DESC"),
         {"p": project_id},
     ).mappings()]
+    previews.sort(key=lambda r: _aware(r.get("created_at")) or datetime.min.replace(
+        tzinfo=timezone.utc), reverse=True)
+    # The newest deploy of ANY kind — the same union Infra › Deploys reads (a stack deploy is
+    # a deploy too), worded by the same vocabulary (infra_view.deploy_word).
     deploy = connection.execute(
-        text("SELECT status, created_at, finished_at FROM deployment_runs WHERE project_id = :p "
-             "ORDER BY created_at DESC LIMIT 1"),
+        text("SELECT status, created_at, finished_at FROM ("
+             "  SELECT status, created_at, finished_at FROM deployment_runs WHERE project_id = :p "
+             "  UNION ALL "
+             "  SELECT status, created_at, finished_at FROM stack_deployments "
+             "  WHERE project_id = :p) u ORDER BY created_at DESC LIMIT 1"),
         {"p": project_id},
     ).mappings().first()
     return {**dict(row), "previews": previews, "deploy": dict(deploy) if deploy else None}
@@ -622,27 +660,31 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
                             if open_jobs else "Nothing waiting"),
                     "href": "?area=monitoring"})
 
-    # PREVIEWS: read-only over app_previews.
+    # PREVIEWS: read-only over app_previews, worded as Infra › Previews words them.
     previews = list(probe.get("previews") or [])
     if not previews:
         out.append({"key": "previews", "tone": "grey", "word": "Previews", "state": "Not set up",
-                    "tip": "No preview yet", "href": "?area=code_tasks&view=apps"})
+                    "tip": "No preview yet", "href": "?area=infra&view=previews"})
     else:
         latest = previews[0]
         running = sum(1 for p in previews if p.get("status") == "running")
         started = _aware(latest.get("created_at"))
-        if latest.get("status") == "failed" and started and now - started <= timedelta(hours=24):
+        failed = [p for p in previews if p.get("status") == "failed"
+                  and (_aware(p.get("created_at")) or now) >= now - timedelta(hours=24)]
+        if failed:
             out.append({"key": "previews", "tone": "red", "word": "Previews", "state": "Failed",
-                        "tip": "The latest preview failed to start", "href": "?area=code_tasks&view=apps"})
+                        "tip": (f"{_plural(len(failed), 'app', 'apps')}' newest preview failed "
+                                "in the last 24h"),
+                        "href": "?area=infra&view=previews"})
         elif latest.get("status") == "starting" and started and now - started > timedelta(minutes=5):
             out.append({"key": "previews", "tone": "amber", "word": "Previews", "state": "Slow",
                         "tip": f"A preview has been starting for {_age((now - started).total_seconds())}",
-                        "href": "?area=code_tasks&view=apps"})
+                        "href": "?area=infra&view=previews"})
         else:
             out.append({"key": "previews", "tone": "green", "word": "Previews", "state": "OK",
                         "tip": (f"{_plural(running, 'preview', 'previews')} running" if running
                                 else "None running, none requested"),
-                        "href": "?area=code_tasks&view=apps"})
+                        "href": "?area=infra&view=previews"})
 
     # DEPLOYS: the latest deployment run; no target bound is grey.
     deploy = probe.get("deploy")
@@ -658,16 +700,7 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
         status = str(deploy.get("status") or "")
         at = _aware(deploy.get("finished_at")) or _aware(deploy.get("created_at"))
         ago = _age((now - at).total_seconds()) if at else ""
-        if status in DEPLOY_FAILED and at and now - at <= timedelta(days=7):
-            out.append({"key": "deploys", "tone": "red", "word": "Deploys", "state": "Failed",
-                        "tip": f"The latest deploy failed {ago} ago", "href": "?area=infra"})
-        elif status in DEPLOY_OK or status in DEPLOY_FAILED:
-            out.append({"key": "deploys", "tone": "green", "word": "Deploys", "state": "OK",
-                        "tip": f"Last deploy {ago} ago", "href": "?area=infra"})
-        else:
-            out.append({"key": "deploys", "tone": "amber", "word": "Deploys", "state": "Deploying",
-                        "tip": f"A deploy is in progress ({status.replace('_', ' ')})",
-                        "href": "?area=infra"})
+        out.append(deploy_dot(status, ago=ago, recent=bool(at and now - at <= timedelta(days=7))))
     return out
 
 

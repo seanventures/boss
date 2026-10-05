@@ -1342,6 +1342,18 @@ async def lifespan(_: FastAPI):
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     _install_shipped_cast()
     _backfill_agent_identities()
+    # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
+    # used to raise a pending decision nobody could act on and a failed run that never ran;
+    # those are withdrawn and removed here, idempotently (governed_host_deploy).
+    try:
+        from boss_engine.services.governed_host_deploy import repair_refusal_records
+
+        with begin(engine) as connection:
+            repaired = repair_refusal_records(connection)
+        if any(repaired.values()):
+            print(f"[lifespan] refused deployment plans cleared: {repaired}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] refused-plan repair skipped: {exc}")
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
     # per-command durations, the queueing-vs-work split, why a preview refused — went to a
     # container log an operator cannot open. From here it also lands in `app_logs`, which the
@@ -2218,11 +2230,50 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
         raise HTTPException(status_code=403, detail=str(error)) from error
 
 
+def _may_act_as(connection, project_id: str, actor: str) -> bool:
+    """May this request's principal act as `actor`? The same answer
+    require_authenticated_actor_binding gives, without recording a denial: no principal (auth
+    off), the principal itself, or a member whose role_keys name the principal (the console's
+    `executive_console` carries `ceo`, so the console's key may act as it)."""
+    principal = current_api_principal.get()
+    if not principal or principal == actor:
+        return True
+    try:
+        member = members.get_member(connection, project_id, actor)
+    except Exception:  # noqa: BLE001 — no member, no delegation
+        return False
+    return principal in ((member or {}).get("role_keys") or [])
+
+
+def signed_in_actor(connection, project_id: str, claimed: str | None) -> str:
+    """THE ONE ACTOR RULE (govern_guard.govern_actor's, bound): the signed-in operator the
+    console names is who acted — when this key may act as them — else the key's principal.
+
+    Plans, approvals and redeploys of one deploy were recorded as three different people: the
+    plan as the operator the console named, the approval as the key's principal (`ceo`), the
+    redeploy as whichever route it went through. An exact MCP confirmation still records its
+    independently authenticated reviewer."""
+    claimed = str(claimed or "").strip()
+    if current_mcp_human_attribution.get():
+        return _decision_action_actor(claimed)
+    if claimed and _may_act_as(connection, project_id, claimed):
+        return claimed
+    return str(current_api_principal.get() or claimed or "").strip()
+
+
+def _decision_route_actor(connection, decision_id: str, claimed: str | None) -> str:
+    row = connection.execute(text("SELECT project_id FROM decisions WHERE id = :d"),
+                             {"d": decision_id}).mappings().first()
+    if not row:
+        return _decision_action_actor(claimed)
+    return signed_in_actor(connection, row["project_id"], claimed)
+
+
 def require_project_write_actor(
     connection, project_id: str, claimed_actor: str | None, permission: str,
 ) -> str:
     """Bind a project mutation to the authenticated member and its permission."""
-    actor = str(current_api_principal.get() or claimed_actor or "").strip()
+    actor = signed_in_actor(connection, project_id, claimed_actor)
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
     require_project_actor(connection, project_id, actor, permission)
@@ -2347,7 +2398,11 @@ def require_decision_actor_binding(
     ).mappings().first()
     if not row:
         raise HTTPException(status_code=404, detail="Decision not found")
-    require_authenticated_actor_binding(row["project_id"], actor, "decision_resolve")
+    # With the connection, so the bounded delegation every other write honours applies here
+    # too: the console's key may answer as the operator signed in to it (`executive_console`
+    # carries `ceo`), and as nobody else.
+    require_authenticated_actor_binding(row["project_id"], actor, "decision_resolve",
+                                        connection)
 
 
 def raise_project_actor_error(error: Exception) -> None:
@@ -8775,6 +8830,7 @@ def delivery_deploy_endpoint(payload: ManualDeployBody):
             {"i": target_id}).mappings().first()
         if not target:
             raise HTTPException(status_code=404, detail="no such deployment target")
+        actor = signed_in_actor(connection, target["project_id"], actor)
         require_project_actor(
             connection, target["project_id"], actor, "providerops_manage")
         # A newly registered cloud target is still `created`. It must be able
@@ -9505,9 +9561,14 @@ def apply_host_deployment_endpoint(deployment_run_id: str,
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.governed_host_deploy import execute_host_job
 
-    return execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
-                            job_id=payload.job_id, worker_id=payload.worker_id,
-                            lease_token=payload.lease_token)
+    result = execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
+                              job_id=payload.job_id, worker_id=payload.worker_id,
+                              lease_token=payload.lease_token)
+    if result.get("http_status"):
+        # A lease that is not this job's, or a run that does not exist: 4xx, never a 200.
+        raise HTTPException(status_code=int(result["http_status"]),
+                            detail=str(result.get("error") or "Refused."))
+    return result
 
 
 def _planned_next_action(planned: dict) -> dict:
@@ -9703,6 +9764,7 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
         if not run_row:
             raise HTTPException(status_code=404, detail=p.get("reason")
                                 or f"no deployment run {deployment_run_id}")
+        actor = signed_in_actor(connection, run_row["project_id"], actor)
         require_project_actor(
             connection, run_row["project_id"], actor, "providerops_manage"
         )
@@ -21834,7 +21896,7 @@ def approve_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21871,7 +21933,7 @@ def reject_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21899,7 +21961,7 @@ def revise_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21929,7 +21991,7 @@ def delegate_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -21959,7 +22021,7 @@ def execute_decision(
     with begin(engine) as connection:
         # Ordinary keys use their bound principal; exact MCP confirmations use
         # the independently authenticated human reviewer.
-        payload.actor = _decision_action_actor(payload.actor)
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(

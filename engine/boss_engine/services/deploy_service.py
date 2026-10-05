@@ -258,7 +258,11 @@ def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: 
     `ConnectTimeout` bounds the TCP connect separately, so an unroutable address fails in
     seconds instead of occupying the whole budget.
     """
-    argv = ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+    from .host_key_pin import ssh_options
+
+    # Under a governed deploy the host's pinned key is enforced (host_key_pin); elsewhere the
+    # long-standing option stands.
+    argv = ["ssh", "-i", key_path, *ssh_options(), "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={max(5, min(timeout, 20))}",
             # ConnectTimeout bounds the TCP HANDSHAKE only. A host that accepts the connection
             # and then stops answering — a stopped VM, a dropped route, a firewall that
@@ -272,8 +276,15 @@ def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: 
     try:
         # start_new_session puts ssh in its OWN process group, so the timeout path can kill the
         # whole tree rather than just the process Python is holding.
-        return owned_process.run(argv, capture_output=True, text=True, timeout=timeout,
-                              start_new_session=True)
+        result = owned_process.run(argv, capture_output=True, text=True, timeout=timeout,
+                                   start_new_session=True)
+        from .host_key_pin import note_result
+
+        changed = note_result(result.returncode, result.stderr or "")
+        if changed:
+            return subprocess.CompletedProcess(argv, returncode=result.returncode,
+                                               stdout=result.stdout or "", stderr=changed)
+        return result
     except FileNotFoundError:
         # No ssh binary at all. Returned as a RESULT because every caller here checks
         # returncode — raising would surface as a 500 several layers up, naming nothing.
@@ -299,6 +310,8 @@ def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: 
 def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_port: int,
                         remote: str) -> str:
     """Build the local tar|ssh pipeline. Host/user MUST be validated + shell-quoted."""
+    from .host_key_pin import ssh_options
+
     dest = shlex.quote(f"{user}@{host}")
     # remote is derived from sanitized _app_name; still quote for defense in depth.
     remote_q = shlex.quote(remote)
@@ -321,7 +334,8 @@ def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_
     )
     return (
         f"tar czf - -C {shlex.quote(str(work))} dist | ssh -i {shlex.quote(key_path)} "
-        f"-o StrictHostKeyChecking=no -o BatchMode=yes -p {int(ssh_port)} {dest} "
+        f"{' '.join(shlex.quote(o) for o in ssh_options())} -o BatchMode=yes "
+        f"-p {int(ssh_port)} {dest} "
         f"{shlex.quote(remote_cmd)}"
     )
 

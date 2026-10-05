@@ -178,6 +178,10 @@ class ControlPlaneClient:
         response = self._client.post(
             f"/v1/delivery/deployments/{payload['deployment_run_id']}/apply",
             json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
+        if response.status_code in (404, 409):
+            # The lease is gone or the run is: nothing to retry, so the job ends here.
+            return {"status": "refused", "retry": False,
+                    "error": (response.text or "")[:300]}
         response.raise_for_status()
         return response.json()
 

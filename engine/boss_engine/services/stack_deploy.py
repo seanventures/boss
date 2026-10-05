@@ -1647,7 +1647,10 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             fetch_tree=lambda dest: github.download_tarball(owner, repo,
                                                             deployment["commit_sha"], dest),
             record=record, now=lambda: now_utc().isoformat())
-        outcome = applier.run()
+        from .host_key_pin import pinned
+
+        with pinned(engine, deployment.get("host_id")):
+            outcome = applier.run()
     except (StackStepFailed, StackDeployError) as exc:
         raise _ApplyFailed(exc.headline, exc.action, applier.steps if applier else None,
                            applier.log if applier else None)

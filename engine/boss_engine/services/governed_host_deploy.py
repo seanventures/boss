@@ -59,8 +59,8 @@ WAIT_SECONDS = 30
 
 #: Where every refusal of an ungoverned host write points.
 GOVERNED_PATH = (
-    "Plan it in the Deployment Manager (Plan deployment or Plan redeploy), approve its "
-    "decision in Approvals, and BOSS applies it under the approved ChangeSet."
+    "Deploy it from Infra › Deploys (+ Deploy, Redeploy or Roll back), approve it there or in "
+    "Approvals, and BOSS applies it under the approved ChangeSet."
 )
 
 
@@ -124,6 +124,68 @@ def target_for_apply(connection: Connection, target: dict) -> dict:
     return {**target, "secret_refs": bindings}
 
 
+def refuse_plan(connection: Connection, *, project_id: str, target: dict, actor: str,
+                headline: str, action: str, reason: str) -> dict[str, Any]:
+    """A host deployment BOSS will not plan: the answer, and one plain event — nothing else.
+
+    No decision (there is nothing for a person to approve), no failed deployment run (nothing
+    ran, so the rail and the failure cards have nothing to say). Callers answer 409 with
+    `failure_reason`, which carries the next step."""
+    emit_event(connection, project_id, "deployment.plan_refused", actor, "deployment_target",
+               target["id"], {"reason": reason, "headline": headline, "next": action,
+                              "environment": target.get("environment")})
+    return {"status": "blocked", "refused": True, "id": None, "deployment_run_id": None,
+            "deployment_target_id": target["id"], "reason_code": reason,
+            "failure_reason": f"{headline} {action}", "next": action}
+
+
+#: The decision the pre-governance guard and the first governed plans raised for a refusal.
+REFUSAL_DECISION_ACTION = "implement_governed_host_deployment"
+
+
+def repair_refusal_records(connection: Connection) -> dict[str, int]:
+    """Withdraw the decisions earlier refusals raised and remove the failed runs they left.
+
+    Before refusals became plain answers, an unverified host or the old Community guard raised a
+    pending decision nobody could act on and a `failed` run that never ran — so Approvals, the
+    needs-you count, the deploy rail and the failure cards all reported work that never existed.
+    Idempotent; only runs that have no ChangeSet (they never reached Resource Plane) go."""
+    withdrawn = connection.execute(
+        text("UPDATE decisions SET status = 'withdrawn', updated_at = now(), "
+             "resolution_note = 'A refused deployment plan: nothing to approve.' "
+             "WHERE status IN ('pending', 'delegated', 'expired') "
+             "AND recommendation->>'action' = :a RETURNING id"),
+        {"a": REFUSAL_DECISION_ACTION}).scalars().all()
+    runs = connection.execute(
+        text("SELECT d.id FROM deployment_runs d JOIN decisions x ON x.id = d.decision_id "
+             "WHERE x.recommendation->>'action' = :a AND d.changeset_id IS NULL "
+             "AND d.status IN ('failed', 'blocked')"),
+        {"a": REFUSAL_DECISION_ACTION}).scalars().all()
+    removed = 0
+    for run_id in runs:
+        try:
+            with connection.begin_nested():
+                connection.execute(text("DELETE FROM deployment_runs WHERE id = :i"),
+                                   {"i": run_id})
+                removed += 1
+        except Exception:  # noqa: BLE001 — something references it; leave it, say nothing
+            log.info("refused-plan run %s kept: it is referenced", run_id)
+    return {"decisions_withdrawn": len(withdrawn), "runs_removed": removed}
+
+
+def release_guard(connection: Connection, guard: Optional[dict]) -> None:
+    """End a surface lease this plan took (same owner and version), e.g. when the plan is
+    refused after taking it."""
+    if not isinstance(guard, dict) or not guard.get("ownership_id"):
+        return
+    connection.execute(
+        text("UPDATE surface_ownerships SET expires_at = now(), updated_at = now() "
+             "WHERE id = :i AND owner_ref = :o AND version = :v AND status = 'active' "
+             "AND (expires_at IS NULL OR expires_at > now())"),
+        {"i": guard["ownership_id"], "o": guard.get("owner_ref"),
+         "v": int(guard.get("version") or 0)})
+
+
 def release_surface(connection: Connection, row: Any) -> None:
     """A finished host deploy lets go of its target's deployment surface.
 
@@ -134,14 +196,7 @@ def release_surface(connection: Connection, row: Any) -> None:
     """
     packet = row.get("release_packet") if hasattr(row, "get") else None
     guard = (packet or {}).get("surface_ownership") if isinstance(packet, dict) else None
-    if not isinstance(guard, dict) or not guard.get("ownership_id"):
-        return
-    connection.execute(
-        text("UPDATE surface_ownerships SET expires_at = now(), updated_at = now() "
-             "WHERE id = :i AND owner_ref = :o AND version = :v AND status = 'active' "
-             "AND (expires_at IS NULL OR expires_at > now())"),
-        {"i": guard["ownership_id"], "o": guard.get("owner_ref"),
-         "v": int(guard.get("version") or 0)})
+    release_guard(connection, guard)
 
 
 def _redact(value: str, hidden: list[str]) -> str:
@@ -349,7 +404,7 @@ def on_decision_approved(connection: Connection, settings: Settings, decision: d
         return None
     # A host write is approved by the signed-in person, never by an agent or by BOSS itself —
     # and certainly not by the agent that planned it.
-    if not is_person(actor) or (actor == row["created_by"] and not is_person(row["created_by"])):
+    if not is_person(actor, connection, row["project_id"]):
         raise InvalidDecisionTransitionError(
             f"'{actor}' cannot approve a host deployment: a person approves it in Approvals.")
     rp = ResourcePlaneService(settings)
@@ -471,10 +526,13 @@ def execute_host_job(engine, settings: Settings, *, deployment_run_id: str, job_
             try:
                 jobs.require_active_lease(connection, worker_id, job_id, lease_token)
             except LeaseNotFoundError as exc:
-                return {"status": "failed", "retry": False, "error": f"lease: {exc}"}
+                # Not this job's live lease (forged, reclaimed or unknown): refused, not "failed".
+                return {"status": "refused", "retry": False, "http_status": 409,
+                        "error": f"lease: {exc}"}
             row = _row(connection, deployment_run_id, lock=True)
             if not row:
-                return {"status": "failed", "retry": False, "error": "no such deployment run"}
+                return {"status": "refused", "retry": False, "http_status": 404,
+                        "error": "no such deployment run"}
             if row["status"] not in ("approved", "running"):
                 if row["status"] in ("failed", "blocked"):
                     # Failed elsewhere (the startup sweep fails a run the API was applying):
@@ -537,6 +595,25 @@ def execute_host_job(engine, settings: Settings, *, deployment_run_id: str, job_
 
 def apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
                   connector: Any = None) -> dict[str, Any]:
+    """Phase two, against the host's PINNED key (host_key_pin): every SSH session of this
+    apply — preflight, transfer, health gate, rollback — talks only to the verified machine."""
+    from ..db import begin
+    from .host_key_pin import CHANGED, pinned
+
+    with begin(engine) as c:
+        host_id = c.execute(text("SELECT host_id FROM deployment_targets WHERE id = :t"),
+                            {"t": row["deployment_target_id"]}).scalar()
+    with pinned(engine, host_id) as pin:
+        outcome = _apply_on_host(engine, settings, row=row, governance=governance,
+                                 connector=connector)
+    if pin is not None and pin.changed:
+        outcome = {**outcome, "status": "failed" if outcome.get("status") != "rolled_back"
+                   else outcome["status"], "reason": CHANGED}
+    return outcome
+
+
+def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
+                   connector: Any = None) -> dict[str, Any]:
     """Phase two: the September connector path — preflight, build, transfer, health check —
     run under the approved ChangeSet, with every step recorded on the run."""
     from ..db import begin
@@ -648,8 +725,9 @@ def apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
     except Exception as exc:  # noqa: BLE001 — a sentence, never a stack trace or a secret
         log.warning("governed host deploy %s failed", run_id, exc_info=True)
         rec.finish()
-        return {"status": "failed",
-                "reason": _redact(f"{type(exc).__name__}: {exc}", hidden)[:400]}
+        # In words: the exception's own sentence, never its class name.
+        said = str(exc).strip() or "The deploy stopped unexpectedly."
+        return {"status": "failed", "reason": _redact(said[:1].upper() + said[1:], hidden)[:400]}
 
 
 def _finalize(connection: Connection, settings: Settings, *, row: dict, token: str,

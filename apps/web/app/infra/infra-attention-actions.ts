@@ -6,8 +6,6 @@
  * Deploys rail and the host drawer post) and answers what happened, which the card shows in
  * place. `Open` is not a press: the card follows the item's `open` href.
  */
-import { revalidatePath } from "next/cache";
-
 import { apiWrite } from "../../lib/api-write";
 import { API_URL, authHeaders } from "../../lib/client";
 
@@ -30,7 +28,8 @@ export async function actOnInfraAttentionAction(form: FormData): Promise<InfraAc
       const detail = typeof body.detail === "string" ? body.detail : `The API answered ${response.status}.`;
       return { ok: false, error: detail };
     }
-    revalidatePath("/");
+    // NO revalidatePath("/"): a whole-console server render for one card's press. The card
+    // asks the console's refresh coordinator (notifyChanged + onRefresh) instead.
     return { ok: true, result: body.result, ...(body.open ? { open: body.open } : {}) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
