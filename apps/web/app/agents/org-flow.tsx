@@ -189,7 +189,11 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the run, not every board poll
   }, [props.focusRunId, projectId]);
 
-  const cols = useMemo(() => flowColumns(board, teams), [board, teams]);
+  // The map draws the teams that worked; the rest are one muted line under it, so the columns
+  // that matter share the width (walk: a seventh column pushed the map past the panel).
+  const allCols = useMemo(() => flowColumns(board, teams), [board, teams]);
+  const cols = useMemo(() => allCols.filter((c) => !c.muted), [allCols]);
+  const idleTeams = allCols.find((c) => c.muted)?.teams ?? [];
 
   // WHAT OPENS TO ITS AGENTS: a run's path (just its agents), else the selected agent's team,
   // else the isolated team (≤16 by volume).
@@ -580,6 +584,11 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
         </div>
       ) : null}
 
+      {showMap && idleTeams.length ? (
+        <span className="ag-flow-idle" data-testid="ag-flow-idle" title="Nobody on these teams was handed work">
+          No work in {windowWords(days)} · {idleTeams.map((k) => teamLabel(k, board)).join(" · ")}
+        </span>
+      ) : null}
       <StuckNow board={board} teams={teams} />
 
       <FlowTable board={board} rows={tableRows} search={search} visible={!showMap} teamOf={teamOf}
