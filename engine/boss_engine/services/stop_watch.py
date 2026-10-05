@@ -49,7 +49,10 @@ def stopped_runs(connection: Any, run_ids: list[str]) -> list[str]:
 
 def tick(engine: Any) -> list[dict[str, Any]]:
     """One pass. Returns what it ended (for tests and the log)."""
-    live = sorted(owned_process.live_owner_ids(kind="code_run"))
+    # Every owner id at any depth: while the review panel runs, the only live processes are
+    # seats (kind review_seat, chain = (run,)), and the build must still be found by its id.
+    # The query keeps only ids that are builds.
+    live = sorted(owned_process.live_owner_ids())
     if not live:
         return []
     try:

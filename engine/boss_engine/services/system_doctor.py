@@ -487,7 +487,8 @@ def _upsert_findings(connection: Any, found: list[dict[str, Any]],
             fid = str(row["id"])
             connection.execute(text(
                 "UPDATE system_findings SET severity = :s, title = :t, detail = :d, "
-                "evidence = CAST(:e AS JSONB), options = CAST(:o AS JSONB), needs_choice = :n, "
+                "evidence = CAST(:e AS JSONB), options = CAST(:o AS JSONB), needs_choice = "
+                "CASE WHEN chosen_option IS NOT NULL THEN needs_choice ELSE :n END, "
                 "last_seen = now(), clear_since = NULL, status = CASE WHEN status = 'snoozed' "
                 "AND snoozed_until <= now() THEN 'open' ELSE status END WHERE id = :id"),
                 {"id": fid, **payload})
@@ -844,8 +845,10 @@ def _snooze(minutes: float, message: str) -> Callable[..., dict[str, Any]]:
 
 def _one_at_a_time(engine, settings, row, evidence, actor):
     with engine.begin() as c:
+        # force_one: one build runs even under the pressure that would otherwise hold it —
+        # the operator chose to build anyway, one at a time.
         admission.set_state(c, "builds_at_once", {"value": 1, "until_finding": row["id"],
-                                                  "set_by": actor})
+                                                  "set_by": actor, "force_one": True})
     return {"result": "Builds run one at a time until memory frees up. Nothing running was "
                       "stopped.", "status": "chosen"}
 

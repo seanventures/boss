@@ -185,52 +185,103 @@ def live_preview_handles(engine: Any) -> dict[str, set[str]]:
     return {"ids": ids, "containers": containers}
 
 
+#: A container or image younger than this is never swept: a preview's container and image
+#: exist for up to a build + 20 s before its row says `running`, and a sandbox container is
+#: created at the start of its build.
+MIN_DOCKER_AGE_SECONDS = 15 * 60
+
+
+def _age_seconds(created: str) -> float:
+    """Age from docker's `CreatedAt` ("2026-10-05 01:27:08 +0000 UTC") or an ISO stamp."""
+    from datetime import datetime, timezone
+
+    raw = (created or "").strip()
+    for fmt, cut in (("%Y-%m-%d %H:%M:%S %z", 25), ("%Y-%m-%dT%H:%M:%S", 19)):
+        try:
+            stamp = datetime.strptime(raw[:cut], fmt)
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - stamp).total_seconds()
+        except ValueError:
+            continue
+    return 0.0          # unknown age: treated as young, never swept
+
+
+def _live_sandbox_tasks(engine: Any) -> set[str]:
+    """Build ids whose sandbox container must stay: live in this process, or not ended."""
+    live = set(owned_process.live_owner_ids())
+    if engine is None:
+        return live
+    try:
+        with engine.begin() as c:
+            live |= {str(r[0]) for r in c.execute(text(
+                "SELECT id FROM code_task_runs WHERE status IN ('running', 'queued', "
+                "'repairing', 'starting')")).all()}
+    except Exception:  # noqa: BLE001 — unknown: keep every sandbox
+        return {"*"}
+    return live
+
+
 def reap_docker(engine: Any, *, install_id: Optional[str], binary: str = "docker",
                 legacy_prefix: str = LEGACY_PREVIEW_PREFIX,
-                live: Optional[dict[str, set[str]]] = None) -> dict[str, Any]:
-    """The substrate side (spec §4a.6): containers and images labelled `boss.owner` by THIS
-    install, or named like a preview (legacy, unlabelled), whose preview is not live."""
+                live: Optional[dict[str, set[str]]] = None,
+                min_age: float = MIN_DOCKER_AGE_SECONDS) -> dict[str, Any]:
+    """The substrate side (spec §4a.6): containers and images labelled by THIS install, or
+    named like a preview (legacy, unlabelled), that nothing live owns and that are older than
+    `min_age`. A sandbox container is kept while its build is not ended."""
     live = live if live is not None else live_preview_handles(engine)
+    sandboxes: Optional[set[str]] = None
     removed_c, removed_i = [], []
-    # Containers: labelled by this install …
-    rows: list[tuple[str, str, str]] = []
+    fmt = ('{{.ID}}\t{{.Names}}\t{{.Label "boss.preview_id"}}\t{{.Label "boss.owner"}}\t'
+           '{{.Label "boss.task_id"}}\t{{.Label "boss.install_id"}}\t{{.CreatedAt}}')
+    rows: list[list[str]] = []
     if install_id:
-        for line in _docker(["ps", "-a", "--filter", f"label=boss.install_id={install_id}",
-                             "--format", '{{.ID}}\t{{.Names}}\t{{.Label "boss.preview_id"}}'],
-                            binary=binary).splitlines():
-            parts = (line.split("\t") + ["", "", ""])[:3]
-            rows.append((parts[0], parts[1], parts[2]))
-    # … and legacy: named like a preview, carrying no install label at all.
-    for line in _docker(["ps", "-a", "--filter", f"name=^{legacy_prefix}",
-                         "--format", '{{.ID}}\t{{.Names}}\t{{.Label "boss.install_id"}}'],
-                        binary=binary).splitlines():
-        parts = (line.split("\t") + ["", "", ""])[:3]
-        if parts[1].startswith(legacy_prefix) and not parts[2]:
-            rows.append((parts[0], parts[1], ""))
-    for cid, name, preview_id in rows:
-        if preview_id in live["ids"] or name in live["containers"] or cid in live["containers"] \
-                or any(cid.startswith(x) or x.startswith(cid) for x in live["containers"] if x):
+        rows += [(line.split("\t") + [""] * 7)[:7] for line in _docker(
+            ["ps", "-a", "--filter", f"label=boss.install_id={install_id}", "--format", fmt],
+            binary=binary).splitlines() if line.strip()]
+    rows += [r for r in ((line.split("\t") + [""] * 7)[:7] for line in _docker(
+        ["ps", "-a", "--filter", f"name=^{legacy_prefix}", "--format", fmt],
+        binary=binary).splitlines() if line.strip())
+        if r[1].startswith(legacy_prefix) and not r[5]]
+    for cid, name, preview_id, owner, task_id, _inst, created in rows:
+        if _age_seconds(created) < min_age:
+            continue
+        if owner == "sandbox":
+            if sandboxes is None:
+                sandboxes = _live_sandbox_tasks(engine)
+            if "*" in sandboxes or not task_id or task_id in sandboxes:
+                continue
+        elif preview_id in live["ids"] or name in live["containers"] or \
+                cid in live["containers"] or \
+                any(cid.startswith(x) or x.startswith(cid) for x in live["containers"] if x):
             continue
         _docker(["rm", "-f", cid], binary=binary)
         removed_c.append(name or cid)
-    # Images: same two ways in. An image a remaining container uses is never removed.
+    # Images: same two ways in. An image a remaining container uses, or a young one, stays.
     used = set(_docker(["ps", "-a", "--format", "{{.Image}}"], binary=binary).split())
-    images: list[str] = []
+    ifmt = "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}"
+    images: list[tuple[str, str]] = []
     if install_id:
-        images += [x for x in _docker(
-            ["images", "--filter", f"label=boss.install_id={install_id}",
-             "--format", "{{.Repository}}:{{.Tag}}"], binary=binary).split() if x]
-    images += [x for x in _docker(["images", "--format", "{{.Repository}}:{{.Tag}}"],
-                                  binary=binary).split()
-               if x.startswith(legacy_prefix) and not _image_install_label(x, binary)]
-    for ref in sorted(set(images)):
+        images += [tuple((x.split("\t") + [""])[:2]) for x in _docker(
+            ["images", "--filter", f"label=boss.install_id={install_id}", "--format", ifmt],
+            binary=binary).splitlines() if x.strip()]
+    images += [tuple((x.split("\t") + [""])[:2]) for x in _docker(
+        ["images", "--format", ifmt], binary=binary).splitlines()
+        if x.startswith(legacy_prefix)]
+    for ref, created in sorted(set(images)):
         repo = ref.split(":", 1)[0]
+        if _age_seconds(created) < min_age:
+            continue
         if repo in live["containers"] or ref in used or repo in used:
             continue
         if any(repo == f"{legacy_prefix}{i.replace('_', '-').lower()}" for i in live["ids"]):
             continue
-        _docker(["rmi", "-f", ref], binary=binary, timeout=120)
-        removed_i.append(ref)
+        if repo.startswith(legacy_prefix) and not install_id and _image_install_label(ref, binary):
+            continue
+        if not repo.startswith(legacy_prefix) or not _image_install_label(ref, binary) or \
+                _image_install_label(ref, binary) == install_id:
+            _docker(["rmi", "-f", ref], binary=binary, timeout=120)
+            removed_i.append(ref)
     return {"containers": removed_c, "images": removed_i}
 
 

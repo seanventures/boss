@@ -73,9 +73,18 @@ class Capacity:
 
 def sample() -> Capacity:
     """What this API container can see right now (Linux /proc and cgroup v2)."""
-    from .self_observability import cpu_snapshot, disk_snapshot, memory_snapshot
+    import shutil
 
-    mem, cpu, disk = memory_snapshot(), cpu_snapshot(), disk_snapshot()
+    from .self_observability import cpu_snapshot, memory_snapshot
+
+    mem, cpu = memory_snapshot(), cpu_snapshot()
+    # statvfs only: this runs on every lease poll, so never walk the preview trees here.
+    try:
+        usage = shutil.disk_usage("/")
+        disk = {"free_gb": round(usage.free / 1e9, 1),
+                "used_pct": round(100 * usage.used / usage.total, 1) if usage.total else 0.0}
+    except OSError:
+        disk = {}
     total = float(mem.get("host_total_mb") or 0.0)
     available = float(mem.get("host_available_mb") or 0.0)
     limit = mem.get("limit_mb")
@@ -142,7 +151,7 @@ def _gb(mb: float) -> str:
 
 
 def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
-           level: int = L0) -> Decision:
+           level: int = L0, force_one: bool = False) -> Decision:
     """Pure: admit or defer one heavy job. Every refusal says what is short, in GB."""
     problems: list[str] = []
     if cap.total_mb > 0 and cap.spare_mb < profile.request_mb:
@@ -156,6 +165,13 @@ def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
         problems.append(f"CPU load {cap.load_per_core:.1f} per core")
     if level >= L2:
         problems.append("the system doctor has paused new builds until pressure eases")
+    # NOTHING RUNNING MEANS ONE MAY RUN. A small or busy machine runs one build at a time
+    # rather than none forever. Critical pressure (L2) still holds it — unless the operator
+    # chose "one at a time" / "build anyway" on the card (force_one); sustained critical (L3)
+    # and a nearly full disk hold even that.
+    if problems and in_flight == 0 and cap.disk_free_gb >= 1.0 and (
+            level < L2 or (force_one and level < L3)):
+        problems = []
     backpressure = {"admit_new_work": not problems, "reason": "; ".join(problems)}
     verdict = admit_or_reject(in_flight=in_flight, max_in_flight=max(1, slots),
                               backpressure=backpressure)
@@ -238,10 +254,15 @@ def admit_job(connection: Any, kind: str, *, cap: Optional[Capacity] = None) -> 
     if profile_kind is None:
         return Decision(admitted=True, reason="light work is never held back")
     cap = cap or sample()
+    # One heavy admission at a time across lease slots: the in-flight count and free memory
+    # are read, then the lease commits; without this two slots admit against the same memory.
+    # Held until the claim's transaction ends.
+    connection.execute(text("SELECT pg_advisory_xact_lock(hashtext('boss.admission'))"))
     profile = load_profile(connection, profile_kind)
     slots = builds_at_once(connection, cap, profile.request_mb)["value"]
+    force_one = bool(_state(connection, "builds_at_once").get("force_one"))
     return decide(cap, profile, in_flight=heavy_in_flight(connection), slots=slots,
-                  level=current_level(connection, cap))
+                  level=current_level(connection, cap), force_one=force_one)
 
 
 def snapshot(connection: Any, *, cap: Optional[Capacity] = None) -> dict[str, Any]:

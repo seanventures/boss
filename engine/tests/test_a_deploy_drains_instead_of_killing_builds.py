@@ -50,6 +50,9 @@ class _Engine:
 
                     def scalar(self):
                         return 0
+
+                    def all(self):
+                        return [("run_drain",)]
                 return _R()
         return _C()
 
