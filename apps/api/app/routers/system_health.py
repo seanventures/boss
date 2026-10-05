@@ -87,3 +87,85 @@ def put_builds_at_once(project_id: str, payload: BuildsAtOnceBody) -> dict[str, 
                             {"value": value, "set_for_project": project_id})
         state = admission.snapshot(connection, cap=cap)
     return {"builds_at_once": state["builds_at_once"], "label": state["label"]}
+
+
+class FindingActBody(BaseModel):
+    """One of the card's options, by key."""
+
+    option: str = Field(..., min_length=1, max_length=120, description="The option's key")
+    actor: Optional[str] = Field(default=None, max_length=120,
+                                 description="Who chose it; defaults to the caller")
+
+
+class HostSampleBody(BaseModel):
+    """What the optional host helper (`boss doctor --host`, macOS) measures of the machine
+    under Docker Desktop, which BOSS cannot see from inside its VM."""
+
+    swap_used_mb: float = Field(default=0, ge=0)
+    swap_total_mb: float = Field(default=0, ge=0)
+    memory_pressure: Optional[str] = Field(default=None, max_length=40)
+    top: list[dict[str, Any]] = Field(default_factory=list, max_length=8,
+                                      description='[{"name": "Chrome", "mb": 4192}, …]')
+
+
+def _actor(explicit: Optional[str]) -> str:
+    if explicit and explicit.strip():
+        return explicit.strip()[:120]
+    try:
+        from apps.api.app.main import current_api_principal
+        return str(current_api_principal.get() or "operator")
+    except Exception:  # noqa: BLE001
+        return "operator"
+
+
+@router.get("/v1/system-doctor/findings")
+def get_findings(include_resolved: bool = False) -> dict[str, Any]:
+    """What the doctor has found: open (and snoozed) findings, each with its options."""
+    from sqlalchemy import text
+
+    from boss_engine.services import system_doctor
+
+    with begin(get_engine()) as connection:
+        found = system_doctor.open_findings(connection)
+        resolved = []
+        if include_resolved:
+            resolved = [dict(r) for r in connection.execute(text(
+                "SELECT id, kind, title, resolved_at, chosen_option, chosen_by FROM "
+                "system_findings WHERE status = 'resolved' ORDER BY resolved_at DESC LIMIT 50"
+            )).mappings()]
+    return {"findings": found, "resolved": resolved, "last_tick": system_doctor.last_report()}
+
+
+@router.post("/v1/system-doctor/findings/{finding_id}/act")
+def act_on_finding(finding_id: str, payload: FindingActBody) -> dict[str, Any]:
+    """Do what the operator chose on a system-health card; answers what happened, in place."""
+    from fastapi import HTTPException
+
+    from boss_engine.config import get_settings
+    from boss_engine.services import system_doctor
+
+    try:
+        return system_doctor.act(get_engine(), get_settings(), finding_id, payload.option,
+                                 actor=_actor(payload.actor))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except system_doctor.ActRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/v1/system-doctor/actions")
+def get_actions(since: Optional[str] = None, limit: int = 100) -> dict[str, Any]:
+    """Everything the doctor did on its own and everything a person chose, newest first."""
+    from boss_engine.services import system_doctor
+
+    with begin(get_engine()) as connection:
+        return {"actions": system_doctor.recent_actions(connection, since=since, limit=limit)}
+
+
+@router.post("/v1/self/host-sample")
+def post_host_sample(payload: HostSampleBody) -> dict[str, Any]:
+    """The Mac under Docker Desktop, as the optional helper measured it."""
+    from boss_engine.services import system_doctor
+
+    with begin(get_engine()) as connection:
+        return {"recorded": system_doctor.record_host_sample(connection, payload.model_dump())}
