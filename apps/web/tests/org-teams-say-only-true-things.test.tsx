@@ -61,8 +61,8 @@ describe("a team card", () => {
     expect(waiting.querySelector("a")!.getAttribute("href")).toContain("wfr=wfr_182");
     expect(waiting.textContent).toContain("+1 more waiting");
     expect(row("engineering", "load")!.textContent).toContain("9h");
-    expect(row("engineering", "with")!.textContent).toContain("Quality ×31");
-    expect(row("engineering", "with")!.textContent).toContain("Leadership ×19");
+    expect(row("engineering", "with")!.textContent).toBe("Hands toQuality ×31Operations ×6");
+    expect(row("engineering", "gets")!.textContent).toBe("Gets fromLeadership ×19");
     expect(row("engineering", "spend")!.textContent).toBe("Spend$4.10 metered120 on plan");
     expect(row("engineering", "models")!.textContent).toContain("+1");
     const gaps = row("engineering", "gaps")!;
