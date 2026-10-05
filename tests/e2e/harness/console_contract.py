@@ -124,13 +124,20 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Press("decision-filter-all", "app/decision-inbox-ui.tsx",
               expect='[data-testid="decision-filter-all"].active'),
     ),
-    "delivery": (
-        Press("dm-open-dock", "app/deployment-manager-ui.tsx", expect=_tid("agent-send"),
-              expect_source="app/agent-ui.tsx"),
+    # Infra and Observability (infra-observability spec §9.3). `delivery` and `monitoring` were
+    # these two screens' old ids; their links redirect (app/legacy-areas.ts).
+    "infra": (
+        Press("infra-add", "app/infra/fleet.tsx", expect=_tid("infra-add-host")),
+        Press("infra-ask", "app/infra/fleet.tsx", expect=_tid("infra-ask-starter")),
+        Press("inf-deploy-new", "app/infra/deploys.tsx", expect=_tid("inf-deploy-sheet"), why="opens the one deploy sheet (testId prop)",
+              expect_source="app/infra/deploy-sheet.tsx"),
     ),
-    "monitoring": (
-        Press("monitoring-open-dock", "app/monitoring-ui.tsx", expect=_tid("agent-send"),
-              expect_source="app/agent-ui.tsx"),
+    "observability": (
+        Press("obs-win-7d", "app/observability/obs-home.tsx",
+              expect='[data-testid="obs-win-7d"][aria-checked="true"]'),
+        Press("obs-ask", "app/observability/pulse.tsx", expect=_tid("obs-ask-starter")),
+        Press("obs-check-config", "app/observability/sources.tsx", expect=_tid("obs-check-result"),
+              why="Sources tab: the health-check dry-run answers in rows"),
     ),
     "activity": (
         Press("activity-level-error", "app/activity-log-ui.tsx",
@@ -218,10 +225,6 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Press("ghx-setup", "app/github-operations-ui.tsx", opens=True,
               expect='[data-testid="ghx-setup"] form'),
     ),
-    "infra": (
-        Press("infra-view-resources", "app/provider-configuration-ui.tsx",
-              expect='[data-testid="infra-view-resources"].active'),
-    ),
     "capabilities": (
         Journey("mcp_register"),
     ),
@@ -265,6 +268,8 @@ def declared_in_source(source_text: str, testid: str) -> bool:
         return True
     if f'testid="{testid}"' in source_text:
         return True   # a component prop forwarded to data-testid (phase3-ui's <Result testid=…>)
+    if f'testId="{testid}"' in source_text or f'testId: "{testid}"' in source_text:
+        return True   # a testId prop or menu-item field forwarded to data-testid (infra/kit's Sheet, Menu)
     return any(prefix and testid.startswith(prefix)
                for prefix in _TEMPLATE_PREFIX.findall(source_text))
 
