@@ -119,6 +119,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
 
   // ── the list ──
   const [queryError, setQueryError] = useState("");
+  const [toTop, setToTop] = useState(0);
   const holding = holdingScroll || !!state.row;
   const stream = useLogStream<ActivityLogItem>({
     key: `${projectId}|${queryKey}`,
@@ -357,7 +358,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
           <PulseStrip histogram={histogram.data} loading={histogram.loading} onZoom={zoom} onReset={unzoom} />
           {stream.fresh.length ? (
             <button type="button" className="lx-new" data-testid="lx-new" title="Show the newest lines"
-                    onClick={() => { stream.showFresh(); setHoldingScroll(false); }}>{stream.fresh.length} new ↑</button>
+                    onClick={() => { stream.showFresh(); setHoldingScroll(false); setToTop((n) => n + 1); }}>{stream.fresh.length} new ↑</button>
           ) : null}
           {stream.error ? (
             <div className="ag-empty lx-banner" role="alert" data-testid="lx-unreachable">
@@ -374,7 +375,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
             <LogRows items={items} labels={labels} byRun={state.group === "run"} selectedId={state.row}
                      arrived={stream.arrived} onOpen={(id) => openRow(id)} onHolding={setHoldingScroll}
                      onNearEnd={() => { if (stream.next && !stream.loadingOlder && !stream.olderError) stream.loadOlder(); }}
-                     footer={footer} />
+                     footer={footer} toTop={toTop} />
           )}
         </main>
         {state.row ? (
