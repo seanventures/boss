@@ -20,12 +20,11 @@ import { AttentionCard } from "./agents/attention-card";
 import { CARDS_SHOWN, OutcomeChip, ROWS_SHOWN, sortMissions, splitAttention } from "./agents/live-board";
 import { RING_BUDGET, ago, linkTo, navigate, plainClick, reducedMotion, useBand, useNow } from "./agents/live-util";
 import { MissionRow, rowAnimates } from "./agents/mission-row";
-import { DayStrip } from "./command-center/day-strip";
-import { Floor } from "./command-center/floor";
+// Code-split (fix pass D10): each graphic is its own chunk, still server-rendered.
+import { DayStrip, Floor, TodayChart, WeekBars } from "./command-center/lazy";
 import { StatusLine } from "./command-center/status-line";
 import { SystemsRow } from "./command-center/systems-row";
-import { TodayChart, type TodayTab } from "./command-center/today-chart";
-import { WeekBars } from "./command-center/week-bars";
+import type { TodayTab } from "./command-center/today-chart";
 import { useHostAdvice } from "./host-advice";
 import { HostCard } from "./command-center/host-card";
 import { OnboardingHelpRows } from "./onboarding-help-card";
