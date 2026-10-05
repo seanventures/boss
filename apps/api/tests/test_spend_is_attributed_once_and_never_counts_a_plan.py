@@ -48,3 +48,9 @@ def test_spend_is_attributed_once_and_a_plan_call_is_never_money(client, engine)
     assert by_id[forge]["spend_usd"] == 1.6
     assert by_id[rook]["spend_usd"] == 0.25
     assert wf["spend_attributed"] is True
+
+    # And the Passport: metered money only, subscription use as its own count.
+    passport = client.get(f"/v1/agents/{forge}/passport", params={"project_id": ob.PROJECT})
+    assert passport.status_code == 200, passport.text
+    vitals = passport.json()["vitals"]
+    assert vitals["cost_7d"] == 1.6 and vitals["plan_calls_7d"] == 1

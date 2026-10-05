@@ -47,7 +47,8 @@ def test_handoff_outcomes_are_counted_on_the_agent_and_the_team_edge(client, eng
     for status, ended in (("complete", timedelta(minutes=30)), ("error", timedelta(minutes=20)),
                           ("awaiting_input", None)):
         top = ob.root(engine)
-        step = ob.act(engine, forge, parent=top, root=top, handed_by="person", how="run_actor")
+        # Production shape: the run act is the person's; its first step is handed by BOSS.
+        step = ob.act(engine, forge, parent=top, root=top, handed_by="boss", how="named")
         ob.act(engine, rook, parent=step, root=top, status=status, ended=ended,
                started=timedelta(minutes=50), how="model_pick")
     got = ob.board(client)
@@ -62,7 +63,9 @@ def test_handoff_outcomes_are_counted_on_the_agent_and_the_team_edge(client, eng
     assert edge["label"] == "Picked by BOSS"
     team_edge = next(e for e in body["team_edges"] if (e["from"], e["to"]) == (eng, qa))
     assert (team_edge["handoffs"], team_edge["failed"], team_edge["waiting"]) == (3, 1, 1)
-    # (c) each run's first step was handed by the person who started it
+    # Flow's `Stuck now`: the failure, with its run.
+    assert [f["role_key"] for f in body["failures"]] == [rook] and body["failures"][0]["team"] == qa
+    # (c) each run's first step hangs from the run its person started: a person→agent edge
     person = next(e for e in body["agent_edges"] if (e["from"], e["to"]) == ("person", forge))
     assert person["handoffs"] == 3
     assert any(e["from"] == "person" and e["to"] == eng for e in body["team_edges"])
@@ -127,6 +130,8 @@ def test_an_old_open_item_waits_with_its_real_status(client, engine):
     assert first["act_id"] == old and first["status"] == "active"
     assert first["label"] == "Build · Old one" and first["run_id"] == "wfr_old"
     assert first["attention_id"] is None
+    # One count of what waits: Open is the Waiting list's length, nested work counted once.
+    assert row["work"]["open"] == row["waiting_total"] == 1
 
 
 def test_an_unchanged_board_is_a_304_and_an_ending_act_changes_it(client, engine):
@@ -173,4 +178,7 @@ def test_a_gate_holding_an_agents_work_is_its_teams_wait(client, engine, monkeyp
     gate = [w for w in yours["waiting"] if w["attention_id"] == decision_id]
     assert gate and gate[0]["role_key"] == herald and gate[0]["run_id"] == run_id, yours
     assert gate[0]["status"] == "awaiting_input"
+    # D13: the card's needs-you badge and Open count include the gate, as Waiting does.
+    assert yours["needs_you"] >= 1 and yours["waiting_you"] >= 1
+    assert yours["work"]["open"] == yours["waiting_total"]
     assert ob.agent_row(body, herald)["work"]["done"] >= 1

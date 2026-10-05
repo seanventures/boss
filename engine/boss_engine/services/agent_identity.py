@@ -576,11 +576,15 @@ def _vitals(connection: Connection, project_id: str, row: dict[str, Any]) -> dic
         "policy_violation_count", "hidden_failure_count", "low_quality_output_count",
         "scope_violation_count"))
     key = row["role_key"]
-    cost = connection.execute(
-        text("SELECT COALESCE(SUM(cost_usd_micros), 0) FROM llm_calls WHERE project_id = :p "
-             "AND role = :r AND created_at > now() - interval '7 days'"),
-        {"p": project_id, "r": key},
-    ).scalar() or 0
+    # METERED MONEY ONLY, attributed once (llm_telemetry.attribute_llm_calls — the Directory and
+    # Organization read the same helper): a call on a subscription is counted as a call
+    # (`plan_calls_7d`), never as dollars (operator decision 2026-10-04).
+    from .llm_telemetry import attribute_llm_calls, canonical_role
+
+    mine = [c for c in attribute_llm_calls(connection, project_id, 168)
+            if c["role"] == (canonical_role(key) or key)]
+    cost = sum(c["metered_micros"] for c in mine)
+    plan_calls = sum(c["calls"] for c in mine if c["included"])
     panels = 0
     for keys in connection.execute(
             text("SELECT role_keys FROM meeting_runs WHERE project_id = :p "
@@ -599,7 +603,8 @@ def _vitals(connection: Connection, project_id: str, row: dict[str, Any]) -> dic
         apps = 0
     return {"trust": int(row.get("trust_score") or 0), "runs": runs,
             "clean_rate": round(runs / (runs + faults), 4) if runs + faults else 0.0,
-            "cost_7d": round(int(cost) / 1_000_000, 4), "panels": panels, "apps": int(apps)}
+            "cost_7d": round(int(cost) / 1_000_000, 4), "plan_calls_7d": int(plan_calls),
+            "panels": panels, "apps": int(apps)}
 
 
 def _ago(seconds: float) -> str:
