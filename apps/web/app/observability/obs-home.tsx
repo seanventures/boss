@@ -84,7 +84,8 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   const spend = pulse.data?.spend24hMicros ?? 0;
   const attention = [
     ...(pulse.data?.attention ?? []).filter((a) => !a.area || a.area === "observability"),
-  ];
+  // On System, the doctor's findings are its FINDINGS section: one card, not two on one screen.
+  ].filter((a) => !(url.view === "system" && a.kind === "system_health"));
 
   return (
     <div className="inf obs" data-testid="obs" data-paused={live ? undefined : ""}>
