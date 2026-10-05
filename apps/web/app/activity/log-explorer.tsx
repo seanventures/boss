@@ -52,7 +52,17 @@ function toLocalInput(iso: string | null): string {
 
 export function LogExplorer({ projectId, actor }: { projectId: string; actor: string }) {
   const live = useConsoleLive();
-  const [state, setState] = useState<LogState>(() => readLogParams(typeof window === "undefined" ? "" : window.location.search));
+  // The server renders with no URL; the URL is read once mounted, and nothing is fetched before
+  // it is, so the first paint matches the server's and no read is made for the wrong view.
+  const [state, setState] = useState<LogState>(() => readLogParams(""));
+  const [ready, setReady] = useState(false);
+  const [facetKey, setFacetKey] = useState(() => JSON.stringify(apiParams(readLogParams(""))));
+  useEffect(() => {
+    const fromUrl = readLogParams(window.location.search);
+    setState(fromUrl);
+    setFacetKey(JSON.stringify(apiParams(fromUrl)));
+    setReady(true);
+  }, []);
   const [holdingScroll, setHoldingScroll] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [custom, setCustom] = useState<{ from: string; to: string } | null>(null);
@@ -85,7 +95,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
 
   // ── the pulse and the header count (one read, ETag-polled) ──
   const histogram = usePolledRead({
-    key: `${projectId}|${queryKey}`, pollMs: state.from ? null : LOG_POLL_MS, paused: !live,
+    key: `${projectId}|${queryKey}`, pollMs: state.from ? null : LOG_POLL_MS, paused: !live, enabled: ready,
     read: async (etag, signal) => {
       const got = await fetchHistogram(projectId, params, { etag, signal });
       return got.ok ? (got.notModified ? { ok: true as const, notModified: true, etag: got.etag }
@@ -94,13 +104,12 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
   });
 
   // ── the rail (debounced: a burst of clicks asks once, and a stale answer is aborted) ──
-  const [facetKey, setFacetKey] = useState(queryKey);
   useEffect(() => {
     const t = setTimeout(() => setFacetKey(queryKey), 250);
     return () => clearTimeout(t);
   }, [queryKey]);
   const facets = usePolledRead({
-    key: `${projectId}|${facetKey}`, pollMs: null, paused: !live,
+    key: `${projectId}|${facetKey}`, pollMs: null, paused: !live, enabled: ready,
     read: async (etag, signal) => {
       const got = await fetchFacets(projectId, JSON.parse(facetKey) as Record<string, string>, { etag, signal });
       return got.ok ? (got.notModified ? { ok: true as const, notModified: true, etag: got.etag }
@@ -117,6 +126,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
     pollMs: LOG_POLL_MS,
     paused: !live || !!state.from,
     holding,
+    enabled: ready,
     first: async (signal) => {
       const got = await fetchLogPage(projectId, { ...params, limit: PAGE }, { signal });
       if (!got.ok) {

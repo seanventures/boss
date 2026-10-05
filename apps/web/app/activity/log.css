@@ -205,7 +205,8 @@
   .lx-pulse { height: 48px; }
   .lx-row { height: 32px; grid-template-columns: 58px 18px 22px minmax(0, 1fr); gap: 6px; }
   .lx-lvl > span:last-child, .lx-right { display: none; }
-  .lx-drawer { position: fixed; inset: 0; border-radius: 0; z-index: 60; }
+  /* The whole log body, not the viewport: the console's own bar stays above it. */
+  .lx-drawer { inset: 0; width: 100%; }
   .lx-view, .lx-rail-pick, .lx .ag-btn { min-height: 40px; }
 }
 

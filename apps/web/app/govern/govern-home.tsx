@@ -34,8 +34,10 @@ function readTab(): { tab: Tab; focus: string | null } {
 
 export function GovernHome({ projectId, actor }: { projectId: string; actor: string }) {
   const live = useConsoleLive();
-  const [{ tab, focus }, setPlace] = useState(readTab);
+  // Read after mount: the server renders the default tab, and the first paint must match it.
+  const [{ tab, focus }, setPlace] = useState<{ tab: Tab; focus: string | null }>({ tab: "limits", focus: null });
   useEffect(() => {
+    setPlace(readTab());
     const on = () => setPlace(readTab());
     window.addEventListener("popstate", on);
     return () => window.removeEventListener("popstate", on);
@@ -60,6 +62,12 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
     },
   });
   const data = view.data;
+  // Links that keep who you are (org=) are built from the URL, so only after mount: a server
+  // render has no URL, and an href that differs between the two is a hydration mismatch.
+  const [links, setLinks] = useState<{ changes: string; stopped: string }>({ changes: "", stopped: "" });
+  useEffect(() => {
+    setLinks({ changes: logHref({ view: "govern-changes", range: "30d" }), stopped: logHref({ view: "refusals", range: "7d" }) });
+  }, []);
   const frozen = data?.meter.state === "red";
 
   return (
@@ -73,9 +81,9 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           ))}
         </span>
         <span className="gv-spacer" />
-        <a className="ag-link" href={logHref({ view: "govern-changes", range: "30d" })} data-testid="gv-changes"
+        <a className="ag-link" href={links.changes || undefined} data-testid="gv-changes"
            title="Every limit someone changed, in the Log">Changes ↗</a>
-        <a className="ag-link" href={logHref({ view: "refusals", range: "7d" })} data-testid="gv-stopped"
+        <a className="ag-link" href={links.stopped || undefined} data-testid="gv-stopped"
            title="Work a limit stopped, in the Log">Stopped ↗</a>
       </header>
       <GovernMeter meter={data?.meter ?? null} error={view.error} onRetry={view.reload} />
@@ -83,7 +91,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         <div className="gv-frozen" role="status" data-testid="gv-frozen">
           <span>New work is waiting for budget</span>
           <button type="button" className="ag-btn" onClick={() => setPlace({ tab: "limits", focus: "monthly_cap" })}>Raise monthly cap</button>
-          <a className="ag-link" href={logHref({ view: "refusals", range: "7d" })}>Stopped ↗</a>
+          <a className="ag-link" href={links.stopped || undefined}>Stopped ↗</a>
         </div>
       ) : null}
       {tab === "limits" ? (
