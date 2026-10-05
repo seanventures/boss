@@ -45,7 +45,7 @@ export function CloudCapacity(p: CloudViewProps) {
         <span className="ag-zone-label">API health</span>
         {head.apiHealth.length === 0 ? <span className="inf-muted">No checks yet</span> : head.apiHealth.map((h) => (
           <span key={h.provider} role="listitem" className="cloud-health-item"
-                title={`API ${h.api} · rate limit ${h.rateLimit} · cap ${h.usageCap}${h.checkedAt ? ` · checked ${localTime(h.checkedAt)}` : ""}`}>
+                title={`API ${h.api} · limit ${h.rateLimit} · cap ${h.usageCap}${h.checkedAt ? ` · ${localTime(h.checkedAt)}` : ""}`} data-copy="data">
             <Dot tone={h.state.tone} label={`${h.provider} ${h.state.word}`} />
             <span data-copy="data">{h.provider}</span><span className="inf-faint">{h.state.word}</span>
           </span>

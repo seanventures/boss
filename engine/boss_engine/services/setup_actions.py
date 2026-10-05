@@ -678,6 +678,18 @@ def _same_connection(connection: Connection, project_id: str, provider: str, *,
     return None
 
 
+def _backend_it_lives_in(connection: Connection, project_id: str, source_id: str) -> Optional[str]:
+    """REPLACE KEEPS THE KEY WHERE IT LIVES (operator decision 2026-10-04). A key stored in Vault
+    from Repo and models' Capacity row is replaced in Vault, not moved to the default store;
+    only a first-time store asks (or takes the default)."""
+    row = connection.execute(
+        text("SELECT r.storage_backend FROM entitlement_sources e "
+             "JOIN secret_refs r ON r.id = e.credential_secret_ref_id "
+             "WHERE e.project_id = :p AND e.source_id = :s"),
+        {"p": project_id, "s": source_id}).scalar()
+    return str(row) if row else None
+
+
 def _connect_key(connection: Connection, settings: Any, project_id: str, provider: str, *,
                  api_key: str, base_url: str, model: str, accept: bool, actor: str,
                  http: Optional[Http], replace_source_id: str = "") -> dict[str, Any]:
@@ -748,7 +760,8 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     if api_key:
         ModelGatewayService(settings).upload_credential(
             connection, project_id, source_id, value=api_key,
-            backend=default_secret_backend(settings), actor=actor)
+            backend=_backend_it_lives_in(connection, project_id, source_id)
+            or default_secret_backend(settings), actor=actor)
     _record_model_check(connection, project_id, source_id, proof, actor)
     return {"ok": bool(proof.get("ok")), "source_id": source_id, "state": proof.get("state")}
 

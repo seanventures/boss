@@ -119,7 +119,7 @@ function Secrets({ projectId, actor, t, canBind, refresh }: { projectId: string;
           const r = await bindSecret(projectId, t.id, actor, name.trim(), secretId);
           setBusy(false);
           if (!r.ok) { setError(r.error); return; }
-          showToast("success", "Bound");
+          showToast("success", "Secret bound");
           setOpen(false);
           afterWrite(refresh);
         }}>
