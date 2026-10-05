@@ -1,94 +1,42 @@
 /**
- * Global activity log (BOSS-379). Projection over events + read-only
- * process/job/deadletter/receipt rows — not a second event store.
+ * The Activity log's shapes and mappers — the ONE type source for the Log, the step panel and
+ * the Factory's build log (the viewer used to re-declare its own copy of these).
  *
- * Mapper never invents rows or a success status. Missing payload stays
- * empty. Data is treated as already redacted; this module never logs it.
+ * The mapper never invents a row or a success: a missing status reads `info`, a missing payload
+ * stays empty. It KEEPS the honesty fields (`total_is_exact`, `truncated_note`, `window`) that
+ * the old mapper dropped, so a count that is a floor is shown as one. Data arrives redacted.
  */
 
 import { PROJECT_ID, resolveProjectId } from "./client";
 
-export const ACTIVITY_LOG_SOURCES = [
-  "event",
-  "process_step",
-  "job",
-  "deadletter",
-  "receipt",
-] as const;
+export const ACTIVITY_LOG_STATUSES = ["ok", "failed", "waiting", "stuck", "info"] as const;
+export const ACTIVITY_LOG_LEVELS = ["error", "warn", "info", "verbose"] as const;
+/** The ten streams, in the rail's order. */
+export const ACTIVITY_LOG_STREAMS = ["event", "workflow_step", "process_step", "agent_turn", "llm_call",
+                                     "app_log", "deployment", "job", "deadletter", "receipt"] as const;
 
-export const ACTIVITY_LOG_STATUSES = [
-  "ok",
-  "failed",
-  "waiting",
-  "stuck",
-  "info",
-] as const;
-
-export const ACTIVITY_LOG_SORTS = ["created_at", "status", "kind"] as const;
-
-export const ACTIVITY_LOG_ORDERS = ["desc", "asc"] as const;
-
-export type ActivityLogSource = (typeof ACTIVITY_LOG_SOURCES)[number];
 export type ActivityLogStatus = (typeof ACTIVITY_LOG_STATUSES)[number];
-export type ActivityLogSort = (typeof ACTIVITY_LOG_SORTS)[number];
-export type ActivityLogOrder = (typeof ACTIVITY_LOG_ORDERS)[number];
+export type ActivityLogLevel = (typeof ACTIVITY_LOG_LEVELS)[number];
 
-export type ActivityLogQuery = {
-  q?: string;
-  kind?: string;
-  status?: string;
-  actor?: string;
-  entity_type?: string;
-  /** verbose | info | warn | error — how loudly a row speaks, which is a different question
-   *  from `status` (what happened to the work). */
-  level?: string;
-  /** One stream, or "infra" for the three that describe BOSS operating itself. */
-  source?: string;
-  /** One work task. */
-  run_id?: string;
-  /** One workflow run (`wfr_…`) — the governed run a work task was one step of. A different
-   *  scope from `run_id`, and the console URL can carry both. */
-  workflow_run_id?: string;
-  /** One step of that workflow run: its own rows and the work task it started. */
-  step_id?: string;
-  /** One AI agent, by role key. */
-  agent?: string;
-  /** Which BOSS process said it: "api" | "worker". Rows from sources that do not record a
-   *  process are excluded rather than guessed at, so this narrows to container logs. */
-  service?: string;
-  since?: string;
-  until?: string;
-  sort?: string;
-  order?: string;
-  limit?: number;
-  offset?: number;
-  /** `next_cursor` from the previous page: the rows strictly older than it. */
-  cursor?: string;
-};
+export type ActivityLogQuery = Record<string, string | number | undefined>;
 
 export type ActivityLogItem = {
   id: string;
   source: string;
   kind: string;
   status: ActivityLogStatus;
-  /** The log level. Defaults to "info" for a payload from an older API, so a mixed-version
-   *  deployment shows rows at a sane level rather than dropping them out of every filter. */
+  /** The log level. "info" for a payload from an API that predates levels, so a row never
+   *  falls out of every level filter. */
   level: string;
   title: string;
   actor: string;
   entityType: string;
   entityId: string;
   stage: string;
-  /** The work task this row belongs to, when it belongs to one. */
   runId: string;
   workflowRunId: string;
-  /** The AI agent that produced it, by role key. */
   agent: string;
-  /** Which BOSS process emitted it: "api" | "worker". Empty for sources that do not record a
-   *  process — left empty rather than guessed, so the filter never claims a wrong origin. */
   service: string;
-  /** The readable body of a transcript turn — what was said, or what a tool returned. Empty
-   *  for every other source, which carry structured `data` instead. */
   body: string;
   createdAt: string;
   data: Record<string, unknown>;
@@ -100,177 +48,179 @@ export type ActivityLog = {
   blockedReason?: string;
   items: ActivityLogItem[];
   total?: number;
+  /** False when `total` is a floor; the console then says `≥`. */
+  totalIsExact?: boolean;
+  truncatedNote?: string;
   limit?: number;
   offset?: number;
-  /** Present when there is an older page; pass it back as `cursor` to load it. */
   nextCursor?: string;
+  /** The newest row's cursor: the live tail asks for rows after it. */
+  newestCursor?: string;
+  /** More new rows than one page arrived since `after`: reload rather than splice. */
+  gap?: boolean;
+  /** Names for the ids on the page: runs, workflow runs, `wfr/step` and work items. */
+  labels: Record<string, string>;
+  window?: { from: string | null; to: string | null; range: string | null };
+  /** Step panel (`summary=1`): how many errors and warnings, alongside the five rows. */
+  counts?: { error: number; warn: number };
+  /** Step panel (`summary=1`): the step's model calls — how many, their money (a subscription
+   *  call is not money) and the newest model. */
+  calls?: { count: number; costUsd: number; model: string };
 };
 
-/** How many rows the LOG holds per level and per stream (GET /v1/activity/facets) — counted
- *  against the log, not the page. */
 export type ActivityFacets = {
   levels: Record<string, number>;
   sources: Record<string, number>;
-  levelsExact: boolean;
-  /** False when a stream count is a floor (a scoped view counts at most the scan cap per stream). */
-  sourcesExact: boolean;
-  note?: string;
+  statuses: Record<string, number>;
+  services: Record<string, number>;
+  agents: { roleKey: string; n: number }[];
+  agentsMore: number;
+  /** The real kinds in the window (D13: `kind:` autocomplete), most common first. */
+  kinds: { kind: string; n: number }[];
+  runs: { id: string; label: string; n: number }[];
+  total: number;
+  exact: boolean;
 };
 
-export function mapActivityFacets(payload: unknown): ActivityFacets | null {
-  if (!isPlainObject(payload)) return null;
-  const counts = (value: unknown): Record<string, number> => {
-    const out: Record<string, number> = {};
-    if (isPlainObject(value)) {
-      for (const [key, n] of Object.entries(value)) {
-        const parsed = asFiniteNumber(n);
-        if (parsed !== undefined) out[key] = parsed;
-      }
-    }
-    return out;
-  };
-  return {
-    levels: counts(payload.levels),
-    sources: counts(payload.sources),
-    levelsExact: payload.levels_exact !== false,
-    sourcesExact: payload.sources_exact !== false,
-    note: typeof payload.note === "string" ? payload.note : undefined,
-  };
+export type ActivityHistogram = {
+  buckets: { t: string; error: number; warn: number; info: number; verbose: number }[];
+  bucketSeconds: number;
+  from: string;
+  to: string;
+  total: number;
+  totalIsExact: boolean;
+};
+
+export function emptyActivityLog(reason?: string, projectId = PROJECT_ID): ActivityLog {
+  return { projectId: resolveProjectId(projectId), apiReachable: false, blockedReason: reason,
+           items: [], labels: {} };
 }
 
-/** What a level or stream chip shows. A chip is read as a fact about the log, so it is "…"
- *  until the counts arrive, "?" when one could not be read — never a zero that was not counted —
- *  and carries a "+" when the count is a floor. Stream counts under a run/agent/service scope are
- *  counted from at most the facet scan cap per stream (sources_exact=false); they were shown as
- *  exact while only the level chips knew about floors (review of milestone/console-b). */
-export function facetChipLabel(
-  facets: ActivityFacets | null, kind: "levels" | "sources", key: string,
-): string {
-  if (facets === null) return "…";
-  const n = facets[kind]?.[key];
-  if (typeof n !== "number") return "?";
-  const exact = kind === "levels" ? facets.levelsExact : facets.sourcesExact;
-  return `${n}${exact ? "" : "+"}`;
-}
-
-/** The API sends a next-page cursor only for time, newest first (its order when none is sent);
- *  any other server order is one page, so its last row is not the oldest row. */
-export function activityPagesByCursor(sort?: string, order?: string): boolean {
-  return (sort ?? "created_at") === "created_at" && (order ?? "desc") === "desc";
-}
-
-const STATUS_SET = new Set<string>(ACTIVITY_LOG_STATUSES);
-const SORT_SET = new Set<string>(ACTIVITY_LOG_SORTS);
-const ORDER_SET = new Set<string>(ACTIVITY_LOG_ORDERS);
-
-export function emptyActivityLog(
-  reason?: string,
-  projectId = PROJECT_ID,
-): ActivityLog {
-  return {
-    projectId: resolveProjectId(projectId),
-    apiReachable: false,
-    blockedReason: reason,
-    items: [],
-  };
-}
-
-/** Build GET /v1/activity query params. Omits empty filters; never logs values. */
-export function activityLogSearchParams(
-  projectId: string,
-  query: ActivityLogQuery = {},
-): URLSearchParams {
+/** GET /v1/activity params from a plain object. Omits empties; never logs values. */
+export function activityLogSearchParams(projectId: string, query: ActivityLogQuery = {}): URLSearchParams {
   const params = new URLSearchParams();
   params.set("project_id", resolveProjectId(projectId));
-  setIfPresent(params, "q", query.q);
-  setIfPresent(params, "kind", query.kind);
-  setIfPresent(params, "status", query.status);
-  setIfPresent(params, "actor", query.actor);
-  setIfPresent(params, "entity_type", query.entity_type);
-  setIfPresent(params, "level", query.level);
-  setIfPresent(params, "source", query.source);
-  setIfPresent(params, "run_id", query.run_id);
-  setIfPresent(params, "workflow_run_id", query.workflow_run_id);
-  setIfPresent(params, "step_id", query.step_id);
-  setIfPresent(params, "agent", query.agent);
-  setIfPresent(params, "service", query.service);
-  setIfPresent(params, "since", query.since);
-  setIfPresent(params, "until", query.until);
-  if (query.sort && SORT_SET.has(query.sort)) {
-    params.set("sort", query.sort);
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) params.set(key, text);
   }
-  if (query.order && ORDER_SET.has(query.order)) {
-    params.set("order", query.order);
-  }
-  if (typeof query.limit === "number" && Number.isFinite(query.limit)) {
-    params.set("limit", String(Math.min(200, Math.max(1, Math.trunc(query.limit)))));
-  }
-  if (typeof query.offset === "number" && Number.isFinite(query.offset)) {
-    params.set("offset", String(Math.max(0, Math.trunc(query.offset))));
-  }
-  setIfPresent(params, "cursor", query.cursor);
   return params;
 }
 
-export function mapActivityLog(
-  payload: unknown,
-  projectId?: string,
-): ActivityLog {
+export function mapActivityLog(payload: unknown, projectId?: string): ActivityLog {
   const fallback = resolveProjectId(projectId);
-  if (!isPlainObject(payload)) {
-    return { projectId: fallback, apiReachable: true, items: [] };
-  }
+  if (!isPlainObject(payload)) return { projectId: fallback, apiReachable: true, items: [], labels: {} };
   const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  const window = isPlainObject(payload.window) ? payload.window : null;
+  const counts = isPlainObject(payload.counts) ? payload.counts : null;
+  const calls = isPlainObject(payload.calls) ? payload.calls : null;
   return {
-    projectId:
-      typeof payload.project_id === "string" && payload.project_id.trim()
-        ? payload.project_id.trim()
-        : fallback,
+    projectId: typeof payload.project_id === "string" && payload.project_id.trim()
+      ? payload.project_id.trim() : fallback,
     apiReachable: true,
     items: rawItems.flatMap(mapActivityLogItem),
     total: asFiniteNumber(payload.total),
+    totalIsExact: typeof payload.total_is_exact === "boolean" ? payload.total_is_exact : undefined,
+    truncatedNote: typeof payload.truncated_note === "string" ? payload.truncated_note : undefined,
     limit: asFiniteNumber(payload.limit),
     offset: asFiniteNumber(payload.offset),
-    nextCursor:
-      typeof payload.next_cursor === "string" && payload.next_cursor ? payload.next_cursor : undefined,
+    nextCursor: asText(payload.next_cursor) || undefined,
+    newestCursor: asText(payload.newest_cursor) || undefined,
+    gap: payload.gap === true,
+    labels: mapStrings(payload.labels),
+    window: window ? { from: asText(window.from) || null, to: asText(window.to) || null,
+                       range: asText(window.range) || null } : undefined,
+    counts: counts ? { error: asFiniteNumber(counts.error) ?? 0, warn: asFiniteNumber(counts.warn) ?? 0 }
+      : undefined,
+    calls: calls ? { count: asFiniteNumber(calls.count) ?? 0, costUsd: asFiniteNumber(calls.cost_usd) ?? 0,
+                     model: asText(calls.model) } : undefined,
   };
 }
 
-function mapActivityLogItem(value: unknown): ActivityLogItem[] {
+export function mapActivityLogItem(value: unknown): ActivityLogItem[] {
   if (!isPlainObject(value)) return [];
   const id = asText(value.id);
   if (!id) return [];
-  return [
-    {
-      id,
-      source: asText(value.source),
-      kind: asText(value.kind),
-      status: mapStatus(value.status),
-      // "info" rather than "" when absent: an API that predates levels should render its rows
-      // at a sane level, not have them vanish from every level filter.
-      level: asText(value.level) || "info",
-      title: asText(value.title),
-      actor: asText(value.actor),
-      entityType: asText(value.entity_type),
-      entityId: asText(value.entity_id),
-      stage: asText(value.stage),
-      runId: asText(value.run_id),
-      workflowRunId: asText(value.workflow_run_id),
-      agent: asText(value.agent),
-      service: asText(value.service),
-      body: asText(value.body),
-      createdAt: asText(value.created_at),
-      data: isPlainObject(value.data) ? value.data : {},
-    },
-  ];
+  return [{
+    id,
+    source: asText(value.source),
+    kind: asText(value.kind),
+    status: mapStatus(value.status),
+    level: asText(value.level) || "info",
+    title: asText(value.title),
+    actor: asText(value.actor),
+    entityType: asText(value.entity_type),
+    entityId: asText(value.entity_id),
+    stage: asText(value.stage),
+    runId: asText(value.run_id),
+    workflowRunId: asText(value.workflow_run_id),
+    agent: asText(value.agent),
+    service: asText(value.service),
+    body: typeof value.body === "string" ? value.body : "",
+    createdAt: asText(value.created_at),
+    data: isPlainObject(value.data) ? value.data : {},
+  }];
 }
 
+export function mapActivityFacets(payload: unknown): ActivityFacets | null {
+  if (!isPlainObject(payload)) return null;
+  const agents = Array.isArray(payload.agents) ? payload.agents : [];
+  const runs = Array.isArray(payload.runs) ? payload.runs : [];
+  return {
+    levels: mapCounts(payload.levels),
+    sources: mapCounts(payload.sources),
+    statuses: mapCounts(payload.statuses),
+    services: mapCounts(payload.services),
+    agents: agents.filter(isPlainObject).map((a) => ({ roleKey: asText(a.role_key), n: asFiniteNumber(a.n) ?? 0 }))
+      .filter((a) => a.roleKey),
+    agentsMore: asFiniteNumber(payload.agents_more) ?? 0,
+    kinds: (Array.isArray(payload.kinds) ? payload.kinds : []).filter(isPlainObject)
+      .map((k) => ({ kind: asText(k.kind), n: asFiniteNumber(k.n) ?? 0 })).filter((k) => k.kind),
+    runs: runs.filter(isPlainObject).map((r) => ({ id: asText(r.id), label: asText(r.label), n: asFiniteNumber(r.n) ?? 0 }))
+      .filter((r) => r.id),
+    total: asFiniteNumber(payload.total) ?? 0,
+    exact: payload.exact !== false && payload.levels_exact !== false,
+  };
+}
+
+export function mapActivityHistogram(payload: unknown): ActivityHistogram | null {
+  if (!isPlainObject(payload) || !Array.isArray(payload.buckets)) return null;
+  return {
+    buckets: payload.buckets.filter(isPlainObject).map((b) => ({
+      t: asText(b.t), error: asFiniteNumber(b.error) ?? 0, warn: asFiniteNumber(b.warn) ?? 0,
+      info: asFiniteNumber(b.info) ?? 0, verbose: asFiniteNumber(b.verbose) ?? 0,
+    })),
+    bucketSeconds: asFiniteNumber(payload.bucket_seconds) ?? 900,
+    from: asText(payload.from),
+    to: asText(payload.to),
+    total: asFiniteNumber(payload.total) ?? 0,
+    totalIsExact: payload.total_is_exact !== false,
+  };
+}
+
+const STATUS_SET = new Set<string>(ACTIVITY_LOG_STATUSES);
+
 function mapStatus(value: unknown): ActivityLogStatus {
-  if (typeof value === "string" && STATUS_SET.has(value)) {
-    return value as ActivityLogStatus;
-  }
   // Neutral only — never invent a success.
-  return "info";
+  return typeof value === "string" && STATUS_SET.has(value) ? (value as ActivityLogStatus) : "info";
+}
+
+function mapCounts(value: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (isPlainObject(value)) {
+    for (const [key, n] of Object.entries(value)) {
+      const parsed = asFiniteNumber(n);
+      if (parsed !== undefined) out[key] = parsed;
+    }
+  }
+  return out;
+}
+
+function mapStrings(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (isPlainObject(value)) for (const [k, v] of Object.entries(value)) if (typeof v === "string" && v) out[k] = v;
+  return out;
 }
 
 function asText(value: unknown): string {
@@ -283,13 +233,4 @@ function asFiniteNumber(value: unknown): number | undefined {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function setIfPresent(
-  params: URLSearchParams,
-  key: string,
-  value: string | undefined,
-): void {
-  const trimmed = value?.trim();
-  if (trimmed) params.set(key, trimmed);
 }

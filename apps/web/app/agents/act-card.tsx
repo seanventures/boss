@@ -22,6 +22,7 @@ import { AiBadge, nameOf, RunFace, StateWord } from "./run-face";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { identitiesProject } from "../../lib/agent-identity";
 import { instructionsApi, type VersionDoc } from "../../lib/agent-instructions";
+import { logHref } from "../../lib/log-url";
 import { usd } from "../../lib/money";
 
 /** A URL in this console with `patch` applied, keeping the org and project the page is on. */
@@ -156,8 +157,8 @@ export function ActCard({ act, viewer, inline, onClose, askless }: {
   const took = tookLabel(act);
   const cost = act.costUsd ? usd(act.costUsd) : "";
   const turnsHref = act.links.code_task_run_id && act.kind === "stage"
-    ? consoleHref({ area: "activity", run: act.links.code_task_run_id })
-    : act.links.workflow_run_id ? consoleHref({ area: "activity", wfr: act.links.workflow_run_id }) : null;
+    ? logHref({ run: act.links.code_task_run_id })
+    : act.links.workflow_run_id ? logHref({ wfr: act.links.workflow_run_id }) : null;
   return (
     <section className="ag-act" data-inline={inline ? "true" : undefined} data-testid="ag-act-card"
              data-act-id={act.actId} aria-label={`${named.name}: ${shortLabel(act.label)}`}>
