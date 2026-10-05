@@ -1,208 +1,90 @@
 // @vitest-environment happy-dom
-
-import React, { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+/**
+ * Where apps install, now the Fleet (infra-observability spec §4.3-§4.4; parity P-I-03..P-I-07).
+ * The old "Where apps install" screen (HardwareManager) is three things in the Fleet:
+ *   - This computer is the first rack, and `host=this` shows its facts and `Correct record`;
+ *   - `+ Add › Enroll machine` shows the enroll command the API returns;
+ *   - `+ Add › Hardware account` registers a provider by secret REFERENCE and refuses a pasted
+ *     secret before anything is sent.
+ * The `#hardware-manager` anchor still lands on This computer (infra-home.tsx).
+ */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { HardwareManager } from "../app/hardware-manager-ui";
-import { EMPTY_EXTRAS_COPY } from "../lib/hardware";
+import { hostFixture, type Route } from "./_helpers/infra-fixtures";
+import { $$, byTestId, click, mountFleet, submit, type, unmountInfra } from "./_helpers/infra-render";
 
-const localPlace = {
-  id: "place_local",
-  kind: "local",
-  name: "installer-host",
-  hostname: "boss.local",
-  arch: "arm64",
-  os: "linux",
-  agent_state: "installed" as const,
-};
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 
-const providerPlace = {
-  id: "place_do",
-  kind: "provider",
-  name: "spare-account",
-  provider: "digitalocean",
-};
+afterEach(() => unmountInfra());
 
-type Call = { url: string; method: string; body?: Record<string, unknown> };
-
-let host: HTMLDivElement;
-let root: Root;
-let calls: Call[];
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function installFetch(places: unknown[], defaultPlaceId = "place_local") {
-  calls = [];
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    const method = (init?.method ?? "GET").toUpperCase();
-    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
-    calls.push({ url, method, body });
-    if (method === "GET" && url.includes("/api/hardware/places")) {
-      return json({ places, default_place_id: defaultPlaceId });
-    }
-    if (method === "GET" && url.includes("/api/hardware/resolve")) {
-      return json(localPlace);
-    }
-    if (url.includes("/api/hardware/places/providers")) {
-      return json({ id: "place_aws", kind: "provider", name: body?.name, provider: body?.provider });
-    }
-    if (url.includes("/api/hardware/places/agents")) {
-      return json({ enroll_command: "scripts/install/node_agent.sh --enroll --token example" });
-    }
-    return json({ error: `unexpected ${method} ${url}` }, 500);
-  }));
-}
-
-async function renderManager() {
-  await act(async () => {
-    root.render(<HardwareManager projectId="project_1" actor="operator" />);
-  });
-  for (let i = 0; i < 20; i += 1) {
-    if (host.querySelector('[data-testid="hardware-default-place"]')) return;
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-  }
-  throw new Error(`places did not render: ${host.textContent}`);
-}
-
-function button(label: string): HTMLButtonElement {
-  const found = [...host.querySelectorAll("button")].find((el) => el.textContent?.trim() === label);
-  if (!found) throw new Error(`missing button ${label}`);
-  return found as HTMLButtonElement;
-}
-
-beforeEach(() => {
-  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  host.remove();
-  vi.unstubAllGlobals();
-});
-
-describe("hardware manager", () => {
-  it("renders the local installer place selected, ahead of any other place", async () => {
-    installFetch([providerPlace, localPlace]);
-    await renderManager();
-
-    const selected = host.querySelector<HTMLElement>('[data-testid="hardware-default-place"]');
-    expect(selected?.getAttribute("data-selected")).toBe("true");
-    expect(selected?.getAttribute("aria-current")).toBe("true");
-    expect(selected?.textContent).toContain("This computer");
-    expect(selected?.textContent).toContain("Where BOSS was installed");
-    expect(selected?.textContent).toContain("installer-host");
-    expect(selected?.querySelector('[data-testid="hardware-local-agent"]')?.getAttribute("data-agent-state"))
-      .toBe("installed");
-    expect(selected?.textContent).toContain("Hardware agent installed on this computer.");
-    const extra = host.querySelector<HTMLElement>('[data-testid="hardware-extra-place"]');
-    expect(extra?.getAttribute("data-selected")).toBe("false");
-    expect(extra?.textContent).toContain("spare-account");
-    expect(host.innerHTML.indexOf("hardware-default-place"))
-      .toBeLessThan(host.innerHTML.indexOf("hardware-extra-place"));
+describe("This computer and added hardware", () => {
+  it("draws This computer first, selected, ahead of every other machine", async () => {
+    await mountFleet("view=fleet");
+    const racks = $$('[data-testid="inf-rack-this"], [data-testid="inf-rack"]');
+    expect(racks[0].dataset.testid).toBe("inf-rack-this");
+    expect(racks[0].textContent).toContain("This computer");
+    expect(racks[0].textContent).toContain("boss-1");
   });
 
-  it("shows the local agent as not ready when it is absent", async () => {
-    installFetch([{ ...localPlace, agent_state: "absent" }]);
-    await renderManager();
-    const agent = host.querySelector('[data-testid="hardware-local-agent"]');
-    expect(agent?.getAttribute("data-agent-state")).toBe("absent");
-    expect(agent?.textContent).toContain("Hardware agent not ready on this computer.");
-    expect(agent?.textContent).not.toContain("Hardware agent installed");
+  it("shows its facts and the agent state, and says Not ready when the agent is absent", async () => {
+    await mountFleet("view=fleet&host=this");
+    const facts = byTestId("inf-host-facts")!;
+    expect(facts.textContent).toContain("boss-1");
+    expect(facts.textContent).toContain("arm64");
+    expect(facts.textContent).toContain("Installed");
+    unmountInfra();
+    const absent: Route = { match: /^\/v1\/infra\/hosts\/this$/, etag: true, reply: () => {
+      const h = hostFixture("this")!;
+      return { ...h, facts: { ...(h.facts as Record<string, unknown>), agent_state: "absent" } };
+    } };
+    await mountFleet("view=fleet&host=this", { routes: [absent] });
+    expect(byTestId("inf-host-facts")?.textContent).toContain("Not ready");
   });
 
-  it("does not say there is nowhere to install when the only place is this computer", async () => {
-    installFetch([localPlace]);
-    await renderManager();
-
-    expect(host.querySelector('[data-testid="hardware-extra-empty"]')?.textContent)
-      .toContain(EMPTY_EXTRAS_COPY);
-    expect(host.textContent?.toLowerCase()).not.toMatch(
-      /nowhere to install|nowhere to deploy|no place to install|has nowhere/,
-    );
-    expect(host.textContent).toContain("This computer");
-    expect(host.textContent).toContain("Where BOSS was installed");
+  it("Correct record saves hostname, arch and OS for this computer", async () => {
+    const mock = await mountFleet("view=fleet&host=this");
+    await click("inf-host-correct");
+    const form = byTestId("inf-host-correct-form")!;
+    await type(form.querySelector('input[name="hostname"]'), "boss-2");
+    await submit(form);
+    const posted = mock.writes();
+    expect(posted.map((w) => w.path)).toEqual(["/api/hardware/places/local"]);
+    expect(posted[0].body).toEqual({ project_id: "project_1", actor: "ceo", hostname: "boss-2", arch: "arm64", os: "linux" });
   });
 
-  it("sends secret_ref for a provider and refuses a pasted raw secret", async () => {
-    installFetch([localPlace]);
-    await renderManager();
-    await act(async () => button("Connect a provider").click());
+  it("Hardware account sends a secret reference and refuses a pasted raw secret", async () => {
+    const mock = await mountFleet("view=fleet");
+    await click("infra-add");
+    await click("infra-add-hwaccount");
+    await type("inf-hwaccount-name", "Production");
+    await type("inf-hwaccount-secret", "AKIAABCDEFGHIJKLMNOP");
+    await submit("inf-hwaccount-name");
+    expect(byTestId("inf-hwaccount-error")?.textContent).toMatch(/secret reference|access key/i);
+    expect(mock.writes()).toHaveLength(0);
 
-    const name = host.querySelector<HTMLInputElement>('input[name="name"]')!;
-    const secret = host.querySelector<HTMLInputElement>('input[name="secret_ref"]')!;
-    const provider = host.querySelector<HTMLSelectElement>('select[name="provider"]')!;
-    name.value = "Production";
-    secret.value = "pasted secret value";
-    await act(async () => {
-      provider.value = "aws";
-      provider.dispatchEvent(new Event("change", { bubbles: true }));
-      button("Register account").click();
-    });
-
-    expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/secret reference|access key/i);
-    expect(calls.filter((call) => call.url.includes("/providers"))).toHaveLength(0);
-    expect(host.querySelector('input[name="secret"], input[name="token"], input[name="password"]')).toBeNull();
-
-    secret.value = "env:BOSS_AWS_SECRET";
-    await act(async () => button("Register account").click());
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-
-    const posted = calls.filter((call) => call.method === "POST" && call.url.includes("/providers"));
-    expect(posted).toHaveLength(1);
-    expect(posted[0].body).toEqual({
-      project_id: "project_1",
-      actor: "operator",
-      name: "Production",
-      provider: "aws",
-      secret_ref: "env:BOSS_AWS_SECRET",
-    });
-    expect(posted[0].body).not.toHaveProperty("secret");
-    expect(posted[0].body).not.toHaveProperty("token");
-    expect(posted[0].body).not.toHaveProperty("password");
+    await type("inf-hwaccount-secret", "env:BOSS_AWS_SECRET");
+    await submit("inf-hwaccount-name");
+    const posted = mock.writes();
+    expect(posted.map((w) => w.path)).toEqual(["/api/hardware/places/providers"]);
+    expect(posted[0].body).toEqual({ project_id: "project_1", actor: "ceo", name: "Production", provider: "aws",
+                                     secret_ref: "env:BOSS_AWS_SECRET" });
   });
 
-  it("shows the enroll command the API returns", async () => {
-    installFetch([localPlace]);
-    await renderManager();
-    await act(async () => button("Add hardware").click());
-    const name = host.querySelector<HTMLInputElement>('[data-testid="hardware-agent-panel"] input[name="name"]')!;
-    name.value = "build-vm";
-    await act(async () => button("Show enroll command").click());
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-
-    expect(host.querySelector('[data-testid="hardware-enroll-command"]')?.textContent)
-      .toBe("scripts/install/node_agent.sh --enroll --token example");
-    const posted = calls.find((call) => call.url.includes("/places/agents"));
-    expect(posted?.body).toEqual({ project_id: "project_1", actor: "operator", name: "build-vm" });
+  it("Enroll machine shows the enroll command the API returns", async () => {
+    const mock = await mountFleet("view=fleet");
+    await click("infra-add");
+    await click("infra-add-enroll");
+    await type("inf-enroll-name", "build-vm");
+    await submit("inf-enroll-name");
+    expect(byTestId("inf-enroll-command")?.textContent).toContain("curl -fsSL https://boss.example/enroll | sh -s -- tok_123");
+    expect(mock.writes()[0].body).toEqual({ project_id: "project_1", actor: "ceo", name: "build-vm" });
   });
 
-  it("links to the hardware manager from delivery and leaves the SSH host wizard alone", () => {
-    const delivery = readFileSync(resolve(__dirname, "../app/delivery-ui.tsx"), "utf8");
-    const screen = readFileSync(resolve(__dirname, "../app/hardware-manager-ui.tsx"), "utf8");
-    const fleet = readFileSync(resolve(__dirname, "../app/delivery-manage.tsx"), "utf8");
-    expect(delivery).toContain("<HardwareManagerLink />");
-    expect(screen).toContain('data-testid="hardware-manager-link"');
-    expect(screen).toContain('href="#hardware-manager"');
-    expect(fleet).toContain("export function FleetPanel");
-    expect(fleet).toContain("No hosts yet. Register one to give BOSS somewhere to deploy.");
-    expect(fleet).not.toContain("hardware-manager");
+  it("the old #hardware-manager anchor still opens This computer", () => {
+    const home = readFileSync(resolve(__dirname, "../app/infra/infra-home.tsx"), "utf8");
+    expect(home).toContain('window.location.hash === "#hardware-manager"');
+    expect(home).toContain('host: "this"');
   });
 });

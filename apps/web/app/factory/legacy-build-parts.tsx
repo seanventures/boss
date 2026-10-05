@@ -63,7 +63,7 @@ import {
   conveneMeetingAction,
 } from "../actions";
 import {
-  ChangeSetNextStep, LiveDeployment, plannedDeploymentFrom, type PlannedDeployment,
+  ChangeSetNextStep, LiveDeployment, changeReviewHref, plannedDeploymentFrom, type PlannedDeployment,
 } from "../deploy-ui";
 import { Markdown } from "../markdown";
 import { ClientRelativeTime } from "../client-relative-time";
@@ -1482,7 +1482,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
       ) : null}
       {planned && !plan ? (
         <span className="detail">No deployment is running. Review its ChangeSet in{" "}
-          <a href={consoleHref({ area: "infra" })}>ProviderOps ChangeSet Review</a>.
+          <a href={changeReviewHref((latest as { changeset_id?: string | null }).changeset_id)}>ProviderOps ChangeSet Review</a>.
         </span>
       ) : null}
       {/* Steps, timings and logs, without leaving the card. Reuses the CI/CD stepper rather

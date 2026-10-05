@@ -1,7 +1,4 @@
-import { describe, expect, it } from "vitest";
-
-import { codeOnly } from "./_helpers/source";
-
+// @vitest-environment happy-dom
 /**
  * Infra offers a host action only when BOSS can carry it out.
  *
@@ -10,45 +7,48 @@ import { codeOnly } from "./_helpers/source";
  * Register a host, Verify and Re-verify — each of which ends at that refusal, after a key may
  * have been minted and pasted onto a real machine. Only Retire was gated.
  *
- * Enumerated: every call site of each host action in the panel must sit behind its gate.
+ * Rewritten for the Fleet (spec §4.3-§4.4, §9.2): the gate is the server's (`preconditions` on
+ * the fleet, `can` on the host), and every place an action can appear — the rack's inline stage
+ * action, the host drawer's SETUP and CHECKS, `+ Add › Host` — is walked with SSH out on and off.
  */
-const SRC = codeOnly("app/delivery-manage.tsx");
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-const GATES: Record<string, string> = {
-  verifyDeploymentHostAction: "canReachHosts ?",
-  registerDeploymentHostAction: "openReg && canReachHosts ?",
-  installHostKeyAction: "hostWritesAllowed ?",
-  provisionHostAction: "hostWritesAllowed ?",
-};
+import { byTestId, click, mountFleet, unmountInfra } from "./_helpers/infra-render";
 
-function callSites(action: string): number[] {
-  const out: number[] = [];
-  let at = SRC.indexOf(`callAction(${action})(`);
-  while (at >= 0) {
-    out.push(at);
-    at = SRC.indexOf(`callAction(${action})(`, at + 1);
-  }
-  return out;
-}
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
+
+afterEach(() => unmountInfra());
+
+/** Every control that reaches the machine (SSH) or writes to it. */
+const REACHES = ["inf-stage-ran", "inf-stage-verify", "inf-stage-verify-provision", "inf-stage-install-key", "inf-stage-docker"];
 
 describe("host actions in Infra", () => {
-  it("finds every call site", () => {
-    expect(callSites("verifyDeploymentHostAction").length).toBeGreaterThanOrEqual(4);
-    expect(callSites("registerDeploymentHostAction").length).toBe(1);
+  it("with SSH out allowed, every stage control is offered", async () => {
+    await mountFleet("view=fleet&host=h_setup");
+    for (const id of REACHES) expect(byTestId(id), id).not.toBeNull();
+    expect(byTestId("inf-stage-generate")).not.toBeNull();
+    expect(byTestId("inf-ssh-off")).toBeNull();
   });
 
-  for (const [action, gate] of Object.entries(GATES)) {
-    it(`${action} is offered only behind ${gate}`, () => {
-      for (const at of callSites(action)) {
-        const before = SRC.slice(Math.max(0, at - 1200), at);
-        expect(before.lastIndexOf(gate), `${action} at ${at} is not behind ${gate}`)
-          .toBeGreaterThan(-1);
-      }
-    });
-  }
+  it("with SSH out off, nothing that reaches a machine is drawn — and the line says why", async () => {
+    await mountFleet("view=fleet&host=h_setup", { variant: "blocked" });
+    for (const id of REACHES) expect(byTestId(id), id).toBeNull();
+    // Minting or adopting a key touches nothing on the machine: still offered.
+    expect(byTestId("inf-stage-generate")).not.toBeNull();
+    expect(byTestId("inf-stage-adopt")).not.toBeNull();
+    expect(byTestId("inf-ssh-off")?.getAttribute("title")).toContain("BOSS_SSH_OUTWARD_ALLOWED");
+    // The rack's inline Verify, and Add host, are gone too.
+    expect(byTestId("inf-rack-stage-verify")).toBeNull();
+    await click("infra-add");
+    expect(byTestId("infra-add-host")).toBeNull();
+  });
 
-  it("the gate is the same precondition the notice at the top reports", () => {
-    expect(SRC).toContain("const canReachHosts = blocker === null;");
-    expect(SRC).toContain('data-testid="fleet-action-unavailable"');
+  it("Re-verify on a ready machine follows the same gate", async () => {
+    await mountFleet("view=fleet&host=h_ready");
+    expect(byTestId("inf-host-reverify")).not.toBeNull();
+    unmountInfra();
+    await mountFleet("view=fleet&host=h_ready", { variant: "blocked" });
+    expect(byTestId("inf-host-checks")).not.toBeNull();
+    expect(byTestId("inf-host-reverify")).toBeNull();
   });
 });

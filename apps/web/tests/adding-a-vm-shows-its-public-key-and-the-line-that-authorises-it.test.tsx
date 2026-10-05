@@ -1,9 +1,4 @@
 // @vitest-environment happy-dom
-
-import React, { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 /**
  * Adding a VM in Infra shows its public key and the line that authorises it — then Verify.
  *
@@ -12,127 +7,62 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * for me") and the screen that followed showed only a push command that assumes the operator's
  * laptop can already SSH to the VM. Now one press records the VM and mints its key, and the next
  * thing on screen is the PUBLIC key, a copy button, and the exact line to add it to
- * authorized_keys — with Verify beside it.
+ * authorized_keys — with `I ran it` beside it.
+ *
+ * Rewritten for the Fleet (spec §4.3 `+ Add › Host`, §4.4 SETUP): the sheet records and mints in
+ * one press, then the new machine's drawer opens on its Authorise stage.
  */
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-const PUBLIC = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExample boss@boss-vm";
+import { AUTHORISE_LINE, hostFixture, PUBLIC_KEY, type Route } from "./_helpers/infra-fixtures";
+import { byTestId, click, mountFleet, submit, type, unmountInfra } from "./_helpers/infra-render";
 
-const state: { hosts: Record<string, unknown>[] } = { hosts: [] };
-const registered: FormData[] = [];
-const minted: FormData[] = [];
-const verified: FormData[] = [];
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
-  usePathname: () => "/",
-}));
+afterEach(() => unmountInfra());
 
-vi.mock("../app/actions", () => ({
-  listDeploymentHostsAction: vi.fn(async () => ({
-    ok: true, data: { hosts: state.hosts, preconditions: { blocker: null, host_writes_allowed: false } },
-  })),
-  registerDeploymentHostAction: vi.fn(async (_prev: unknown, fd: FormData) => {
-    registered.push(fd);
-    state.hosts = [{
-      id: "host_1", name: String(fd.get("name")), address: String(fd.get("address")),
-      ssh_user: String(fd.get("ssh_user")), ssh_port: Number(fd.get("ssh_port")), status: "registered",
-      app_count: 0, apps: [], key_secret_ref: null, last_preflight: null,
-    }];
-    return { ok: true, data: state.hosts[0] };
-  }),
-  generateHostKeyAction: vi.fn(async (_prev: unknown, fd: FormData) => {
-    minted.push(fd);
-    const install = `ssh -o StrictHostKeyChecking=accept-new -p 2222 ubuntu@203.0.113.7 "… BOSS_KEY_INSTALLED"`;
-    state.hosts = state.hosts.map((h) => ({ ...h, key_secret_ref: "sref_1", key_public: PUBLIC,
-                                            install_command: install }));
-    return { ok: true, data: { host_id: "host_1", public_key: PUBLIC, install_command: install } };
-  }),
-  verifyDeploymentHostAction: vi.fn(async (_prev: unknown, fd: FormData) => {
-    verified.push(fd);
-    return { ok: true, data: { status: "verified" } };
-  }),
-  adoptHostKeyAction: vi.fn(), installHostKeyAction: vi.fn(), provisionHostAction: vi.fn(),
-  retireHostAction: vi.fn(),
-  bindSecretAction: vi.fn(), createTargetAction: vi.fn(), deployObservabilityAction: vi.fn(),
-  getDeliveryDefaultsAction: vi.fn(), listRefsAction: vi.fn(), listRepoAppsAction: vi.fn(),
-  listReposAction: vi.fn(), updateTargetAction: vi.fn(), deployTargetAction: vi.fn(),
-  generateKeypairAction: vi.fn(), putSecretAction: vi.fn(), setAutoDeployAction: vi.fn(),
-  verifySecretAction: vi.fn(),
-}));
+/** The new machine, as the view answers once its key is minted: stage Authorise. */
+const NEW_HOST: Route = { match: /^\/v1\/infra\/hosts\/h_new$/, etag: true, reply: () => ({
+  ...hostFixture("h_setup"), id: "h_new", name: "203.0.113.7",
+  state: { word: "Setting up · 2/5", tone: "accent" }, stage: { stage: "install", index: 2, label: "Authorise" },
+  facts: { address: "203.0.113.7", user: "ubuntu", port: 2222, arch: null, labels: [], port_min: null, port_max: null, max_apps: null, key_fingerprint: null },
+}) };
 
-const { FleetPanel, authorizeLine } = await import("../app/delivery-manage");
+describe("Add host", () => {
+  it("records the VM with its address, user and port, mints its key, and shows the key to authorise", async () => {
+    const mock = await mountFleet("view=fleet", { routes: [NEW_HOST] });
+    await click("infra-add");
+    await click("infra-add-host");
+    expect(byTestId("inf-host-sheet")).not.toBeNull();
+    await type("inf-host-address", "203.0.113.7");
+    await type("inf-host-user", "ubuntu");
+    await type("inf-host-port", "2222");
+    await submit("inf-host-address");
 
-let host: HTMLDivElement;
-let root: Root;
+    const writes = mock.writes();
+    expect(writes.map((w) => w.path)).toEqual(["/v1/deployment-hosts", "/v1/deployment-hosts/h_new/key"]);
+    expect(writes[0].body).toMatchObject({ project_id: "project_1", address: "203.0.113.7", ssh_user: "ubuntu", ssh_port: 2222,
+                                           // A blank name is the address — one less field to invent.
+                                           name: "203.0.113.7" });
+    // Durable by default: `file` loses the key on the next redeploy of BOSS itself.
+    expect(writes[1].body).toMatchObject({ backend: "database" });
 
-async function settle(until: () => boolean, what: string) {
-  for (let i = 0; i < 40; i += 1) {
-    if (until()) return;
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-  }
-  throw new Error(`${what} did not happen: ${host.textContent}`);
-}
+    // The new machine's drawer is open on Authorise: the key, the line, the copies.
+    expect(byTestId("inf-host-sheet")).toBeNull();
+    expect(byTestId("inf-host-drawer")).not.toBeNull();
+    expect(new URLSearchParams(window.location.search).get("host")).toBe("h_new");
+    expect(byTestId("inf-stage-public-key")?.textContent).toBe(PUBLIC_KEY);
+    expect(byTestId("inf-stage-authorise-line")?.textContent).toBe(AUTHORISE_LINE);
+    expect(byTestId("inf-stage-copy-key")?.textContent).toBe("Copy key");
+    expect(byTestId("inf-stage-copy-line")?.textContent).toBe("Copy line");
+    expect((byTestId("inf-step-install") as HTMLDetailsElement).open).toBe(true);
 
-function button(label: string): HTMLButtonElement {
-  const found = [...host.querySelectorAll("button")].find((el) => el.textContent?.trim() === label);
-  if (!found) throw new Error(`missing button ${label}: ${host.textContent}`);
-  return found as HTMLButtonElement;
-}
-
-beforeEach(() => {
-  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  state.hosts = [];
-  registered.length = 0; minted.length = 0; verified.length = 0;
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  host.remove();
-});
-
-describe("Add a VM", () => {
-  it("the authorise line appends exactly this key, with the modes sshd insists on", () => {
-    expect(authorizeLine(` ${PUBLIC} `)).toBe(
-      "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-      + `printf '%s\\n' '${PUBLIC}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`);
+    await click("inf-stage-ran");
+    expect(mock.writes().map((w) => w.path).at(-1)).toBe("/v1/deployment-hosts/h_new/verify");
   });
 
-  it("records the VM with its address, user and port, mints its key, and shows the key to authorise", async () => {
-    await act(async () => { root.render(<FleetPanel projectId="project_1" />); });
-    await settle(() => !!host.querySelector('[data-testid="fleet-panel"]'), "panel");
-    await act(async () => { button("Add a VM").click(); });
-
-    const form = [...host.querySelectorAll("form")].find((f) => f.querySelector('[name="address"]'))!;
-    (form.querySelector('[name="address"]') as HTMLInputElement).value = "203.0.113.7";
-    (form.querySelector('[name="ssh_user"]') as HTMLInputElement).value = "ubuntu";
-    (form.querySelector('[name="ssh_port"]') as HTMLInputElement).value = "2222";
-    await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
-    await settle(() => !!host.querySelector('[data-testid="fleet-public-key"]'), "public key");
-
-    expect(registered).toHaveLength(1);
-    expect(registered[0].get("address")).toBe("203.0.113.7");
-    expect(registered[0].get("ssh_user")).toBe("ubuntu");
-    expect(registered[0].get("ssh_port")).toBe("2222");
-    // A blank name is the address — one less field to invent before anything works.
-    expect(registered[0].get("name")).toBe("203.0.113.7");
-    expect(minted).toHaveLength(1);
-    expect(minted[0].get("host_id")).toBe("host_1");
-    // Durable by default: `file` loses the key on the next redeploy of BOSS itself.
-    expect(minted[0].get("backend")).toBe("database");
-
-    const block = host.querySelector('[data-testid="fleet-public-key"]')!;
-    expect(block.textContent).toContain(PUBLIC);
-    expect(block.textContent).toContain("ubuntu");
-    expect(host.querySelector('[data-testid="fleet-authorize-line"]')?.textContent).toBe(authorizeLine(PUBLIC));
-    const labels = [...block.querySelectorAll("button")].map((b) => b.textContent?.trim());
-    expect(labels).toEqual(expect.arrayContaining(["Copy public key", "Copy line"]));
-
-    await act(async () => { button("I've run it — verify").click(); });
-    await settle(() => verified.length === 1, "verify");
-    expect(verified[0].get("host_id")).toBe("host_1");
+  it("the authorise line is exactly the server's, which appends this key with the modes sshd insists on", () => {
+    expect(AUTHORISE_LINE).toBe("mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+      + `printf '%s\\n' '${PUBLIC_KEY}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`);
   });
 });
