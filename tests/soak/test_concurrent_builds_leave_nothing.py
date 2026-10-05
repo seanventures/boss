@@ -272,6 +272,8 @@ _DOOMED_API = textwrap.dedent("""
 """)
 
 
+@pytest.mark.skipif(os.environ.get("BOSS_SOAK_ONLY") not in (None, "", "six"),
+                    reason="BOSS_SOAK_ONLY selects another case")
 def test_six_builds_in_three_gigabytes_leave_nothing():
     from sqlalchemy import create_engine, text
 
@@ -474,3 +476,115 @@ def test_six_builds_in_three_gigabytes_leave_nothing():
     assert after["tmp_entries"] == before["tmp_entries"], (before, after)
     assert after["pg_conns"] <= before["pg_conns"] + 2 + 5   # + this run's own pool
     assert after["anon_mb"] <= before["anon_mb"] + 50, (before["anon_mb"], after["anon_mb"])
+
+
+@pytest.mark.skipif(os.environ.get("BOSS_SOAK_ONLY") not in (None, "", "cancel"),
+                    reason="BOSS_SOAK_ONLY selects another case")
+def test_a_build_stopped_mid_install_leaves_nothing():
+    """The soak's cancel case on its own: one Vite build in the envelope, Stop pressed through
+    the real `cancel_run` while it is installing; the stop watch (the API's thread) ends it."""
+    from sqlalchemy import create_engine, text
+
+    from boss_engine.config import Settings
+    from boss_engine.db import ensure_schema
+    from boss_engine.services import owned_process, resource_reaper
+    from boss_engine.services.code_task_service import cancel_run
+    from boss_engine.services.jobs import JobLeaseService
+    from boss_engine.services.resource_ledger import claimed_dirs
+    from boss_engine.services.system_threads import start_all
+
+    url = os.environ["BOSS_TEST_DATABASE_URL"]
+    engine = create_engine(url, future=True, pool_size=5, max_overflow=5)
+    ensure_schema(engine)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO orgs (id, name) VALUES ('org_soak','soak') ON CONFLICT DO NOTHING"))
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES ('ws_soak','org_soak',"
+                       "'soak') ON CONFLICT DO NOTHING"))
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES ('p_soak',"
+                       "'ws_soak','soak','p-soak') ON CONFLICT DO NOTHING"))
+        for t in ("jobs", "code_task_runs", "code_task_stop_requests", "app_previews"):
+            c.execute(text(f"DELETE FROM {t} WHERE project_id = 'p_soak'"))
+        c.execute(text("DELETE FROM owned_resources"))
+    settings = Settings(database_url=url, default_project_id="p_soak")
+    apps = make_fixtures()
+    (SOAK / "chromium.py").write_text(CHROMIUM)
+    before = snapshot(engine)
+    start_all(engine, settings)
+
+    rid = f"crun_soak_cancel_{uuid.uuid4().hex[:6]}"
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, phase) VALUES "
+                       "(:i, 'p_soak', 'vite-a', 'running', 'implement')"), {"i": rid})
+        c.execute(text("INSERT INTO jobs (id, project_id, kind, payload) VALUES (:j, 'p_soak', "
+                       "'code.task', CAST(:p AS JSONB))"),
+                  {"j": f"job_{rid}", "p": json.dumps({"run_id": rid})})
+        job = JobLeaseService(settings).claim_job(c, "soak-w0", ["code.task"], 900)
+    assert job and job["payload"]["run_id"] == rid
+    with engine.begin() as c:
+        c.execute(text("UPDATE jobs SET status='running' WHERE id=:j"), {"j": job["id"]})
+
+    seen: dict = {}
+
+    def watch_tree():
+        # The build's own tree while it runs: its token, and what it is doing at Stop.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and "token" not in seen:
+            for p in owned_process.live():
+                if p.owner is not None and rid in p.owner.ids():
+                    seen.update({"token": p.token, "pgid": p.pgid})
+            time.sleep(0.2)
+
+    def press_stop():
+        # Mid-install: wait until npm is actually running in the tree, then press Stop.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if "token" in seen:
+                comms = [owned_process._read_proc_stat(pid).comm
+                         for pid in owned_process.members(seen["pgid"], seen["token"])["alive"]
+                         if owned_process._read_proc_stat(pid)]
+                if any(c.startswith(("npm", "node")) for c in comms):
+                    seen["at_stop"] = sorted(set(comms))
+                    seen["alive_at_stop"] = len(comms)
+                    break
+            time.sleep(0.2)
+        seen["stop_pressed"] = time.monotonic()
+        with engine.begin() as c:
+            seen["cancel"] = cancel_run(c, rid, "p_soak", actor="soak")["status"]
+
+    threading.Thread(target=watch_tree, daemon=True).start()
+    threading.Thread(target=press_stop, daemon=True).start()
+    t0 = time.monotonic()
+    outcome = run_build(engine, rid, apps["vite-a"], "node")
+    ended_after_stop = round(time.monotonic() - seen.get("stop_pressed", t0), 2)
+    left = owned_process.members(seen.get("pgid"), seen.get("token"))
+    sandboxes = [p for p in (Path(tempfile.gettempdir()) / "boss-sandboxes").glob(f"{rid}-*")]
+    resource_reaper.tick(engine, settings)
+    time.sleep(1)
+    after = snapshot(engine)
+    with engine.begin() as c:
+        run_status = c.execute(text("SELECT status FROM code_task_runs WHERE id=:i"),
+                               {"i": rid}).scalar()
+        job_status = c.execute(text("SELECT status FROM jobs WHERE id=:j"),
+                               {"j": job["id"]}).scalar()
+        previews = int(c.execute(text("SELECT count(*) FROM app_previews WHERE run_id=:i AND "
+                                      "status IN ('running','starting')"), {"i": rid}).scalar())
+        open_rows = int(c.execute(text("SELECT count(*) FROM owned_resources WHERE released_at "
+                                       "IS NULL AND (owner_id = :i OR :i = ANY(owner_chain))"),
+                                  {"i": rid}).scalar())
+    report = {"outcome": outcome, "cancel_answer": seen.get("cancel"),
+              "doing_at_stop": seen.get("at_stop"), "procs_at_stop": seen.get("alive_at_stop"),
+              "seconds_stop_to_zero": ended_after_stop, "left_alive": left["alive"],
+              "left_zombies": left["zombies"], "sandbox_dirs": [str(p) for p in sandboxes],
+              "claimed_dirs": [d for d in claimed_dirs() if rid in d],
+              "open_ownership_rows": open_rows, "running_previews": previews,
+              "run_status": run_status, "job_status": job_status,
+              "before": before, "after": after}
+    print("SOAK_CANCEL_REPORT " + json.dumps(report, default=str), flush=True)
+    assert seen.get("at_stop"), "Stop was not pressed mid-install"
+    assert outcome == "cancelled"
+    assert ended_after_stop <= 10
+    assert left == {"alive": [], "zombies": []}
+    assert not sandboxes and not report["claimed_dirs"]
+    assert open_rows == 0 and previews == 0
+    assert run_status == "cancelled" and job_status == "cancelled"
+    assert after["procs"] == before["procs"] and after["zombies"] == 0
