@@ -56,6 +56,7 @@ class DecisionService:
         if project_id:
             params["project_id"] = project_id
             project_filter = "AND project_id = :project_id"
+        self.hold_plan_gates(connection, project_id)
 
         rows = connection.execute(
             text(
@@ -118,6 +119,52 @@ class DecisionService:
                 },
             )
         return expired
+
+    def hold_plan_gates(self, connection: Connection, project_id: Optional[str] = None) -> list[str]:
+        """A BUILD WAITING AT ITS PLAN WAITS FOR A PERSON, SO ITS QUESTION STAYS OPEN.
+
+        A plan approval (recommendation.action = resume_code_task) was a hold-default decision
+        with a 24h deadline. It expired, dropped out of Needs action, the pill and the Command
+        Center, while the build sat at "Needs you · plan" for weeks: the one thing that moves
+        it was hidden everywhere but the Factory. Every plan question whose build is still
+        blocked at awaiting_plan_approval is kept pending with no deadline; one that already
+        expired is reopened (`decision.reopened`). Driven from the blocked builds — a handful
+        of rows — so it is cheap enough to run on every read that expires decisions.
+        Returns the ids reopened."""
+        scope = "AND c.project_id = :project_id" if project_id else ""
+        reopened = connection.execute(
+            text(
+                f"""
+                WITH held AS (
+                  SELECT d.id, d.project_id, d.status AS was
+                  FROM code_task_runs c
+                  JOIN decisions d ON d.id = c.decision_id
+                  WHERE c.status = 'blocked' AND c.phase = 'awaiting_plan_approval'
+                    {scope}
+                    AND d.recommendation->>'action' = 'resume_code_task'
+                    AND (d.status = 'expired'
+                         OR (d.status IN ('pending', 'delegated') AND d.deadline_at IS NOT NULL))
+                  FOR UPDATE OF d
+                )
+                UPDATE decisions d
+                SET status = CASE WHEN held.was = 'expired' THEN 'pending' ELSE d.status END,
+                    deadline_at = NULL, updated_at = :now
+                FROM held
+                WHERE d.id = held.id
+                RETURNING d.id, d.project_id, held.was
+                """
+            ),
+            {"now": now_utc(), **({"project_id": project_id} if project_id else {})},
+        ).mappings().all()
+        out = []
+        for row in reopened:
+            if row["was"] != "expired":
+                continue
+            out.append(str(row["id"]))
+            emit_event(connection, row["project_id"], "decision.reopened", "system", "decision",
+                       row["id"], {"why": "Its build is still waiting at the plan for a person.",
+                                   "was": "expired"})
+        return out
 
     def create_digest(
         self,

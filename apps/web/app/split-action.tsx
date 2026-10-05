@@ -115,7 +115,7 @@ export function SplitAction({ primary, others, disabled, busy }: {
       >
         {busy ? <span className="askboss-spinner" aria-hidden /> : primary.label}
       </button>
-      <button
+      {others.length ? <button
         className="split-action-caret"
         type="button"
         disabled={disabled}
@@ -126,7 +126,7 @@ export function SplitAction({ primary, others, disabled, busy }: {
         onClick={() => setOpen((o) => !o)}
       >
         ▾
-      </button>
+      </button> : null}
       {open && at && typeof document !== "undefined" ? createPortal(
         <div className="split-action-menu" role="menu" data-testid="split-menu" ref={menu}
              style={{ top: at.top, right: at.right,
