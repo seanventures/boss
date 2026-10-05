@@ -22,17 +22,18 @@ from boss_engine.services import obs_view
 def seeded():
     eng = pg_engine()
     rnd = random.Random(7)
-    w = obs_view.window_bounds("24h")
+    # Inside every layout's window: 96, 48 and 24 cells align to 15, 30 and 60 minutes.
+    first = max(obs_view.window_bounds("24h", n)["start"] for n in (None, 48, 24))
     with eng.begin() as c:
         pid = project(c)
         target(c, pid, f"{pid}_t_live", "invoice")
         target(c, pid, f"{pid}_t_new", "billing", deployed=False)
         now = c.execute(text("SELECT now()")).scalar()
         hole_from, hole_to = now - timedelta(hours=10), now - timedelta(hours=8)
-        span = (now - w["start"]).total_seconds() - 1
+        span = (now - first).total_seconds() - 1
         placed = 0
         while placed < 720:
-            at = w["start"] + timedelta(seconds=rnd.uniform(0, span))
+            at = first + timedelta(seconds=rnd.uniform(0, span))
             if hole_from <= at < hole_to:
                 continue
             ok = rnd.random() > 0.15
@@ -99,3 +100,25 @@ def test_the_state_is_health_views_state(seeded):
     for r in body["rows"]:
         assert r["state"] == old[r["target_id"]]["status"]
         assert r["since"] == old[r["target_id"]]["status_since"]
+
+
+def test_incidents_are_counted_as_deployment_health_derives_them():
+    """Runs of 2, 3 and 5 failed probes: two outages (3 in a row opens one), as
+    deployment_health.incidents says over the same samples."""
+    from boss_engine.services.deployment_health import incidents
+
+    eng = pg_engine()
+    pattern = "ok ok F F ok F F F ok ok F F F F F ok F".split()
+    with eng.begin() as c:
+        pid = project(c)
+        tid = target(c, pid, f"{pid}_t_down", "api")
+        now = c.execute(text("SELECT now()")).scalar()
+        for i, mark in enumerate(pattern):
+            sample(c, pid, tid, now - timedelta(minutes=2 * (len(pattern) - i)), mark == "ok",
+                   120 if mark == "ok" else None)
+        row = obs_view.pulse(c, get_settings(), pid)["rows"][0]
+        rows = [dict(r) for r in c.execute(text(
+            "SELECT checked_at, ok, status_code, latency_ms, error FROM deployment_health_samples "
+            "WHERE deployment_target_id = :t ORDER BY checked_at DESC"), {"t": tid}).mappings()]
+    assert row["incidents"] == len(incidents(rows)) == 2
+    assert row["state"] == "degraded"
