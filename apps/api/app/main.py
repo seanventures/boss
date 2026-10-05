@@ -27963,6 +27963,46 @@ def agents_live_board_endpoint(project_id: str, request: Request, response: Resp
     return board
 
 
+@app.get("/v1/agents/org-board")
+def agents_org_board_endpoint(project_id: str, request: Request, response: Response,
+                              days: int = 7, fresh: bool = False,
+                              viewer: Optional[str] = None):
+    """Agents › Organization in one read (org-view spec §6.1): each team's work, waits, spend
+    and gaps, who hands work to whom, and the plan against the work. `days` is 1, 7 or 30.
+    ETag'd and cached 15s per (project, days); a write's refresh asks with `fresh=1`.
+    Composition only — see agents_org_board."""
+    from boss_engine.services import agents_org_board
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            board = agents_org_board.build(connection, settings, project_id, days=days,
+                                           fresh=fresh)
+        except agents_org_board.OrgBoardError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return _etagged(request, response, jsonable_encoder(board))
+
+
+@app.get("/v1/agents/org-board/handoffs")
+def agents_org_board_handoffs(project_id: str, days: int = 7, source: str = "",
+                              target: str = "", limit: int = 10):
+    """The newest handoffs along one Organization edge (the Edge panel): `source` and `target`
+    are comma lists of role keys (`person` for work a person handed directly)."""
+    from boss_engine.services import agents_org_board
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return agents_org_board.handoffs(
+                connection, project_id, days=days, limit=limit,
+                sources=[s.strip() for s in source.split(",")],
+                targets=[t.strip() for t in target.split(",")])
+        except agents_org_board.OrgBoardError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 # --- the Factory (factory spec §6.2-§6.5) ---------------------------------------------------
 # The Floor, a build's cockpit, the Apps tab, and the build actions that were MCP-only. Every
 # word a build shows comes from factory_view, the one derivation the MCP tools read too.

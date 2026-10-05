@@ -241,7 +241,7 @@ export function toPassport(w: unknown): Passport {
     version: num(o.version, 1), fingerprint: str(o.fingerprint), reportsTo: opt(o.reports_to),
     vitals: {
       trust: num(vitals.trust), runs: num(vitals.runs), cleanRate: num(vitals.clean_rate),
-      cost7d: num(vitals.cost_7d), panels: num(vitals.panels), apps: num(vitals.apps),
+      cost7d: num(vitals.cost_7d), planCalls7d: num(vitals.plan_calls_7d), panels: num(vitals.panels), apps: num(vitals.apps),
     },
     presence: toPresence(o.presence),
     identity: { mode: "local", tokens: false },
