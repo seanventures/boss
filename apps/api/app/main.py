@@ -7629,8 +7629,8 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     hosting Docker was thrashing 21.4 GB of 22.5 GB swap. Every memory and disk reading BOSS
     already had said "healthy" — they see the Docker VM, and the VM was fine.
 
-    So the worker times its own poll loop, and a cycle that comes round minutes late is
-    reported here. Stored as an event so any run overlapping it can be asked the only question
+    So the worker times its own idle wait — never the time it spends running a job — and a
+    wait that comes round minutes late is reported here. Stored as an event so any run overlapping it can be asked the only question
     that matters: how much of this was the machine, and how much was us.
     """
     payload = payload.payload()
@@ -7638,8 +7638,12 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     if stalled <= 0:
         return {"recorded": False, "reason": "not a stall"}
     with begin(engine) as connection:
+        # `source` marks a stall measured over the worker's IDLE WAIT only. Rows without one
+        # were written by the old poll clock, which counted every job's duration as a host
+        # stall (stability spec C5); readers ignore them.
         emit_event(connection, settings.default_project_id, "host.stalled", "boss",
-                   "host", "self", {"stalled_seconds": round(stalled, 2)})
+                   "host", "self", {"stalled_seconds": round(stalled, 2),
+                                    "source": "worker.idle_wait"})
     return {"recorded": True, "stalled_seconds": round(stalled, 2)}
 
 
