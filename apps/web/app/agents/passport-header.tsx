@@ -45,7 +45,9 @@ export function bornByLabel(by: string, actor: string): string {
 export function vitalsLine(v: Passport["vitals"]): string[] {
   const out = [`Trust ${v.trust}`, `${v.runs} run${v.runs === 1 ? "" : "s"}`];
   if (v.runs > 0) out.push(`${Math.round(v.cleanRate * (v.cleanRate <= 1 ? 100 : 1))}% clean`);
+  // Metered money only; subscription use is its own count, never dollars.
   if (v.cost7d > 0) out.push(`${money(v.cost7d)} this week`);
+  if (v.planCalls7d > 0) out.push(`${v.planCalls7d} on plan`);
   if (v.panels > 0) out.push(`${v.panels} panel${v.panels === 1 ? "" : "s"}`);
   if (v.apps > 0) out.push(`${v.apps} app${v.apps === 1 ? "" : "s"}`);
   return out;

@@ -20,7 +20,7 @@ export function teamWire(key: string, over: Wire = {}): Wire {
   const members = TEAM_WIRE[key] ?? [];
   return {
     key, label: TEAM_LABEL[key] ?? key, tip: key === "quality" ? "Quality and security" : null, members,
-    needs_you: 0, flow_col: COL[key] ?? null, self_handoffs: 0,
+    needs_you: 0, waiting_you: 0, flow_col: COL[key] ?? null, self_handoffs: 0,
     work: { done: 0, failed: 0, open: 0 }, waiting: [], waiting_total: 0,
     members_load: members.map((r) => ({ role_key: r, busy_seconds: 0 })),
     spend: { metered_usd: 0, plan_calls: 0 }, models: [], configured_models: [],
@@ -61,7 +61,7 @@ export function orgWire(over: { teams?: Record<string, Wire>; agents?: Record<st
       edgeWire("pm", "software_engineer", 19, { how: "named", label: "Named in workflow" }),
       edgeWire("software_engineer", "sre", 6, { how: "named", label: "Named in workflow" }),
     ],
-    truncated: false, missing_roles: [],
+    truncated: false, missing_roles: [], failures: [],
     declared_vs_observed: { planned_unused: [], unplanned_pairs: [], lines: 0 },
     ...rest,
   };

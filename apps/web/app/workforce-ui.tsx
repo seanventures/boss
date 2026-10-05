@@ -122,6 +122,9 @@ export function WorkforceArea(
   const [openRole, setOpenRole] = useState("");
   const [focusId, setFocusId] = useState<string | null>(null);
   const [focusRun, setFocusRun] = useState<string | null>(null);
+  // Activity reached from a link (Organization's edges): one agent and a window, from the URL.
+  const [activityAgent, setActivityAgent] = useState<string | null>(null);
+  const [activityDays, setActivityDays] = useState<1 | 7>(1);
   const [orgId, setOrgId] = useState<string | null>(null);
   useEffect(() => {
     const sync = () => {
@@ -137,6 +140,8 @@ export function WorkforceArea(
         }
         setFocusId(url.searchParams.get("focus"));
         setFocusRun(url.searchParams.get("run"));
+        setActivityAgent(url.searchParams.get("agent"));
+        setActivityDays(Number(url.searchParams.get("days")) >= 7 ? 7 : 1);
         setOrgId(url.searchParams.get("org"));
       } catch { /* non-browser */ }
     };
@@ -149,6 +154,8 @@ export function WorkforceArea(
     try {
       const url = new URL(window.location.href);
       if (next === "live") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+      // A link's one-agent Activity filter belongs to that link, not to the next visit.
+      if (!("agent" in patch)) { url.searchParams.delete("agent"); setActivityAgent(null); }
       for (const [k, v] of Object.entries(patch)) {
         if (v === null) url.searchParams.delete(k); else url.searchParams.set(k, v);
       }
@@ -368,7 +375,8 @@ export function WorkforceArea(
                  lines={(drift) => (chart ? <OrgChartArea projectId={projectId} actor={actor} chart={chart} drift={drift} />
                    : <p className="detail">Team unavailable</p>)} />
       ) : view === "activity" ? (
-        <ActivityRiver projectId={projectId} roleKey={searchedRole} runId={focusRun}
+        <ActivityRiver projectId={projectId} roleKey={searchedRole ?? activityAgent} runId={focusRun}
+                       key={`${activityAgent ?? ""}:${activityDays}`} initialDays={activityDays}
                        runLabel={board.board?.missions.find((m) => m.runId === focusRun)?.subject || undefined}
                        onClearRun={() => setView("activity", { run: null })} paused={!consoleLive} />
       ) : view === "panels" && studio ? (
@@ -577,7 +585,8 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
                  data-testid="org-note">{note}</p> : null}
 
       {drift && (placedCount > 0 || drift.lines > 0) && view === "planned" ? (
-        <PlanVsWork drift={drift} busy={busy} onPlan={(child, parent) => void place(child, parent)} />
+        <PlanVsWork drift={drift} busy={busy} declared={declared}
+                    onPlan={(child, parent) => void place(child, parent)} />
       ) : null}
 
       {treeNow.length === 0 ? (

@@ -24,17 +24,20 @@ export type OrgOpenItem = {
   roleKey: string; actId: string; status: string; label: string; since: string | null;
   runId: string | null; attentionId: string | null;
 };
-export type OrgAbilityGap = { ability: string; label: string; roles: string[] };
+/** `needsSetup`: the Kit refuses to give it until it is set up — link there, never offer Give. */
+export type OrgAbilityGap = { ability: string; label: string; roles: string[]; needsSetup: boolean };
 export type OrgStepGap = {
   workflowKey: string; workflowName: string; stepId: string; stepTitle: string; roleKey: string;
-  ability: string; label: string;
+  ability: string; label: string; needsSetup: boolean;
 };
 export type OrgStepRef = { workflowKey: string; workflowName: string; stepId: string; stepTitle: string };
 
 export type OrgTeam = {
   key: string; label: string; tip: string | null; members: string[];
-  /** The team's agents' own open asks, as items (a gate is yours, never the team's). */
+  /** Its open items that wait on a person (gates holding its work included). */
   needsYou: number;
+  /** Of those, the decisions (gates) — Flow's `You ⏸`. */
+  waitingYou: number;
   flowCol: number | null; selfHandoffs: number;
   work: OrgWork; waiting: OrgOpenItem[]; waitingTotal: number;
   membersLoad: { roleKey: string; busySeconds: number }[];
@@ -46,8 +49,9 @@ export type OrgAgent = {
   roleKey: string; team: string; registered: boolean; work: OrgWork; busySeconds: number;
   spend: OrgSpend; models: OrgModel[]; configuredModel: string | null;
   open: OrgOpenItem[]; openTotal: number; namedOn: OrgStepRef[];
-  gaps: { abilities: { ability: string; label: string }[]; stepGaps: OrgStepGap[] };
+  gaps: { abilities: { ability: string; label: string; needsSetup: boolean }[]; stepGaps: OrgStepGap[] };
 };
+export type OrgFailure = { roleKey: string; actId: string; label: string; at: string | null; runId: string | null; team: string };
 export type OrgEdge = {
   from: string; to: string; handoffs: number; failed: number; waiting: number; stale: number;
   lastAt: string | null; how?: string | null; label?: string | null;
@@ -69,7 +73,7 @@ export type OrgBoard = {
   projectId: string; days: OrgDays; generatedAt: string; etag: string;
   totals: OrgTotals; teams: OrgTeam[]; agents: OrgAgent[];
   teamEdges: OrgEdge[]; agentEdges: OrgEdge[]; truncated: boolean;
-  missingRoles: OrgMissingRole[]; drift: OrgDrift;
+  missingRoles: OrgMissingRole[]; drift: OrgDrift; failures: OrgFailure[];
 };
 
 type Wire = Record<string, unknown>;
@@ -102,7 +106,8 @@ function stepRef(v: unknown): OrgStepRef {
 }
 function stepGap(v: unknown): OrgStepGap {
   const o = obj(v);
-  return { ...stepRef(o), roleKey: str(o.role_key), ability: str(o.ability), label: str(o.label) || str(o.ability) };
+  return { ...stepRef(o), roleKey: str(o.role_key), ability: str(o.ability), label: str(o.label) || str(o.ability),
+           needsSetup: o.needs_setup === true };
 }
 function edge(v: unknown): OrgEdge {
   const o = obj(v);
@@ -126,14 +131,14 @@ export function parseOrgBoard(body: unknown): OrgBoard {
       const g = obj(x.gaps);
       return {
         key: str(x.key), label: str(x.label) || str(x.key), tip: strOrNull(x.tip),
-        members: arr(x.members).map(str).filter(Boolean), needsYou: num(x.needs_you),
+        members: arr(x.members).map(str).filter(Boolean), needsYou: num(x.needs_you), waitingYou: num(x.waiting_you),
         flowCol: typeof x.flow_col === "number" ? x.flow_col : null, selfHandoffs: num(x.self_handoffs),
         work: work(x.work), waiting: arr(x.waiting).map(openItem), waitingTotal: num(x.waiting_total),
         membersLoad: arr(x.members_load).map((m) => ({ roleKey: str(obj(m).role_key), busySeconds: num(obj(m).busy_seconds) })),
         spend: spend(x.spend), models: models(x.models), configuredModels: arr(x.configured_models).map(str),
         gaps: {
           abilities: arr(g.abilities).map((a) => ({ ability: str(obj(a).ability), label: str(obj(a).label) || str(obj(a).ability),
-                                                    roles: arr(obj(a).roles).map(str) })),
+                                                    roles: arr(obj(a).roles).map(str), needsSetup: obj(a).needs_setup === true })),
           stepGaps: arr(g.step_gaps).map(stepGap), missingRoles: num(g.missing_roles),
           kitOk: g.kit_ok !== false, kitReason: strOrNull(g.kit_reason),
         },
@@ -147,7 +152,8 @@ export function parseOrgBoard(body: unknown): OrgBoard {
         work: work(x.work), busySeconds: num(x.busy_seconds), spend: spend(x.spend), models: models(x.models),
         configuredModel: strOrNull(x.configured_model), open: arr(x.open).map(openItem),
         openTotal: num(x.open_total), namedOn: arr(x.named_on).map(stepRef),
-        gaps: { abilities: arr(g.abilities).map((a) => ({ ability: str(obj(a).ability), label: str(obj(a).label) || str(obj(a).ability) })),
+        gaps: { abilities: arr(g.abilities).map((a) => ({ ability: str(obj(a).ability), label: str(obj(a).label) || str(obj(a).ability),
+                                                          needsSetup: obj(a).needs_setup === true })),
                 stepGaps: arr(g.step_gaps).map(stepGap) },
       };
     }).filter((x) => x.roleKey),
@@ -165,6 +171,11 @@ export function parseOrgBoard(body: unknown): OrgBoard {
       }),
       lines: num(d.lines),
     },
+    failures: arr(o.failures).map((raw) => {
+      const x = obj(raw);
+      return { roleKey: str(x.role_key), actId: str(x.act_id), label: str(x.label), at: strOrNull(x.at),
+               runId: strOrNull(x.run_id), team: str(x.team) || "yours" };
+    }).filter((f) => f.roleKey),
   };
 }
 

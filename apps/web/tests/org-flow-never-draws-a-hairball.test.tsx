@@ -68,8 +68,8 @@ describe("Flow", () => {
 
   it("a failed edge says failed in words, and its node says it too", async () => {
     await render(orgWire());
-    const state = $$(".ag-flow-edge-state").find((b) => b.dataset.state === "failed")!;
-    expect(state.textContent).toBe("2 failed ✕ · 1 waiting ⏸");
+    const state = $$(".ag-flow-edge-label").find((b) => b.dataset.state === "failed")!;
+    expect(state.textContent).toBe("×31 · 2 failed ✕ · 1 waiting ⏸");
     expect($('path.ag-flow-edge[data-edge="engineering>quality"]')!.dataset.state).toBe("failed");
     expect($('[data-testid="ag-flow-node-engineering"]')!.getAttribute("aria-label"))
       .toBe("Engineering, 4 agents, hands to Quality 31 times, 2 failed");
@@ -103,7 +103,7 @@ describe("Flow", () => {
     await render(orgWire(), (url) => (url.startsWith("/v1/agents/org-board/handoffs") ? Response.json({ items: [
       { act_id: "h1", from: "software_engineer", to: "qa", status: "error", label: "Test · Ship it #182",
         how: "Picked by BOSS", started_at: new Date().toISOString(), run_id: "wfr_2" }] }) : undefined));
-    await act(async () => { $$(".ag-flow-edge-state")[0].click(); });
+    await act(async () => { $('.ag-flow-edge-label[data-edge="engineering>quality"]')!.click(); });
     await settle();
     const panel = $('[data-testid="ag-org-edge"]')!;
     expect(panel.textContent).toContain("Engineering → Quality");

@@ -27,7 +27,7 @@ import { openRoom } from "../../lib/converse-doors";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import type { OrgActions } from "./org-actions";
 import {
-  MenuPop, OpenItemLink, consoleHref, liveFirst, liveState, nameOf, teamLabel, teamTip, workflowHref,
+  MenuPop, OpenItemLink, consoleHref, kitHref, liveFirst, liveState, nameOf, teamLabel, teamTip, workflowHref,
 } from "./org-shared";
 import { Badges, Face, matches, nextInGrid, teamHue, type ZoneMember } from "./team-zones";
 
@@ -83,14 +83,28 @@ function stepGapPhrases(team: OrgTeam): { label: string; n: number; tip: string 
   return [...by.values()];
 }
 
-/** Everything `Give ▾` can give on this team: recommended-not-held, then a step's need. */
-function givable(team: OrgTeam): { ability: string; label: string; roleKey: string }[] {
-  const out = new Map<string, { ability: string; label: string; roleKey: string }>();
-  for (const a of team.gaps.abilities) for (const r of a.roles) out.set(`${a.ability}:${r}`, { ability: a.ability, label: a.label, roleKey: r });
+type Givable = { ability: string; label: string; roleKey: string; needsSetup: boolean };
+
+/** Everything `Give ▾` lists on this team: recommended-not-held, then a step's need. One the
+ *  Kit would refuse until it is set up says so and links there (walk D6) — never a Give that
+ *  fails. */
+export function givable(team: OrgTeam): Givable[] {
+  const out = new Map<string, Givable>();
+  for (const a of team.gaps.abilities) {
+    for (const r of a.roles) out.set(`${a.ability}:${r}`, { ability: a.ability, label: a.label, roleKey: r, needsSetup: a.needsSetup });
+  }
   for (const g of team.gaps.stepGaps) {
-    if (team.members.includes(g.roleKey)) out.set(`${g.ability}:${g.roleKey}`, { ability: g.ability, label: g.label, roleKey: g.roleKey });
+    if (team.members.includes(g.roleKey)) {
+      out.set(`${g.ability}:${g.roleKey}`, { ability: g.ability, label: g.label, roleKey: g.roleKey, needsSetup: g.needsSetup });
+    }
   }
   return [...out.values()];
+}
+
+/** What `Give recommended` will actually give: the team's recommended gaps that need no setup. */
+export function recommendedGive(team: OrgTeam): { abilities: number; roles: string[] } {
+  const ready = team.gaps.abilities.filter((a) => !a.needsSetup);
+  return { abilities: ready.length, roles: [...new Set(ready.flatMap((a) => a.roles))] };
 }
 
 export function OrgTeams(props: OrgTeamsProps): React.ReactElement {
@@ -386,14 +400,20 @@ function GapsRow({ team, actions }: { team: OrgTeam; actions: OrgActions | null 
             </button>
             {open ? (
               <MenuPop label="Give" onClose={() => setOpen(false)}>
-                {gives.map((g) => (
+                {gives.map((g) => (g.needsSetup ? (
+                  <a key={`${g.ability}:${g.roleKey}`} role="menuitem" href={kitHref(g.ability)}
+                     data-testid={`ag-orgteam-setup-${g.ability}-${g.roleKey}`}
+                     title={`${g.label} must be set up in the Kit before anyone can hold it`}>
+                    <span data-user-text>{g.label}</span> · Set up first ↗
+                  </a>
+                ) : (
                   <button key={`${g.ability}:${g.roleKey}`} type="button" role="menuitem"
                           data-testid={`ag-orgteam-give-${g.ability}-${g.roleKey}`}
                           title={`Give ${g.label} to ${nameOf(g.roleKey)}`}
                           onClick={() => { setOpen(false); void actions.give(g.ability, g.label, g.roleKey); }}>
                     <span data-user-text>{g.label}</span> → <span data-user-text>{nameOf(g.roleKey)}</span>
                   </button>
-                ))}
+                )))}
               </MenuPop>
             ) : null}
           </span>
@@ -440,7 +460,7 @@ function TeamMenu(p: CardProps) {
     const lb = isLive(live.get(b)) ? 0 : 1;
     return la - lb || (busy.get(b) ?? 0) - (busy.get(a) ?? 0);
   }).slice(0, 5);
-  const recRoles = [...new Set(team.gaps.abilities.flatMap((a) => a.roles))];
+  const rec = recommendedGive(team);
   const unregistered = team.members.filter((m) => !board.agents.find((a) => a.roleKey === m)?.registered);
   return (
     <span className="org-menu-wrap">
@@ -454,10 +474,10 @@ function TeamMenu(p: CardProps) {
           {confirm ? (
             <>
               <span className="org-menu-head">
-                Give {team.gaps.abilities.length} {team.gaps.abilities.length === 1 ? "ability" : "abilities"} to {recRoles.length} {recRoles.length === 1 ? "agent" : "agents"}
+                Give {rec.abilities} {rec.abilities === 1 ? "ability" : "abilities"} to {rec.roles.length} {rec.roles.length === 1 ? "agent" : "agents"}
               </span>
               <button type="button" role="menuitem" data-testid={`ag-orgteam-give-recommended-yes-${team.key}`}
-                      onClick={() => { setOpen(false); setConfirm(false); void actions?.giveRecommended(team.members); }}>Give</button>
+                      onClick={() => { setOpen(false); setConfirm(false); void actions?.giveRecommended(rec.roles); }}>Give</button>
               <button type="button" role="menuitem" onClick={() => setConfirm(false)}>Cancel</button>
             </>
           ) : (
@@ -467,7 +487,7 @@ function TeamMenu(p: CardProps) {
                         title={seats.map(nameOf).join(", ")}
                         onClick={() => { setOpen(false); openRoom({ seats }); }}>Open room</button>
               ) : null}
-              {team.gaps.abilities.length && actions ? (
+              {rec.abilities && actions ? (
                 <button type="button" role="menuitem" data-testid={`ag-orgteam-give-recommended-${team.key}`}
                         onClick={() => setConfirm(true)}>Give recommended</button>
               ) : null}
@@ -504,6 +524,7 @@ function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
         const gaps = t.gaps.abilities.length + t.gaps.stepGaps.length + t.gaps.missingRoles;
         const stats = [
           t.work.done ? `Done ${t.work.done}` : "",
+          t.work.failed ? `Failed ${t.work.failed}` : "",
           oldest ? `Waiting ${ageWords(oldest.since)}` : "",
           gaps ? `${gaps} ${gaps === 1 ? "gap" : "gaps"}` : "",
         ].filter(Boolean);
@@ -539,7 +560,8 @@ function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
                     {t.waiting.map((w) => (
                       <li key={w.actId}>
                         <span data-user-text>{nameOf(w.roleKey)}</span> <span>{ageWords(w.since)}</span>{" "}
-                        <span>{openStatusWord(w.status)}</span> <OpenItemLink item={w} />
+                        <span>{openStatusWord(w.status)}</span>{" "}
+                        <span className="ag-trunc" data-user-text title={w.label}>{w.label}</span> <OpenItemLink item={w} />
                       </li>
                     ))}
                   </ul>

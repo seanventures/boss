@@ -151,7 +151,7 @@ describe("the Agents home copy budget", () => {
                                   started_at: new Date().toISOString(), run_id: "wfr_2" }] }) : undefined)).fn));
     await render(<OrgView projectId="p1" live={liveMap} actor="ceo" lines={() => <div />} />);
     await clickAll('[data-testid="ag-flow-node-engineering"]');
-    await clickAll(".ag-flow-edge-state");
+    await clickAll('.ag-flow-edge-label[data-state="failed"]');
     let r = audit();
     expect(document.querySelector("[data-testid='ag-org-edge']")).not.toBeNull();
     expect([r.over, r.paragraphs, r.banned]).toEqual([[], [], []]);
