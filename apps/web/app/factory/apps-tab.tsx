@@ -213,9 +213,12 @@ export function stationsThatRan(row: BuildRowData): BuildRowData["stations"] {
   return row.stations.filter((s) => s.status !== "pending" && s.status !== "skipped");
 }
 
+/** Builds still on the line say which station they are at; a shipped or stopped one does not. */
+const ON_THE_LINE = new Set(["building", "queued", "quiet", "budget_wait", "blocked", "needs_plan", "needs_waiver", "budget_refused"]);
+
 function stateCell(b: { word: string; row?: BuildRowData }): { word: string; where: string } {
-  const st = b.row?.stations.find((s) => s.key === b.row?.station);
-  return { word: b.word, where: st && !b.word.startsWith(st.label) ? st.label : "" };
+  const st = b.row && ON_THE_LINE.has(b.row.state) ? b.row.stations.find((s) => s.key === b.row?.station) : undefined;
+  return { word: b.word, where: st && !b.word.split(" · ").includes(st.label) ? st.label : "" };
 }
 
 export type AppsTabProps = {
