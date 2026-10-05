@@ -1079,6 +1079,9 @@
 .ag-att-failed { color: var(--red); font-weight: 600; }
 .ag-att-detail { font-size: 0.8rem; color: var(--muted); }
 .ag-att-error { font-size: 0.8rem; color: var(--red); }
+/* A system-health card: what the chosen option did, said in place (stability spec §4d). */
+.ag-att-done { font-size: 0.8rem; color: var(--green, var(--text)); }
+.ag-att[data-severity="critical"] { border-color: var(--red); }
 .ag-att-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ag-att-actions .ag-btn { min-height: 32px; }
 .ag-btn[data-tone="approve"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
