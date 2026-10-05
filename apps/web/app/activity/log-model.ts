@@ -93,7 +93,7 @@ export function tokenText(t: LogToken, labels: Record<string, string>, names: { 
       case "svc": return SERVICE_LABEL[t.value] ?? t.value;
       case "run": case "wfr": return labels[t.value] || names.run || t.value;
       case "step": return (wfr && labels[`${wfr}/${t.value}`]) || names.step || t.value;
-      case "act": return labels[t.value] || t.value;
+      case "act": return labels[t.value] || names.run || t.value;
       case "agent": return nameOf(t.value).name;
       default: return t.value;
     }

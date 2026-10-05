@@ -158,7 +158,7 @@ export function writeLogParams(state: LogState, currentSearch: string): string {
   if (state.group) params.set("group", state.group);
   if (state.showVerbose) params.set("verbose", "1");
   if (state.names.step && state.tokens.some((t) => t.key === "step")) params.set("step_name", state.names.step);
-  if (state.names.run && state.tokens.some((t) => t.key === "wfr" || t.key === "run")) {
+  if (state.names.run && state.tokens.some((t) => t.key === "wfr" || t.key === "run" || t.key === "act")) {
     params.set("run_name", state.names.run);
   }
   const rest = params.toString();

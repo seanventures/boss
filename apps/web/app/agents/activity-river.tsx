@@ -21,7 +21,7 @@ import { listActivity, listToolCalls } from "../../lib/agents-activity";
 import { getAct, identityOf, money } from "../../lib/agent-world";
 import { useLogStream } from "../../lib/log-stream";
 import { clock as logClock, dayLabel as logDayLabel, utcTitle } from "../../lib/log-time";
-import { logHref } from "../../lib/log-url";
+import { logHref, type LogScope } from "../../lib/log-url";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ActCard, consoleHref } from "./act-card";
 import { AgState } from "./agent-face";
@@ -126,6 +126,15 @@ function whoOf(item: ActivityItem): { roleKey: string | null; variant: AvatarVar
 
 /** Agent-to-agent handoffs carry the edge glyph; work a workflow simply named does not. */
 const HANDOFF_HOWS = new Set(["captain", "asked_by_agent", "model_pick", "only_holder", "only_candidate"]);
+/** Where a river row's `All lines ↗` goes: the act's own lines when it wrote any (turns or
+ *  model calls), else its workflow run's — an act scope with no lines was an empty Log. */
+export function riverLogScope(item: Pick<ActivityItem, "actId" | "label" | "verb" | "toolCalls" | "costUsd" | "workflowRunId">): LogScope {
+  const name = withoutVerb(item.label, item.verb).trim() || item.label;
+  const wroteLines = item.toolCalls > 0 || item.costUsd > 0;
+  if (!wroteLines && item.workflowRunId) return { wfr: item.workflowRunId, run_name: name || null };
+  return { act: item.actId, run_name: name || null };
+}
+
 function isHandoff(item: ActivityItem): boolean {
   return item.kind === "handoff" || HANDOFF_HOWS.has(item.how) || item.from?.kind === "agent";
 }
@@ -303,8 +312,7 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
           {item.costUsd > 0 ? money(item.costUsd) : ""}
         </span>
       </div>
-      {item.children > 0 || item.toolCalls > 0 ? (
-        <div className="ag-river-folds">
+      <div className="ag-river-folds">
           {item.children > 0 ? (
             <button type="button" className="ag-link" aria-expanded={kidsOpen} data-testid={`ag-river-inside-${item.actId}`}
                     onClick={() => void toggleKids()}>
@@ -317,8 +325,11 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
               {item.toolCalls} tool call{item.toolCalls === 1 ? "" : "s"} {toolsOpen ? "▴" : "▾"}
             </button>
           ) : null}
+          {/* EVERY ROW reaches its lines (D7): the work's own lines, or its run's when the work
+              wrote none of its own; the name rides along so the chip reads before the server. */}
+          <a className="ag-link ag-river-log" data-testid={`ag-river-log-${item.actId}`} title="Every log line of this work"
+             href={logHref(riverLogScope(item))}>All lines ↗</a>
         </div>
-      ) : null}
       {card ? (
         <div className="ag-river-card" data-testid={`ag-river-card-${item.actId}`}>
           <ActCard act={card} viewer={viewer} inline onClose={() => setCard(null)} />
@@ -334,12 +345,7 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
             </li>
           ))}
           {tools.more || item.toolCalls > TOOL_CAP ? (
-            <li>
-              <a className="ag-link" data-testid={`ag-river-log-${item.actId}`} title="Every log line of this work"
-                 href={logHref({ act: item.actId })}>
-                All lines ↗
-              </a>
-            </li>
+            <li className="ag-river-tool">{item.toolCalls - TOOL_CAP > 0 ? `+${item.toolCalls - TOOL_CAP} more in All lines` : "More in All lines"}</li>
           ) : null}
         </ul>
       ) : null}
