@@ -405,7 +405,10 @@ def _gone(tag: str) -> None:
 def _sweep(engine):
     from boss_engine.services import resource_reaper
 
-    return resource_reaper.reap_docker(engine, install_id=TEST_INSTALL, legacy_prefix=LEGACY)
+    # min_age=0: these were made seconds ago; the product waits 15 minutes (see
+    # test_a_young_or_live_container_is_never_swept).
+    return resource_reaper.reap_docker(engine, install_id=TEST_INSTALL, legacy_prefix=LEGACY,
+                                       min_age=0)
 
 
 @needs_docker
@@ -571,3 +574,40 @@ def test_owned_dirs(ending, tmp_path, monkeypatch):
         resource_reaper.reap_dirs(tmp=tmp_path)
     assert not path.exists(), f"{path} left behind"
     assert str(path) not in claimed_dirs()
+
+
+@needs_docker
+def test_a_young_or_live_container_is_never_swept(pg_engine, monkeypatch):
+    """A preview between `docker run` and its `running` row, and a build's sandbox container,
+    are not orphans (review of the reaper)."""
+    from boss_engine.services import resource_reaper
+
+    pid = f"prev_st{uuid.uuid4().hex[:10]}"
+    tag, _cid = _make_preview_container(pid)                  # no row yet: being started
+    sbx = f"boss-sbx-st{uuid.uuid4().hex[:8]}"
+    run_id = f"crun_st{uuid.uuid4().hex[:8]}"
+    _docker("run", "-d", "--init", "--label", "boss.owner=sandbox", "--label",
+            f"boss.task_id={run_id}", "--label", f"boss.install_id={TEST_INSTALL}",
+            "--name", sbx, "alpine:latest", "sleep", "600", check=True)
+    try:
+        resource_reaper.reap_docker(pg_engine, install_id=TEST_INSTALL, legacy_prefix=LEGACY)
+        assert _docker("ps", "--filter", f"name=^{tag}$", "--format", "{{.ID}}")
+        assert _docker("images", "-q", tag)
+        # Old enough, but its build is live in this process: kept.
+        with owned_process.owner_scope("code_run", run_id):
+            holder = owned_process.popen(["sleep", "30"])
+        try:
+            resource_reaper.reap_docker(pg_engine, install_id=TEST_INSTALL,
+                                        legacy_prefix=LEGACY, min_age=0,
+                                        live={"ids": {pid}, "containers": {tag}})
+            assert _docker("ps", "--filter", f"name=^{sbx}$", "--format", "{{.ID}}")
+        finally:
+            holder.kill()
+        # Its build ended: the sandbox container is the orphan it now is.
+        resource_reaper.reap_docker(pg_engine, install_id=TEST_INSTALL, legacy_prefix=LEGACY,
+                                    min_age=0, live={"ids": {pid}, "containers": {tag}})
+        assert _docker("ps", "-a", "--filter", f"name=^{sbx}$", "--format", "{{.ID}}") == ""
+    finally:
+        for t in (tag, sbx):
+            _docker("rm", "-f", t)
+        _docker("rmi", "-f", tag)

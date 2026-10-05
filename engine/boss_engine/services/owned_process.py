@@ -332,6 +332,8 @@ def ledger() -> Any:
 # ------------------------------------------------------------------------------------------ #
 
 _LIVE: dict[int, "OwnedPopen"] = {}
+#: Tokens of trees being spawned right now (not yet in _LIVE).
+_PENDING: set[str] = set()
 _LIVE_LOCK = threading.Lock()
 #: Owner ids a cancel has ended, so a stage that dies of the kill is read as cancelled, not
 #: failed (governed_code_task_service). Bounded: only ids, only recent.
@@ -479,7 +481,8 @@ def orphan_trees(*, only: Optional[set[str]] = None) -> dict[str, list[int]]:
     """Owned trees nobody owns any more: their creator process is gone, or it is THIS process
     and the tree is no longer in its registry (ended without being collected). A tree whose
     creator is another live process (a CLI run in the same container) is not ours to judge."""
-    mine = {p.token for p in live()}
+    with _LIVE_LOCK:
+        mine = {p.token for p in _LIVE.values()} | set(_PENDING)
     me = os.getpid()
     protected = _protected_pids()
     out: dict[str, list[int]] = {}
@@ -551,9 +554,9 @@ class OwnedPopen(subprocess.Popen):
     def __init__(self, args: Any, *, owner: Optional[Owner] = None,
                  resource: str = "process_group", record: bool = True,
                  keep_tree_on_exit: bool = False, expires_at: Any = None,
-                 **kwargs: Any) -> None:
+                 refuse_when_stopped: bool = True, **kwargs: Any) -> None:
         self.owner = owner or current_owner()
-        if self.owner is not None:
+        if self.owner is not None and refuse_when_stopped:
             stopped = next((i for i in self.owner.ids() if i in _CANCELLED), None)
             if stopped:
                 raise OwnerCancelled(f"{stopped} was stopped; not starting {_argv0(args)}")
@@ -562,6 +565,10 @@ class OwnedPopen(subprocess.Popen):
         # The creator's pid rides in the token: the orphan sweep can tell a tree whose creator
         # is gone (an orphan) from one another live process in this container still owns.
         self.token = f"own_{os.getpid()}_{uuid.uuid4().hex}"
+        # Known to this process BEFORE the child exists: the orphan sweep must never take a
+        # tree that is merely between spawn and registration for an orphan.
+        with _LIVE_LOCK:
+            _PENDING.add(self.token)
         self.resource = resource
         self.keep_tree_on_exit = keep_tree_on_exit
         self.end_reason: Optional[str] = None
@@ -583,6 +590,8 @@ class OwnedPopen(subprocess.Popen):
         try:
             super().__init__(args, **kwargs)
         except BaseException:
+            with _LIVE_LOCK:
+                _PENDING.discard(self.token)
             with contextlib.suppress(Exception):
                 _LEDGER.release(self.ledger_id, "spawn_failed")
             raise
@@ -593,6 +602,7 @@ class OwnedPopen(subprocess.Popen):
                 _LEDGER.set_handle(self.ledger_id, pgid=self.pgid, token=self.token)
         with _LIVE_LOCK:
             _LIVE[self.pid] = self
+            _PENDING.discard(self.token)
 
     # -- ending --------------------------------------------------------------------------
 
@@ -772,6 +782,10 @@ def run(args: Any, *, timeout: Optional[float] = None, input: Any = None,  # noq
         if kwargs.get("stdin") is not None:
             raise ValueError("stdin and input arguments may not both be used.")
         kwargs["stdin"] = subprocess.PIPE
+    # A run-to-completion command is never refused after a stop: it is how a stopped build
+    # checkpoints its work and removes its sandbox container. New work (agents, builds) is
+    # started with `popen`, which is refused.
+    kwargs.setdefault("refuse_when_stopped", False)
     proc = OwnedPopen(args, owner=owner, resource=resource, record=record, **kwargs)
     try:
         out, err = communicate(proc, input=input, timeout=timeout)

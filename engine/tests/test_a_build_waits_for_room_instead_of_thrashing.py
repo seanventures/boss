@@ -64,8 +64,8 @@ def test_slots_full_queues_rather_than_exceeding():
 def test_a_full_disk_and_a_busy_cpu_also_hold_a_build():
     low_disk = Capacity(**{**BOSS_1.__dict__, "disk_free_gb": 2.0, "notes": []})
     busy = Capacity(**{**BOSS_1.__dict__, "load_per_core": 2.0, "notes": []})
-    assert "of disk free" in admission.decide(low_disk, CODE, in_flight=0, slots=4).shortfall
-    assert "CPU load" in admission.decide(busy, CODE, in_flight=0, slots=4).shortfall
+    assert "of disk free" in admission.decide(low_disk, CODE, in_flight=1, slots=4).shortfall
+    assert "CPU load" in admission.decide(busy, CODE, in_flight=1, slots=4).shortfall
 
 
 def test_light_work_is_never_held_back():
@@ -156,3 +156,21 @@ def test_the_profile_moves_toward_what_builds_really_peak_at(pg):
     with pg.begin() as c:
         c.execute(__import__("sqlalchemy").text(
             "DELETE FROM workload_profiles WHERE kind = 'code.task'"))
+
+
+def test_nothing_running_means_one_build_may_run():
+    """A small or busy machine runs one build at a time, never none forever (review)."""
+    small = Capacity(total_mb=4000, available_mb=2100, cores=2, disk_free_gb=4.5,
+                     load_per_core=1.6)
+    assert admission.decide(small, CODE, in_flight=0, slots=1).admitted
+    assert not admission.decide(small, CODE, in_flight=0, slots=1, level=admission.L3).admitted
+    assert not admission.decide(small, CODE, in_flight=1, slots=2).admitted
+
+
+def test_build_anyway_runs_one_even_under_critical_pressure_but_not_sustained():
+    lvl = admission.level_of(MAC_VM_THRASHING)
+    assert not admission.decide(MAC_VM_THRASHING, CODE, in_flight=0, slots=1, level=lvl).admitted
+    assert admission.decide(MAC_VM_THRASHING, CODE, in_flight=0, slots=1, level=lvl,
+                            force_one=True).admitted
+    assert not admission.decide(MAC_VM_THRASHING, CODE, in_flight=0, slots=1,
+                                level=admission.L3, force_one=True).admitted

@@ -276,3 +276,16 @@ def test_one_at_a_time_ends_when_the_pressure_does(pg):
         assert admission.builds_at_once(c, CALM, 1200)["value"] == 1
         doc._on_resolved(c, "sf_mem", "memory_pressure_external")
         assert admission.builds_at_once(c, CALM, 1200)["auto"] is True
+
+
+def test_a_chosen_option_is_not_asked_again_while_the_signal_holds(pg):
+    from sqlalchemy import text
+    doc.tick(pg, None, sig=_sig(deploy_restarts_hour=5))
+    with pg.begin() as c:
+        fid = c.execute(text("SELECT id FROM system_findings WHERE kind = "
+                             "'deploy_churn_killing_builds' AND status = 'open'")).scalar()
+        c.execute(text("UPDATE system_findings SET chosen_option = 'x', needs_choice = false "
+                       "WHERE id = :id"), {"id": fid})
+    doc.tick(pg, None, sig=_sig(deploy_restarts_hour=5))
+    with pg.begin() as c:
+        assert all(i["finding_id"] != fid for i in doc.card_items(c, "p"))

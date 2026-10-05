@@ -70,7 +70,14 @@ def hand_back_interrupted(engine: Any, jobs: Any, run_id: str, project_id: Optio
 def drain(engine: Any, settings: Any = None) -> dict[str, Any]:
     """Steps 1-3 above. Idempotent; returns what it did."""
     owned_process.begin_drain()
-    runs = sorted(owned_process.live_owner_ids(kind="code_run"))
+    candidates = sorted(owned_process.live_owner_ids())
+    runs: list[str] = []
+    try:
+        with engine.begin() as c:
+            runs = sorted(str(r[0]) for r in c.execute(text(
+                "SELECT id FROM code_task_runs WHERE id = ANY(:ids)"), {"ids": candidates}).all())
+    except Exception:  # noqa: BLE001 — unknown: end the trees anyway
+        runs = []
     project = getattr(settings, "default_project_id", None) if settings is not None else None
     for run_id in runs:
         try:

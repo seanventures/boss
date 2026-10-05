@@ -597,8 +597,10 @@ class JobLeaseService:
                     try:
                         if admission_cap is None:
                             admission_cap = admission.sample()
-                        verdict = admission.admit_job(connection, candidate["kind"],
-                                                      cap=admission_cap)
+                        # In a savepoint: a failed statement must not abort the claim.
+                        with connection.begin_nested():
+                            verdict = admission.admit_job(connection, candidate["kind"],
+                                                          cap=admission_cap)
                     except Exception:  # noqa: BLE001 — an unreadable host never blocks work
                         verdict = None
                     if verdict is not None and not verdict.admitted:

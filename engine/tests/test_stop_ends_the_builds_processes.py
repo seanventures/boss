@@ -86,3 +86,25 @@ def test_a_run_another_actor_marked_failed_is_ended_too(pg):
         c.execute(text("UPDATE code_task_runs SET status = 'failed' WHERE id = :i"), {"i": rid})
     stop_watch.tick(pg)
     assert owned_process.members(proc.pgid, proc.token)["alive"] == []
+
+
+def test_stop_reaches_a_build_whose_only_processes_are_review_seats(pg):
+    from sqlalchemy import text
+    rid = _run(pg)
+    with owned_process.owner_scope("code_run", rid):
+        with owned_process.owner_scope("review_seat", f"{rid}:review[0]"):
+            seat = owned_process.popen(["sleep", "600"])
+    with pg.begin() as c:
+        c.execute(text("INSERT INTO code_task_stop_requests (run_id, project_id, actor) "
+                       "VALUES (:i, 'p_sw', 'ceo')"), {"i": rid})
+    stop_watch.tick(pg)
+    assert owned_process.members(seat.pgid, seat.token)["alive"] == []
+
+
+def test_a_stopped_build_may_still_clean_up_but_not_start_work(pg):
+    rid = _run(pg)
+    owned_process.terminate_owner(rid, reason="cancel")
+    with owned_process.owner_scope("code_run", rid):
+        assert owned_process.run(["true"]).returncode == 0       # checkpoint, docker rm …
+        with pytest.raises(owned_process.OwnerCancelled):
+            owned_process.popen(["sleep", "1"])                  # a new agent
