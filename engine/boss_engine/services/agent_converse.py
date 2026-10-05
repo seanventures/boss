@@ -345,11 +345,48 @@ def _clean_context(connection, project_id: str, context: Optional[dict]) -> dict
     return out
 
 
+def _resumable_talk(connection, project_id: str, actor: str, role_key: str,
+                   context: dict) -> Optional[str]:
+    """The talk an "Ask <agent>" reopens instead of starting over: this operator's latest open
+    talk with that agent, about the same thing.
+
+    A door about a run step (or one act) reopens the talk about THAT step; any other door
+    reopens the latest open talk with the agent, whatever it was about — so what was asked
+    from a step's panel is there again from the Passport. A talk with something said in it
+    wins over an empty one: an empty talk opened and closed must never hide the real one.
+    """
+    clauses = ["project_id = :p", "actor = :a", "kind = 'talk'", "status = 'open'",
+               "seats->>0 = :r"]
+    params: dict[str, Any] = {"p": project_id, "a": actor, "r": role_key}
+    if context.get("workflow_run_id"):
+        clauses += ["context->>'workflow_run_id' = :run",
+                    "COALESCE(context->>'step_id', '') = :step"]
+        params.update(run=context["workflow_run_id"], step=context.get("step_id") or "")
+    elif context.get("act_id"):
+        clauses.append("context->>'act_id' = :act")
+        params["act"] = context["act_id"]
+    row = connection.execute(
+        text(f"""
+            SELECT conversation_id FROM agent_conversations c WHERE {' AND '.join(clauses)}
+            ORDER BY EXISTS (SELECT 1 FROM agent_conversation_turns t
+                             WHERE t.conversation_id = c.conversation_id) DESC,
+                     updated_at DESC
+            LIMIT 1
+        """),
+        params,
+    ).first()
+    return row[0] if row else None
+
+
 def create_conversation(connection, *, project_id: str, actor: str, kind: str,
                         seats: list[str], lead_role_key: Optional[str] = None,
                         preset: Optional[str] = None, title: str = "",
-                        context: Optional[dict] = None) -> dict:
-    """No model call. 422 on a bad seat count, or an agent this project lacks or has retired."""
+                        context: Optional[dict] = None, resume: bool = False) -> dict:
+    """No model call. 422 on a bad seat count, or an agent this project lacks or has retired.
+
+    `resume` (a talk only): reopen the operator's open talk with that agent about the same
+    thing (`_resumable_talk`) rather than start an empty one; the result says `resumed`.
+    """
     if kind not in KINDS:
         raise _invalid(f"kind must be one of {', '.join(KINDS)}")
     preset_row = next((p for p in ROOM_PRESETS if p["key"] == preset), None) if preset else None
@@ -377,6 +414,11 @@ def create_conversation(connection, *, project_id: str, actor: str, kind: str,
     if lead not in resolved:
         raise _invalid("the lead must be one of the seats")
     # Named the way the console names them: the callsign when there is one ("Talk with Vera").
+    cleaned = _clean_context(connection, project_id, context)
+    if resume and kind == "talk":
+        found = _resumable_talk(connection, project_id, actor, resolved[0], cleaned)
+        if found:
+            return {**get_conversation(connection, project_id, found), "resumed": True}
     names = [_seat_info(roles[k]).get("callsign") or roles[k].get("display_name") or k
              for k in resolved]
     default_title = {"talk": f"Talk with {names[0]}", "plan": f"Plan with {names[0]}",
@@ -391,11 +433,11 @@ def create_conversation(connection, *, project_id: str, actor: str, kind: str,
         {"c": conversation_id, "p": project_id, "k": kind,
          "t": (str(title or "").strip()[:120] or default_title), "a": actor,
          "s": json.dumps(resolved), "lead": lead, "preset": preset_row["key"] if preset_row
-         else None, "ctx": json.dumps(_clean_context(connection, project_id, context))},
+         else None, "ctx": json.dumps(cleaned)},
     )
     emit_event(connection, project_id, "conversation.opened", actor, "conversation",
                conversation_id, {"kind": kind, "seats": resolved, "preset": preset})
-    return get_conversation(connection, project_id, conversation_id)
+    return {**get_conversation(connection, project_id, conversation_id), "resumed": False}
 
 
 def _set_status(connection, project_id: str, conversation_id: str, status: str, actor: str

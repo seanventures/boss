@@ -287,6 +287,7 @@ class Conversation(TypedDict, total=False):
     turns: list[ConversationTurn]
     created_at: str
     updated_at: str
+    resumed: bool  # POST /v1/conversations only: an open talk was reopened, not a new one made
 
 
 class ConverseEvent(TypedDict, total=False):
