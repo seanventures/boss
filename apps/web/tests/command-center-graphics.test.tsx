@@ -8,19 +8,26 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { overBudget } from "./_helpers/copy-budget";
-import { NOW_MS, flow, freshView, hours, quietView, view } from "./_helpers/command-center-view-fixture";
+import { codeOnly } from "./_helpers/source";
+import { NOW_MS, flow, freshView, hours, mission, quietView, view } from "./_helpers/command-center-view-fixture";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { $, $$, mount, rerender, unmount } from "./_helpers/live-render";
 import { parseCommandCenterView, type CommandCenterView } from "../lib/command-center-view";
 import {
   chainsOf, cumulative, edgeWidth, fitArcLabel, floorCounts, floorKinds, floorLayout, newComets, nowPosition,
   placeNames, recencyOpacity, stripScale,
-  stripWindow,
+  stripWindow, stripLabel, stripHeading, STRIP_MIN_SPAN, LABEL_MIN_SCALE,
 } from "../lib/command-center-graphics";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { Floor } = await import("../app/command-center/floor");
+const { Floor, floorFooter } = await import("../app/command-center/floor");
+/** A strip bar's share of the track (happy-dom drops a `max()` width from style, so it is read
+ *  from the bar's data-share). */
+const barShare = (el: Element | null) => parseFloat(el?.getAttribute("data-share") ?? "NaN");
+
 const { TodayChart } = await import("../app/command-center/today-chart");
 const { DayStrip } = await import("../app/command-center/day-strip");
 const { WeekBars } = await import("../app/command-center/week-bars");
@@ -191,9 +198,22 @@ describe("the Floor, as the day really is", () => {
     const k = floorKinds(v, NOW_MS);
     expect(k.get("media_publisher")).toBe("waiting");
     expect(k.get("pm")).toBe("on_run");
-    // A stopped run is not running: its agent (the engineer whose step failed) is stuck.
-    expect(k.get("software_engineer")).toBe("stuck");
-    expect(floorCounts(k)).toMatchObject({ working: 0, onRuns: 2, stuck: 1 });
+    // The engineer's #180 stopped, but they are on #182's running step now: working wins, as on
+    // the lane ("Coding · step 4 of 7") — one source for "working" (re-test 10).
+    expect(k.get("software_engineer")).toBe("working");
+    expect(floorCounts(k)).toMatchObject({ working: 1, onRuns: 2, stuck: 0 });
+  });
+
+  it("an agent on a running run's current step is working even when presence says idle (re-test 10)", () => {
+    const idle = (view().agents as Record<string, unknown>[]).map((a) => ({ ...a, state: "idle", line: "Idle" }));
+    const v = V(view({ agents: idle, attention: [], missions: [mission({
+      run_id: "wfr_1", state: "running", verb: "Working",
+      hops: [{ act_id: "a1", role_key: "pm", state: "done", label: "PRD", edge_label: "Named" },
+             { act_id: "a2", role_key: "qa", state: "working", label: "Test", edge_label: "Named" }] })] }));
+    const k = floorKinds(v, NOW_MS);
+    expect(k.get("qa")).toBe("working");
+    expect(k.get("pm")).toBe("on_run");
+    expect(floorFooter(v, NOW_MS).text).toMatch(/^1 working/);
   });
 
   it("draws each run in flight as its chain of faces, into You when it waits on you", async () => {
@@ -372,8 +392,11 @@ describe("the LAST 24H strip", () => {
   it("a live bar ends at now with a ▶; a failed run ends in a red square; a finished one in a circle", async () => {
     await mount(strip());
     const live = $("[data-testid='cc-day-bar-wfr_182']")!;
-    const left = parseFloat(live.style.left), width = parseFloat(live.style.width);
-    expect(left + width).toBeCloseTo(100, 3);
+    // Right-anchored: a live bar's right edge IS now (nothing drawn past it), and a short bar
+    // grows leftward to a readable minimum.
+    expect(parseFloat(live.getAttribute("data-end") ?? "NaN")).toBeCloseTo(0, 3);
+    expect(barShare(live)).toBeGreaterThan(0);
+    expect(codeOnly("app/command-center/day-strip.tsx")).toContain("width: `max(${width}%, ${BAR_MIN_PX}px)`");
     expect(live.querySelector(".cc-day-cap")?.getAttribute("data-cap")).toBe("live");
     expect($("[data-testid='cc-day-bar-wfr_170'] .cc-day-cap")?.getAttribute("data-cap")).toBe("failed");
     expect($("[data-testid='cc-day-bar-wfr_169'] .cc-day-cap")?.getAttribute("data-cap")).toBe("done");
@@ -417,11 +440,11 @@ describe("the LAST 24H strip", () => {
     expect(ticks.length).toBeLessThanOrEqual(6);
     // A run that started inside the window is not a sliver at the right edge.
     const live = $("[data-testid='cc-day-bar-wfr_video']") as HTMLElement;
-    const fitWidth = parseFloat(live.style.width);
+    const fitWidth = barShare(live);
     ($("[data-testid='cc-day-zoom-full']") as HTMLElement).click();
     await rerender(strip({}, today));
     expect($("[data-testid='cc-day-strip']")?.getAttribute("data-zoom")).toBe("full");
-    expect(parseFloat(($("[data-testid='cc-day-bar-wfr_video']") as HTMLElement).style.width)).toBeLessThan(fitWidth);
+    expect(barShare($("[data-testid='cc-day-bar-wfr_video']"))).toBeLessThan(fitWidth);
   });
 
   it("names every run on the left, in lane order", async () => {
@@ -430,11 +453,11 @@ describe("the LAST 24H strip", () => {
       .toEqual(["Ship it #182", "Weekly video", "Audit deps", "Ship it #179"]);
   });
 
-  it("the fit window starts just before the earliest run, at least an hour, ticks 3-6", () => {
+  it("the fit window starts just before the earliest run, at least half an hour, ticks 3-6", () => {
     const now = Date.parse("2026-10-04T15:40:00Z");
     const w = stripWindow([{ startedAt: "2026-10-04T15:20:00Z" }], now, 24, "fit");
-    expect(now - w.since).toBeGreaterThanOrEqual(3_600_000);
-    expect(now - w.since).toBeLessThan(2 * 3_600_000);
+    expect(now - w.since).toBe(STRIP_MIN_SPAN);                  // 20 min of work: the 30-min floor
+    expect(w.label).toBe("Last 30m");
     expect(w.ticks.length).toBeGreaterThanOrEqual(3);
     const full = stripWindow([{ startedAt: "2026-10-04T15:20:00Z" }], now, 24, "full");
     expect(full.since).toBe(now - 24 * 3_600_000);
@@ -498,11 +521,20 @@ describe("labels never collide or leave the stage (fix pass D9/D16)", () => {
         const left = anchor === "start" ? f.x : anchor === "end" ? f.x - f.width : f.x - f.width / 2;
         expect(left).toBeGreaterThanOrEqual(5.9);
         expect(left + f.width).toBeLessThanOrEqual(width - 5.9);
-        expect(f.scale).toBeGreaterThanOrEqual(0.55);
+        expect(f.scale).toBeGreaterThanOrEqual(LABEL_MIN_SCALE);
+        expect(f.text.endsWith("…")).toBe(false);
       }
     }
     expect(fitArcLabel("ARCHITECTURE", 400, 30, "start", { width: 960, height: 440 }).text).toBe("ARCHITECTURE");
-    expect(fitArcLabel("ARCHITECTURE", 300, 30, "start", { width: 320, height: 440 }).text.endsWith("…")).toBe(true);
+    // Re-test 9: never below a readable size, never "Architec…" — the team's short name instead.
+    const narrow = fitArcLabel("Architecture", 300, 30, "start", { width: 320, height: 440 });
+    expect(narrow.text).toBe("Arch.");
+    expect(narrow.scale).toBeGreaterThanOrEqual(LABEL_MIN_SCALE);
+    for (const [label, short] of Object.entries({ Engineering: "Eng.", Operations: "Ops", Leadership: "Lead.", Thinkers: "Think." })) {
+      expect(fitArcLabel(label, 300, 30, "start", { width: 320, height: 440 }).text).toBe(short);
+    }
+    // A short name stays itself; no label anywhere ends in an ellipsis.
+    expect(fitArcLabel("Quality", 300, 30, "start", { width: 320, height: 440 }).text).toBe("Quality");
   });
 
   it("places names outside their faces, inside the stage, and drops one that would overlap", () => {
@@ -527,19 +559,46 @@ describe("labels never collide or leave the stage (fix pass D9/D16)", () => {
 describe("the strip frames live work and reserves its height (fix pass)", () => {
   const v = V(view());
   const { DayStrip: Strip } = { DayStrip };
-  it("Fit starts at the earliest LIVE run, not an old finished one, so live bars are wide", () => {
+  it("Fit frames EVERY listed run (re-test 1: 7 of 10 lanes were stubs), with 5% padding", () => {
     const rows = [
       { startedAt: "2026-10-04T15:00:00Z", finishedAt: null },            // live, 40 min ago
-      { startedAt: "2026-10-04T09:00:00Z", finishedAt: "2026-10-04T09:40:00Z" },
+      { startedAt: "2026-10-04T09:40:00Z", finishedAt: "2026-10-04T10:20:00Z" },
     ];
     const w = stripWindow(rows, NOW_MS, 24, "fit");
-    expect(w.since).toBeGreaterThanOrEqual(Date.parse("2026-10-04T14:30:00Z"));
-    // Nothing live: the latest finished runs frame it.
-    const done = stripWindow([{ startedAt: "2026-10-04T12:00:00Z", finishedAt: "2026-10-04T12:40:00Z" },
-                              { startedAt: "2026-10-04T02:00:00Z", finishedAt: "2026-10-04T02:30:00Z" },
-                              { startedAt: "2026-10-04T01:00:00Z", finishedAt: "2026-10-04T01:30:00Z" },
-                              { startedAt: "2026-10-03T18:00:00Z", finishedAt: "2026-10-03T18:30:00Z" }], NOW_MS, 24, "fit");
-    expect(done.since).toBeGreaterThan(Date.parse("2026-10-03T18:00:00Z"));
+    const first = Date.parse("2026-10-04T09:40:00Z");
+    expect(w.since).toBeLessThanOrEqual(first);                       // no listed run starts before it
+    expect(first - w.since).toBeCloseTo((NOW_MS - first) * 0.05, -3); // just 5% of padding
+    expect(w.label).toBe("Last 6h");
+    // A run older than the whole window clamps to it: the heading says the window.
+    const old = stripWindow([{ startedAt: "2026-10-03T09:00:00Z", finishedAt: "2026-10-03T20:00:00Z" }], NOW_MS, 24, "fit");
+    expect(old.since).toBe(NOW_MS - 24 * 3_600_000);
+    expect(old.label).toBe("Last 24h");
+  });
+
+  it("says the window it shows: whole hours from 2h, else minutes rounded to 5", () => {
+    expect(stripLabel(24 * 3_600_000, 24)).toBe("Last 24h");
+    expect(stripLabel(12 * 3_600_000, 12)).toBe("Last 12h");
+    expect(stripLabel(6.2 * 3_600_000, 24)).toBe("Last 6h");
+    expect(stripLabel(2 * 3_600_000, 24)).toBe("Last 2h");
+    expect(stripLabel(44 * 60_000, 24)).toBe("Last 45m");
+    expect(stripLabel(31 * 60_000, 24)).toBe("Last 30m");
+    expect(stripHeading([{ startedAt: "2026-10-04T15:20:00Z" }], NOW_MS, "full", 12)).toBe("Last 12h");
+  });
+
+  it("tells the page its window so the head can say it", async () => {
+    const said: string[] = [];
+    await mount(<Strip day={v.day} nowMs={NOW_MS} generatedAt={v.generatedAt} windowHours={24} rowsMax={10}
+                       motion="full" hoverRunId={null} onHover={noop} onStartWork={noop}
+                       onWindow={(w) => said.push(w)} />);
+    expect(said).toEqual([stripHeading(v.day.rows, NOW_MS, "fit", 24)]);
+  });
+
+  it("draws nothing past now: every cap sits inside its bar", () => {
+    const css = readFileSync(resolve(__dirname, "../app/command-center/graphics.css"), "utf8");
+    for (const rule of css.match(/\.cc-day-cap[^{]*\{[^}]*\}/g) ?? []) {
+      const right = /right:\s*(-?[\d.]+)px/.exec(rule);
+      if (right) expect(parseFloat(right[1])).toBeGreaterThanOrEqual(0);
+    }
   });
 
   it("reserves rowsMax lanes, shows waits (open ones striped) and says a wide bar's state inside", async () => {

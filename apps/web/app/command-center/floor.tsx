@@ -530,8 +530,8 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
           const mid = (arc.start + arc.end) / 2;
           const lr = R + 50;
           const anchor = Math.abs(Math.cos(mid)) < 0.3 ? "middle" : Math.cos(mid) > 0 ? "start" : "end";
-          // FITTED AT EVERY SIZE (D16): shrink, slide, and only then shorten — never cut by the
-          // panel's edge ("ARCHITECTURE" lost letters at 1280 and 1024).
+          // FITTED AT EVERY SIZE (D16, re-test 9): a little smaller, then the team's short name
+          // (`Arch.`), then slid inward — never cut, never below a readable size.
           const fit = fitArcLabel(arc.label, layout.cx + lr * Math.cos(mid), layout.cy + lr * Math.sin(mid),
                                   anchor, { width: W, height: H });
           const lx = fit.x, ly = fit.y, scale = fit.scale;
@@ -551,7 +551,8 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
               {fold && arc.idleFolded ? (
                 <text className="cc-arc-fold" x={q(lx)} y={q(ly + 14)} textAnchor={anchor}>{`+${arc.idleFolded} idle`}</text>
               ) : null}
-              <title>{busy > 0 ? `${team?.tip || arc.label} · ${busy} working` : (team?.tip || arc.label)}</title>
+              {/* The FULL name always, whatever the arc could fit (`Arch.`), then its note. */}
+              <title>{[arc.label, team?.tip, busy > 0 ? `${busy} working` : ""].filter(Boolean).join(" · ")}</title>
             </g>
           );
         })}
