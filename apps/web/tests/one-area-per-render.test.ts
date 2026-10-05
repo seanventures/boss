@@ -46,11 +46,12 @@ describe("only the requested area is rendered", () => {
   });
 
   it("every area section passes through it", () => {
-    // 68 sections at the top level of the frame. A section added without a gate is a section
-    // every other area pays for.
+    // 59 sections at the top level of the frame (the budget sections became one Govern
+    // section). A section added without a gate is a section every other area pays for; the
+    // floor only proves the pattern still finds the sections.
     const sections = PAGE_RAW.split("\n").filter((l) => /^        <section\b/.test(l)).length;
     const gates = (PAGE_RAW.match(/\{shows\("/g) ?? []).length;
-    expect(sections).toBeGreaterThan(60);
+    expect(sections).toBeGreaterThan(50);
     expect(gates).toBeGreaterThanOrEqual(sections);
   });
 
@@ -59,7 +60,8 @@ describe("only the requested area is rendered", () => {
     // Missed on the first pass and caught by measuring: a Discovery render still carried a
     // GitHub panel and a Govern panel.
     expect(PAGE).toContain('{shows("github") ? <RepoActivityPanel');
-    expect(PAGE).toContain('{shows("budget") ? (\n          <TokenEfficiencyPanel');
+    // Govern is one gated section around its own client component (app/govern/govern-home.tsx).
+    expect(PAGE).toMatch(/\{shows\("budget"\) \? \(\s*<section[^>]*data-area="budget"[\s\S]{0,400}<GovernHome/);
   });
 });
 

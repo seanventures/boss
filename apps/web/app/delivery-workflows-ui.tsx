@@ -1791,6 +1791,20 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
     ?? steps.find((s) => phaseOf(s) === "failed") ?? steps[0];
   const [picked, setPicked] = useState<string | null>(initial?.step_id ?? null);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
+  // A LINK TO ONE STEP LANDS ON THAT STEP (`?wfr=<this run>&step=<id>` — the Log's Step ↗, a
+  // step panel's link). It opened on the run's own choice above, so every such link showed
+  // the first step that wanted attention instead. Read after mount (the URL is the client's).
+  const stepIds = steps.map((s) => s.step_id).join("|");
+  useEffect(() => {
+    const read = () => {
+      const q = new URLSearchParams(window.location.search);
+      const wanted = q.get("step");
+      if (q.get("wfr") === run.id && wanted && stepIds.split("|").includes(wanted)) setPicked(wanted);
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, [run.id, stepIds]);
 
   // WHERE THE CALLOUT POINTS. Measured from the DOM rather than computed from an index: the
   // lane fits itself to the width, so a computed position is right until it is not.
