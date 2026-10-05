@@ -3,7 +3,7 @@
  * way out to Infra (dropping Observability's own params), and the Ask BOSS starters built from
  * the Pulse on screen (the old Monitoring screen's `monitoringAsks`).
  */
-import { monitoringAsks } from "../monitoring-ui";
+import type { DockSubject } from "../../lib/dock-subject";
 import type { Pulse } from "../../lib/obs-view";
 import { navigate } from "../agents/live-util";
 
@@ -43,12 +43,41 @@ export function leaveTo(href: string) {
   navigate(patch);
 }
 
-/** The starters the old Monitoring screen offered (`monitoringAsks`), built from the Pulse on
- *  screen: the sick app is asked about AS its deployment. */
-export function obsAsks(pulse: Pulse | null) {
-  const targets = (pulse?.rows ?? []).map((r) => ({
-    target_id: r.targetId, app_name: r.app, environment: r.env, status: r.state,
-  }));
-  return monitoringAsks({ project_id: "", targets, summary: { up: 0, degraded: 0, down: 0, unknown: 0, overall: "", total: targets.length } } as never);
+/** One starter: the operator's question, and the app it is about when there is one. */
+export type MonitoringAsk = { question: string; subject: DockSubject | null };
+type AskTarget = { target_id: string; app_name: string; environment: string; status: string };
+
+/** What is worth asking about, given the apps on screen (the old Monitoring screen's starters,
+ *  moved here when it retired). A single sick app is asked about AS its deployment — its error,
+ *  address and history travel as the record, not as a sentence (lib/dock-subject.ts). */
+export function monitoringAsks(targets: AskTarget[]): MonitoringAsk[] {
+  const sick = targets.filter((t) => t.status === "down" || t.status === "degraded");
+  const unknown = targets.filter((t) => t.status === "unknown" || t.status === "not_deployed");
+  const out: MonitoringAsk[] = [];
+  const ask = (question: string, subject: DockSubject | null = null) => out.push({ question, subject });
+  if (sick.length === 1) {
+    const t = sick[0];
+    ask(`Why is ${t.app_name} (${t.environment}) ${t.status}, and what is the fix?`,
+        t.target_id ? { kind: "deployment", id: t.target_id } : null);
+  } else if (sick.length > 1) {
+    ask(`${sick.map((t) => t.app_name).join(", ")} are not healthy. What is actually wrong with each?`);
+  } else if (targets.length) {
+    ask("Everything here reads healthy. Check the probes are really running and that " +
+        "each app answers on the port its target claims — not just that the row is green.");
+  }
+  if (unknown.length) {
+    ask(`${unknown.map((t) => t.app_name).join(", ")} ${unknown.length === 1 ? "has" : "have"} no health signal. ` +
+        "Is that because nothing is deployed, or because nothing is probing it?");
+  }
+  // The reason an operator comes to this screen with an idea rather than an incident.
+  ask("I want to change what we monitor. What is being checked for each app today, " +
+      "what would you add, and what can you set up yourself?");
+  return out;
 }
 
+/** The starters, built from the Pulse on screen. */
+export function obsAsks(pulse: Pulse | null): MonitoringAsk[] {
+  return monitoringAsks((pulse?.rows ?? []).map((r) => ({
+    target_id: r.targetId, app_name: r.app, environment: r.env, status: r.state,
+  })));
+}

@@ -191,11 +191,9 @@ describe("only the requested area is fetched", () => {
       "lib/identity-providers.ts",
       "lib/oncall-sre.ts",
       "lib/release-planning.ts",
-      "lib/worker-autoscaling.ts",
       "lib/token-efficiency.ts",
       "lib/observability-suite.ts",
       "lib/knowledge-graph.ts",
-      "lib/cicd-pipelines.ts",
       "lib/live-jobs.ts",
       "lib/qa-scorecard.ts",
     ]) {

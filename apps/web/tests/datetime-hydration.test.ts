@@ -12,7 +12,7 @@ import {
 } from "../lib/datetime";
 import { MissionTaskBoard } from "../app/mission-operations-ui";
 import { PolicyEvalList } from "../app/safety-ui";
-import { CICDPipelinesPanel } from "../app/cicd-pipelines-ui";
+import { ago } from "../app/agents/live-util";
 import { GitHubOperations } from "../app/github-operations-ui";
 import { emptyGitHubOperationsFeed } from "../lib/github-operations";
 import type { TaskFeedItem } from "../lib/tasks";
@@ -206,23 +206,14 @@ describe("datetime helpers are hydration-safe", () => {
     expect(policyHtml).not.toContain("2026-08-12T01:25:15");
     expect(policyHtml).not.toContain("2026-08-12 01:25:15");
 
-    const cicdHtml = renderToStaticMarkup(
-      React.createElement(CICDPipelinesPanel, {
-        projectId: "boss-dogfood",
-        initialRuns: [
-          {
-            id: "run_1",
-            project_id: "boss-dogfood",
-            vendor: "github_actions",
-            status: "succeeded",
-            recorded_at: iso,
-            source: "webhook",
-          },
-        ],
-      }),
-    );
-    expect(cicdHtml).toContain("Aug 12, 2026, 1:25 AM UTC");
-    expect(cicdHtml).not.toMatch(/2026-08-12[T ]01:25:15/);
+    // CI/CD: the old CICDPipelinesPanel retired into Deploys › CI config (app/infra/ci-sheet.tsx).
+    // Its run times are relative ("12m") and gated on a mounted clock: the server paints no
+    // clock-dependent text at all, so there is nothing for hydration to disagree with.
+    const ciSheet = readFileSync(resolve(__dirname, "../app/infra/ci-sheet.tsx"), "utf8");
+    expect(ciSheet).toContain("useNow(");
+    expect(ciSheet).toMatch(/ago\(r\.recorded_at, now\)/);
+    expect(ago(iso, null)).toBe("");
+    expect(ago(iso, Date.parse(iso) + 12 * 60_000)).toBe("12m");
 
     const feed = {
       ...emptyGitHubOperationsFeed(undefined, "boss-dogfood"),
