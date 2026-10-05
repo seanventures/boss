@@ -106,7 +106,8 @@ type Drawn = { key: string; from: string; to: string; fromPt: string; toPt: stri
 export function OrgFlow(props: OrgFlowProps): React.ReactElement {
   useIdentityVersion();
   const { board, live, search, days, narrow, isolate, selected, mode, projectId } = props;
-  const teams = useMemo(() => shownTeams(board), [board]);
+  // A team node is its agents: a team with none (Yours holding only an empty seat) is not one.
+  const teams = useMemo(() => shownTeams(board).filter((t) => t.members.length > 0), [board]);
   const teamOf = useCallback((r: string) => teamOfRole(board, r), [board]);
   const [focus, setFocus] = useState<FlowFocus | null>(null);
   const [litCount, setLitCount] = useState(0);
@@ -578,21 +579,21 @@ function FlowTable({ board, rows, search, visible, teamOf, filter, onClearFilter
                       {teamLabel(e.from, board)}
                     </button>
                   </td>
-                  <td>{teamLabel(e.to, board)}</td>
-                  <td>{e.handoffs}</td>
-                  <td>{e.failed ? `${e.failed} failed ✕` : "0"}</td>
-                  <td>{e.waiting ? `${e.waiting} waiting ⏸` : "0"}</td>
-                  <td title={e.lastAt ? new Date(e.lastAt).toLocaleString() : undefined}>{e.lastAt ? `${ageWords(e.lastAt)} ago` : ""}</td>
+                  <td><span className="ag-flow-arrow" aria-hidden>→ </span>{teamLabel(e.to, board)}</td>
+                  <td data-label="Handoffs">{e.handoffs}</td>
+                  <td data-label="Failed">{e.failed ? `${e.failed} failed ✕` : "0"}</td>
+                  <td data-label="Waiting">{e.waiting ? `${e.waiting} waiting ⏸` : "0"}</td>
+                  <td data-label="Last" title={e.lastAt ? new Date(e.lastAt).toLocaleString() : undefined}>{e.lastAt ? `${ageWords(e.lastAt)} ago` : ""}</td>
                 </tr>
                 {isOpen ? pairs.map((a) => (
                   <tr key={`${key}:${a.from}>${a.to}`} className="ag-flow-pair">
                     <td><button type="button" className="ag-link" onClick={() => onOpenEdge({ from: a.from, to: a.to, level: "agent" })}>
                       <span data-user-text>{nameOf(a.from)}</span></button></td>
-                    <td data-user-text>{nameOf(a.to)}</td>
-                    <td>{a.handoffs}</td>
-                    <td>{a.failed ? `${a.failed} failed ✕` : "0"}</td>
-                    <td>{a.waiting ? `${a.waiting} waiting ⏸` : "0"}</td>
-                    <td>{a.lastAt ? `${ageWords(a.lastAt)} ago` : ""}</td>
+                    <td><span className="ag-flow-arrow" aria-hidden>→ </span><span data-user-text>{nameOf(a.to)}</span></td>
+                    <td data-label="Handoffs">{a.handoffs}</td>
+                    <td data-label="Failed">{a.failed ? `${a.failed} failed ✕` : "0"}</td>
+                    <td data-label="Waiting">{a.waiting ? `${a.waiting} waiting ⏸` : "0"}</td>
+                    <td data-label="Last">{a.lastAt ? `${ageWords(a.lastAt)} ago` : ""}</td>
                   </tr>
                 )) : null}
               </React.Fragment>

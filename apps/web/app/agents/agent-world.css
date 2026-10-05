@@ -1447,6 +1447,9 @@
 .ag-orgteam-agent:focus-visible, .ag-orgteam-missing:focus-visible, .ag-flow-node-btn:focus-visible,
 .ag-flow-agent:focus-visible, .ag-flow-edge-state:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .ag-orgteam-agent[data-selected] { background: color-mix(in srgb, var(--team-hue) 18%, transparent); }
+/* The press is the button's: a face's SVG is redrawn when the tab stop moves on mousedown, and a
+   click whose mousedown and mouseup land on different nodes never fires. */
+.ag-orgteam-agent *, .ag-orgteam-missing *, .ag-flow-agent *, .ag-flow-node-btn *, .ag-zones-lmember * { pointer-events: none; }
 .ag-orgteam-agent[data-dim="search"], .ag-flow-agent[data-dim="search"], .ag-flow-node .ag-team-face[data-dim="search"] { opacity: 0.3; }
 .ag-orgteam-name, .ag-flow-agent-name { font-size: 11px; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-orgteam-tag { font-size: 10px; color: var(--amber); white-space: nowrap; }
@@ -1565,12 +1568,25 @@
 .ag-flow-table tr[data-state="waiting"] td:nth-child(5) { color: var(--amber); }
 .ag-flow-pair td { color: var(--muted); font-size: 12px; }
 .ag-flow-pair td:first-child { padding-left: 32px; }
+.ag-flow-arrow { display: none; }
+/* A phone: each edge is a block — `Engineering → Quality` over its numbers, each labelled — so
+   the Table is whole at 390px with no sideways scroll. */
 @media (max-width: 639px) {
-  .ag-flow-table td, .ag-flow-table th { white-space: normal; padding: 6px 4px; }
   .ag-org-totals { display: none; }
+  .ag-flow-table, .ag-flow-table tbody { display: block; }
+  .ag-flow-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .ag-flow-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; padding: 6px 0;
+    border-bottom: 1px solid var(--border); }
+  .ag-flow-table td { border: 0; padding: 0; white-space: nowrap; }
+  .ag-flow-table td:nth-child(2) { flex: 1 0 40%; }
+  .ag-flow-table td:nth-child(n+3) { font-size: 12px; color: var(--muted); }
+  .ag-flow-table td[data-label]::before { content: attr(data-label) " "; color: var(--faint); }
+  .ag-flow-arrow { display: inline; color: var(--faint); }
+  .ag-flow-pair td:first-child { padding-left: 24px; }
 }
 
-/* Under 640px: Teams is the drill-down list, enriched. */
+/* Under 640px: Teams is the drill-down list, enriched — one column, never the card grid. */
+.ag-orgteams.ag-zones-list { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .ag-zones-lstats { flex-basis: 100%; font-size: 12px; color: var(--muted); }
 .ag-zones-lbody { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 10px; }
 .ag-zones-lwaits { list-style: none; margin: 0; padding: 0 4px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
@@ -1587,6 +1603,8 @@
 .org-drift-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 32px; }
 .org-drift-sub { color: var(--faint); }
 .org-drift-sub::before { content: "· "; }
+.org-drift-pick select { background: var(--surface-2); color: var(--ink); border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm); font: inherit; font-size: 12px; padding: 2px 6px; min-height: 28px; }
 
 @media (prefers-reduced-motion: reduce) {
   .ag-flow-edge, .ag-flow-node, .ag-orgteam-agent { transition: none !important; }

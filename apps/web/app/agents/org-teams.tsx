@@ -64,20 +64,23 @@ function working(team: OrgTeam, live: LiveMap): number {
   return team.members.filter((m) => ["working", "thinking", "speaking"].includes(liveState(live, m))).length;
 }
 
-/** The team's visible teams: an empty Yours is never drawn. */
+/** The teams drawn: an empty Yours is never drawn — unless an empty seat (a missing role)
+ *  belongs there, which is something true to say. */
 export function shownTeams(board: OrgBoard): OrgTeam[] {
-  return board.teams.filter((t) => !(t.key === "yours" && t.members.length === 0));
+  return board.teams.filter((t) => !(t.key === "yours" && t.members.length === 0
+    && !board.missingRoles.some((m) => m.team === "yours")));
 }
 
 function stepGapPhrases(team: OrgTeam): { label: string; n: number; tip: string }[] {
-  const by = new Map<string, { label: string; n: number; tips: string[] }>();
+  const by = new Map<string, { label: string; n: number; tip: string }>();
   for (const g of team.gaps.stepGaps) {
-    const x = by.get(g.ability) ?? { label: g.label, n: 0, tips: [] };
+    // One sentence (a tooltip stays under 14 words): the first step; the count says the rest.
+    const x = by.get(g.ability) ?? { label: g.label, n: 0,
+                                     tip: `${g.workflowName} › ${g.stepTitle} needs ${g.label}. ${nameOf(g.roleKey)} lacks it.` };
     x.n += 1;
-    x.tips.push(`${g.workflowName} › ${g.stepTitle} needs ${g.label}. ${nameOf(g.roleKey)} lacks it.`);
     by.set(g.ability, x);
   }
-  return [...by.values()].map((x) => ({ label: x.label, n: x.n, tip: x.tips.join("\n") }));
+  return [...by.values()];
 }
 
 /** Everything `Give ▾` can give on this team: recommended-not-held, then a step's need. */
@@ -189,7 +192,7 @@ function TeamCard(p: CardProps) {
              aria-labelledby={titleId} style={{ ["--team-hue" as string]: teamHue(team.key) }}>
       <header className="ag-orgteam-head">
         <span className="ag-team-label" id={titleId} title={teamTip(team.key, board)}>{label}</span>
-        <span className="ag-team-count">{team.members.length}</span>
+        {team.members.length ? <span className="ag-team-count">{team.members.length}</span> : null}
         <Badges team={{ working: working(team, live), needsYou: team.needsYou }} />
         <span className="ag-spacer" />
         <TeamMenu {...p} />
@@ -242,9 +245,9 @@ function TeamCard(p: CardProps) {
           ) : null}
           <WaitingRow team={team} />
           {anyBusy ? <LoadRow team={team} days={days} /> : null}
-          {hands.length || gets.length ? (
+          {hands.length ? (
             <div className="ag-orgteam-row" data-row="with">
-              <dt>{hands.length ? "Hands to" : "Gets from"}</dt>
+              <dt>Hands to</dt>
               <dd>
                 {hands.map((e) => (
                   <button key={e.to} type="button" className="ag-link" title="Handoffs in this window. Press to see them."
@@ -253,7 +256,13 @@ function TeamCard(p: CardProps) {
                     {teamLabel(e.to, board)} ×{e.handoffs}
                   </button>
                 ))}
-                {hands.length && gets.length ? <span className="ag-orgteam-sub">Gets from</span> : null}
+              </dd>
+            </div>
+          ) : null}
+          {gets.length ? (
+            <div className="ag-orgteam-row" data-row="gets">
+              <dt>Gets from</dt>
+              <dd>
                 {gets.map((e) => (
                   <button key={e.from} type="button" className="ag-link" title="Handoffs in this window. Press to see them."
                           data-testid={`ag-orgteam-gets-${team.key}-${e.from}`}
@@ -356,7 +365,7 @@ function GapsRow({ team, actions }: { team: OrgTeam; actions: OrgActions | null 
       <dd className="ag-orgteam-gaps">
         {chips.slice(0, CHIPS_MAX).map((a) => (
           <span key={a.ability} className="ag-orgteam-chip" data-testid={`ag-orgteam-gap-${team.key}-${a.ability}`}
-                title={a.roles.map((r) => `Recommended for ${nameOf(r)}. Not held.`).join("\n")}>
+                title={`Recommended for ${a.roles.map(nameOf).join(", ")}. Not held.`}>
             <Star size={10} weight="bold" aria-hidden /> {a.label}
           </span>
         ))}
@@ -503,7 +512,7 @@ function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
             <button type="button" className="ag-zones-lhead" aria-expanded={open === t.key}
                     data-testid={`ag-zones-team-${t.key}`} onClick={() => setOpen(open === t.key ? null : t.key)}>
               <span className="ag-team-label" title={teamTip(t.key, board)}>{label}</span>
-              <span className="ag-team-count">{t.members.length}</span>
+              {t.members.length ? <span className="ag-team-count">{t.members.length}</span> : null}
               <Badges team={{ working: working(t, live), needsYou: t.needsYou }} />
               {stats.length ? (
                 <span className="ag-zones-lstats">
@@ -538,7 +547,7 @@ function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
                 {t.gaps.abilities.length ? (
                   <div className="ag-zones-lgaps">
                     {t.gaps.abilities.map((a) => (
-                      <span key={a.ability} className="ag-orgteam-chip" title={a.roles.map((r) => `Recommended for ${nameOf(r)}. Not held.`).join("\n")}>
+                      <span key={a.ability} className="ag-orgteam-chip" title={`Recommended for ${a.roles.map(nameOf).join(", ")}. Not held.`}>
                         <Star size={10} weight="bold" aria-hidden /> {a.label}
                       </span>
                     ))}

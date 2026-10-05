@@ -174,3 +174,16 @@ describe("Teams keeps Zones' faces", () => {
     expect($('[data-testid="ag-org-agent"]')).not.toBeNull();
   });
 });
+
+describe("a press on a face always lands", () => {
+  it("every Organization face button takes the press itself, never its redrawn SVG", async () => {
+    // Walk 2026-10-04: a mousedown focused the face, moving the tab stop redrew its SVG, and the
+    // mouseup landed on a different node, so the browser fired no click (old Zones had the same
+    // fault). The press belongs to the button: its children take no pointer events.
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync("app/agents/agent-world.css", "utf8");
+    for (const sel of [".ag-orgteam-agent *", ".ag-orgteam-missing *", ".ag-flow-agent *", ".ag-flow-node-btn *", ".ag-zones-lmember *"]) {
+      expect(css).toMatch(new RegExp(`${sel.replace(/[.*]/g, (c) => `\\${c}`)}[^{]*\\{ pointer-events: none; \\}`));
+    }
+  });
+});

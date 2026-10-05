@@ -285,9 +285,10 @@ export async function listEdgeHandoffs(projectId: string, days: OrgDays, sources
 
 // ── Words (one place) ───────────────────────────────────────────────────────────────────────
 
-/** `9h`, `40m`, `0`: busy time, said plainly. */
+/** `9h`, `40m`, `<1m`, `0`: busy time, said plainly (a few seconds is never "0"). */
 export function busyWords(seconds: number): string {
-  if (seconds < 60) return "0";
+  if (seconds <= 0) return "0";
+  if (seconds < 60) return "<1m";
   const m = Math.round(seconds / 60);
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
