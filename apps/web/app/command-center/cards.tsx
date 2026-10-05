@@ -153,7 +153,7 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
         {view && all.length > (needsYou ?? 0) ? (
           <span className="cc-n-more" data-testid="cc-needs-more"
                 title="Also listed: stopped work, setup and system findings. Not decisions.">
-            {needsYou ? `+${all.length - (needsYou ?? 0)} more` : `${all.length} to look at`}
+            {needsYou ? `+${all.length - (needsYou ?? 0)} other` : `${all.length} to look at`}
           </span>
         ) : null}
         {view && view.counts.stopped > 0 ? (
@@ -184,7 +184,9 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
             {rows.length > NEEDS_ROWS ? (
               <button type="button" className="cc-more" aria-expanded={more} data-testid="cc-att-more"
                       onClick={() => setMore((v) => !v)}>
-                {more ? "Show fewer" : `+${rows.length - NEEDS_ROWS} more`}
+                {/* ONE NUMBER (re-check): the head says decisions + other = every row; this
+                    opens to that same total. */}
+                {more ? "Show fewer" : `Show all ${all.length}`}
               </button>
             ) : null}
           </div>
@@ -346,9 +348,9 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
           )}
         </div>
       ) : null}
-      {recent.length || (view?.today.runsFinished ?? 0) > 0 ? (
+      {recent.length || (view?.today.runsFinished ?? 0) > 0 || (view?.today.runsFailed ?? 0) > 0 ? (
         <ul className="cc-done" aria-label="Finished lately" data-testid="cc-done">
-          {view && view.today.runsFinished > 0 ? (
+          {view && (view.today.runsFinished > 0 || view.today.runsFailed > 0) ? (
             <li className="cc-done-n" data-testid="cc-kpi-done-today" title="Runs that finished today">
               {view.today.runsFinished} done today
               {view.today.runsFailed > 0 ? <em className="cc-failed"> · {view.today.runsFailed} failed</em> : null}
@@ -417,7 +419,10 @@ export function HealthCard({ view, reachable, orgId }: {
           {view ? (
             cap > 0 ? <b>{usd(spent)} <small>of {usd(cap)}</small></b> : <b>{usd(spent)} <small>no cap</small></b>
           ) : <b>—</b>}
-          <span>{PERIOD_WORD[b?.period ?? "month"] ?? "This period"} · subscription calls free</span>
+          <span>
+            {PERIOD_WORD[b?.period ?? "month"] ?? "This period"}
+            {b?.subscription ? " · subscription calls free" : ""}
+          </span>
         </span>
       </Go>
       {/* Today's money, when the ring is not already today's (a day-period budget). */}

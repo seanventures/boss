@@ -755,7 +755,12 @@ def escalation_words(question: str, task_ref: str, build: Optional[Mapping[str, 
     thing = f"“{name}”" if name else "A build"
     stuck = _STUCK.search(line)
     cls = _CLASS_Q.match(line)
-    if stuck:
+    from .build_waits import waits_on_person as _waits, why_waiting as _why
+
+    if build and _waits(build.get("status"), build.get("phase"), build.get("decision_status")):
+        # A BUILD THAT WAITS ON YOU is never "stopped for a reason BOSS couldn't name".
+        title = f"{thing} waits on you to {_why(build.get('phase'), build.get('decision_status')) or 'answer it'}"
+    elif stuck:
         stage = _STAGE_WORDS.get(stuck.group(1).strip().lower(), stuck.group(1).replace("_", " "))
         title = f"{thing} stuck {stage} for {_span_words(int(stuck.group(2)))}. Continue or cancel?"
     elif cls:
@@ -771,7 +776,7 @@ def escalation_words(question: str, task_ref: str, build: Optional[Mapping[str, 
     if build:
         status = str(build.get("status") or "")
         word = {"cancelled": "stopped", "failed": "failed", "completed": "finished",
-                "blocked": "waiting", "running": "still marked running"}.get(status, status or "unknown")
+                "blocked": "waiting on you", "running": "still marked running"}.get(status, status or "unknown")
         detail = f"Build {'of ' + name if name else ''} · {word}".replace("  ", " ")
     else:
         detail = "Its build is gone"
@@ -798,7 +803,9 @@ def shepherd_escalation_cards(connection: Any, project_id: str) -> list[dict[str
                 {"p": project_id}).mappings().all()
             refs = [str(r["task_ref"]) for r in rows if r["task_ref"]]
             builds = {str(b["id"]): dict(b) for b in connection.execute(text(
-                "SELECT id, title, status, spec, finalize_ctx FROM code_task_runs WHERE id = ANY(:ids)"),
+                "SELECT r.id, r.title, r.status, r.phase, r.spec, r.finalize_ctx, "
+                "d.status AS decision_status FROM code_task_runs r "
+                "LEFT JOIN decisions d ON d.id = r.decision_id WHERE r.id = ANY(:ids)"),
                 {"ids": refs}).mappings()} if refs else {}
     except Exception:  # noqa: BLE001 — an older schema
         return []
@@ -920,6 +927,9 @@ _ENDED_BUILD = frozenset({"completed", "failed", "cancelled", "simulated"})
 CLEAN_UP_PAGE = 200
 
 
+from .build_waits import waits_on_person, why_waiting  # noqa: E402
+
+
 def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
                  older_than: timedelta = OLD_QUESTION) -> dict[str, Any]:
     """CLEAN UP, the Command Center's one button for old stuck builds.
@@ -941,8 +951,10 @@ def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
         while True:
             with engine.begin() as c:
                 page = c.execute(text(
-                    "SELECT e.id, e.task_ref, r.status, r.updated_at FROM shepherd_escalations e "
+                    "SELECT e.id, e.task_ref, r.status, r.phase, r.updated_at, "
+                    "d.status AS decision_status FROM shepherd_escalations e "
                     "LEFT JOIN code_task_runs r ON r.id = e.task_ref "
+                    "LEFT JOIN decisions d ON d.id = r.decision_id "
                     "WHERE e.project_id = :p AND e.status = 'open' AND e.created_at < :cut "
                     "AND e.id > :after ORDER BY e.id LIMIT :n"),
                     {"p": project_id, "cut": cutoff, "after": after, "n": CLEAN_UP_PAGE}).mappings().all()
@@ -959,8 +971,14 @@ def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
             updated = updated.replace(tzinfo=timezone.utc)
         live = bool(status) and status not in _ENDED_BUILD
         answer = "cleared: the build already ended"
+        # WAITING ON A PERSON IS NOT STUCK (independent re-check R1): a build at its plan, its
+        # merge, or any open decision is the operator's move, never BOSS's. Clean up closes
+        # the stale question and leaves the build and its decision exactly as they are.
+        waiting = waits_on_person(status, row["phase"], row["decision_status"])
+        if waiting:
+            answer = "cleared: the build waits on a person"
         with engine.begin() as c:
-            if live and (updated is None or updated < cutoff):
+            if live and not waiting and (updated is None or updated < cutoff):
                 try:
                     code_task_service.cancel_run(
                         c, ref, project_id, actor=actor,
@@ -969,7 +987,7 @@ def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
                     answer = "cancel"
                 except (code_task_service.CancelRefused, LookupError):
                     pass
-            elif live:
+            elif live and not waiting:
                 continue  # it moved since the question: not history, leave the card
             n = c.execute(text(
                 "UPDATE shepherd_escalations SET status='answered', answer=:a, answered_by=:by, "

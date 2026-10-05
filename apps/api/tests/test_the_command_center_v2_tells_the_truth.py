@@ -355,3 +355,61 @@ def test_the_latest_feed_says_what_the_team_made(engine, client):
     assert ("wrote the PRD for", "Lead triage inbox") in said
     pr = next(e for e in latest if e["verb"].startswith("opened PR"))
     assert pr["kind"] == "made" and pr["url"] == "https://github.com/a/b/pull/42"
+
+
+# ── re-check (cc/v2 @ddf673f8) ──────────────────────────────────────────────────────────────
+
+
+def test_clean_up_never_stops_a_build_that_waits_on_you(engine, client):
+    """An 8-day-old question about a build at its plan: Clean up closes the question and leaves
+    the build, its decision and its Needs you row exactly as they were."""
+    with engine.begin() as c:
+        run_id, dec = _plan_wait(c)
+        c.execute(text("UPDATE code_task_runs SET updated_at = :u WHERE id = :i"),
+                  {"u": NOW - timedelta(days=9), "i": run_id})
+        q = _question(c, ref=run_id, age=timedelta(days=8))
+    before = _view(client)
+    assert any(a.get("decision_id") == dec for a in before["attention"])
+    body = client.post("/v1/command-center/clean-up", json={"project_id": PID, "actor": "ceo"}).json()
+    assert body["cancelled"] == 0 and body["closed"] == 1
+    with engine.begin() as c:
+        assert c.execute(text("SELECT status FROM code_task_runs WHERE id = :i"), {"i": run_id}).scalar() == "blocked"
+        assert c.execute(text("SELECT answer FROM shepherd_escalations WHERE id = :i"),
+                         {"i": q}).scalar() == "cleared: the build waits on a person"
+    after = _view(client)
+    assert any(a.get("decision_id") == dec for a in after["attention"])
+    assert after["counts"]["needs_you"] == before["counts"]["needs_you"]
+
+
+def test_shepherd_never_asks_about_a_build_that_waits_on_you_and_never_twice(engine):
+    from boss_engine.services.shepherd_service import open_question
+
+    with engine.begin() as c:
+        run_id, _dec = _plan_wait(c)
+        assert open_question(c, project_id=PID, task_ref=run_id, question="Stuck?", options=[],
+                             evidence={}) is None
+        other = _build(c, title="A running build", status="running", phase="coding")
+        first = open_question(c, project_id=PID, task_ref=other, question="Still coding?",
+                              options=["continue"], evidence={})
+        assert first
+        again = open_question(c, project_id=PID, task_ref=_build(c, title="Another", status="running"),
+                              question="Still coding?", options=["continue"], evidence={})
+        assert again is None
+
+
+def test_rejecting_a_plan_stops_its_build(engine, client):
+    with engine.begin() as c:
+        run_id, dec = _plan_wait(c)
+    got = client.post(f"/v1/decisions/{dec}/reject", json={"actor": "ceo", "note": "Not this"})
+    if got.status_code == 404:
+        got = client.post(f"/v1/decisions/{dec}/transition",
+                          json={"action": "reject", "actor": "ceo", "note": "Not this"})
+    assert got.status_code in (200, 201), got.text
+    with engine.begin() as c:
+        row = c.execute(text("SELECT status, finalize_ctx FROM code_task_runs WHERE id = :i"),
+                        {"i": run_id}).mappings().one()
+    assert row["status"] == "cancelled"
+    assert (row["finalize_ctx"] or {}).get("plan_rejected") is True
+    apps = client.get("/v1/factory/apps", params={"project_id": PID}).json()["apps"]
+    mine = next(a for a in apps if run_id in a["run_ids"])
+    assert mine["state"] != "needs_plan"

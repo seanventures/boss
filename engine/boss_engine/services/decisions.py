@@ -933,10 +933,27 @@ class DecisionService:
         A rejected stack deployment closes its ChangeSet and hands back its reservation, so
         the console stops showing it as waiting for somebody.
         """
-        if (row["recommendation"] or {}).get("action") == "deploy_stack":
+        rec = row["recommendation"] or {}
+        if rec.get("action") == "deploy_stack":
             from .stack_deploy import on_decision_not_approved
 
             on_decision_not_approved(connection, self.settings, row, actor, "rejected")
+        elif rec.get("action") == "resume_code_task" and rec.get("run_id"):
+            # A PLAN SOMEBODY SAID NO TO ENDS ITS BUILD (independent re-check): it stayed
+            # "Needs you · plan" in the Factory and on the shelf after Reject. The build is
+            # stopped the way a person's Stop stops it, and says the plan was rejected.
+            from .code_task_service import CancelRefused, cancel_run
+
+            try:
+                with connection.begin_nested():
+                    cancel_run(connection, str(rec["run_id"]), str(row["project_id"]), actor=actor,
+                               reason="The plan was rejected")
+                    connection.execute(text(
+                        "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                        "|| jsonb_build_object('plan_rejected', true) WHERE id = :id"),
+                        {"id": str(rec["run_id"])})
+            except (CancelRefused, LookupError):
+                pass
 
     def _handle_non_approved_follow_on(
         self,

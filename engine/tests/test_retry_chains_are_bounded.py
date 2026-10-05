@@ -80,8 +80,11 @@ def test_the_escalation_is_what_makes_the_bound_stick():
     """`sweep` skips runs with an open escalation, so escalating removes the run from the
     candidate set instead of it being reconsidered on every 180s tick."""
     esc = inspect.getsource(shepherd_service._escalate_exhausted_lineage)
-    assert "INSERT INTO shepherd_escalations" in esc
-    assert "NOT EXISTS" in esc, "a second escalation per tick is the loop wearing a new hat"
+    assert "open_question(" in esc
+    # The one door refuses a second open question about the same build.
+    door = inspect.getsource(shepherd_service.open_question)
+    assert "task_ref = :t" in door and "status = 'open'" in door, \
+        "a second escalation per tick is the loop wearing a new hat"
     sweep = inspect.getsource(shepherd_service.sweep)
     assert "shepherd_escalations" in sweep and "status = 'open'" in sweep
 

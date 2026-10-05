@@ -94,6 +94,8 @@ export type ViewBudget = {
   utilizationRatio: number | null; resetsAtLabel: string; budgetTimezone: string;
   /** The day period, when the budget has one (a cap of 0 = no day cap). */
   day: { capUsdMicros: number; actualUsdMicros: number };
+  /** A working subscription model is connected: its calls cost nothing. */
+  subscription: boolean;
 };
 
 export type SystemKey = "models" | "repo" | "budget" | "host" | "queue" | "previews" | "deploys";
@@ -256,6 +258,7 @@ export function parseCommandCenterView(w: unknown): CommandCenterView {
       utilizationRatio: typeof b.utilization_ratio === "number" ? b.utilization_ratio : null,
       resetsAtLabel: str(b.resets_at_label), budgetTimezone: str(b.budget_timezone, "UTC"),
       day: { capUsdMicros: num(bd.cap_usd_micros), actualUsdMicros: num(bd.actual_usd_micros) },
+      subscription: b.subscription === true,
     },
     host: { show: h.show === true,
             ...(h.severity === "warning" || h.severity === "critical" ? { severity: h.severity } : {}),

@@ -11,7 +11,9 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 
-import { openTalk } from "../../lib/converse-doors";
+import { createPortal } from "react-dom";
+
+import { openDockAbout } from "../../lib/dock-subject";
 
 import type { BoardAgent, TeamSummary } from "../../lib/agents-live-board";
 import type { CcApp } from "../../lib/command-center-apps";
@@ -126,8 +128,11 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
   still: boolean;
 }) {
   const byKey = new Map(agents.map((a) => [a.roleKey, a]));
-  const [open, setOpen] = useState<string | null>(null);
-  const isWorkingAgent = (a: BoardAgent) => a.state === "working" || a.state === "in_panel" || live.has(a.roleKey);
+  const [open, setOpen] = useState<{ key: string; at: DOMRect } | null>(null);
+  // ONE SOURCE (re-check R6): the board's own agent state, which the server sets from open
+  // work AND the running missions' working hops — what In flight and the pill read too.
+  void live;
+  const isWorkingAgent = (a: BoardAgent) => a.state === "working" || a.state === "in_panel";
   const working = agents.filter((a) => isWorkingAgent(a) && !waiting.has(a.roleKey)).length;
   const waitingN = agents.filter((a) => waiting.has(a.roleKey)).length;
   const ready = Math.max(0, agents.length - working - waitingN);
@@ -160,17 +165,20 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
                   return (
                     <span key={a.roleKey} className="cc-face-wrap">
                       <button type="button" className="cc-face" title={label} aria-label={label}
-                              aria-expanded={open === a.roleKey} data-testid="cc-face"
+                              aria-expanded={open?.key === a.roleKey} data-testid="cc-face"
                               data-live={isWorking || isWaiting ? "true" : undefined}
-                              onClick={() => setOpen((o) => (o === a.roleKey ? null : a.roleKey))}>
+                              onClick={(e) => {
+                                const at = e.currentTarget.getBoundingClientRect();
+                                setOpen((o) => (o?.key === a.roleKey ? null : { key: a.roleKey, at }));
+                              }}>
                         <span className="cc-face-in" data-working={isWorking && !isWaiting ? "true" : undefined}
                               data-waiting={isWaiting ? "true" : undefined}>
                           <AgentAvatar agent={a.roleKey} size={32} aiBadge={false}
                                        state={still ? "idle" : isWorking ? "working" : "idle"} />
                         </span>
                       </button>
-                      {open === a.roleKey ? (
-                        <FaceCard agent={a} word={word} orgId={orgId} onClose={() => setOpen(null)} />
+                      {open?.key === a.roleKey ? (
+                        <FaceCard agent={a} word={word} orgId={orgId} at={open.at} onClose={() => setOpen(null)} />
                       ) : null}
                     </span>
                   );
@@ -195,8 +203,8 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
 }
 
 /** The agent behind a face: who, what it is doing now, Talk, and its page. */
-function FaceCard({ agent, word, orgId, onClose }: {
-  agent: BoardAgent; word: string; orgId?: string | null; onClose: () => void;
+function FaceCard({ agent, word, orgId, at, onClose }: {
+  agent: BoardAgent; word: string; orgId?: string | null; at: DOMRect; onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -206,21 +214,33 @@ function FaceCard({ agent, word, orgId, onClose }: {
       onClose();
     };
     const escape = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const scrolled = () => onClose();
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+    window.addEventListener("scroll", scrolled, { passive: true, capture: true });
+    return () => {
+      document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape);
+      window.removeEventListener("scroll", scrolled, { capture: true });
+    };
   }, [onClose]);
-  return (
+  // IN THE POPOVER LAYER (re-check R2): a tile's hover transform made each tile a stacking
+  // context, so the card painted under the next tile. Portalled to the body, placed by its face.
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1440;
+  const style: React.CSSProperties = { top: at.bottom + 6, left: Math.max(8, Math.min(at.left - 8, vw - 256)) };
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div className="cc-facecard" role="dialog" aria-label={whoLine(agent.roleKey, agent.name)} ref={box}
-         data-testid="cc-facecard">
+         data-testid="cc-facecard" style={style}>
       <b>{whoLine(agent.roleKey, agent.name)}</b>
       <span className="cc-facecard-line">{agent.line && agent.line !== "No work yet" ? agent.line : word === "ready" ? "Ready for work" : word}</span>
       <span className="cc-facecard-acts">
+        {/* TALK OPENS THE DOCK (re-check), which makes room for itself — not an overlay. */}
         <button type="button" className="cc-btn sm primary" data-testid="cc-face-talk"
-                onClick={() => { onClose(); openTalk(agent.roleKey); }}>Talk</button>
+                onClick={() => { onClose(); openDockAbout({ subject: null, question: "", role: agent.name, roleKey: agent.roleKey, history: "push" }); }}>
+          Talk
+        </button>
         <Go className="cc-btn sm" patch={{ area: "workforce", role: agent.roleKey, view: null }} orgId={orgId}
             testId="cc-face-open">Open ↗</Go>
       </span>
-    </div>
-  );
+    </div>, document.body);
 }

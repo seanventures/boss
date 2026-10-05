@@ -267,7 +267,7 @@
 .cc-face { border: 0; padding: 0; background: none; cursor: pointer; }
 .cc-face-wrap { position: relative; display: inline-flex; }
 .cc-facecard {
-  position: absolute; z-index: 40; top: calc(100% + 6px); left: -8px; width: 240px;
+  position: fixed; z-index: 150; width: 240px;
   display: grid; gap: 6px; padding: 12px; border-radius: 12px; text-align: left;
   border: 1px solid var(--border-strong); background: #101A30; box-shadow: var(--shadow-lg);
   font-size: 12.5px; color: var(--muted);
@@ -500,7 +500,7 @@
 }
 .cc-app-state[data-state="pr"] { background: rgba(9, 14, 28, .78); color: #D6E4FF; border: 1px solid rgba(141, 180, 255, .45); }
 .cc-app-state[data-state="needs"] { background: rgba(245, 181, 68, .9); color: #2A1A00; }
-.cc-app-state[data-state="failed"] { background: rgba(242, 100, 122, .85); color: #fff; }
+.cc-app-state[data-state="failed"] { color: #FFB3C0; border-color: rgba(242, 100, 122, .7); }
 .cc-app-state[data-state="building"] { color: #9FF3EC; }
 .cc-app-state[data-state="done"] { color: #A7F3D0; }
 .cc-app-body { padding: 11px 13px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -626,7 +626,7 @@
   .cc-systems { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
   .cc-today-spend { padding-left: 0; margin-top: 0; }
   .cc-help-rows .ag-link { min-height: 44px; }
-  .cc-facecard { position: fixed; left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; z-index: 90; }
+
   .cc-rail-track { grid-auto-columns: 78%; }
   .cc-rail-btn { display: none; }
   .cc-rail::after { width: 40px; }
@@ -665,3 +665,15 @@
   .cc-headline { font-size: 24px; }
   .cc-rail-track { grid-auto-columns: 92%; }
 }
+
+@media (max-width: 640px) {
+  .cc-facecard { left: 16px !important; right: 16px; top: auto !important; bottom: 16px; width: auto; }
+  .cc-facecard .cc-btn { min-height: 44px; }
+}
+.cc-facecard .cc-btn { font: 600 13px var(--sans); }
+
+/* THE DOCK IS OPEN (re-check): Talk to BOSS is right there, so the hero's own button goes, and
+   the composer keeps to two rows — pickers and Build, then Ideas and Add. */
+[data-dock="open"] .cc .askboss[data-layout="hero"] .askboss-talk { display: none; }
+[data-dock="open"] .cc .askboss[data-layout="hero"] .askboss-bar-settings { flex-basis: auto; flex-wrap: nowrap; }
+[data-dock="open"] .cc .askboss[data-layout="hero"] .split-action { margin-left: auto; }

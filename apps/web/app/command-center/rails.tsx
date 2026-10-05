@@ -16,7 +16,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { IDEAS, IdeaCover, ideaFor, openTemplate, type Idea } from "../ask-boss-hero";
-import { shelfOrder, shelfState, shelfWord, type CcApp, type ShelfState } from "../../lib/command-center-apps";
+import { appNeed, shelfOrder, shelfState, shelfWord, type AppNeed, type CcApp, type ShelfState } from "../../lib/command-center-apps";
+import type { AttentionItem } from "../../lib/agents-live-board";
 import { AgentAvatar } from "../agent-avatar";
 import { nameOf } from "../agents/run-face";
 import { addFeaturePatch } from "../../lib/compose-links";
@@ -185,17 +186,20 @@ function Monogram({ name }: { name: string }) {
 
 export type ShelfFilter = "all" | "pr" | "needs" | "stopped";
 
-export function filterApps(apps: CcApp[], f: ShelfFilter): CcApp[] {
+export function filterApps(apps: CcApp[], f: ShelfFilter, needOf: (a: CcApp) => AppNeed | null = (a) => appNeed(a)): CcApp[] {
   if (f === "all") return apps;
-  if (f === "stopped") return apps.filter((a) => ["stopped", "failed"].includes(shelfState(a)));
-  return apps.filter((a) => shelfState(a) === f);
+  if (f === "stopped") return apps.filter((a) => ["stopped", "failed"].includes(shelfState(a, needOf(a))));
+  return apps.filter((a) => shelfState(a, needOf(a)) === f);
 }
 
-export function AppsShelf({ apps, orgId }: { apps: CcApp[] | null; orgId?: string | null }) {
+export function AppsShelf({ apps, attention = [], orgId }: {
+  apps: CcApp[] | null; attention?: AttentionItem[]; orgId?: string | null;
+}) {
   const [filter, setFilter] = useState<ShelfFilter>("all");
   if (apps && apps.length === 0) return null;
-  const list = apps ? filterApps(shelfOrder(apps), filter) : [];
-  const n = (f: ShelfFilter) => (apps ? filterApps(apps, f).length : 0);
+  const needOf = (a: CcApp) => appNeed(a, attention);
+  const list = apps ? filterApps(shelfOrder(apps, needOf), filter, needOf) : [];
+  const n = (f: ShelfFilter) => (apps ? filterApps(apps, f, needOf).length : 0);
   const chips: [ShelfFilter, string][] = [["all", "All"], ["pr", "PR open"], ["needs", "Needs you"], ["stopped", "Stopped"]];
   return (
     <section className="cc-shelf" aria-labelledby="cc-apps-h" data-testid="cc-apps">
@@ -213,16 +217,19 @@ export function AppsShelf({ apps, orgId }: { apps: CcApp[] | null; orgId?: strin
       </div>
       <Rail label="Apps" testId="cc-apps-rail" resetKey={filter}>
         {list.map((a) => {
-          const state: ShelfState = shelfState(a);
+          const need = needOf(a);
+          const state: ShelfState = shelfState(a, need);
+          // The card opens what waits on you, else the latest build — the chip's own rule.
+          const target = need?.runId ?? a.openRunId;
           const idea = templateFor(a.app);
           const builders = a.builders.slice(0, 5);
           return (
             <div key={a.key} className="cc-app" data-state={state}>
-              <Go className="cc-app-open" patch={{ area: "code_tasks", view: "apps", build: a.openRunId, role: null }}
+              <Go className="cc-app-open" patch={{ area: "code_tasks", view: "apps", build: target, role: null }}
                   orgId={orgId} testId="cc-app" title={`${a.app} · ${a.word}. Opens it in the Factory.`}>
                 <span className="cc-app-art" data-state={state}>
                   {idea ? <IdeaCover idea={idea} scope={`app-${a.key}`} /> : <Monogram name={a.app} />}
-                  <span className="cc-app-state" data-state={state}>{shelfWord(a)}</span>
+                  <span className="cc-app-state" data-state={state}>{shelfWord(a, need)}</span>
                 </span>
                 <span className="cc-app-body">
                   <b data-user-text>{a.app}</b>
