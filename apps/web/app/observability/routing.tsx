@@ -38,7 +38,8 @@ export function routeRow(w: Record<string, unknown>): RoutingRow {
   const s = (v: unknown) => (typeof v === "string" && v ? v : null);
   return {
     id: String(w.id ?? ""), at: String(w.created_at ?? ""), provider: s(w.selected_provider), budget: s(w.budget_state),
-    boundary: s(w.data_boundary), outcome: w.selected_source_id ? "selected" : "denied", model: s(w.selected_model_id),
+    boundary: s(w.data_boundary),
+    outcome: w.denial_reason ? "denied" : w.selected_source_id ? "selected" : "none", model: s(w.selected_model_id),
   };
 }
 
@@ -49,17 +50,27 @@ async function readRoutes(projectId: string, f: RouteFilters, limit: number): Pr
 
 const word = (v: string | null) => (v ? v.replace(/[_-]/g, " ") : "—");
 
+/** One outcome language for both sources: the Models view sends the server's word (`Routed`,
+ *  `Denied`, `No route`), the full list route a key (`selected` / `denied`). */
+export function outcomeOf(v: string | null | undefined): { key: "selected" | "denied" | "none"; word: string } {
+  const o = (v ?? "").trim().toLowerCase();
+  if (o === "denied" || o === "refused") return { key: "denied", word: "Refused" };
+  if (o === "selected" || o === "routed") return { key: "selected", word: "Routed" };
+  return { key: "none", word: "No route" };
+}
+
 function RouteLine({ r }: { r: RoutingRow }) {
   const t = Date.parse(r.at);
+  const out = outcomeOf(r.outcome);
   return (
-    <li className="obs-line obs-route" data-testid="obs-route-row" data-outcome={r.outcome ?? undefined}>
+    <li className="obs-line obs-route" data-testid="obs-route-row" data-outcome={out.key}>
       <span className="inf-num inf-muted" title={Number.isFinite(t) ? new Date(t).toLocaleString() : undefined}>
         {Number.isFinite(t) ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}
       </span>
       <span data-copy="data">{word(r.provider)}</span>
       <span className="inf-muted" title="Budget state">{word(r.budget)}</span>
       <span className="inf-muted" title="Data boundary">{word(r.boundary)}</span>
-      <span className={r.outcome === "denied" ? "obs-bad" : "obs-ok"}>{r.outcome === "denied" ? "Refused" : "Routed"}</span>
+      <span className={out.key === "denied" ? "obs-bad" : out.key === "selected" ? "obs-ok" : "inf-muted"}>{out.word}</span>
       {r.model ? <span className="inf-mono inf-faint inf-trunc" data-copy="data">{r.model}</span> : null}
     </li>
   );

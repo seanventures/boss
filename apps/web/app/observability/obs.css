@@ -133,7 +133,8 @@
 
 /* ── Models ────────────────────────────────────────────────────────────────────────────────── */
 .obs-models-none { padding: 0; }
-.obs-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+/* Tokens carries two numbers (`4.8M in · 713k out`), so it gets the wider track. */
+.obs-stats { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)); gap: 10px; }
 .obs-stat {
   display: grid; grid-template-columns: 1fr auto; grid-template-areas: "k spark" "v spark"; align-items: center; gap: 2px 10px;
   min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
