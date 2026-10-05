@@ -1176,7 +1176,8 @@ def command_center_fits(page, ctx: Context, goto: Callable[[str], None]) -> str:
         crowded = page.evaluate(
             """() => { const bar = document.querySelector('.bx-topbar'); if (!bar) return [];
                  const items = [...bar.children].filter((e) => e.getClientRects().length
-                   && getComputedStyle(e).position !== 'absolute' && !e.classList.contains('bx-topbar-spacer'));
+                   && getComputedStyle(e).position !== 'absolute' && !e.classList.contains('bx-topbar-spacer'))
+                   .sort((x, y) => x.getBoundingClientRect().left - y.getBoundingClientRect().left);
                  const out = [];
                  for (let i = 1; i < items.length; i++) {
                    const a = items[i - 1].getBoundingClientRect(), b = items[i].getBoundingClientRect();
