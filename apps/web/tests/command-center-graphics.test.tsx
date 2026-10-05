@@ -12,7 +12,8 @@ import { NOW_MS, flow, freshView, hours, quietView, view } from "./_helpers/comm
 import { $, $$, mount, rerender, unmount } from "./_helpers/live-render";
 import { parseCommandCenterView, type CommandCenterView } from "../lib/command-center-view";
 import {
-  chainsOf, cumulative, floorCounts, floorKinds, floorLayout, newComets, nowPosition, recencyOpacity, stripScale,
+  chainsOf, cumulative, edgeWidth, fitArcLabel, floorCounts, floorKinds, floorLayout, newComets, nowPosition,
+  placeNames, recencyOpacity, stripScale,
   stripWindow,
 } from "../lib/command-center-graphics";
 
@@ -41,25 +42,39 @@ function visibleText(): string {
 }
 
 describe("the Floor", () => {
-  it("draws every agent as a real face, sized and lit by what it is doing", async () => {
+  it("draws a face for every agent doing something and a dim dot for every idle one (§4.7)", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW_MS);
     const v = V(view());
     await mount(floor(v));
-    const faces = $$("[data-testid='cc-floor-face']");
-    expect(faces).toHaveLength(v.agents.length);
-    expect($$("[data-testid='cc-floor-face'] .ag-avatar")).toHaveLength(v.agents.length);
     const kind = (k: string) => $(`[data-role='${k}']`)?.getAttribute("data-kind");
     expect(kind("software_engineer")).toBe("working");          // presence: working
     expect(kind("media_publisher")).toBe("waiting");            // its run waits on you
     expect(kind("pm")).toBe("on_run");                          // a hop on Ship it #182, between steps
     expect(kind("ceo_agent")).toBe("recent");                   // last work 3h40m ago
-    expect(kind("staff_engineer")).toBe("recent");              // last work 5h40m ago: within 6h
     expect(kind("adversarial_reviewer")).toBe("never");         // no work yet
-    const px = (k: string) => parseFloat(($(`[data-role='${k}']`) as HTMLElement).style.width);
-    expect(px("software_engineer")).toBeGreaterThan(px("pm"));
-    expect(px("pm")).toBeGreaterThan(px("ceo_agent"));
-    expect(px("ceo_agent")).toBeGreaterThan(px("adversarial_reviewer"));
+    const faces = $$("[data-testid='cc-floor-face']").map((e) => e.getAttribute("data-role"));
+    const dots = $$("[data-testid='cc-floor-dot']").map((e) => e.getAttribute("data-role"));
+    for (const k of ["software_engineer", "media_publisher", "pm", "qa"]) expect(faces).toContain(k);
+    for (const k of ["ceo_agent", "staff_engineer", "adversarial_reviewer"]) expect(dots).toContain(k);
+    expect(faces.length + dots.length).toBe(v.agents.length);
+    // A dot is a dot: no avatar inside it; a face carries the kit's avatar without its AI badge.
+    expect($$("[data-testid='cc-floor-dot'] .ag-avatar")).toHaveLength(0);
+    expect($$("[data-testid='cc-floor-face'] .ag-avatar").length).toBe(faces.length);
+    expect($("[data-testid='cc-floor-face'] .ag-ai")).toBeNull();          // the kit's AI badge, off on the Floor
+    // Dots are 10px under 48 agents.
+    expect(($("[data-testid='cc-floor-dot']") as HTMLElement).style.getPropertyValue("--dot")).toBe("10px");
+    vi.useRealTimers();
+  });
+
+  it("names only active faces, and never two names on top of each other", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW_MS);
+    const v = V(view());
+    await mount(floor(v));
+    const named = $$("[data-testid='cc-floor-name']").map((e) => e.textContent);
+    expect(named).toContain("Forge");
+    expect(named).not.toContain("Atlas");                       // idle: a dot, no name
     vi.useRealTimers();
   });
 
@@ -84,15 +99,16 @@ describe("the Floor", () => {
   it("says the team map in words", async () => {
     await mount(floor(V(view())));
     expect($("svg[role='img']")?.getAttribute("aria-label"))
-      .toBe("Team map: 2 working, 2 on runs, 1 waiting on you, 6 hand-offs in the last 6 hours");
+      .toBe("Team map: 2 working, 2 on runs, 1 waiting on you, 6 hand-offs in the last hour");
     expect($("[data-testid='cc-floor-sr-list']")?.textContent).toContain("Forge");
   });
 
   it("all idle: a quiet ring and how long since the last work", async () => {
     const q = V(quietView());
     await mount(<Floor view={q} projectId="p1" motion="full" band="wide" onYou={noop} onThread={noop} />);
-    // Every agent is still a face, none of them lit: nobody is working, waiting or on a run.
-    expect($$("[data-testid='cc-floor-face']")).toHaveLength(q.agents.length);
+    // A quiet ring of dots: nobody is working, waiting or on a run, so nobody is a face.
+    expect($$("[data-testid='cc-floor-face']")).toHaveLength(0);
+    expect($$("[data-testid='cc-floor-dot']")).toHaveLength(q.agents.length);
     expect($$("[data-kind='working'], [data-kind='waiting'], [data-kind='on_run']")).toHaveLength(0);
     expect($("[data-testid='cc-floor-footer']")?.textContent).toMatch(/^All idle · last work \d+h$/);
   });
@@ -267,11 +283,13 @@ describe("newComets", () => {
     const lots = Array.from({ length: 20 }, (_, i) => f(`n${i}`));
     expect(newComets([], lots)).toHaveLength(12);
   });
-  it("fades an edge by recency over the six hours drawn, never below 0.18", () => {
+  it("fades an edge by recency over the hour drawn, never below 0.2; strokes stay thin", () => {
     expect(recencyOpacity(NOW_MS - 2 * 60_000, NOW_MS)).toBe(0.9);
-    expect(recencyOpacity(NOW_MS - 3 * 3_600_000, NOW_MS)).toBeGreaterThan(0.18);
-    expect(recencyOpacity(NOW_MS - 3 * 3_600_000, NOW_MS)).toBeLessThan(0.9);
-    expect(recencyOpacity(NOW_MS - 7 * 3_600_000, NOW_MS)).toBe(0.18);
+    expect(recencyOpacity(NOW_MS - 30 * 60_000, NOW_MS)).toBeGreaterThan(0.2);
+    expect(recencyOpacity(NOW_MS - 30 * 60_000, NOW_MS)).toBeLessThan(0.9);
+    expect(recencyOpacity(NOW_MS - 61 * 60_000, NOW_MS)).toBe(0.2);
+    expect(edgeWidth(1)).toBe(1);
+    expect(edgeWidth(1000)).toBe(2.5);
   });
 });
 
@@ -291,11 +309,12 @@ describe("Today", () => {
   it("draws the line, a now dot labelled with today's number and yesterday's two labels", async () => {
     await mount(<TodayChart view={v} tab="work" onTab={noop} motion="full" nowMs={NOW_MS} tz="UTC" />);
     expect($("[data-testid='cc-today-line']")).not.toBeNull();
-    expect($(".cc-today-now")?.textContent).toBe("14");
+    // Work has a unit (steps), so it is never read as a count of runs.
+    expect($(".cc-today-now")?.textContent).toBe("14 steps");
     const labels = $$(".cc-yday-label").map((t) => t.textContent);
-    expect(labels[1]).toBe("11 all day");
-    expect(labels[0]).toMatch(/^\d+ by now$/);
-    expect($("figcaption")?.textContent).toMatch(/^Work today: 14 by 15:40\./);
+    expect(labels[1]).toBe("11 steps all day");
+    expect(labels[0]).toMatch(/^\d+ steps? by now$/);
+    expect($("figcaption")?.textContent).toMatch(/^Work today: 14 steps by 15:40\./);
     expect($$("table tbody tr")).toHaveLength(24);
   });
 
@@ -467,5 +486,79 @@ describe("THIS WEEK", () => {
   it("is never animated", async () => {
     await mount(<WeekBars week={V(view()).week} tz="UTC" />);
     expect($$("[data-new], [data-woke], [data-arrive]")).toHaveLength(0);
+  });
+});
+
+describe("labels never collide or leave the stage (fix pass D9/D16)", () => {
+  it("fits a team label at every stage width: shrink, slide, then shorten — never past the edge", () => {
+    for (const width of [320, 420, 548, 690, 960]) {
+      const stage = { width, height: 440 };
+      for (const [x, anchor] of [[width - 40, "start"], [40, "end"], [width / 2, "middle"]] as const) {
+        const f = fitArcLabel("ARCHITECTURE", x, 30, anchor, stage);
+        const left = anchor === "start" ? f.x : anchor === "end" ? f.x - f.width : f.x - f.width / 2;
+        expect(left).toBeGreaterThanOrEqual(5.9);
+        expect(left + f.width).toBeLessThanOrEqual(width - 5.9);
+        expect(f.scale).toBeGreaterThanOrEqual(0.55);
+      }
+    }
+    expect(fitArcLabel("ARCHITECTURE", 400, 30, "start", { width: 960, height: 440 }).text).toBe("ARCHITECTURE");
+    expect(fitArcLabel("ARCHITECTURE", 300, 30, "start", { width: 320, height: 440 }).text.endsWith("…")).toBe(true);
+  });
+
+  it("places names outside their faces, inside the stage, and drops one that would overlap", () => {
+    const stage = { width: 400, height: 300 };
+    const items = [
+      { key: "a", x: 200, y: 40, angle: -Math.PI / 2, size: 44, text: "Forge", rank: 0 },
+      { key: "b", x: 206, y: 44, angle: -Math.PI / 2, size: 40, text: "Pilot", rank: 3 },   // crowds a
+      { key: "c", x: 390, y: 150, angle: 0, size: 44, text: "Herald", rank: 1 },          // at the edge
+    ];
+    const got = placeNames(items, stage);
+    expect(got.has("a")).toBe(true);
+    expect(got.has("b")).toBe(false);                            // a lower rank never overlaps
+    const c = got.get("c")!;
+    const left = c.align === "left" ? c.x : c.align === "right" ? c.x - c.w : c.x - c.w / 2;
+    expect(left + c.w).toBeLessThanOrEqual(stage.width);
+    // No placed name overlaps another face.
+    const a = got.get("a")!;
+    expect(a.y + a.h / 2 <= 40 - 22 || a.y - a.h / 2 >= 40 + 22 || Math.abs(a.x - 200) > 22).toBe(true);
+  });
+});
+
+describe("the strip frames live work and reserves its height (fix pass)", () => {
+  const v = V(view());
+  const { DayStrip: Strip } = { DayStrip };
+  it("Fit starts at the earliest LIVE run, not an old finished one, so live bars are wide", () => {
+    const rows = [
+      { startedAt: "2026-10-04T15:00:00Z", finishedAt: null },            // live, 40 min ago
+      { startedAt: "2026-10-04T09:00:00Z", finishedAt: "2026-10-04T09:40:00Z" },
+    ];
+    const w = stripWindow(rows, NOW_MS, 24, "fit");
+    expect(w.since).toBeGreaterThanOrEqual(Date.parse("2026-10-04T14:30:00Z"));
+    // Nothing live: the latest finished runs frame it.
+    const done = stripWindow([{ startedAt: "2026-10-04T12:00:00Z", finishedAt: "2026-10-04T12:40:00Z" },
+                              { startedAt: "2026-10-04T02:00:00Z", finishedAt: "2026-10-04T02:30:00Z" },
+                              { startedAt: "2026-10-04T01:00:00Z", finishedAt: "2026-10-04T01:30:00Z" },
+                              { startedAt: "2026-10-03T18:00:00Z", finishedAt: "2026-10-03T18:30:00Z" }], NOW_MS, 24, "fit");
+    expect(done.since).toBeGreaterThan(Date.parse("2026-10-03T18:00:00Z"));
+  });
+
+  it("reserves rowsMax lanes, shows waits (open ones striped) and says a wide bar's state inside", async () => {
+    await mount(<Strip day={v.day} nowMs={NOW_MS} generatedAt={v.generatedAt} windowHours={24} rowsMax={10}
+                       motion="full" hoverRunId={null} onHover={noop} onStartWork={noop} />);
+    expect(($(".cc-day-grid") as HTMLElement).style.getPropertyValue("--rows")).toBe("10");
+    const open = $$("[data-testid='cc-day-gate'][data-open]");
+    expect(open.length).toBeGreaterThan(0);
+    expect(open[0].getAttribute("title")).toMatch(/^Waiting for you /);
+    expect($$(".cc-day-in").map((e) => e.textContent).some((t) => /·/.test(t ?? ""))).toBe(true);
+  });
+});
+
+describe("this week fills its card", () => {
+  it("draws seven columns with a count above each, 110px at the busiest day", async () => {
+    const week = V(view()).week;
+    await mount(<WeekBars week={week} tz="UTC" />);
+    expect($$("[data-testid='cc-week-bar']")).toHaveLength(7);
+    const heights = $$(".cc-week-stack").map((e) => parseFloat((e as HTMLElement).style.height));
+    expect(Math.max(...heights)).toBe(110);
   });
 });

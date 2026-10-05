@@ -32,7 +32,7 @@ export type TodayChartProps = {
   compact?: boolean;
 };
 
-const PAD = { l: 44, r: 92, t: 18, b: 24 };
+const PAD = { l: 44, r: 116, t: 18, b: 24 };
 const PERIOD_WORD: Record<string, string> = { month: "this month", week: "this week", day: "today" };
 const METER_TONE: Record<BudgetState, string> = { unknown: "muted", green: "green", yellow: "amber", orange: "amber", red: "red" };
 
@@ -63,6 +63,12 @@ export function todaySeries(view: CommandCenterView, tab: TodayTab, nowMs: numbe
   return { index, frac, main, inc, showIncluded, nowX: index - 24 + frac };
 }
 
+/** `78 steps` / `1 step`: Today's Work number, with the unit it counts. */
+export function stepsWord(v: number): string {
+  const n = Math.round(v);
+  return `${n} ${n === 1 ? "step" : "steps"}`;
+}
+
 export function TodayChart({ view, tab, onTab, motion, nowMs, tz, compact = false }: TodayChartProps) {
   const box = useRef<HTMLDivElement>(null);
   const width = useWidth(box, 960);
@@ -70,6 +76,8 @@ export function TodayChart({ view, tab, onTab, motion, nowMs, tz, compact = fals
   const now = nowMs ?? Date.parse(view.today.now || view.generatedAt);
   const s = todaySeries(view, tab, now);
   const fmt = (v: number) => (tab === "work" ? String(Math.round(v)) : money(v));
+  // THE NUMBER HAS A UNIT (imp. 6): work is agent STEPS finished, never confused with runs.
+  const said = (v: number) => (tab === "work" ? stepsWord(v) : money(v));
   const budget = view.budget;
   const capLine = tab === "spend" && budget.day.capUsdMicros > 0 && tz === budget.budgetTimezone;
   const meter = tab === "spend" && !capLine && budget.capUsdMicros > 0 && budget.period !== "day";
@@ -112,7 +120,7 @@ export function TodayChart({ view, tab, onTab, motion, nowMs, tz, compact = fals
 
   const nowLabel = `${pad2(Math.floor(s.nowX))}:${pad2(Math.round((s.nowX % 1) * 60) % 60)}`;
   const caption = tab === "work"
-    ? `Work today: ${fmt(s.main.todayTotal)} by ${nowLabel}. Yesterday: ${fmt(s.main.yesterdayByNow)} by this time, ${fmt(s.main.yesterdayTotal)} all day.`
+    ? `Work today: ${said(s.main.todayTotal)} by ${nowLabel}. Yesterday: ${said(s.main.yesterdayByNow)} by this time, ${said(s.main.yesterdayTotal)} all day.`
     : `Spend today: ${fmt(s.main.todayTotal)} by ${nowLabel}. Yesterday: ${fmt(s.main.yesterdayByNow)} by this time, ${fmt(s.main.yesterdayTotal)} all day.`;
   const lastPt = s.main.today[s.main.today.length - 1];
   const clipId = `cc-today-clip-${tab}`;
@@ -192,13 +200,13 @@ export function TodayChart({ view, tab, onTab, motion, nowMs, tz, compact = fals
           {!empty && s.main.today.length ? (
             <g className="cc-today-dot" style={{ transform: `translate(${nowPx}px, ${y(s.main.todayTotal)}px)` }}>
               <circle r={3} />
-              <text x={8} y={-8} className="cc-today-now">{fmt(s.main.todayTotal)}</text>
+              <text x={8} y={-8} className="cc-today-now" data-testid="cc-today-now">{said(s.main.todayTotal)}</text>
             </g>
           ) : null}
           {!empty ? (
             <>
-              <text className="cc-yday-label" x={nowPx + 8} y={Math.min(y(0) - 4, y(s.main.yesterdayByNow) + 14)}>{`${fmt(s.main.yesterdayByNow)} by now`}</text>
-              <text className="cc-yday-label" x={PAD.l + iw + 6} y={y(s.main.yesterdayTotal)} dominantBaseline="middle">{`${fmt(s.main.yesterdayTotal)} all day`}</text>
+              <text className="cc-yday-label" x={nowPx + 8} y={Math.min(y(0) - 4, y(s.main.yesterdayByNow) + 14)}>{`${said(s.main.yesterdayByNow)} by now`}</text>
+              <text className="cc-yday-label" x={PAD.l + iw + 6} y={y(s.main.yesterdayTotal)} dominantBaseline="middle">{`${said(s.main.yesterdayTotal)} all day`}</text>
             </>
           ) : null}
           {cross !== null ? <line className="cc-cross" x1={x(cross + 0.5)} x2={x(cross + 0.5)} y1={PAD.t} y2={y(0)} /> : null}
