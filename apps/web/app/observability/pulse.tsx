@@ -23,7 +23,7 @@ import { HEAD, SPAN, dur, leaveTo, obsAsks, timeTicks } from "./obs-util";
 import type { ObsTabProps } from "./obs-home";
 import { AppDrawer } from "./app-drawer";
 import { PulseStrip, StripTable } from "./pulse-strip";
-import { Empty, LiveRegion, Skeleton, StateWord, TableToggle, ZoneHead, useAnnouncer } from "../infra/kit";
+import { Empty, LiveRegion, Skeleton, StateWord, ZoneHead, useAnnouncer } from "../infra/kit";
 
 // ── one row ─────────────────────────────────────────────────────────────────────────────────
 
@@ -72,7 +72,11 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
       <span className="obs-prow-p95 inf-num" data-testid="obs-pulse-p95">{right}</span>
       <span className="obs-prow-go">
         {!notDeployed ? (
-          <TableToggle on={table} onToggle={() => setTable((v) => !v)} testId="obs-pulse-table-toggle" />
+          // One glyph per row (a word per row was a column of repeated text): its name is the
+          // tooltip and the accessible label.
+          <button type="button" className="obs-tbl" aria-pressed={table} data-testid="obs-pulse-table-toggle"
+                  aria-label={table ? "View as chart" : "View as table"} title={table ? "View as chart" : "View as table"}
+                  onClick={() => setTable((v) => !v)}>{table ? "▥" : "▤"}</button>
         ) : null}
         <button type="button" className="ag-link obs-go" aria-label={`Open ${name}`} data-testid="obs-app-open-row"
                 onClick={() => onOpen(row.targetId)}>↗</button>
