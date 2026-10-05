@@ -422,8 +422,10 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         team_of_role.setdefault(a["role_key"], a["team"])
     teams: dict[str, dict[str, Any]] = {}
     for t in teams_raw:
+        # `needs_you`: the team's agents' OWN open asks, counted as items (force's rule — a
+        # gate holding an agent's work is the operator's wait, never the team's).
         teams[t["key"]] = {"key": t["key"], "label": t["label"], "tip": t.get("tip"),
-                           "members": list(t["members"])}
+                           "members": list(t["members"]), "needs_you": int(t.get("needs_you") or 0)}
     members = {m for t in teams.values() for m in t["members"]}
 
     counts = work_counts(connection, project_id, hours)
@@ -447,7 +449,8 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         if role in registered:
             continue
         if "yours" not in teams:
-            teams["yours"] = {"key": "yours", "label": "Yours", "tip": None, "members": []}
+            teams["yours"] = {"key": "yours", "label": "Yours", "tip": None, "members": [],
+                              "needs_you": 0}
         teams["yours"]["members"].append(role)
         members.add(role)
 
@@ -558,6 +561,7 @@ def _compose(connection: Connection, settings: Any, project_id: str, days: int) 
         configured = sorted({c for c in (_configured_model(specs.get(r)) for r in ms) if c})
         team_rows.append({
             "key": t["key"], "label": t["label"], "tip": t.get("tip"), "members": ms,
+            "needs_you": t.get("needs_you", 0),
             "flow_col": cols.get(t["key"]), "self_handoffs": self_handoffs.get(t["key"], 0),
             "work": work,
             "waiting": waiting[:WAITING_MAX], "waiting_total": len(waiting),

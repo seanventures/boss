@@ -6,9 +6,9 @@
  *       Gate"; a run that ended badly is Stopped, never Stuck;
  *   D8  a team's "needs you" counts ITEMS waiting on you (one agent, three gates = 3), and says
  *       "1 needs you" / "2 need you";
- *   D13 Zones arrow keys move in two dimensions;
+ *   D13 arrow keys move in two dimensions (nextInGrid, which Organization › Teams uses);
  *   D14 "Has done work" counts agents whose signed work says so, when the feed sends no counts;
- *   D17 the map has no empty cell and never draws "Yours 0".
+ *   D17 Organization never draws "Yours 0" (pinned on Teams; the zone map is retired).
  */
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -21,7 +21,8 @@ import type { V2Agent } from "../lib/v2/workforce";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TeamZones, nextInGrid, needYouWords, mapRowOf } = await import("../app/agents/team-zones");
+const { TeamZones, nextInGrid, needYouWords } = await import("../app/agents/team-zones");
+const { OrgView } = await import("../app/agents/org-view");
 const { sentenceOf, riverState, riverStatusWord } = await import("../app/agents/activity-river");
 const { hasDoneWork } = await import("../app/agents/directory-view");
 
@@ -69,25 +70,19 @@ describe("D8 a team's needs-you is items, in the right grammar", () => {
   });
 });
 
-describe("D17 the map has no empty cell", () => {
-  it("rows are a band, three across, four across; Yours is drawn only with members", async () => {
-    await render(<TeamZones projectId="p1" board={board()} density="full" />);
-    const rows = Object.fromEntries($$(".ag-zones-zone").map((z) => [z.dataset.team, z.dataset.row]));
-    expect(rows).toEqual({ leadership: "band", architecture: "mid", engineering: "mid", quality: "mid",
-                           operations: "low", cost: "low", media: "low", thinkers: "low" });
+describe("D17 Organization never draws an empty Yours", () => {
+  it("Teams draws the shipped teams in order and no `Yours 0`", async () => {
+    const { orgFetch, orgWire } = await import("./_helpers/org-board-fixtures");
+    vi.stubGlobal("fetch", vi.fn(orgFetch(() => orgWire()).fn));
+    window.history.replaceState(null, "", "/?area=workforce&view=org");
+    await render(<OrgView projectId="p1" live={new Map()} lines={() => <div />} />);
+    expect($$(".ag-orgteam").map((z) => z.dataset.team)).toEqual(
+      ["leadership", "architecture", "engineering", "quality", "operations", "cost", "media", "thinkers"]);
     expect(document.body.textContent).not.toMatch(/Yours\s*0/);
-    expect(mapRowOf("my_squad")).toBe("rest");
-  });
-  it("the stylesheet spans every row across all twelve columns", async () => {
-    const { readFileSync } = await import("node:fs");
-    const css = readFileSync("app/agents/agent-world.css", "utf8");
-    expect(css).toMatch(/\.ag-zones-map \{[^}]*repeat\(12,[^}]*align-items: start/);
-    expect(css).toContain('.ag-zones-zone[data-row="mid"] { grid-column: span 4; }');
-    expect(css).toContain('.ag-zones-zone[data-row="low"] { grid-column: span 3; }');
   });
 });
 
-describe("D13 Zones arrows move in two dimensions", () => {
+describe("D13 arrows move in two dimensions", () => {
   // Two rows: a band of three faces on top, then two zones side by side below.
   const r = (left: number, top: number) => ({ left, top, width: 72, height: 80 });
   const rects = [r(0, 0), r(80, 0), r(160, 0), r(0, 200), r(80, 200), r(400, 200)];
