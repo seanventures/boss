@@ -326,3 +326,248 @@ def test_db_connections(ending, monkeypatch):
         assert count <= baseline + 2, f"{count} connections after, baseline {baseline}"
     finally:
         config.get_settings.cache_clear()
+
+
+# ------------------------------------------------------------------------------------------ #
+# 3 & 4. containers and images (need a Docker daemon AND the test database)
+# ------------------------------------------------------------------------------------------ #
+
+def _docker_ok() -> bool:
+    import shutil as _sh
+    if _sh.which("docker") is None:
+        return False
+    try:
+        return subprocess.run(["docker", "image", "inspect", "alpine:latest"],
+                              capture_output=True, timeout=20).returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+needs_docker = pytest.mark.skipif(
+    not (_docker_ok() and PG_URL.startswith("postgres")),
+    reason="needs a Docker daemon with alpine:latest and BOSS_TEST_DATABASE_URL")
+
+#: Everything the docker cases create carries THIS install id or THIS name prefix, and the
+#: sweep is asked about nothing else — the operator's own containers are never in scope.
+TEST_INSTALL = f"inst_sttest_{uuid.uuid4().hex[:8]}"
+LEGACY = f"boss-prev-sttest{uuid.uuid4().hex[:6]}-"
+
+
+@pytest.fixture(scope="module")
+def pg_engine():
+    from sqlalchemy import create_engine
+
+    from boss_engine.db import ensure_schema
+
+    engine = create_engine(PG_URL, future=True)
+    ensure_schema(engine)
+    yield engine
+    engine.dispose()
+
+
+def _docker(*args: str, check: bool = False) -> str:
+    done = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=120)
+    if check and done.returncode != 0:
+        raise AssertionError(done.stderr)
+    return done.stdout.strip()
+
+
+def _make_preview_container(preview_id: str, *, labelled: bool = True, exits: bool = False,
+                            name: str = "") -> tuple[str, str]:
+    """An image and a container shaped exactly like a docker-mode preview's."""
+    from boss_engine.services.preview_service import preview_image_tag
+
+    tag = name or preview_image_tag(preview_id)
+    labels = (["--label", "boss.owner=preview", "--label", f"boss.preview_id={preview_id}",
+               "--label", f"boss.install_id={TEST_INSTALL}"] if labelled else [])
+    dockerfile = f"FROM alpine:latest\nLABEL boss.test={preview_id}\n"
+    subprocess.run(["docker", "build", "-q", *labels, "-t", tag, "-"], input=dockerfile,
+                   capture_output=True, text=True, timeout=300, check=True)
+    cmd = ["sh", "-c", "exit 1"] if exits else ["sleep", "600"]
+    cid = _docker("run", "-d", "--init", *labels, "--name", tag, tag, *cmd, check=True)[:12]
+    return tag, cid
+
+
+def _row(engine, preview_id: str, *, status: str, cid: str, expires_in_min: int = 60) -> None:
+    from sqlalchemy import text as _t
+    with engine.begin() as c:
+        c.execute(_t(
+            "INSERT INTO app_previews (id, project_id, mode, container_id, status, expires_at) "
+            "VALUES (:id, 'p_sttest', 'docker', :cid, :st, now() + make_interval(mins => :m))"),
+            {"id": preview_id, "cid": cid, "st": status, "m": expires_in_min})
+
+
+def _gone(tag: str) -> None:
+    assert _docker("ps", "-a", "--filter", f"name=^{tag}$", "--format", "{{.ID}}") == ""
+    assert _docker("images", "-q", tag) == ""
+
+
+def _sweep(engine):
+    from boss_engine.services import resource_reaper
+
+    return resource_reaper.reap_docker(engine, install_id=TEST_INSTALL, legacy_prefix=LEGACY)
+
+
+@needs_docker
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_preview_container(ending, pg_engine, monkeypatch):
+    from boss_engine.config import Settings
+    from boss_engine.services import preview_service
+
+    monkeypatch.setenv("BOSS_INSTALL_ID", TEST_INSTALL)
+    pid = f"prev_st{uuid.uuid4().hex[:10]}"
+    tag, cid = _make_preview_container(pid, exits=(ending == "failure"))
+    try:
+        if ending == "success":                       # the operator presses Stop
+            _row(pg_engine, pid, status="running", cid=cid)
+            preview_service.stop_preview(pg_engine, pid, Settings())
+        elif ending == "failure":                     # the app crashed; the reaper notices
+            time.sleep(1.0)
+            _row(pg_engine, pid, status="running", cid=cid)
+            got = preview_service.reap_previews(pg_engine, Settings())
+            assert got["dead"] >= 1
+        elif ending == "cancel":                      # its build was stopped, row closed
+            _row(pg_engine, pid, status="stopped", cid=cid)
+            _sweep(pg_engine)
+        elif ending == "timeout":                     # past its TTL
+            _row(pg_engine, pid, status="running", cid=cid, expires_in_min=-1)
+            got = preview_service.reap_previews(pg_engine, Settings())
+            assert got["expired"] >= 1
+        else:                                         # the API died before writing a row
+            _sweep(pg_engine)
+        _gone(tag)
+    finally:
+        _docker("rm", "-f", tag)
+        _docker("rmi", "-f", tag)
+
+
+@needs_docker
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_orphan_container_or_image(ending, pg_engine, monkeypatch):
+    monkeypatch.setenv("BOSS_INSTALL_ID", TEST_INSTALL)
+    pid = f"prev_st{uuid.uuid4().hex[:10]}"
+    keep_pid = f"prev_st{uuid.uuid4().hex[:10]}"
+    tags = []
+    try:
+        # A LIVE preview of this install, which the sweep must never touch (control).
+        keep_tag, keep_cid = _make_preview_container(keep_pid)
+        tags.append(keep_tag)
+        _row(pg_engine, keep_pid, status="running", cid=keep_cid)
+        if ending == "timeout":
+            # Legacy: named like a preview, no labels at all, row expired.
+            tag, cid = _make_preview_container(pid, labelled=False,
+                                               name=f"{LEGACY}{uuid.uuid4().hex[:8]}")
+            _row(pg_engine, pid, status="expired", cid=cid)
+        elif ending == "parent_sigkill":
+            # Only the image survived (the run that would have used it died), and no row.
+            from boss_engine.services.preview_service import preview_image_tag
+            tag = preview_image_tag(pid)
+            subprocess.run(["docker", "build", "-q", "--label", "boss.owner=preview",
+                            "--label", f"boss.install_id={TEST_INSTALL}", "-t", tag, "-"],
+                           input=f"FROM alpine:latest\nLABEL boss.test={pid}\n", text=True,
+                           capture_output=True, timeout=300, check=True)
+        else:
+            tag, cid = _make_preview_container(pid, exits=(ending != "cancel"))
+            _row(pg_engine, pid, status={"success": "stopped", "failure": "failed",
+                                         "cancel": "stopped"}[ending], cid=cid)
+        tags.append(tag)
+        time.sleep(0.5)
+        _sweep(pg_engine)                             # ONE pass
+        _gone(tag)
+        assert _docker("ps", "--filter", f"name=^{keep_tag}$", "--format", "{{.ID}}"), \
+            "the sweep removed a live preview's container"
+        assert _docker("images", "-q", keep_tag), "the sweep removed a live preview's image"
+    finally:
+        for t in tags:
+            _docker("rm", "-f", t)
+            _docker("rmi", "-f", t)
+
+
+# ------------------------------------------------------------------------------------------ #
+# 5. directories: a sandbox, a serve proof, an MCP config dir
+# ------------------------------------------------------------------------------------------ #
+
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_owned_dirs(ending, tmp_path, monkeypatch):
+    import tempfile as _tf
+
+    from boss_engine.config import Settings
+    from boss_engine.services import resource_reaper
+    from boss_engine.services.code_task_mcp import HarnessMcp
+    from boss_engine.services.resource_ledger import claim_dir, claimed_dirs
+    from boss_engine.services.sandbox import EphemeralSandbox
+
+    monkeypatch.setattr(_tf, "tempdir", str(tmp_path))
+    if ending == "success":
+        # A sandbox's normal end: teardown removes and releases it.
+        sb = EphemeralSandbox(Settings(), task_id="st")
+        root = tmp_path / resource_reaper.SANDBOX_ROOT_NAME
+        root.mkdir()
+        sb.path = Path(_tf.mkdtemp(prefix="st-", dir=root))
+        sb._owns_dir = True
+        claim_dir(sb.path)
+        (sb.path / "node_modules").mkdir()
+        path = sb.path
+        sb.teardown()
+    elif ending == "failure":
+        # A run that raised: its MCP dir is cleaned in `finally`.
+        d = _tf.mkdtemp(prefix="boss-mcp-")
+        claim_dir(d)
+        (Path(d) / "mcp.json").write_text("{}")
+        mcp = HarnessMcp(path=str(Path(d) / "mcp.json"), servers=[])
+        try:
+            raise RuntimeError("the build failed")
+        except RuntimeError:
+            pass
+        finally:
+            mcp.cleanup()
+        path = Path(d)
+    elif ending == "cancel":
+        # A serve proof for a build that was stopped mid-proof: the proof's `finally`.
+        from boss_engine.services import preview_service
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "app.py").write_text("print(1)")
+        tree = preview_service._proof_tree(work)
+        assert str(tree) in claimed_dirs()
+        import shutil as _sh
+        _sh.rmtree(tree, ignore_errors=True)
+        from boss_engine.services.resource_ledger import release_dir
+        release_dir(tree, "cancel")
+        path = tree
+    elif ending == "timeout":
+        # Left behind past its age, unclaimed: the reaper takes it; a claimed one stays.
+        old = Path(_tf.mkdtemp(prefix="boss-serve-proof-"))
+        kept = Path(_tf.mkdtemp(prefix="boss-serve-proof-"))
+        claim_dir(kept)
+        past = time.time() - resource_reaper.DIR_MIN_AGE_SECONDS - 60
+        for p in (old, kept):
+            os.utime(p, (past, past))
+        resource_reaper.reap_dirs(tmp=tmp_path)
+        assert kept.exists(), "a claimed directory was reaped"
+        from boss_engine.services.resource_ledger import release_dir
+        import shutil as _sh
+        _sh.rmtree(kept)
+        release_dir(kept)
+        path = old
+    else:
+        # The process that claimed it was SIGKILLed: the claim died with it; one pass reaps.
+        code = textwrap.dedent(f"""
+            import sys, tempfile, time
+            sys.path.insert(0, {str(ENGINE)!r})
+            tempfile.tempdir = {str(tmp_path)!r}
+            from boss_engine.services.resource_ledger import claim_dir
+            d = tempfile.mkdtemp(prefix="boss-mcp-"); claim_dir(d)
+            print(d, flush=True); time.sleep(600)
+        """)
+        child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        d = child.stdout.readline().strip()
+        child.send_signal(signal.SIGKILL)
+        child.wait(timeout=10)
+        path = Path(d)
+        assert path.exists()
+        past = time.time() - resource_reaper.DIR_MIN_AGE_SECONDS - 60
+        os.utime(path, (past, past))
+        resource_reaper.reap_dirs(tmp=tmp_path)
+    assert not path.exists(), f"{path} left behind"
+    assert str(path) not in claimed_dirs()
