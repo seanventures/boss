@@ -752,11 +752,35 @@ def health_states(connection: Any, target_ids: list[str], *,
         samples[r["t"]].append({"checked_at": r["checked_at"], "ok": bool(r["ok"]),
                                 "latency_ms": r["latency_ms"]})
     deployed = deployed_targets(connection, target_ids)
+    verdicts = {t: (verdict(samples.get(t) or []) if t in deployed else "not_deployed")
+                for t in target_ids}
+    # WHEN IT BEGAN. The newest 20 probes say what the state is; when every one of them agrees,
+    # the state began before them, so ask the 7-day history: up since the last failed probe,
+    # down since the last good one (one grouped query, only for those targets).
+    since: dict[str, Any] = {}
+    deeper = []
     for t in target_ids:
         s = samples.get(t) or []
-        status = verdict(s) if t in deployed else "not_deployed"
-        since = status_since(s) if t in deployed else None
-        out[t] = {"status": status, "since": _iso(since), **word("health", status)}
+        if verdicts[t] in ("not_deployed", "unknown") or not s:
+            continue
+        began = status_since(s)
+        if verdicts[t] in ("up", "down") and began == s[-1]["checked_at"] and len(s) >= 20:
+            deeper.append(t)
+        since[t] = began
+    if deeper:
+        for r in connection.execute(text(
+                "SELECT deployment_target_id AS t, "
+                "       max(checked_at) FILTER (WHERE NOT ok) AS last_bad, "
+                "       max(checked_at) FILTER (WHERE ok) AS last_good, "
+                "       min(checked_at) AS first "
+                "FROM deployment_health_samples "
+                "WHERE deployment_target_id = ANY(:ids) AND checked_at >= :cut GROUP BY 1"),
+                {"ids": deeper, "cut": now - timedelta(days=7)}).mappings():
+            edge = r["last_bad"] if verdicts[r["t"]] == "up" else r["last_good"]
+            since[r["t"]] = edge or r["first"]
+    for t in target_ids:
+        status = verdicts[t]
+        out[t] = {"status": status, "since": _iso(since.get(t)), **word("health", status)}
     return out
 
 
