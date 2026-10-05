@@ -59,6 +59,9 @@ Commands:
   uninstall [--purge] Stop BOSS and keep data. --purge also deletes data after a backup and
                       a typed confirmation, then removes the boss command the installer
                       put on PATH for this install. Also: --yes, --dry-run, --backup-dir PATH
+  prune [--dedicated] Free disk BOSS used: stopped previews, unused preview images, old BOSS
+                      image tags; build cache too above 75% disk on a BOSS-only host
+                      (--dedicated). Runs after every upgrade and update. Also: --dry-run
   version             Installed release and commit
 
 Environment: BOSS_INSTALL_DIR selects another install.
@@ -218,6 +221,21 @@ cmd_upgrade() {
     esac
   done
   bash "$INSTALL_DIR/scripts/install/upgrade.sh" "${args[@]}"
+  post_deploy_prune
+}
+
+# EVERY DEPLOY LEAVES ~1.3 GB BEHIND (build cache, the previous images). Best effort: a prune
+# that fails must never fail the update that preceded it.
+post_deploy_prune() {
+  [[ -x "$INSTALL_DIR/scripts/install/prune.sh" ]] || return 0
+  BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
+    bash "$INSTALL_DIR/scripts/install/prune.sh" || printf 'boss: prune skipped\n' >&2
+}
+
+cmd_prune() {
+  need_install
+  BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
+    bash "$INSTALL_DIR/scripts/install/prune.sh" "$@"
 }
 
 cmd_update() {
@@ -231,6 +249,7 @@ cmd_update() {
   done
   # The installer reads the remembered release from .boss-release, so this cannot move to main.
   bash "$INSTALL_DIR/install.sh" --dir "$INSTALL_DIR" --yes "$@"
+  post_deploy_prune
 }
 
 
@@ -1076,6 +1095,7 @@ case "$COMMAND" in
   upgrade) cmd_upgrade "$@" ;;
   update) cmd_update "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
+  prune) cmd_prune "$@" ;;
   version|--version) cmd_version ;;
   *) printf 'boss: unknown command %s\n\n' "$COMMAND" >&2; usage >&2; exit 2 ;;
 esac

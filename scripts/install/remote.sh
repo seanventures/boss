@@ -62,6 +62,7 @@ commands:
   install      stream this commit to the host and run the installer there
   update       ship a newer commit to an EXISTING install and rebuild it in place
   uninstall    stop/remove the host stack; keep data and credentials by default
+  prune        free disk BOSS used on the host (old images, stopped previews, build cache)
   check        run BOSS's own health check on the host
   smoke        prove the install works: API, database, console, model wiring
   status       containers, ports and disk on the host
@@ -122,7 +123,7 @@ USAGE
 CMD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    install|update|uninstall|check|smoke|status|tunnel|logs|model|env|subscription) CMD="$1"; shift ;;
+    install|update|uninstall|check|smoke|status|tunnel|logs|model|env|subscription|prune) CMD="$1"; shift ;;
     --token|--token=*|--api-key|--api-key=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Use the hidden prompt or pipe one line on stdin." ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
@@ -282,6 +283,7 @@ cmd_install() {
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
     || die "the installer failed on $HOST; previous source remains at $DIR.prev and private backup was printed above"
   rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this install"
+  prune_remote
   ok "installer finished"
 
   # The tunnel makes the VM's loopback ports available on the operator laptop;
@@ -317,6 +319,23 @@ backup_remote() {
   backup="$(rsh "cd '$DIR' && bash scripts/install/backup.sh --dir '$DIR'")" ||
     die "remote backup failed; source and containers were not changed"
   say "private recovery backup on host: $backup"
+}
+
+# A HOST THIS SCRIPT INSTALLS RUNS ONLY BOSS, so its Docker build cache is BOSS's: every
+# deploy adds ~1.3 GB and nothing removed it (boss-1: 80% disk, 46.5 GB of cache). Best effort
+# after every install and update; never volumes, never another project's containers.
+prune_remote() {
+  rshq "[ -f '$DIR/scripts/install/prune.sh' ]" || return 0
+  local out
+  out="$(rsh "cd '$DIR' && bash scripts/install/prune.sh --dedicated" 2>&1)" \
+    || { warn "disk prune skipped: ${out##*$'\n'}"; return 0; }
+  say "disk: $(printf '%s\n' "$out" | grep -E '^disk (before|after)' | tr '\n' ' ')"
+}
+
+cmd_prune() {
+  head_ "Free BOSS's disk on $HOST"
+  preflight
+  prune_remote
 }
 
 cmd_update() {
@@ -392,6 +411,7 @@ cmd_update() {
   fi
   rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this update"
 
+  prune_remote
   ok "updated $was → $(rshq "cat '$DIR/.boss-shipped-commit'")"
   say ""
   say "now run:  ${D}scripts/install/$(again) smoke${N}"
@@ -720,6 +740,7 @@ cmd_logs() {
 case "$CMD" in
   install)   cmd_install ;;
   update)    cmd_update ;;
+  prune)     cmd_prune ;;
   uninstall) cmd_uninstall ;;
   check)     cmd_check ;;
   smoke)     cmd_smoke ;;

@@ -4,7 +4,10 @@ They run in the API because that is where builds run: the worker's loop blocks f
 a job and is blind while one runs, which is exactly when the host needs watching.
 
 * the ownership ledger (owned_process → owned_resources rows);
-* the stop watch: Stop ends the build's processes within seconds (stop_watch).
+* the stop watch: Stop ends the build's processes within seconds (stop_watch);
+* the reaper: expired, idle and orphaned previews, orphaned process trees, unclaimed temp
+  directories, BOSS's unowned containers and images, the disk prune, table retention
+  (resource_reaper).
 """
 from __future__ import annotations
 
@@ -33,4 +36,12 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("stop watch not started", exc_info=True)
         started["stop_watch"] = False
+    try:
+        from . import resource_reaper
+
+        resource_reaper.start(engine, settings)
+        started["reaper"] = True
+    except Exception:  # noqa: BLE001
+        _log.warning("reaper not started", exc_info=True)
+        started["reaper"] = False
     return started

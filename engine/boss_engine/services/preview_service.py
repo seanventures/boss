@@ -2205,7 +2205,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     ).value
     project_id = run["project_id"]
     preview_id = make_id("prev")
-    tag = f"boss-prev-{preview_id.replace('_', '-').lower()}"
+    tag = preview_image_tag(preview_id)
     PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
     workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
 
@@ -2249,17 +2249,24 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     except RuntimeError as exc:
         return _fail(str(exc))
 
-    build = owned_process.run(["docker", "build", "-t", tag, str(workdir)],
-                           capture_output=True, text=True, timeout=600)
+    # LABELLED, so the reaper's substrate sweep finds this image and its container by what
+    # they are (boss.owner / boss.preview_id / boss.install_id) even when the row is gone.
+    labels = preview_labels(engine, preview_id)
+    build = owned_process.run(["docker", "build", *labels, "-t", tag, str(workdir)],
+                              capture_output=True, text=True, timeout=600)
     if build.returncode != 0:
+        _docker_rmi(tag)
         return _fail(f"docker build failed: {(build.stderr or build.stdout or '')[-400:]}")
 
     host_port = _free_port()
-    docker_argv = ["docker", "run", "-d", "--name", tag, "-p", f"{host_port}:{container_port}",
+    docker_argv = ["docker", "run", "-d", "--init", *container_limits("preview_node"), *labels,
+                   "--name", tag, "-p", f"{host_port}:{container_port}",
                    "-e", f"PORT={container_port}", "-e", "HOST=0.0.0.0", tag]
     docker_command = " ".join(docker_argv)
     run_cmd = owned_process.run(docker_argv, capture_output=True, text=True, timeout=60)
     if run_cmd.returncode != 0:
+        _docker_rm(tag)
+        _docker_rmi(tag)
         return _fail(f"docker run failed: {(run_cmd.stderr or '')[-300:]}", command=docker_command)
     container_id = run_cmd.stdout.strip()[:12]
 
@@ -2271,8 +2278,10 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
             break
         time.sleep(1.0)
     if not ok:
-        logs = owned_process.run(["docker", "logs", "--tail", "20", tag], capture_output=True, text=True).stdout
-        owned_process.run(["docker", "rm", "-f", tag], capture_output=True)
+        logs = owned_process.run(["docker", "logs", "--tail", "20", tag], capture_output=True,
+                                 text=True, timeout=30).stdout
+        _docker_rm(tag)
+        _docker_rmi(tag)
         return _fail(f"container did not serve HTTP. logs: {logs[-300:]}", command=docker_command)
 
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
@@ -2443,7 +2452,12 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
 
 # How many dead process previews to auto-respawn on boot (newest first) — bounds the rebuild
 # cost so a restart with many historical previews doesn't stampede npm builds.
-_RESPAWN_ON_BOOT_LIMIT = 3
+# ONE, and only one worth its rebuild (stability spec §4a.6). Each boot rebuilt up to three
+# previews — clone, install, build — while the build the restart interrupted was redoing the
+# same, which is a load spike at the worst moment. A preview about to expire is not worth it,
+# and none is respawned while the host has no headroom (admission.respawn_allowed).
+_RESPAWN_ON_BOOT_LIMIT = 1
+_RESPAWN_MIN_REMAINING = timedelta(minutes=10)
 
 
 def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
@@ -2498,14 +2512,88 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
     if respawn_candidates:
         with begin(engine) as c:
             ordered = [r[0] for r in c.execute(text(
-                "SELECT id FROM app_previews WHERE id = ANY(:ids) ORDER BY created_at DESC LIMIT :lim"
-            ), {"ids": respawn_candidates, "lim": _RESPAWN_ON_BOOT_LIMIT}).all()]
+                "SELECT id FROM app_previews WHERE id = ANY(:ids) AND expires_at > :keep "
+                "ORDER BY created_at DESC LIMIT :lim"
+            ), {"ids": respawn_candidates, "lim": _RESPAWN_ON_BOOT_LIMIT,
+                "keep": now + _RESPAWN_MIN_REMAINING}).all()]
+        if ordered and not _respawn_allowed(engine, settings):
+            ordered = []
         for pid in ordered:
             threading.Thread(target=_respawn_process_preview, args=(engine, settings, pid),
                              daemon=True).start()
             respawned += 1
     return {"checked": len(rows), "running": alive, "stopped": stopped, "expired": expired,
             "respawning": respawned}
+
+
+def _respawn_allowed(engine, settings: Settings) -> bool:
+    """Whether the host has room to rebuild a preview now (the admission gate's answer)."""
+    try:
+        from .admission import respawn_allowed
+        return respawn_allowed(engine, settings)
+    except ImportError:
+        return True
+    except Exception:  # noqa: BLE001 — unknown capacity: be conservative at boot
+        return False
+
+
+def reap_previews(engine, settings: Settings, *, idle_minutes: Optional[int] = None,
+                  now: Optional[datetime] = None) -> dict[str, int]:
+    """THE PERIODIC PREVIEW REAPER (stability spec §4a.6). Expiry used to happen only when
+    somebody listed previews or the API booted, so an unlisted 60-minute preview ran forever.
+
+    * past its TTL → torn down, `expired`;
+    * its process or container is gone → `stopped`;
+    * nobody has opened it (no proxied request) for `idle_minutes` → torn down, `stopped`.
+    """
+    now = now or datetime.now(timezone.utc)
+    if idle_minutes is None:
+        idle_minutes = int(os.environ.get("BOSS_PREVIEW_IDLE_MINUTES") or 20)
+    with begin(engine) as c:
+        rows = [dict(r) for r in c.execute(text(
+            "SELECT id, project_id, pid, mode, container_id, sandbox_task_id, expires_at, "
+            "created_at, last_seen_at FROM app_previews WHERE status = 'running'"
+        )).mappings().all()]
+    out = {"checked": len(rows), "expired": 0, "dead": 0, "idle": 0}
+    for row in rows:
+        mode = row.get("mode") or "process"
+        if mode == FIXTURE_MODE:
+            continue
+        expires = row.get("expires_at")
+        if expires is not None and expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        seen = row.get("last_seen_at") or row.get("created_at")
+        if seen is not None and getattr(seen, "tzinfo", None) is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        if expires is not None and expires <= now:
+            status, why, key = "expired", "past its time limit", "expired"
+        elif mode == "process" and not _process_alive(row.get("pid")):
+            status, why, key = "stopped", "its process exited", "dead"
+        elif mode == "docker" and not _docker_alive(row.get("container_id")):
+            status, why, key = "stopped", "its container exited", "dead"
+        elif idle_minutes and seen is not None and now - seen > timedelta(minutes=idle_minutes):
+            status, why, key = "stopped", f"nobody opened it for {idle_minutes} min", "idle"
+        else:
+            continue
+        try:
+            _teardown(row, settings)
+        except Exception:  # noqa: BLE001 — mark it anyway; the substrate sweep follows up
+            pass
+        with begin(engine) as c:
+            changed = c.execute(text(
+                "UPDATE app_previews SET status = :s, error = COALESCE(error, :e) "
+                "WHERE id = :id AND status = 'running'"),
+                {"s": status, "e": f"Stopped by BOSS: {why}.", "id": row["id"]}).rowcount
+            if changed:
+                try:
+                    with c.begin_nested():
+                        emit_event(c, row.get("project_id") or "", f"app_preview.{status}",
+                                   "boss", "app_preview", row["id"],
+                                   {"reason": key, "detail": why})
+                except Exception:  # noqa: BLE001 — the stop stands without its log line
+                    pass
+        out[key] += 1
+    return out
 
 
 def preview_log_snapshot(engine, preview_id: str, *, tail_chars: int = 12000) -> dict:
@@ -2551,7 +2639,45 @@ def stream_preview_logs(engine, preview_id: str):
 
 def _docker_rm(container_id: Optional[str]) -> None:
     if container_id:
-        owned_process.run(["docker", "rm", "-f", container_id], capture_output=True)
+        try:
+            owned_process.run(["docker", "rm", "-f", container_id], capture_output=True,
+                              timeout=60)
+        except Exception:  # noqa: BLE001 — the reaper's substrate sweep is the backstop
+            pass
+
+
+def _docker_rmi(tag: Optional[str]) -> None:
+    """A preview's image goes with it. Teardown was `rm -f` only: 82 `boss-prev-*` images
+    (29 GB nominal) were left on one laptop, one per preview ever started."""
+    if tag:
+        try:
+            owned_process.run(["docker", "rmi", "-f", tag], capture_output=True, timeout=120)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def preview_image_tag(preview_id: str) -> str:
+    return f"boss-prev-{preview_id.replace('_', '-').lower()}"
+
+
+def preview_labels(engine, preview_id: str) -> list[str]:
+    """`--label` args every preview container and image carries (stability spec §4a.6)."""
+    install = ""
+    try:
+        from .resource_ledger import install_id
+        with begin(engine) as c:
+            install = install_id(c)
+    except Exception:  # noqa: BLE001 — unlabelled by install still has owner + preview id
+        install = ""
+    out = ["--label", "boss.owner=preview", "--label", f"boss.preview_id={preview_id}"]
+    if install:
+        out += ["--label", f"boss.install_id={install}"]
+    return out
+
+
+def container_limits(kind: str) -> list[str]:
+    """The resource envelope a workload container runs in (filled in by workload limits)."""
+    return []
 
 
 def _kill(pid: Optional[int]) -> None:
@@ -2716,6 +2842,24 @@ def forwarded_preview_headers(
     return out
 
 
+#: preview id → when its last_seen_at was last written. Idle-stop needs "seen in the last N
+#: minutes", not every request: one UPDATE a minute per preview at most.
+_SEEN_WRITTEN: dict[str, float] = {}
+
+
+def _touch_seen(engine, preview_id: str) -> None:
+    now = time.monotonic()
+    if now - _SEEN_WRITTEN.get(preview_id, 0.0) < 60:
+        return
+    _SEEN_WRITTEN[preview_id] = now
+    try:
+        with begin(engine) as c:
+            c.execute(text("UPDATE app_previews SET last_seen_at = now() WHERE id = :id"),
+                      {"id": preview_id})
+    except Exception:  # noqa: BLE001 — a missed touch only shortens an idle preview's life
+        pass
+
+
 def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   query_string: str = "", body: Optional[bytes] = None,
                   content_type: Optional[str] = None,
@@ -2732,6 +2876,7 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         return 404, "text/plain", b"preview not found", {}
     if row["status"] != "running":
         return 409, "text/plain", f"preview not running (status={row['status']})".encode(), {}
+    _touch_seen(engine, preview_id)
     if str(row.get("mode") or "") == FIXTURE_MODE:
         if subpath and subpath not in {"", "/"}:
             return 404, "text/plain", b"fixture preview has no extra paths", {}
@@ -2871,6 +3016,8 @@ def smoke_test(
 def _teardown(row, settings: Optional[Settings] = None) -> None:
     if row.get("mode") == "docker":
         _docker_rm(row.get("container_id"))
+        if row.get("id"):
+            _docker_rmi(preview_image_tag(str(row["id"])))
     elif row.get("mode") == "rootfs":
         sandbox_id = row.get("sandbox_task_id")
         if settings and sandbox_id:
@@ -2895,7 +3042,7 @@ def _teardown(row, settings: Optional[Settings] = None) -> None:
 def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -> dict:
     with begin(engine) as c:
         row = c.execute(text(
-            "SELECT pid,mode,container_id,sandbox_task_id FROM app_previews WHERE id=:id"
+            "SELECT id,pid,mode,container_id,sandbox_task_id FROM app_previews WHERE id=:id"
         ),
                         {"id": preview_id}).mappings().first()
         if row is None:
