@@ -81,7 +81,8 @@ def test_load_older_reaches_every_row_once(client, engine):
 
 
 def test_a_cursor_with_a_non_recency_sort_is_refused_with_a_reason(client):
+    """Level and status are facets now; a sort by them only ever sorted the loaded page."""
     response = client.get("/v1/activity", params={
         "project_id": PROJECT_ID, "cursor": "2026-09-01T00:00:00+00:00|evt_x", "sort": "kind"})
     assert response.status_code == 422
-    assert "newest-first" in response.text
+    assert response.json()["detail"] == "Sort by time; use filters for level or status"
