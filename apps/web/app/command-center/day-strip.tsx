@@ -73,7 +73,7 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
   // THE WINDOW FITS THE WORK: zoomed to the runs on the strip by default, so a busy last hour is
   // not a pile of slivers at the right edge; `24h` (12h on a phone) shows the whole day.
   const [zoom, setZoom] = useState<"fit" | "full">("fit");
-  const { since, ticks } = stripWindow(shown, now, windowHours, zoom);
+  const { since, ticks } = stripWindow(shown, now, windowHours, zoom, windowHours === 12 ? 3 : 6);
   const pct = (ms: number) => ((Math.min(Math.max(ms, since), now) - since) / Math.max(1, now - since)) * 100;
 
   // What changed since the last poll: new ticks fade in, a cap that just ended pulses once.

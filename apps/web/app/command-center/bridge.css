@@ -272,7 +272,7 @@
 }
 
 /* The severity chip beside the calm headline (the server's first matching rule). */
-.cc-sev { font-size: 0.82rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); }
+.cc-sev { white-space: nowrap; font-size: 0.82rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); }
 .cc-sev[data-tone="red"] { color: var(--red); background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
 .cc-sev[data-tone="amber"] { color: var(--amber); background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
 
@@ -298,3 +298,5 @@
 .cc-host-detail { color: var(--muted); }
 .cc-host-fix { color: var(--accent-text); cursor: help; border-bottom: 1px dotted currentColor; }
 .cc-host-copy { display: inline-flex; align-items: center; gap: 6px; }
+
+.cc-chip { white-space: nowrap; }

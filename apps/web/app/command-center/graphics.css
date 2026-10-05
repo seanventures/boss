@@ -285,7 +285,7 @@
 @media (max-width: 639px) { .cc-day-row { height: 28px; } .cc-day-bar { height: 24px; top: 2px; } }
 
 /* ── This week ──────────────────────────────────────────────────────────────────────────── */
-.cc-week-body { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; min-width: 0; }
+.cc-week-body { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; min-width: 0; padding-top: 18px; }
 .cc-week-chart { display: flex; flex-direction: column; gap: 8px; }
 .cc-week-bars {
   display: flex; align-items: flex-end; gap: 14px; padding: 0 4px;
@@ -431,18 +431,6 @@
 .cc-day[data-motion="none"] *, .cc-day[data-motion="reduced"] * { animation: none !important; }
 @media (max-width: 639px) { .cc-day-row { height: 28px; } .cc-day-bar { height: 24px; top: 2px; } }
 
-/* ── This week ──────────────────────────────────────────────────────────────────────────── */
-.cc-week-body { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; min-width: 0; }
-.cc-week-bars { display: flex; align-items: flex-end; gap: 6px; height: 56px; border-bottom: 1px solid var(--border-strong); padding: 0 2px; }
-.cc-week-bar { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 14px; }
-.cc-week-stack { display: flex; flex-direction: column; justify-content: flex-end; width: 14px; height: 40px; }
-.cc-week-stack i { display: block; width: 100%; }
-.cc-week-done { background: var(--green); border-radius: 2px 2px 0 0; }
-.cc-week-failed { background: var(--red); border-radius: 2px 2px 0 0; }
-.cc-week-failed + .cc-week-done { border-radius: 0; }
-.cc-week-dow { font: 600 9px/1 var(--sans); color: var(--faint); }
-.cc-week-line { display: inline-flex; gap: 6px; align-items: baseline; font: 600 13px/1.3 var(--sans); color: var(--ink-soft); padding-bottom: 14px; }
-.cc-sep { color: var(--faint); }
 
 @media (prefers-reduced-motion: reduce) {
   .cc-edge[data-new] .cc-edge-line, .cc-thread[data-new], .cc-node[data-woke] > .ag-avatar,
@@ -451,3 +439,7 @@
   .cc-floor-stage .ag-av, .cc-floor-stage .ag-av * { animation: none !important; }
 }
 .cc-floor-stage[data-motion="none"] *, .cc-floor-stage[data-motion="none"]::after { animation: none !important; transition: none !important; }
+
+@media (max-width: 639px) {
+  .cc-day-axis, .cc-day-row { grid-template-columns: minmax(90px, 36%) minmax(0, 1fr); gap: 10px; }
+}
