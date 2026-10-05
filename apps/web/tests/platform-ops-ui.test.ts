@@ -13,7 +13,6 @@ import { ReleasePlanningPanel } from "../app/release-planning-ui";
 // Worker autoscaling, the observability suite and CI/CD retired into Infra and Observability:
 // Cloud › Capacity, Observability › Sources, and Deploys › CI config.
 import { CloudCapacity } from "../app/infra/cloud-capacity";
-import { TokenEfficiencyPanel } from "../app/token-efficiency-ui";
 import { SourcesTab } from "../app/observability/sources";
 import { KnowledgeGraphPanel } from "../app/knowledge-graph-ui";
 import { CiSheet } from "../app/infra/ci-sheet";
@@ -27,7 +26,6 @@ export const PLATFORM_OPS_AREA_NESTING = {
   releases: "portfolio",
   cicd: "infra",
   scaling: "infra",
-  tokenEfficiency: "budget",
   observability: "observability",
   knowledgeGraph: "reliability",
 } as const;
@@ -79,7 +77,6 @@ describe("platform-ops UI nesting", () => {
     expect(PLATFORM_OPS_AREA_NESTING.releases).toBe("portfolio");
     expect(PLATFORM_OPS_AREA_NESTING.cicd).toBe("infra");
     expect(PLATFORM_OPS_AREA_NESTING.scaling).toBe("infra");
-    expect(PLATFORM_OPS_AREA_NESTING.tokenEfficiency).toBe("budget");
     expect(PLATFORM_OPS_AREA_NESTING.observability).toBe("observability");
     expect(PLATFORM_OPS_AREA_NESTING.knowledgeGraph).toBe("reliability");
   });
@@ -98,7 +95,6 @@ describe("platform-ops UI smoke imports", () => {
     expect(typeof SecurityScanCard).toBe("function");
     expect(typeof ReleasePlanningPanel).toBe("function");
     expect(typeof CloudCapacity).toBe("function");
-    expect(typeof TokenEfficiencyPanel).toBe("function");
     expect(typeof SourcesTab).toBe("function");
     expect(typeof KnowledgeGraphPanel).toBe("function");
     expect(typeof CiSheet).toBe("function");

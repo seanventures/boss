@@ -202,7 +202,7 @@ const AREAS: AreaDef[] = [
   // Cloud, Repo and models, Skills & MCP and Observability, so it has no rail entry.
   { id: "infra", label: "Infra", sub: "Where your apps run and how they got there", group: "Run", icon: ICONS.infra },
   { id: "observability", label: "Observability", sub: "Is it alive, how fast, what thinking costs", group: "Run", icon: ICONS.observability },
-  { id: "activity", label: "Activity log", sub: "Every log line — agents, models, tasks, infra", group: "Run", icon: ICONS.activity },
+  { id: "activity", label: "Activity log", sub: "Every line BOSS wrote, searchable", group: "Run", icon: ICONS.activity },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   // ONE ENTRY, NOT TWO. "Metatron" was an always-on captain whose session table does not exist
@@ -226,7 +226,7 @@ const AREAS: AreaDef[] = [
   // WHAT YOUR CREW CAN DO (skills-mcp spec §5.1): the Kit of abilities, who holds them, and every
   // skill and MCP server. Second in Settings: a repo and a model come first.
   { id: "skills", label: "Skills & MCP", sub: "What your crew can do", group: "Settings", icon: ICONS.capabilities },
-  { id: "budget", label: "Govern", sub: "How hard BOSS runs — concurrency, turn budgets, and spend", group: "Settings", icon: ICONS.budget },
+  { id: "budget", label: "Govern", sub: "Spend caps, pace and limits", group: "Settings", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Settings", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Settings", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Settings", icon: ICONS.ops },

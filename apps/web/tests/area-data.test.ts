@@ -28,44 +28,28 @@ vi.mock("../lib/client", () => ({
 }));
 
 describe("area-data loaders (BOSS-13)", () => {
-  it("exports budget, infra, and assurance loaders", async () => {
+  it("exports infra and assurance loaders — and no budget pack: Govern reads its own data", async () => {
     const mod = await import("../lib/area-data");
-    expect(typeof mod.loadBudgetAreaData).toBe("function");
+    expect("loadBudgetAreaData" in mod).toBe(false);
     expect(typeof mod.loadInfraAreaData).toBe("function");
     expect(typeof mod.loadAssuranceAreaData).toBe("function");
-    expect(typeof mod.shouldLoadBudgetArea).toBe("function");
     expect(typeof mod.shouldLoadInfraArea).toBe("function");
     expect(typeof mod.shouldLoadAssuranceArea).toBe("function");
   });
 
   it("gates inactive areas without network work", async () => {
     const {
-      loadBudgetAreaData,
       loadInfraAreaData,
       loadAssuranceAreaData,
-      shouldLoadBudgetArea,
       shouldLoadInfraArea,
       shouldLoadAssuranceArea,
     } = await import("../lib/area-data");
-
-    expect(shouldLoadBudgetArea(undefined)).toBe(true);
-    expect(shouldLoadBudgetArea("overview")).toBe(true);
-    expect(shouldLoadBudgetArea("budget")).toBe(true);
-    expect(shouldLoadBudgetArea("meetings")).toBe(false);
 
     expect(shouldLoadInfraArea("infra")).toBe(true);
     expect(shouldLoadInfraArea("meetings")).toBe(false);
 
     expect(shouldLoadAssuranceArea("assurance")).toBe(true);
     expect(shouldLoadAssuranceArea("meetings")).toBe(false);
-
-    const budget = await loadBudgetAreaData({
-      projectId: "boss-dogfood",
-      active: false,
-    });
-    expect(budget.loaded).toBe(false);
-    expect(budget.budgetStatus.apiReachable).toBe(false);
-    expect(budget.finopsSummary.spendByProvider).toEqual([]);
 
     const infra = await loadInfraAreaData({
       projectId: "boss-dogfood",
@@ -86,7 +70,7 @@ describe("area-data loaders (BOSS-13)", () => {
     const pagePath = resolve(__dirname, "../app/page.tsx");
     const source = readFileSync(pagePath, "utf8");
     expect(source).toContain('from "../lib/area-data"');
-    expect(source).toContain("loadBudgetAreaData");
+    expect(source).not.toContain("loadBudgetAreaData");
     // Infra › Cloud reads GET /v1/infra/cloud client-side (infra-observability spec §6.6): the
     // page no longer loads an infra pack, whose ProviderOps fan-out was 17 calls per render.
     expect(source).not.toContain("loadInfraAreaData");
@@ -103,7 +87,7 @@ describe("area-data loaders (BOSS-13)", () => {
   it("gates every area pack on needs(), never on the requested area", () => {
     const source = codeOnly("app/page.tsx");
     const calls = [...source.matchAll(/load(\w+)AreaData\(\{[^}]*active:\s*(\w+)/g)];
-    expect(calls.length, "found no area-pack loads — the scan is broken").toBeGreaterThanOrEqual(2);
+    expect(calls.length, "found no area-pack loads — the scan is broken").toBeGreaterThanOrEqual(1);
     for (const [, pack, flag] of calls) {
       const def = source.match(new RegExp(`const ${flag}\\s*=\\s*([^;]+);`));
       expect(def, `${pack}: ${flag} is not defined in page.tsx`).not.toBeNull();

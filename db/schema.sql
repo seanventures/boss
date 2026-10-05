@@ -5936,6 +5936,15 @@ CREATE INDEX IF NOT EXISTS idx_deadletters_project_created
   ON deadletters(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_project_created
   ON jobs(project_id, created_at DESC);
+-- The log reads every stream newest-first by keyset (activity_sql). A workflow step is dated
+-- when it RAN, so its index is on that expression, not on created_at; deployments led with
+-- `status`; app output with no project is half of app_logs' reads and had no index at all.
+CREATE INDEX IF NOT EXISTS idx_workflow_step_runs_project_ran
+  ON workflow_step_runs(project_id, (COALESCE(completed_at, started_at, created_at)) DESC);
+CREATE INDEX IF NOT EXISTS idx_deployment_runs_project_created
+  ON deployment_runs(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_logs_unowned_created
+  ON app_logs(created_at DESC) WHERE project_id IS NULL;
 
 
 -- Project-level gate autonomy: whether small, reversible, well-understood gates may approve

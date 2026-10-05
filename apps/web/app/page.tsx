@@ -47,7 +47,8 @@ import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
-import { ActivityLog } from "./activity-log-ui";
+import { LogExplorer } from "./activity/log-explorer";
+import { GovernHome } from "./govern/govern-home";
 import { DeliveryWorkflows } from "./delivery-workflows-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
@@ -55,16 +56,10 @@ import { PackExportButton, PackImportForm } from "./packs-import-ui";
 import { DecisionInbox } from "./decision-inbox-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
-import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
 import {
   loadAssuranceAreaData,
-  loadBudgetAreaData,
   ASSURANCE_AREA_IDS,
-  BUDGET_AREA_IDS,
 } from "../lib/area-data";
-import { fetchBudgetStatus, fetchBudgetIntensity, periodWords } from "../lib/budget-status";
-import { BudgetIntensitySlider } from "./budget-intensity-ui";
-import { SettingsKnobs } from "./settings-knobs-ui";
 import { fetchLatestCanary } from "../lib/canaries";
 import { CanaryCard } from "./canary-ui";
 import { fetchDashboard } from "../lib/dashboard";
@@ -88,8 +83,7 @@ import {
   FactoryScaleCard,
 } from "./phase3-ui";
 import { fetchChaosRuns } from "../lib/chaos";
-import { fetchCommitmentReconciliations, fetchFinopsSummary } from "../lib/finops";
-import { ChaosCard, FinopsCard } from "./phase4-ui";
+import { ChaosCard } from "./phase4-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -116,7 +110,6 @@ import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
-import { appIdentity } from "./app-identity";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { WorkforceArea } from "./workforce-ui";
 import { resolveLegacyArea, searchParamsFrom } from "./legacy-areas";
@@ -128,8 +121,6 @@ import { ObsHome } from "./observability/obs-home";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchAiSreCapabilities } from "../lib/ai-sre";
 import { AiSreHome } from "./ai-sre-ui";
-import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
-import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { buildAgentRoster } from "../lib/roster";
 import { TZ_COOKIE, fetchCommandCenterView } from "../lib/command-center-view-server";
@@ -189,13 +180,6 @@ import {
   fetchReleases,
 } from "../lib/release-planning";
 import { ReleasePlanningPanel } from "./release-planning-ui";
-import {
-  fetchTokenConsumption,
-  fetchTokenPolicies,
-  fetchTokenRecommendations,
-  fetchTokenScorecard,
-} from "../lib/token-efficiency";
-import { TokenEfficiencyPanel } from "./token-efficiency-ui";
 import { fetchKnowledgeGraphFeed } from "../lib/knowledge-graph";
 import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
 import { AskBossHero } from "./ask-boss-hero";
@@ -295,24 +279,6 @@ function formatMsDuration(ms?: number): string {
 
 function formatDateTime(value?: string): string {
   return formatDateTimeShared(value, "Unknown time");
-}
-
-function formatDurationSeconds(value?: number | null): string {
-  if (typeof value !== "number") {
-    return "No active burn rate";
-  }
-  if (value <= 0) {
-    return "At cap";
-  }
-  const hours = Math.floor(value / 3600);
-  const days = Math.floor(hours / 24);
-  if (days > 0) {
-    return `${days}d ${hours % 24}h`;
-  }
-  if (hours > 0) {
-    return `${hours}h`;
-  }
-  return `${Math.max(Math.floor(value / 60), 1)}m`;
 }
 
 function titleCaseToken(value: string): string {
@@ -594,7 +560,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // unavailable"; land on Govern, open System Configuration, "MCP registry unavailable." while
   // Skills listed three servers. Data that was simply not requested rendered as a failure.
   // `needs` is the one seam that decides what a render fetches, so the packs ask it too.
-  const budgetActive = needs(...BUDGET_AREA_IDS);
   const assuranceActive = needs(...ASSURANCE_AREA_IDS);
   // ALWAYS FETCHED, deliberately.
   //
@@ -621,7 +586,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // waits for it.
   const workforceP = fetchWorkforce(activeProjectId);
   const orgChartP = fetchOrgChart(activeProjectId);
-  const budgetP = loadBudgetAreaData({ projectId: activeProjectId, active: budgetActive });
   // No Infra pack: Infra › Cloud reads GET /v1/infra/cloud itself (infra-observability spec §6.6),
   // which replaced the 17-call ProviderOps fan-out this page made for System Configuration.
   const assuranceP = loadAssuranceAreaData({ projectId: activeProjectId, active: assuranceActive });
@@ -647,7 +611,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
   const [workforceData, orgChartData] = await Promise.all([workforceP, orgChartP]);
 
-  const [budgetArea, assuranceArea] = await Promise.all([budgetP, assuranceP]);
+  // GOVERN READS ITS OWN DATA (app/govern: one GET /v1/govern, then one per tab opened), so
+  // nothing about spend is fetched by this render any more — eleven reads, one a POST, used to
+  // run here on every render of every area that needed them.
+  const [assuranceArea] = await Promise.all([assuranceP]);
   const assuranceFeed = assuranceArea.assuranceFeed;
   // The platform-ops feeds. They need the project id and `assuranceArea`, both of which exist
   // here — so waiting until after the 66-feed wave cost a third round trip for nothing.
@@ -666,10 +633,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fetchReleaseStatus(activeProjectId, needs("portfolio")),
     fetchReleaseBoard(activeProjectId, needs("portfolio")),
     fetchReleases(activeProjectId, needs("portfolio")),
-    fetchTokenScorecard(activeProjectId, undefined, needs("budget")),
-    fetchTokenConsumption(activeProjectId, 24, needs("budget")),
-    fetchTokenPolicies(activeProjectId, needs("budget")),
-    fetchTokenRecommendations(activeProjectId, undefined, needs("budget")),
     fetchKnowledgeGraphFeed(activeProjectId, needs("reliability")),
     fetchLiveJobsFeed(activeProjectId, 12, needs("work")),
     fetchQaScorecardFeed(activeProjectId, needs("reports")),
@@ -695,11 +658,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     githubOperations,
     repoActivity,
     receipts,
-    budgetStatus,
-    budgetIntensity,
     canaryRun,
     plansList,
-    budgetAllocations,
     auditSummary,
     changeJournal,
     selfImprovement,
@@ -730,8 +690,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     ackState,
     wipStatus,
     chaosRuns,
-    commitmentRecons,
-    finopsSummary,
     workflowFeed,
     agentStudioFeed,
     workOrchestrationFeed,
@@ -754,11 +712,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchGitHubOperationsFeed(activeProjectId, needs("github")),
       fetchRepoActivity(activeProjectId, 30, needs("github")),
       fetchReceiptFeed(activeProjectId, 100),
-      Promise.resolve(budgetArea.budgetStatus),
-      Promise.resolve(budgetArea.budgetIntensity),
       fetchLatestCanary(activeProjectId, needs("ops")),
       fetchPlans(activeProjectId, needs("work")),
-      Promise.resolve(budgetArea.budgetAllocations),
       // Was the single biggest cost on this page, for eight numbers: it called
       // /v1/audit/export, which serialises the entire audit trail — 192 MB in 62 seconds on
       // this project — so the Ops screen could display eight counts. It now asks
@@ -793,7 +748,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCodeTasksFeed(
         activeProjectId,
         requestedArea,
-        needs("activity", "code_tasks", "reports"),
+        needs("code_tasks", "reports"),
       ),
       fetchDiscoveriesFeed(activeProjectId, needs("discovery")),
       fetchPreviews(activeProjectId, needs("code_tasks")),
@@ -809,8 +764,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchAckState(activeProjectId, 25, false, needs("comms")),
       fetchWipStatus(activeProjectId, 5, needs("code_tasks", "pipeline")),
       fetchChaosRuns(activeProjectId, 15, needs("ops")),
-      Promise.resolve(budgetArea.commitmentRecons),
-      Promise.resolve(budgetArea.finopsSummary),
       fetchWorkflowFeed(activeProjectId, needs("ops")),
       // The Agents area reads it: Profile on an agent, Panels, and orphan definitions offered
       // as templates in New agent.
@@ -822,10 +775,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
   // calls, so serialising it was pure waste on every single render.
   const [reliabilityFeed, aiSreFeed, , commandCenter] = await reliabilityWaveP;
-  const [costInsights, llmSpend] = await Promise.all([
-    Promise.resolve(budgetArea.costInsights),
-    Promise.resolve(budgetArea.llmSpend),
-  ]);
   // Platform ops panels nested into existing Mission Control areas (no new nav).
   const [
     identityProvidersFeed,
@@ -836,10 +785,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     releaseStatus,
     releaseBoard,
     releasePlans,
-    tokenScorecard,
-    tokenConsumption,
-    tokenPolicies,
-    tokenRecommendations,
     knowledgeGraphFeed,
     liveJobs,
     qaScorecard,
@@ -1352,244 +1297,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("budget") ? (
         <section className="panel-stack" data-area="budget" aria-label="Govern">
-          <div className="panel">
-            <span className="eyebrow" data-area="budget">Govern</span>
-            <h2>How hard BOSS runs</h2>
-            <p className="detail">
-              These lived in environment variables, so changing one meant an ops action and a
-              restart. Each says where its value comes from; a project value overrides the
-              deployment default.
-            </p>
-            {/* Numbers only. Which model fills which role is asked in Setup, next to the
-                step that connects one — not here beside concurrency and spend. */}
-            <SettingsKnobs projectId={activeProjectId} actor={activeActorId} only="number" />
-          </div>
-        </section>
-        ) : null}
-        {shows("budget") ? (
-        <section className="panel-stack">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow" data-area="budget">Budget Control Center</span>
-              <h2>Live spend, forecast, and cap pressure.</h2>
-            </div>
-            <p className="status-meta">
-              From the budget ledger for project {activeProjectId}: reservations, actual spend and the cap.
-            </p>
-          </div>
-
-          <BudgetIntensitySlider projectId={activeProjectId} current={budgetIntensity} />
-
-          <article className="stack-card">
-            {!budgetStatus.apiReachable ? (
-              <p className="detail">
-                {budgetStatus.blockedReason ?? "Budget status API is unavailable."}
-              </p>
-            ) : (
-              <>
-                <div className="grid compact-grid">
-                  <article>
-                    <h2>Spent {periodWords(budgetStatus.period).when}</h2>
-                    <div className="metric">
-                      {formatMicros(budgetStatus.actualUsdMicros)}
-                    </div>
-                    <p className="detail" data-testid="budget-period">
-                      Money settled {periodWords(budgetStatus.period).when}. The{" "}
-                      {periodWords(budgetStatus.period).cap} resets at{" "}
-                      {budgetStatus.resetsAtLabel}.
-                    </p>
-                  </article>
-                  <article>
-                    <h2>Reserved</h2>
-                    <div className="metric">
-                      {formatMicros(budgetStatus.reservedUsdMicros)}
-                    </div>
-                    <p className="detail">
-                      {budgetStatus.activeReservationsCount} active reservation
-                      {budgetStatus.activeReservationsCount === 1 ? "" : "s"}.
-                    </p>
-                  </article>
-                  <article>
-                    <h2>Forecast 24h</h2>
-                    <div className="metric">
-                      {formatMicros(budgetStatus.forecasted24hUsdMicros)}
-                    </div>
-                    <p className="detail">
-                      Observed spend over {budgetStatus.burnWindowHours}h plus
-                      active reservations.
-                    </p>
-                  </article>
-                  <article>
-                    <h2>Time To Cap</h2>
-                    <div className="metric">
-                      {formatDurationSeconds(budgetStatus.timeToCapSeconds)}
-                    </div>
-                    <p className="detail">
-                      Burn rate{" "}
-                      {formatMicros(budgetStatus.burnRateUsdMicrosPerHour)}
-                      /hour.
-                    </p>
-                  </article>
-                </div>
-                <div className="decision-grid">
-                  <div>
-                    <h4>Cap pressure</h4>
-                    <p className="detail">
-                      State {budgetStatus.budgetState}; committed{" "}
-                      {formatMicros(budgetStatus.committedUsdMicros)} of{" "}
-                      {periodWords(budgetStatus.period).whose}{" "}
-                      {formatMicros(budgetStatus.capUsdMicros)} with{" "}
-                      {Math.round(budgetStatus.utilizationRatio * 100)}%
-                      utilization. It resets at {budgetStatus.resetsAtLabel}.
-                    </p>
-                    {/* Each cap measures its own period; the one that does not bind is shown
-                        too, so a nearly-spent month is not hidden behind a quiet day. */}
-                    {budgetStatus.periods
-                      .filter((p) => p.period !== budgetStatus.period)
-                      .map((p) => (
-                        <p className="detail" key={p.period} data-testid={`budget-period-${p.period}`}>
-                          {periodWords(p.period).whose[0].toUpperCase()}
-                          {periodWords(p.period).whose.slice(1)} budget:{" "}
-                          {formatMicros(p.committedUsdMicros)} of{" "}
-                          {formatMicros(p.capUsdMicros)} (
-                          {Math.round(p.utilizationRatio * 100)}%), resets at {p.resetsAtLabel}.
-                        </p>
-                      ))}
-                  </div>
-                  <div>
-                    <h4>Top cost drivers</h4>
-                    {budgetStatus.topCostDrivers.length > 0 ? (
-                      <ul className="detail">
-                        {budgetStatus.topCostDrivers.map((driver) => (
-                          <li key={driver.skillOrModelId}>
-                            {driver.skillOrModelId}:{" "}
-                            {formatMicros(driver.amountUsdMicros)}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="detail">No cost receipts recorded yet.</p>
-                    )}
-                    {/* NOT MONEY, NEVER DROPPED. What subscription calls would have cost at
-                        API list price: shown, and counted against no cap (included_spend.py). */}
-                    {budgetStatus.includedInSubscriptionUsdMicros > 0 ? (
-                      <p className="detail" data-testid="budget-included-in-subscription">
-                        Included in your subscription:{" "}
-                        {formatMicros(budgetStatus.includedInSubscriptionUsdMicros)} at API list
-                        price — not spent, and not counted against the cap.
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              </>
-            )}
-          </article>
-        </section>
-        ) : null}
-
-        {shows("budget") ? (
-        <section className="panel-stack" data-area="budget" aria-label="Cost governance">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Cost Governance</span>
-              <h2>Real model spend, enforced thresholds, and the top cost saves.</h2>
-            </div>
-            <p className="status-meta">
-              llm_calls is the ledger of record — per agent, per model, cache leverage.
-            </p>
-          </div>
-          <div className="stack-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
-            <CostInsightsCard feed={costInsights} />
-            <LlmSpendCard feed={llmSpend} />
-            <BudgetThresholdsCard status={budgetStatus} />
-          </div>
-        </section>
-        ) : null}
-
-        {shows("budget") ? (
-          <TokenEfficiencyPanel
-            scorecard={tokenScorecard}
-            consumption={tokenConsumption}
-            policies={tokenPolicies}
-            recommendations={tokenRecommendations}
-          />
-        ) : null}
-
-        {shows("budget") ? (
-        <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">FinOps · Commitments &amp; Initiatives</span>
-              <h2>Reconcile committed spend and gate big initiatives.</h2>
-            </div>
-            <p className="status-meta">
-              Commitment utilization vs actual usage, and tier-2+ initiative budget approval.
-            </p>
-          </div>
-          <div className="stack-grid">
-            <FinopsCard
-              projectId={activeProjectId}
-              reconciliations={commitmentRecons}
-              summary={finopsSummary}
-            />
-          </div>
-        </section>
-        ) : null}
-
-        {shows("budget") ? (
-        <section className="panel-stack">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow" data-area="budget">Budget Allocations</span>
-              <h2>Hierarchical spend envelopes for departments and initiatives.</h2>
-            </div>
-            <p className="status-meta">
-              Child allocations and reservations cannot exceed the parent envelope.
-            </p>
-          </div>
-
-          <article className="stack-card">
-            {!budgetAllocations.apiReachable ? (
-              <p className="detail">
-                {budgetAllocations.blockedReason ??
-                  "Budget allocation API is unavailable."}
-              </p>
-            ) : budgetAllocations.items.length === 0 ? (
-              <p className="detail">
-                No budget allocations have been created for this project yet.
-              </p>
-            ) : (
-              <div className="feed-list">
-                {budgetAllocations.items.map((allocation) => (
-                  <div className="feed-row" key={allocation.id}>
-                    <div>
-                      <h4>
-                        {titleCaseToken(allocation.scopeType)} /{" "}
-                        {allocation.scopeId}
-                      </h4>
-                      <p className="detail">
-                        Amount {formatMicros(allocation.amountUsdMicros)} / available{" "}
-                        {formatMicros(allocation.availableUsdMicros)}
-                      </p>
-                      <p className="detail">
-                        Child allocations{" "}
-                        {formatMicros(allocation.childAllocatedUsdMicros)} / reserved{" "}
-                        {formatMicros(allocation.reservedUsdMicros)} / actual{" "}
-                        {formatMicros(allocation.actualUsdMicros)}
-                      </p>
-                      <p className="detail">
-                        {formatDateTime(allocation.periodStart)} to{" "}
-                        {formatDateTime(allocation.periodEnd)}
-                      </p>
-                    </div>
-                    <code className="mono">
-                      {allocation.parentAllocationId ?? allocation.id}
-                    </code>
-                  </div>
-                ))}
-              </div>
-            )}
-          </article>
+          {/* GOVERN, AS ONE PAGE (activity-govern spec §4.4): the meter, then Limits · Spend ·
+              Envelopes. It reads its own data client-side — one GET /v1/govern and one per tab —
+              so a rail switch never finds it "not loaded". */}
+          <GovernHome projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
 
@@ -3379,16 +3090,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               component, and the Factory links across with pushState — a client-side navigation
               that never re-runs it. Threading it through props would have worked on a reload
               and silently done nothing on the click that matters. */}
-          <ActivityLog
-            projectId={activeProjectId} actor={activeActorId}
-            // NAMES, NOT IDS. Arriving here from a run, the scope banner said
-            // "Scoped to one work task crun_2f0a15b2…" — which is the truth and tells the
-            // reader nothing about WHICH app they are looking at. The page already has every
-            // run's title, so no extra fetch is needed to say it.
-            runTitles={Object.fromEntries(codeTasksFeed.items.map((t) => [
-              t.id, appIdentity({ title: t.title ?? "" }).name || t.id,
-            ]))}
-          />
+          <LogExplorer projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
 

@@ -35,10 +35,8 @@ const PLATFORM_OPS_FEEDS: ReadonlyArray<readonly [string, string]> = [
   ["fetchReleaseStatus", "portfolio"],
   ["fetchReleaseBoard", "portfolio"],
   ["fetchReleases", "portfolio"],
-  ["fetchTokenScorecard", "budget"],
-  ["fetchTokenConsumption", "budget"],
-  ["fetchTokenPolicies", "budget"],
-  ["fetchTokenRecommendations", "budget"],
+  // The four token feeds left this wave: Govern reads its own data now (one GET /v1/govern,
+  // then one read per tab opened), so a render fetches nothing for it (activity-govern §6.2).
   ["fetchKnowledgeGraphFeed", "reliability"],
   ["fetchLiveJobsFeed", "work"],
   ["fetchQaScorecardFeed", "reports"],
@@ -89,7 +87,7 @@ describe("only the requested area is fetched", () => {
       .split("\n")
       .slice(1)
       .findIndex((l) => l.trim().startsWith("]"));
-    expect(entries).toBe(14);
+    expect(entries).toBe(10);
   });
 
   it("the main wave gates the feeds that only one area reads", () => {
@@ -191,7 +189,6 @@ describe("only the requested area is fetched", () => {
       "lib/identity-providers.ts",
       "lib/oncall-sre.ts",
       "lib/release-planning.ts",
-      "lib/token-efficiency.ts",
       "lib/observability-suite.ts",
       "lib/knowledge-graph.ts",
       "lib/live-jobs.ts",

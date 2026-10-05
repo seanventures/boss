@@ -8,6 +8,7 @@ import type { SetupView } from "../../lib/setup-types";
 import { toast, useBoard } from "./parts";
 import { Pill, Tip } from "./pill";
 import { SetupRow } from "./setup-row";
+import { consoleHref } from "../url-intent";
 
 const usd = (n: number) => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
 
@@ -21,6 +22,12 @@ export const BudgetRow = forwardRef<HTMLElement, { mode: string; focused: boolea
     const [value, setValue] = useState(String(budget.monthly_cap_usd ?? budget.cap_usd));
     const [busy, setBusy] = useState(false);
     const [open, setOpen] = useState(false);
+    // Govern ↗ lands on the Monthly cap row and keeps who you are (org=): built from the URL,
+    // so after mount — a bare `?area=budget` dropped the org and landed at the top (D12).
+    const [governHref, setGovernHref] = useState("?area=budget&focus=monthly_cap");
+    useEffect(() => {
+      setGovernHref(consoleHref(window.location.search, { area: "budget", focus: "monthly_cap" }));
+    }, []);
     const collapsed = mode === "collapsed" && !open && !focused;
     const ratio = budget.cap_usd ? Math.min(1, budget.spent_usd / budget.cap_usd) : 0;
     const period = budget.period === "day" ? "today" : "this month";
@@ -70,7 +77,7 @@ export const BudgetRow = forwardRef<HTMLElement, { mode: string; focused: boolea
               <button type="button" className="su-link" data-testid="su-budget-edit"
                       onClick={() => setEditing(true)}>Edit</button>
             )}
-            <a className="su-link" href="?area=budget" data-testid="su-govern">Govern ↗</a>
+            <a className="su-link" href={governHref} data-testid="su-govern">Govern ↗</a>
           </div>
         )}
       </SetupRow>
