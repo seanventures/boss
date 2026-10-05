@@ -1231,6 +1231,18 @@ _SOURCES_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 _GAP_LABELS = {"no_metrics_backend": "No metrics backend", "no_logs_backend": "No log backend",
                "empty_observability": "Nothing watched yet"}
+#: The UI's tooltip for each gap (≤ 14 words, operator decision 2026-10-04). suite_status's own
+#: sentence is kept on the gap as `detail` for anyone who opens it.
+_GAP_TIPS = {
+    "no_metrics_backend": "No Prometheus source, and the monitoring stack is not deployed",
+    "no_logs_backend": "No log source registered, so log answers will be thin",
+    "empty_observability": "No sources and no stack yet. Deploy the stack to start.",
+}
+
+
+def _tip14(text_: str) -> str:
+    words = text_.split()
+    return text_ if len(words) <= 14 else " ".join(words[:13]) + "…"
 
 
 def forget_sources(project_id: Optional[str] = None) -> None:
@@ -1328,7 +1340,8 @@ def sources(connection: Any, settings: Any, project_id: str, *, fresh: bool = Fa
              "url": s.get("base_url"), "enabled": bool(s.get("enabled"))}
             for s in ((suite.get("connectors") or {}).get("registered") or [])]
     gaps = [{"id": g["id"], "label": _GAP_LABELS.get(g["id"], g["id"]),
-             "tip": str(g.get("message") or "")} for g in (suite.get("gaps") or [])]
+             "tip": _GAP_TIPS.get(g["id"]) or _tip14(str(g.get("message") or "")),
+             "detail": str(g.get("message") or "")} for g in (suite.get("gaps") or [])]
     body: Sources = {
         "stack": {"state": state, "word": sw["word"], "tone": sw["tone"], "host": host_ref,
                   "host_target_id": host["id"] if host else None,

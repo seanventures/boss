@@ -103,7 +103,7 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
         <div className="inf-actions">
           {can.adopt_key ? (
             <button type="button" className="ag-btn" data-testid="inf-stage-adopt" aria-expanded={adopting}
-                    title="Paste a private key that already reaches this machine (I have a key that works)"
+                    title="Paste a private key that already reaches this machine"
                     onClick={() => setAdopting((v) => !v)}>Use my key</button>
           ) : null}
           {can.generate_key ? (
@@ -184,7 +184,7 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
           ) : null}
           {can.install_key ? (
             <button type="button" className="ag-btn" data-testid="inf-stage-install-key" disabled={busy !== null}
-                    title="BOSS logs in once with your key and installs its own (Let BOSS install its own key)"
+                    title="BOSS logs in once with your key and installs its own"
                     onClick={() => void act("install-key", () => installHostKey(host.id, actor, store))}>
               {busy === "install-key" ? "Installing…" : "Install key for me"}
             </button>
@@ -232,7 +232,7 @@ function CorrectRecord({ host, projectId, actor, refresh }: { host: HostDetail; 
       try {
         await registerLocalPlace({ project_id: projectId, actor, hostname: String(f.get("hostname") ?? "").trim(),
                                    arch: String(f.get("arch") ?? "").trim(), os: String(f.get("os") ?? "").trim() });
-        showToast("success", "Saved");
+        showToast("success", "Record saved");
         setOpen(false);
         afterWrite(refresh);
       } catch (err) {

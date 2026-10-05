@@ -210,7 +210,9 @@ export function ObsAskBoss({ pulse }: ObsTabProps) {
       {open ? (
         <span className="inf-menu obs-ask-menu" role="menu" data-testid="obs-ask-menu">
           {asks.map((a) => (
-            <button key={a.question} type="button" role="menuitem" data-testid="obs-ask-starter" title={a.question}
+            // The starter IS the question the dock will be prefilled with (data, editable there),
+            // so it is shown whole and is not a tooltip.
+            <button key={a.question} type="button" role="menuitem" data-testid="obs-ask-starter" data-user-text
                     onClick={() => { setOpen(false); openDockAbout({ subject: a.subject, question: a.question, role: null }); }}>
               <span className="obs-ask-q">{a.question}</span>
             </button>

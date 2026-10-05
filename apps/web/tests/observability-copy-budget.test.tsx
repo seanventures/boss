@@ -39,6 +39,11 @@ function audit() {
     over: [...new Set(over)],
     paragraphs: roots.flatMap((r) => [...r.querySelectorAll("p")].map((p) => p.textContent ?? "")),
     banned: [...new Set(roots.flatMap(texts).filter((t) => BANNED.test(t)))],
+    // Tooltips ≤ 14 words (§5.1). A title on data (an error, a URL, a log line) is exempt.
+    longTips: [...new Set(roots.flatMap((r) => [...r.querySelectorAll("[title]")])
+      .filter((el) => !el.closest("[data-copy='data'], [data-user-text], code, pre"))
+      .map((el) => el.getAttribute("title") ?? "")
+      .filter((t) => t.trim().split(/\s+/).filter(Boolean).length > 14))],
   };
 }
 
@@ -66,6 +71,7 @@ describe("the Observability copy budget", () => {
       expect(a.paragraphs).toEqual([]);
       expect(a.banned).toEqual([]);
       expect(a.over).toEqual([]);
+      expect(a.longTips).toEqual([]);
     });
   }
 });
