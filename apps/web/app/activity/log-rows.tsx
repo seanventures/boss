@@ -86,7 +86,7 @@ export function LogLine({ row, labels, selected, fresh, onOpen, onFold }: {
   );
 }
 
-export function LogRows({ items, labels, byRun, selectedId, arrived, onOpen, onHolding, onNearEnd, footer }: {
+export function LogRows({ items, labels, byRun, selectedId, arrived, onOpen, onHolding, onNearEnd, footer, toTop = 0 }: {
   items: ActivityLogItem[];
   labels: Record<string, string>;
   byRun: boolean;
@@ -97,6 +97,8 @@ export function LogRows({ items, labels, byRun, selectedId, arrived, onOpen, onH
   onHolding: (holding: boolean) => void;
   onNearEnd: () => void;
   footer: React.ReactNode;
+  /** Bumped to take the reader to the newest line (`n new ↑`, D9). */
+  toTop?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -116,6 +118,15 @@ export function LogRows({ items, labels, byRun, selectedId, arrived, onOpen, onH
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // `n new ↑` shows the new lines AND goes to them: they arrive at the top.
+  useEffect(() => {
+    if (!toTop || !box.current) return;
+    const el = box.current;
+    if (typeof el.scrollTo === "function") el.scrollTo({ top: 0, behavior: "smooth" });
+    el.scrollTop = 0;
+    setScrollTop(0);
+  }, [toTop]);
 
   // The selected line stays in view as J/K moves it.
   useEffect(() => {

@@ -62,8 +62,11 @@ describe("nothing moves under the reader", () => {
     await tick();
     expect(ids()).toEqual(["r0", "r1", "r2"]);
     expect($("[data-testid=lx-new]")!.textContent).toBe("2 new ↑");
+    // The reader had scrolled down; `n new ↑` takes them to the new lines (D9).
+    ($("[data-testid=lx-list]") as HTMLElement).scrollTop = 400;
     await click($("[data-testid=lx-new]"));
     expect(ids()).toEqual(["n1", "n2", "r0", "r1", "r2"]);
+    expect(($("[data-testid=lx-list]") as HTMLElement).scrollTop).toBe(0);
   });
 
   it("Paused asks nothing", async () => {
