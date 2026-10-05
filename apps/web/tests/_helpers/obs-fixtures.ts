@@ -12,6 +12,8 @@
  */
 import { vi } from "vitest";
 
+import { board } from "./setup-fixtures";
+
 export const NOW = "2026-10-04T12:00:00.000Z";
 export const NOW_MS = Date.parse(NOW);
 const H = 3600_000;
@@ -60,7 +62,7 @@ export const FINDING_NO_FIX = {
   answers: [], actions: [], decide_inline: false, at: iso(NOW_MS - 3 * H), area: "observability",
 };
 
-export function pulseRow(over: Record<string, unknown>) {
+export function pulseRow(over: Record<string, unknown> & { target_id: string }): Record<string, unknown> & { target_id: string } {
   return { host: null, since: null, uptime: null, p95_ms: null, strip: [], pins: [], incidents: 0, ...over };
 }
 
@@ -375,6 +377,8 @@ export function entitlementSessionsWire() {
 export type ObsBodies = {
   pulse?: unknown; app?: (targetId: string) => unknown; models?: (group: string) => unknown; system?: unknown; sources?: unknown;
   llmCalls?: (offset: number) => unknown; routes?: unknown; catalog?: unknown; entitlements?: unknown; sessions?: unknown;
+  /** Repo and models' board (GET /api/setup), for the `setup` parity rows. */
+  setup?: unknown;
   /** POST answers by path suffix (`/probe`, `/stack/deploy`, …). */
   writes?: Record<string, { status?: number; body: unknown }>;
 };
@@ -423,6 +427,7 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
     if (path === "/v1/observability-suite/catalog") return json(bodies.catalog ?? CATALOG_WIRE);
     if (path === "/v1/entitlements/sources") return json(bodies.entitlements ?? entitlementSourcesWire());
     if (path === "/v1/entitlement-connection-sessions") return json(bodies.sessions ?? entitlementSessionsWire());
+    if (path === "/api/setup") return json(bodies.setup ?? board());
     return new Response("{}", { status: 404 });
   });
   vi.stubGlobal("fetch", fn);
