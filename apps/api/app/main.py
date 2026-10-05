@@ -28389,7 +28389,8 @@ from .routers.observability_view import build_observability_router
 for _build_view_router in (build_infra_router, build_observability_router):
     app.include_router(_build_view_router(
         engine=engine,
-        settings=get_settings,
+        # main's own settings object (what every other route reads, and what tests patch).
+        settings=lambda: settings,
         require_write_actor=require_project_write_actor,
         require_reader=require_project_reader,
         reader_project=_acts_reader,
