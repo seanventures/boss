@@ -99,6 +99,13 @@ describe("the Log says what it has, exactly", () => {
     expect($("[data-testid=lx-tail]")!.getAttribute("title")).toBe("Console is paused. Nothing updates.");
   });
 
+  it("a work scope from the river reads its name before the server's labels (D7)", async () => {
+    at("?area=activity&act=act_9&run_name=Ship+it+%23182");
+    await mount(<LogExplorer projectId="p1" actor="ceo" />);
+    expect(text("[data-testid=lx-token-act]")).toBe("work: Ship it #182");
+    expect(new URLSearchParams(window.location.search).get("run_name")).toBe("Ship it #182");
+  });
+
   it("a finished step with no lines says so without \"yet\" (D16)", async () => {
     log.page.labels = { "wfr_1/plan@state": "finished" };
     at("?area=activity&wfr=wfr_1&step=plan&step_name=Plan+it");

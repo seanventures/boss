@@ -132,6 +132,20 @@ describe("Activity: the river", () => {
     expect(href.get("area")).toBe("activity");
     expect(href.get("act")).toBe("a_parent");
     expect(href.get("workflow_run_id")).toBeNull();
+    expect(href.get("run_name")).toBeTruthy(); // the chip reads a name before the server answers
+  });
+
+  it("every row reaches its lines; work that wrote none falls back to its run, by name (D7)", async () => {
+    pages = [{ items: [item("quiet"), item("busy", { cost_usd: 0.02 }), item("loose", { links: {} })], next: null }];
+    await render(<ActivityRiver projectId="p1" />);
+    const hrefOf = (id: string) => new URLSearchParams($(`[data-testid="ag-river-log-${id}"]`)!.getAttribute("href")!.split("?")[1]);
+    // Nothing of its own (no tool calls, no model calls): the run's lines, named.
+    expect([hrefOf("quiet").get("wfr"), hrefOf("quiet").get("act")]).toEqual(["wfr_1", null]);
+    expect(hrefOf("quiet").get("run_name")).toBeTruthy();
+    // It called a model: its own lines.
+    expect([hrefOf("busy").get("act"), hrefOf("busy").get("wfr")]).toEqual(["busy", null]);
+    // No run to fall back to: still its own scope, never the whole project.
+    expect(hrefOf("loose").get("act")).toBe("loose");
   });
 
   it("new work waits behind `n new ↑` and does not shift the rows", async () => {
