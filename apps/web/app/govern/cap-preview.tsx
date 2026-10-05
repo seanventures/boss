@@ -12,6 +12,7 @@
 import React from "react";
 
 import { money, type CapPreview as CapPreviewData, type DailySpend } from "../../lib/govern";
+import { plural } from "../../lib/factory-floor";
 
 const W = 300;
 const H = 64;
@@ -36,7 +37,7 @@ export function DailyBars({ daily, cap, cumulative, testid = "gv-daily" }: {
   const y = (v: number) => H - (Math.min(v, peak) / peak) * (H - 4);
   const chart = (
     <svg className="gv-chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" data-testid={testid}
-         aria-label={`${daily.length} days of spend`}>
+         aria-label={`${plural(daily.length, "day")} of spend`}>
       {daily.map((d, i) => {
         const v = series[i];
         return (
