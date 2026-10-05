@@ -21,7 +21,7 @@ import {
 import { AgFace } from "./agent-face";
 import type { OrgActions } from "./org-actions";
 import {
-  Drawer, MenuPop, OpenItemLink, kitHref, liveState, nameOf, teamLabel, workflowHref,
+  Drawer, MenuPop, WaitItem, kitHref, liveState, nameOf, teamLabel, workflowHref,
 } from "./org-shared";
 
 const ROWS_MAX = 5;
@@ -72,12 +72,7 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
             <dd>
               <ul className="ag-org-list">
                 {agent.open.slice(0, ROWS_MAX).map((o) => (
-                  <li key={o.actId}>
-                    <span className="ag-trunc" title={o.label} data-user-text>{o.label}</span>
-                    <span>{openStatusWord(o.status)}</span>
-                    <span title={`Open since ${o.since ? new Date(o.since).toLocaleString() : "unknown"}`}>{ageWords(o.since)}</span>
-                    <OpenItemLink item={o} />
-                  </li>
+                  <li key={o.actId}><WaitItem item={o} who={false} /></li>
                 ))}
               </ul>
             </dd>

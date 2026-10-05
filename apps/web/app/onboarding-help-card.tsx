@@ -28,7 +28,7 @@ export function OnboardingHelpCard() {
           <ul className="help-list">
             <li>
               <b>Build</b> — describe what you want. BOSS starts a workflow run: a panel writes the
-              spec, an agent builds and tests it and opens a pull request. Watch every step in
+              plan, an agent builds and tests it and opens a pull request. Watch every step in
               {" "}<b>Workflow</b>; the finished project is in <b>Factory</b>.
             </li>
             <li>
@@ -74,5 +74,32 @@ export function OnboardingHelpCard() {
         Setup is in <code>docs/community/GETTING_STARTED.md</code>.
       </p>
     </article>
+  );
+}
+
+/**
+ * The same help, as three short rows: shown inline under the composer only before the first
+ * run (command-center spec §9 row 47), when the empty landing page has the room and the
+ * newcomer the question. Each row's old sentence is its tooltip; the limits and the setup
+ * document are one press away in the full card (`Getting started ↗`).
+ */
+export function OnboardingHelpRows({ onMore }: { onMore?: () => void }) {
+  return (
+    <ul className="cc-help-rows" data-testid="console-capabilities-card" aria-label="What you can do here">
+      <li title="A panel writes the plan; an agent builds, tests and opens a PR.">
+        <b>Build</b><span>describe it, BOSS builds it</span>
+      </li>
+      <li title="BOSS answers from live state, and acts only when you press.">
+        <b>Talk to BOSS</b><span>ask about your work</span>
+      </li>
+      <li title="Shipping, merging and failed steps wait here for you.">
+        <b>Approvals</b><span>what waits on you</span>
+      </li>
+      {onMore ? (
+        <li>
+          <button type="button" className="ag-link" onClick={onMore}>Getting started ↗</button>
+        </li>
+      ) : null}
+    </ul>
   );
 }

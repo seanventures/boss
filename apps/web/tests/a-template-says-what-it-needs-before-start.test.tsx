@@ -50,7 +50,8 @@ describe("the start form shows what is missing, with the fix", () => {
   it("names each missing thing, the step that needs it and how to fix it", () => {
     expect(html).toContain("This cannot run here yet");
     expect(html).toContain("Somewhere to deploy: a verified deployment host");
-    expect(html).toContain("needed by Deploy");
+    // Why it is needed sits behind the item's "Why" (said once, short: independent test D6).
+    expect(html).toContain("Needed by Deploy");
     expect(html).toContain("Add and verify a host in Infra");
     expect(html).toContain("Outgoing email (SMTP)");
     expect(html).toContain("POST /v1/email/config");

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 // The icon set both callers already use. A hand-drawn triangle would have been one more
 // warning glyph to keep in step with the rest of the console for no gain.
 import { Warning } from "@phosphor-icons/react";
+import { Check, Copy } from "@phosphor-icons/react";
 
 /**
  * "This computer is out of memory" — said to the person who can fix it, and ONLY when it is.
@@ -35,9 +36,13 @@ export type HostAdvice = {
   cause?: string;
 };
 
-export function useHostAdvice(projectId: string, pollMs = 60_000): HostAdvice {
+/** `initial`: a caller that already reads the host's advice (the Command Center's view carries
+ *  `host`) passes it, and this hook then does not poll on its own (command-center spec §6.3). */
+export function useHostAdvice(projectId: string, pollMs = 60_000, initial?: HostAdvice): HostAdvice {
   const [advice, setAdvice] = useState<HostAdvice>({ show: false });
+  const given = initial !== undefined;
   useEffect(() => {
+    if (given) return undefined;
     let alive = true;
     const read = async () => {
       try {
@@ -55,8 +60,8 @@ export function useHostAdvice(projectId: string, pollMs = 60_000): HostAdvice {
     read();
     const timer = setInterval(read, pollMs);
     return () => { alive = false; clearInterval(timer); };
-  }, [projectId, pollMs]);
-  return advice;
+  }, [projectId, pollMs, given]);
+  return given ? (initial ?? { show: false }) : advice;
 }
 
 export function HostAdviceBanner(
@@ -77,8 +82,37 @@ export function HostAdviceBanner(
       <div className="host-advice-body">
         <b className="host-advice-head">{advice.headline}</b>
         {compact ? null : <span className="host-advice-detail">{advice.detail}</span>}
-        <span className="host-advice-action">{advice.action}</span>
+        <span className="host-advice-action"><AdviceText text={advice.action ?? ""} /></span>
       </div>
     </div>
+  );
+}
+
+/** The server's advice with its `commands` drawn as code, each with Copy — never as literal
+ *  backticks (Command Center re-test, 4). The words around them are unchanged. */
+export function AdviceText({ text }: { text: string }) {
+  const parts = text.split(/`([^`]+)`/);
+  return (
+    <>
+      {parts.map((part, i) => (i % 2 === 1
+        ? <CopyCode key={i} code={part} />
+        : <React.Fragment key={i}>{part}</React.Fragment>))}
+    </>
+  );
+}
+
+function CopyCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="host-advice-code">
+      <code>{code}</code>
+      <button type="button" className="host-advice-copy" title={`Copy: ${code}`} aria-label={`Copy ${code}`}
+              data-testid="host-advice-copy"
+              onClick={() => {
+                try { void navigator.clipboard?.writeText(code); setCopied(true); window.setTimeout(() => setCopied(false), 1500); } catch { /* none */ }
+              }}>
+        {copied ? <Check size={11} weight="bold" aria-hidden /> : <Copy size={11} weight="bold" aria-hidden />}
+      </button>
+    </span>
   );
 }

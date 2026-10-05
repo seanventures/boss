@@ -109,6 +109,11 @@ def test_every_count_of_waiting_on_you_equals_the_inbox_needs_action(engine, cli
     cc = client.get("/v1/console/command-center", params={"project_id": pid}).json()
     assert cc["counts"]["approvals"] == len(needs_action)
 
+    # The bridge's one read (command-center spec §10.1): its NEED YOU is the same number.
+    view = client.get("/v1/command-center/view", params={"project_id": pid})
+    assert view.status_code == 200, view.text
+    assert view.json()["counts"]["needs_you"] == len(needs_action)
+
     dashboard = client.get("/v1/dashboard", params={"project_id": pid})
     assert dashboard.status_code == 200, dashboard.text
     assert dashboard.json()["workload_state"]["pending_decisions"] == len(needs_action)
@@ -161,11 +166,14 @@ def test_agents_live_and_the_pill_count_what_the_inbox_and_command_center_count(
     needs_action = {i["id"] for i in items if i["attention"] == "needs_action"}
 
     badge = client.get("/v1/status", params={"project_id": pid}).json()["pending_decisions"]
+    view = client.get("/v1/command-center/view", params={"project_id": pid}).json()
 
     # ONE NUMBER (agents-home D2): DECISIONS waiting on the operator. The pill, Live's header,
-    # the Command Center, the Approvals badge and its Needs action all say it.
+    # the Command Center (old read and the bridge's view), the Approvals badge and its Needs
+    # action all say it.
     assert board["counts"]["needs_you"] == pill["count"] == cc["counts"]["needs_you"] \
-        == badge == len(needs_action)
+        == view["counts"]["needs_you"] == badge == len(needs_action)
+    assert [a["id"] for a in view["attention"]] == [a["id"] for a in board["attention"]]
     assert {a["id"] for a in board["attention"] if a["kind"] == "approval"} == needs_action
     assert "dec_agree_stuck_pr" in {a["id"] for a in board["attention"]}  # no agent, counted
     # The overdue one was expired by the same sweep, so no surface lists it.
@@ -192,12 +200,13 @@ def test_a_setup_gap_is_listed_but_never_counted_as_needs_you(engine, client, mo
     board = client.get("/v1/agents/live-board", params={"project_id": pid}).json()
     pill = client.get("/v1/agents/live", params={"project_id": pid}).json()["attention"]
     cc = client.get("/v1/console/command-center", params={"project_id": pid}).json()
+    view = client.get("/v1/command-center/view", params={"project_id": pid}).json()
     badge = client.get("/v1/status", params={"project_id": pid}).json()["pending_decisions"]
     assert {a["id"] for a in board["attention"] if a["kind"] == "readiness"} == {
         "ready:github", "ready:model"}
-    assert board["counts"]["setup"] == cc["counts"]["setup"] == 2
+    assert board["counts"]["setup"] == cc["counts"]["setup"] == view["counts"]["setup"] == 2
     assert board["counts"]["needs_you"] == pill["count"] == cc["counts"]["needs_you"] \
-        == badge == needs_action
+        == view["counts"]["needs_you"] == badge == needs_action
     assert not [i for i in pill["items"] if i["id"].startswith("ready:")]
     # Setup comes last in the shared order.
     kinds = [a["kind"] for a in board["attention"]]

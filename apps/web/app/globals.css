@@ -3,7 +3,7 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* ============================================================
+/* =====================================================
    BOSS Executive Console — Dark "impressive startup" theme
    Aligned to the Kaappu design system: near-black base,
    indigo -> violet -> pink gradient, glass, glow, orbs.
@@ -782,6 +782,10 @@ h1, h2, h3, h4, h5, h6 {
   gap: 1px;
   overflow-y: auto;
   margin-top: 2px;
+  /* The nav scrolls INSIDE the sidebar; it never runs under the account block (re-test 2: at
+     768px tall "Identity" sat behind it). */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .bx-nav-label {
@@ -853,6 +857,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-nav-badge[data-tone="red"] { background: var(--red); color: #fff; }
 
 .bx-sidebar-foot {
+  flex: none;
   margin-top: auto;
   padding: 14px 10px 2px;
   border-top: 1px solid var(--border);
@@ -6445,6 +6450,24 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .bx-topbar-title small { display: none; }
 .bx-new-project { order: 2; border-radius: 6px; background: transparent; }
+/* THE TOP BAR NEVER SCROLLS THE PAGE SIDEWAYS (Command Center independent test: at 1024 the
+   "+ New build" button sat 23px past the window). Between the phone layout and a wide window
+   it tightens its padding and gaps, and its items may shrink. */
+/* Nothing in the bar is squeezed under another (re-test 2: at 1024 the title ran into the org
+   name, the Live dot squashed to a line, System touched the pill, "+ New build" its border).
+   Each item keeps its own width; the org name gives way first (ellipsis), then "Jump to"
+   becomes just its key, then the gaps tighten. */
+.bx-topbar > * { flex: none; white-space: nowrap; }
+.bx-topbar > .bx-topbar-spacer { flex: 1 1 0; min-width: 8px; }
+.bx-topbar .dot { flex: none; width: 7px; height: 7px; }
+.bx-org-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; }
+.bx-org-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bx-new-project { padding-inline: 12px; }
+@media (max-width: 1279px) {
+  .bx-topbar { padding: 0 16px; gap: 10px; }
+  .bx-org-chip { max-width: 120px; }
+  .bx-kbd > span { display: none; }
+}
 .bx-topbar-spacer { order: 1; }
 .bx-org-chip {
   padding: 5px 8px; border: 0; border-radius: 4px;
@@ -8664,6 +8687,9 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .dw-ready-ok { border-color: var(--border); background: transparent; color: var(--muted); }
 .dw-ready-list { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 6px; }
 .dw-ready-list li[data-accepted] { opacity: 0.7; }
+.dw-ready-why { display: inline; margin-left: 6px; }
+.dw-ready-why > summary { display: inline; cursor: pointer; color: var(--accent-text); font-size: 0.85em; }
+.dw-ready-why[open] > .detail { display: block; margin-top: 2px; }
 .dw-ready-fix { display: block; }
 .dw-ready-later { display: block; font-style: italic; }
 .dw-ready-anyway { display: flex; gap: 6px; align-items: center; cursor: pointer; }
@@ -8693,3 +8719,12 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   --viz-1: #2a78d6; --viz-2: #eb6834; --viz-3: #1baf7a; --viz-4: #eda100; --viz-5: #e87ba4;
   --viz-other: #9a9a96;
 }
+=======
+/* A command inside the host's advice: code, with its own Copy (never literal backticks). */
+.host-advice-code { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.host-advice-code code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.85em; padding: 1px 6px;
+  border-radius: 4px; background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.host-advice-copy { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border);
+  border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.host-advice-copy:hover { color: var(--ink); border-color: var(--accent-line); }
+@media (max-width: 639px) { .host-advice-copy { width: 44px; height: 44px; } }

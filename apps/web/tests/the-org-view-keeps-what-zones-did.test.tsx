@@ -187,3 +187,16 @@ describe("a press on a face always lands", () => {
     }
   });
 });
+
+describe("a menu is never clipped by its card", () => {
+  it("opens in <body>, fixed under its button, and focusing it never scrolls the page", async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    await render(view());
+    await act(async () => { $('[data-testid="ag-orgteam-more-engineering"]')!.click(); });
+    const menu = $('[role="menu"]')!;
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.style.position).toBe("fixed");
+    expect(focus.mock.calls.some((c) => (c[0] as FocusOptions | undefined)?.preventScroll === true)).toBe(true);
+    focus.mockRestore();
+  });
+});

@@ -1,0 +1,623 @@
+// @vitest-environment happy-dom
+/**
+ * The Command Center's graphics tell the truth (command-center spec §10.2): every mark comes from
+ * the view, nothing goes past now, nothing moves unless something changed, and the words fit the
+ * copy budget. Rendered from the view fixture through the page's own parser.
+ */
+import React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { overBudget } from "./_helpers/copy-budget";
+import { codeOnly } from "./_helpers/source";
+import { NOW_MS, flow, freshView, hours, mission, quietView, view } from "./_helpers/command-center-view-fixture";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { $, $$, mount, rerender, unmount } from "./_helpers/live-render";
+import { parseCommandCenterView, type CommandCenterView } from "../lib/command-center-view";
+import {
+  chainsOf, cumulative, edgeWidth, fitArcLabel, floorCounts, floorKinds, floorLayout, newComets, nowPosition,
+  placeNames, recencyOpacity, stripScale,
+  stripWindow, stripLabel, stripHeading, STRIP_MIN_SPAN, LABEL_MIN_SCALE,
+} from "../lib/command-center-graphics";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const { Floor, floorFooter } = await import("../app/command-center/floor");
+/** A strip bar's share of the track (happy-dom drops a `max()` width from style, so it is read
+ *  from the bar's data-share). */
+const barShare = (el: Element | null) => parseFloat(el?.getAttribute("data-share") ?? "NaN");
+
+const { TodayChart } = await import("../app/command-center/today-chart");
+const { DayStrip } = await import("../app/command-center/day-strip");
+const { WeekBars } = await import("../app/command-center/week-bars");
+
+const V = (w: Record<string, unknown>) => parseCommandCenterView(w);
+const noop = () => {};
+const BANNED = /\b(capability|binding|governed|immutable|frontier|runtime|spec|namespace|fork|terminal|ETA|estimated|almost done|mission|office|alive|forecast|time to cap|projected|health score|AI-powered)\b|%/i;
+
+const floor = (v: CommandCenterView, over: Partial<React.ComponentProps<typeof Floor>> = {}) => (
+  <Floor view={v} projectId="p1" motion="full" band="wide" onYou={noop} onThread={noop} {...over} />
+);
+
+afterEach(() => unmount());
+
+function visibleText(): string {
+  const root = document.body.cloneNode(true) as HTMLElement;
+  root.querySelectorAll(".wf-sr, [aria-hidden='true'], title").forEach((n) => n.remove());
+  return root.textContent ?? "";
+}
+
+describe("the Floor", () => {
+  it("draws a face for every agent doing something and a dim dot for every idle one (§4.7)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW_MS);
+    const v = V(view());
+    await mount(floor(v));
+    const kind = (k: string) => $(`[data-role='${k}']`)?.getAttribute("data-kind");
+    expect(kind("software_engineer")).toBe("working");          // presence: working
+    expect(kind("media_publisher")).toBe("waiting");            // its run waits on you
+    expect(kind("pm")).toBe("on_run");                          // a hop on Ship it #182, between steps
+    expect(kind("ceo_agent")).toBe("recent");                   // last work 3h40m ago
+    expect(kind("adversarial_reviewer")).toBe("never");         // no work yet
+    const faces = $$("[data-testid='cc-floor-face']").map((e) => e.getAttribute("data-role"));
+    const dots = $$("[data-testid='cc-floor-dot']").map((e) => e.getAttribute("data-role"));
+    for (const k of ["software_engineer", "media_publisher", "pm", "qa"]) expect(faces).toContain(k);
+    for (const k of ["ceo_agent", "staff_engineer", "adversarial_reviewer"]) expect(dots).toContain(k);
+    expect(faces.length + dots.length).toBe(v.agents.length);
+    // A dot is a dot: no avatar inside it; a face carries the kit's avatar without its AI badge.
+    expect($$("[data-testid='cc-floor-dot'] .ag-avatar")).toHaveLength(0);
+    expect($$("[data-testid='cc-floor-face'] .ag-avatar").length).toBe(faces.length);
+    expect($("[data-testid='cc-floor-face'] .ag-ai")).toBeNull();          // the kit's AI badge, off on the Floor
+    // Dots are 10px under 48 agents.
+    expect(($("[data-testid='cc-floor-dot']") as HTMLElement).style.getPropertyValue("--dot")).toBe("10px");
+    vi.useRealTimers();
+  });
+
+  it("names only active faces, and never two names on top of each other", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW_MS);
+    const v = V(view());
+    await mount(floor(v));
+    const named = $$("[data-testid='cc-floor-name']").map((e) => e.textContent);
+    expect(named).toContain("Forge");
+    expect(named).not.toContain("Atlas");                       // idle: a dot, no name
+    vi.useRealTimers();
+  });
+
+  it("draws one edge per hand-off between known nodes, and none to a guessed one", async () => {
+    const v = V(view());
+    await mount(floor(v));
+    expect($$("[data-testid='cc-floor-edge']")).toHaveLength(v.flows.length);
+    await rerender(floor(V(view({ flows: [flow(), flow({ from: "nobody_here", newest_act_id: "act_x" })] }))));
+    expect($$("[data-testid='cc-floor-edge']")).toHaveLength(1);
+    expect($("[data-testid='cc-floor-edge']")?.getAttribute("data-tip")).toMatch(/^Juno → Forge · 3 hand-offs · \d+[mhd] ago$/);
+  });
+
+  it("threads run to You only from an approval that names its agent; stopped work is red", async () => {
+    await mount(floor(V(view())));
+    const threads = $$("[data-testid='cc-floor-thread']");
+    expect(threads.map((t) => t.getAttribute("data-tone")).sort()).toEqual(["amber", "red"]);
+    unmount();
+    await mount(floor(V(view({ attention: [{ ...(view().attention as Record<string, unknown>[])[1], role_key: null }] }))));
+    expect($$("[data-testid='cc-floor-thread']")).toHaveLength(0);
+  });
+
+  it("says the team map in words", async () => {
+    await mount(floor(V(view())));
+    expect($("svg[role='img']")?.getAttribute("aria-label"))
+      .toBe("Team map: 2 working, 2 on runs, 1 waiting on you, 6 hand-offs in the last hour");
+    expect($("[data-testid='cc-floor-sr-list']")?.textContent).toContain("Forge");
+  });
+
+  it("all idle: a quiet ring and how long since the last work", async () => {
+    const q = V(quietView());
+    await mount(<Floor view={q} projectId="p1" motion="full" band="wide" onYou={noop} onThread={noop} />);
+    // A quiet ring of dots: nobody is working, waiting or on a run, so nobody is a face.
+    expect($$("[data-testid='cc-floor-face']")).toHaveLength(0);
+    expect($$("[data-testid='cc-floor-dot']")).toHaveLength(q.agents.length);
+    expect($$("[data-kind='working'], [data-kind='waiting'], [data-kind='on_run']")).toHaveLength(0);
+    expect($("[data-testid='cc-floor-footer']")?.textContent).toMatch(/^All idle · last work \d+h$/);
+  });
+
+  it("a fresh team says it is ready", async () => {
+    await mount(floor(V(freshView())));
+    expect($("[data-testid='cc-floor-footer']")?.textContent).toBe("Your team is ready");
+    expect($("[data-testid='cc-floor-footer']")?.getAttribute("title")).toBe("7 agents, idle until work starts");
+  });
+
+  it("busy: counts the truth — working, on runs, idle; List shows the same facts as a list", async () => {
+    await mount(floor(V(view())));
+    expect($("[data-testid='cc-floor-footer']")?.textContent).toBe("2 working · 2 on runs · 3 idle");
+    $("[data-testid='cc-floor-list-toggle']")!.click();
+    await rerender(floor(V(view())));
+    expect($("[data-testid='cc-floor-list']")).not.toBeNull();
+    expect($("[data-testid='cc-floor-stage']")).toBeNull();
+    expect($("[data-testid='cc-floor-list-toggle']")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("no agents: says so and links to Agents", async () => {
+    await mount(floor(V(view({ agents: [], teams: [] }))));
+    expect($("[data-testid='cc-floor-empty']")?.textContent).toContain("No agents yet");
+  });
+
+  it("a new act flies a comet with full motion, and none under reduced motion or none", async () => {
+    const raf = vi.spyOn(globalThis, "requestAnimationFrame");
+    await mount(floor(V(view())));
+    expect(raf).not.toHaveBeenCalled(); // first paint: nothing flies
+    await rerender(floor(V(view({ flows: [flow({ newest_act_id: "act_new" })] }))));
+    expect(raf).toHaveBeenCalled();
+    unmount();
+    raf.mockClear();
+    for (const motion of ["reduced", "none"] as const) {
+      await mount(floor(V(view()), { motion }));
+      await rerender(floor(V(view({ flows: [flow({ newest_act_id: `act_${motion}` })] })), { motion }));
+      expect(raf).not.toHaveBeenCalled();
+      expect($$(".cc-comet")).toHaveLength(0);
+      unmount();
+    }
+    raf.mockRestore();
+  });
+
+  it("reduced motion lights the edge instead; none holds every face still and says why on You", async () => {
+    await mount(floor(V(view()), { motion: "reduced" }));
+    await rerender(floor(V(view({ flows: [flow({ newest_act_id: "act_lit" })] })), { motion: "reduced" }));
+    expect($("[data-testid='cc-floor-edge']")?.hasAttribute("data-lit")).toBe(true);
+    unmount();
+    await mount(floor(V(view()), { motion: "none", motionWhy: "Motion paused while the host struggles" }));
+    expect($("[data-testid='cc-floor-stage']")?.hasAttribute("data-still")).toBe(true);
+    expect($$("[data-testid='cc-floor-face']").every((f) => f.hasAttribute("data-still"))).toBe(true);
+    expect($("[data-testid='cc-floor-you']")?.getAttribute("title")).toBe("Motion paused while the host struggles");
+  });
+
+  it("at most eight faces move", async () => {
+    const agents = Array.from({ length: 12 }, (_, i) => ({ role_key: `agent_${String(i).padStart(2, "0")}`, name: `A${i}`,
+                                                          team: "engineering", state: "working", line: "Now: Coding" }));
+    await mount(floor(V(view({ agents, flows: [], attention: [] }))));
+    const moving = $$("[data-testid='cc-floor-face']").filter((f) => !f.hasAttribute("data-still"));
+    expect(moving).toHaveLength(8);
+  });
+
+  it("narrow and phone draw the compact teams, never the ring", async () => {
+    await mount(floor(V(view()), { band: "phone" }));
+    expect($("[data-testid='cc-floor-compact']")).not.toBeNull();
+    expect($("[data-testid='cc-floor-stage']")).toBeNull();
+  });
+
+  it("fits the copy budget and uses no banned word", async () => {
+    await mount(floor(V(view())));
+    expect(overBudget(document.body)).toEqual([]);
+    expect(visibleText()).not.toMatch(BANNED);
+  });
+});
+
+describe("the Floor, as the day really is", () => {
+  it("a busy day whose runs wait on you is not '0 working · all idle'", () => {
+    // Every step has finished and presence says idle; two runs are in flight, one waits on you.
+    const v = V(view({ agents: (view().agents as Record<string, unknown>[]).map((a) => ({ ...a, state: "idle", line: "Idle" })) }));
+    const k = floorKinds(v, NOW_MS);
+    expect(k.get("media_publisher")).toBe("waiting");
+    expect(k.get("pm")).toBe("on_run");
+    // The engineer's #180 stopped, but they are on #182's running step now: working wins, as on
+    // the lane ("Coding · step 4 of 7") — one source for "working" (re-test 10).
+    expect(k.get("software_engineer")).toBe("working");
+    expect(floorCounts(k)).toMatchObject({ working: 1, onRuns: 2, stuck: 0 });
+  });
+
+  it("an agent on a running run's current step is working even when presence says idle (re-test 10)", () => {
+    const idle = (view().agents as Record<string, unknown>[]).map((a) => ({ ...a, state: "idle", line: "Idle" }));
+    const v = V(view({ agents: idle, attention: [], missions: [mission({
+      run_id: "wfr_1", state: "running", verb: "Working",
+      hops: [{ act_id: "a1", role_key: "pm", state: "done", label: "PRD", edge_label: "Named" },
+             { act_id: "a2", role_key: "qa", state: "working", label: "Test", edge_label: "Named" }] })] }));
+    const k = floorKinds(v, NOW_MS);
+    expect(k.get("qa")).toBe("working");
+    expect(k.get("pm")).toBe("on_run");
+    expect(floorFooter(v, NOW_MS).text).toMatch(/^1 working/);
+  });
+
+  it("draws each run in flight as its chain of faces, into You when it waits on you", async () => {
+    const v = V(view());
+    await mount(floor(v));
+    const chains = $$("[data-testid='cc-floor-chain']");
+    expect(chains.map((c) => c.getAttribute("data-run-id")).sort()).toEqual(["wfr_182", "wfr_ship", "wfr_video"]);
+    expect($("[data-testid='cc-floor-chain'][data-run-id='wfr_video']")?.getAttribute("data-tone")).toBe("amber");
+    expect($("[data-testid='cc-floor-chain'][data-run-id='wfr_ship']")?.getAttribute("data-tone")).toBe("red");
+    expect($("[data-testid='cc-floor-chain'][data-run-id='wfr_182'] title")?.textContent)
+      .toBe("Ship it #182 · step 4 of 7 · Coding");
+    expect(chainsOf(v.missions, new Set(["pm", "software_engineer"])).find((c) => c.runId === "wfr_182")?.keys)
+      .toEqual(["pm", "software_engineer"]);
+    // The face on each run's current hop is ringed.
+    expect($("[data-role='software_engineer']")?.hasAttribute("data-current")).toBe(true);
+  });
+
+  it("You carries the needs-you count", async () => {
+    await mount(floor(V(view())));
+    expect($("[data-testid='cc-floor-you-count']")?.textContent).toBe("1");
+    await rerender(floor(V(quietView())));
+    expect($("[data-testid='cc-floor-you-count']")).toBeNull();
+  });
+
+  it("hover or focus a face: a mini card with what it is doing, Talk and Passport", async () => {
+    await mount(floor(V(view())));
+    const face = $("[data-role='software_engineer']") as HTMLElement;
+    face.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    await rerender(floor(V(view())));
+    let card = $("[data-testid='cc-floor-card']");
+    expect(card?.textContent).toContain("Forge");
+    expect(card?.textContent).toContain("Now: Coding · Build · Ship it #182");
+    expect($("[data-testid='cc-floor-card-talk']")?.textContent).toBe("Talk");
+    expect($("[data-testid='cc-floor-card-passport']")?.textContent).toBe("Passport ↗");
+    unmount();
+    await mount(floor(V(view())));
+    ($("[data-role='staff_engineer']") as HTMLElement).focus();
+    await rerender(floor(V(view())));
+    card = $("[data-testid='cc-floor-card']");
+    expect(card?.textContent).toContain("Vera");
+    expect(card?.textContent).toMatch(/last work \d+h/);
+    expect(overBudget(document.body)).toEqual([]);
+  });
+
+  it("Talk on the card opens a talk with that agent", async () => {
+    const heard: unknown[] = [];
+    const on = (e: Event) => heard.push((e as CustomEvent).detail);
+    window.addEventListener("boss:converse", on);
+    await mount(floor(V(view())));
+    ($("[data-role='pm']") as HTMLElement).click();
+    await rerender(floor(V(view())));
+    ($("[data-testid='cc-floor-card-talk']") as HTMLElement).click();
+    window.removeEventListener("boss:converse", on);
+    expect(JSON.stringify(heard)).toContain('"roleKey":"pm"');
+  });
+});
+
+describe("floorLayout", () => {
+  const v = V(view());
+  it("is deterministic: same input, same coordinates", () => {
+    expect(floorLayout(v.teams, v.agents, { width: 720, height: 440 }))
+      .toEqual(floorLayout(v.teams, v.agents, { width: 720, height: 440 }));
+  });
+  it("never moves a node when only its state changes", () => {
+    const a = floorLayout(v.teams, v.agents, { width: 720, height: 440 });
+    const woke = v.agents.map((x) => (x.roleKey === "staff_engineer" ? { ...x, state: "working" as const } : x));
+    expect(floorLayout(v.teams, woke, { width: 720, height: 440 }).nodes).toEqual(a.nodes);
+  });
+  it("puts Leadership at 12 o'clock and sorts members by role_key", () => {
+    const l = floorLayout(v.teams, v.agents, { width: 720, height: 440 });
+    expect(l.arcs[0].team).toBe("leadership");
+    expect(l.nodes.filter((n) => n.team === "leadership").map((n) => n.roleKey)).toEqual(["ceo_agent", "pm"]);
+    expect(l.radius).toBe(162);                                 // fills the stage: 440/2 − 58
+  });
+  it("shrinks idle dots past 48 agents and folds idle past 120", () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ roleKey: `r${i}`, name: `R${i}`, team: "engineering", state: "idle" as const, line: "" }));
+    expect(floorLayout([], many(49), { width: 720, height: 440 }).idleR).toBe(3);
+    expect(floorLayout([], many(121), { width: 720, height: 440 }).arcs[0].idleFolded).toBe(121);
+  });
+});
+
+describe("newComets", () => {
+  const f = (id: string) => V(view({ flows: [flow({ newest_act_id: id })] })).flows[0];
+  it("flies none on the first poll, only new acts after, at most twelve", () => {
+    expect(newComets(null, [f("a")])).toEqual([]);
+    expect(newComets([f("a")], [f("a"), f("b")]).map((x) => x.newestActId)).toEqual(["b"]);
+    const lots = Array.from({ length: 20 }, (_, i) => f(`n${i}`));
+    expect(newComets([], lots)).toHaveLength(12);
+  });
+  it("fades an edge by recency over the hour drawn, never below 0.2; strokes stay thin", () => {
+    expect(recencyOpacity(NOW_MS - 2 * 60_000, NOW_MS)).toBe(0.9);
+    expect(recencyOpacity(NOW_MS - 30 * 60_000, NOW_MS)).toBeGreaterThan(0.2);
+    expect(recencyOpacity(NOW_MS - 30 * 60_000, NOW_MS)).toBeLessThan(0.9);
+    expect(recencyOpacity(NOW_MS - 61 * 60_000, NOW_MS)).toBe(0.2);
+    expect(edgeWidth(1)).toBe(1);
+    expect(edgeWidth(1000)).toBe(2.5);
+  });
+});
+
+describe("Today", () => {
+  const v = V(view());
+  it("the today line never goes past now; yesterday covers the day", () => {
+    const { index, frac } = nowPosition(v.today.hours, NOW_MS);
+    expect(index).toBe(39);
+    expect(frac).toBeCloseTo(40 / 60, 3);
+    const c = cumulative(v.today.hours, index, frac, "work");
+    expect(Math.max(...c.today.map(([h]) => h))).toBeCloseTo(15 + 40 / 60, 3);
+    expect(c.yesterday[c.yesterday.length - 1][0]).toBe(24);
+    expect(c.todayTotal).toBe(14);
+    expect(c.yesterdayTotal).toBe(11);
+  });
+
+  it("draws the line, a now dot labelled with today's number and yesterday's two labels", async () => {
+    await mount(<TodayChart view={v} tab="work" onTab={noop} motion="full" nowMs={NOW_MS} tz="UTC" />);
+    expect($("[data-testid='cc-today-line']")).not.toBeNull();
+    // Work has a unit (steps), so it is never read as a count of runs.
+    expect($(".cc-today-now")?.textContent).toBe("14 steps");
+    const labels = $$(".cc-yday-label").map((t) => t.textContent);
+    expect(labels[1]).toBe("11 steps all day");
+    expect(labels[0]).toMatch(/^\d+ steps? by now$/);
+    expect($("figcaption")?.textContent).toMatch(/^Work today: 14 steps by 15:40\./);
+    expect($$("table tbody tr")).toHaveLength(24);
+  });
+
+  it("with nothing on either day: no lines, the axis, and the words", async () => {
+    const empty = V(view({ today: { ...(view().today as Record<string, unknown>), hours: hours() } }));
+    expect(cumulative(empty.today.hours, 39, 0.5, "work").today).toEqual([]);
+    await mount(<TodayChart view={empty} tab="work" onTab={noop} motion="full" nowMs={NOW_MS} tz="UTC" />);
+    expect($("[data-testid='cc-today-line']")).toBeNull();
+    expect($("[data-testid='cc-today-yesterday']")).toBeNull();
+    expect($("[data-testid='cc-today-empty']")?.textContent).toBe("No work yet today");
+    expect($(".cc-axis")).not.toBeNull();
+  });
+
+  it("Spend: a cap line only for a day cap in the viewer's own zone; otherwise the month meter", async () => {
+    const dayCap = (tz: string) => V(view({ budget: { ...(view().budget as Record<string, unknown>), budget_timezone: tz,
+                                                     day: { cap_usd_micros: 10_000_000, actual_usd_micros: 4_120_000 } } }));
+    await mount(<TodayChart view={dayCap("UTC")} tab="spend" onTab={noop} motion="full" nowMs={NOW_MS} tz="UTC" />);
+    expect($("[data-testid='cc-today-cap']")?.textContent).toBe("Cap $10");
+    unmount();
+    await mount(<TodayChart view={dayCap("Asia/Kolkata")} tab="spend" onTab={noop} motion="full" nowMs={NOW_MS} tz="UTC" />);
+    expect($("[data-testid='cc-today-cap']")).toBeNull();
+    expect($("[data-testid='cc-today-meter']")?.textContent).toBe("$84 of $200 · this month");
+    unmount();
+    await mount(<TodayChart view={v} tab="spend" onTab={noop} motion="full" nowMs={NOW_MS} tz="UTC" />);
+    expect($("[data-testid='cc-today-cap']")).toBeNull();
+    expect($("[data-testid='cc-today-meter']")?.textContent).toBe("$84 of $200 · this month");
+    expect($(".cc-today-now")?.textContent).toBe("$4.12");
+  });
+
+  it("Spend all covered by a plan: money stays at zero and Included is drawn apart", async () => {
+    const plan = V(view({ today: { ...(view().today as Record<string, unknown>),
+                                   hours: hours({}, {}, { 36: 3_800_000 }), money_micros: 0 } }));
+    await mount(<TodayChart view={plan} tab="spend" onTab={noop} motion="full" nowMs={NOW_MS} tz="UTC" />);
+    expect($("[data-testid='cc-today-included'] text")?.textContent).toBe("Included $3.80");
+  });
+
+  it("the tabs press, carry their tooltips, and fit the copy budget", async () => {
+    const onTab = vi.fn();
+    await mount(<TodayChart view={v} tab="work" onTab={onTab} motion="full" nowMs={NOW_MS} tz="UTC" />);
+    $("[data-testid='cc-today-tab-spend']")!.click();
+    expect(onTab).toHaveBeenCalledWith("spend");
+    expect($("[data-testid='cc-today-tab-work']")?.getAttribute("title")).toBe("Agent work finished, by hour");
+    expect(overBudget(document.body)).toEqual([]);
+    expect(visibleText()).not.toMatch(BANNED);
+  });
+});
+
+describe("the LAST 24H strip", () => {
+  const v = V(view());
+  const strip = (over: Partial<React.ComponentProps<typeof DayStrip>> = {}, day = v.day) => (
+    <DayStrip day={day} nowMs={NOW_MS} generatedAt={v.generatedAt} windowHours={24} rowsMax={10} motion="full"
+              hoverRunId={null} onHover={noop} onStartWork={noop} {...over} />
+  );
+
+  it("a live bar ends at now with a ▶; a failed run ends in a red square; a finished one in a circle", async () => {
+    await mount(strip());
+    const live = $("[data-testid='cc-day-bar-wfr_182']")!;
+    // Right-anchored: a live bar's right edge IS now (nothing drawn past it), and a short bar
+    // grows leftward to a readable minimum.
+    expect(parseFloat(live.getAttribute("data-end") ?? "NaN")).toBeCloseTo(0, 3);
+    expect(barShare(live)).toBeGreaterThan(0);
+    expect(codeOnly("app/command-center/day-strip.tsx")).toContain("width: `max(${width}%, ${BAR_MIN_PX}px)`");
+    expect(live.querySelector(".cc-day-cap")?.getAttribute("data-cap")).toBe("live");
+    expect($("[data-testid='cc-day-bar-wfr_170'] .cc-day-cap")?.getAttribute("data-cap")).toBe("failed");
+    expect($("[data-testid='cc-day-bar-wfr_169'] .cc-day-cap")?.getAttribute("data-cap")).toBe("done");
+    expect($("[data-testid='cc-day-bar-wfr_169'] .cc-day-clip")).not.toBeNull(); // started before the window
+  });
+
+  it("each bar links to its run and says it in full; gate spans say how long you were waited for", async () => {
+    await mount(strip());
+    const bar = $("[data-testid='cc-day-bar-wfr_182']") as HTMLAnchorElement;
+    expect(bar.getAttribute("href")).toContain("wfr=wfr_182");
+    expect(bar.getAttribute("aria-label")).toBe("Ship it #182 · Ship it · step 4 of 7 · Coding · 6h 40m");
+    expect($("[data-testid='cc-day-bar-wfr_182'] [data-testid='cc-day-gate']")?.getAttribute("title")).toBe("Waited for you 18m");
+    expect($$("[data-testid='cc-day-bar-wfr_182'] .cc-day-tick")).toHaveLength(3);
+  });
+
+  it("caps its rows and counts the rest, the server's too", async () => {
+    await mount(strip({ rowsMax: 2 }, { ...v.day, more: 3 }));
+    expect($$(".cc-day-bar")).toHaveLength(2);
+    expect($("[data-testid='cc-day-more']")?.textContent).toBe("+5 more");
+  });
+
+  it("highlights the bar its MissionRow hovers", async () => {
+    await mount(strip({ hoverRunId: "wfr_video" }));
+    expect($("[data-testid='cc-day-bar-wfr_video']")?.hasAttribute("data-hover")).toBe(true);
+  });
+
+  it("empty: says so and offers a way to start", async () => {
+    const start = vi.fn();
+    await mount(strip({ onStartWork: start }, { since: v.day.since, rows: [], more: 0 }));
+    expect($("[data-testid='cc-day-strip']")?.textContent).toContain("No runs in 24h");
+    $("[data-testid='cc-day-start']")!.click();
+    expect(start).toHaveBeenCalled();
+  });
+
+  it("fits the window to its runs by default, with an axis; 24h shows the whole day", async () => {
+    const today = { ...v.day, rows: v.day.rows.slice(0, 2) };       // started 09:00 and 14:00
+    await mount(strip({}, today));
+    expect($("[data-testid='cc-day-strip']")?.getAttribute("data-zoom")).toBe("fit");
+    const ticks = $$(".cc-day-axis-tick");
+    expect(ticks.length).toBeGreaterThanOrEqual(3);
+    expect(ticks.length).toBeLessThanOrEqual(6);
+    // A run that started inside the window is not a sliver at the right edge.
+    const live = $("[data-testid='cc-day-bar-wfr_video']") as HTMLElement;
+    const fitWidth = barShare(live);
+    ($("[data-testid='cc-day-zoom-full']") as HTMLElement).click();
+    await rerender(strip({}, today));
+    expect($("[data-testid='cc-day-strip']")?.getAttribute("data-zoom")).toBe("full");
+    expect(barShare($("[data-testid='cc-day-bar-wfr_video']"))).toBeLessThan(fitWidth);
+  });
+
+  it("names every run on the left, in lane order", async () => {
+    await mount(strip());
+    expect($$(".cc-day-label-name").map((n) => n.textContent))
+      .toEqual(["Ship it #182", "Weekly video", "Audit deps", "Ship it #179"]);
+  });
+
+  it("the fit window starts just before the earliest run, at least half an hour, ticks 3-6", () => {
+    const now = Date.parse("2026-10-04T15:40:00Z");
+    const w = stripWindow([{ startedAt: "2026-10-04T15:20:00Z" }], now, 24, "fit");
+    expect(now - w.since).toBe(STRIP_MIN_SPAN);                  // 20 min of work: the 30-min floor
+    expect(w.label).toBe("Last 30m");
+    expect(w.ticks.length).toBeGreaterThanOrEqual(3);
+    const full = stripWindow([{ startedAt: "2026-10-04T15:20:00Z" }], now, 24, "full");
+    expect(full.since).toBe(now - 24 * 3_600_000);
+  });
+
+  it("the x-scale clamps to the window", () => {
+    const x = stripScale(0, 1000, 100);
+    expect(x(-5)).toBe(0);
+    expect(x(2000)).toBe(100);
+    expect(x(500)).toBe(50);
+  });
+
+  it("fits the copy budget (run names are the operator's) and uses no banned word", async () => {
+    await mount(strip());
+    expect(overBudget(document.body)).toEqual([]);
+    expect(visibleText()).not.toMatch(BANNED);
+  });
+});
+
+describe("THIS WEEK", () => {
+  it("one line of totals, and its tooltip says builds and model hours", async () => {
+    const v = V(view());
+    await mount(<WeekBars week={v.week} tz="UTC" />);
+    const line = $("[data-testid='cc-week-line']")!;
+    expect(line.textContent).toBe("42 runs·38 passed·3 deploys·$12.40");
+    expect(line.getAttribute("title")).toBe("9 builds (7 passed) · 6 PRs · 128 jobs · 2.1M tokens · 3.4 model hours");
+    expect($$("[data-testid='cc-week-bar']")).toHaveLength(7);
+    expect($$("[data-testid='cc-week-bar']")[2].getAttribute("title")).toBe("Wed 30 Sep · 7 finished · 1 failed");
+    const more = $("[data-testid='cc-week-more']")!;
+    expect([...more.querySelectorAll("[title]")].map((e) => e.getAttribute("title")))
+      .toEqual(["Code tasks: an agent edits code and opens a PR", "Time models spent answering"]);
+    expect(overBudget(document.body)).toEqual([]);
+    expect(visibleText()).not.toMatch(BANNED);
+  });
+
+  it("is a small chart: seven columns with their counts and day names", async () => {
+    await mount(<WeekBars week={V(view()).week} tz="UTC" />);
+    expect($$(".cc-week-n").map((n) => n.textContent)).toEqual(["7", "4", "8", "5", "9", "5", "4"]);
+    expect($$(".cc-week-dow").map((n) => n.textContent)).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+    expect(parseFloat(($(".cc-week-stack") as HTMLElement).style.height)).toBeGreaterThanOrEqual(80);
+  });
+
+  it("an empty week keeps its baseline and says so", async () => {
+    await mount(<WeekBars week={V(freshView()).week} tz="UTC" />);
+    expect($("[data-testid='cc-week-line']")?.textContent).toBe("No runs this week");
+    expect($(".cc-week-done")).toBeNull();
+  });
+
+  it("is never animated", async () => {
+    await mount(<WeekBars week={V(view()).week} tz="UTC" />);
+    expect($$("[data-new], [data-woke], [data-arrive]")).toHaveLength(0);
+  });
+});
+
+describe("labels never collide or leave the stage (fix pass D9/D16)", () => {
+  it("fits a team label at every stage width: shrink, slide, then shorten — never past the edge", () => {
+    for (const width of [320, 420, 548, 690, 960]) {
+      const stage = { width, height: 440 };
+      for (const [x, anchor] of [[width - 40, "start"], [40, "end"], [width / 2, "middle"]] as const) {
+        const f = fitArcLabel("ARCHITECTURE", x, 30, anchor, stage);
+        const left = anchor === "start" ? f.x : anchor === "end" ? f.x - f.width : f.x - f.width / 2;
+        expect(left).toBeGreaterThanOrEqual(5.9);
+        expect(left + f.width).toBeLessThanOrEqual(width - 5.9);
+        expect(f.scale).toBeGreaterThanOrEqual(LABEL_MIN_SCALE);
+        expect(f.text.endsWith("…")).toBe(false);
+      }
+    }
+    expect(fitArcLabel("ARCHITECTURE", 400, 30, "start", { width: 960, height: 440 }).text).toBe("ARCHITECTURE");
+    // Re-test 9: never below a readable size, never "Architec…" — the team's short name instead.
+    const narrow = fitArcLabel("Architecture", 300, 30, "start", { width: 320, height: 440 });
+    expect(narrow.text).toBe("Arch.");
+    expect(narrow.scale).toBeGreaterThanOrEqual(LABEL_MIN_SCALE);
+    for (const [label, short] of Object.entries({ Engineering: "Eng.", Operations: "Ops", Leadership: "Lead.", Thinkers: "Think." })) {
+      expect(fitArcLabel(label, 300, 30, "start", { width: 320, height: 440 }).text).toBe(short);
+    }
+    // A short name stays itself; no label anywhere ends in an ellipsis.
+    expect(fitArcLabel("Quality", 300, 30, "start", { width: 320, height: 440 }).text).toBe("Quality");
+  });
+
+  it("places names outside their faces, inside the stage, and drops one that would overlap", () => {
+    const stage = { width: 400, height: 300 };
+    const items = [
+      { key: "a", x: 200, y: 40, angle: -Math.PI / 2, size: 44, text: "Forge", rank: 0 },
+      { key: "b", x: 206, y: 44, angle: -Math.PI / 2, size: 40, text: "Pilot", rank: 3 },   // crowds a
+      { key: "c", x: 390, y: 150, angle: 0, size: 44, text: "Herald", rank: 1 },          // at the edge
+    ];
+    const got = placeNames(items, stage);
+    expect(got.has("a")).toBe(true);
+    expect(got.has("b")).toBe(false);                            // a lower rank never overlaps
+    const c = got.get("c")!;
+    const left = c.align === "left" ? c.x : c.align === "right" ? c.x - c.w : c.x - c.w / 2;
+    expect(left + c.w).toBeLessThanOrEqual(stage.width);
+    // No placed name overlaps another face.
+    const a = got.get("a")!;
+    expect(a.y + a.h / 2 <= 40 - 22 || a.y - a.h / 2 >= 40 + 22 || Math.abs(a.x - 200) > 22).toBe(true);
+  });
+});
+
+describe("the strip frames live work and reserves its height (fix pass)", () => {
+  const v = V(view());
+  const { DayStrip: Strip } = { DayStrip };
+  it("Fit frames EVERY listed run (re-test 1: 7 of 10 lanes were stubs), with 5% padding", () => {
+    const rows = [
+      { startedAt: "2026-10-04T15:00:00Z", finishedAt: null },            // live, 40 min ago
+      { startedAt: "2026-10-04T09:40:00Z", finishedAt: "2026-10-04T10:20:00Z" },
+    ];
+    const w = stripWindow(rows, NOW_MS, 24, "fit");
+    const first = Date.parse("2026-10-04T09:40:00Z");
+    expect(w.since).toBeLessThanOrEqual(first);                       // no listed run starts before it
+    expect(first - w.since).toBeCloseTo((NOW_MS - first) * 0.05, -3); // just 5% of padding
+    expect(w.label).toBe("Last 6h");
+    // A run older than the whole window clamps to it: the heading says the window.
+    const old = stripWindow([{ startedAt: "2026-10-03T09:00:00Z", finishedAt: "2026-10-03T20:00:00Z" }], NOW_MS, 24, "fit");
+    expect(old.since).toBe(NOW_MS - 24 * 3_600_000);
+    expect(old.label).toBe("Last 24h");
+  });
+
+  it("says the window it shows: whole hours from 2h, else minutes rounded to 5", () => {
+    expect(stripLabel(24 * 3_600_000, 24)).toBe("Last 24h");
+    expect(stripLabel(12 * 3_600_000, 12)).toBe("Last 12h");
+    expect(stripLabel(6.2 * 3_600_000, 24)).toBe("Last 6h");
+    expect(stripLabel(2 * 3_600_000, 24)).toBe("Last 2h");
+    expect(stripLabel(44 * 60_000, 24)).toBe("Last 45m");
+    expect(stripLabel(31 * 60_000, 24)).toBe("Last 30m");
+    expect(stripHeading([{ startedAt: "2026-10-04T15:20:00Z" }], NOW_MS, "full", 12)).toBe("Last 12h");
+  });
+
+  it("tells the page its window so the head can say it", async () => {
+    const said: string[] = [];
+    await mount(<Strip day={v.day} nowMs={NOW_MS} generatedAt={v.generatedAt} windowHours={24} rowsMax={10}
+                       motion="full" hoverRunId={null} onHover={noop} onStartWork={noop}
+                       onWindow={(w) => said.push(w)} />);
+    expect(said).toEqual([stripHeading(v.day.rows, NOW_MS, "fit", 24)]);
+  });
+
+  it("draws nothing past now: every cap sits inside its bar", () => {
+    const css = readFileSync(resolve(__dirname, "../app/command-center/graphics.css"), "utf8");
+    for (const rule of css.match(/\.cc-day-cap[^{]*\{[^}]*\}/g) ?? []) {
+      const right = /right:\s*(-?[\d.]+)px/.exec(rule);
+      if (right) expect(parseFloat(right[1])).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("reserves rowsMax lanes, shows waits (open ones striped) and says a wide bar's state inside", async () => {
+    await mount(<Strip day={v.day} nowMs={NOW_MS} generatedAt={v.generatedAt} windowHours={24} rowsMax={10}
+                       motion="full" hoverRunId={null} onHover={noop} onStartWork={noop} />);
+    expect(($(".cc-day-grid") as HTMLElement).style.getPropertyValue("--rows")).toBe("10");
+    const open = $$("[data-testid='cc-day-gate'][data-open]");
+    expect(open.length).toBeGreaterThan(0);
+    expect(open[0].getAttribute("title")).toMatch(/^Waiting for you /);
+    expect($$(".cc-day-in").map((e) => e.textContent).some((t) => /·/.test(t ?? ""))).toBe(true);
+  });
+});
+
+describe("this week fills its card", () => {
+  it("draws seven columns with a count above each, 110px at the busiest day", async () => {
+    const week = V(view()).week;
+    await mount(<WeekBars week={week} tz="UTC" />);
+    expect($$("[data-testid='cc-week-bar']")).toHaveLength(7);
+    const heights = $$(".cc-week-stack").map((e) => parseFloat((e as HTMLElement).style.height));
+    expect(Math.max(...heights)).toBe(110);
+  });
+});
