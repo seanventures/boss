@@ -226,6 +226,8 @@ class JobBody(_Body):
 
 class BudgetBody(_Body):
     monthly_cap_usd: float
+    #: Which screen wrote it, for the `budget.monthly_cap_set` record: Setup's row or Govern.
+    via: Optional[str] = None
 
 
 class TryBody(_Body):

@@ -121,7 +121,9 @@ def test_token_efficiency_http_never_500_when_tables_missing(client, engine):
 
 def test_token_efficiency_put_policy_then_consumption_is_real_zeros(client):
     """Stored policy must not invent token usage when llm_calls is empty."""
-    pid = f"proj_e2e_te_zeros_{uuid4().hex[:10]}"
+    # A real project: writing token guides needs a member with `budget_manage` now
+    # (activity-govern §10 Q3). Its llm_calls are emptied before every test.
+    pid = SEEDED_PROJECT
     put = client.put(
         "/v1/token-efficiency/policies",
         json={
